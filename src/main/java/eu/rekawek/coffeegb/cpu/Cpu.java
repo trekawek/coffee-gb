@@ -1,28 +1,14 @@
 package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.List;
-
-import static java.util.Arrays.asList;
-import static java.util.Collections.unmodifiableList;
+import static jdk.nashorn.internal.objects.NativeArray.push;
 
 public class Cpu {
 
-    private static final List<Command> COMMANDS;
-
-    static {
-        Command[] commands = new Command[0xff];
-
-        regCmd(commands, 0x06, 8, 1, "LD B, {}", (r, m, a) -> r.setB(a[0]));
-        regCmd(commands, 0x0e, 8, 1, "LD C, {}", (r, m, a) -> r.setC(a[0]));
-        regCmd(commands, 0x16, 8, 1, "LD D, {}", (r, m, a) -> r.setD(a[0]));
-        regCmd(commands, 0x1e, 8, 1, "LD E, {}", (r, m, a) -> r.setE(a[0]));
-        regCmd(commands, 0x26, 8, 1, "LD H, {}", (r, m, a) -> r.setH(a[0]));
-        regCmd(commands, 0x2e, 8, 1, "LD L, {}", (r, m, a) -> r.setL(a[0]));
-
-        COMMANDS = unmodifiableList(asList(commands));
-    }
+    private static final Logger LOG = LoggerFactory.getLogger(Cpu.class);
 
     private final Registers registers;
 
@@ -33,8 +19,85 @@ public class Cpu {
         this.addressSpace = addressSpace;
     }
 
-    private static void regCmd(Command[] commands, int opcode, int cycles, int argsLength, String label, Command.Operation operation) {
-        commands[opcode] = new Command(opcode, cycles, argsLength, label, operation);
+    public int runCommand() {
+        handleInterrupt();
+
+        int pc = registers.getPC();
+        int opcode = addressSpace.getByte(pc++);
+        Command cmd;
+        if (opcode == 0xcb) {
+            opcode = addressSpace.getByte(pc++);
+            cmd = Opcodes.EXT_COMMANDS.get(opcode);
+        } else {
+            cmd = Opcodes.COMMANDS.get(opcode);
+        }
+
+        if (cmd == null) {
+            LOG.warn(String.format("Invalid instruction %02x @ %04x", opcode, registers.getPC()));
+            return 0;
+        }
+
+        int[] args = new int[cmd.getArgsLength()];
+        for (int i = 0; i < args.length; i++) {
+            args[i] = addressSpace.getByte(pc++);
+        }
+
+        if (LOG.isTraceEnabled()) {
+            LOG.trace(String.format("%04x: %8s\t%s", registers.getPC(), getDump(registers.getPC(), pc), cmd.getLabel()));
+        }
+
+        registers.setPC(pc);
+        cmd.getOperation().run(registers, addressSpace, args);
+
+        if (LOG.isTraceEnabled()) {
+            LOG.trace("Registers: {}", registers);
+        }
+
+        return cmd.getCycles();
+    }
+
+    private boolean handleInterrupt() {
+        if (!registers.isIME()) {
+            return false;
+        }
+
+        int interruptFlag = addressSpace.getByte(0xff0f);
+        int interruptEnable = addressSpace.getByte(0xffff);
+
+        int handler = 0;
+        if ((interruptEnable & interruptFlag & (1 << 0)) != 0) {
+            handler = 0x0040; // V-Blank
+        }
+        if ((interruptEnable & interruptFlag & (1 << 1)) != 0) {
+            handler = 0x0048; // LCDC Status
+        }
+        if ((interruptEnable & interruptFlag & (1 << 2)) != 0) {
+            handler = 0x0050; // Timer Overflow
+        }
+        if ((interruptEnable & interruptFlag & (1 << 3)) != 0) {
+            handler = 0x0058; // Serial Transfer
+        }
+        if ((interruptEnable & interruptFlag & (1 << 4)) != 0) {
+            handler = 0x0060; // Hi-Lo of P10-P13
+        }
+
+        if (handler > 0) {
+            registers.setIME(false);
+            addressSpace.setByte(0xff0f, 0);
+            push(registers.getPC());
+            registers.setPC(handler);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    private String getDump(int from, int to) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = from; i < to; i++) {
+            builder.append(String.format("%02x", addressSpace.getByte(i) & 0xff));
+        }
+        return builder.toString();
     }
 
 }

@@ -22,6 +22,22 @@ public class Command {
         this.operation = operation;
     }
 
+    public int getArgsLength() {
+        return argsLength;
+    }
+
+    public Operation getOperation() {
+        return operation;
+    }
+
+    public int getCycles() {
+        return cycles;
+    }
+
+    public String getLabel() {
+        return label;
+    }
+
     interface Operation {
         void run(Registers registers, AddressSpace addressSpace, int[] arguments);
     }

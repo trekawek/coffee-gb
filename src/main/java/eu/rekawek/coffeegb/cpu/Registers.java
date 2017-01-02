@@ -1,9 +1,11 @@
 package eu.rekawek.coffeegb.cpu;
 
+import static eu.rekawek.coffeegb.cpu.BitUtils.abs;
 import static eu.rekawek.coffeegb.cpu.BitUtils.checkByteArgument;
 import static eu.rekawek.coffeegb.cpu.BitUtils.checkWordArgument;
 import static eu.rekawek.coffeegb.cpu.BitUtils.getLSB;
 import static eu.rekawek.coffeegb.cpu.BitUtils.getMSB;
+import static eu.rekawek.coffeegb.cpu.BitUtils.isNegative;
 
 public class Registers {
 
@@ -13,7 +15,9 @@ public class Registers {
 
     private int pc;
 
-    private Flags flag = new Flags();
+    private Flags flags = new Flags();
+
+    private boolean ime;
 
     public int getA() {
         return a;
@@ -63,12 +67,20 @@ public class Registers {
         return h << 8 | l;
     }
 
-    public int getSp() {
+    public int getSP() {
         return sp;
     }
 
-    public int getPc() {
+    public int getPC() {
         return pc;
+    }
+
+    public Flags getFlags() {
+        return flags;
+    }
+
+    public boolean isIME() {
+        return ime;
     }
 
     public void setA(int a) {
@@ -135,13 +147,51 @@ public class Registers {
         l = getLSB(hl);
     }
 
-    public void setSp(int sp) {
+    public void setSP(int sp) {
         checkWordArgument("sp", sp);
         this.sp = sp;
     }
 
-    public void setPc(int pc) {
+    public void setPC(int pc) {
         checkWordArgument("pc", pc);
         this.pc = pc;
+    }
+
+    public void setIME(boolean ime) {
+        this.ime = ime;
+    }
+
+    public int decrementHL() {
+        int oldHL = getHL();
+        setHL((oldHL - 1) % 0xffff);
+        return oldHL;
+    }
+
+    public int incrementHL() {
+        int oldHL = getHL();
+        setHL((oldHL + 1) % 0xffff);
+        return oldHL;
+    }
+
+    public void decrementSP() {
+        sp = (sp - 1) % 0xffff;
+    }
+
+    public void incrementSP() {
+        sp = (sp + 1) % 0xffff;
+    }
+
+    public void addToPC(int signedByte) {
+        checkByteArgument("signedByte", signedByte);
+        if (isNegative(signedByte)) {
+            pc = (pc - abs(signedByte)) & 0xffff;
+        } else {
+            pc = (pc + abs(signedByte)) & 0xffff;
+        }
+    }
+
+    @Override
+    public String toString() {
+        return String.format("AF=%04x, BC=%04x, DE=%04x, HL=%04x, SP=%04x, PC=%04x, %s", getAF(), getBC(), getDE(), getHL(), getSP(), getPC(), getFlags().toString());
     }
 }

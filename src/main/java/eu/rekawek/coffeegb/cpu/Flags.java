@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.cpu;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.checkByteArgument;
-import static eu.rekawek.coffeegb.cpu.BitUtils.clearBit;
 import static eu.rekawek.coffeegb.cpu.BitUtils.getBit;
 import static eu.rekawek.coffeegb.cpu.BitUtils.setBit;
 
@@ -37,40 +36,35 @@ class Flags {
         return getBit(flags, C_POS);
     }
 
-    public void setZ() {
-        setBit(flags, Z_POS);
+    public void setZ(boolean z) {
+        flags = setBit(flags, Z_POS, z);
     }
 
-    public void setN() {
-        setBit(flags, N_POS);
+    public void setN(boolean n) {
+        flags = setBit(flags, N_POS, n);
     }
 
-    public void setH() {
-        setBit(flags, H_POS);
+    public void setH(boolean h) {
+        flags = setBit(flags, H_POS, h);
     }
 
-    public void setC() {
-        setBit(flags, C_POS);
-    }
-
-    public void clearZ() {
-        clearBit(flags, Z_POS);
-    }
-
-    public void clearN() {
-        clearBit(flags, N_POS);
-    }
-
-    public void clearH() {
-        clearBit(flags, H_POS);
-    }
-
-    public void clearC() {
-        clearBit(flags, C_POS);
+    public void setC(boolean c) {
+        flags = setBit(flags, C_POS, c);
     }
 
     public void setFlagsByte(int flags) {
         checkByteArgument("flags", flags);
         this.flags = flags;
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder result = new StringBuilder();
+        result.append(isZ() ? 'Z' : '-');
+        result.append(isN() ? 'N' : '-');
+        result.append(isH() ? 'H' : '-');
+        result.append(isC() ? 'C' : '-');
+        result.append("----");
+        return result.toString();
     }
 }
