@@ -8,6 +8,151 @@ import static eu.rekawek.coffeegb.cpu.BitUtils.getMSB;
 import static eu.rekawek.coffeegb.cpu.BitUtils.isNegative;
 
 public class Registers {
+    public enum ByteRegisterType {
+        A {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setA(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getA();
+            }
+        }, B {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setB(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getB();
+            }
+        }, C {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setC(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getC();
+            }
+        }, D {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setD(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getD();
+            }
+        }, E {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setE(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getE();
+            }
+        }, H {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setH(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getH();
+            }
+        }, L {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setL(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getL();
+            }
+        };
+
+        public abstract void set(Registers registers, int value);
+
+        public abstract int get(Registers registers);
+    }
+
+    public enum WordRegisterType {
+        AF {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setAF(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getAF();
+            }
+        }, BC {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setBC(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getBC();
+            }
+        }, DE {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setDE(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getDE();
+            }
+        }, HL {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setHL(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getHL();
+            }
+        }, SP {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setSP(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getSP();
+            }
+        }, PC {
+            @Override
+            public void set(Registers registers, int value) {
+                registers.setPC(value);
+            }
+
+            @Override
+            public int get(Registers registers) {
+                return registers.getPC();
+            }
+        };
+
+        public abstract void set(Registers registers, int value);
+
+        public abstract int get(Registers registers);
+    }
 
     private int a, b, c, d, e, f, h, l;
 
@@ -161,6 +306,10 @@ public class Registers {
         this.ime = ime;
     }
 
+    public void set(ByteRegisterType type, int value) {
+
+    }
+
     public int decrementHL() {
         int oldHL = getHL();
         setHL((oldHL - 1) % 0xffff);
@@ -171,6 +320,10 @@ public class Registers {
         int oldHL = getHL();
         setHL((oldHL + 1) % 0xffff);
         return oldHL;
+    }
+
+    public void incrementPC() {
+        pc = (pc + 1) % 0xffff;
     }
 
     public void decrementSP() {

@@ -4,7 +4,7 @@ import static eu.rekawek.coffeegb.cpu.BitUtils.checkByteArgument;
 import static eu.rekawek.coffeegb.cpu.BitUtils.getBit;
 import static eu.rekawek.coffeegb.cpu.BitUtils.setBit;
 
-class Flags {
+public class Flags {
 
     private static int Z_POS = 7;
 
