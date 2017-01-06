@@ -2,8 +2,7 @@ package eu.rekawek.coffeegb.cpu.opcode;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.Registers;
-import eu.rekawek.coffeegb.cpu.alu.AluFunctionWrapper;
-import eu.rekawek.coffeegb.cpu.alu.AluFunctions;
+import eu.rekawek.coffeegb.cpu.AluFunctions;
 import eu.rekawek.coffeegb.cpu.op.Argument;
 import eu.rekawek.coffeegb.cpu.op.DataType;
 import eu.rekawek.coffeegb.cpu.op.Op;
@@ -12,6 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class OpcodeBuilder {
+
+    private static final AluFunctions ALU = new AluFunctions();
 
     private final int opcode;
 
@@ -176,7 +177,7 @@ public class OpcodeBuilder {
 
     public OpcodeBuilder alu(String operation, String argument2) {
         Argument arg2 = Argument.parse(argument2);
-        AluFunctionWrapper.BiIntRegistryFunction func = AluFunctions.findAluFunction(operation, lastDataType, arg2.getDataType());
+        AluFunctions.BiIntRegistryFunction func = ALU.findAluFunction(operation, lastDataType, arg2.getDataType());
         ops.add(new Op() {
             @Override
             public boolean readsMemory() {
@@ -198,7 +199,7 @@ public class OpcodeBuilder {
     }
 
     public OpcodeBuilder alu(String operation, int d8Value) {
-        AluFunctionWrapper.BiIntRegistryFunction func = AluFunctions.findAluFunction(operation, lastDataType, DataType.D8);
+        AluFunctions.BiIntRegistryFunction func = ALU.findAluFunction(operation, lastDataType, DataType.D8);
         ops.add(new Op() {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int v1) {
@@ -209,7 +210,7 @@ public class OpcodeBuilder {
     }
 
     public OpcodeBuilder alu(String operation) {
-        AluFunctionWrapper.IntRegistryFunction func = AluFunctions.findAluFunction(operation, lastDataType);
+        AluFunctions.IntRegistryFunction func = ALU.findAluFunction(operation, lastDataType);
         ops.add(new Op() {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int value) {
