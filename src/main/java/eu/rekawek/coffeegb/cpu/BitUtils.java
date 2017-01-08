@@ -59,6 +59,14 @@ public final class BitUtils {
         }
     }
 
+    public static int addSignedByte(int word, int signedByteValue) {
+        if (isNegative(signedByteValue)) {
+            return word - abs(signedByteValue);
+        } else {
+            return word + signedByteValue;
+        }
+    }
+
     static void checkByteArgument(String argumentName, int argument) {
         checkArgument(argument >= 0 && argument <= 0xff, "Argument {} should be a byte", argumentName);
     }
@@ -66,4 +74,5 @@ public final class BitUtils {
     static void checkWordArgument(String argumentName, int argument) {
         checkArgument(argument >= 0 && argument <= 0xffff, "Argument {} should be a word", argumentName);
     }
+
 }

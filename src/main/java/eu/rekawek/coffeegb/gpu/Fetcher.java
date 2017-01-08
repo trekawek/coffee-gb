@@ -1,0 +1,91 @@
+package eu.rekawek.coffeegb.gpu;
+
+import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.cpu.BitUtils;
+
+public class Fetcher {
+
+    private enum State {
+        READ_TILE_ID, READ_DATA_1, READ_DATA_2, PUSH
+    }
+
+    private final PixelFifo fifo;
+
+    private final AddressSpace videoRam;
+
+    private final int line;
+
+    private final int scrollX;
+
+    private final int scrollY;
+
+    private final int lcdc;
+
+    private int xPos;
+
+    private boolean divider;
+
+    private State state = State.READ_TILE_ID;
+
+    private int tileId;
+
+    private int tileData1;
+
+    private int tileData2;
+
+    public Fetcher(PixelFifo fifo, int line, AddressSpace videoRam, int lcdc, int scrollX, int scrollY) {
+        this.fifo = fifo;
+        this.videoRam = videoRam;
+        this.line = line;
+        this.scrollX = scrollX;
+        this.scrollY = scrollY;
+        this.lcdc = lcdc;
+    }
+
+    public void tick() {
+        divider = !divider;
+        if (!divider) {
+            return;
+        }
+
+        switch (state) {
+            case READ_TILE_ID:
+                tileId = getTileId((scrollX + xPos) / 0x08, (scrollY + line) / 0x08);
+                state = State.READ_DATA_1;
+                break;
+
+            case READ_DATA_1:
+                tileData1 = getTileData(tileId, (scrollY + line) % 0x08, 0);
+                state = State.READ_DATA_2;
+                break;
+
+            case READ_DATA_2:
+                tileData2 = getTileData(tileId, (scrollY + line) % 0x08, 1);
+                state = State.PUSH;
+
+            case PUSH:
+                if (fifo.getLength() <= 8) {
+                    fifo.enqueue4Pixels(tileData1);
+                    fifo.enqueue4Pixels(tileData2);
+                    state = State.READ_TILE_ID;
+                    xPos += 0x08;
+                }
+        }
+
+    }
+
+    private int getTileId(int backgroundTileX, int backgroundTileY) {
+        int map = ((lcdc & (1 << 3)) == 0) ? 0x9800 : 0x9c00;
+        return videoRam.getByte(backgroundTileX + backgroundTileY * 0x100);
+    }
+
+    private int getTileData(int tileId, int line, int byteNumber) {
+        int tileAddress;
+        if ((lcdc & (1 << 4)) == 0) {
+            tileAddress = BitUtils.addSignedByte(0x9000, tileId) * 0x10;
+        } else {
+            tileAddress = 0x8000 + tileId * 0x10;
+        }
+        return tileAddress + line * 2 + byteNumber;
+    }
+}

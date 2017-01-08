@@ -1,32 +1,53 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.cpu.InterruptManager;
-
-import java.util.HashSet;
-import java.util.Set;
+import eu.rekawek.coffeegb.gpu.phase.GpuPhase;
+import eu.rekawek.coffeegb.gpu.phase.HBlankPhase;
+import eu.rekawek.coffeegb.gpu.phase.OamSearch;
+import eu.rekawek.coffeegb.gpu.phase.PixelTransfer;
+import eu.rekawek.coffeegb.gpu.phase.VBlankPhase;
 
 public class Gpu implements AddressSpace {
 
-    private final InterruptManager interruptManager;
+    private enum Mode {
+        HBlank, VBlank, OamSearch, PixelTransfer
+    }
 
-    private Mode mode = Mode.OAM_Search;
+    private final AddressSpace ram;
+
+    private int lcdc, scrollY, scrollX;
 
     private int line;
 
-    private int remainingClocks = mode.getCycles();
+    private int ticksInLine;
 
-    private Set<Mode> enabledInterrupts = new HashSet<>();
+    private Mode mode;
 
-    public Gpu(InterruptManager interruptManager) {
-        this.interruptManager = interruptManager;
+    private GpuPhase phase;
+
+    public Gpu(AddressSpace ram) {
+        this.ram = ram;
+        this.phase = new OamSearch(line);
+        this.mode = Mode.OamSearch;
     }
 
     @Override
     public void setByte(int address, int value) {
         switch (address) {
+            case 0xff40:
+                lcdc = value;
+                break;
+
             case 0xff41:
                 setStat(value);
+                break;
+
+            case 0xff42:
+                scrollY = value;
+                break;
+
+            case 0xff43:
+                scrollX = value;
                 break;
         }
     }
@@ -34,8 +55,17 @@ public class Gpu implements AddressSpace {
     @Override
     public int getByte(int address) {
         switch (address) {
+            case 0xff40:
+                return lcdc;
+
             case 0xff41:
                 return getStat();
+
+            case 0xff42:
+                return scrollY;
+
+            case 0xff43:
+                return scrollX;
 
             case 0xff44:
                 return line;
@@ -43,48 +73,42 @@ public class Gpu implements AddressSpace {
         return 0xff;
     }
 
-    public void proceed(int clockCycles) {
-        int c = clockCycles;
-        while (c > 0) {
-            if (remainingClocks > c) {
-                remainingClocks -= c;
-                c = 0;
-            } else {
-                c -= remainingClocks;
-                switchMode();
+    public void tick() {
+        boolean phaseInProgress = phase.tick();
+        if (!phaseInProgress) {
+            switch (mode) {
+                case OamSearch:
+                    mode = Mode.PixelTransfer;
+                    phase = new PixelTransfer(line, ram, lcdc, scrollX, scrollY);
+                    break;
+
+                case PixelTransfer:
+                    mode = Mode.HBlank;
+                    phase = new HBlankPhase(line, ticksInLine);
+                    break;
+
+                case HBlank:
+                    ticksInLine = 0;
+                    if (++line == 144) {
+                        mode = Mode.VBlank;
+                        phase = new VBlankPhase(line);
+                    } else {
+                        mode = Mode.OamSearch;
+                        phase = new OamSearch(line);
+                    }
+                    break;
+
+                case VBlank:
+                    ticksInLine = 0;
+                    if (++line == 154) {
+                        mode = Mode.OamSearch;
+                        line = 0;
+                        phase = new OamSearch(line);
+                        System.out.println("---");
+                    } else {
+                        phase = new VBlankPhase(line);
+                    }
             }
-        }
-    }
-
-    private void switchMode() {
-        switch (mode) {
-            case OAM_Search:
-                mode = Mode.PixelTransfer;
-                break;
-
-            case PixelTransfer:
-                mode = Mode.H_Blank;
-                break;
-
-            case H_Blank:
-                if (++line == 144) {
-                    mode = Mode.V_Blank;
-                } else {
-                    mode = Mode.OAM_Search;
-                }
-                break;
-
-            case V_Blank:
-                if (++line == 154) {
-                    line = 0;
-                    mode = Mode.OAM_Search;
-                }
-                break;
-        }
-
-        remainingClocks = mode.getCycles();
-        if (enabledInterrupts.contains(mode)) {
-            interruptManager.requestLcdcInterrupt();
         }
     }
 
