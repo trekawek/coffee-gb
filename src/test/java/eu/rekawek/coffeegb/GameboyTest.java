@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb;
 
+import eu.rekawek.coffeegb.gpu.Display;
 import org.apache.commons.io.IOUtils;
 import org.junit.Test;
 
@@ -19,7 +20,15 @@ public class GameboyTest {
             r[i] = rom[i] & 0xff;
         }
 
-        new Gameboy(r).run();
+        new Gameboy(r, new Display() {
+            @Override
+            public void setPixel(int x, int y, int color) {
+            }
+
+            @Override
+            public void refresh() {
+            }
+        }).run();
     }
 
 }

@@ -63,7 +63,7 @@ public final class BitUtils {
         if (isNegative(signedByteValue)) {
             return word - abs(signedByteValue);
         } else {
-            return word + signedByteValue;
+            return word + abs(signedByteValue);
         }
     }
 

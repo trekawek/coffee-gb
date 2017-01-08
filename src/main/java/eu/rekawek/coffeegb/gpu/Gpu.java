@@ -15,6 +15,8 @@ public class Gpu implements AddressSpace {
 
     private final AddressSpace ram;
 
+    private final Display display;
+
     private int lcdc, scrollY, scrollX;
 
     private int line;
@@ -25,10 +27,11 @@ public class Gpu implements AddressSpace {
 
     private GpuPhase phase;
 
-    public Gpu(AddressSpace ram) {
+    public Gpu(AddressSpace ram, Display display) {
         this.ram = ram;
         this.phase = new OamSearch(line);
         this.mode = Mode.OamSearch;
+        this.display = display;
     }
 
     @Override
@@ -79,7 +82,7 @@ public class Gpu implements AddressSpace {
             switch (mode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(line, ram, lcdc, scrollX, scrollY);
+                    phase = new PixelTransfer(line, ram, display, lcdc, scrollX, scrollY);
                     break;
 
                 case PixelTransfer:
@@ -104,7 +107,6 @@ public class Gpu implements AddressSpace {
                         mode = Mode.OamSearch;
                         line = 0;
                         phase = new OamSearch(line);
-                        System.out.println("---");
                     } else {
                         phase = new VBlankPhase(line);
                     }

@@ -1,7 +1,10 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.cpu.BitUtils;
+import eu.rekawek.coffeegb.Dumper;
+
+import static eu.rekawek.coffeegb.cpu.BitUtils.abs;
+import static eu.rekawek.coffeegb.cpu.BitUtils.isNegative;
 
 public class Fetcher {
 
@@ -40,6 +43,7 @@ public class Fetcher {
         this.scrollX = scrollX;
         this.scrollY = scrollY;
         this.lcdc = lcdc;
+        //dumpVideoRam();
     }
 
     public void tick() {
@@ -65,27 +69,35 @@ public class Fetcher {
 
             case PUSH:
                 if (fifo.getLength() <= 8) {
-                    fifo.enqueue4Pixels(tileData1);
-                    fifo.enqueue4Pixels(tileData2);
+                    fifo.enqueue8Pixels(tileData1, tileData2);
                     state = State.READ_TILE_ID;
                     xPos += 0x08;
                 }
         }
-
     }
 
     private int getTileId(int backgroundTileX, int backgroundTileY) {
         int map = ((lcdc & (1 << 3)) == 0) ? 0x9800 : 0x9c00;
-        return videoRam.getByte(backgroundTileX + backgroundTileY * 0x100);
+        return videoRam.getByte(map + (backgroundTileX % 0x20) + (backgroundTileY % 0x20) * 0x20);
+    }
+
+    private void dumpVideoRam() {
+        int map = ((lcdc & (1 << 3)) == 0) ? 0x9800 : 0x9c00;
+        Dumper.dump(videoRam, map, 32 * 32, 32);
+        System.out.println("---");
     }
 
     private int getTileData(int tileId, int line, int byteNumber) {
         int tileAddress;
         if ((lcdc & (1 << 4)) == 0) {
-            tileAddress = BitUtils.addSignedByte(0x9000, tileId) * 0x10;
+            if (isNegative(tileId)) {
+                tileAddress = 0x9000 - abs(tileId) * 0x10;
+            } else {
+                tileAddress = 0x9000 + abs(tileId) * 0x10;
+            }
         } else {
             tileAddress = 0x8000 + tileId * 0x10;
         }
-        return tileAddress + line * 2 + byteNumber;
+        return videoRam.getByte(tileAddress + line * 2 + byteNumber);
     }
 }
