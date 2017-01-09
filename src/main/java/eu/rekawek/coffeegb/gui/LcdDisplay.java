@@ -6,6 +6,8 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 
+import static eu.rekawek.coffeegb.gui.Main.SCALE;
+
 public class LcdDisplay extends JPanel implements Display {
 
     private final BufferedImage img = new BufferedImage(160 * 2, 144 * 2, BufferedImage.TYPE_INT_RGB);
@@ -14,10 +16,11 @@ public class LcdDisplay extends JPanel implements Display {
 
     @Override
     public void setPixel(int x, int y, int color) {
-        img.setRGB(x * 2, y * 2, COLORS[color]);
-        img.setRGB(x * 2, y * 2 + 1, COLORS[color]);
-        img.setRGB(x * 2 + 1, y * 2, COLORS[color]);
-        img.setRGB(x * 2 + 1, y * 2 + 1, COLORS[color]);
+        for (int i = 0; i < SCALE; i++) {
+            for (int j = 0; j < SCALE; j++) {
+                img.setRGB(x * SCALE + i, y * SCALE + j, COLORS[color]);
+            }
+        }
     }
 
     @Override
@@ -34,6 +37,4 @@ public class LcdDisplay extends JPanel implements Display {
         g2d.drawImage(img, 0, 0, Color.WHITE, null);
         g2d.dispose();
     }
-
-
 }

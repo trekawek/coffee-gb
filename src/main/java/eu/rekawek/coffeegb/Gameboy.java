@@ -8,8 +8,6 @@ import eu.rekawek.coffeegb.memory.Mmu;
 import eu.rekawek.coffeegb.memory.Ram;
 import eu.rekawek.coffeegb.memory.Rom;
 
-import java.io.InputStream;
-
 public class Gameboy {
 
     private final InterruptManager interruptManager;
@@ -20,8 +18,7 @@ public class Gameboy {
 
     private final Cpu cpu;
 
-    public Gameboy(int[] data, Display display) {
-        Rom rom = new Rom(data, 0);
+    public Gameboy(Rom rom, Display display) {
         Ram ram = new Ram();
         interruptManager = new InterruptManager();
         gpu = new Gpu(ram, display);

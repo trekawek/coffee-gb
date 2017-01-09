@@ -1,14 +1,15 @@
 package eu.rekawek.coffeegb.gui;
 
 import eu.rekawek.coffeegb.Gameboy;
-import org.apache.commons.io.IOUtils;
+import eu.rekawek.coffeegb.memory.Rom;
 
-import javax.swing.*;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
+import javax.swing.*;
+import java.awt.*;
 
 public class Main {
+
+    static final int SCALE = 2;
 
     public static void main(String[] args) {
         javax.swing.SwingUtilities.invokeLater(() -> createAndShowGUI());
@@ -22,32 +23,17 @@ public class Main {
             mainWindow.setLocationRelativeTo(null);
 
             LcdDisplay display = new LcdDisplay();
-            display.setSize(160 * 2, 144 * 2);
+            display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
 
             mainWindow.setContentPane(display);
             mainWindow.setResizable(false);
             mainWindow.setVisible(true);
-            mainWindow.setSize(160 * 2 + 10, 144 * 2 + 50);
+            mainWindow.pack();
 
-            new Thread(() -> new Gameboy(getRom(), display).run()).start();
+            final Rom rom = new Rom(new File("src/test/resources/tetris.gb"), 0);
+            new Thread(() -> new Gameboy(rom, display).run()).start();
         } catch(Exception e) {
             throw new RuntimeException(e);
         }
     }
-
-    private static int[] getRom() {
-        byte[] rom = new byte[32768];
-        try {
-            IOUtils.read(new FileInputStream(new File("src/test/resources/dr-mario.gb")), rom);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-
-        int[] r = new int[rom.length];
-        for (int i = 0; i < r.length; i++) {
-            r[i] = rom[i] & 0xff;
-        }
-        return r;
-    }
-
 }
