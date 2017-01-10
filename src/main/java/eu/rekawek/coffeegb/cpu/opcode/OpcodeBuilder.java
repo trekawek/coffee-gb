@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.cpu.opcode;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.cpu.AluFunctions;
 import eu.rekawek.coffeegb.cpu.op.Argument;
@@ -9,6 +10,8 @@ import eu.rekawek.coffeegb.cpu.op.Op;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static eu.rekawek.coffeegb.cpu.BitUtils.toWord;
 
 public class OpcodeBuilder {
 
@@ -43,7 +46,7 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public int operangeLength() {
+            public int operandLength() {
                 return arg.getOperandLength();
             }
 
@@ -68,26 +71,62 @@ public class OpcodeBuilder {
 
     public OpcodeBuilder store(String target) {
         Argument arg = Argument.parse(target);
-        if (lastDataType != arg.getDataType() && !(lastDataType == DataType.D16 && arg == Argument._a16)) {
+        if (lastDataType == DataType.D16 && arg == Argument._a16) {
+            ops.add(new Op() {
+                @Override
+                public boolean writesMemory() {
+                    return arg.isMemory();
+                }
+
+                @Override
+                public int operandLength() {
+                    return arg.getOperandLength();
+                }
+
+                @Override
+                public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
+                    addressSpace.setByte(toWord(args), context & 0x00ff);
+                    return context;
+                }
+            });
+            ops.add(new Op() {
+                @Override
+                public boolean writesMemory() {
+                    return arg.isMemory();
+                }
+
+                @Override
+                public int operandLength() {
+                    return arg.getOperandLength();
+                }
+
+                @Override
+                public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
+                    addressSpace.setByte((toWord(args) + 1) & 0xffff, (context & 0xff00) >> 8);
+                    return context;
+                }
+            });
+        } else if (lastDataType == arg.getDataType()) {
+            ops.add(new Op() {
+                @Override
+                public boolean writesMemory() {
+                    return arg.isMemory();
+                }
+
+                @Override
+                public int operandLength() {
+                    return arg.getOperandLength();
+                }
+
+                @Override
+                public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
+                    arg.write(registers, addressSpace, args, context);
+                    return context;
+                }
+            });
+        } else {
             throw new IllegalStateException("Can't write " + lastDataType + " to " + target);
         }
-        ops.add(new Op() {
-            @Override
-            public boolean writesMemory() {
-                return arg.isMemory();
-            }
-
-            @Override
-            public int operangeLength() {
-                return arg.getOperandLength();
-            }
-
-            @Override
-            public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
-                arg.write(registers, addressSpace, args, context);
-                return context;
-            }
-        });
         return this;
     }
 
@@ -185,7 +224,7 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public int operangeLength() {
+            public int operandLength() {
                 return arg2.getOperandLength();
             }
 
@@ -215,6 +254,20 @@ public class OpcodeBuilder {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int value) {
                 return func.apply(registers.getFlags(), value);
+            }
+        });
+        return this;
+    }
+
+    public OpcodeBuilder switchInterrupts(boolean enable, boolean withDelay) {
+        ops.add(new Op() {
+            @Override
+            public void switchInterrupts(InterruptManager interruptManager) {
+                if (enable) {
+                    interruptManager.enableInterrupts(withDelay);
+                } else {
+                    interruptManager.disableInterrupts(withDelay);
+                }
             }
         });
         return this;
