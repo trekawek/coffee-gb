@@ -21,7 +21,7 @@ public class Opcode {
     }
 
     public int getOperandLength() {
-        return ops.stream().mapToInt(o -> o.operangeLength()).max().orElse(0);
+        return ops.stream().mapToInt(o -> o.operandLength()).max().orElse(0);
     }
 
     public int getCycles() {

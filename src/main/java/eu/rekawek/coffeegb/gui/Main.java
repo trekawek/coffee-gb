@@ -30,7 +30,7 @@ public class Main {
             mainWindow.setVisible(true);
             mainWindow.pack();
 
-            final Rom rom = new Rom(new File("src/test/resources/tetris.gb"), 0);
+            final Rom rom = new Rom(new File("src/test/resources/dr-mario.gb"), 0);
             new Thread(() -> new Gameboy(rom, display).run()).start();
         } catch(Exception e) {
             throw new RuntimeException(e);

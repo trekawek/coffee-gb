@@ -139,7 +139,7 @@ public final class Opcodes {
             regCmd(opcodes, i, String.format("RST %02XH", j)).load("PC").push().loadWord(j).store("PC");
         }
 
-        regCmd(opcodes, 0xd9, "RETI").pop().store("PC"); /* TODO enabled interrupts */
+        regCmd(opcodes, 0xd9, "RETI").pop().store("PC").switchInterrupts(true, false);
 
         regLoad(opcodes, 0xe2, "(C)", "A");
         regLoad(opcodes, 0xf2, "A", "(C)");
@@ -155,8 +155,8 @@ public final class Opcodes {
         regLoad(opcodes, 0xea, "(a16)", "A");
         regLoad(opcodes, 0xfa, "A", "(a16)");
 
-        regCmd(opcodes, 0xf3, "DI");
-        regCmd(opcodes, 0xfb, "EI");
+        regCmd(opcodes, 0xf3, "DI").switchInterrupts(false, true);
+        regCmd(opcodes, 0xfb, "EI").switchInterrupts(true, true);
 
         regLoad(opcodes, 0xf9, "SP", "HL");
 

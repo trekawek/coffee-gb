@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.cpu.InterruptManager;
+import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.gpu.phase.GpuPhase;
 import eu.rekawek.coffeegb.gpu.phase.HBlankPhase;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch;
@@ -17,9 +19,9 @@ public class Gpu implements AddressSpace {
 
     private final Display display;
 
-    private int lcdc, scrollY, scrollX;
+    private final InterruptManager interruptManager;
 
-    private int line;
+    private int lcdc, stat, scrollY, scrollX, ly, lyc;
 
     private int ticksInLine;
 
@@ -27,9 +29,10 @@ public class Gpu implements AddressSpace {
 
     private GpuPhase phase;
 
-    public Gpu(AddressSpace ram, Display display) {
+    public Gpu(AddressSpace ram, Display display, InterruptManager interruptManager) {
+        this.interruptManager = interruptManager;
         this.ram = ram;
-        this.phase = new OamSearch(line);
+        this.phase = new OamSearch(ly);
         this.mode = Mode.OamSearch;
         this.display = display;
     }
@@ -52,6 +55,10 @@ public class Gpu implements AddressSpace {
             case 0xff43:
                 scrollX = value;
                 break;
+
+            case 0xff45:
+                lyc = value;
+                break;
         }
     }
 
@@ -71,7 +78,10 @@ public class Gpu implements AddressSpace {
                 return scrollX;
 
             case 0xff44:
-                return line;
+                return ly;
+
+            case 0xff45:
+                return lyc;
         }
         return 0xff;
     }
@@ -82,42 +92,63 @@ public class Gpu implements AddressSpace {
             switch (mode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(line, ram, display, lcdc, scrollX, scrollY);
+                    phase = new PixelTransfer(ly, ram, display, lcdc, scrollX, scrollY);
                     break;
 
                 case PixelTransfer:
                     mode = Mode.HBlank;
-                    phase = new HBlankPhase(line, ticksInLine);
+                    phase = new HBlankPhase(ly, ticksInLine);
+                    requestLcdcInterrupt(3);
                     break;
 
                 case HBlank:
                     ticksInLine = 0;
-                    if (++line == 144) {
+                    if (++ly == 144) {
                         mode = Mode.VBlank;
-                        phase = new VBlankPhase(line);
+                        phase = new VBlankPhase(ly);
+                        interruptManager.requestInterrupt(InterruptType.VBlank);
+                        requestLcdcInterrupt(4);
                     } else {
                         mode = Mode.OamSearch;
-                        phase = new OamSearch(line);
+                        phase = new OamSearch(ly);
+                        requestLcdcInterrupt(5);
                     }
+                    requestLycEqualsLyInterrupt();
                     break;
 
                 case VBlank:
                     ticksInLine = 0;
-                    if (++line == 154) {
+                    if (++ly == 154) {
                         mode = Mode.OamSearch;
-                        line = 0;
-                        phase = new OamSearch(line);
+                        ly = 0;
+                        phase = new OamSearch(ly);
+                        requestLcdcInterrupt(5);
                     } else {
-                        phase = new VBlankPhase(line);
+                        phase = new VBlankPhase(ly);
                     }
+                    requestLycEqualsLyInterrupt();
+                    break;
             }
         }
     }
 
+    private void requestLcdcInterrupt(int statBit) {
+        if ((stat & (1 << statBit)) != 0) {
+            interruptManager.requestInterrupt(InterruptType.LCDC);
+        }
+    }
+
+    private void requestLycEqualsLyInterrupt() {
+        if (lyc == ly) {
+            requestLcdcInterrupt(6);
+        }
+    }
+
     private int getStat() {
-        return 0;
+        return stat | mode.ordinal() | (ly == lyc ? (1 << 2) : 0);
     }
 
     private void setStat(int value) {
+        this.stat = value & 0b11111000; // last three bits are read-only
     }
 }

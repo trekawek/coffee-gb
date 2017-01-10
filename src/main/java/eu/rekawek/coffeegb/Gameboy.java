@@ -21,9 +21,9 @@ public class Gameboy {
     public Gameboy(Rom rom, Display display) {
         Ram ram = new Ram();
         interruptManager = new InterruptManager();
-        gpu = new Gpu(ram, display);
+        gpu = new Gpu(ram, display, interruptManager);
         mmu = new Mmu(gpu, ram, rom);
-        cpu = new Cpu(mmu);
+        cpu = new Cpu(mmu, interruptManager);
     }
 
     public void run() {
