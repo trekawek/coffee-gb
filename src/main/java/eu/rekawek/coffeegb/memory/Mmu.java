@@ -1,22 +1,53 @@
 package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.gpu.Gpu;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class Mmu implements AddressSpace {
 
-    private final AddressSpace bootRom = new Rom(BootRom.GAMEBOY_CLASSIC, 0);
+    private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
 
-    private final AddressSpace ram;
+    private static final AddressSpace VOID = new AddressSpace() {
+        @Override
+        public boolean accepts(int address) {
+            return true;
+        }
 
-    private final Gpu gpu;
+        @Override
+        public void setByte(int address, int value) {
+            LOG.warn("Writing value {} to void address {}", Integer.toHexString(value), Integer.toHexString(address));
+        }
 
-    private final Rom rom;
+        @Override
+        public int getByte(int address) {
+            LOG.warn("Reading value from void address {}", Integer.toHexString(address));
+            return 0xff;
+        }
+    };
 
-    public Mmu(Gpu gpu, AddressSpace ram, Rom rom) {
-        this.gpu = gpu;
-        this.ram = ram;
-        this.rom = rom;
+    private final List<AddressSpace> spaces = new ArrayList<>();
+
+    public Mmu() {
+        Ram internalRam = new Ram(0xc000, 0x2000);
+        Ram shadowRam = Ram.createShadow(0xe000, 0x1e00, internalRam);
+        Ram ffRam = new Ram(0xff80, 0x0080);
+
+        addAddressSpace(internalRam);
+        addAddressSpace(shadowRam);
+        addAddressSpace(ffRam);
+    }
+
+    public void addAddressSpace(AddressSpace space) {
+        spaces.add(space);
+    }
+
+    @Override
+    public boolean accepts(int address) {
+        return true;
     }
 
     @Override
@@ -30,15 +61,12 @@ public class Mmu implements AddressSpace {
     }
 
     private AddressSpace getSpace(int address) {
-        if (address >= 0x0000 && address <= 0x00ff) {
-            return bootRom;
-        } else if (address >= 0x0100 && address <= 0x7fff) {
-            return rom;
-        } else if (address >= 0xff40 && address <= 0xff4b) {
-            return gpu;
-        } else {
-            return ram;
+        for (AddressSpace s : spaces) {
+            if (s.accepts(address)) {
+                return s;
+            }
         }
+        return VOID;
     }
 
 }

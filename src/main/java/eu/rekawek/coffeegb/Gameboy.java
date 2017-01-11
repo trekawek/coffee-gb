@@ -5,8 +5,7 @@ import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.Mmu;
-import eu.rekawek.coffeegb.memory.Ram;
-import eu.rekawek.coffeegb.memory.Rom;
+import eu.rekawek.coffeegb.memory.Cartridge;
 
 public class Gameboy {
 
@@ -18,17 +17,19 @@ public class Gameboy {
 
     private final Cpu cpu;
 
-    public Gameboy(Rom rom, Display display) {
-        Ram ram = new Ram();
+    public Gameboy(Cartridge rom, Display display) {
         interruptManager = new InterruptManager();
-        gpu = new Gpu(ram, display, interruptManager);
-        mmu = new Mmu(gpu, ram, rom);
+        gpu = new Gpu(display, interruptManager);
+        mmu = new Mmu();
+        mmu.addAddressSpace(rom);
+        mmu.addAddressSpace(gpu);
+        mmu.addAddressSpace(interruptManager);
         cpu = new Cpu(mmu, interruptManager);
     }
 
     public void run() {
         int cpuTick = 0;
-        while (cpu.getRegisters().getPC() != 0x100) {
+        while (true) {
             if (cpuTick == 0) {
                 cpu.tick();
             }

@@ -103,6 +103,7 @@ public class Cpu {
                 }
                 ops = currentOpcode.getOps();
                 state = State.RUNNING;
+                //trace();
                 // fall through
 
             case RUNNING:
@@ -177,9 +178,6 @@ public class Cpu {
     }
 
     private void trace() {
-        if (++trace % 1000 != 0) {
-            return;
-        }
         trace = 0;
         String label = currentOpcode.toString();
         label = label.replace("d8", String.format("0x%02x", operand[0]));
@@ -187,7 +185,7 @@ public class Cpu {
         label = label.replace("d16", String.format("0x%04x", BitUtils.toWord(operand)));
         label = label.replace("a16", String.format("0x%04x", BitUtils.toWord(operand)));
         label = label.replace("r8", String.format("%s0x%02x", BitUtils.isNegative(operand[0]) ? "-" : "", BitUtils.abs(operand[0])));
-        LOG.trace("{} {}", String.format("%04x %6s", commandStart, getDump(commandStart, registers.getPC())), label);
+        System.out.println(String.format("%04x %6s %s", commandStart, getDump(commandStart, registers.getPC()), label));
     }
 
     public Registers getRegisters() {

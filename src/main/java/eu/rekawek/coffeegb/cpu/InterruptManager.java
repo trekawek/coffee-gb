@@ -1,12 +1,6 @@
 package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.cpu.op.Op;
-import eu.rekawek.coffeegb.cpu.opcode.Opcode;
-import eu.rekawek.coffeegb.cpu.opcode.OpcodeBuilder;
-
-import java.util.Arrays;
-import java.util.List;
 
 public class InterruptManager implements AddressSpace {
 
@@ -82,6 +76,11 @@ public class InterruptManager implements AddressSpace {
     public void flush() {
         interruptFlag = 0;
         interruptRequested = false;
+    }
+
+    @Override
+    public boolean accepts(int address) {
+        return address == 0xff0f || address == 0xffff;
     }
 
     @Override
