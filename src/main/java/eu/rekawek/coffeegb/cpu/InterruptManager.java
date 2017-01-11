@@ -18,7 +18,7 @@ public class InterruptManager implements AddressSpace {
         }
     }
 
-    private boolean ime;
+    private boolean ime = true;
 
     private int interruptFlag;
 
@@ -26,9 +26,9 @@ public class InterruptManager implements AddressSpace {
 
     private boolean interruptRequested;
 
-    private int pendingEnableInterrupts;
+    private int pendingEnableInterrupts = -1;
 
-    private int pendingDisableInterrupts;
+    private int pendingDisableInterrupts = -1;
 
     public void enableInterrupts(boolean withDelay) {
         if (withDelay) {

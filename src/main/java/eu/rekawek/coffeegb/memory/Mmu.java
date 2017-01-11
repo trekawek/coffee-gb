@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,11 +20,17 @@ public class Mmu implements AddressSpace {
 
         @Override
         public void setByte(int address, int value) {
+            if (address < 0 || address > 0xffff) {
+                throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
+            }
             LOG.warn("Writing value {} to void address {}", Integer.toHexString(value), Integer.toHexString(address));
         }
 
         @Override
         public int getByte(int address) {
+            if (address < 0 || address > 0xffff) {
+                throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
+            }
             LOG.warn("Reading value from void address {}", Integer.toHexString(address));
             return 0xff;
         }

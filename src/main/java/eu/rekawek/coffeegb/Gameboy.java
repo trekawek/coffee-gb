@@ -1,11 +1,13 @@
 package eu.rekawek.coffeegb;
 
+import eu.rekawek.coffeegb.controller.Controller;
+import eu.rekawek.coffeegb.controller.Joypad;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.Mmu;
-import eu.rekawek.coffeegb.memory.Cartridge;
+import eu.rekawek.coffeegb.memory.cart.Cartridge;
 
 public class Gameboy {
 
@@ -17,12 +19,13 @@ public class Gameboy {
 
     private final Cpu cpu;
 
-    public Gameboy(Cartridge rom, Display display) {
+    public Gameboy(Cartridge rom, Display display, Controller controller) {
         interruptManager = new InterruptManager();
         gpu = new Gpu(display, interruptManager);
         mmu = new Mmu();
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
+        mmu.addAddressSpace(new Joypad(interruptManager, controller));
         mmu.addAddressSpace(interruptManager);
         cpu = new Cpu(mmu, interruptManager);
     }

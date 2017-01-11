@@ -11,7 +11,7 @@ import java.util.List;
 public class Cpu {
 
     private enum State {
-        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED;
+        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED;
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(Cpu.class);
@@ -157,7 +157,7 @@ public class Cpu {
             case IRQ_PUSH_1:
                 registers.decrementSP();
                 addressSpace.setByte(registers.getSP(), (registers.getPC() & 0xff00) >> 8);
-                state = State.IRQ_PUSH_2;
+                state = State.IRQ_PUSH_2_AND_JUMP;
                 break;
 
             case IRQ_PUSH_2_AND_JUMP:

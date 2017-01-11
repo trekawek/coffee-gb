@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.gui;
 
 import eu.rekawek.coffeegb.Gameboy;
-import eu.rekawek.coffeegb.memory.Cartridge;
+import eu.rekawek.coffeegb.memory.cart.Cartridge;
 
 import java.io.File;
 import javax.swing.*;
@@ -30,8 +30,12 @@ public class Main {
             mainWindow.setVisible(true);
             mainWindow.pack();
 
+            final SwingController controller = new SwingController();
+            mainWindow.addKeyListener(controller);
+
             final Cartridge rom = new Cartridge(new File("src/test/resources/dr-mario.gb"));
-            new Thread(() -> new Gameboy(rom, display).run()).start();
+
+            new Thread(() -> new Gameboy(rom, display, controller).run()).start();
         } catch(Exception e) {
             throw new RuntimeException(e);
         }
