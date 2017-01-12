@@ -18,7 +18,7 @@ public class InterruptManager implements AddressSpace {
         }
     }
 
-    private boolean ime = true;
+    private boolean ime;
 
     private int interruptFlag;
 
@@ -87,6 +87,7 @@ public class InterruptManager implements AddressSpace {
     public void setByte(int address, int value) {
         switch (address) {
             case 0xff0f:
+                interruptRequested = true;
                 interruptFlag = value;
                 break;
 

@@ -103,7 +103,6 @@ public class Cpu {
                 }
                 ops = currentOpcode.getOps();
                 state = State.RUNNING;
-                //trace();
                 // fall through
 
             case RUNNING:
@@ -118,6 +117,7 @@ public class Cpu {
                 while (opIndex < ops.size()) {
                     Op op = ops.get(opIndex++);
                     opContext = op.execute(registers, addressSpace, operand, opContext);
+                    op.switchInterrupts(interruptManager);
                     if (!op.proceed(registers)) {
                         opIndex = ops.size();
                         break;
@@ -144,6 +144,7 @@ public class Cpu {
                 for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.values()) {
                     if ((interruptFlag & interruptEnabled & (1 << irq.ordinal())) != 0) {
                         requestedIrq = irq;
+                        break;
                     }
                 }
                 interruptManager.flush();
@@ -151,6 +152,7 @@ public class Cpu {
                     state = State.OPCODE;
                 } else {
                     state = State.IRQ_PUSH_1;
+                    interruptManager.disableInterrupts(false);
                 }
                 break;
 
