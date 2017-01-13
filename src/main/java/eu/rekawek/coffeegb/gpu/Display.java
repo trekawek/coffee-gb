@@ -6,4 +6,8 @@ public interface Display {
 
     void refresh();
 
+    void enableLcd();
+
+    void disableLcd();
+
 }

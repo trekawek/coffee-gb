@@ -1,18 +1,88 @@
 package eu.rekawek.coffeegb.gpu.phase;
 
+import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.gpu.GpuRegister;
+import eu.rekawek.coffeegb.gpu.Lcdc;
+import eu.rekawek.coffeegb.memory.MemoryRegisters;
+
 public class OamSearch implements GpuPhase {
 
-    private final int line;
+    private enum State {
+        READING_Y, READING_X;
+    }
 
-    private int ticks;
+    public static class SpritePosition {
 
-    public OamSearch(int line) {
-        this.line = line;
+        private final int x;
+
+        private final int y;
+
+        private final int address;
+
+        public SpritePosition(int x, int y, int address) {
+            this.x = x;
+            this.y = y;
+            this.address = address;
+        }
+    }
+
+    private final AddressSpace oemRam;
+
+    private final MemoryRegisters registers;
+
+    private final SpritePosition[] sprites;
+
+    private final Lcdc lcdc;
+
+    private int spritePosIndex;
+
+    private State state;
+
+    private int spriteY;
+
+    private int spriteX;
+
+    private int i;
+
+    public OamSearch(AddressSpace oemRam, MemoryRegisters registers) {
+        this.oemRam = oemRam;
+        this.registers = registers;
+        this.lcdc = new Lcdc(registers);
+
+        this.sprites = new SpritePosition[10];
+        this.state = State.READING_Y;
     }
 
     @Override
     public boolean tick() {
-        return ++ticks < 80;
+        int spriteAddress = 0xfe00 + 4 * i;
+
+        switch (state) {
+            case READING_Y:
+                spriteY = oemRam.getByte(spriteAddress);
+                if (between(spriteY, registers.get(GpuRegister.LY) + 16, spriteY + lcdc.getSpriteHeight())) {
+                    state = State.READING_X;
+                } else {
+                    i++;
+                }
+                break;
+
+            case READING_X:
+                spriteX = oemRam.getByte(spriteAddress + 1);
+                sprites[spritePosIndex++] = new SpritePosition(spriteX, spriteY, spriteAddress);
+                i++;
+                state = State.READING_Y;
+                break;
+        }
+        return i < 40;
+    }
+
+    public SpritePosition[] getSprites() {
+        return sprites;
+    }
+
+    private static boolean between(int from, int x, int to) {
+        return from <= x && x < to;
     }
 
 }

@@ -27,6 +27,8 @@ public class Gpu implements AddressSpace {
 
     private final InterruptManager interruptManager;
 
+    private final Lcdc lcdc;
+
     private MemoryRegisters r;
 
     private int ticksInLine;
@@ -40,9 +42,10 @@ public class Gpu implements AddressSpace {
         this.interruptManager = interruptManager;
         this.videoRam = new Ram(0x8000, 0x2000);
         this.oemRam = new Ram(0xfe00, 0x00a0);
-        this.phase = new OamSearch(0);
+        this.phase = new OamSearch(oemRam, r);
         this.mode = Mode.OamSearch;
         this.display = display;
+        this.lcdc = new Lcdc(r);
     }
 
     private AddressSpace getAddressSpace(int address) {
@@ -90,11 +93,19 @@ public class Gpu implements AddressSpace {
 
     public void tick() {
         boolean phaseInProgress = phase.tick();
-        if (!phaseInProgress) {
+        if (phaseInProgress) {
+            if (mode == Mode.VBlank) {
+                if (lcdc.isLcdEnabled()) {
+                    display.enableLcd();
+                } else {
+                    display.disableLcd();
+                }
+            }
+        } else {
             switch (mode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(videoRam, display, r);
+                    phase = new PixelTransfer(videoRam, display, r, ((OamSearch) phase).getSprites());
                     break;
 
                 case PixelTransfer:
@@ -112,7 +123,7 @@ public class Gpu implements AddressSpace {
                         requestLcdcInterrupt(4);
                     } else {
                         mode = Mode.OamSearch;
-                        phase = new OamSearch(r.get(LY));
+                        phase = new OamSearch(oemRam, r);
                         requestLcdcInterrupt(5);
                     }
                     requestLycEqualsLyInterrupt();
@@ -123,7 +134,7 @@ public class Gpu implements AddressSpace {
                     if (r.preIncrement(LY) == 154) {
                         mode = Mode.OamSearch;
                         r.put(LY, 0);
-                        phase = new OamSearch(0);
+                        phase = new OamSearch(oemRam, r);
                         requestLcdcInterrupt(5);
                         display.refresh();
                     } else {

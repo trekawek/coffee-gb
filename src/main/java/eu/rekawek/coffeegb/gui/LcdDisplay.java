@@ -14,6 +14,8 @@ public class LcdDisplay extends JPanel implements Display {
 
     private static final int[] COLORS = new int[] {Color.WHITE.getRGB(), Color.LIGHT_GRAY.getRGB(), Color.DARK_GRAY.getRGB(), Color.BLACK.getRGB()};
 
+    private boolean enabled = true;
+
     @Override
     public void setPixel(int x, int y, int color) {
         for (int i = 0; i < SCALE; i++) {
@@ -30,11 +32,26 @@ public class LcdDisplay extends JPanel implements Display {
     }
 
     @Override
+    public void enableLcd() {
+        enabled = true;
+    }
+
+    @Override
+    public void disableLcd() {
+        enabled = false;
+    }
+
+    @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
 
         Graphics2D g2d = (Graphics2D) g.create();
-        g2d.drawImage(img, 0, 0, Color.WHITE, null);
+        if (enabled) {
+            g2d.drawImage(img, 0, 0, Color.WHITE, null);
+        } else {
+            g2d.setColor(Color.BLACK);
+            g2d.drawRect(0, 0, img.getWidth(), img.getHeight());
+        }
         g2d.dispose();
     }
 }

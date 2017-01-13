@@ -21,6 +21,14 @@ public class GameboyTest {
             @Override
             public void refresh() {
             }
+
+            @Override
+            public void enableLcd() {
+            }
+
+            @Override
+            public void disableLcd() {
+            }
         }, listener -> {}).run();
     }
 
