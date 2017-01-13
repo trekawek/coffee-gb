@@ -8,7 +8,10 @@ import eu.rekawek.coffeegb.gpu.phase.HBlankPhase;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch;
 import eu.rekawek.coffeegb.gpu.phase.PixelTransfer;
 import eu.rekawek.coffeegb.gpu.phase.VBlankPhase;
+import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import eu.rekawek.coffeegb.memory.Ram;
+
+import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
 public class Gpu implements AddressSpace {
 
@@ -24,7 +27,7 @@ public class Gpu implements AddressSpace {
 
     private final InterruptManager interruptManager;
 
-    private int lcdc, stat, scrollY, scrollX, ly, lyc;
+    private MemoryRegisters r;
 
     private int ticksInLine;
 
@@ -33,80 +36,56 @@ public class Gpu implements AddressSpace {
     private GpuPhase phase;
 
     public Gpu(Display display, InterruptManager interruptManager) {
+        this.r = new MemoryRegisters(GpuRegister.values());
         this.interruptManager = interruptManager;
         this.videoRam = new Ram(0x8000, 0x2000);
         this.oemRam = new Ram(0xfe00, 0x00a0);
-        this.phase = new OamSearch(ly);
+        this.phase = new OamSearch(0);
         this.mode = Mode.OamSearch;
         this.display = display;
     }
 
+    private AddressSpace getAddressSpace(int address) {
+        if (videoRam.accepts(address)) {
+            return videoRam;
+        } else if (oemRam.accepts(address)) {
+            return oemRam;
+        } else if (r.accepts(address)) {
+            return r;
+        } else {
+            return null;
+        }
+    }
+
     @Override
     public boolean accepts(int address) {
-        return (address >= 0x8000 && address < 0xa000) ||
-               (address >= 0xfe00 && address < 0xfea0) ||
-               (address >= 0xff40 && address <= 0xff4b);
+        return getAddressSpace(address) != null;
     }
 
     @Override
     public void setByte(int address, int value) {
-        if (videoRam.accepts(address)) {
-            videoRam.setByte(address, value);
-        } else if (oemRam.accepts(address)) {
-            oemRam.setByte(address, value);
+        if (address == STAT.getAddress()) {
+            setStat(value);
         } else {
-            switch (address) {
-                case 0xff40:
-                    lcdc = value;
-                    break;
-
-                case 0xff41:
-                    setStat(value);
-                    break;
-
-                case 0xff42:
-                    scrollY = value;
-                    break;
-
-                case 0xff43:
-                    scrollX = value;
-                    break;
-
-                case 0xff45:
-                    lyc = value;
-                    break;
+            AddressSpace space = getAddressSpace(address);
+            if (space != null) {
+                space.setByte(address, value);
             }
         }
     }
 
     @Override
     public int getByte(int address) {
-        if (videoRam.accepts(address)) {
-            return videoRam.getByte(address);
-        } else if (oemRam.accepts(address)) {
-            return oemRam.getByte(address);
+        if (address == STAT.getAddress()) {
+            return getStat();
         } else {
-            switch (address) {
-                case 0xff40:
-                    return lcdc;
-
-                case 0xff41:
-                    return getStat();
-
-                case 0xff42:
-                    return scrollY;
-
-                case 0xff43:
-                    return scrollX;
-
-                case 0xff44:
-                    return ly;
-
-                case 0xff45:
-                    return lyc;
+            AddressSpace space = getAddressSpace(address);
+            if (space == null) {
+                return 0xff;
+            } else {
+                return space.getByte(address);
             }
         }
-        return 0xff;
     }
 
     public void tick() {
@@ -115,25 +94,25 @@ public class Gpu implements AddressSpace {
             switch (mode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(ly, videoRam, display, lcdc, scrollX, scrollY);
+                    phase = new PixelTransfer(videoRam, display, r);
                     break;
 
                 case PixelTransfer:
                     mode = Mode.HBlank;
-                    phase = new HBlankPhase(ly, ticksInLine);
+                    phase = new HBlankPhase(r.get(LY), ticksInLine);
                     requestLcdcInterrupt(3);
                     break;
 
                 case HBlank:
                     ticksInLine = 0;
-                    if (++ly == 144) {
+                    if (r.preIncrement(LY) == 144) {
                         mode = Mode.VBlank;
-                        phase = new VBlankPhase(ly);
+                        phase = new VBlankPhase(r.get(LY));
                         interruptManager.requestInterrupt(InterruptType.VBlank);
                         requestLcdcInterrupt(4);
                     } else {
                         mode = Mode.OamSearch;
-                        phase = new OamSearch(ly);
+                        phase = new OamSearch(r.get(LY));
                         requestLcdcInterrupt(5);
                     }
                     requestLycEqualsLyInterrupt();
@@ -141,13 +120,14 @@ public class Gpu implements AddressSpace {
 
                 case VBlank:
                     ticksInLine = 0;
-                    if (++ly == 154) {
+                    if (r.preIncrement(LY) == 154) {
                         mode = Mode.OamSearch;
-                        ly = 0;
-                        phase = new OamSearch(ly);
+                        r.put(LY, 0);
+                        phase = new OamSearch(0);
                         requestLcdcInterrupt(5);
+                        display.refresh();
                     } else {
-                        phase = new VBlankPhase(ly);
+                        phase = new VBlankPhase(r.get(LY));
                     }
                     requestLycEqualsLyInterrupt();
                     break;
@@ -156,22 +136,22 @@ public class Gpu implements AddressSpace {
     }
 
     private void requestLcdcInterrupt(int statBit) {
-        if ((stat & (1 << statBit)) != 0) {
+        if ((r.get(STAT) & (1 << statBit)) != 0) {
             interruptManager.requestInterrupt(InterruptType.LCDC);
         }
     }
 
     private void requestLycEqualsLyInterrupt() {
-        if (lyc == ly) {
+        if (r.get(LYC) == r.get(LY)) {
             requestLcdcInterrupt(6);
         }
     }
 
     private int getStat() {
-        return stat | mode.ordinal() | (ly == lyc ? (1 << 2) : 0);
+        return r.get(STAT) | mode.ordinal() | (r.get(LYC) == r.get(LY) ? (1 << 2) : 0);
     }
 
     private void setStat(int value) {
-        this.stat = value & 0b11111000; // last three bits are read-only
+        r.put(STAT, value & 0b11111000); // last three bits are read-only
     }
 }

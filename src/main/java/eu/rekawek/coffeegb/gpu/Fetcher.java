@@ -2,9 +2,14 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Dumper;
+import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.abs;
 import static eu.rekawek.coffeegb.cpu.BitUtils.isNegative;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.LCDC;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.SCX;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.SCY;
 
 public class Fetcher {
 
@@ -36,13 +41,13 @@ public class Fetcher {
 
     private int tileData2;
 
-    public Fetcher(PixelFifo fifo, int line, AddressSpace videoRam, int lcdc, int scrollX, int scrollY) {
+    public Fetcher(PixelFifo fifo, AddressSpace videoRam, MemoryRegisters r) {
         this.fifo = fifo;
         this.videoRam = videoRam;
-        this.line = line;
-        this.scrollX = scrollX;
-        this.scrollY = scrollY;
-        this.lcdc = lcdc;
+        this.line = r.get(LY);
+        this.scrollX = r.get(SCX);
+        this.scrollY = r.get(SCY);
+        this.lcdc = r.get(LCDC);
         //dumpVideoRam();
     }
 
@@ -70,6 +75,11 @@ public class Fetcher {
             case PUSH:
                 if (fifo.getLength() <= 8) {
                     fifo.enqueue8Pixels(tileData1, tileData2);
+                    if (xPos == 0) {
+                        for (int i = 0; i < scrollX % 0x08; i++) {
+                            fifo.dequeuePixel();
+                        }
+                    }
                     state = State.READ_TILE_ID;
                     xPos += 0x08;
                 }

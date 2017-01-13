@@ -4,10 +4,11 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Fetcher;
 import eu.rekawek.coffeegb.gpu.PixelFifo;
+import eu.rekawek.coffeegb.memory.MemoryRegisters;
+
+import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 
 public class PixelTransfer implements GpuPhase {
-
-    private final int line;
 
     private final PixelFifo fifo;
 
@@ -15,12 +16,14 @@ public class PixelTransfer implements GpuPhase {
 
     private final Display display;
 
+    private final MemoryRegisters r;
+
     private int pixels;
 
-    public PixelTransfer(int line, AddressSpace videoRam, Display display, int lcdc, int scrollX, int scrollY) {
-        this.line = line;
+    public PixelTransfer(AddressSpace videoRam, Display display, MemoryRegisters r) {
+        this.r = r;
         this.fifo = new PixelFifo();
-        this.fetcher = new Fetcher(fifo, line, videoRam, lcdc, scrollX, scrollY);
+        this.fetcher = new Fetcher(fifo, videoRam, r);
         this.display = display;
     }
 
@@ -28,9 +31,8 @@ public class PixelTransfer implements GpuPhase {
     public boolean tick() {
         fetcher.tick();
         if (fifo.getLength() > 8) {
-            display.setPixel(pixels++, line, fifo.dequeuePixel());
+            display.setPixel(pixels++, r.get(LY), fifo.dequeuePixel());
             if (pixels == 160) {
-                display.refresh();
                 return false;
             }
         }
