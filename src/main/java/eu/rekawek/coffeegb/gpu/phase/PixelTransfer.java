@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Fetcher;
 import eu.rekawek.coffeegb.gpu.Lcdc;
 import eu.rekawek.coffeegb.gpu.PixelFifo;
+import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
@@ -25,16 +26,19 @@ public class PixelTransfer implements GpuPhase {
 
     private final Lcdc lcdc;
 
+    private final SpritePosition[] sprites;
+
     private int droppedPixels;
 
     private int x;
 
-    public PixelTransfer(AddressSpace videoRam, Display display, MemoryRegisters r, OamSearch.SpritePosition[] sprites) {
+    public PixelTransfer(AddressSpace videoRam, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites) {
         this.r = r;
         this.lcdc = new Lcdc(r);
         this.fifo = new PixelFifo();
-        this.fetcher = new Fetcher(fifo, videoRam);
+        this.fetcher = new Fetcher(fifo, videoRam, oemRam, r);
         this.display = display;
+        this.sprites = sprites;
 
         if (lcdc.isBgAndWindowDisplay()) {
             startFetchingBackground();
@@ -57,6 +61,17 @@ public class PixelTransfer implements GpuPhase {
             }
             if (lcdc.isWindowDisplay() && r.get(LY) >= r.get(WY) && x == r.get(WX) - 7) {
                 startFetchingWindow();
+            }
+        }
+
+        if (lcdc.isObjDisplay()) {
+            for (SpritePosition s : sprites) {
+                if (s == null) {
+                    continue;
+                }
+                if (s.getX() - 8 == x) {
+                    fetcher.addSprite(s);
+                }
             }
         }
 

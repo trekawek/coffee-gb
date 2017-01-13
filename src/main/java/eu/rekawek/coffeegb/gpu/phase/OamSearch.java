@@ -24,6 +24,18 @@ public class OamSearch implements GpuPhase {
             this.y = y;
             this.address = address;
         }
+
+        public int getX() {
+            return x;
+        }
+
+        public int getY() {
+            return y;
+        }
+
+        public int getAddress() {
+            return address;
+        }
     }
 
     private final AddressSpace oemRam;

@@ -14,7 +14,6 @@ public enum GpuRegister implements MemoryRegisters.Register {
     SCX(0xff43, RW),
     LY(0xff44, R),
     LYC(0xff45, RW),
-    DMA(0xff46, W),
     BGP(0xff47, RW),
     OBP0(0xff48, RW),
     OBP1(0xff49, RW),

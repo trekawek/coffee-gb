@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
+import eu.rekawek.coffeegb.memory.Dma;
 import eu.rekawek.coffeegb.memory.Mmu;
 import eu.rekawek.coffeegb.memory.Ram;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
@@ -24,11 +25,14 @@ public class Gameboy {
 
     private final Timer timer;
 
+    private final Dma dma;
+
     public Gameboy(Cartridge rom, Display display, Controller controller) {
         interruptManager = new InterruptManager();
         timer = new Timer(interruptManager);
         gpu = new Gpu(display, interruptManager);
         mmu = new Mmu();
+        dma = new Dma(mmu);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(new Joypad(interruptManager, controller));
@@ -36,6 +40,7 @@ public class Gameboy {
         mmu.addAddressSpace(new SerialPort());
         mmu.addAddressSpace(new Ram(0xff10, 0x30)); // sound
         mmu.addAddressSpace(timer);
+        mmu.addAddressSpace(dma);
         cpu = new Cpu(mmu, interruptManager);
     }
 
@@ -48,6 +53,7 @@ public class Gameboy {
             cpuTick = (cpuTick + 1) % 4;
             gpu.tick();
             timer.tick();
+            dma.tick();
         }
     }
 }

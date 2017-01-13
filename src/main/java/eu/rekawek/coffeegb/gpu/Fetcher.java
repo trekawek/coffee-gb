@@ -1,20 +1,27 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.abs;
 import static eu.rekawek.coffeegb.cpu.BitUtils.isNegative;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 
 public class Fetcher {
 
     private enum State {
-        READ_TILE_ID, READ_DATA_1, READ_DATA_2, PUSH
+        READ_TILE_ID, READ_DATA_1, READ_DATA_2, PUSH,
+        READ_SPRITE_TILE_ID, READ_SPRITE_FLAGS, READ_SPRITE_DATA_1, READ_SPRITE_DATA_2, PUSH_SPRITE
     }
 
     private final PixelFifo fifo;
 
     private final AddressSpace videoRam;
+
+    private final AddressSpace oemRam;
+
+    private final MemoryRegisters r;
 
     private boolean divider;
 
@@ -36,9 +43,17 @@ public class Fetcher {
 
     private int tileData2;
 
-    public Fetcher(PixelFifo fifo, AddressSpace videoRam) {
+    private int spriteTileLine;
+
+    private SpritePosition sprite;
+
+    private SpriteFlags spriteFlags;
+
+    public Fetcher(PixelFifo fifo, AddressSpace videoRam, AddressSpace oemRam, MemoryRegisters registers) {
         this.fifo = fifo;
         this.videoRam = videoRam;
+        this.oemRam = oemRam;
+        this.r = registers;
     }
 
     public void startFetching(int mapAddress, int tileDataAddress, boolean tileIdSigned, int tileLine) {
@@ -58,8 +73,11 @@ public class Fetcher {
         this.fetchingDisabled = true;
     }
 
-    public void addSprite(int tileAddress, int tileLine) {
+    public void addSprite(SpritePosition sprite) {
+        this.sprite = sprite;
+        this.state = State.READ_SPRITE_TILE_ID;
 
+        this.spriteTileLine = r.get(LY) + 16 - sprite.getY();
     }
 
     public void tick() {
@@ -96,6 +114,35 @@ public class Fetcher {
                     mapAddress++;
                     state = State.READ_TILE_ID;
                 }
+                break;
+
+            case READ_SPRITE_TILE_ID:
+                tileId = oemRam.getByte(sprite.getAddress() + 2);
+                state = State.READ_SPRITE_FLAGS;
+                break;
+
+            case READ_SPRITE_FLAGS:
+                spriteFlags = new SpriteFlags(oemRam.getByte(sprite.getAddress() + 3));
+                if (spriteFlags.isYflip()) {
+                    spriteTileLine = 15 - spriteTileLine;
+                }
+                state = State.READ_SPRITE_DATA_1;
+                break;
+
+            case READ_SPRITE_DATA_1:
+                tileData1 = getTileData(tileId, spriteTileLine, 0, 0x8000, false);
+                state = State.READ_SPRITE_DATA_2;
+                break;
+
+            case READ_SPRITE_DATA_2:
+                tileData2 = getTileData(tileId, spriteTileLine, 1, 0x8000, false);
+                state = State.PUSH_SPRITE;
+                break;
+
+            case PUSH_SPRITE:
+                fifo.setOverlay(tileData1, tileData2, 0, spriteFlags);
+                state = State.READ_TILE_ID;
+                break;
         }
     }
 
