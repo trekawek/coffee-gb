@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.gpu.phase.GpuPhase;
@@ -10,10 +11,14 @@ import eu.rekawek.coffeegb.gpu.phase.PixelTransfer;
 import eu.rekawek.coffeegb.gpu.phase.VBlankPhase;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import eu.rekawek.coffeegb.memory.Ram;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
 public class Gpu implements AddressSpace {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Gpu.class);
 
     private enum Mode {
         HBlank, VBlank, OamSearch, PixelTransfer
@@ -36,6 +41,8 @@ public class Gpu implements AddressSpace {
     private Mode mode;
 
     private GpuPhase phase;
+
+    private int ticksForMode;
 
     public Gpu(Display display, InterruptManager interruptManager) {
         this.r = new MemoryRegisters(GpuRegister.values());
@@ -92,6 +99,7 @@ public class Gpu implements AddressSpace {
     }
 
     public boolean tick() {
+        ticksInLine++;
         boolean phaseInProgress = phase.tick();
         boolean screenRefreshed = false;
         if (phaseInProgress) {

@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.gpu.PixelFifo;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
+import static eu.rekawek.coffeegb.gpu.GpuRegister.BGP;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.SCX;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.SCY;
@@ -35,7 +36,7 @@ public class PixelTransfer implements GpuPhase {
     public PixelTransfer(AddressSpace videoRam, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites) {
         this.r = r;
         this.lcdc = new Lcdc(r);
-        this.fifo = new PixelFifo();
+        this.fifo = new PixelFifo(r.get(BGP));
         this.fetcher = new Fetcher(fifo, videoRam, oemRam, r);
         this.display = display;
         this.sprites = sprites;

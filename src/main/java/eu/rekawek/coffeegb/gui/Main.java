@@ -9,9 +9,10 @@ import java.awt.*;
 
 public class Main {
 
-    static final int SCALE = 2;
+    private static final int SCALE = 2;
 
     public static void main(String[] args) {
+        System.setProperty("sun.java2d.opengl", "true");
         javax.swing.SwingUtilities.invokeLater(() -> createAndShowGUI());
     }
 
@@ -22,7 +23,7 @@ public class Main {
             mainWindow.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
             mainWindow.setLocationRelativeTo(null);
 
-            LcdDisplay display = new LcdDisplay();
+            LcdDisplay display = new LcdDisplay(SCALE);
             display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
 
             mainWindow.setContentPane(display);

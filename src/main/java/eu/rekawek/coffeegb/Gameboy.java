@@ -70,24 +70,26 @@ public class Gameboy {
                 display.refresh();
             }
 
-            /*ticksSinceScreenRefresh++;
+            ticksSinceScreenRefresh++;
             if (screenRefreshed) {
                 long timeSinceScreenRefresh = System.nanoTime() - lastScreenRefresh;
-                long gbTime = ticksSinceScreenRefresh * 1_000_000_000 / 4_194_304;
+                long gbTime = (1_000_000_000 / 4_194_304) * ticksSinceScreenRefresh;
 
                 if (timeSinceScreenRefresh < gbTime) {
-                    try {
-                        Thread.sleep(0, (int) (gbTime - timeSinceScreenRefresh));
-                    } catch (InterruptedException e) {
-                        break;
-                    }
-
-                    ticksSinceScreenRefresh = 0;
-                    lastScreenRefresh = System.nanoTime();
-                } else {
-                    System.err.println("too long: " + (timeSinceScreenRefresh - gbTime));
+                    sleepNanos(gbTime - timeSinceScreenRefresh);
                 }
-            }*/
+
+                ticksSinceScreenRefresh = 0;
+                lastScreenRefresh = System.nanoTime();
+            }
+        }
+    }
+
+    private void sleepNanos(long nanos) {
+        try {
+            Thread.sleep(nanos / 1_000_000, (int) (nanos % 1_000_000));
+        } catch (InterruptedException e) {
+            LOG.warn("Interrupted", e);
         }
     }
 }

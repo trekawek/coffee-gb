@@ -142,7 +142,7 @@ public class Fetcher {
                 break;
 
             case PUSH_SPRITE:
-                fifo.setOverlay(tileData1, tileData2, 0, spriteFlags);
+                fifo.setOverlay(tileData1, tileData2, 0, spriteFlags, r);
                 state = State.READ_TILE_ID;
                 break;
         }

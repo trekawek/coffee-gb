@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.gpu;
 
+import eu.rekawek.coffeegb.memory.MemoryRegisters;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -9,11 +11,19 @@ import static com.google.common.collect.Lists.reverse;
 
 public class PixelFifo {
 
-    private Deque<Integer> deque = new ArrayDeque<>();
+    private final int bgp;
 
-    private Deque<Integer> overlayDeque = new ArrayDeque<>();
+    private final Deque<Integer> deque = new ArrayDeque<>();
+
+    private final Deque<Integer> overlayDeque = new ArrayDeque<>();
 
     private boolean overlayPriority;
+
+    private int overlayPalette;
+
+    public PixelFifo(int bgp) {
+        this.bgp = bgp;
+    }
 
     public int getLength() {
         return deque.size();
@@ -21,14 +31,14 @@ public class PixelFifo {
 
     public int dequeuePixel() {
         if (overlayDeque.isEmpty()) {
-            return deque.poll();
+            return getBgColor(deque.poll());
         } else {
             int overlayPixel = overlayDeque.poll();
             int pixel = deque.poll();
             if (overlayPriority) {
-                return overlayPixel;
+                return getObjectColor(overlayPixel);
             } else {
-                return pixel == 0 ? overlayPixel : pixel;
+                return pixel == 0 ? getObjectColor(overlayPixel) : getBgColor(pixel);
             }
         }
     }
@@ -37,12 +47,13 @@ public class PixelFifo {
         deque.addAll(zip(data1, data2));
     }
 
-    public void setOverlay(int data1, int data2, int offset, SpriteFlags flags) {
+    public void setOverlay(int data1, int data2, int offset, SpriteFlags flags, MemoryRegisters registers) {
         List<Integer> pixelLine = zip(data1, data2);
         if (flags.isXflip()) {
             reverse(pixelLine);
         }
         overlayPriority = flags.isPriority();
+        overlayPalette = registers.get(flags.getPalette());
         overlayDeque.clear();
         overlayDeque.addAll(pixelLine.subList(offset, 8));
     }
@@ -51,12 +62,24 @@ public class PixelFifo {
         List<Integer> pixelLine = new ArrayList<>();
         for (int i = 7; i >= 0; i--) {
             int mask = (1 << i);
-            pixelLine.add(2 * ((data1 & mask) == 0 ? 0 : 1) + ((data2 & mask) == 0 ? 0 : 1));
+            pixelLine.add(2 * ((data2 & mask) == 0 ? 0 : 1) + ((data1 & mask) == 0 ? 0 : 1));
         }
         return pixelLine;
     }
 
     List<Integer> asList() {
         return new ArrayList<>(deque);
+    }
+
+    private int getBgColor(int colorIndex) {
+        return getColor(bgp, colorIndex);
+    }
+
+    private int getObjectColor(int colorIndex) {
+        return getColor(overlayPalette, colorIndex);
+    }
+
+    private static int getColor(int pallete, int colorIndex) {
+        return 0b11 & (pallete >> (colorIndex * 2));
     }
 }
