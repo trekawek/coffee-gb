@@ -8,6 +8,8 @@ Coffee GB is a Gameboy emulator written in Java 8. It's meant to be a developmen
 
     java -jar coffee-gb-*.jar src/test/resources/tetris.gb
 
+Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd>.
+
 ## Features
 
 * Cycle-exact Gameboy CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
