@@ -13,10 +13,10 @@ public class Main {
 
     public static void main(String[] args) {
         System.setProperty("sun.java2d.opengl", "true");
-        javax.swing.SwingUtilities.invokeLater(() -> createAndShowGUI());
+        javax.swing.SwingUtilities.invokeLater(() -> start(args[0]));
     }
 
-    private static void createAndShowGUI() {
+    private static void start(String romPath) {
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
             JFrame mainWindow = new JFrame("Coffee GB");
@@ -34,7 +34,7 @@ public class Main {
             final SwingController controller = new SwingController();
             mainWindow.addKeyListener(controller);
 
-            final Cartridge rom = new Cartridge(new File("src/test/resources/tetris.gb"));
+            final Cartridge rom = new Cartridge(new File(romPath));
 
             new Thread(() -> new Gameboy(rom, display, controller).run()).start();
         } catch(Exception e) {

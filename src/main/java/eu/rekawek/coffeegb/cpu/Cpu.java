@@ -46,7 +46,7 @@ public class Cpu {
 
     private InterruptManager.InterruptType requestedIrq;
 
-    private int trace;
+    private int clockCycle = 0;
 
     public Cpu(AddressSpace addressSpace, InterruptManager interruptManager) {
         this.registers = new Registers();
@@ -55,6 +55,12 @@ public class Cpu {
     }
 
     public void tick() {
+        if (++clockCycle == 4) {
+            clockCycle = 0;
+        } else {
+            return;
+        }
+
         if (state == State.OPCODE || state == State.HALTED || state == State.STOPPED) {
             if (interruptManager.isInterruptRequested()) {
                 state = State.IRQ_READ_IF;
@@ -180,7 +186,6 @@ public class Cpu {
     }
 
     private void trace() {
-        trace = 0;
         String label = currentOpcode.toString();
         label = label.replace("d8", String.format("0x%02x", operand[0]));
         label = label.replace("a8", String.format("0xff00 + 0x%02x", operand[0]));

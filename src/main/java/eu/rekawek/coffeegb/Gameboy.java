@@ -35,7 +35,6 @@ public class Gameboy {
 
     public Gameboy(Cartridge rom, Display display, Controller controller) {
         this.display = display;
-
         interruptManager = new InterruptManager();
         timer = new Timer(interruptManager);
         gpu = new Gpu(display, interruptManager);
@@ -53,19 +52,10 @@ public class Gameboy {
     }
 
     public void run() {
-        int cpuTick = 0;
-
         int ticksSinceScreenRefresh = 0;
         long lastScreenRefresh = System.nanoTime();
         while (true) {
-            if (cpuTick == 0) {
-                cpu.tick();
-            }
-            cpuTick = (cpuTick + 1) % 4;
-            timer.tick();
-            dma.tick();
-            boolean screenRefreshed = gpu.tick();
-
+            boolean screenRefreshed = tick();
             if (screenRefreshed) {
                 display.refresh();
             }
@@ -83,6 +73,13 @@ public class Gameboy {
                 lastScreenRefresh = System.nanoTime();
             }
         }
+    }
+
+    public boolean tick() {
+        cpu.tick();
+        timer.tick();
+        dma.tick();
+        return gpu.tick();
     }
 
     private void sleepNanos(long nanos) {

@@ -13,23 +13,7 @@ public class GameboyTest {
     @Test
     @Ignore
     public void testBoot() throws IOException {
-        new Gameboy(new Cartridge(new File("src/test/resources/tetris.gb")), new Display() {
-            @Override
-            public void setPixel(int x, int y, int color) {
-            }
-
-            @Override
-            public void refresh() {
-            }
-
-            @Override
-            public void enableLcd() {
-            }
-
-            @Override
-            public void disableLcd() {
-            }
-        }, listener -> {}).run();
+        new Gameboy(new Cartridge(new File("src/test/resources/tetris.gb")), Display.NULL_DISPLAY, listener -> {}).run();
     }
 
 }
