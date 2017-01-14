@@ -91,8 +91,9 @@ public class Gpu implements AddressSpace {
         }
     }
 
-    public void tick() {
+    public boolean tick() {
         boolean phaseInProgress = phase.tick();
+        boolean screenRefreshed = false;
         if (phaseInProgress) {
             if (mode == Mode.VBlank) {
                 if (lcdc.isLcdEnabled()) {
@@ -136,7 +137,7 @@ public class Gpu implements AddressSpace {
                         r.put(LY, 0);
                         phase = new OamSearch(oemRam, r);
                         requestLcdcInterrupt(5);
-                        display.refresh();
+                        screenRefreshed = true;
                     } else {
                         phase = new VBlankPhase(r.get(LY));
                     }
@@ -144,6 +145,7 @@ public class Gpu implements AddressSpace {
                     break;
             }
         }
+        return screenRefreshed;
     }
 
     private void requestLcdcInterrupt(int statBit) {

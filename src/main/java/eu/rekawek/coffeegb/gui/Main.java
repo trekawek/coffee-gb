@@ -33,7 +33,7 @@ public class Main {
             final SwingController controller = new SwingController();
             mainWindow.addKeyListener(controller);
 
-            final Cartridge rom = new Cartridge(new File("src/test/resources/dr-mario.gb"));
+            final Cartridge rom = new Cartridge(new File("src/test/resources/tetris.gb"));
 
             new Thread(() -> new Gameboy(rom, display, controller).run()).start();
         } catch(Exception e) {

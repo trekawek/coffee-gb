@@ -16,7 +16,7 @@ public class Counter {
     public boolean tick() {
         if (++clocks == 4194304 / frequency) {
             clocks = 0;
-            counter = counter + 1;
+            counter = (counter + 1) & 0xff;
             return true;
         } else {
             return false;

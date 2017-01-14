@@ -26,7 +26,7 @@
         <configuration>
           <archive>
             <manifest>
-              <mainClass>eu.rekawek.coffeegb.Main</mainClass>
+              <mainClass>eu.rekawek.coffeegb.gui.Main</mainClass>
             </manifest>
           </archive>
           <descriptorRefs>

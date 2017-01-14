@@ -65,6 +65,9 @@ public class PixelTransfer implements GpuPhase {
         }
 
         if (lcdc.isObjDisplay()) {
+            if (fetcher.spriteInProgress()) {
+                return true;
+            }
             for (SpritePosition s : sprites) {
                 if (s == null) {
                     continue;

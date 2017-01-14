@@ -12,8 +12,12 @@ import eu.rekawek.coffeegb.memory.Ram;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.timer.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class Gameboy {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Gameboy.class);
 
     private final InterruptManager interruptManager;
 
@@ -27,7 +31,11 @@ public class Gameboy {
 
     private final Dma dma;
 
+    private final Display display;
+
     public Gameboy(Cartridge rom, Display display, Controller controller) {
+        this.display = display;
+
         interruptManager = new InterruptManager();
         timer = new Timer(interruptManager);
         gpu = new Gpu(display, interruptManager);
@@ -46,14 +54,40 @@ public class Gameboy {
 
     public void run() {
         int cpuTick = 0;
+
+        int ticksSinceScreenRefresh = 0;
+        long lastScreenRefresh = System.nanoTime();
         while (true) {
             if (cpuTick == 0) {
                 cpu.tick();
             }
             cpuTick = (cpuTick + 1) % 4;
-            gpu.tick();
             timer.tick();
             dma.tick();
+            boolean screenRefreshed = gpu.tick();
+
+            if (screenRefreshed) {
+                display.refresh();
+            }
+
+            /*ticksSinceScreenRefresh++;
+            if (screenRefreshed) {
+                long timeSinceScreenRefresh = System.nanoTime() - lastScreenRefresh;
+                long gbTime = ticksSinceScreenRefresh * 1_000_000_000 / 4_194_304;
+
+                if (timeSinceScreenRefresh < gbTime) {
+                    try {
+                        Thread.sleep(0, (int) (gbTime - timeSinceScreenRefresh));
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+
+                    ticksSinceScreenRefresh = 0;
+                    lastScreenRefresh = System.nanoTime();
+                } else {
+                    System.err.println("too long: " + (timeSinceScreenRefresh - gbTime));
+                }
+            }*/
         }
     }
 }

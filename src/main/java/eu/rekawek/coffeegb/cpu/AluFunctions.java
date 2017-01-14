@@ -253,7 +253,7 @@ public class AluFunctions {
             flags.setN(false);
             flags.setH(true);
             if (bit < 8) {
-                flags.setZ(BitUtils.getBit(arg1, arg2));
+                flags.setZ(!BitUtils.getBit(arg1, arg2));
             }
             return arg1;
         });

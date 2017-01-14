@@ -25,10 +25,10 @@ public class PixelFifo {
         } else {
             int overlayPixel = overlayDeque.poll();
             int pixel = deque.poll();
-            if (overlayPriority && pixel != 0) {
-                return pixel;
-            } else {
+            if (overlayPriority) {
                 return overlayPixel;
+            } else {
+                return pixel == 0 ? overlayPixel : pixel;
             }
         }
     }

@@ -8,6 +8,9 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 
+import static eu.rekawek.coffeegb.cpu.BitUtils.checkByteArgument;
+import static eu.rekawek.coffeegb.cpu.BitUtils.checkWordArgument;
+
 public class Mmu implements AddressSpace {
 
     private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
@@ -59,11 +62,14 @@ public class Mmu implements AddressSpace {
 
     @Override
     public void setByte(int address, int value) {
+        checkByteArgument("value", value);
+        checkWordArgument("address", address);
         getSpace(address).setByte(address, value);
     }
 
     @Override
     public int getByte(int address) {
+        checkWordArgument("address", address);
         return getSpace(address).getByte(address);
     }
 

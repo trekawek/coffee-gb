@@ -67,11 +67,11 @@ public final class BitUtils {
         }
     }
 
-    static void checkByteArgument(String argumentName, int argument) {
+    public static void checkByteArgument(String argumentName, int argument) {
         checkArgument(argument >= 0 && argument <= 0xff, "Argument {} should be a byte", argumentName);
     }
 
-    static void checkWordArgument(String argumentName, int argument) {
+    public static void checkWordArgument(String argumentName, int argument) {
         checkArgument(argument >= 0 && argument <= 0xffff, "Argument {} should be a word", argumentName);
     }
 
