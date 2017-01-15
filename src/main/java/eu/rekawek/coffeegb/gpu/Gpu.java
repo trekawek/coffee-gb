@@ -20,7 +20,7 @@ public class Gpu implements AddressSpace {
 
     private static final Logger LOG = LoggerFactory.getLogger(Gpu.class);
 
-    private enum Mode {
+    public enum Mode {
         HBlank, VBlank, OamSearch, PixelTransfer
     }
 
@@ -98,10 +98,11 @@ public class Gpu implements AddressSpace {
         }
     }
 
-    public boolean tick() {
+    public Mode tick() {
+        Mode oldMode = mode;
+
         ticksInLine++;
         boolean phaseInProgress = phase.tick();
-        boolean screenRefreshed = false;
         if (phaseInProgress) {
             if (mode == Mode.VBlank) {
                 if (lcdc.isLcdEnabled()) {
@@ -145,7 +146,6 @@ public class Gpu implements AddressSpace {
                         r.put(LY, 0);
                         phase = new OamSearch(oemRam, r);
                         requestLcdcInterrupt(5);
-                        screenRefreshed = true;
                     } else {
                         phase = new VBlankPhase(r.get(LY));
                     }
@@ -153,7 +153,11 @@ public class Gpu implements AddressSpace {
                     break;
             }
         }
-        return screenRefreshed;
+        if (oldMode == mode) {
+            return null;
+        } else {
+            return mode;
+        }
     }
 
     private void requestLcdcInterrupt(int statBit) {

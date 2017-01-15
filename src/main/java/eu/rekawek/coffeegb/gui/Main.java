@@ -9,7 +9,7 @@ import java.awt.*;
 
 public class Main {
 
-    private static final int SCALE = 2;
+    private static final int SCALE = 5;
 
     public static void main(String[] args) {
         System.setProperty("sun.java2d.opengl", "true");
@@ -36,6 +36,7 @@ public class Main {
 
             final Cartridge rom = new Cartridge(new File(romPath));
 
+            new Thread(display).start();
             new Thread(() -> new Gameboy(rom, display, controller).run()).start();
         } catch(Exception e) {
             throw new RuntimeException(e);

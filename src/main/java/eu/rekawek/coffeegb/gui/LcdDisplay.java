@@ -5,8 +5,9 @@ import eu.rekawek.coffeegb.gpu.Display;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-public class LcdDisplay extends JPanel implements Display {
+public class LcdDisplay extends JPanel implements Display, Runnable {
 
     public static final int DISPLAY_WIDTH = 160;
 
@@ -22,9 +23,12 @@ public class LcdDisplay extends JPanel implements Display {
 
     private int scale;
 
+    private volatile boolean doStop;
+
+    private volatile boolean doRefresh;
+
     public LcdDisplay(int scale) {
         super();
-
         GraphicsConfiguration gfxConfig = GraphicsEnvironment.
                 getLocalGraphicsEnvironment().getDefaultScreenDevice().
                 getDefaultConfiguration();
@@ -39,10 +43,24 @@ public class LcdDisplay extends JPanel implements Display {
     }
 
     @Override
-    public void refresh() {
-        img.setRGB(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, rgb, 0, DISPLAY_WIDTH);
-        validate();
-        repaint();
+    public void requestRefresh() {
+        doRefresh = true;
+        synchronized (this) {
+            notify();
+        }
+    }
+
+    @Override
+    public void waitForRefresh() {
+        while (doRefresh) {
+            synchronized (this) {
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        }
     }
 
     @Override
@@ -67,5 +85,27 @@ public class LcdDisplay extends JPanel implements Display {
             g2d.drawRect(0, 0, DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale);
         }
         g2d.dispose();
+    }
+
+    @Override
+    public void run() {
+        while (!doStop) {
+            synchronized (this) {
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+            if (doRefresh) {
+                img.setRGB(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, rgb, 0, DISPLAY_WIDTH);
+                validate();
+                repaint();
+                doRefresh = false;
+            }
+            synchronized (this) {
+                notify();
+            }
+        }
     }
 }

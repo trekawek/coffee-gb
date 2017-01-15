@@ -4,7 +4,9 @@ public interface Display {
 
     void setPixel(int x, int y, int color);
 
-    void refresh();
+    void requestRefresh();
+
+    void waitForRefresh();
 
     void enableLcd();
 
@@ -17,7 +19,11 @@ public interface Display {
         }
 
         @Override
-        public void refresh() {
+        public void requestRefresh() {
+        }
+
+        @Override
+        public void waitForRefresh() {
         }
 
         @Override
@@ -28,4 +34,5 @@ public interface Display {
         public void disableLcd() {
         }
     };
+
 }

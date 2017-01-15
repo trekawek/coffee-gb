@@ -54,14 +54,21 @@ public class Gameboy {
     public void run() {
         int ticksSinceScreenRefresh = 0;
         long lastScreenRefresh = System.nanoTime();
-        while (true) {
-            boolean screenRefreshed = tick();
-            if (screenRefreshed) {
-                display.refresh();
-            }
 
+        boolean requestedScreenRefresh = false;
+
+        while (true) {
             ticksSinceScreenRefresh++;
-            if (screenRefreshed) {
+
+            Gpu.Mode newMode = tick();
+            if (newMode == Gpu.Mode.VBlank) {
+                requestedScreenRefresh = true;
+                display.requestRefresh();
+            }
+            if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
+                requestedScreenRefresh = false;
+                display.waitForRefresh();
+
                 long timeSinceScreenRefresh = System.nanoTime() - lastScreenRefresh;
                 long gbTime = (1_000_000_000 / 4_194_304) * ticksSinceScreenRefresh;
 
@@ -75,7 +82,7 @@ public class Gameboy {
         }
     }
 
-    public boolean tick() {
+    public Gpu.Mode tick() {
         cpu.tick();
         timer.tick();
         dma.tick();
