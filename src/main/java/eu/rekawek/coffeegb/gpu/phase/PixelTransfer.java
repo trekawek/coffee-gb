@@ -69,12 +69,21 @@ public class PixelTransfer implements GpuPhase {
             if (fetcher.spriteInProgress()) {
                 return true;
             }
-            for (SpritePosition s : sprites) {
+            boolean spriteAdded = false;
+            for (int i = 0; i < sprites.length; i++) {
+                SpritePosition s = sprites[i];
                 if (s == null) {
                     continue;
                 }
                 if (s.getX() - 8 == x) {
-                    fetcher.addSprite(s);
+                    if (!spriteAdded) {
+                        fetcher.addSprite(s);
+                        spriteAdded = true;
+                    }
+                    sprites[i] = null;
+                }
+                if (spriteAdded) {
+                    return true;
                 }
             }
         }

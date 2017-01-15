@@ -36,9 +36,9 @@ public class PixelFifo {
             int overlayPixel = overlayDeque.poll();
             int pixel = deque.poll();
             if (overlayPriority) {
-                return getObjectColor(overlayPixel);
-            } else {
                 return pixel == 0 ? getObjectColor(overlayPixel) : getBgColor(pixel);
+            } else {
+                return getObjectColor(overlayPixel);
             }
         }
     }
