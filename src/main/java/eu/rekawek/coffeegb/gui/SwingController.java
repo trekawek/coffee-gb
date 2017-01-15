@@ -16,7 +16,6 @@ public class SwingController implements Controller, KeyListener {
         this.listener = listener;
     }
 
-
     @Override
     public void keyTyped(KeyEvent e) {
     }

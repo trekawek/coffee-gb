@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.gui;
 
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
+import eu.rekawek.coffeegb.sound.SoundOutput;
 
 import java.io.File;
 import javax.swing.*;
@@ -35,9 +36,10 @@ public class Main {
             mainWindow.addKeyListener(controller);
 
             final Cartridge rom = new Cartridge(new File(romPath));
+            final JavaSoundOutput output = new JavaSoundOutput();
 
             new Thread(display).start();
-            new Thread(() -> new Gameboy(rom, display, controller).run()).start();
+            new Thread(() -> new Gameboy(rom, display, controller, output).run()).start();
         } catch(Exception e) {
             throw new RuntimeException(e);
         }

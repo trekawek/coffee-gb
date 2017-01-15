@@ -25,7 +25,7 @@ public class Cartridge implements AddressSpace {
 
     private final int ramBanks;
 
-    private int dmgBoostrap;
+    private int dmgBoostrap = 1;
 
     public Cartridge(File file) throws IOException {
         this.rom = loadFile(file);
