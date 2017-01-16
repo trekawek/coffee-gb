@@ -302,36 +302,16 @@ public class Registers {
         this.pc = pc;
     }
 
-    public void setIME(boolean ime) {
-        this.ime = ime;
-    }
-
-    public void set(ByteRegisterType type, int value) {
-
-    }
-
-    public int decrementHL() {
-        int oldHL = getHL();
-        setHL((oldHL - 1) % 0xffff);
-        return oldHL;
-    }
-
-    public int incrementHL() {
-        int oldHL = getHL();
-        setHL((oldHL + 1) % 0xffff);
-        return oldHL;
-    }
-
     public void incrementPC() {
-        pc = (pc + 1) % 0xffff;
+        pc = (pc + 1) & 0xffff;
     }
 
     public void decrementSP() {
-        sp = (sp - 1) % 0xffff;
+        sp = (sp - 1) & 0xffff;
     }
 
     public void incrementSP() {
-        sp = (sp + 1) % 0xffff;
+        sp = (sp + 1) & 0xffff;
     }
 
     public void addToPC(int signedByte) {

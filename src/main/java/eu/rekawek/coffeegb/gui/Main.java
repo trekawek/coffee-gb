@@ -9,7 +9,7 @@ import java.awt.*;
 
 public class Main {
 
-    private static final int SCALE = 5;
+    private static final int SCALE = 2;
 
     public static void main(String[] args) {
         System.setProperty("sun.java2d.opengl", "true");

@@ -13,7 +13,7 @@ import static eu.rekawek.coffeegb.cpu.BitUtils.checkWordArgument;
 
 public class Mmu implements AddressSpace {
 
-    private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Mmu.class);
 
     private static final AddressSpace VOID = new AddressSpace() {
         @Override

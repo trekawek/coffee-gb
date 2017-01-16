@@ -51,7 +51,7 @@ public class Cartridge implements AddressSpace {
         } else if (address == 0xff50) {
             dmgBoostrap = value;
         } else {
-            LOG.warn("Can't write {} to ROM {}", value, address);
+            LOG.warn("Can't write {} to ROM {}", Integer.toHexString(value), Integer.toHexString(address));
         }
     }
 
