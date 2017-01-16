@@ -15,7 +15,7 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
 
     private final BufferedImage img;
 
-    private static final int[] COLORS = new int[] {0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
+    private static final int[] COLORS = new int[]{0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
 
     private final int[] rgb;
 
@@ -23,9 +23,9 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
 
     private int scale;
 
-    private volatile boolean doStop;
+    private boolean doStop;
 
-    private volatile boolean doRefresh;
+    private boolean doRefresh;
 
     public LcdDisplay(int scale) {
         super();
@@ -43,22 +43,18 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
     }
 
     @Override
-    public void requestRefresh() {
+    public synchronized void requestRefresh() {
         doRefresh = true;
-        synchronized (this) {
-            notify();
-        }
+        notifyAll();
     }
 
     @Override
-    public void waitForRefresh() {
+    public synchronized void waitForRefresh() {
         while (doRefresh) {
-            synchronized (this) {
-                try {
-                    wait();
-                } catch (InterruptedException e) {
-                    break;
-                }
+            try {
+                wait(1);
+            } catch (InterruptedException e) {
+                break;
             }
         }
     }
@@ -92,19 +88,21 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
         while (!doStop) {
             synchronized (this) {
                 try {
-                    wait();
+                    wait(1);
                 } catch (InterruptedException e) {
                     break;
                 }
             }
+
             if (doRefresh) {
                 img.setRGB(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, rgb, 0, DISPLAY_WIDTH);
                 validate();
                 repaint();
-                doRefresh = false;
-            }
-            synchronized (this) {
-                notify();
+
+                synchronized (this) {
+                    doRefresh = false;
+                    notifyAll();
+                }
             }
         }
     }
