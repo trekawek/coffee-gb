@@ -46,12 +46,8 @@ public class SoundMode1_2 extends AbstractSoundMode {
             lengthCounter--;
         }
 
-        if (volumeEnvelope != null) {
-            volumeEnvelope.tick();
-        }
-        if (frequencySweep != null) {
-            frequencySweep.tick();
-        }
+        volumeEnvelope.tick();
+        frequencySweep.tick();
 
         if (freqDivider-- == 0) {
             resetFreqDivider();
