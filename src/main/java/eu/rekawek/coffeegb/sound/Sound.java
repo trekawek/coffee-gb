@@ -33,8 +33,6 @@ public class Sound implements AddressSpace {
             }
         }
 
-        sound[0] = sound[1] = sound[2] = 0;
-
         int selection = r.getByte(0xff25);
         int left = 0;
         int right = 0;
@@ -50,12 +48,12 @@ public class Sound implements AddressSpace {
                 rightCount++;
             }
         }
-        //left /= leftCount;
-        //right /= rightCount;
+        left /= leftCount;
+        right /= rightCount;
 
         int volumes = r.getByte(0xff24);
-        left *= (volumes & 0b111) + 1;
-        right *= ((volumes >> 4) & 0b111) + 1;
+        left *= (volumes & 0b111);
+        right *= ((volumes >> 4) & 0b111);
 
         output.play((byte) left, (byte) right);
     }

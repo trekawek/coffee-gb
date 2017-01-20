@@ -35,9 +35,11 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     @Override
     public void trigger() {
-        this.lengthCounter = 64;
+        this.lengthCounter = TICKS_PER_SEC / 256 * 64;
         this.i = 0;
         resetFreqDivider();
+        volumeEnvelope.start();
+        frequencySweep.start();
     }
 
     @Override

@@ -1,7 +1,5 @@
 package eu.rekawek.coffeegb.sound;
 
-import java.util.Random;
-
 import static eu.rekawek.coffeegb.Gameboy.TICKS_PER_SEC;
 
 public class SoundMode4 extends AbstractSoundMode {
@@ -29,7 +27,9 @@ public class SoundMode4 extends AbstractSoundMode {
 
     @Override
     public void trigger() {
-        this.lengthCounter = 64;
+        this.lengthCounter = TICKS_PER_SEC / 256 * 64;
+        lfsr.reset();
+        volumeEnvelope.start();
     }
 
     @Override

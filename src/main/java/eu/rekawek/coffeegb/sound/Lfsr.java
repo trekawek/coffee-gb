@@ -1,10 +1,16 @@
 package eu.rekawek.coffeegb.sound;
 
-import java.util.Random;
-
 public class Lfsr {
 
-    private int lfsr = new Random().nextInt(0x7fff); // 15 bit
+    private int lfsr;
+
+    public Lfsr() {
+        reset();
+    }
+
+    public void reset() {
+        lfsr = 0x7fff;
+    }
 
     public int nextBit(boolean widthMode7) {
         boolean x = ((lfsr & 1) ^ ((lfsr & 2) >> 1)) != 0;
