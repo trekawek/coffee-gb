@@ -49,11 +49,10 @@ public class InterruptManager implements AddressSpace {
     }
 
     public void requestInterrupt(InterruptType type) {
-        if (!ime) {
-            return;
+        if (ime) {
+            interruptRequested = true;
         }
         interruptFlag = interruptFlag | (1 << type.ordinal());
-        interruptRequested = true;
     }
 
     public void onInstructionFinished() {
@@ -73,6 +72,10 @@ public class InterruptManager implements AddressSpace {
         return interruptRequested;
     }
 
+    public boolean isInterruptFlagSet() {
+        return (interruptFlag & interruptEnabled) != 0;
+    }
+
     public void flush() {
         interruptFlag = 0;
         interruptRequested = false;
@@ -87,7 +90,9 @@ public class InterruptManager implements AddressSpace {
     public void setByte(int address, int value) {
         switch (address) {
             case 0xff0f:
-                interruptRequested = true;
+                if (ime) {
+                    interruptRequested = true;
+                }
                 interruptFlag = value;
                 break;
 

@@ -79,7 +79,7 @@ public class Timer implements AddressSpace {
     }
 
     public void setTima() {
-        switch (tma & 0b11) {
+        switch (tac & 0b11) {
             case 0b00:
                 tima = new Counter(4096);
                 break;

@@ -67,6 +67,10 @@ public class Cpu {
             }
         }
 
+        if (state == State.HALTED && interruptManager.isInterruptFlagSet()) {
+            state = State.OPCODE;
+        }
+
         int pc = registers.getPC();
         switch (state) {
             case OPCODE:

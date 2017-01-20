@@ -43,12 +43,9 @@ public class Mmu implements AddressSpace {
 
     public Mmu() {
         Ram internalRam = new Ram(0xc000, 0x2000);
-        Ram shadowRam = Ram.createShadow(0xe000, 0x1e00, internalRam);
-        Ram ffRam = new Ram(0xff80, 0x0080);
-
         addAddressSpace(internalRam);
-        addAddressSpace(shadowRam);
-        addAddressSpace(ffRam);
+        addAddressSpace(Ram.createShadow(0xe000, 0x1e00, internalRam));
+        addAddressSpace(new Ram(0xff80, 0x007f));
     }
 
     public void addAddressSpace(AddressSpace space) {

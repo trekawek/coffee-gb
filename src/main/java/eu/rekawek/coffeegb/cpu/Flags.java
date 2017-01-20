@@ -54,7 +54,7 @@ public class Flags {
 
     public void setFlagsByte(int flags) {
         checkByteArgument("flags", flags);
-        this.flags = flags;
+        this.flags = flags & 0xf0;
     }
 
     @Override

@@ -18,6 +18,7 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
     * basic sprite support
 * Joypad
 * Timer
+* Sound
 
 ## Playable titles
 
@@ -25,7 +26,6 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 
 ## Prioritized TODO
 
-* Sound
 * Memory bank switching
 * Better sprite support
     * partially hidden sprites (X < 16)
