@@ -50,22 +50,15 @@ public class AluFunctions {
            flags.setC(arg1 + arg2 > 0xffff);
            return (arg1 + arg2) & 0xffff;
         });
-        registerAluFunction("ADD", DataType.D16, DataType.R8, (flags, arg1, arg2) -> {
+        registerAluFunction("ADD", DataType.D16, DataType.R8, (flags, arg1, arg2) -> (arg1 + arg2) & 0xffff);
+        registerAluFunction("ADD_SP", DataType.D16, DataType.R8, (flags, arg1, arg2) -> {
             flags.setZ(false);
             flags.setN(false);
 
-            int b = BitUtils.abs(arg2);
-            int word = arg1;
-
-            if (BitUtils.isNegative(arg2)) {
-                flags.setH((word & 0x0f) < (b & 0x0f));
-                flags.setC((word & 0xff) < b);
-                return (word - b) & 0xffff;
-            } else {
-                flags.setC((word & 0xff) + b > 0xff);
-                flags.setH((word & 0x0f) + (b & 0x0f) > 0x0f);
-                return (word + b) & 0xffff;
-            }
+            int result = arg1 + arg2;
+            flags.setC((((arg1 & 0xff) + (arg2 & 0xff)) & 0x100) != 0);
+            flags.setH((((arg1 & 0x0f) + (arg2 & 0x0f)) & 0x10) != 0);
+            return result & 0xffff;
         });
         registerAluFunction("DAA", DataType.D8, (flags, arg) -> {
             int result = arg;
@@ -93,8 +86,8 @@ public class AluFunctions {
             return result;
         });
         registerAluFunction("CPL", DataType.D8, (flags, arg) -> {
-            flags.setN(false);
-            flags.setH(false);
+            flags.setN(true);
+            flags.setH(true);
             return (~arg) & 0xff;
         });
         registerAluFunction("SCF", DataType.D8, (flags, arg) -> {
@@ -133,11 +126,13 @@ public class AluFunctions {
         });
         registerAluFunction("SBC", DataType.D8, DataType.D8, (flags, byte1, byte2) -> {
             int carry = flags.isC() ? 1 : 0;
-            flags.setZ(((byte1 - byte2 - carry) & 0xff) == 0);
+            int res = byte1 - byte2 - carry;
+
+            flags.setZ((res & 0xff) == 0);
             flags.setN(true);
-            flags.setH((0x0f & (byte2 + carry)) > (0x0f & byte1));
-            flags.setC(byte2 + carry > byte1);
-            return (byte1 - byte2 - carry) & 0xff;
+            flags.setH(((byte1 ^ byte2 ^ (res & 0xff)) & (1 << 4)) != 0);
+            flags.setC(res < 0);
+            return res & 0xff;
         });
         registerAluFunction("AND", DataType.D8, DataType.D8, (flags, byte1, byte2) -> {
             int result = byte1 & byte2;

@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.BitUtils;
 import eu.rekawek.coffeegb.cpu.Registers;
 
+import static eu.rekawek.coffeegb.cpu.BitUtils.toSigned;
+
 public enum Argument {
 
     A {
@@ -161,7 +163,7 @@ public enum Argument {
     }, r8("r8", 1, false, DataType.R8) {
         @Override
         public int read(Registers registers, AddressSpace addressSpace, int[] args) {
-            return args[0];
+            return toSigned(args[0]);
         }
 
         @Override

@@ -6,8 +6,7 @@ import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
 import java.util.EnumSet;
 
-import static eu.rekawek.coffeegb.cpu.BitUtils.abs;
-import static eu.rekawek.coffeegb.cpu.BitUtils.isNegative;
+import static eu.rekawek.coffeegb.cpu.BitUtils.toSigned;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 
 public class Fetcher {
@@ -151,11 +150,7 @@ public class Fetcher {
     private int getTileData(int tileId, int line, int byteNumber, int tileDataAddress, boolean signed) {
         int tileAddress;
         if (signed) {
-            if (isNegative(tileId)) {
-                tileAddress = tileDataAddress - abs(tileId) * 0x10;
-            } else {
-                tileAddress = tileDataAddress + abs(tileId) * 0x10;
-            }
+            tileAddress = tileDataAddress + toSigned(tileId) * 0x10;
         } else {
             tileAddress = tileDataAddress + tileId * 0x10;
         }

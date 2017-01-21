@@ -195,7 +195,7 @@ public class Cpu {
         label = label.replace("a8", String.format("0xff00 + 0x%02x", operand[0]));
         label = label.replace("d16", String.format("0x%04x", BitUtils.toWord(operand)));
         label = label.replace("a16", String.format("0x%04x", BitUtils.toWord(operand)));
-        label = label.replace("r8", String.format("%s0x%02x", BitUtils.isNegative(operand[0]) ? "-" : "", BitUtils.abs(operand[0])));
+        label = label.replace("r8", String.format("%s0x%02x", BitUtils.toSigned(operand[0])));
         System.out.println(String.format("%04x %6s %s", commandStart, getDump(commandStart, registers.getPC()), label));
     }
 

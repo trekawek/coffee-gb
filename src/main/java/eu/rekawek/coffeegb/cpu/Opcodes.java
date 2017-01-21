@@ -47,7 +47,7 @@ public final class Opcodes {
         }
 
         for (Entry<Integer, String> o : indexedList(0x07, 0x08, "RLC", "RRC", "RL", "RR")) {
-            regCmd(opcodes, o, o.getValue() + "A").load("A").alu(o.getValue()).store("A");
+            regCmd(opcodes, o, o.getValue() + "A").load("A").alu(o.getValue()).clearZ().store("A");
         }
 
         regLoad(opcodes, 0x08, "(a16)", "SP");
@@ -149,8 +149,8 @@ public final class Opcodes {
         regCmd(opcodes, 0xe0, "LDH (a8),A").copyByte("(a8)", "A");
         regCmd(opcodes, 0xf0, "LDH A,(a8)").copyByte("A", "(a8)");
 
-        regCmd(opcodes, 0xe8, "ADD SP,r8").load("SP").alu("ADD", "r8").store("SP");
-        regCmd(opcodes, 0xf8, "LD HL,SP+r8").load("SP").alu("ADD", "r8").store("HL");
+        regCmd(opcodes, 0xe8, "ADD SP,r8").load("SP").alu("ADD_SP", "r8").store("SP");
+        regCmd(opcodes, 0xf8, "LD HL,SP+r8").load("SP").alu("ADD_SP", "r8").store("HL");
 
         regLoad(opcodes, 0xea, "(a16)", "A");
         regLoad(opcodes, 0xfa, "A", "(a16)");

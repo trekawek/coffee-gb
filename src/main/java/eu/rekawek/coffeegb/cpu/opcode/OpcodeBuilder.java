@@ -259,6 +259,17 @@ public class OpcodeBuilder {
         return this;
     }
 
+    public OpcodeBuilder clearZ() {
+        ops.add(new Op() {
+            @Override
+            public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
+                registers.getFlags().setZ(false);
+                return context;
+            }
+        });
+        return this;
+    }
+
     public OpcodeBuilder switchInterrupts(boolean enable, boolean withDelay) {
         ops.add(new Op() {
             @Override

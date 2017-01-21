@@ -45,25 +45,11 @@ public final class BitUtils {
         return ~(1 << position) & byteValue & 0xff;
     }
 
-    public static boolean isNegative(int signedByteValue) {
-        checkByteArgument("byteValue", signedByteValue);
-        return (signedByteValue & (1 << 7)) != 0;
-    }
-
-    public static int abs(int signedByteValue) {
-        checkByteArgument("signedByteValue", signedByteValue);
-        if (isNegative(signedByteValue)) {
-            return 0x100 - signedByteValue;
+    public static int toSigned(int byteValue) {
+        if ((byteValue & (1 << 7)) == 0) {
+            return byteValue;
         } else {
-            return signedByteValue;
-        }
-    }
-
-    public static int addSignedByte(int word, int signedByteValue) {
-        if (isNegative(signedByteValue)) {
-            return word - abs(signedByteValue);
-        } else {
-            return word + abs(signedByteValue);
+            return byteValue - 0x100;
         }
     }
 
