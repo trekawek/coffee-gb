@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.timer;
 
+import eu.rekawek.coffeegb.Gameboy;
+
 public class Counter {
 
     private final int frequency;
@@ -12,9 +14,8 @@ public class Counter {
         this.frequency = frequency;
     }
 
-    // this is invoked 4194304 times a second
     public boolean tick() {
-        if (++clocks == 4194304 / frequency) {
+        if (++clocks == Gameboy.TICKS_PER_SEC / frequency) {
             clocks = 0;
             counter = (counter + 1) & 0xff;
             return true;
@@ -25,10 +26,6 @@ public class Counter {
 
     public int getCounter() {
         return counter;
-    }
-
-    public void resetCounter() {
-        this.counter = 0;
     }
 
     public void setCounter(int counter) {

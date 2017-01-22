@@ -10,8 +10,8 @@ import java.util.List;
 
 public class Cpu {
 
-    private enum State {
-        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED;
+    enum State {
+        OPCODE, EXT_OPCODE, OPERAND, RUNNING, FINISHED, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(Cpu.class);
@@ -67,82 +67,118 @@ public class Cpu {
             }
         }
 
+        if (state == State.IRQ_READ_IF || state == State.IRQ_READ_IE || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2_AND_JUMP) {
+            handleInterrupt();
+            return;
+        }
+
         if (state == State.HALTED && interruptManager.isInterruptFlagSet()) {
             state = State.OPCODE;
         }
 
+        if (state == State.HALTED || state == State.STOPPED) {
+            return;
+        }
+
         int pc = registers.getPC();
-        switch (state) {
-            case OPCODE:
-                clearState();
-
-                commandStart = pc;
-                opcode1 = addressSpace.getByte(pc);
-                if (opcode1 == 0xcb) {
-                    state = State.EXT_OPCODE;
-                } else if (opcode1 == 0x10) {
-                    currentOpcode = Opcodes.COMMANDS.get(opcode1);
-                    state = State.EXT_OPCODE;
-                } else {
-                    state = State.OPERAND;
-                    currentOpcode = Opcodes.COMMANDS.get(opcode1);
-                    if (currentOpcode == null) {
-                        throw new IllegalStateException(String.format("No command for 0x%02x", opcode1));
+        boolean accessedMemory = false;
+        while (true) {
+            switch (state) {
+                case OPCODE:
+                    clearState();
+                    commandStart = pc;
+                    opcode1 = addressSpace.getByte(pc);
+                    accessedMemory = true;
+                    if (opcode1 == 0xcb) {
+                        state = State.EXT_OPCODE;
+                    } else if (opcode1 == 0x10) {
+                        currentOpcode = Opcodes.COMMANDS.get(opcode1);
+                        state = State.EXT_OPCODE;
+                    } else {
+                        state = State.OPERAND;
+                        currentOpcode = Opcodes.COMMANDS.get(opcode1);
+                        if (currentOpcode == null) {
+                            throw new IllegalStateException(String.format("No command for 0x%02x", opcode1));
+                        }
                     }
-                }
-                registers.incrementPC();
-                break;
-
-            case EXT_OPCODE:
-                opcode2 = addressSpace.getByte(pc);
-                if (currentOpcode == null) {
-                    currentOpcode = Opcodes.EXT_COMMANDS.get(opcode2);
-                }
-                if (currentOpcode == null) {
-                    throw new IllegalStateException(String.format("No command for %0xcb 0x%02x", opcode2));
-                }
-                state = State.OPERAND;
-                registers.incrementPC();
-                break;
-
-            case OPERAND:
-                if (operandIndex < currentOpcode.getOperandLength()) {
-                    operand[operandIndex++] = addressSpace.getByte(pc);
                     registers.incrementPC();
                     break;
-                }
-                ops = currentOpcode.getOps();
-                state = State.RUNNING;
-                // fall through
 
-            case RUNNING:
-                if (opcode1 == 0x10) {
-                    state = State.STOPPED;
+                case EXT_OPCODE:
+                    if (accessedMemory) {
+                        return;
+                    }
+                    accessedMemory = true;
+                    opcode2 = addressSpace.getByte(pc);
+                    if (currentOpcode == null) {
+                        currentOpcode = Opcodes.EXT_COMMANDS.get(opcode2);
+                    }
+                    if (currentOpcode == null) {
+                        throw new IllegalStateException(String.format("No command for %0xcb 0x%02x", opcode2));
+                    }
+                    state = State.OPERAND;
+                    registers.incrementPC();
                     break;
-                } else if (opcode1 == 0x76) {
-                    state = State.HALTED;
-                    break;
-                }
 
-                while (opIndex < ops.size()) {
-                    Op op = ops.get(opIndex++);
-                    opContext = op.execute(registers, addressSpace, operand, opContext);
-                    op.switchInterrupts(interruptManager);
-                    if (!op.proceed(registers)) {
-                        opIndex = ops.size();
+                case OPERAND:
+                    while (operandIndex < currentOpcode.getOperandLength()) {
+                        if (accessedMemory) {
+                            return;
+                        }
+                        accessedMemory = true;
+                        operand[operandIndex++] = addressSpace.getByte(pc);
+                        registers.incrementPC();
+                    }
+                    ops = currentOpcode.getOps();
+                    state = State.RUNNING;
+                    break;
+
+                case RUNNING:
+                    if (opcode1 == 0x10) {
+                        state = State.STOPPED;
+                        break;
+                    } else if (opcode1 == 0x76) {
+                        state = State.HALTED;
                         break;
                     }
-                    if (op.readsMemory() || op.writesMemory()) {
-                        break;
-                    }
-                }
-                if (opIndex >= ops.size()) {
-                    state = State.OPCODE;
-                    operandIndex = 0;
-                    interruptManager.onInstructionFinished();
-                }
-                break;
 
+                    if (opIndex < ops.size()) {
+                        Op op = ops.get(opIndex);
+                        boolean opAccessesMemory = op.readsMemory() || op.writesMemory();
+                        if (accessedMemory && opAccessesMemory) {
+                            return;
+                        }
+                        opIndex++;
+                        opContext = op.execute(registers, addressSpace, operand, opContext);
+                        op.switchInterrupts(interruptManager);
+
+                        if (!op.proceed(registers)) {
+                            opIndex = ops.size();
+                            break;
+                        }
+
+                        if (op.forceFinishCycle()) {
+                            return;
+                        }
+
+                        if (opAccessesMemory) {
+                            accessedMemory = true;
+                        }
+                    }
+
+                    if (opIndex >= ops.size()) {
+                        state = State.OPCODE;
+                        operandIndex = 0;
+                        interruptManager.onInstructionFinished();
+                        return;
+                    }
+                    break;
+            }
+        }
+    }
+
+    private void handleInterrupt() {
+        switch(state) {
             case IRQ_READ_IF:
                 interruptFlag = addressSpace.getByte(0xff0f);
                 state = State.IRQ_READ_IE;
@@ -181,11 +217,6 @@ public class Cpu {
 
                 state = State.OPCODE;
                 break;
-
-            default:
-            case STOPPED:
-            case HALTED:
-                break;
         }
     }
 
@@ -211,7 +242,7 @@ public class Cpu {
         return builder.toString();
     }
 
-    private void clearState() {
+    void clearState() {
         opcode1 = 0;
         opcode2 = 0;
         currentOpcode = null;
@@ -227,6 +258,15 @@ public class Cpu {
         interruptFlag = 0;
         interruptEnabled = 0;
         requestedIrq = null;
+    }
+
+
+    State getState() {
+        return state;
+    }
+
+    Opcode getCurrentOpcode() {
+        return currentOpcode;
     }
 
 }

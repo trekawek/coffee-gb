@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.cpu.opcode;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.cpu.BitUtils;
+import eu.rekawek.coffeegb.cpu.Flags;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.cpu.AluFunctions;
@@ -234,6 +236,9 @@ public class OpcodeBuilder {
                 return func.apply(registers.getFlags(), v1, v2);
             }
         });
+        if (lastDataType == DataType.D16) {
+            extraCycle();
+        }
         return this;
     }
 
@@ -245,6 +250,9 @@ public class OpcodeBuilder {
                 return func.apply(registers.getFlags(), v1, d8Value);
             }
         });
+        if (lastDataType == DataType.D16) {
+            extraCycle();
+        }
         return this;
     }
 
@@ -254,6 +262,44 @@ public class OpcodeBuilder {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int value) {
                 return func.apply(registers.getFlags(), value);
+            }
+        });
+        if (lastDataType == DataType.D16) {
+            extraCycle();
+        }
+        return this;
+    }
+
+    public OpcodeBuilder aluHL(String operation) {
+        load("HL");
+        AluFunctions.IntRegistryFunction func = ALU.findAluFunction(operation, DataType.D16);
+        ops.add(new Op() {
+            @Override
+            public int execute(Registers registers, AddressSpace addressSpace, int[] args, int value) {
+                return func.apply(registers.getFlags(), value);
+            }
+        });
+        store("HL");
+        return this;
+    }
+
+    public OpcodeBuilder bitHL(int bit) {
+        ops.add(new Op() {
+            @Override
+            public boolean readsMemory() {
+                return true;
+            }
+
+            @Override
+            public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
+                int value = addressSpace.getByte(registers.getHL());
+                Flags flags = registers.getFlags();
+                flags.setN(false);
+                flags.setH(true);
+                if (bit < 8) {
+                    flags.setZ(!BitUtils.getBit(value, bit));
+                }
+                return context;
             }
         });
         return this;
@@ -284,6 +330,31 @@ public class OpcodeBuilder {
         return this;
     }
 
+    public OpcodeBuilder op(Op op) {
+        ops.add(op);
+        return this;
+    }
+
+    public OpcodeBuilder extraCycle() {
+        ops.add(new Op() {
+            @Override
+            public boolean readsMemory() {
+                return true;
+            }
+        });
+        return this;
+    }
+
+    public OpcodeBuilder forceFinish() {
+        ops.add(new Op() {
+            @Override
+            public boolean forceFinishCycle() {
+                return true;
+            }
+        });
+        return this;
+    }
+
     public Opcode build() {
         return new Opcode(this);
     }
@@ -304,4 +375,6 @@ public class OpcodeBuilder {
     public String toString() {
         return label;
     }
+
+
 }

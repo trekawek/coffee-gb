@@ -36,10 +36,10 @@ public class Main {
             mainWindow.addKeyListener(controller);
 
             final Cartridge rom = new Cartridge(new File(romPath));
-            final JavaSoundOutput output = new JavaSoundOutput();
+            //final JavaSoundOutput output = new JavaSoundOutput();
 
             new Thread(display).start();
-            new Thread(() -> new Gameboy(rom, display, controller, output).run()).start();
+            new Thread(() -> new Gameboy(rom, display, controller, SoundOutput.NULL_OUTPUT).run()).start();
         } catch(Exception e) {
             throw new RuntimeException(e);
         }

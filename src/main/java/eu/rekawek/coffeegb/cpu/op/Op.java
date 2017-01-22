@@ -28,4 +28,8 @@ public interface Op {
     default boolean proceed(Registers registers) {
         return true;
     }
+
+    default boolean forceFinishCycle() {
+        return false;
+    }
 }

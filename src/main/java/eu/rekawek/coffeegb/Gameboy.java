@@ -137,8 +137,8 @@ public class Gameboy {
     }
 
     public Gpu.Mode tick() {
-        cpu.tick();
         timer.tick();
+        cpu.tick();
         dma.tick();
         sound.tick();
         return gpu.tick();

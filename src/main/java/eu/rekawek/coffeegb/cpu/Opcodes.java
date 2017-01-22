@@ -72,14 +72,14 @@ public final class Opcodes {
             regCmd(opcodes, c, "JR {},r8").load("PC").proceedIf(c.getValue()).alu("ADD", "r8").store("PC");
         }
 
-        regCmd(opcodes, 0x22, "LD (HL+),A").copyByte("(HL)", "A").load("HL").alu("INC").store("HL");
-        regCmd(opcodes, 0x2a, "LD A,(HL+)").copyByte("A", "(HL)").load("HL").alu("INC").store("HL");
+        regCmd(opcodes, 0x22, "LD (HL+),A").copyByte("(HL)", "A").aluHL("INC");
+        regCmd(opcodes, 0x2a, "LD A,(HL+)").copyByte("A", "(HL)").aluHL("INC");
 
         regCmd(opcodes, 0x27, "DAA").load("A").alu("DAA").store("A");
         regCmd(opcodes, 0x2f, "CPL").load("A").alu("CPL").store("A");
 
-        regCmd(opcodes, 0x32, "LD (HL-),A").copyByte("(HL)", "A").load("HL").alu("DEC").store("HL");
-        regCmd(opcodes, 0x3a, "LD A,(HL-)").copyByte("A", "(HL)").load("HL").alu("DEC").store("HL");
+        regCmd(opcodes, 0x32, "LD (HL-),A").copyByte("(HL)", "A").aluHL("DEC");
+        regCmd(opcodes, 0x3a, "LD A,(HL-)").copyByte("A", "(HL)").aluHL("DEC");
 
         regCmd(opcodes, 0x37, "SCF").load("A").alu("SCF").store("A");
         regCmd(opcodes, 0x3f, "CCF").load("A").alu("CCF").store("A");
@@ -102,7 +102,7 @@ public final class Opcodes {
         }
 
         for (Entry<Integer, String> c : indexedList(0xc0, 0x08, "NZ", "Z", "NC", "C")) {
-            regCmd(opcodes, c, "RET {}").proceedIf(c.getValue()).pop().store("PC");
+            regCmd(opcodes, c, "RET {}").extraCycle().proceedIf(c.getValue()).pop().forceFinish().store("PC");
         }
 
         for (Entry<Integer, String> t : indexedList(0xc1, 0x10, "BC", "DE", "HL", "AF")) {
@@ -110,17 +110,17 @@ public final class Opcodes {
         }
 
         for (Entry<Integer, String> c : indexedList(0xc2, 0x08, "NZ", "Z", "NC", "C")) {
-            regCmd(opcodes, c, "JP {},a16").load("a16").proceedIf(c.getValue()).store("PC");
+            regCmd(opcodes, c, "JP {},a16").load("a16").proceedIf(c.getValue()).store("PC").extraCycle();
         }
 
-        regCmd(opcodes, 0xc3, "JP a16").load("a16").store("PC");
+        regCmd(opcodes, 0xc3, "JP a16").load("a16").store("PC").extraCycle();
 
         for (Entry<Integer, String> c : indexedList(0xc4, 0x08, "NZ", "Z", "NC", "C")) {
-            regCmd(opcodes, c, "CALL {},a16").proceedIf(c.getValue()).load("PC").push().load("a16").store("PC");
+            regCmd(opcodes, c, "CALL {},a16").proceedIf(c.getValue()).load("PC").push().forceFinish().load("a16").store("PC");
         }
 
         for (Entry<Integer, String> t : indexedList(0xc5, 0x10, "BC", "DE", "HL", "AF")) {
-            regCmd(opcodes, t, "PUSH {}").load(t.getValue()).push();
+            regCmd(opcodes, t, "PUSH {}").load(t.getValue()).push().extraCycle();
         }
 
         for (Entry<Integer, String> o : indexedList(0xc6, 0x08, "ADD", "ADC", "SUB", "SBC", "AND", "XOR", "OR", "CP")) {
@@ -128,18 +128,18 @@ public final class Opcodes {
         }
 
         for (int i = 0xc7, j = 0x00; i <= 0xf7; i += 0x10, j += 0x10) {
-            regCmd(opcodes, i, String.format("RST %02XH", j)).load("PC").push().loadWord(j).store("PC");
+            regCmd(opcodes, i, String.format("RST %02XH", j)).load("PC").push().forceFinish().loadWord(j).store("PC");
         }
 
-        regCmd(opcodes, 0xc9, "RET").pop().store("PC");
+        regCmd(opcodes, 0xc9, "RET").pop().forceFinish().store("PC");
 
-        regCmd(opcodes, 0xcd, "CALL a16").load("PC").push().load("a16").store("PC");
+        regCmd(opcodes, 0xcd, "CALL a16").load("PC").push().forceFinish().load("a16").store("PC");
 
         for (int i = 0xcf, j = 0x08; i <= 0xff; i += 0x10, j += 0x10) {
-            regCmd(opcodes, i, String.format("RST %02XH", j)).load("PC").push().loadWord(j).store("PC");
+            regCmd(opcodes, i, String.format("RST %02XH", j)).load("PC").push().forceFinish().loadWord(j).store("PC");
         }
 
-        regCmd(opcodes, 0xd9, "RETI").pop().store("PC").switchInterrupts(true, false);
+        regCmd(opcodes, 0xd9, "RETI").pop().forceFinish().store("PC").switchInterrupts(true, false);
 
         regLoad(opcodes, 0xe2, "(C)", "A");
         regLoad(opcodes, 0xf2, "A", "(C)");
@@ -149,7 +149,7 @@ public final class Opcodes {
         regCmd(opcodes, 0xe0, "LDH (a8),A").copyByte("(a8)", "A");
         regCmd(opcodes, 0xf0, "LDH A,(a8)").copyByte("A", "(a8)");
 
-        regCmd(opcodes, 0xe8, "ADD SP,r8").load("SP").alu("ADD_SP", "r8").store("SP");
+        regCmd(opcodes, 0xe8, "ADD SP,r8").load("SP").alu("ADD_SP", "r8").extraCycle().store("SP");
         regCmd(opcodes, 0xf8, "LD HL,SP+r8").load("SP").alu("ADD_SP", "r8").store("HL");
 
         regLoad(opcodes, 0xea, "(a16)", "A");
@@ -158,7 +158,7 @@ public final class Opcodes {
         regCmd(opcodes, 0xf3, "DI").switchInterrupts(false, true);
         regCmd(opcodes, 0xfb, "EI").switchInterrupts(true, true);
 
-        regLoad(opcodes, 0xf9, "SP", "HL");
+        regLoad(opcodes, 0xf9, "SP", "HL").extraCycle();
 
         for (Entry<Integer, String> o : indexedList(0x00, 0x08, "RLC", "RRC", "RL", "RR", "SLA", "SRA", "SWAP", "SRL")) {
             for (Entry<Integer, String> t : indexedList(o.getKey(), 0x01, "B", "C", "D", "E", "H", "L", "(HL)", "A")) {
@@ -169,7 +169,11 @@ public final class Opcodes {
         for (Entry<Integer, String> o : indexedList(0x40, 0x40, "BIT", "RES", "SET")) {
             for (int b = 0; b < 0x08; b++) {
                 for (Entry<Integer, String> t : indexedList(o.getKey() + b * 0x08, 0x01, "B", "C", "D", "E", "H", "L", "(HL)", "A")) {
-                    regCmd(extOpcodes, t, String.format("%s %d,%s", o.getValue(), b, t.getValue())).load(t.getValue()).alu(o.getValue(), b).store(t.getValue());
+                    if ("BIT".equals(o.getValue()) && "(HL)".equals(t.getValue())) {
+                        regCmd(extOpcodes, t, String.format("BIT %d,(HL)", b)).bitHL(b);
+                    } else {
+                        regCmd(extOpcodes, t, String.format("%s %d,%s", o.getValue(), b, t.getValue())).load(t.getValue()).alu(o.getValue(), b).store(t.getValue());
+                    }
                 }
             }
         }
