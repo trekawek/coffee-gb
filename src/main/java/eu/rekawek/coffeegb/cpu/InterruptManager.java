@@ -81,6 +81,10 @@ public class InterruptManager implements AddressSpace {
         interruptRequested = false;
     }
 
+    public boolean isHaltBug() {
+        return (interruptFlag & interruptEnabled & 0x1f) != 0 && !ime;
+    }
+
     @Override
     public boolean accepts(int address) {
         return address == 0xff0f || address == 0xffff;

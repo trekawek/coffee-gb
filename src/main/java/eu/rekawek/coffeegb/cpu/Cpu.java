@@ -48,6 +48,8 @@ public class Cpu {
 
     private int clockCycle = 0;
 
+    private boolean haltBugMode;
+
     public Cpu(AddressSpace addressSpace, InterruptManager interruptManager) {
         this.registers = new Registers();
         this.addressSpace = addressSpace;
@@ -101,7 +103,11 @@ public class Cpu {
                             throw new IllegalStateException(String.format("No command for 0x%02x", opcode1));
                         }
                     }
-                    registers.incrementPC();
+                    if (!haltBugMode) {
+                        registers.incrementPC();
+                    } else {
+                        haltBugMode = false;
+                    }
                     break;
 
                 case EXT_OPCODE:
@@ -136,10 +142,16 @@ public class Cpu {
                 case RUNNING:
                     if (opcode1 == 0x10) {
                         state = State.STOPPED;
-                        break;
+                        return;
                     } else if (opcode1 == 0x76) {
-                        state = State.HALTED;
-                        break;
+                        if (interruptManager.isHaltBug()) {
+                            state = State.OPCODE;
+                            haltBugMode = true;
+                            return;
+                        } else {
+                            state = State.HALTED;
+                            return;
+                        }
                     }
 
                     if (opIndex < ops.size()) {
