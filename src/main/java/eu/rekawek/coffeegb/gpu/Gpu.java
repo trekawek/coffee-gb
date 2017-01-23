@@ -42,8 +42,6 @@ public class Gpu implements AddressSpace {
 
     private GpuPhase phase;
 
-    private int ticksForMode;
-
     public Gpu(Display display, InterruptManager interruptManager) {
         this.r = new MemoryRegisters(GpuRegister.values());
         this.interruptManager = interruptManager;
@@ -69,7 +67,7 @@ public class Gpu implements AddressSpace {
 
     @Override
     public boolean accepts(int address) {
-        return getAddressSpace(address) != null;
+        return videoRam.accepts(address) || oemRam.accepts(address) || r.accepts(address);
     }
 
     @Override

@@ -2,9 +2,8 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
+import java.util.LinkedList;
 import java.util.List;
 
 import static com.google.common.collect.Lists.reverse;
@@ -13,38 +12,27 @@ public class PixelFifo {
 
     private final int bgp;
 
-    private final Deque<Integer> deque = new ArrayDeque<>();
+    private final List<Integer> pixels = new LinkedList<>();
 
-    private final Deque<Integer> overlayDeque = new ArrayDeque<>();
-
-    private boolean overlayPriority;
-
-    private int overlayPalette;
+    private final List<Integer> palettes = new LinkedList<>();
 
     public PixelFifo(int bgp) {
         this.bgp = bgp;
     }
 
     public int getLength() {
-        return deque.size();
+        return pixels.size();
     }
 
     public int dequeuePixel() {
-        if (overlayDeque.isEmpty()) {
-            return getBgColor(deque.poll());
-        } else {
-            int overlayPixel = overlayDeque.poll();
-            int pixel = deque.poll();
-            if (overlayPriority) {
-                return pixel == 0 ? getObjectColor(overlayPixel) : getBgColor(pixel);
-            } else {
-                return overlayPixel == 0 ? getBgColor(pixel) : getObjectColor(overlayPixel);
-            }
-        }
+        return getColor(palettes.remove(0), pixels.remove(0));
     }
 
     public void enqueue8Pixels(int data1, int data2) {
-        deque.addAll(zip(data1, data2));
+        for (int p : zip(data1, data2)) {
+            pixels.add(p);
+            palettes.add(bgp);
+        }
     }
 
     public void setOverlay(int data1, int data2, int offset, SpriteFlags flags, MemoryRegisters registers) {
@@ -52,10 +40,17 @@ public class PixelFifo {
         if (flags.isXflip()) {
             pixelLine = reverse(pixelLine);
         }
-        overlayPriority = flags.isPriority();
-        overlayPalette = registers.get(flags.getPalette());
-        overlayDeque.clear();
-        overlayDeque.addAll(pixelLine.subList(offset, 8));
+        boolean priority = flags.isPriority();
+        int overlayPalette = registers.get(flags.getPalette());
+
+        int i = 0;
+        for (int p : pixelLine.subList(offset, pixelLine.size())) {
+            if ((priority && pixels.get(i) == 0) || !priority && p != 0) {
+                pixels.set(i, p);
+                palettes.set(i, overlayPalette);
+            }
+            i++;
+        }
     }
 
     static List<Integer> zip(int data1, int data2) {
@@ -68,18 +63,10 @@ public class PixelFifo {
     }
 
     List<Integer> asList() {
-        return new ArrayList<>(deque);
+        return new ArrayList<>(pixels);
     }
 
-    private int getBgColor(int colorIndex) {
-        return getColor(bgp, colorIndex);
-    }
-
-    private int getObjectColor(int colorIndex) {
-        return getColor(overlayPalette, colorIndex);
-    }
-
-    private static int getColor(int pallete, int colorIndex) {
-        return 0b11 & (pallete >> (colorIndex * 2));
+    private static int getColor(int palette, int colorIndex) {
+        return 0b11 & (palette >> (colorIndex * 2));
     }
 }

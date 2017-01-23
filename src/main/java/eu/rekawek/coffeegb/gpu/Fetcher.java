@@ -24,6 +24,8 @@ public class Fetcher {
 
     private final MemoryRegisters r;
 
+    private final Lcdc lcdc;
+
     private boolean divider;
 
     private State state = State.READ_TILE_ID;
@@ -52,11 +54,14 @@ public class Fetcher {
 
     private SpriteFlags spriteFlags;
 
+    private int spriteOffset;
+
     public Fetcher(PixelFifo fifo, AddressSpace videoRam, AddressSpace oemRam, MemoryRegisters registers) {
         this.fifo = fifo;
         this.videoRam = videoRam;
         this.oemRam = oemRam;
         this.r = registers;
+        this.lcdc = new Lcdc(r);
     }
 
     public void startFetching(int mapAddress, int tileDataAddress, int xOffset, boolean tileIdSigned, int tileLine) {
@@ -77,11 +82,11 @@ public class Fetcher {
         this.fetchingDisabled = true;
     }
 
-    public void addSprite(SpritePosition sprite) {
+    public void addSprite(SpritePosition sprite, int offset) {
         this.sprite = sprite;
         this.state = State.READ_SPRITE_TILE_ID;
-
         this.spriteTileLine = r.get(LY) + 16 - sprite.getY();
+        this.spriteOffset = offset;
     }
 
     public void tick() {
@@ -127,13 +132,13 @@ public class Fetcher {
 
             case READ_SPRITE_FLAGS:
                 spriteFlags = new SpriteFlags(oemRam.getByte(sprite.getAddress() + 3));
-                if (spriteFlags.isYflip()) {
-                    spriteTileLine = 15 - spriteTileLine;
-                }
                 state = State.READ_SPRITE_DATA_1;
                 break;
 
             case READ_SPRITE_DATA_1:
+                if (spriteFlags.isYflip()) {
+                    spriteTileLine = lcdc.getSpriteHeight() * 2 - 1 - spriteTileLine;
+                }
                 tileData1 = getTileData(tileId, spriteTileLine, 0, 0x8000, false);
                 state = State.READ_SPRITE_DATA_2;
                 break;
@@ -144,7 +149,7 @@ public class Fetcher {
                 break;
 
             case PUSH_SPRITE:
-                fifo.setOverlay(tileData1, tileData2, 0, spriteFlags, r);
+                fifo.setOverlay(tileData1, tileData2, spriteOffset, spriteFlags, r);
                 state = State.READ_TILE_ID;
                 break;
         }
