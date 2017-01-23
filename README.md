@@ -19,24 +19,32 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 * Joypad
 * Timer
 * Sound
+* Memory bank switching
 
 ## Playable titles
 
 * Tetris
+* Dr Mario
+* Super Mario Land
+
+## Passed tests
+
+* cpu_instrs
+* instr_timing
+* mem_timing-2
 
 ## Prioritized TODO
 
-* Memory bank switching
 * Better sprite support
     * partially hidden sprites (X < 16)
     * overlaying sprites
+* Passing compatibility tests
 * Battery saves
 * Gameboy Color support
 * Performance optimization
 * Snapshot saves
 * User interface to load ROMs / change config
 * Serial port
-* Passing compatibility tests
 
 ## Resources
 
@@ -46,3 +54,5 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 * [Nitty Gritty Gameboy cycle timing](http://blog.kevtris.org/blogfiles/Nitty%20Gritty%20Gameboy%20VRAM%20Timing.txt)
 * [Video Timing](https://github.com/jdeblese/gbcpu/wiki/Video-Timing)
 * [BGB emulator](http://bgb.bircd.org/) --- good for testing / debugging, works fine with Wine
+* [The Cycle-Accurate Game Boy Docs](https://github.com/AntonioND/giibiiadvance/tree/master/docs)
+* [Test ROMs](http://gbdev.gg8.se/files/roms/blargg-gb-tests/) - included in the [src/test/resources/roms](src/test/resources/roms)
