@@ -32,6 +32,8 @@ public class Fetcher {
 
     private int mapAddress;
 
+    private int xOffset;
+
     private int tileDataAddress;
 
     private boolean tileIdSigned;
@@ -57,9 +59,10 @@ public class Fetcher {
         this.r = registers;
     }
 
-    public void startFetching(int mapAddress, int tileDataAddress, boolean tileIdSigned, int tileLine) {
+    public void startFetching(int mapAddress, int tileDataAddress, int xOffset, boolean tileIdSigned, int tileLine) {
         this.mapAddress = mapAddress;
         this.tileDataAddress = tileDataAddress;
+        this.xOffset = xOffset;
         this.tileIdSigned = tileIdSigned;
         this.tileLine = tileLine;
 
@@ -96,7 +99,7 @@ public class Fetcher {
 
         switch (state) {
             case READ_TILE_ID:
-                tileId = videoRam.getByte(mapAddress);
+                tileId = videoRam.getByte(mapAddress + xOffset);
                 state = State.READ_DATA_1;
                 break;
 
@@ -112,7 +115,7 @@ public class Fetcher {
             case PUSH:
                 if (fifo.getLength() <= 8) {
                     fifo.enqueue8Pixels(tileData1, tileData2);
-                    mapAddress++;
+                    xOffset = (xOffset + 1) % 0x20;
                     state = State.READ_TILE_ID;
                 }
                 break;

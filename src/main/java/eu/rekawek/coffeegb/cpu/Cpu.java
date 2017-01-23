@@ -11,7 +11,7 @@ import java.util.List;
 public class Cpu {
 
     enum State {
-        OPCODE, EXT_OPCODE, OPERAND, RUNNING, FINISHED, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED
+        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(Cpu.class);
@@ -173,6 +173,10 @@ public class Cpu {
                         return;
                     }
                     break;
+
+                case HALTED:
+                case STOPPED:
+                    return;
             }
         }
     }

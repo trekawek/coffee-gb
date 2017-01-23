@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.memory.cart;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.BootRom;
+import eu.rekawek.coffeegb.memory.cart.type.Mbc1;
+import eu.rekawek.coffeegb.memory.cart.type.Rom;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,43 +17,36 @@ public class Cartridge implements AddressSpace {
 
     private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
 
-    private final int[] rom;
-
-    private final int[] switchableRam;
-
-    private final CartridgeType type;
-
-    private final int romBanks;
-
-    private final int ramBanks;
+    private final AddressSpace addressSpace;
 
     private int dmgBoostrap = 1;
 
     public Cartridge(File file) throws IOException {
-        this.rom = loadFile(file);
-        this.type = CartridgeType.getById(rom[0x0147]);
+        int[] rom = loadFile(file);
+        CartridgeType type = CartridgeType.getById(rom[0x0147]);
         LOG.info("Cartridge type: {}", type);
-        this.romBanks = getRomBanks(rom[0x0148]);
-        this.ramBanks = getRamBanks(rom[0x0149]);
+        int romBanks = getRomBanks(rom[0x0148]);
+        int ramBanks = getRamBanks(rom[0x0149]);
         LOG.info("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
-        this.switchableRam = new int[0x2000];
+
+        if (type.isMbc1()) {
+            addressSpace = new Mbc1(rom, type, romBanks, ramBanks);
+        } else {
+            addressSpace = new Rom(rom, type, romBanks, ramBanks);
+        }
     }
 
     @Override
     public boolean accepts(int address) {
-        return (address >= 0x0000 && address < 0x8000) ||
-               (address >= 0xa000 && address < 0xc000) ||
-                address == 0xff50;
+        return addressSpace.accepts(address) || address == 0xff50;
     }
 
     @Override
     public void setByte(int address, int value) {
-        if (address >= 0xa000 && address < 0xc000) {
-            switchableRam[address - 0xa000] = value;
-        } else if (address == 0xff50) {
+        if (address == 0xff50) {
             dmgBoostrap = value;
         } else {
-            LOG.warn("Can't write {} to ROM {}", Integer.toHexString(value), Integer.toHexString(address));
+            addressSpace.setByte(address, value);
         }
     }
 
@@ -59,12 +54,10 @@ public class Cartridge implements AddressSpace {
     public int getByte(int address) {
         if (dmgBoostrap == 0 && (address >= 0x0000 && address < 0x0100)) {
             return BootRom.GAMEBOY_CLASSIC[address];
-        } else if (address >= 0xa000 && address < 0xc000) {
-            return switchableRam[address - 0xa000];
         } else if (address == 0xff50) {
             return dmgBoostrap;
         } else {
-            return rom[address];
+            return addressSpace.getByte(address);
         }
     }
 

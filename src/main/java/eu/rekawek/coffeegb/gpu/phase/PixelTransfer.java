@@ -96,17 +96,17 @@ public class PixelTransfer implements GpuPhase {
     }
 
     private void startFetchingBackground() {
-        int bgX = r.get(SCX);
+        int bgX = r.get(SCX) / 0x08;
         int bgY = (r.get(SCY) + r.get(LY)) % 0x100;
 
-        fetcher.startFetching(lcdc.getBgTileMapDisplay() + bgX / 0x08 + (bgY / 0x08) * 0x20, lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), bgY % 0x08);
+        fetcher.startFetching(lcdc.getBgTileMapDisplay() + (bgY / 0x08) * 0x20, lcdc.getBgWindowTileData(), bgX, lcdc.isBgWindowTileDataSigned(), bgY % 0x08);
     }
 
     private void startFetchingWindow() {
-        int winX = this.x - r.get(WX) + 7;
+        int winX = (this.x - r.get(WX) + 7) / 0x08;
         int winY = r.get(LY) - r.get(WY);
 
-        fetcher.startFetching(lcdc.getWindowTileMapDisplay() + winX / 0x08 + (winY / 0x08) * 0x20, lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), winY % 0x08);
+        fetcher.startFetching(lcdc.getWindowTileMapDisplay() + (winY / 0x08) * 0x20, lcdc.getBgWindowTileData(), winX, lcdc.isBgWindowTileDataSigned(), winY % 0x08);
     }
 
 }

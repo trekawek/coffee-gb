@@ -33,10 +33,6 @@ public enum CartridgeType {
         this.id = id;
     }
 
-    public boolean isRom() {
-        return nameContainsSegment("ROM");
-    }
-
     public boolean isMbc1() {
         return nameContainsSegment("MBC1");
     }
@@ -78,7 +74,8 @@ public enum CartridgeType {
     }
 
     private boolean nameContainsSegment(String segment) {
-        return name().matches("(^|_)" + Pattern.quote(segment) + "($|_)");
+        Pattern p = Pattern.compile("(^|_)" + Pattern.quote(segment) + "($|_)");
+        return p.matcher(segment).find();
     }
 
     public static CartridgeType getById(int id) {

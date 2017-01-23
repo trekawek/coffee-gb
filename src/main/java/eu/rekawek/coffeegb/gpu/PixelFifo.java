@@ -38,7 +38,7 @@ public class PixelFifo {
             if (overlayPriority) {
                 return pixel == 0 ? getObjectColor(overlayPixel) : getBgColor(pixel);
             } else {
-                return getObjectColor(overlayPixel);
+                return overlayPixel == 0 ? getBgColor(pixel) : getObjectColor(overlayPixel);
             }
         }
     }
@@ -50,7 +50,7 @@ public class PixelFifo {
     public void setOverlay(int data1, int data2, int offset, SpriteFlags flags, MemoryRegisters registers) {
         List<Integer> pixelLine = zip(data1, data2);
         if (flags.isXflip()) {
-            reverse(pixelLine);
+            pixelLine = reverse(pixelLine);
         }
         overlayPriority = flags.isPriority();
         overlayPalette = registers.get(flags.getPalette());
