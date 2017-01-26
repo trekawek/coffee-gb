@@ -56,7 +56,7 @@ public class Gameboy {
         mmu.addAddressSpace(timer);
         mmu.addAddressSpace(dma);
         mmu.addAddressSpace(sound);
-        cpu = new Cpu(mmu, interruptManager);
+        cpu = new Cpu(mmu, interruptManager, gpu);
         init();
     }
 
@@ -136,12 +136,27 @@ public class Gameboy {
         }
     }
 
+    private int ticks;
+
+    private Gpu.Mode previousMode;
+
     public Gpu.Mode tick() {
+        Gpu.Mode mode = gpu.tick();
         timer.tick();
         cpu.tick();
         dma.tick();
         sound.tick();
-        return gpu.tick();
+
+        ticks++;
+        if (previousMode != mode && mode != null) {
+            //System.out.println("Mode: " + previousMode + "\t" + ticks);
+            ticks = 0;
+        }
+        if (mode != null) {
+            previousMode = mode;
+        }
+
+        return mode;
     }
 
     private void sleepNanos(long nanos) {

@@ -39,7 +39,7 @@ public class Mbc1 implements AddressSpace {
 
     @Override
     public void setByte(int address, int value) {
-        if (address >= 0x0000 && address < 0x2000 && memoryModel == 1) {
+        if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = (value & 0b1010) != 0;
         } else if (address >= 0x2000 && address < 0x4000) {
             int bank = value & 0b00011111;

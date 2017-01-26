@@ -26,8 +26,6 @@ public class Fetcher {
 
     private final Lcdc lcdc;
 
-    private boolean divider;
-
     private State state = State.READ_TILE_ID;
 
     private boolean fetchingDisabled;
@@ -56,6 +54,8 @@ public class Fetcher {
 
     private int spriteOffset;
 
+    private int divider = 2;
+
     public Fetcher(PixelFifo fifo, AddressSpace videoRam, AddressSpace oemRam, MemoryRegisters registers) {
         this.fifo = fifo;
         this.videoRam = videoRam;
@@ -72,10 +72,10 @@ public class Fetcher {
         this.tileLine = tileLine;
 
         state = State.READ_TILE_ID;
-        divider = false;
         tileId = 0;
         tileData1 = 0;
         tileData2 = 0;
+        divider = 2;
     }
 
     public void fetchingDisabled() {
@@ -97,8 +97,9 @@ public class Fetcher {
             return;
         }
 
-        divider = !divider;
-        if (!divider) {
+        if (--divider == 0) {
+            divider = 2;
+        } else {
             return;
         }
 

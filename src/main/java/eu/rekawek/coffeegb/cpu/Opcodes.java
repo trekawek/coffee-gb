@@ -61,7 +61,7 @@ public final class Opcodes {
         }
 
         for (Entry<Integer, String> t : indexedList(0x0b, 0x10, "BC", "DE", "HL", "SP")) {
-            regCmd(opcodes, t, "INC {}").load(t.getValue()).alu("DEC").store(t.getValue());
+            regCmd(opcodes, t, "DEC {}").load(t.getValue()).alu("DEC").store(t.getValue());
         }
 
         regCmd(opcodes, 0x10, "STOP");

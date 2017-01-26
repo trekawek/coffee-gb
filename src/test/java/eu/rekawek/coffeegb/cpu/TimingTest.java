@@ -17,7 +17,7 @@ public class TimingTest {
 
     public TimingTest() {
         memory = new Ram(0x00, 0x10000);
-        cpu = new Cpu(memory, new InterruptManager());
+        cpu = new Cpu(memory, new InterruptManager(), null);
     }
 
     @Test
@@ -63,6 +63,12 @@ public class TimingTest {
         assertTiming(16, 0xea, 0x00, 0x00); // LD (a16),A
         assertTiming(8, 0x09); // ADD HL,BC
         assertTiming(16, 0xc7); // RST 00H
+
+
+        assertTiming(8, 0x3e, 0x51); // LDA A,51
+        assertTiming(4, 0x1f); // RRA
+        assertTiming(8, 0xce, 0x01); // ADC A,01
+        assertTiming(4, 0x00); // NOP
     }
 
     private void assertTiming(int expectedTiming, int... opcodes) {

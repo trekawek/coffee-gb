@@ -32,4 +32,8 @@ public interface Op {
     default boolean forceFinishCycle() {
         return false;
     }
+
+    default boolean causesOemBug(Registers registers, int context) {
+        return false;
+    }
 }

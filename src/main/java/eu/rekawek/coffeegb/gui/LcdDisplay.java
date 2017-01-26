@@ -77,7 +77,7 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
         if (enabled) {
             g2d.drawImage(img, 0, 0, DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale, null);
         } else {
-            g2d.setColor(Color.BLACK);
+            g2d.setColor(new Color(COLORS[0]));
             g2d.drawRect(0, 0, DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale);
         }
         g2d.dispose();

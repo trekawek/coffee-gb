@@ -34,6 +34,10 @@ public class Gpu implements AddressSpace {
 
     private final Lcdc lcdc;
 
+    private boolean lcdEnabled = true;
+
+    private int lcdEnabledDelay;
+
     private MemoryRegisters r;
 
     private int ticksInLine;
@@ -74,6 +78,8 @@ public class Gpu implements AddressSpace {
     public void setByte(int address, int value) {
         if (address == STAT.getAddress()) {
             setStat(value);
+        } else if (address == LCDC.getAddress()) {
+            setLcdc(value);
         } else {
             AddressSpace space = getAddressSpace(address);
             if (space != null) {
@@ -86,6 +92,8 @@ public class Gpu implements AddressSpace {
     public int getByte(int address) {
         if (address == STAT.getAddress()) {
             return getStat();
+        } else if (address == LCDC.getAddress()) {
+            return getLcdc();
         } else {
             AddressSpace space = getAddressSpace(address);
             if (space == null) {
@@ -97,19 +105,21 @@ public class Gpu implements AddressSpace {
     }
 
     public Mode tick() {
-        Mode oldMode = mode;
-
-        ticksInLine++;
-        boolean phaseInProgress = phase.tick();
-        if (phaseInProgress) {
-            if (mode == Mode.VBlank) {
-                if (lcdc.isLcdEnabled()) {
+        if (!lcdEnabled) {
+            if (lcdEnabledDelay != -1) {
+                if (--lcdEnabledDelay == 0) {
                     display.enableLcd();
-                } else {
-                    display.disableLcd();
+                    lcdEnabled = true;
                 }
             }
-        } else {
+        }
+        if (!lcdEnabled) {
+            return null;
+        }
+
+        Mode oldMode = mode;
+        ticksInLine++;
+        if (!phase.tick()) {
             switch (mode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
@@ -118,8 +128,9 @@ public class Gpu implements AddressSpace {
 
                 case PixelTransfer:
                     mode = Mode.HBlank;
-                    phase = new HBlankPhase(r.get(LY), ticksInLine);
+                    phase = new HBlankPhase(ticksInLine, r);
                     requestLcdcInterrupt(3);
+                    requestLycEqualsLyInterrupt();
                     break;
 
                 case HBlank:
@@ -133,8 +144,8 @@ public class Gpu implements AddressSpace {
                         mode = Mode.OamSearch;
                         phase = new OamSearch(oemRam, r);
                         requestLcdcInterrupt(5);
+                        requestLycEqualsLyInterrupt();
                     }
-                    requestLycEqualsLyInterrupt();
                     break;
 
                 case VBlank:
@@ -147,7 +158,6 @@ public class Gpu implements AddressSpace {
                     } else {
                         phase = new VBlankPhase(r.get(LY));
                     }
-                    requestLycEqualsLyInterrupt();
                     break;
             }
         }
@@ -156,6 +166,10 @@ public class Gpu implements AddressSpace {
         } else {
             return mode;
         }
+    }
+
+    public int getTicksInLine() {
+        return ticksInLine;
     }
 
     private void requestLcdcInterrupt(int statBit) {
@@ -176,5 +190,32 @@ public class Gpu implements AddressSpace {
 
     private void setStat(int value) {
         r.put(STAT, value & 0b11111000); // last three bits are read-only
+    }
+
+    private int getLcdc() {
+        return (r.get(LCDC) & 0x7f) | (lcdEnabled ? (1 << 7) : 0);
+    }
+
+    private void setLcdc(int value) {
+        r.put(LCDC, value & 0x7f);
+        if ((value & (1 << 7)) == 0) {
+            disableLcd();
+        } else {
+            enableLcd();
+        }
+    }
+
+    private void disableLcd() {
+        r.put(LY, 0);
+        this.ticksInLine = 0;
+        this.phase = new HBlankPhase(250, r);
+        this.mode = Mode.HBlank;
+        this.lcdEnabled = false;
+        this.lcdEnabledDelay = -1;
+        display.disableLcd();
+    }
+
+    private void enableLcd() {
+        lcdEnabledDelay = 244;
     }
 }

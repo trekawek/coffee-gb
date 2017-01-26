@@ -11,13 +11,24 @@ import eu.rekawek.coffeegb.cpu.op.DataType;
 import eu.rekawek.coffeegb.cpu.op.Op;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.toWord;
 
 public class OpcodeBuilder {
 
     private static final AluFunctions ALU = new AluFunctions();
+
+    private static final Set<AluFunctions.IntRegistryFunction> OEM_BUG;
+    static {
+        Set<AluFunctions.IntRegistryFunction> oemBugFunctions = new HashSet<>();
+        oemBugFunctions.add(ALU.findAluFunction("INC", DataType.D16));
+        oemBugFunctions.add(ALU.findAluFunction("DEC", DataType.D16));
+        OEM_BUG = Collections.unmodifiableSet(oemBugFunctions);
+    }
 
     private final int opcode;
 
@@ -156,6 +167,7 @@ public class OpcodeBuilder {
     }
 
     public OpcodeBuilder push() {
+        AluFunctions.IntRegistryFunction dec = ALU.findAluFunction("DEC", DataType.D16);
         ops.add(new Op() {
             @Override
             public boolean writesMemory() {
@@ -164,9 +176,14 @@ public class OpcodeBuilder {
 
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
-                registers.decrementSP();
+                registers.setSP(dec.apply(registers.getFlags(), registers.getSP()));
                 addressSpace.setByte(registers.getSP(), (context & 0xff00) >> 8);
                 return context;
+            }
+
+            @Override
+            public boolean causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.this.causesOemBug(dec, registers.getSP());
             }
         });
         ops.add(new Op() {
@@ -177,15 +194,22 @@ public class OpcodeBuilder {
 
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
-                registers.decrementSP();
+                registers.setSP(dec.apply(registers.getFlags(), registers.getSP()));
                 addressSpace.setByte(registers.getSP(), context & 0x00ff);
                 return context;
+            }
+
+            @Override
+            public boolean causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.this.causesOemBug(dec, registers.getSP());
             }
         });
         return this;
     }
 
     public OpcodeBuilder pop() {
+        AluFunctions.IntRegistryFunction inc = ALU.findAluFunction("INC", DataType.D16);
+
         lastDataType = DataType.D16;
         ops.add(new Op() {
             @Override
@@ -196,8 +220,13 @@ public class OpcodeBuilder {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
                 int lsb = addressSpace.getByte(registers.getSP());
-                registers.incrementSP();
+                registers.setSP(inc.apply(registers.getFlags(), registers.getSP()));
                 return lsb;
+            }
+
+            @Override
+            public boolean causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.this.causesOemBug(inc, registers.getSP());
             }
         });
         ops.add(new Op() {
@@ -209,8 +238,13 @@ public class OpcodeBuilder {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
                 int msb = addressSpace.getByte(registers.getSP());
-                registers.incrementSP();
+                registers.setSP(inc.apply(registers.getFlags(), registers.getSP()));
                 return context | (msb << 8);
+            }
+
+            @Override
+            public boolean causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.this.causesOemBug(inc, registers.getSP());
             }
         });
         return this;
@@ -263,6 +297,11 @@ public class OpcodeBuilder {
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int value) {
                 return func.apply(registers.getFlags(), value);
             }
+
+            @Override
+            public boolean causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.this.causesOemBug(func, context);
+            }
         });
         if (lastDataType == DataType.D16) {
             extraCycle();
@@ -277,6 +316,11 @@ public class OpcodeBuilder {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int value) {
                 return func.apply(registers.getFlags(), value);
+            }
+
+            @Override
+            public boolean causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.this.causesOemBug(func, context);
             }
         });
         store("HL");
@@ -376,5 +420,8 @@ public class OpcodeBuilder {
         return label;
     }
 
+    private boolean causesOemBug(AluFunctions.IntRegistryFunction function, int context) {
+        return OEM_BUG.contains(function) && context >= 0xfe00 && context <= 0xfeff;
+    }
 
 }

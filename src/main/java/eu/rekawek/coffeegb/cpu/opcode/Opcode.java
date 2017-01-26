@@ -24,10 +24,6 @@ public class Opcode {
         return ops.stream().mapToInt(o -> o.operandLength()).max().orElse(0);
     }
 
-    public int getCycles() {
-        return (int) ops.stream().filter(o -> o.readsMemory() || o.writesMemory()).count() * 4;
-    }
-
     @Override
     public String toString() {
         return String.format("%02x %s", opcode, label);
