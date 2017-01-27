@@ -24,10 +24,10 @@ public class Cartridge implements AddressSpace {
     public Cartridge(File file) throws IOException {
         int[] rom = loadFile(file);
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
-        LOG.info("Cartridge type: {}", type);
+        LOG.debug("Cartridge type: {}", type);
         int romBanks = getRomBanks(rom[0x0148]);
         int ramBanks = getRamBanks(rom[0x0149]);
-        LOG.info("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
+        LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
 
         if (type.isMbc1()) {
             addressSpace = new Mbc1(rom, type, romBanks, ramBanks);

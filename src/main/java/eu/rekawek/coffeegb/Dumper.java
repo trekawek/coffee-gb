@@ -5,12 +5,20 @@ public final class Dumper {
     private Dumper() {
     }
 
-    public static void dump(AddressSpace addressSpace, int offset, int length, int width) {
+    public static void dump(AddressSpace addressSpace, int offset, int length) {
         for (int i = offset; i < (offset + length); i++) {
             System.out.print(String.format("%02X ", addressSpace.getByte(i)));
-            if ((i - offset + 1) % width == 0) {
+            if ((i - offset + 1) % 16 == 0) {
+                //System.out.print(" ");
+                //dumpText(addressSpace, i - 16);
                 System.out.println();
             }
+        }
+    }
+
+    private static void dumpText(AddressSpace addressSpace, int offset) {
+        for (int i = 0; i < 16; i++) {
+            System.out.print(Character.toString((char) addressSpace.getByte(offset + i)));
         }
     }
 

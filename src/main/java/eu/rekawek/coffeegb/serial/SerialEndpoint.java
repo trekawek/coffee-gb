@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.serial;
 
+import java.io.IOException;
+
 public interface SerialEndpoint {
 
-    int transfer(int outgoing);
+    int transfer(int outgoing) throws IOException;
 
     SerialEndpoint NULL_ENDPOINT = new SerialEndpoint() {
         @Override

@@ -3,8 +3,14 @@ package eu.rekawek.coffeegb.serial;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
 
 public class SerialPort implements AddressSpace {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SerialPort.class);
 
     private final SerialEndpoint serialEndpoint;
 
@@ -29,7 +35,12 @@ public class SerialPort implements AddressSpace {
         }
         if (--divider == 0) {
             transferInProgress = false;
-            sb = serialEndpoint.transfer(sb);
+            try {
+                sb = serialEndpoint.transfer(sb);
+            } catch (IOException e) {
+                LOG.error("Can't transfer byte", e);
+                sb = 0;
+            }
             interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
         }
     }

@@ -26,7 +26,7 @@ public class Mmu implements AddressSpace {
             if (address < 0 || address > 0xffff) {
                 throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
             }
-            LOG.warn("Writing value {} to void address {}", Integer.toHexString(value), Integer.toHexString(address));
+            LOG.debug("Writing value {} to void address {}", Integer.toHexString(value), Integer.toHexString(address));
         }
 
         @Override
@@ -34,7 +34,7 @@ public class Mmu implements AddressSpace {
             if (address < 0 || address > 0xffff) {
                 throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
             }
-            LOG.warn("Reading value from void address {}", Integer.toHexString(address));
+            LOG.debug("Reading value from void address {}", Integer.toHexString(address));
             return 0xff;
         }
     };
