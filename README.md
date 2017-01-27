@@ -19,7 +19,8 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 * Joypad
 * Timer
 * Sound
-* Memory bank switching
+* MBC1
+* ROM-based compatibility tests run from Maven
 
 ## Playable titles
 
@@ -27,23 +28,33 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 * Dr Mario
 * Super Mario Land
 
-## Passed tests
+## Running Blargg's tests
+
+The [Blargg's test ROMs](http://gbdev.gg8.se/wiki/articles/Test_ROMs) are used for testing the compatibility. Tests can be launched from Maven using appropriate profile:
+
+    mvn clean test -Ptest-blargg
+    mvn clean test -Ptest-blargg-individual # for running "single" tests providing more diagnostic info
+
+The tests output is redirected to stdout.
+
+Right now, following tests are green:
 
 * cpu_instrs
 * instr_timing
 * mem_timing-2
+* oam_bug-2
+
+To be done:
+
+* dmg_sound-2
+* halt_bug
 
 ## Prioritized TODO
 
-* Better sprite support
-    * partially hidden sprites (X < 16)
-    * overlaying sprites
-* Passing compatibility tests
 * Battery saves
 * Gameboy Color support
 * Performance optimization
 * Snapshot saves
-* User interface to load ROMs / change config
 * Serial port
 
 ## Resources
