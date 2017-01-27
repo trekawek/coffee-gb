@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.Lcdc;
+import eu.rekawek.coffeegb.gpu.SpriteBug;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,7 +15,7 @@ import java.util.Random;
 
 public class Cpu {
 
-    enum State {
+    public enum State {
         OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED
     }
 
@@ -170,8 +171,10 @@ public class Cpu {
                             return;
                         }
                         opIndex++;
-                        if (op.causesOemBug(registers, opContext)) {
-                            handleSpriteBug();
+
+                        SpriteBug.CorruptionType corruptionType = op.causesOemBug(registers, opContext);
+                        if (corruptionType != null) {
+                            handleSpriteBug(corruptionType);
                         }
                         opContext = op.execute(registers, addressSpace, operand, opContext);
                         op.switchInterrupts(interruptManager);
@@ -258,16 +261,14 @@ public class Cpu {
         System.out.println(String.format("%04x %6s %s", commandStart, getDump(commandStart, registers.getPC()), label));
     }
 
-    private void handleSpriteBug() {
+    private void handleSpriteBug(SpriteBug.CorruptionType type) {
         Lcdc lcdc = new Lcdc(addressSpace.getByte(GpuRegister.LCDC.getAddress()));
         if (!lcdc.isLcdEnabled()) {
             return;
         }
         int stat = addressSpace.getByte(GpuRegister.STAT.getAddress());
         if ((stat & 0b11) == Gpu.Mode.OamSearch.ordinal() && gpu.getTicksInLine() < 79) {
-            for (int i = 0xfe08; i < 0xff00; i++) {
-                addressSpace.setByte(i, random.nextInt(256));
-            }
+            SpriteBug.corruptOam(addressSpace, type, gpu.getTicksInLine());
         }
     }
 
@@ -302,7 +303,7 @@ public class Cpu {
     }
 
 
-    State getState() {
+    public State getState() {
         return state;
     }
 

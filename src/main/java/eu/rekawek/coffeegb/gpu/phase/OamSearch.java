@@ -68,7 +68,6 @@ public class OamSearch implements GpuPhase {
     @Override
     public boolean tick() {
         int spriteAddress = 0xfe00 + 4 * i;
-
         switch (state) {
             case READING_Y:
                 spriteY = oemRam.getByte(spriteAddress);

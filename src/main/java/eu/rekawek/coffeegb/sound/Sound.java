@@ -48,8 +48,12 @@ public class Sound implements AddressSpace {
                 rightCount++;
             }
         }
-        left /= leftCount;
-        right /= rightCount;
+        if (leftCount > 0) {
+            left /= leftCount;
+        }
+        if (rightCount > 0) {
+            right /= rightCount;
+        }
 
         int volumes = r.getByte(0xff24);
         left *= (volumes & 0b111);

@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.cpu.op;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.Registers;
+import eu.rekawek.coffeegb.gpu.SpriteBug;
 
 public interface Op {
 
@@ -33,7 +34,7 @@ public interface Op {
         return false;
     }
 
-    default boolean causesOemBug(Registers registers, int context) {
-        return false;
+    default SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+        return null;
     }
 }

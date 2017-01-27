@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.cpu.AluFunctions;
 import eu.rekawek.coffeegb.cpu.op.Argument;
 import eu.rekawek.coffeegb.cpu.op.DataType;
 import eu.rekawek.coffeegb.cpu.op.Op;
+import eu.rekawek.coffeegb.gpu.SpriteBug;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -182,8 +183,8 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public boolean causesOemBug(Registers registers, int context) {
-                return OpcodeBuilder.this.causesOemBug(dec, registers.getSP());
+            public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+                return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.PUSH_1 : null;
             }
         });
         ops.add(new Op() {
@@ -200,8 +201,8 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public boolean causesOemBug(Registers registers, int context) {
-                return OpcodeBuilder.this.causesOemBug(dec, registers.getSP());
+            public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+                return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.PUSH_2 : null;
             }
         });
         return this;
@@ -225,8 +226,8 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public boolean causesOemBug(Registers registers, int context) {
-                return OpcodeBuilder.this.causesOemBug(inc, registers.getSP());
+            public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+                return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.POP_1 : null;
             }
         });
         ops.add(new Op() {
@@ -243,8 +244,8 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public boolean causesOemBug(Registers registers, int context) {
-                return OpcodeBuilder.this.causesOemBug(inc, registers.getSP());
+            public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+                return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.POP_2 : null;
             }
         });
         return this;
@@ -299,8 +300,8 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public boolean causesOemBug(Registers registers, int context) {
-                return OpcodeBuilder.this.causesOemBug(func, context);
+            public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.causesOemBug(func, context) ? SpriteBug.CorruptionType.INC_DEC : null;
             }
         });
         if (lastDataType == DataType.D16) {
@@ -319,8 +320,8 @@ public class OpcodeBuilder {
             }
 
             @Override
-            public boolean causesOemBug(Registers registers, int context) {
-                return OpcodeBuilder.this.causesOemBug(func, context);
+            public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+                return OpcodeBuilder.causesOemBug(func, context) ? SpriteBug.CorruptionType.LD_HL : null;
             }
         });
         store("HL");
@@ -420,8 +421,11 @@ public class OpcodeBuilder {
         return label;
     }
 
-    private boolean causesOemBug(AluFunctions.IntRegistryFunction function, int context) {
-        return OEM_BUG.contains(function) && context >= 0xfe00 && context <= 0xfeff;
+    private static boolean causesOemBug(AluFunctions.IntRegistryFunction function, int context) {
+        return OEM_BUG.contains(function) && inOamArea(context);
     }
 
+    private static boolean inOamArea(int address) {
+        return address >= 0xfe00 && address <= 0xfeff;
+    }
 }
