@@ -7,21 +7,14 @@ import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.Lcdc;
 import eu.rekawek.coffeegb.gpu.SpriteBug;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.Random;
 
 public class Cpu {
 
     public enum State {
         OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED
     }
-
-    private static final Logger LOG = LoggerFactory.getLogger(Cpu.class);
-
-    private final Random random = new Random();
 
     private final Registers registers;
 
