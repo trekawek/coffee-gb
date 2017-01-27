@@ -130,7 +130,6 @@ public class Gpu implements AddressSpace {
                     mode = Mode.HBlank;
                     phase = new HBlankPhase(ticksInLine, r);
                     requestLcdcInterrupt(3);
-                    requestLycEqualsLyInterrupt();
                     break;
 
                 case HBlank:
@@ -144,8 +143,8 @@ public class Gpu implements AddressSpace {
                         mode = Mode.OamSearch;
                         phase = new OamSearch(oemRam, r);
                         requestLcdcInterrupt(5);
-                        requestLycEqualsLyInterrupt();
                     }
+                    requestLycEqualsLyInterrupt();
                     break;
 
                 case VBlank:
@@ -158,6 +157,7 @@ public class Gpu implements AddressSpace {
                     } else {
                         phase = new VBlankPhase(r.get(LY));
                     }
+                    requestLycEqualsLyInterrupt();
                     break;
             }
         }

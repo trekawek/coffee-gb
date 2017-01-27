@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.memory.Dma;
 import eu.rekawek.coffeegb.memory.Mmu;
 import eu.rekawek.coffeegb.memory.Ram;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
+import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.sound.SoundOutput;
@@ -40,7 +41,9 @@ public class Gameboy {
 
     private final Sound sound;
 
-    public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput) {
+    private final SerialPort serialPort;
+
+    public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
         this.display = display;
         interruptManager = new InterruptManager();
         timer = new Timer(interruptManager);
@@ -48,11 +51,12 @@ public class Gameboy {
         mmu = new Mmu();
         dma = new Dma(mmu);
         sound = new Sound(soundOutput);
+        serialPort = new SerialPort(interruptManager, serialEndpoint);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(new Joypad(interruptManager, controller));
         mmu.addAddressSpace(interruptManager);
-        mmu.addAddressSpace(new SerialPort());
+        mmu.addAddressSpace(serialPort);
         mmu.addAddressSpace(timer);
         mmu.addAddressSpace(dma);
         mmu.addAddressSpace(sound);
@@ -141,6 +145,7 @@ public class Gameboy {
         cpu.tick();
         dma.tick();
         sound.tick();
+        serialPort.tick();
         return gpu.tick();
     }
 

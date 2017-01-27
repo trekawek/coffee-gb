@@ -39,7 +39,7 @@ public class Main {
             final JavaSoundOutput output = new JavaSoundOutput();
 
             new Thread(display).start();
-            new Thread(() -> new Gameboy(rom, display, controller, output).run()).start();
+            new Thread(() -> new Gameboy(rom, display, controller, output, new StdoutSerialEndpoint()).run()).start();
         } catch(Exception e) {
             throw new RuntimeException(e);
         }
