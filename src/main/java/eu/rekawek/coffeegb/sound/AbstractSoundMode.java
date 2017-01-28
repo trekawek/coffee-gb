@@ -6,6 +6,8 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     private final int offset;
 
+    private boolean enabled;
+
     protected int nr0, nr1, nr2, nr3, nr4;
 
     public AbstractSoundMode(int offset) {
@@ -17,7 +19,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
     public abstract void trigger();
 
     public boolean isEnabled() {
-        return true;
+        return enabled;
     }
 
     @Override
@@ -92,6 +94,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
     protected void setNr4(int value) {
         nr4 = value;
         if ((value & (1 << 7)) != 0) {
+            enabled = true;
             trigger();
         }
     }
@@ -118,5 +121,9 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     protected int getFrequency() {
         return 2048 - (nr3 | ((nr4 & 0b111) << 8));
+    }
+
+    public void stop() {
+        enabled = false;
     }
 }

@@ -5,6 +5,17 @@ import eu.rekawek.coffeegb.memory.Ram;
 
 public class Sound implements AddressSpace {
 
+    private static final int[] MASKS = new int[] {
+            0x80, 0x3f, 0x00, 0xff, 0xbf,
+            0xff, 0x3f, 0x00, 0xff, 0xbf,
+            0x7f, 0xff, 0x9f, 0xff, 0xbf,
+            0xff, 0xff, 0x00, 0x00, 0xbf,
+            0x00, 0x00, 0x70,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+
     private final AbstractSoundMode[] allModes = new AbstractSoundMode[4];
 
     private final Ram waveRam = new Ram(0xff30, 0x10);
@@ -12,6 +23,8 @@ public class Sound implements AddressSpace {
     private final Ram r = new Ram(0xff24, 0x03);
 
     private final SoundOutput output;
+
+    private boolean enabled;
 
     public Sound(SoundOutput output) {
         allModes[0] = new SoundMode1_2(1);
@@ -90,14 +103,17 @@ public class Sound implements AddressSpace {
     public void setByte(int address, int value) {
         if (address == 0xff26) {
             if ((value & (1 << 7)) == 0) {
-                if (isEnabled()) {
-                    output.stop();
+                if (enabled) {
+                    enabled = false;
+                    stop();
                 }
             } else {
-                if (!isEnabled()) {
-                    output.start();
+                if (!enabled) {
+                    enabled = true;
+                    start();
                 }
             }
+            return;
         }
 
         AddressSpace s = getAddressSpace(address);
@@ -109,18 +125,34 @@ public class Sound implements AddressSpace {
 
     @Override
     public int getByte(int address) {
+        int result;
         if (address == 0xff26) {
-            int result = r.getByte(0xff26) & 0b11110000;
+            result = 0;
             for (int i = 0; i < allModes.length; i++) {
                 result |= allModes[i].isEnabled() ? (1 << i) : 0;
             }
-            return result;
+            result |= enabled ? (1 << 7) : 0;
+        } else {
+            AddressSpace s = getAddressSpace(address);
+            if (s == null) {
+                throw new IllegalArgumentException();
+            }
+            result = s.getByte(address);
         }
+        return result | MASKS[address - 0xff10];
+    }
 
-        AddressSpace s = getAddressSpace(address);
-        if (s == null) {
-            throw new IllegalArgumentException();
+    private void start() {
+        for (int i = 0xff10; i <= 0xff25; i++) {
+            setByte(i, 0);
         }
-        return s.getByte(address);
+        output.start();
+    }
+
+    private void stop() {
+        output.stop();
+        for (AbstractSoundMode s : allModes) {
+            s.stop();
+        }
     }
 }

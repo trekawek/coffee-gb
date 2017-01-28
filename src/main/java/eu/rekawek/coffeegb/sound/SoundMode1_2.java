@@ -30,7 +30,7 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     @Override
     public boolean isEnabled() {
-        return lengthCounter > 0 || ((nr4 & (1 << 6)) == 0);
+        return super.isEnabled() && (lengthCounter > 0 || ((nr4 & (1 << 6)) == 0));
     }
 
     @Override

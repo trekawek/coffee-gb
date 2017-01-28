@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.util.Collection;
 
 @RunWith(Parameterized.class)
-@Ignore
 public class DmgSound2Test {
 
     private final String rom;
