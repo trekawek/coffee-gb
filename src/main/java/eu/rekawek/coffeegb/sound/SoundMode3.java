@@ -22,14 +22,17 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void trigger() {
         if (lengthCounter == 0) {
-            this.lengthCounter = 256 * (TICKS_PER_SEC / 2);
+            this.lengthCounter = 256 * (TICKS_PER_SEC / 256);
         }
-        this.i = 0;
+        i = 0;
         resetFreqDivider();
     }
 
     @Override
     public int tick() {
+        if (!dacEnabled) {
+            return 0;
+        }
         if (!updateLength()) {
             return 0;
         }
@@ -56,7 +59,7 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     protected void setNr1(int value) {
         super.setNr1(value);
-        lengthCounter = (256 - value) * (TICKS_PER_SEC / 2);
+        lengthCounter = (256 - value) * (TICKS_PER_SEC / 256);
     }
 
     private int getVolume() {

@@ -29,6 +29,9 @@ public class SoundMode4 extends AbstractSoundMode {
 
     @Override
     public int tick() {
+        if (!dacEnabled) {
+            return 0;
+        }
         if (!updateLength()) {
             return 0;
         }

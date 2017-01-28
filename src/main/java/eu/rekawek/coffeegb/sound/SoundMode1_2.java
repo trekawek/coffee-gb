@@ -39,6 +39,9 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     @Override
     public int tick() {
+        if (!dacEnabled) {
+            return 0;
+        }
         if (!updateLength()) {
             return 0;
         }
@@ -69,11 +72,12 @@ public class SoundMode1_2 extends AbstractSoundMode {
         lengthCounter = (64 - (value & 0b00111111)) * (TICKS_PER_SEC / 256);
     }
 
+    @Override
     protected void setNr2(int value) {
         super.setNr2(value);
         volumeEnvelope = new VolumeEnvelope(value);
         dacEnabled = (value & 0b11111000) != 0;
-        //enabled &= dacEnabled;
+        enabled &= dacEnabled;
     }
 
     private int getDuty() {
