@@ -52,6 +52,8 @@ public class SoundMode4 extends AbstractSoundMode {
     protected void setNr2(int value) {
         super.setNr2(value);
         volumeEnvelope = new VolumeEnvelope(value);
+        dacEnabled = (value & 0b11111000) != 0;
+        enabled &= dacEnabled;
     }
 
     @Override

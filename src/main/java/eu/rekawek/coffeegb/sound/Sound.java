@@ -41,9 +41,7 @@ public class Sound implements AddressSpace {
         int[] sound = new int[4];
         for (int i = 0; i < allModes.length; i++) {
             AbstractSoundMode m = allModes[i];
-            if (m.isEnabled()) {
-                sound[i] = m.tick();
-            }
+            sound[i] = m.tick();
         }
 
         int selection = r.getByte(0xff25);

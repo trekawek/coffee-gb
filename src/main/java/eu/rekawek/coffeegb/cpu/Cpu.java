@@ -90,9 +90,6 @@ public class Cpu {
         while (true) {
             switch (state) {
                 case OPCODE:
-                    if (pc == 0xc1f9) {
-                        int i = 0;
-                    }
                     clearState();
                     commandStart = pc;
                     opcode1 = addressSpace.getByte(pc);

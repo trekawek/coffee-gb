@@ -4,9 +4,11 @@ import eu.rekawek.coffeegb.AddressSpace;
 
 public abstract class AbstractSoundMode implements AddressSpace {
 
-    private final int offset;
+    protected final int offset;
 
     protected boolean enabled;
+
+    protected boolean dacEnabled;
 
     protected int nr0, nr1, nr2, nr3, nr4;
 
@@ -21,7 +23,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
     public abstract void trigger();
 
     public boolean isEnabled() {
-        return enabled;
+        return enabled && dacEnabled;
     }
 
     @Override
@@ -96,7 +98,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
     protected void setNr4(int value) {
         nr4 = value;
         if ((value & (1 << 7)) != 0) {
-            enabled = true;
+            enabled = dacEnabled;
             trigger();
         }
     }
@@ -138,10 +140,9 @@ public abstract class AbstractSoundMode implements AddressSpace {
             return enabled;
         } else if (lengthCounter <= 0) {
             enabled = false;
-            return false;
         } else {
             lengthCounter--;
-            return enabled;
         }
+        return enabled;
     }
 }

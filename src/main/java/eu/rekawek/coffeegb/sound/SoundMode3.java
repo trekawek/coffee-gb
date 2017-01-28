@@ -46,6 +46,12 @@ public class SoundMode3 extends AbstractSoundMode {
         return lastOutput;
     }
 
+    @Override
+    protected void setNr0(int value) {
+        super.setNr0(value);
+        dacEnabled = (value & (1 << 7)) != 0;
+        enabled &= dacEnabled;
+    }
 
     @Override
     protected void setNr1(int value) {
