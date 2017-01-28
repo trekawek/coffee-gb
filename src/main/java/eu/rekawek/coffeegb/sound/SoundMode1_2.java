@@ -8,8 +8,6 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     private int freqDivider;
 
-    private int lengthCounter;
-
     private int lastOutput;
 
     private int i;
@@ -29,13 +27,10 @@ public class SoundMode1_2 extends AbstractSoundMode {
     }
 
     @Override
-    public boolean isEnabled() {
-        return super.isEnabled() && (lengthCounter > 0 || ((nr4 & (1 << 6)) == 0));
-    }
-
-    @Override
     public void trigger() {
-        this.lengthCounter = TICKS_PER_SEC / 256 * 64;
+        if (lengthCounter == 0) {
+            this.lengthCounter = 64 * (TICKS_PER_SEC / 256);
+        }
         this.i = 0;
         resetFreqDivider();
         volumeEnvelope.start();
@@ -44,8 +39,8 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     @Override
     public int tick() {
-        if (lengthCounter > 0) {
-            lengthCounter--;
+        if (!updateLength()) {
+            return 0;
         }
 
         volumeEnvelope.tick();
@@ -71,7 +66,7 @@ public class SoundMode1_2 extends AbstractSoundMode {
     @Override
     protected void setNr1(int value) {
         super.setNr1(value);
-        lengthCounter = (value & 0b00111111) * (TICKS_PER_SEC / 256);
+        lengthCounter = (64 - (value & 0b00111111)) * (TICKS_PER_SEC / 256);
     }
 
     protected void setNr2(int value) {

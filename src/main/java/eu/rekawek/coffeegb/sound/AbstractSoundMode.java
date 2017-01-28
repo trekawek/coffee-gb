@@ -6,9 +6,11 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     private final int offset;
 
-    private boolean enabled;
+    protected boolean enabled;
 
     protected int nr0, nr1, nr2, nr3, nr4;
+
+    protected int lengthCounter;
 
     public AbstractSoundMode(int offset) {
         this.offset = offset;
@@ -125,5 +127,21 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     public void stop() {
         enabled = false;
+    }
+
+    protected boolean isConsecutively() {
+        return ((nr4 & (1 << 6)) == 0);
+    }
+
+    protected boolean updateLength() {
+        if (isConsecutively()) {
+            return enabled;
+        } else if (lengthCounter <= 0) {
+            enabled = false;
+            return false;
+        } else {
+            lengthCounter--;
+            return enabled;
+        }
     }
 }

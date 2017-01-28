@@ -4,8 +4,6 @@ import static eu.rekawek.coffeegb.Gameboy.TICKS_PER_SEC;
 
 public class SoundMode4 extends AbstractSoundMode {
 
-    private int lengthCounter;
-
     private VolumeEnvelope volumeEnvelope;
 
     private PolynomialCounter polynomialCounter;
@@ -21,21 +19,18 @@ public class SoundMode4 extends AbstractSoundMode {
     }
 
     @Override
-    public boolean isEnabled() {
-        return super.isEnabled() && (lengthCounter > 0 || ((nr4 & (1 << 6)) == 0));
-    }
-
-    @Override
     public void trigger() {
-        this.lengthCounter = TICKS_PER_SEC / 256 * 64;
+        if (lengthCounter == 0) {
+            this.lengthCounter = 64 * (TICKS_PER_SEC / 256);
+        }
         lfsr.reset();
         volumeEnvelope.start();
     }
 
     @Override
     public int tick() {
-        if (lengthCounter > 0) {
-            lengthCounter--;
+        if (!updateLength()) {
+            return 0;
         }
 
         volumeEnvelope.tick();
@@ -50,7 +45,7 @@ public class SoundMode4 extends AbstractSoundMode {
     @Override
     protected void setNr1(int value) {
         super.setNr1(value);
-        lengthCounter = (value & 0b00111111) * (TICKS_PER_SEC / 256);
+        lengthCounter = (64 - (value & 0b00111111)) * (TICKS_PER_SEC / 256);
     }
 
     @Override

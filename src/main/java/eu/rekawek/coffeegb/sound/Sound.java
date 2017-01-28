@@ -35,7 +35,7 @@ public class Sound implements AddressSpace {
     }
 
     public void tick() {
-        if (!isEnabled()) {
+        if (!enabled) {
             return;
         }
         int[] sound = new int[4];
@@ -49,34 +49,22 @@ public class Sound implements AddressSpace {
         int selection = r.getByte(0xff25);
         int left = 0;
         int right = 0;
-        int leftCount = 0;
-        int rightCount = 0;
         for (int i = 0; i < 4; i++) {
             if ((selection & (1 << i)) != 0) {
                 left += sound[i];
-                leftCount++;
             }
             if ((selection & (1 << i + 4)) != 0) {
                 right += sound[i];
-                rightCount++;
             }
         }
-        if (leftCount > 0) {
-            left /= leftCount;
-        }
-        if (rightCount > 0) {
-            right /= rightCount;
-        }
+        left /= 4;
+        right /= 4;
 
         int volumes = r.getByte(0xff24);
         left *= (volumes & 0b111);
         right *= ((volumes >> 4) & 0b111);
 
         output.play((byte) left, (byte) right);
-    }
-
-    private boolean isEnabled() {
-        return (r.getByte(0xff26) & (1 << 7)) != 0;
     }
 
     private AddressSpace getAddressSpace(int address) {
