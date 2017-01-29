@@ -97,7 +97,7 @@ public class InterruptManager implements AddressSpace {
                 if (ime) {
                     interruptRequested = true;
                 }
-                interruptFlag = value;
+                interruptFlag = value | 0xe0;
                 break;
 
             case 0xffff:

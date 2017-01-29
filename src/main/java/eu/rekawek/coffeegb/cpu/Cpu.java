@@ -85,9 +85,9 @@ public class Cpu {
             return;
         }
 
-        int pc = registers.getPC();
         boolean accessedMemory = false;
         while (true) {
+            int pc = registers.getPC();
             switch (state) {
                 case OPCODE:
                     clearState();
@@ -244,16 +244,6 @@ public class Cpu {
         }
     }
 
-    private void trace() {
-        String label = currentOpcode.toString();
-        label = label.replace("d8", String.format("0x%02x", operand[0]));
-        label = label.replace("a8", String.format("0xff00 + 0x%02x", operand[0]));
-        label = label.replace("d16", String.format("0x%04x", BitUtils.toWord(operand)));
-        label = label.replace("a16", String.format("0x%04x", BitUtils.toWord(operand)));
-        label = label.replace("r8", String.format("%s0x%02x", BitUtils.toSigned(operand[0])));
-        System.out.println(String.format("%04x %6s %s", commandStart, getDump(commandStart, registers.getPC()), label));
-    }
-
     private void handleSpriteBug(SpriteBug.CorruptionType type) {
         Lcdc lcdc = new Lcdc(addressSpace.getByte(GpuRegister.LCDC.getAddress()));
         if (!lcdc.isLcdEnabled()) {
@@ -267,14 +257,6 @@ public class Cpu {
 
     public Registers getRegisters() {
         return registers;
-    }
-
-    private String getDump(int from, int to) {
-        StringBuilder builder = new StringBuilder();
-        for (int i = from; i < to; i++) {
-            builder.append(String.format("%02x", addressSpace.getByte(i) & 0xff));
-        }
-        return builder.toString();
     }
 
     void clearState() {
