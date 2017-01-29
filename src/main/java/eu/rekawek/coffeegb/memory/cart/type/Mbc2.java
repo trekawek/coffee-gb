@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
 import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 
 public class Mbc2 implements AddressSpace {
@@ -13,15 +15,19 @@ public class Mbc2 implements AddressSpace {
 
     private final int[] ram;
 
+    private final Battery battery;
+
     private int selectedRomBank = 1;
 
     private boolean ramWriteEnabled;
 
-    public Mbc2(int[] cartridge, CartridgeType type, int romBanks) {
+    public Mbc2(int[] cartridge, CartridgeType type, Battery battery, int romBanks) {
         this.cartridge = cartridge;
         this.romBanks = romBanks;
         this.ram = new int[0x0200];
         this.type = type;
+        this.battery = battery;
+        battery.loadRam(ram);
     }
 
     @Override
@@ -35,6 +41,9 @@ public class Mbc2 implements AddressSpace {
         if (address >= 0x0000 && address < 0x2000) {
             if ((address & 0x0100) == 0) {
                 ramWriteEnabled = (value & 0b1010) != 0;
+                if (!ramWriteEnabled) {
+                    battery.saveRam(ram);
+                }
             }
         } else if (address >= 0x2000 && address < 0x4000) {
             if ((address & 0x0100) != 0) {

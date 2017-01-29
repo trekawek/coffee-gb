@@ -1,10 +1,15 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
+import eu.rekawek.coffeegb.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
+
 public class RealTimeClock {
+
+    private final Battery battery;
 
     private long offsetSec;
 
-    private long clockStart = System.currentTimeMillis();
+    private long clockStart;
 
     private boolean halt;
 
@@ -18,17 +23,19 @@ public class RealTimeClock {
 
     private int haltDays;
 
+    public RealTimeClock(Battery battery) {
+        this.battery = battery;
+        long[] data = battery.loadClock();
+        offsetSec = data[0];
+        clockStart = data[1] == 0 ? System.currentTimeMillis() : data[1];
+    }
+
     public void latch() {
-        if (latchStart == 0) {
-            latchStart = System.currentTimeMillis();
-        }
+        latchStart = System.currentTimeMillis();
     }
 
     public void unlatch() {
-        if (latchStart != 0) {
-            clockStart += (System.currentTimeMillis() - latchStart);
-            latchStart = 0;
-        }
+        latchStart = 0;
     }
 
     public int getSeconds() {
@@ -85,13 +92,16 @@ public class RealTimeClock {
 
     public void setHalt(boolean halt) {
         if (halt) {
+            latch();
             haltSeconds = getSeconds();
             haltMinutes = getMinutes();
             haltHours = getHours();
             haltDays = getDayCounter();
+            unlatch();
         } else {
             offsetSec = haltSeconds + haltMinutes * 60 + haltHours * 60 * 60 + haltDays * 60 * 60 * 24;
             clockStart = System.currentTimeMillis();
+            battery.saveClock(new long[] {offsetSec, clockStart});
         }
         this.halt = halt;
     }
