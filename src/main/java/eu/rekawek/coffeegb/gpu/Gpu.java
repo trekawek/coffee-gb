@@ -120,7 +120,7 @@ public class Gpu implements AddressSpace {
         Mode oldMode = mode;
         ticksInLine++;
         if (!phase.tick()) {
-            switch (mode) {
+            switch (oldMode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
                     phase = new PixelTransfer(videoRam, oemRam, display, r, ((OamSearch) phase).getSprites());

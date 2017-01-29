@@ -29,6 +29,7 @@ public class Counter {
     }
 
     public void setCounter(int counter) {
+        this.clocks = 0;
         this.counter = counter;
     }
 }

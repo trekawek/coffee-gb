@@ -24,8 +24,6 @@ public class InterruptManager implements AddressSpace {
 
     private int interruptEnabled;
 
-    private boolean interruptRequested;
-
     private int pendingEnableInterrupts = -1;
 
     private int pendingDisableInterrupts = -1;
@@ -49,27 +47,20 @@ public class InterruptManager implements AddressSpace {
     }
 
     public void requestInterrupt(InterruptType type) {
-        if (ime) {
-            interruptRequested = true;
-        }
         interruptFlag = interruptFlag | (1 << type.ordinal());
     }
 
     public void onInstructionFinished() {
         if (pendingEnableInterrupts != -1) {
             if (pendingEnableInterrupts-- == 0) {
-                ime = true;
+                enableInterrupts(false);
             }
         }
         if (pendingDisableInterrupts != -1) {
             if (pendingDisableInterrupts-- == 0) {
-                ime = false;
+                disableInterrupts(false);
             }
         }
-    }
-
-    public boolean isInterruptRequested() {
-        return interruptRequested;
     }
 
     public boolean isInterruptFlagSet() {
@@ -78,7 +69,6 @@ public class InterruptManager implements AddressSpace {
 
     public void flush() {
         interruptFlag = 0;
-        interruptRequested = false;
     }
 
     public boolean isHaltBug() {
@@ -94,9 +84,6 @@ public class InterruptManager implements AddressSpace {
     public void setByte(int address, int value) {
         switch (address) {
             case 0xff0f:
-                if (ime) {
-                    interruptRequested = true;
-                }
                 interruptFlag = value | 0xe0;
                 break;
 

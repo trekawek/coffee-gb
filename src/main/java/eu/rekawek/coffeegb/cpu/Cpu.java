@@ -67,7 +67,7 @@ public class Cpu {
         }
 
         if (state == State.OPCODE || state == State.HALTED || state == State.STOPPED) {
-            if (interruptManager.isInterruptRequested()) {
+            if (interruptManager.isInterruptFlagSet()) {
                 state = State.IRQ_READ_IF;
             }
         }
