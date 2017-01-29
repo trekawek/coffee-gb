@@ -75,7 +75,7 @@ public enum CartridgeType {
 
     private boolean nameContainsSegment(String segment) {
         Pattern p = Pattern.compile("(^|_)" + Pattern.quote(segment) + "($|_)");
-        return p.matcher(segment).find();
+        return p.matcher(name()).find();
     }
 
     public static CartridgeType getById(int id) {

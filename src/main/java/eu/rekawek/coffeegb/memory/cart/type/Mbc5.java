@@ -3,7 +3,7 @@ package eu.rekawek.coffeegb.memory.cart.type;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 
-public class Mbc1 implements AddressSpace {
+public class Mbc5 implements AddressSpace {
 
     private final CartridgeType type;
 
@@ -19,15 +19,13 @@ public class Mbc1 implements AddressSpace {
 
     private int selectedRomBank = 1;
 
-    private int memoryModel;
-
     private boolean ramWriteEnabled;
 
-    public Mbc1(int[] cartridge, CartridgeType type, int romBanks, int ramBanks) {
+    public Mbc5(int[] cartridge, CartridgeType type, int romBanks, int ramBanks) {
         this.cartridge = cartridge;
         this.ramBanks = ramBanks;
         this.romBanks = romBanks;
-        this.ram = new int[0x2000 * this.ramBanks];
+        this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
         this.type = type;
     }
 
@@ -41,20 +39,15 @@ public class Mbc1 implements AddressSpace {
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = (value & 0b1010) != 0;
-        } else if (address >= 0x2000 && address < 0x4000) {
-            int bank = value & 0b00011111;
-            selectRomBank(bank);
-        } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 0) {
-            int bank = selectedRomBank & 0b00011111;
-            bank = bank | ((value & 0b11) << 5);
-            selectRomBank(bank);
-        } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 1) {
-            int bank = value & 0b11;
+        } else if (address >= 0x2000 && address < 0x3000) {
+            selectRomBank((selectedRomBank & 0x100) | value);
+        } else if (address >= 0x3000 && address < 0x4000) {
+            selectRomBank((selectedRomBank & 0x0ff) | ((value & 1) << 9));
+        } else if (address >= 0x4000 && address < 0x6000) {
+            int bank = value & 0x0f;
             if (bank < ramBanks) {
                 selectedRamBank = bank;
             }
-        } else if (address >= 0x6000 && address < 0x8000) {
-            memoryModel = value & 1;
         } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
@@ -64,9 +57,6 @@ public class Mbc1 implements AddressSpace {
     }
 
     private void selectRomBank(int bank) {
-        if (bank % 0x20 == 0) {
-            bank = bank + 1;
-        }
         if (bank < romBanks) {
             selectedRomBank = bank;
         }

@@ -3,6 +3,9 @@ package eu.rekawek.coffeegb.memory.cart;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.BootRom;
 import eu.rekawek.coffeegb.memory.cart.type.Mbc1;
+import eu.rekawek.coffeegb.memory.cart.type.Mbc2;
+import eu.rekawek.coffeegb.memory.cart.type.Mbc3;
+import eu.rekawek.coffeegb.memory.cart.type.Mbc5;
 import eu.rekawek.coffeegb.memory.cart.type.Rom;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
@@ -31,6 +34,12 @@ public class Cartridge implements AddressSpace {
 
         if (type.isMbc1()) {
             addressSpace = new Mbc1(rom, type, romBanks, ramBanks);
+        } else if (type.isMbc2()) {
+            addressSpace = new Mbc2(rom, type, romBanks);
+        } else if (type.isMbc3()) {
+            addressSpace = new Mbc3(rom, type, romBanks, ramBanks);
+        } else if (type.isMbc5()) {
+            addressSpace = new Mbc5(rom, type, romBanks, ramBanks);
         } else {
             addressSpace = new Rom(rom, type, romBanks, ramBanks);
         }
