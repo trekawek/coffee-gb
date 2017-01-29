@@ -1,5 +1,7 @@
 # Coffee GB
 
+[![Build Status](https://travis-ci.org/trekawek/coffee-gb.svg?branch=master)](https://travis-ci.org/trekawek/coffee-gb)
+
 Coffee GB is a Gameboy emulator written in Java 8. It's meant to be a development exercise.
 
 ![Coffee GB running Tetris](doc/tetris.gif)
@@ -35,7 +37,17 @@ The [Blargg's test ROMs](http://gbdev.gg8.se/wiki/articles/Test_ROMs) are used f
     mvn clean test -Ptest-blargg
     mvn clean test -Ptest-blargg-individual # for running "single" tests providing more diagnostic info
 
-The tests output is redirected to stdout.
+They are also part of the [Travis-based CI](https://travis-ci.org/trekawek/coffee-gb).
+
+The tests output (normally displayed on the Gameboy screen) is redirected to the stdout:
+
+```
+cpu_instrs
+
+01:ok  02:ok  03:ok  04:ok  05:ok  06:ok  07:ok  08:ok  09:ok  10:ok  11:ok
+
+Passed all tests
+```
 
 Right now, following tests are green:
 
@@ -43,11 +55,11 @@ Right now, following tests are green:
 * instr_timing
 * mem_timing-2
 * oam_bug-2
+* halt_bug
 
 To be done:
 
 * dmg_sound-2
-* halt_bug
 
 ## Prioritized TODO
 
