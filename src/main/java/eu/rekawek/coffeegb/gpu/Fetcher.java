@@ -138,7 +138,7 @@ public class Fetcher {
 
             case READ_SPRITE_DATA_1:
                 if (spriteFlags.isYflip()) {
-                    spriteTileLine = lcdc.getSpriteHeight() * 2 - 1 - spriteTileLine;
+                    spriteTileLine = lcdc.getSpriteHeight() - 1 - spriteTileLine;
                 }
                 tileData1 = getTileData(tileId, spriteTileLine, 0, 0x8000, false);
                 state = State.READ_SPRITE_DATA_2;
