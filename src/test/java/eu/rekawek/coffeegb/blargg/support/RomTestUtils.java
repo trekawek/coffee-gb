@@ -27,12 +27,14 @@ public final class RomTestUtils {
     }
 
     public static void testRomWithMemory(String romName) throws IOException {
+        System.out.println("\n### Running test rom " + romName + " ###");
         MemoryTestRunner runner = new MemoryTestRunner(new File("src/test/resources/roms", romName), System.out);
         MemoryTestRunner.TestResult result = runner.runTest();
         assertEquals("Non-zero return value", 0, result.getStatus());
     }
 
     public static void testRomWithSerial(String romName) throws IOException {
+        System.out.println("\n### Running test rom " + romName + " ###");
         SerialTestRunner runner = new SerialTestRunner(new File("src/test/resources/roms", romName), System.out);
         String result = runner.runTest();
         assertTrue(result.contains("Passed"));
