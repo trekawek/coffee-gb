@@ -76,7 +76,7 @@ public class OamSearch implements GpuPhase {
 
             case READING_X:
                 spriteX = oemRam.getByte(spriteAddress + 1);
-                if (between(spriteY, registers.get(GpuRegister.LY) + 16, spriteY + lcdc.getSpriteHeight())) {
+                if (spritePosIndex < sprites.length && between(spriteY, registers.get(GpuRegister.LY) + 16, spriteY + lcdc.getSpriteHeight())) {
                     sprites[spritePosIndex++] = new SpritePosition(spriteX, spriteY, spriteAddress);
                 }
                 i++;
