@@ -33,6 +33,10 @@ public class Cartridge implements AddressSpace {
         LOG.debug("Cartridge type: {}", type);
         int romBanks = getRomBanks(rom[0x0148]);
         int ramBanks = getRamBanks(rom[0x0149]);
+        if (ramBanks == 0 && type.isRam()) {
+            LOG.warn("RAM bank is defined to 0. Overriding to 1.");
+            ramBanks = 1;
+        }
         LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
 
         Battery battery = Battery.NULL_BATTERY;
