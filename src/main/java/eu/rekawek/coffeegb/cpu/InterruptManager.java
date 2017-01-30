@@ -63,7 +63,11 @@ public class InterruptManager implements AddressSpace {
         }
     }
 
-    public boolean isInterruptFlagSet() {
+    public boolean isIme() {
+        return ime;
+    }
+
+    public boolean isInterruptRequested() {
         return (interruptFlag & interruptEnabled) != 0;
     }
 

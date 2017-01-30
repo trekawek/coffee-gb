@@ -71,10 +71,10 @@ public class Cpu {
         }
 
         if (state == State.OPCODE || state == State.HALTED || state == State.STOPPED) {
-            if (state == State.STOPPED) {
-                display.enableLcd();
-            }
-            if (interruptManager.isInterruptFlagSet()) {
+            if (interruptManager.isIme() && interruptManager.isInterruptRequested()) {
+                if (state == State.STOPPED) {
+                    display.enableLcd();
+                }
                 state = State.IRQ_READ_IF;
             }
         }
@@ -84,7 +84,7 @@ public class Cpu {
             return;
         }
 
-        if (state == State.HALTED && interruptManager.isInterruptFlagSet()) {
+        if (state == State.HALTED && interruptManager.isInterruptRequested()) {
             state = State.OPCODE;
         }
 
