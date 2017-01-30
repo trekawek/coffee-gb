@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.cpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.op.Op;
 import eu.rekawek.coffeegb.cpu.opcode.Opcode;
+import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.Lcdc;
@@ -23,6 +24,8 @@ public class Cpu {
     private final InterruptManager interruptManager;
 
     private final Gpu gpu;
+
+    private final Display display;
 
     private int opcode1, opcode2;
 
@@ -52,11 +55,12 @@ public class Cpu {
 
     private boolean haltBugMode;
 
-    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu) {
+    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, Display display) {
         this.registers = new Registers();
         this.addressSpace = addressSpace;
         this.interruptManager = interruptManager;
         this.gpu = gpu;
+        this.display = display;
     }
 
     public void tick() {
@@ -67,6 +71,9 @@ public class Cpu {
         }
 
         if (state == State.OPCODE || state == State.HALTED || state == State.STOPPED) {
+            if (state == State.STOPPED) {
+                display.enableLcd();
+            }
             if (interruptManager.isInterruptFlagSet()) {
                 state = State.IRQ_READ_IF;
             }
@@ -145,6 +152,7 @@ public class Cpu {
                 case RUNNING:
                     if (opcode1 == 0x10) {
                         state = State.STOPPED;
+                        display.disableLcd();
                         return;
                     } else if (opcode1 == 0x76) {
                         if (interruptManager.isHaltBug()) {

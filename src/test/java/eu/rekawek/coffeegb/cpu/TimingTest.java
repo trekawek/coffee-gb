@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.opcode.Opcode;
+import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.Ram;
 import org.junit.Test;
 
@@ -17,7 +18,7 @@ public class TimingTest {
 
     public TimingTest() {
         memory = new Ram(0x00, 0x10000);
-        cpu = new Cpu(memory, new InterruptManager(), null);
+        cpu = new Cpu(memory, new InterruptManager(), null, Display.NULL_DISPLAY);
     }
 
     @Test

@@ -60,7 +60,7 @@ public class Gameboy {
         mmu.addAddressSpace(timer);
         mmu.addAddressSpace(dma);
         mmu.addAddressSpace(sound);
-        cpu = new Cpu(mmu, interruptManager, gpu);
+        cpu = new Cpu(mmu, interruptManager, gpu, display);
         init();
     }
 
