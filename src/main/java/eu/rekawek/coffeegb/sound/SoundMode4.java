@@ -20,8 +20,8 @@ public class SoundMode4 extends AbstractSoundMode {
 
     @Override
     public void trigger() {
-        if (lengthCounter == 0) {
-            this.lengthCounter = 64 * (TICKS_PER_SEC / 256);
+        if (length.isDisabled()) {
+            length.setLength(64);
         }
         lfsr.reset();
         volumeEnvelope.start();
@@ -48,7 +48,7 @@ public class SoundMode4 extends AbstractSoundMode {
     @Override
     protected void setNr1(int value) {
         super.setNr1(value);
-        lengthCounter = (64 - (value & 0b00111111)) * (TICKS_PER_SEC / 256);
+        length.setLength(64 - (value & 0b00111111));
     }
 
     @Override

@@ -12,7 +12,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     protected int nr0, nr1, nr2, nr3, nr4;
 
-    protected int lengthCounter;
+    protected LengthCounter length = new LengthCounter();
 
     public AbstractSoundMode(int offset) {
         this.offset = offset;
@@ -138,10 +138,10 @@ public abstract class AbstractSoundMode implements AddressSpace {
     protected boolean updateLength() {
         if (isConsecutively()) {
             return enabled;
-        } else if (lengthCounter <= 0) {
+        }
+        length.tick();
+        if (length.isDisabled()) {
             enabled = false;
-        } else {
-            lengthCounter--;
         }
         return enabled;
     }
