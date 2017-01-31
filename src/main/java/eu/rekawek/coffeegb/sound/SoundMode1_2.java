@@ -1,7 +1,5 @@
 package eu.rekawek.coffeegb.sound;
 
-import static eu.rekawek.coffeegb.Gameboy.TICKS_PER_SEC;
-
 public class SoundMode1_2 extends AbstractSoundMode {
 
     private final int mode;
@@ -17,7 +15,7 @@ public class SoundMode1_2 extends AbstractSoundMode {
     private VolumeEnvelope volumeEnvelope;
 
     public SoundMode1_2(int mode) {
-        super(mode == 1 ? 0xff10 : 0xff15);
+        super(mode == 1 ? 0xff10 : 0xff15, 64);
         if (mode != 1 && mode != 2) {
             throw new IllegalArgumentException();
         }
@@ -28,9 +26,6 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     @Override
     public void trigger() {
-        if (length.isDisabled()) {
-            length.setLength(64);
-        }
         this.i = 0;
         resetFreqDivider();
         volumeEnvelope.start();
@@ -39,10 +34,10 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     @Override
     public int tick() {
-        if (!dacEnabled) {
+        if (!updateLength()) {
             return 0;
         }
-        if (!updateLength()) {
+        if (!dacEnabled) {
             return 0;
         }
 
@@ -77,7 +72,7 @@ public class SoundMode1_2 extends AbstractSoundMode {
         super.setNr2(value);
         volumeEnvelope = new VolumeEnvelope(value);
         dacEnabled = (value & 0b11111000) != 0;
-        enabled &= dacEnabled;
+        channelEnabled &= dacEnabled;
     }
 
     private int getDuty() {

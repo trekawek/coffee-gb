@@ -2,8 +2,6 @@ package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-import static eu.rekawek.coffeegb.Gameboy.TICKS_PER_SEC;
-
 public class SoundMode3 extends AbstractSoundMode {
 
     private final AddressSpace waveram;
@@ -15,25 +13,22 @@ public class SoundMode3 extends AbstractSoundMode {
     private int i;
 
     public SoundMode3(AddressSpace waveram) {
-        super(0xff1a);
+        super(0xff1a, 256);
         this.waveram = waveram;
     }
 
     @Override
     public void trigger() {
-        if (length.isDisabled()) {
-            length.setLength(256);
-        }
         i = 0;
         resetFreqDivider();
     }
 
     @Override
     public int tick() {
-        if (!dacEnabled) {
+        if (!updateLength()) {
             return 0;
         }
-        if (!updateLength()) {
+        if (!dacEnabled) {
             return 0;
         }
 
@@ -53,7 +48,7 @@ public class SoundMode3 extends AbstractSoundMode {
     protected void setNr0(int value) {
         super.setNr0(value);
         dacEnabled = (value & (1 << 7)) != 0;
-        enabled &= dacEnabled;
+        channelEnabled &= dacEnabled;
     }
 
     @Override

@@ -6,24 +6,25 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     protected final int offset;
 
-    protected boolean enabled;
+    protected boolean channelEnabled;
 
     protected boolean dacEnabled;
 
     protected int nr0, nr1, nr2, nr3, nr4;
 
-    protected LengthCounter length = new LengthCounter();
+    protected LengthCounter length;
 
-    public AbstractSoundMode(int offset) {
+    public AbstractSoundMode(int offset, int length) {
         this.offset = offset;
+        this.length = new LengthCounter(length);
     }
 
     public abstract int tick();
 
-    public abstract void trigger();
+    protected abstract void trigger();
 
     public boolean isEnabled() {
-        return enabled && dacEnabled;
+        return channelEnabled && dacEnabled;
     }
 
     @Override
@@ -97,8 +98,9 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     protected void setNr4(int value) {
         nr4 = value;
+        length.setNr4(value);
         if ((value & (1 << 7)) != 0) {
-            enabled = dacEnabled;
+            channelEnabled = dacEnabled;
             trigger();
         }
     }
@@ -128,21 +130,17 @@ public abstract class AbstractSoundMode implements AddressSpace {
     }
 
     public void stop() {
-        enabled = false;
-    }
-
-    protected boolean isConsecutively() {
-        return ((nr4 & (1 << 6)) == 0);
+        channelEnabled = false;
     }
 
     protected boolean updateLength() {
-        if (isConsecutively()) {
-            return enabled;
-        }
         length.tick();
-        if (length.isDisabled()) {
-            enabled = false;
+        if (!length.isEnabled()) {
+            return channelEnabled;
         }
-        return enabled;
+        if (length.getValue() == 0) {
+            channelEnabled = false;
+        }
+        return channelEnabled;
     }
 }
