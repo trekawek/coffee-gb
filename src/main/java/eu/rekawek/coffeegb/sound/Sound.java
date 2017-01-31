@@ -27,8 +27,8 @@ public class Sound implements AddressSpace {
     private boolean enabled;
 
     public Sound(SoundOutput output) {
-        allModes[0] = new SoundMode1_2(1);
-        allModes[1] = new SoundMode1_2(2);
+        allModes[0] = new SoundMode1();
+        allModes[1] = new SoundMode2();
         allModes[2] = new SoundMode3(waveRam);
         allModes[3] = new SoundMode4();
         this.output = output;

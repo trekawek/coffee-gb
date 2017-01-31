@@ -1,8 +1,6 @@
 package eu.rekawek.coffeegb.sound;
 
-public class SoundMode1_2 extends AbstractSoundMode {
-
-    private final int mode;
+public class SoundMode2 extends AbstractSoundMode {
 
     private int freqDivider;
 
@@ -10,17 +8,10 @@ public class SoundMode1_2 extends AbstractSoundMode {
 
     private int i;
 
-    private FrequencySweep frequencySweep;
-
     private VolumeEnvelope volumeEnvelope;
 
-    public SoundMode1_2(int mode) {
-        super(mode == 1 ? 0xff10 : 0xff15, 64);
-        if (mode != 1 && mode != 2) {
-            throw new IllegalArgumentException();
-        }
-        this.mode = mode;
-        this.frequencySweep = new FrequencySweep(nr0, getFrequency());
+    public SoundMode2() {
+        super(0xff15, 64);
         this.volumeEnvelope = new VolumeEnvelope(nr2);
     }
 
@@ -29,20 +20,18 @@ public class SoundMode1_2 extends AbstractSoundMode {
         this.i = 0;
         resetFreqDivider();
         volumeEnvelope.start();
-        frequencySweep.start();
     }
 
     @Override
     public int tick() {
-        if (!updateLength()) {
-            return 0;
-        }
-        if (!dacEnabled) {
+        boolean e = true;
+        e = updateLength() && e;
+        e = dacEnabled && e;
+        if (!e) {
             return 0;
         }
 
         volumeEnvelope.tick();
-        frequencySweep.tick();
 
         if (freqDivider-- == 0) {
             resetFreqDivider();
@@ -56,9 +45,6 @@ public class SoundMode1_2 extends AbstractSoundMode {
     @Override
     protected void setNr0(int value) {
         super.setNr0(value);
-        if (mode == 1) {
-            frequencySweep = new FrequencySweep(value, getFrequency());
-        }
     }
 
     @Override
@@ -91,10 +77,6 @@ public class SoundMode1_2 extends AbstractSoundMode {
     }
 
     private void resetFreqDivider() {
-        if (frequencySweep.isEnabled()) {
-            freqDivider = frequencySweep.getFreq() * 4;
-        } else {
-            freqDivider = getFrequency() * 4;
-        }
+        freqDivider = getFrequency() * 4;
     }
 }

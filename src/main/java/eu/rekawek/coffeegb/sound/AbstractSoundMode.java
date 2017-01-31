@@ -126,7 +126,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
     }
 
     protected int getFrequency() {
-        return 2048 - (nr3 | ((nr4 & 0b111) << 8));
+        return 2048 - (getNr3() | ((getNr4() & 0b111) << 8));
     }
 
     public void stop() {

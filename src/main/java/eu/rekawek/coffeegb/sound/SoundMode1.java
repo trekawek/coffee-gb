@@ -1,0 +1,117 @@
+package eu.rekawek.coffeegb.sound;
+
+public class SoundMode1 extends AbstractSoundMode {
+
+    private int freqDivider;
+
+    private int lastOutput;
+
+    private int i;
+
+    private FrequencySweep frequencySweep;
+
+    private VolumeEnvelope volumeEnvelope;
+
+    public SoundMode1() {
+        super(0xff10, 64);
+        this.frequencySweep = new FrequencySweep();
+        this.volumeEnvelope = new VolumeEnvelope(nr2);
+    }
+
+    @Override
+    public void trigger() {
+        i = 0;
+        resetFreqDivider();
+        volumeEnvelope.start();
+    }
+
+    @Override
+    public int tick() {
+        boolean e = true;
+        e = updateLength() && e;
+        e = updateSweep() && e;
+        e = dacEnabled && e;
+        if (!e) {
+            return 0;
+        }
+
+        volumeEnvelope.tick();
+
+        if (freqDivider-- == 0) {
+            resetFreqDivider();
+            lastOutput = ((getDuty() & (1 << i)) >> i);
+            lastOutput *= volumeEnvelope.getVolume();
+            i = (i + 1) % 8;
+        }
+        return lastOutput;
+    }
+
+    @Override
+    protected void setNr0(int value) {
+        super.setNr0(value);
+        frequencySweep.setNr10(value);
+    }
+
+    @Override
+    protected void setNr1(int value) {
+        super.setNr1(value);
+        length.setLength(64 - (value & 0b00111111));
+    }
+
+    @Override
+    protected void setNr2(int value) {
+        super.setNr2(value);
+        volumeEnvelope = new VolumeEnvelope(value);
+        dacEnabled = (value & 0b11111000) != 0;
+        channelEnabled &= dacEnabled;
+    }
+
+    @Override
+    protected void setNr3(int value) {
+        super.setNr3(value);
+        frequencySweep.setNr13(value);
+    }
+
+    @Override
+    protected void setNr4(int value) {
+        super.setNr4(value);
+        frequencySweep.setNr14(value);
+    }
+
+    @Override
+    protected int getNr3() {
+        return frequencySweep.getNr13();
+    }
+
+    @Override
+    protected int getNr4() {
+        return (super.getNr4() & 0b11111000) | (frequencySweep.getNr14() & 0b00000111);
+    }
+
+    private int getDuty() {
+        switch (getNr1() >> 6) {
+            case 0:
+                return 0b00000001;
+            case 1:
+                return 0b10000001;
+            case 2:
+                return 0b10000111;
+            case 3:
+                return 0b01111110;
+            default:
+                throw new IllegalStateException();
+        }
+    }
+
+    private void resetFreqDivider() {
+        freqDivider = getFrequency() * 4;
+    }
+
+    protected boolean updateSweep() {
+        frequencySweep.tick();
+        if (channelEnabled && !frequencySweep.isEnabled()) {
+            channelEnabled = false;
+        }
+        return channelEnabled;
+    }
+}
