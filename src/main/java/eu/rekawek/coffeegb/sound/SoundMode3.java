@@ -18,6 +18,12 @@ public class SoundMode3 extends AbstractSoundMode {
     }
 
     @Override
+    public void start() {
+        i = 0;
+        length.start();
+    }
+
+    @Override
     public void trigger() {
         i = 0;
         resetFreqDivider();

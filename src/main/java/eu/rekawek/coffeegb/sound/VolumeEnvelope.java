@@ -20,7 +20,6 @@ public class VolumeEnvelope {
         this.initialVolume = register >> 4;
         this.envelopeDirection = (register & (1 << 3)) == 0 ? -1 : 1;
         this.sweep = register & 0b111;
-        start();
     }
 
     public boolean isEnabled() {
@@ -28,6 +27,11 @@ public class VolumeEnvelope {
     }
 
     public void start() {
+        finished = true;
+        i = 8192;
+    }
+
+    public void trigger() {
         volume = initialVolume;
         i = 0;
     }

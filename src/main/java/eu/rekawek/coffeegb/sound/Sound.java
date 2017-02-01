@@ -132,6 +132,9 @@ public class Sound implements AddressSpace {
         for (int i = 0xff10; i <= 0xff25; i++) {
             setByte(i, 0);
         }
+        for (AbstractSoundMode m : allModes) {
+            m.start();
+        }
         output.start();
     }
 

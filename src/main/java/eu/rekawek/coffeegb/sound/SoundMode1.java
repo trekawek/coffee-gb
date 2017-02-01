@@ -19,10 +19,18 @@ public class SoundMode1 extends AbstractSoundMode {
     }
 
     @Override
+    public void start() {
+        i = 0;
+        length.start();
+        frequencySweep.start();
+        volumeEnvelope.trigger();
+    }
+
+    @Override
     public void trigger() {
         i = 0;
         resetFreqDivider();
-        volumeEnvelope.start();
+        volumeEnvelope.trigger();
     }
 
     @Override

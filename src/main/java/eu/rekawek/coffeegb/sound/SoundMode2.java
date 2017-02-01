@@ -16,10 +16,17 @@ public class SoundMode2 extends AbstractSoundMode {
     }
 
     @Override
+    public void start() {
+        i = 0;
+        length.start();
+        volumeEnvelope.start();
+    }
+
+    @Override
     public void trigger() {
         this.i = 0;
         resetFreqDivider();
-        volumeEnvelope.start();
+        volumeEnvelope.trigger();
     }
 
     @Override

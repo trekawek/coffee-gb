@@ -129,6 +129,8 @@ public abstract class AbstractSoundMode implements AddressSpace {
         return 2048 - (getNr3() | ((getNr4() & 0b111) << 8));
     }
 
+    public abstract void start();
+
     public void stop() {
         channelEnabled = false;
     }

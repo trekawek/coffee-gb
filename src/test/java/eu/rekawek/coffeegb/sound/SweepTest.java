@@ -4,7 +4,6 @@ import org.junit.Test;
 
 import static eu.rekawek.coffeegb.Gameboy.TICKS_PER_SEC;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 public class SweepTest {
@@ -25,7 +24,7 @@ public class SweepTest {
      call should_be_off
      */
     @Test
-    public void test2() {
+    public void test04_2() {
         begin();
         wregNR(10, 0x01);
         wregNR(13, 0xff);
@@ -49,7 +48,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test3() {
+    public void test04_3() {
         begin();
         wregNR(10, 0x10);
         wregNR(13, 0xff);
@@ -68,7 +67,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test4() {
+    public void test04_4() {
         begin();
         wregNR(10, 0x00);
         wregNR(13, 0xff);
@@ -87,7 +86,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test5() {
+    public void test04_5() {
         begin();
         wregNR(10, 0x11);
         wregNR(13, 0x00);
@@ -105,7 +104,7 @@ public class SweepTest {
      call should_be_off
      */
     @Test
-    public void test6() {
+    public void test04_6() {
         begin();
         wregNR(10, 0x02);
         wregNR(13, 0x67);
@@ -123,7 +122,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test7() {
+    public void test04_7() {
         begin();
         wregNR(10, 0x01);
         wregNR(13, 0x55);
@@ -143,7 +142,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test8() {
+    public void test04_8() {
         begin();
         wregNR(10, 0x10);
         wregNR(13, 0xff);
@@ -165,7 +164,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test9() {
+    public void test04_9() {
         begin();
         wregNR(10, 0x01);
         wregNR(13, 0xff);
@@ -186,7 +185,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test10() {
+    public void test04_10() {
         begin();
         wregNR(10, 0x08);
         wregNR(13, 0xff);
@@ -206,7 +205,7 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test11() {
+    public void test04_11() {
         begin();
         wregNR(10, 0x10);
         wregNR(13, 0xff);
@@ -225,12 +224,39 @@ public class SweepTest {
      call should_be_almost_off
      */
     @Test
-    public void test12() {
+    public void test04_12() {
         begin();
         wregNR(10, 0x01);
         wregNR(13, 0x00);
         wregNR(14, 0xc5);
         delayApu(0x20);
+        shouldBeOn();
+    }
+
+    /*
+     set_test 2,"Timer treats period 0 as 8"
+     call begin
+     wreg NR10,$11
+     wreg NR13,$00
+     wreg NR14,$C2
+     delay_apu 1
+     wreg NR10,$01  ; sweep enabled
+     delay_apu 3
+     wreg NR10,$11  ; non-zero period so calc will occur when timer reloads
+     delay_apu $11
+     call should_be_almost_off
+     */
+    @Test
+    public void test05_02() {
+        begin();
+        wregNR(10, 0x11);
+        wregNR(13, 0x00);
+        wregNR(14, 0xc2);
+        delayApu(1);
+        wregNR(10, 0x01);
+        delayApu(3);
+        wregNR(10, 0x11);
+        delayApu(0x11);
         shouldBeOn();
     }
 
@@ -278,7 +304,7 @@ public class SweepTest {
      wreg NR10,$11  ; sweep period = 1, shift = 1
      wreg NR12,$08  ; silent without disabling channel
      wreg NR13,$FF  ; freq = $3FF
-     wreg NR14,$83  ; start
+     wreg NR14,$83  ; trigger
 -    lda  NR52
      and  $01
      jr   nz,-

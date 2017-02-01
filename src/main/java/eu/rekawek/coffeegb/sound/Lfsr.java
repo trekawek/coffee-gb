@@ -8,6 +8,10 @@ public class Lfsr {
         reset();
     }
 
+    public void start() {
+        reset();
+    }
+
     public void reset() {
         lfsr = 0x7fff;
     }

@@ -18,6 +18,10 @@ public class LengthCounter {
         this.fullLength = fullLength;
     }
 
+    public void start() {
+        i = 8192;
+    }
+
     public void tick() {
         if (++i == DIVIDER) {
             i = 0;

@@ -17,9 +17,16 @@ public class SoundMode4 extends AbstractSoundMode {
     }
 
     @Override
+    public void start() {
+        lfsr.start();
+        volumeEnvelope.start();
+        length.start();
+    }
+
+    @Override
     public void trigger() {
         lfsr.reset();
-        volumeEnvelope.start();
+        volumeEnvelope.trigger();
     }
 
     @Override
