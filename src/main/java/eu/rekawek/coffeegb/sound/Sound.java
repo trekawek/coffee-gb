@@ -18,8 +18,6 @@ public class Sound implements AddressSpace {
 
     private final AbstractSoundMode[] allModes = new AbstractSoundMode[4];
 
-    private final Ram waveRam = new Ram(0xff30, 0x10);
-
     private final Ram r = new Ram(0xff24, 0x03);
 
     private final SoundOutput output;
@@ -29,7 +27,7 @@ public class Sound implements AddressSpace {
     public Sound(SoundOutput output) {
         allModes[0] = new SoundMode1();
         allModes[1] = new SoundMode2();
-        allModes[2] = new SoundMode3(waveRam);
+        allModes[2] = new SoundMode3();
         allModes[3] = new SoundMode4();
         this.output = output;
     }
@@ -70,9 +68,6 @@ public class Sound implements AddressSpace {
             if (m.accepts(address)) {
                 return m;
             }
-        }
-        if (waveRam.accepts(address)) {
-            return waveRam;
         }
         if (r.accepts(address)) {
             return r;
@@ -119,18 +114,29 @@ public class Sound implements AddressSpace {
             }
             result |= enabled ? (1 << 7) : 0;
         } else {
-            AddressSpace s = getAddressSpace(address);
-            if (s == null) {
-                throw new IllegalArgumentException();
-            }
-            result = s.getByte(address);
+            result = getUnmaskedByte(address);
         }
         return result | MASKS[address - 0xff10];
     }
 
+    private int getUnmaskedByte(int address) {
+        AddressSpace s = getAddressSpace(address);
+        if (s == null) {
+            throw new IllegalArgumentException();
+        }
+        return s.getByte(address);
+    }
+
     private void start() {
         for (int i = 0xff10; i <= 0xff25; i++) {
-            setByte(i, 0);
+            int v = 0;
+            // lengths should be preserved
+            if (i == 0xff11 || i == 0xff16 || i == 0xff20) { // channel 1, 2, 4 lengths
+                v = getUnmaskedByte(i) & 0b00111111;
+            } else if (i == 0xff1b) { // channel 3 length
+                v = getUnmaskedByte(i);
+            }
+            setByte(i, v);
         }
         for (AbstractSoundMode m : allModes) {
             m.start();

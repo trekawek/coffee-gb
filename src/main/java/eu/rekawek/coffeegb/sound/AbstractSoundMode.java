@@ -133,6 +133,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     public void stop() {
         channelEnabled = false;
+
     }
 
     protected boolean updateLength() {
