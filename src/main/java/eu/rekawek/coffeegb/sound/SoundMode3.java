@@ -22,6 +22,12 @@ public class SoundMode3 extends AbstractSoundMode {
 
     public SoundMode3() {
         super(0xff1a, 256);
+        for (int v : new int[] {
+                0x84, 0x40, 0x43, 0xaa, 0x2d, 0x78, 0x92, 0x3c,
+                0x60, 0x59, 0x59, 0xb0, 0x34, 0xb8, 0x2e, 0xda
+        }) {
+            waveRam.setByte(0xff30, v);
+        }
     }
 
     @Override
@@ -36,7 +42,7 @@ public class SoundMode3 extends AbstractSoundMode {
         }
         if (!isEnabled()) {
             return waveRam.getByte(address);
-        } else if (ticksSinceRead < 1) {
+        } else if (ticksSinceRead < 2) {
             return waveRam.getByte(lastReadAddr);
         } else {
             return 0xff;
@@ -51,9 +57,22 @@ public class SoundMode3 extends AbstractSoundMode {
         }
         if (!isEnabled()) {
             waveRam.setByte(address, value);
-        } else if (ticksSinceRead < 1) {
+        } else if (ticksSinceRead < 2) {
             waveRam.setByte(lastReadAddr, value);
         }
+    }
+
+    @Override
+    protected void setNr0(int value) {
+        super.setNr0(value);
+        dacEnabled = (value & (1 << 7)) != 0;
+        channelEnabled &= dacEnabled;
+    }
+
+    @Override
+    protected void setNr1(int value) {
+        super.setNr1(value);
+        length.setLength(256 - value);
     }
 
     @Override
@@ -64,8 +83,8 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void setNr4(int value) {
         if ((value & (1 << 7)) != 0) {
-            if (isEnabled() && ticksSinceRead < 1) {
-                int pos = ((i + 1) & 0x1f) / 2;
+            if (isEnabled() && freqDivider == 2) {
+                int pos = i / 2;
                 if (pos < 4) {
                     waveRam.setByte(0xff30, waveRam.getByte(0xff30 + pos));
                 } else {
@@ -82,6 +101,7 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void start() {
         i = 0;
+        buffer = 0;
         length.start();
     }
 
@@ -89,6 +109,7 @@ public class SoundMode3 extends AbstractSoundMode {
     public void trigger() {
         i = 0;
         resetFreqDivider();
+        freqDivider += 2;
         triggered = true;
     }
 
@@ -117,19 +138,6 @@ public class SoundMode3 extends AbstractSoundMode {
             i = (i + 1) % 32;
         }
         return lastOutput;
-    }
-
-    @Override
-    protected void setNr0(int value) {
-        super.setNr0(value);
-        dacEnabled = (value & (1 << 7)) != 0;
-        channelEnabled &= dacEnabled;
-    }
-
-    @Override
-    protected void setNr1(int value) {
-        super.setNr1(value);
-        length.setLength(256 - value);
     }
 
     private int getVolume() {

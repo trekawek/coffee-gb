@@ -49,16 +49,13 @@ cpu_instrs
 Passed all tests
 ```
 
-Right now, following tests are green:
+All the tests meant to be run on the DMG are green:
 
 * cpu_instrs
 * instr_timing
 * mem_timing-2
 * oam_bug-2
 * halt_bug
-
-To be done:
-
 * dmg_sound-2
 
 ## Prioritized TODO
