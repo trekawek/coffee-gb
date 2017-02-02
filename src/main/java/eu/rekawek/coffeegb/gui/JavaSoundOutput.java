@@ -10,8 +10,6 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 public class JavaSoundOutput implements SoundOutput {
 
     private static final Logger LOG = LoggerFactory.getLogger(JavaSoundOutput.class);
@@ -33,10 +31,10 @@ public class JavaSoundOutput implements SoundOutput {
     @Override
     public void start() {
         if (line != null) {
-            LOG.info("Sound already started");
+            LOG.debug("Sound already started");
             return;
         }
-        LOG.info("Start sound");
+        LOG.debug("Start sound");
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
             line.open(FORMAT, 4096);
@@ -51,9 +49,9 @@ public class JavaSoundOutput implements SoundOutput {
     @Override
     public void stop() {
         if (line == null) {
-            LOG.info("Can't stop - sound wasn't started");
+            LOG.debug("Can't stop - sound wasn't started");
         }
-        LOG.info("Stop sound");
+        LOG.debug("Stop sound");
         line.drain();
         line.stop();
         line = null;
@@ -65,9 +63,6 @@ public class JavaSoundOutput implements SoundOutput {
             tick %= divider;
             return;
         }
-
-        checkArgument(left >= 0 && left < 256);
-        checkArgument(right >= 0 && right < 256);
 
         buffer[i++] = (byte) (left);
         buffer[i++] = (byte) (right);
