@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
 import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 
 public class Mbc3 implements AddressSpace {
@@ -88,9 +87,7 @@ public class Mbc3 implements AddressSpace {
         if (bank % 0x20 == 0) {
             bank = bank + 1;
         }
-        if (bank < romBanks) {
-            selectedRomBank = bank;
-        }
+        selectedRomBank = bank;
     }
 
     @Override

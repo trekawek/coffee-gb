@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
 import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 
 public class Mbc1 implements AddressSpace {
@@ -59,9 +58,7 @@ public class Mbc1 implements AddressSpace {
             selectRomBank(bank);
         } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 1) {
             int bank = value & 0b11;
-            if (bank < ramBanks) {
-                selectedRamBank = bank;
-            }
+            selectedRamBank = bank;
         } else if (address >= 0x6000 && address < 0x8000) {
             memoryModel = value & 1;
         } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
@@ -76,9 +73,7 @@ public class Mbc1 implements AddressSpace {
         if (bank % 0x20 == 0) {
             bank = bank + 1;
         }
-        if (bank < romBanks) {
-            selectedRomBank = bank;
-        }
+        selectedRomBank = bank;
     }
 
     @Override
