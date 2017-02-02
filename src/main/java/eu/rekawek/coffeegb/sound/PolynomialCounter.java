@@ -2,11 +2,11 @@ package eu.rekawek.coffeegb.sound;
 
 public class PolynomialCounter {
 
-    private final int shiftedDivisor;
+    private int shiftedDivisor;
 
     private int i;
 
-    public PolynomialCounter(int value) {
+    public void setNr43(int value) {
         int clockShift = value >> 4;
         int divisor;
         switch (value & 0b111) {

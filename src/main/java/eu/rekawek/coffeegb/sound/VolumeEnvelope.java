@@ -4,11 +4,11 @@ import eu.rekawek.coffeegb.Gameboy;
 
 public class VolumeEnvelope {
 
-    private final int initialVolume;
+    private int initialVolume;
 
-    private final int envelopeDirection;
+    private int envelopeDirection;
 
-    private final int sweep;
+    private int sweep;
 
     private int volume;
 
@@ -16,7 +16,7 @@ public class VolumeEnvelope {
 
     private boolean finished;
 
-    public VolumeEnvelope(int register) {
+    public void setNr2(int register) {
         this.initialVolume = register >> 4;
         this.envelopeDirection = (register & (1 << 3)) == 0 ? -1 : 1;
         this.sweep = register & 0b111;
@@ -54,7 +54,7 @@ public class VolumeEnvelope {
         if (isEnabled()) {
             return volume;
         } else {
-            return 1;
+            return 0;
         }
     }
 }

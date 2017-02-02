@@ -15,7 +15,7 @@ public class SoundMode1 extends AbstractSoundMode {
     public SoundMode1() {
         super(0xff10, 64);
         this.frequencySweep = new FrequencySweep();
-        this.volumeEnvelope = new VolumeEnvelope(nr2);
+        this.volumeEnvelope = new VolumeEnvelope();
     }
 
     @Override
@@ -35,6 +35,8 @@ public class SoundMode1 extends AbstractSoundMode {
 
     @Override
     public int tick() {
+        volumeEnvelope.tick();
+
         boolean e = true;
         e = updateLength() && e;
         e = updateSweep() && e;
@@ -43,15 +45,12 @@ public class SoundMode1 extends AbstractSoundMode {
             return 0;
         }
 
-        volumeEnvelope.tick();
-
         if (freqDivider-- == 0) {
             resetFreqDivider();
             lastOutput = ((getDuty() & (1 << i)) >> i);
-            lastOutput *= volumeEnvelope.getVolume();
             i = (i + 1) % 8;
         }
-        return lastOutput;
+        return lastOutput * volumeEnvelope.getVolume();
     }
 
     @Override
@@ -69,7 +68,7 @@ public class SoundMode1 extends AbstractSoundMode {
     @Override
     protected void setNr2(int value) {
         super.setNr2(value);
-        volumeEnvelope = new VolumeEnvelope(value);
+        volumeEnvelope.setNr2(value);
         dacEnabled = (value & 0b11111000) != 0;
         channelEnabled &= dacEnabled;
     }

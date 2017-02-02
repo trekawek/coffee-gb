@@ -141,7 +141,7 @@ public abstract class AbstractSoundMode implements AddressSpace {
         if (!length.isEnabled()) {
             return channelEnabled;
         }
-        if (length.getValue() == 0) {
+        if (channelEnabled && length.getValue() == 0) {
             channelEnabled = false;
         }
         return channelEnabled;

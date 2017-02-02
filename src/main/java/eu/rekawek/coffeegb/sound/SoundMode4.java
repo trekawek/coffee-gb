@@ -12,8 +12,8 @@ public class SoundMode4 extends AbstractSoundMode {
 
     public SoundMode4() {
         super(0xff1f, 64);
-        this.volumeEnvelope = new VolumeEnvelope(nr2);
-        this.polynomialCounter = new PolynomialCounter(nr3);
+        this.volumeEnvelope = new VolumeEnvelope();
+        this.polynomialCounter = new PolynomialCounter();
     }
 
     @Override
@@ -31,6 +31,8 @@ public class SoundMode4 extends AbstractSoundMode {
 
     @Override
     public int tick() {
+        volumeEnvelope.tick();
+
         if (!updateLength()) {
             return 0;
         }
@@ -38,13 +40,10 @@ public class SoundMode4 extends AbstractSoundMode {
             return 0;
         }
 
-        volumeEnvelope.tick();
-
         if (polynomialCounter.tick()) {
             lastResult = lfsr.nextBit((nr3 & (1 << 3)) != 0);
-            lastResult *= volumeEnvelope.getVolume();
         }
-        return lastResult;
+        return lastResult * volumeEnvelope.getVolume();
     }
 
     @Override
@@ -56,7 +55,7 @@ public class SoundMode4 extends AbstractSoundMode {
     @Override
     protected void setNr2(int value) {
         super.setNr2(value);
-        volumeEnvelope = new VolumeEnvelope(value);
+        volumeEnvelope.setNr2(value);
         dacEnabled = (value & 0b11111000) != 0;
         channelEnabled &= dacEnabled;
     }
@@ -64,6 +63,6 @@ public class SoundMode4 extends AbstractSoundMode {
     @Override
     protected void setNr3(int value) {
         super.setNr3(value);
-        polynomialCounter = new PolynomialCounter(value);
+        polynomialCounter.setNr43(value);
     }
 }
