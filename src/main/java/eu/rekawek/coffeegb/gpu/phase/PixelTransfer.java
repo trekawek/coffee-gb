@@ -33,6 +33,8 @@ public class PixelTransfer implements GpuPhase {
 
     private int x;
 
+    private boolean window;
+
     public PixelTransfer(AddressSpace videoRam, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites) {
         this.r = r;
         this.lcdc = new Lcdc(r);
@@ -60,8 +62,10 @@ public class PixelTransfer implements GpuPhase {
                 droppedPixels++;
                 return true;
             }
-            if (lcdc.isWindowDisplay() && r.get(LY) >= r.get(WY) && x == r.get(WX) - 7) {
+            if (!window && lcdc.isWindowDisplay() && r.get(LY) >= r.get(WY) && x == r.get(WX) - 7) {
+                window = true;
                 startFetchingWindow();
+                return true;
             }
         }
 

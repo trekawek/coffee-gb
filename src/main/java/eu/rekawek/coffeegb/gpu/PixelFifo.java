@@ -69,4 +69,9 @@ public class PixelFifo {
     private static int getColor(int palette, int colorIndex) {
         return 0b11 & (palette >> (colorIndex * 2));
     }
+
+    public void clear() {
+        pixels.clear();
+        palettes.clear();
+    }
 }

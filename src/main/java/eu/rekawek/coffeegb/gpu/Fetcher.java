@@ -70,6 +70,7 @@ public class Fetcher {
         this.xOffset = xOffset;
         this.tileIdSigned = tileIdSigned;
         this.tileLine = tileLine;
+        this.fifo.clear();
 
         state = State.READ_TILE_ID;
         tileId = 0;
