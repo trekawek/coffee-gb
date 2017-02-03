@@ -43,7 +43,7 @@ public class Joypad implements AddressSpace {
 
     @Override
     public int getByte(int address) {
-        int result = p1 | 0b00001111;
+        int result = p1 | 0b11111111;
         for (ButtonListener.Button b : buttons) {
             if ((b.getLine() & p1) == 0) {
                 result &= 0xff & ~b.getMask();
