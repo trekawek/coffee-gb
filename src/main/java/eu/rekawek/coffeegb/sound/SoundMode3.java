@@ -130,7 +130,7 @@ public class SoundMode3 extends AbstractSoundMode {
         if (--freqDivider == 0) {
             resetFreqDivider();
             if (triggered) {
-                lastOutput = buffer & 0xf0;
+                lastOutput = (buffer >> 4) & 0x0f;
                 triggered = false;
             } else {
                 lastOutput = getWaveEntry();

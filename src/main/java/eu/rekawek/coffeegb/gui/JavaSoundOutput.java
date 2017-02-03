@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.gui;
 
+import com.google.common.base.Preconditions;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.sound.SoundOutput;
 import org.slf4j.Logger;
@@ -63,6 +64,11 @@ public class JavaSoundOutput implements SoundOutput {
             tick %= divider;
             return;
         }
+
+        Preconditions.checkArgument(left >= 0);
+        Preconditions.checkArgument(left < 256);
+        Preconditions.checkArgument(right >= 0);
+        Preconditions.checkArgument(right < 256);
 
         buffer[i++] = (byte) (left);
         buffer[i++] = (byte) (right);
