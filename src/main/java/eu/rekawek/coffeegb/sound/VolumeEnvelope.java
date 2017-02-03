@@ -34,6 +34,7 @@ public class VolumeEnvelope {
     public void trigger() {
         volume = initialVolume;
         i = 0;
+        finished = false;
     }
 
     public void tick() {
