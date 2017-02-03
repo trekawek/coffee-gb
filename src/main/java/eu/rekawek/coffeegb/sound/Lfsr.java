@@ -26,7 +26,7 @@ public class Lfsr {
         return 1 & ~lfsr;
     }
 
-    public int getValue() {
+    int getValue() {
         return lfsr;
     }
 }
