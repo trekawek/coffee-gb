@@ -23,7 +23,7 @@ public class SoundMode1 extends AbstractSoundMode {
         i = 0;
         length.start();
         frequencySweep.start();
-        volumeEnvelope.trigger();
+        volumeEnvelope.start();
     }
 
     @Override

@@ -55,7 +55,7 @@ public class VolumeEnvelope {
         if (isEnabled()) {
             return volume;
         } else {
-            return 0;
+            return initialVolume;
         }
     }
 }
