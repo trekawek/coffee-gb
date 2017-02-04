@@ -21,8 +21,6 @@ import org.slf4j.LoggerFactory;
 
 public class Gameboy {
 
-    private static final Logger LOG = LoggerFactory.getLogger(Gameboy.class);
-
     public static final int TICKS_PER_SEC = 4_194_304;
 
     private final InterruptManager interruptManager;
@@ -110,32 +108,25 @@ public class Gameboy {
     }
 
     public void run() {
-        int ticksSinceScreenRefresh = 0;
-        long lastScreenRefresh = System.nanoTime();
-
         boolean requestedScreenRefresh = false;
-
+        boolean lcdDisabled = false;
         while (true) {
-            ticksSinceScreenRefresh++;
-
             Gpu.Mode newMode = tick();
-            if (newMode == Gpu.Mode.VBlank) {
+
+            if (!gpu.isLcdEnabled() && !lcdDisabled) {
+                lcdDisabled = true;
+                display.requestRefresh();
+            } else if (newMode == Gpu.Mode.VBlank) {
                 requestedScreenRefresh = true;
                 display.requestRefresh();
             }
-            if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
+
+            if (lcdDisabled && gpu.isLcdEnabled()) {
+                lcdDisabled = false;
+                display.waitForRefresh();
+            } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
                 requestedScreenRefresh = false;
                 display.waitForRefresh();
-
-                long timeSinceScreenRefresh = System.nanoTime() - lastScreenRefresh;
-                long gbTime = (1_000_000_000 / TICKS_PER_SEC) * ticksSinceScreenRefresh;
-
-                if (timeSinceScreenRefresh < gbTime) {
-                   // sleepNanos(gbTime - timeSinceScreenRefresh);
-                }
-
-                ticksSinceScreenRefresh = 0;
-                lastScreenRefresh = System.nanoTime();
             }
         }
     }
@@ -150,18 +141,6 @@ public class Gameboy {
     }
 
     public AddressSpace getAddressSpace() {
-        return mmu;
-    }
-
-    private void sleepNanos(long nanos) {
-        try {
-            Thread.sleep(nanos / 1_000_000, (int) (nanos % 1_000_000));
-        } catch (InterruptedException e) {
-            LOG.warn("Interrupted", e);
-        }
-    }
-
-    Mmu getMmu() {
         return mmu;
     }
 

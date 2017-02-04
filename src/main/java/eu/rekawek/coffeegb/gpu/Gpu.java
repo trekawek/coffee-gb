@@ -193,11 +193,11 @@ public class Gpu implements AddressSpace {
     }
 
     private int getLcdc() {
-        return (r.get(LCDC) & 0x7f) | (lcdEnabled ? (1 << 7) : 0);
+        return r.get(LCDC);
     }
 
     private void setLcdc(int value) {
-        r.put(LCDC, value & 0x7f);
+        r.put(LCDC, value);
         if ((value & (1 << 7)) == 0) {
             disableLcd();
         } else {
@@ -217,5 +217,9 @@ public class Gpu implements AddressSpace {
 
     private void enableLcd() {
         lcdEnabledDelay = 244;
+    }
+
+    public boolean isLcdEnabled() {
+        return lcdEnabled;
     }
 }
