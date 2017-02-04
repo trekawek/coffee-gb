@@ -39,7 +39,7 @@ public class FileBattery implements Battery {
             LOG.info("Can't load battery save file", e);
         }
         for (int i = 0; i < ram.length; i++) {
-            ram[i] = buffer[i];
+            ram[i] = buffer[i] & 0xff;
         }
     }
 
@@ -59,13 +59,13 @@ public class FileBattery implements Battery {
     @Override
     public long[] loadClock() {
         if (!clockFile.exists()) {
-            return null;
+            return new long[2];
         }
         try (InputStream is = new FileInputStream(clockFile)) {
             return IOUtils.readLines(is, Charsets.UTF_8).stream().mapToLong(Long::parseLong).toArray();
         } catch (IOException e) {
             LOG.info("Can't load clock data", e);
-            return null;
+            return new long[2];
         }
     }
 
