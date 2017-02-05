@@ -46,7 +46,7 @@ public class Hdma implements AddressSpace {
         if (!isTransferInProgress()) {
             return;
         }
-        if (++tick < 8) {
+        if (++tick < 0x20) {
             return;
         }
         for (int j = 0; j < 0x10; j++) {

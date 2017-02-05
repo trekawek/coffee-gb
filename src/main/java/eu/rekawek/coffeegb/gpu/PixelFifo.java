@@ -16,8 +16,14 @@ public class PixelFifo {
 
     private final List<Integer> palettes = new LinkedList<>();
 
-    public PixelFifo(int bgp) {
+    private final Lcdc lcdc;
+
+    private final boolean gbc;
+
+    public PixelFifo(int bgp, Lcdc lcdc, boolean gbc) {
         this.bgp = bgp;
+        this.lcdc = lcdc;
+        this.gbc = gbc;
     }
 
     public int getLength() {
@@ -41,6 +47,9 @@ public class PixelFifo {
             pixelLine = reverse(pixelLine);
         }
         boolean priority = flags.isPriority();
+        if (gbc && !lcdc.isBgAndWindowDisplay()) {
+            priority = false;
+        }
         int overlayPalette = registers.get(flags.getPalette());
 
         int i = 0;

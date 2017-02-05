@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,13 +39,6 @@ public class Mmu implements AddressSpace {
     };
 
     private final List<AddressSpace> spaces = new ArrayList<>();
-
-    public Mmu() {
-        Ram internalRam = new Ram(0xc000, 0x2000);
-        addAddressSpace(internalRam);
-        addAddressSpace(Ram.createShadow(0xe000, 0x1e00, internalRam));
-        addAddressSpace(new Ram(0xff80, 0x007f));
-    }
 
     public void addAddressSpace(AddressSpace space) {
         spaces.add(space);

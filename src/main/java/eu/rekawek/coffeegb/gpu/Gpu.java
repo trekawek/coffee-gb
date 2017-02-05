@@ -24,7 +24,9 @@ public class Gpu implements AddressSpace {
         HBlank, VBlank, OamSearch, PixelTransfer
     }
 
-    private final AddressSpace videoRam;
+    private final AddressSpace videoRam0;
+
+    private final AddressSpace videoRam1;
 
     private final AddressSpace oemRam;
 
@@ -33,6 +35,8 @@ public class Gpu implements AddressSpace {
     private final InterruptManager interruptManager;
 
     private final Lcdc lcdc;
+
+    private final boolean gbc;
 
     private boolean lcdEnabled = true;
 
@@ -46,10 +50,16 @@ public class Gpu implements AddressSpace {
 
     private GpuPhase phase;
 
-    public Gpu(Display display, InterruptManager interruptManager) {
+    public Gpu(Display display, InterruptManager interruptManager, boolean gbc) {
         this.r = new MemoryRegisters(GpuRegister.values());
         this.interruptManager = interruptManager;
-        this.videoRam = new Ram(0x8000, 0x2000);
+        this.gbc = gbc;
+        this.videoRam0 = new Ram(0x8000, 0x2000);
+        if (gbc) {
+            this.videoRam1 = new Ram(0x8000, 0x2000);
+        } else {
+            this.videoRam1 = null;
+        }
         this.oemRam = new Ram(0xfe00, 0x00a0);
         this.phase = new OamSearch(oemRam, r);
         this.mode = Mode.OamSearch;
@@ -58,8 +68,12 @@ public class Gpu implements AddressSpace {
     }
 
     private AddressSpace getAddressSpace(int address) {
-        if (videoRam.accepts(address)) {
-            return videoRam;
+        if (videoRam0.accepts(address)) {
+            if (gbc && (r.get(VBK) & 1) == 1) {
+                return videoRam1;
+            } else {
+                return videoRam0;
+            }
         } else if (oemRam.accepts(address)) {
             return oemRam;
         } else if (r.accepts(address)) {
@@ -71,7 +85,7 @@ public class Gpu implements AddressSpace {
 
     @Override
     public boolean accepts(int address) {
-        return videoRam.accepts(address) || oemRam.accepts(address) || r.accepts(address);
+        return videoRam0.accepts(address) || oemRam.accepts(address) || r.accepts(address);
     }
 
     @Override
@@ -123,7 +137,7 @@ public class Gpu implements AddressSpace {
             switch (oldMode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(videoRam, oemRam, display, r, ((OamSearch) phase).getSprites());
+                    phase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, r, ((OamSearch) phase).getSprites(), gbc);
                     break;
 
                 case PixelTransfer:

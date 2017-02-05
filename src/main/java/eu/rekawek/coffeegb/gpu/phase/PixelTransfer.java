@@ -29,21 +29,24 @@ public class PixelTransfer implements GpuPhase {
 
     private final SpritePosition[] sprites;
 
+    private final boolean gbc;
+
     private int droppedPixels;
 
     private int x;
 
     private boolean window;
 
-    public PixelTransfer(AddressSpace videoRam, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites) {
+    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites, boolean gbc) {
         this.r = r;
         this.lcdc = new Lcdc(r);
-        this.fifo = new PixelFifo(r.get(BGP));
-        this.fetcher = new Fetcher(fifo, videoRam, oemRam, r);
+        this.gbc = gbc;
+        this.fifo = new PixelFifo(r.get(BGP), lcdc, gbc);
+        this.fetcher = new Fetcher(fifo, videoRam0, oemRam, r);
         this.display = display;
         this.sprites = sprites;
 
-        if (lcdc.isBgAndWindowDisplay()) {
+        if (lcdc.isBgAndWindowDisplay() || gbc) {
             startFetchingBackground();
         } else {
             fetcher.fetchingDisabled();
@@ -53,7 +56,7 @@ public class PixelTransfer implements GpuPhase {
     @Override
     public boolean tick() {
         fetcher.tick();
-        if (lcdc.isBgAndWindowDisplay()) {
+        if (lcdc.isBgAndWindowDisplay() || gbc) {
             if (fifo.getLength() <= 8) {
                 return true;
             }

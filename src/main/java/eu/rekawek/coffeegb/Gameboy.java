@@ -9,8 +9,11 @@ import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.Dma;
+import eu.rekawek.coffeegb.memory.GbcRam;
 import eu.rekawek.coffeegb.memory.Hdma;
 import eu.rekawek.coffeegb.memory.Mmu;
+import eu.rekawek.coffeegb.memory.Ram;
+import eu.rekawek.coffeegb.memory.ShadowAddressSpace;
 import eu.rekawek.coffeegb.memory.UndocumentedGbcRegisters;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
@@ -63,7 +66,7 @@ public class Gameboy implements Runnable {
         speedMode = new SpeedMode();
         interruptManager = new InterruptManager();
         timer = new Timer(interruptManager, speedMode);
-        gpu = new Gpu(display, interruptManager);
+        gpu = new Gpu(display, interruptManager, gbc);
         mmu = new Mmu();
         dma = new Dma(mmu, speedMode);
         hdma = new Hdma(mmu);
@@ -78,11 +81,17 @@ public class Gameboy implements Runnable {
         mmu.addAddressSpace(dma);
         mmu.addAddressSpace(sound);
 
+        mmu.addAddressSpace(new Ram(0xc000, 0x1000));
         if (gbc) {
             mmu.addAddressSpace(speedMode);
-            mmu.addAddressSpace(new UndocumentedGbcRegisters());
             mmu.addAddressSpace(hdma);
+            mmu.addAddressSpace(new GbcRam());
+            mmu.addAddressSpace(new UndocumentedGbcRegisters());
+        } else {
+            mmu.addAddressSpace(new Ram(0xd000, 0x1000));
         }
+        mmu.addAddressSpace(new Ram(0xff80, 0x7f));
+        mmu.addAddressSpace(new ShadowAddressSpace(mmu, 0xe000, 0xc000, 0x1e00));
 
         cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
         init();
