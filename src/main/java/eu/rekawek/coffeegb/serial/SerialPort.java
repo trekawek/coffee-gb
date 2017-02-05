@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.serial;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,6 +17,8 @@ public class SerialPort implements AddressSpace {
 
     private final InterruptManager interruptManager;
 
+    private final SpeedMode speedMode;
+
     private int sb;
 
     private int sc;
@@ -24,16 +27,17 @@ public class SerialPort implements AddressSpace {
 
     private int divider;
 
-    public SerialPort(InterruptManager interruptManager, SerialEndpoint serialEndpoint) {
+    public SerialPort(InterruptManager interruptManager, SerialEndpoint serialEndpoint, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
         this.serialEndpoint = serialEndpoint;
+        this.speedMode = speedMode;
     }
 
     public void tick() {
         if (!transferInProgress) {
             return;
         }
-        if (--divider == 0) {
+        if (++divider >= Gameboy.TICKS_PER_SEC / 8192 / speedMode.getSpeedMode()) {
             transferInProgress = false;
             try {
                 sb = serialEndpoint.transfer(sb);
@@ -75,8 +79,6 @@ public class SerialPort implements AddressSpace {
 
     private void startTransfer() {
         transferInProgress = true;
-        divider = Gameboy.TICKS_PER_SEC / 8192;
+        divider = 0;
     }
-
-
 }

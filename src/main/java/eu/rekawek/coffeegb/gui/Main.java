@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.gui;
 
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.GameboyOptions;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 
 import java.io.File;
@@ -22,18 +24,21 @@ public class Main {
 
     private final SystemOutSerialEndpoint serialEndpoint;
 
+    private final SpeedMode speedMode;
+
     private final Gameboy gameboy;
 
     private JFrame mainWindow;
 
     public Main(String romPath) throws IOException {
         rom = new Cartridge(new File(romPath));
+        speedMode = new SpeedMode();
         sound = new AudioSystemSoundOutput();
         display = new SwingDisplay(SCALE);
         display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
         serialEndpoint = new SystemOutSerialEndpoint();
         controller = new SwingController();
-        gameboy = new Gameboy(rom, display, controller, sound, serialEndpoint);
+        gameboy = new Gameboy(new GameboyOptions(), rom, display, controller, sound, serialEndpoint);
     }
 
     public static void main(String[] args) throws Exception {

@@ -27,6 +27,8 @@ public class Cpu {
 
     private final Display display;
 
+    private final SpeedMode speedMode;
+
     private int opcode1, opcode2;
 
     private int[] operand = new int[2];
@@ -55,16 +57,17 @@ public class Cpu {
 
     private boolean haltBugMode;
 
-    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, Display display) {
+    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, Display display, SpeedMode speedMode) {
         this.registers = new Registers();
         this.addressSpace = addressSpace;
         this.interruptManager = interruptManager;
         this.gpu = gpu;
         this.display = display;
+        this.speedMode = speedMode;
     }
 
     public void tick() {
-        if (++clockCycle == 4) {
+        if (++clockCycle >= (4 / speedMode.getSpeedMode())) {
             clockCycle = 0;
         } else {
             return;
@@ -151,8 +154,12 @@ public class Cpu {
 
                 case RUNNING:
                     if (opcode1 == 0x10) {
-                        state = State.STOPPED;
-                        display.disableLcd();
+                        if (speedMode.onStop()) {
+                            state = State.OPCODE;
+                        } else {
+                            state = State.STOPPED;
+                            display.disableLcd();
+                        }
                         return;
                     } else if (opcode1 == 0x76) {
                         if (interruptManager.isHaltBug()) {

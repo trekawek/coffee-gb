@@ -3,12 +3,15 @@ package eu.rekawek.coffeegb.timer;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 
 public class Timer implements AddressSpace {
 
-    private final Counter div = new Counter(16384);
+    private final Counter div;
 
     private final InterruptManager interruptManager;
+
+    private final SpeedMode speedMode;
 
     private Counter tima;
 
@@ -16,8 +19,10 @@ public class Timer implements AddressSpace {
 
     private int tac;
 
-    public Timer(InterruptManager interruptManager) {
+    public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
+        this.speedMode = speedMode;
+        this.div = new Counter(16384, speedMode);
         setTima();
     }
 
@@ -79,22 +84,24 @@ public class Timer implements AddressSpace {
     }
 
     public void setTima() {
+        int freq = 4096;
         switch (tac & 0b11) {
             case 0b00:
-                tima = new Counter(4096);
+                freq = 4096;
                 break;
 
             case 0b01:
-                tima = new Counter(262144);
+                freq = 262144;
                 break;
 
             case 0b10:
-                tima = new Counter(65536);
+                freq = 65536;
                 break;
 
             case 0b11:
-                tima = new Counter(16384);
+                freq = 16384;
                 break;
         }
+        tima = new Counter(freq, speedMode);
     }
 }

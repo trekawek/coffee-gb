@@ -21,9 +21,25 @@ import java.io.InputStream;
 
 public class Cartridge implements AddressSpace {
 
+    public enum GameboyTypeFlag {
+        UNIVERSAL, CGB, NON_CGB;
+
+        private static GameboyTypeFlag getFlag(int value) {
+            if (value == 0x80) {
+                return UNIVERSAL;
+            } else if (value == 0xc0) {
+                return CGB;
+            } else {
+                return NON_CGB;
+            }
+        }
+    }
+
     private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
 
     private final AddressSpace addressSpace;
+
+    private final GameboyTypeFlag gameboyType;
 
     private int dmgBoostrap = 1;
 
@@ -31,6 +47,7 @@ public class Cartridge implements AddressSpace {
         int[] rom = loadFile(file);
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
         LOG.debug("Cartridge type: {}", type);
+        gameboyType = GameboyTypeFlag.getFlag(rom[0x0143]);
         int romBanks = getRomBanks(rom[0x0148]);
         int ramBanks = getRamBanks(rom[0x0149]);
         if (ramBanks == 0 && type.isRam()) {
@@ -55,6 +72,10 @@ public class Cartridge implements AddressSpace {
         } else {
             addressSpace = new Rom(rom, type, romBanks, ramBanks);
         }
+    }
+
+    public GameboyTypeFlag getGameboyType() {
+        return gameboyType;
     }
 
     @Override

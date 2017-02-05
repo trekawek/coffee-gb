@@ -1,10 +1,13 @@
 package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 
 public class Dma implements AddressSpace {
 
     private final AddressSpace addressSpace;
+
+    private final SpeedMode speedMode;
 
     private boolean transferInProgress;
 
@@ -12,8 +15,9 @@ public class Dma implements AddressSpace {
 
     private int ticks;
 
-    public Dma(AddressSpace addressSpace) {
+    public Dma(AddressSpace addressSpace, SpeedMode speedMode) {
         this.addressSpace = addressSpace;
+        this.speedMode = speedMode;
     }
 
     @Override
@@ -23,7 +27,7 @@ public class Dma implements AddressSpace {
 
     public void tick() {
         if (transferInProgress) {
-            if (++ticks == 671) {
+            if (++ticks >= 671 / speedMode.getSpeedMode()) {
                 transferInProgress = false;
                 for (int i = 0; i < 0xa0; i++) {
                     addressSpace.setByte(0xfe00 + i, addressSpace.getByte(from + i));

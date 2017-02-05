@@ -2,10 +2,12 @@ package eu.rekawek.coffeegb.blargg.support;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.cpu.BitUtils;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
@@ -28,7 +30,7 @@ public class SerialTestRunner implements SerialEndpoint {
 
     public SerialTestRunner(File romFile, OutputStream os) throws IOException {
         Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, this);
+        gb = new Gameboy(new GameboyOptions(), cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, this);
         text = new StringBuilder();
         this.os = os;
     }

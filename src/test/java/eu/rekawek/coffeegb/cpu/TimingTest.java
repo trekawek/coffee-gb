@@ -18,7 +18,7 @@ public class TimingTest {
 
     public TimingTest() {
         memory = new Ram(0x00, 0x10000);
-        cpu = new Cpu(memory, new InterruptManager(), null, Display.NULL_DISPLAY);
+        cpu = new Cpu(memory, new InterruptManager(), null, Display.NULL_DISPLAY, new SpeedMode());
     }
 
     @Test

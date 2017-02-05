@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.Joypad;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.Registers;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.Dma;
@@ -41,17 +42,32 @@ public class Gameboy implements Runnable {
 
     private final SerialPort serialPort;
 
+    private final boolean gbc;
+
+    private final SpeedMode speedMode;
+
     private volatile boolean doStop;
 
-    public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
+    public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
+        Cartridge.GameboyTypeFlag gameboyType = rom.getGameboyType();
+        if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
+            gbc = false;
+        } else if (gameboyType == Cartridge.GameboyTypeFlag.CGB) {
+            gbc = true;
+        } else { // UNIVERSAL
+            gbc = !options.isForceDmg();
+        }
+
+
         this.display = display;
+        speedMode = new SpeedMode();
         interruptManager = new InterruptManager();
-        timer = new Timer(interruptManager);
+        timer = new Timer(interruptManager, speedMode);
         gpu = new Gpu(display, interruptManager);
         mmu = new Mmu();
-        dma = new Dma(mmu);
+        dma = new Dma(mmu, speedMode);
         sound = new Sound(soundOutput);
-        serialPort = new SerialPort(interruptManager, serialEndpoint);
+        serialPort = new SerialPort(interruptManager, serialEndpoint, speedMode);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(new Joypad(interruptManager, controller));
@@ -60,7 +76,12 @@ public class Gameboy implements Runnable {
         mmu.addAddressSpace(timer);
         mmu.addAddressSpace(dma);
         mmu.addAddressSpace(sound);
-        cpu = new Cpu(mmu, interruptManager, gpu, display);
+
+        if (gbc) {
+            mmu.addAddressSpace(speedMode);
+        }
+
+        cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
         init();
     }
 
@@ -68,6 +89,9 @@ public class Gameboy implements Runnable {
         Registers r = cpu.getRegisters();
 
         r.setAF(0x01b0);
+        if (gbc) {
+            r.setA(0x11);
+        }
         r.setBC(0x0013);
         r.setDE(0x00d8);
         r.setHL(0x014d);
