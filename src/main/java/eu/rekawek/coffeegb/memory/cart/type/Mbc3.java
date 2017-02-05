@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.memory.cart.type;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.CartridgeType;
+import eu.rekawek.coffeegb.memory.cart.rtc.Clock;
+import eu.rekawek.coffeegb.memory.cart.rtc.RealTimeClock;
 
 public class Mbc3 implements AddressSpace {
 
@@ -36,7 +38,7 @@ public class Mbc3 implements AddressSpace {
         this.romBanks = romBanks;
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
         this.type = type;
-        this.clock = new RealTimeClock(battery);
+        this.clock = new RealTimeClock(battery, Clock.SYSTEM_CLOCK);
         this.battery = battery;
         battery.loadRam(ram);
     }
@@ -168,7 +170,9 @@ public class Mbc3 implements AddressSpace {
             case 0x0c:
                 clock.setDayCounter((dayCounter & 0xff) | ((value & 1) << 8));
                 clock.setHalt((value & (1 << 6)) != 0);
-                clock.setCounterOverflow((value & (1 << 7)) != 0);
+                if ((value & (1 << 7)) == 0) {
+                    clock.clearCounterOverflow();
+                }
                 break;
         }
     }

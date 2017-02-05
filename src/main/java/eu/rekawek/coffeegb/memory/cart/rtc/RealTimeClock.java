@@ -1,9 +1,11 @@
-package eu.rekawek.coffeegb.memory.cart.type;
+package eu.rekawek.coffeegb.memory.cart.rtc;
 
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
 
 public class RealTimeClock {
+
+    private final Clock clock;
 
     private final Battery battery;
 
@@ -23,15 +25,16 @@ public class RealTimeClock {
 
     private int haltDays;
 
-    public RealTimeClock(Battery battery) {
+    public RealTimeClock(Battery battery, Clock clock) {
+        this.clock = clock;
         this.battery = battery;
         long[] data = battery.loadClock();
         offsetSec = data[0];
-        clockStart = data[1] == 0 ? System.currentTimeMillis() : data[1];
+        clockStart = data[1] == 0 ? clock.currentTimeMillis() : data[1];
     }
 
     public void latch() {
-        latchStart = System.currentTimeMillis();
+        latchStart = clock.currentTimeMillis();
     }
 
     public void unlatch() {
@@ -59,7 +62,7 @@ public class RealTimeClock {
     }
 
     public boolean isCounterOverflow() {
-        return clockTimeInSec() > 60 * 60 * 24 * 512;
+        return clockTimeInSec() >= 60 * 60 * 24 * 512;
     }
 
     public void setSeconds(int seconds) {
@@ -91,34 +94,31 @@ public class RealTimeClock {
     }
 
     public void setHalt(boolean halt) {
-        if (halt) {
+        if (halt && !this.halt) {
             latch();
             haltSeconds = getSeconds();
             haltMinutes = getMinutes();
             haltHours = getHours();
             haltDays = getDayCounter();
             unlatch();
-        } else {
+        } else if (!halt && this.halt) {
             offsetSec = haltSeconds + haltMinutes * 60 + haltHours * 60 * 60 + haltDays * 60 * 60 * 24;
-            clockStart = System.currentTimeMillis();
+            clockStart = clock.currentTimeMillis();
             battery.saveClock(new long[] {offsetSec, clockStart});
         }
         this.halt = halt;
     }
 
-    public void setCounterOverflow(boolean counterOverflow) {
-        if (!halt) {
-            return;
-        }
+    public void clearCounterOverflow() {
         while (isCounterOverflow()) {
-            clockStart += 60 * 60 * 24 * 512 * 1000;
+            offsetSec -= 60 * 60 * 24 * 512;
         }
     }
 
     private long clockTimeInSec() {
         long now;
         if (latchStart == 0) {
-            now = System.currentTimeMillis();
+            now = clock.currentTimeMillis();
         } else {
             now = latchStart;
         }
