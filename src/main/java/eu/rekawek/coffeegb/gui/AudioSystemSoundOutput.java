@@ -11,9 +11,9 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 
-public class JavaSoundOutput implements SoundOutput {
+public class AudioSystemSoundOutput implements SoundOutput {
 
-    private static final Logger LOG = LoggerFactory.getLogger(JavaSoundOutput.class);
+    private static final Logger LOG = LoggerFactory.getLogger(AudioSystemSoundOutput.class);
 
     private static final int SAMPLE_RATE = 44010;
 

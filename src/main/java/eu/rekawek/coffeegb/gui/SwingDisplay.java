@@ -7,7 +7,7 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class LcdDisplay extends JPanel implements Display, Runnable {
+public class SwingDisplay extends JPanel implements Display, Runnable {
 
     public static final int DISPLAY_WIDTH = 160;
 
@@ -19,7 +19,7 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
 
     private final int[] rgb;
 
-    private boolean enabled = true;
+    private boolean enabled;
 
     private int scale;
 
@@ -27,7 +27,7 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
 
     private boolean doRefresh;
 
-    public LcdDisplay(int scale) {
+    public SwingDisplay(int scale) {
         super();
         GraphicsConfiguration gfxConfig = GraphicsEnvironment.
                 getLocalGraphicsEnvironment().getDefaultScreenDevice().
@@ -85,6 +85,9 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
 
     @Override
     public void run() {
+        doStop = false;
+        doRefresh = false;
+        enabled = true;
         while (!doStop) {
             synchronized (this) {
                 try {
@@ -105,5 +108,9 @@ public class LcdDisplay extends JPanel implements Display, Runnable {
                 }
             }
         }
+    }
+
+    public void stop() {
+        doStop = true;
     }
 }

@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.gui;
 
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
-public class StdoutSerialEndpoint implements SerialEndpoint {
+public class SystemOutSerialEndpoint implements SerialEndpoint {
 
     @Override
     public int transfer(int b) {

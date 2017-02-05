@@ -19,7 +19,7 @@ import eu.rekawek.coffeegb.timer.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class Gameboy {
+public class Gameboy implements Runnable {
 
     public static final int TICKS_PER_SEC = 4_194_304;
 
@@ -40,6 +40,8 @@ public class Gameboy {
     private final Sound sound;
 
     private final SerialPort serialPort;
+
+    private volatile boolean doStop;
 
     public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
         this.display = display;
@@ -110,7 +112,8 @@ public class Gameboy {
     public void run() {
         boolean requestedScreenRefresh = false;
         boolean lcdDisabled = false;
-        while (true) {
+        doStop = false;
+        while (!doStop) {
             Gpu.Mode newMode = tick();
 
             if (!gpu.isLcdEnabled() && !lcdDisabled) {
@@ -129,6 +132,10 @@ public class Gameboy {
                 display.waitForRefresh();
             }
         }
+    }
+
+    public void stop() {
+        doStop = true;
     }
 
     public Gpu.Mode tick() {
