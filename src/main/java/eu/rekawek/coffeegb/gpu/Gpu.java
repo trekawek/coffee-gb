@@ -38,6 +38,10 @@ public class Gpu implements AddressSpace {
 
     private final boolean gbc;
 
+    private final ColorPalette backgroundPalette;
+
+    private final ColorPalette objPalette;
+
     private boolean lcdEnabled = true;
 
     private int lcdEnabledDelay;
@@ -65,6 +69,8 @@ public class Gpu implements AddressSpace {
         this.mode = Mode.OamSearch;
         this.display = display;
         this.lcdc = new Lcdc(r);
+        this.backgroundPalette = new ColorPalette(0xff68);
+        this.objPalette = new ColorPalette(0xff6a);
     }
 
     private AddressSpace getAddressSpace(int address) {
@@ -78,6 +84,10 @@ public class Gpu implements AddressSpace {
             return oemRam;
         } else if (r.accepts(address)) {
             return r;
+        } else if (gbc && backgroundPalette.accepts(address)) {
+            return backgroundPalette;
+        } else if (gbc && objPalette.accepts(address)) {
+            return objPalette;
         } else {
             return null;
         }
@@ -85,7 +95,7 @@ public class Gpu implements AddressSpace {
 
     @Override
     public boolean accepts(int address) {
-        return videoRam0.accepts(address) || oemRam.accepts(address) || r.accepts(address);
+        return getAddressSpace(address) != null;
     }
 
     @Override
