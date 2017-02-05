@@ -41,7 +41,9 @@ public class PixelFifo {
         }
     }
 
-    public void setOverlay(int data1, int data2, int offset, SpriteFlags flags, MemoryRegisters registers) {
+    // FIXME in the GBC mode sprite priorites depends on the OAM table position
+    // see "Sprite Priorities and Conflicts" in pandocs
+    public void setOverlay(int data1, int data2, int offset, TileAttributes flags, MemoryRegisters registers) {
         List<Integer> pixelLine = zip(data1, data2);
         if (flags.isXflip()) {
             pixelLine = reverse(pixelLine);
@@ -50,7 +52,7 @@ public class PixelFifo {
         if (gbc && !lcdc.isBgAndWindowDisplay()) {
             priority = false;
         }
-        int overlayPalette = registers.get(flags.getPalette());
+        int overlayPalette = registers.get(flags.getDmgPalette());
 
         int i = 0;
         for (int p : pixelLine.subList(offset, pixelLine.size())) {

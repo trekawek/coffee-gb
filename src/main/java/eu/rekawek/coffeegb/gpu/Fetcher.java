@@ -50,7 +50,7 @@ public class Fetcher {
 
     private SpritePosition sprite;
 
-    private SpriteFlags spriteFlags;
+    private TileAttributes spriteAttributes;
 
     private int spriteOffset;
 
@@ -133,12 +133,12 @@ public class Fetcher {
                 break;
 
             case READ_SPRITE_FLAGS:
-                spriteFlags = new SpriteFlags(oemRam.getByte(sprite.getAddress() + 3));
+                spriteAttributes = new TileAttributes(oemRam.getByte(sprite.getAddress() + 3));
                 state = State.READ_SPRITE_DATA_1;
                 break;
 
             case READ_SPRITE_DATA_1:
-                if (spriteFlags.isYflip()) {
+                if (spriteAttributes.isYflip()) {
                     spriteTileLine = lcdc.getSpriteHeight() - 1 - spriteTileLine;
                 }
                 tileData1 = getTileData(tileId, spriteTileLine, 0, 0x8000, false);
@@ -151,7 +151,7 @@ public class Fetcher {
                 break;
 
             case PUSH_SPRITE:
-                fifo.setOverlay(tileData1, tileData2, spriteOffset, spriteFlags, r);
+                fifo.setOverlay(tileData1, tileData2, spriteOffset, spriteAttributes, r);
                 state = State.READ_TILE_ID;
                 break;
         }
