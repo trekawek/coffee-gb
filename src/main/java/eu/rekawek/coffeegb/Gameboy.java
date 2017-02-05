@@ -9,16 +9,15 @@ import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.Dma;
+import eu.rekawek.coffeegb.memory.Hdma;
 import eu.rekawek.coffeegb.memory.Mmu;
-import eu.rekawek.coffeegb.memory.Ram;
+import eu.rekawek.coffeegb.memory.UndocumentedGbcRegisters;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.sound.SoundOutput;
 import eu.rekawek.coffeegb.timer.Timer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class Gameboy implements Runnable {
 
@@ -35,6 +34,8 @@ public class Gameboy implements Runnable {
     private final Timer timer;
 
     private final Dma dma;
+
+    private final Hdma hdma;
 
     private final Display display;
 
@@ -58,7 +59,6 @@ public class Gameboy implements Runnable {
             gbc = !options.isForceDmg();
         }
 
-
         this.display = display;
         speedMode = new SpeedMode();
         interruptManager = new InterruptManager();
@@ -66,6 +66,7 @@ public class Gameboy implements Runnable {
         gpu = new Gpu(display, interruptManager);
         mmu = new Mmu();
         dma = new Dma(mmu, speedMode);
+        hdma = new Hdma(mmu);
         sound = new Sound(soundOutput);
         serialPort = new SerialPort(interruptManager, serialEndpoint, speedMode);
         mmu.addAddressSpace(rom);
@@ -79,6 +80,8 @@ public class Gameboy implements Runnable {
 
         if (gbc) {
             mmu.addAddressSpace(speedMode);
+            mmu.addAddressSpace(new UndocumentedGbcRegisters());
+            mmu.addAddressSpace(hdma);
         }
 
         cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
@@ -139,6 +142,9 @@ public class Gameboy implements Runnable {
         doStop = false;
         while (!doStop) {
             Gpu.Mode newMode = tick();
+            if (newMode != null) {
+                hdma.onGpuUpdate(newMode);
+            }
 
             if (!gpu.isLcdEnabled() && !lcdDisabled) {
                 lcdDisabled = true;
@@ -164,7 +170,11 @@ public class Gameboy implements Runnable {
 
     public Gpu.Mode tick() {
         timer.tick();
-        cpu.tick();
+        if (hdma.isTransferInProgress()) {
+            hdma.tick();
+        } else {
+            cpu.tick();
+        }
         dma.tick();
         sound.tick();
         serialPort.tick();
