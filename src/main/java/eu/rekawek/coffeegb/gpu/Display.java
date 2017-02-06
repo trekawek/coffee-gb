@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.gpu;
 
 public interface Display {
 
-    void setPixel(int x, int y, int color);
+    void putDmgPixel(int color);
 
     void requestRefresh();
 
@@ -15,7 +15,7 @@ public interface Display {
     Display NULL_DISPLAY = new Display() {
 
         @Override
-        public void setPixel(int x, int y, int color) {
+        public void putDmgPixel(int color) {
         }
 
         @Override

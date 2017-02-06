@@ -27,6 +27,8 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     private boolean doRefresh;
 
+    private int i;
+
     public SwingDisplay(int scale) {
         super();
         GraphicsConfiguration gfxConfig = GraphicsEnvironment.
@@ -38,8 +40,9 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
     }
 
     @Override
-    public void setPixel(int x, int y, int color) {
-        rgb[x + y * DISPLAY_WIDTH] = COLORS[color];
+    public void putDmgPixel(int color) {
+        rgb[i++] = COLORS[color];
+        i = i % rgb.length;
     }
 
     @Override
@@ -103,6 +106,7 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
                 repaint();
 
                 synchronized (this) {
+                    i = 0;
                     doRefresh = false;
                     notifyAll();
                 }

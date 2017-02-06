@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Fetcher;
 import eu.rekawek.coffeegb.gpu.Lcdc;
+import eu.rekawek.coffeegb.gpu.DmgPixelFifo;
 import eu.rekawek.coffeegb.gpu.PixelFifo;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
@@ -41,7 +42,7 @@ public class PixelTransfer implements GpuPhase {
         this.r = r;
         this.lcdc = new Lcdc(r);
         this.gbc = gbc;
-        this.fifo = new PixelFifo(r.get(BGP), lcdc, gbc);
+        this.fifo = new DmgPixelFifo(r.get(BGP), lcdc, display, gbc);
         this.fetcher = new Fetcher(fifo, videoRam0, oemRam, r);
         this.display = display;
         this.sprites = sprites;
@@ -61,7 +62,7 @@ public class PixelTransfer implements GpuPhase {
                 return true;
             }
             if (droppedPixels < r.get(SCX) % 8) {
-                fifo.dequeuePixel();
+                fifo.dropPixel();
                 droppedPixels++;
                 return true;
             }
@@ -101,8 +102,8 @@ public class PixelTransfer implements GpuPhase {
             }
         }
 
-        display.setPixel(x++, r.get(LY), fifo.dequeuePixel());
-        if (x == 160) {
+        fifo.putPixelToScreen();
+        if (++x == 160) {
             return false;
         }
         return true;
