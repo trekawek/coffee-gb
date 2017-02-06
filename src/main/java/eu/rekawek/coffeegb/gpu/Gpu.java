@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.gpu.phase.GpuPhase;
@@ -11,14 +10,10 @@ import eu.rekawek.coffeegb.gpu.phase.PixelTransfer;
 import eu.rekawek.coffeegb.gpu.phase.VBlankPhase;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import eu.rekawek.coffeegb.memory.Ram;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
 public class Gpu implements AddressSpace {
-
-    private static final Logger LOG = LoggerFactory.getLogger(Gpu.class);
 
     public enum Mode {
         HBlank, VBlank, OamSearch, PixelTransfer
@@ -38,9 +33,9 @@ public class Gpu implements AddressSpace {
 
     private final boolean gbc;
 
-    private final ColorPalette backgroundPalette;
+    private final ColorPalette bgPalette;
 
-    private final ColorPalette objPalette;
+    private final ColorPalette oamPalette;
 
     private boolean lcdEnabled = true;
 
@@ -69,8 +64,8 @@ public class Gpu implements AddressSpace {
         this.mode = Mode.OamSearch;
         this.display = display;
         this.lcdc = new Lcdc(r);
-        this.backgroundPalette = new ColorPalette(0xff68);
-        this.objPalette = new ColorPalette(0xff6a);
+        this.bgPalette = new ColorPalette(0xff68);
+        this.oamPalette = new ColorPalette(0xff6a);
     }
 
     private AddressSpace getAddressSpace(int address) {
@@ -84,10 +79,10 @@ public class Gpu implements AddressSpace {
             return oemRam;
         } else if (r.accepts(address)) {
             return r;
-        } else if (gbc && backgroundPalette.accepts(address)) {
-            return backgroundPalette;
-        } else if (gbc && objPalette.accepts(address)) {
-            return objPalette;
+        } else if (gbc && bgPalette.accepts(address)) {
+            return bgPalette;
+        } else if (gbc && oamPalette.accepts(address)) {
+            return oamPalette;
         } else {
             return null;
         }
@@ -147,7 +142,7 @@ public class Gpu implements AddressSpace {
             switch (oldMode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, r, ((OamSearch) phase).getSprites(), gbc);
+                    phase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, r, ((OamSearch) phase).getSprites(), gbc, bgPalette, oamPalette);
                     break;
 
                 case PixelTransfer:

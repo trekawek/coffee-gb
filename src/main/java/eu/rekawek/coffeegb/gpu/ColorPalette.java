@@ -53,8 +53,8 @@ public class ColorPalette implements AddressSpace {
         }
         int[] palette = new int[4];
         for (int i = 0; i < palette.length; i++) {
-            int b1 = data[index * 8 + i];
-            int b2 = data[index * 8 + i + 1];
+            int b1 = data[index * 8 + i * 2];
+            int b2 = data[index * 8 + i * 2 + 1];
             palette[i] = (b2 << 8) | b1;
         }
         return palette;

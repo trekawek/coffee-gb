@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
+import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
 import java.io.File;
 import javax.swing.*;
@@ -22,7 +23,7 @@ public class Main {
 
     private final SwingController controller;
 
-    private final SystemOutSerialEndpoint serialEndpoint;
+    private final SerialEndpoint serialEndpoint;
 
     private final SpeedMode speedMode;
 
@@ -36,7 +37,7 @@ public class Main {
         sound = new AudioSystemSoundOutput();
         display = new SwingDisplay(SCALE);
         display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
-        serialEndpoint = new SystemOutSerialEndpoint();
+        serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
         controller = new SwingController();
         gameboy = new Gameboy(new GameboyOptions(), rom, display, controller, sound, serialEndpoint);
     }

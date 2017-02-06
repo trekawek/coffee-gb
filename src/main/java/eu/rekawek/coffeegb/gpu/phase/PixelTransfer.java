@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.gpu.phase;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.gpu.ColorPalette;
+import eu.rekawek.coffeegb.gpu.ColorPixelFifo;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Fetcher;
 import eu.rekawek.coffeegb.gpu.Lcdc;
@@ -9,7 +11,6 @@ import eu.rekawek.coffeegb.gpu.PixelFifo;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
-import static eu.rekawek.coffeegb.gpu.GpuRegister.BGP;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.SCX;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.SCY;
@@ -38,11 +39,15 @@ public class PixelTransfer implements GpuPhase {
 
     private boolean window;
 
-    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites, boolean gbc) {
+    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
         this.r = r;
         this.lcdc = new Lcdc(r);
         this.gbc = gbc;
-        this.fifo = new DmgPixelFifo(display, r);
+        if (gbc) {
+            this.fifo = new ColorPixelFifo(lcdc, display, bgPalette, oamPalette);
+        } else {
+            this.fifo = new DmgPixelFifo(display, r);
+        }
         this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, r, gbc);
         this.display = display;
         this.sprites = sprites;

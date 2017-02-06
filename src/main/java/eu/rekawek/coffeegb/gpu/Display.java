@@ -4,6 +4,8 @@ public interface Display {
 
     void putDmgPixel(int color);
 
+    void putColorPixel(int gbcRgb);
+
     void requestRefresh();
 
     void waitForRefresh();
@@ -16,6 +18,10 @@ public interface Display {
 
         @Override
         public void putDmgPixel(int color) {
+        }
+
+        @Override
+        public void putColorPixel(int gbcRgb) {
         }
 
         @Override
