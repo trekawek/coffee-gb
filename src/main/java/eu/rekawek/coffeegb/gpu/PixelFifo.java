@@ -1,7 +1,5 @@
 package eu.rekawek.coffeegb.gpu;
 
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
-
 public interface PixelFifo {
 
     int getLength();
@@ -12,7 +10,7 @@ public interface PixelFifo {
 
     void enqueue8Pixels(int[] pixels, TileAttributes tileAttributes);
 
-    void setOverlay(int[] pixels, int offset, TileAttributes flags, MemoryRegisters registers);
+    void setOverlay(int[] pixelLine, TileAttributes flags, int oamIndex);
 
     void clear();
 

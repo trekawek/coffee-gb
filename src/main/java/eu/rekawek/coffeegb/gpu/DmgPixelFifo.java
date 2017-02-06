@@ -6,11 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
-import static com.google.common.collect.Lists.reverse;
-
 public class DmgPixelFifo implements PixelFifo {
-
-    private final int bgp;
 
     private final List<Integer> pixels = new LinkedList<>();
 
@@ -20,10 +16,12 @@ public class DmgPixelFifo implements PixelFifo {
 
     private final Lcdc lcdc;
 
-    public DmgPixelFifo(int bgp, Lcdc lcdc, Display display) {
-        this.bgp = bgp;
-        this.lcdc = lcdc;
+    private final MemoryRegisters registers;
+
+    public DmgPixelFifo(Display display, MemoryRegisters registers) {
+        this.lcdc = new Lcdc(registers);
         this.display = display;
+        this.registers = registers;
     }
 
     @Override
@@ -49,19 +47,17 @@ public class DmgPixelFifo implements PixelFifo {
     public void enqueue8Pixels(int[] pixelLine, TileAttributes tileAttributes) {
         for (int p : pixelLine) {
             pixels.add(p);
-            palettes.add(bgp);
+            palettes.add(registers.get(GpuRegister.BGP));
         }
     }
 
-    // FIXME in the GBC mode sprite priorites depends on the OAM table position
-    // see "Sprite Priorities and Conflicts" in pandocs
     @Override
-    public void setOverlay(int[] pixelLine, int offset, TileAttributes flags, MemoryRegisters registers) {
+    public void setOverlay(int[] pixelLine, TileAttributes flags, int oamIndex) {
         boolean priority = flags.isPriority();
         int overlayPalette = registers.get(flags.getDmgPalette());
 
-        for (int i = 0, j = offset; j < pixelLine.length; i++, j++) {
-            int p = pixelLine[j];
+        for (int i = 0; i < pixelLine.length; i++) {
+            int p = pixelLine[i];
             if ((priority && pixels.get(i) == 0) || !priority && p != 0) {
                 pixels.set(i, p);
                 palettes.set(i, overlayPalette);

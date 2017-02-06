@@ -60,6 +60,8 @@ public class Fetcher {
 
     private int spriteOffset;
 
+    private int spriteOamIndex;
+
     private int divider = 2;
 
     public Fetcher(PixelFifo fifo, AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, MemoryRegisters registers, boolean gbc) {
@@ -91,11 +93,12 @@ public class Fetcher {
         this.fetchingDisabled = true;
     }
 
-    public void addSprite(SpritePosition sprite, int offset) {
+    public void addSprite(SpritePosition sprite, int offset, int oamIndex) {
         this.sprite = sprite;
         this.state = State.READ_SPRITE_TILE_ID;
         this.spriteTileLine = r.get(LY) + 16 - sprite.getY();
         this.spriteOffset = offset;
+        this.spriteOamIndex = oamIndex;
     }
 
     public void tick() {
@@ -167,7 +170,7 @@ public class Fetcher {
                 break;
 
             case PUSH_SPRITE:
-                fifo.setOverlay(zip(tileData1, tileData2, spriteAttributes.isXflip()), spriteOffset, spriteAttributes, r);
+                fifo.setOverlay(subArray(zip(tileData1, tileData2, spriteAttributes.isXflip()), spriteOffset), spriteAttributes, spriteOamIndex);
                 state = State.READ_TILE_ID;
                 break;
         }
@@ -200,6 +203,18 @@ public class Fetcher {
             }
         }
         return pixelLine;
+    }
+
+    static int[] subArray(int[] array, int offset) {
+        if (offset == 0) {
+            return array;
+        } else {
+            int[] result = new int[array.length - offset];
+            for (int i = 0; i < result.length; i++) {
+                result[i] = array[i + offset];
+            }
+            return result;
+        }
     }
 
 }

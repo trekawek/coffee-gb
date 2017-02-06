@@ -42,7 +42,7 @@ public class PixelTransfer implements GpuPhase {
         this.r = r;
         this.lcdc = new Lcdc(r);
         this.gbc = gbc;
-        this.fifo = new DmgPixelFifo(r.get(BGP), lcdc, display);
+        this.fifo = new DmgPixelFifo(display, r);
         this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, r, gbc);
         this.display = display;
         this.sprites = sprites;
@@ -85,13 +85,13 @@ public class PixelTransfer implements GpuPhase {
                 }
                 if (x == 0 && s.getX() < 8) {
                     if (!spriteAdded) {
-                        fetcher.addSprite(s, 8 - s.getX());
+                        fetcher.addSprite(s, 8 - s.getX(), i);
                         spriteAdded = true;
                     }
                     sprites[i] = null;
                 } else if (s.getX() - 8 == x) {
                     if (!spriteAdded) {
-                        fetcher.addSprite(s, 0);
+                        fetcher.addSprite(s, 0, i);
                         spriteAdded = true;
                     }
                     sprites[i] = null;

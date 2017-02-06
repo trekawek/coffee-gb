@@ -40,10 +40,9 @@ public class ColorPixelFifo implements PixelFifo {
     }
 
     @Override
-    public void setOverlay(int[] pixels, int offset, TileAttributes flags, MemoryRegisters registers) {
+    public void setOverlay(int[] pixelLine, TileAttributes flags, int oamIndex) {
 
     }
-
 
     @Override
     public void clear() {
