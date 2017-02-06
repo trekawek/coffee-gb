@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.gpu;
 
 public class TileAttributes {
 
+    public static final TileAttributes EMPTY = new TileAttributes(0);
+
     private final int value;
 
     public TileAttributes(int flags) {

@@ -10,9 +10,9 @@ public interface PixelFifo {
 
     void dropPixel();
 
-    void enqueue8Pixels(int data1, int data2);
+    void enqueue8Pixels(int[] pixels, TileAttributes tileAttributes);
 
-    void setOverlay(int data1, int data2, int offset, TileAttributes flags, MemoryRegisters registers);
+    void setOverlay(int[] pixels, int offset, TileAttributes flags, MemoryRegisters registers);
 
     void clear();
 

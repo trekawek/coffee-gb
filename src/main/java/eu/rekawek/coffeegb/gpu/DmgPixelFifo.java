@@ -20,12 +20,9 @@ public class DmgPixelFifo implements PixelFifo {
 
     private final Lcdc lcdc;
 
-    private final boolean gbc;
-
-    public DmgPixelFifo(int bgp, Lcdc lcdc, Display display, boolean gbc) {
+    public DmgPixelFifo(int bgp, Lcdc lcdc, Display display) {
         this.bgp = bgp;
         this.lcdc = lcdc;
-        this.gbc = gbc;
         this.display = display;
     }
 
@@ -49,8 +46,8 @@ public class DmgPixelFifo implements PixelFifo {
     }
 
     @Override
-    public void enqueue8Pixels(int data1, int data2) {
-        for (int p : zip(data1, data2)) {
+    public void enqueue8Pixels(int[] pixelLine, TileAttributes tileAttributes) {
+        for (int p : pixelLine) {
             pixels.add(p);
             palettes.add(bgp);
         }
@@ -59,34 +56,17 @@ public class DmgPixelFifo implements PixelFifo {
     // FIXME in the GBC mode sprite priorites depends on the OAM table position
     // see "Sprite Priorities and Conflicts" in pandocs
     @Override
-    public void setOverlay(int data1, int data2, int offset, TileAttributes flags, MemoryRegisters registers) {
-        List<Integer> pixelLine = zip(data1, data2);
-        if (flags.isXflip()) {
-            pixelLine = reverse(pixelLine);
-        }
+    public void setOverlay(int[] pixelLine, int offset, TileAttributes flags, MemoryRegisters registers) {
         boolean priority = flags.isPriority();
-        if (gbc && !lcdc.isBgAndWindowDisplay()) {
-            priority = false;
-        }
         int overlayPalette = registers.get(flags.getDmgPalette());
 
-        int i = 0;
-        for (int p : pixelLine.subList(offset, pixelLine.size())) {
+        for (int i = 0, j = offset; j < pixelLine.length; i++, j++) {
+            int p = pixelLine[j];
             if ((priority && pixels.get(i) == 0) || !priority && p != 0) {
                 pixels.set(i, p);
                 palettes.set(i, overlayPalette);
             }
-            i++;
         }
-    }
-
-    static List<Integer> zip(int data1, int data2) {
-        List<Integer> pixelLine = new ArrayList<>();
-        for (int i = 7; i >= 0; i--) {
-            int mask = (1 << i);
-            pixelLine.add(2 * ((data2 & mask) == 0 ? 0 : 1) + ((data1 & mask) == 0 ? 0 : 1));
-        }
-        return pixelLine;
     }
 
     List<Integer> asList() {

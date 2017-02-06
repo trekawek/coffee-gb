@@ -42,8 +42,8 @@ public class PixelTransfer implements GpuPhase {
         this.r = r;
         this.lcdc = new Lcdc(r);
         this.gbc = gbc;
-        this.fifo = new DmgPixelFifo(r.get(BGP), lcdc, display, gbc);
-        this.fetcher = new Fetcher(fifo, videoRam0, oemRam, r);
+        this.fifo = new DmgPixelFifo(r.get(BGP), lcdc, display);
+        this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, r, gbc);
         this.display = display;
         this.sprites = sprites;
 
