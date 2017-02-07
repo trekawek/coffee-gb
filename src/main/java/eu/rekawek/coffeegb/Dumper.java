@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb;
 
+import static eu.rekawek.coffeegb.gpu.Fetcher.zip;
+
 public final class Dumper {
 
     private Dumper() {
@@ -30,9 +32,7 @@ public final class Dumper {
     }
 
     public static void dumpTileLine(int data1, int data2) {
-        for (int i = 7; i >= 0; i--) {
-            int mask = (1 << i);
-            int pixel = 2 * ((data1 & mask) == 0 ? 0 : 1) + (data2 & mask) == 0 ? 0 : 1;
+        for (int pixel : zip(data1, data2, false)) {
             if (pixel == 0) {
                 System.out.print('.');
             } else {

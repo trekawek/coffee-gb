@@ -127,15 +127,12 @@ public class Fetcher {
                 break;
 
             case READ_DATA_1:
-                if (tileAttributes.isYflip()) {
-                    tileLine = 8 - 1 - tileLine;
-                }
-                tileData1 = getTileData(tileId, tileLine, 0, tileDataAddress, tileIdSigned, tileAttributes);
+                tileData1 = getTileData(tileId, tileLine, 0, tileDataAddress, tileIdSigned, tileAttributes, 8);
                 state = State.READ_DATA_2;
                 break;
 
             case READ_DATA_2:
-                tileData2 = getTileData(tileId, tileLine, 1, tileDataAddress, tileIdSigned, tileAttributes);
+                tileData2 = getTileData(tileId, tileLine, 1, tileDataAddress, tileIdSigned, tileAttributes, 8);
                 state = State.PUSH;
 
             case PUSH:
@@ -157,18 +154,15 @@ public class Fetcher {
                 break;
 
             case READ_SPRITE_DATA_1:
-                if (spriteAttributes.isYflip()) {
-                    spriteTileLine = lcdc.getSpriteHeight() - 1 - spriteTileLine;
-                }
                 if (lcdc.getSpriteHeight() == 16) {
                     tileId &= 0xfe;
                 }
-                tileData1 = getTileData(tileId, spriteTileLine, 0, 0x8000, false, spriteAttributes);
+                tileData1 = getTileData(tileId, spriteTileLine, 0, 0x8000, false, spriteAttributes, lcdc.getSpriteHeight());
                 state = State.READ_SPRITE_DATA_2;
                 break;
 
             case READ_SPRITE_DATA_2:
-                tileData2 = getTileData(tileId, spriteTileLine, 1, 0x8000, false, spriteAttributes);
+                tileData2 = getTileData(tileId, spriteTileLine, 1, 0x8000, false, spriteAttributes, lcdc.getSpriteHeight());
                 state = State.PUSH_SPRITE;
                 break;
 
@@ -179,7 +173,14 @@ public class Fetcher {
         }
     }
 
-    private int getTileData(int tileId, int line, int byteNumber, int tileDataAddress, boolean signed, TileAttributes attr) {
+    private int getTileData(int tileId, int line, int byteNumber, int tileDataAddress, boolean signed, TileAttributes attr, int tileHeight) {
+        int effectiveLine;
+        if (attr.isYflip()) {
+            effectiveLine = tileHeight - 1 - line;
+        } else {
+            effectiveLine = line;
+        }
+
         int tileAddress;
         if (signed) {
             tileAddress = tileDataAddress + toSigned(tileId) * 0x10;
@@ -187,14 +188,14 @@ public class Fetcher {
             tileAddress = tileDataAddress + tileId * 0x10;
         }
         AddressSpace videoRam = attr.getBank() == 0 ? videoRam0 : videoRam1;
-        return videoRam.getByte(tileAddress + line * 2 + byteNumber);
+        return videoRam.getByte(tileAddress + effectiveLine * 2 + byteNumber);
     }
 
     public boolean spriteInProgress() {
         return EnumSet.of(State.READ_SPRITE_TILE_ID, State.READ_SPRITE_FLAGS, State.READ_SPRITE_DATA_1, State.READ_SPRITE_DATA_2, State.PUSH_SPRITE).contains(state);
     }
 
-    static int[] zip(int data1, int data2, boolean reverse) {
+    public static int[] zip(int data1, int data2, boolean reverse) {
         int[] pixelLine = new int[8];
         for (int i = 7; i >= 0; i--) {
             int mask = (1 << i);
