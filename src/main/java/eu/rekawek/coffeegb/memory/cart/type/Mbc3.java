@@ -10,8 +10,6 @@ public class Mbc3 implements AddressSpace {
 
     private final CartridgeType type;
 
-    private final int romBanks;
-
     private final int ramBanks;
 
     private final int[] cartridge;
@@ -35,7 +33,6 @@ public class Mbc3 implements AddressSpace {
     public Mbc3(int[] cartridge, CartridgeType type, Battery battery, int romBanks, int ramBanks) {
         this.cartridge = cartridge;
         this.ramBanks = ramBanks;
-        this.romBanks = romBanks;
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
         this.type = type;
         this.clock = new RealTimeClock(battery, Clock.SYSTEM_CLOCK);
@@ -85,9 +82,6 @@ public class Mbc3 implements AddressSpace {
     private void selectRomBank(int bank) {
         if (bank == 0) {
             bank = 1;
-        }
-        if (bank % 0x20 == 0) {
-            bank = bank + 1;
         }
         selectedRomBank = bank;
     }

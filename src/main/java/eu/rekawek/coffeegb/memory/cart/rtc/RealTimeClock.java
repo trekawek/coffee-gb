@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.memory.cart.rtc;
 
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
 
 public class RealTimeClock {
 
