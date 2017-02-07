@@ -15,13 +15,12 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 ## Features
 
 * Cycle-exact Gameboy CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
-* GPU emulation
-    * background and window
-    * basic sprite support
+* Gameboy Color support
 * Joypad
 * Timer
 * Sound
-* MBC1
+* MBC1-5 support.
+* Battery saves
 * ROM-based compatibility tests run from Maven
 
 ## Playable titles
@@ -57,14 +56,6 @@ All the tests meant to be run on the DMG are green:
 * oam_bug-2
 * halt_bug
 * dmg_sound-2
-
-## Prioritized TODO
-
-* Battery saves
-* Gameboy Color support
-* Performance optimization
-* Snapshot saves
-* Serial port
 
 ## Resources
 
