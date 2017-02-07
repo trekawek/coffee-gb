@@ -2,13 +2,19 @@
 
 [![Build Status](https://travis-ci.org/trekawek/coffee-gb.svg?branch=master)](https://travis-ci.org/trekawek/coffee-gb)
 
-Coffee GB is a Gameboy emulator written in Java 8. It's meant to be a development exercise.
+Coffee GB is a Gameboy Color emulator written in Java 8. It's meant to be a development exercise.
 
-![Coffee GB running Tetris](doc/tetris.gif)
+![Coffee GB running game](doc/tetris.gif)
+![Coffee GB running game](doc/screenshot1.png)![Coffee GB running game](doc/screenshot2.png)![Coffee GB running game](doc/screenshot3.png)![Coffee GB running game](doc/screenshot4.png)![Coffee GB running game](doc/screenshot5.png)
 
 ## Usage
 
-    java -jar coffee-gb-*.jar src/test/resources/tetris.gb
+    Usage:
+    java -jar coffee-gb.jar [OPTIONS] ROM_FILE
+    
+    Available options:
+      -f --force-classic    Emulate classic GB (DMG) for universal ROMs
+      -b --use-bootstrap    Start with the GB bootstrap
 
 Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd>.
 
