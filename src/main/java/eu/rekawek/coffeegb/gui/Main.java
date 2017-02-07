@@ -32,7 +32,7 @@ public class Main {
     private JFrame mainWindow;
 
     public Main(String romPath) throws IOException {
-        rom = new Cartridge(new File(romPath));
+        rom = new Cartridge(new File(romPath), GameboyOptions.DEFAULT);
         speedMode = new SpeedMode();
         sound = new AudioSystemSoundOutput();
         display = new SwingDisplay(SCALE);

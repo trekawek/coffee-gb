@@ -53,16 +53,8 @@ public class Gameboy implements Runnable {
     private volatile boolean doStop;
 
     public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
-        Cartridge.GameboyTypeFlag gameboyType = rom.getGameboyType();
-        if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
-            gbc = false;
-        } else if (gameboyType == Cartridge.GameboyTypeFlag.CGB) {
-            gbc = true;
-        } else { // UNIVERSAL
-            gbc = !options.isForceDmg();
-        }
-
         this.display = display;
+        gbc = rom.isGbc();
         speedMode = new SpeedMode();
         interruptManager = new InterruptManager();
         timer = new Timer(interruptManager, speedMode);
@@ -94,10 +86,14 @@ public class Gameboy implements Runnable {
         mmu.addAddressSpace(new ShadowAddressSpace(mmu, 0xe000, 0xc000, 0x1e00));
 
         cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
-        init();
+
+        initIO();
+        if (!options.isUsingBootstrap()) {
+            initRegs();
+        }
     }
 
-    private void init() {
+    private void initRegs() {
         Registers r = cpu.getRegisters();
 
         r.setAF(0x01b0);
@@ -109,7 +105,9 @@ public class Gameboy implements Runnable {
         r.setHL(0x014d);
         r.setSP(0xfffe);
         r.setPC(0x0100);
+    }
 
+    private void initIO() {
         mmu.setByte(0xff05, 0x00);
         mmu.setByte(0xff06, 0x00);
         mmu.setByte(0xff07, 0x00);

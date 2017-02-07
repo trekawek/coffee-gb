@@ -29,7 +29,7 @@ public class SerialTestRunner implements SerialEndpoint {
     private final OutputStream os;
 
     public SerialTestRunner(File romFile, OutputStream os) throws IOException {
-        Cartridge cart = new Cartridge(romFile);
+        Cartridge cart = new Cartridge(romFile, GameboyOptions.DEFAULT);
         gb = new Gameboy(new GameboyOptions(), cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, this);
         text = new StringBuilder();
         this.os = os;

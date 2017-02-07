@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.memory.cart;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.memory.BootRom;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
@@ -41,9 +42,15 @@ public class Cartridge implements AddressSpace {
 
     private final GameboyTypeFlag gameboyType;
 
-    private int dmgBoostrap = 1;
+    private final GameboyOptions options;
 
-    public Cartridge(File file) throws IOException {
+    private final boolean gbc;
+
+    private int dmgBoostrap;
+
+    public Cartridge(File file, GameboyOptions options) throws IOException {
+        this.options = options;
+
         int[] rom = loadFile(file);
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
         LOG.debug("Cartridge type: {}", type);
@@ -72,10 +79,20 @@ public class Cartridge implements AddressSpace {
         } else {
             addressSpace = new Rom(rom, type, romBanks, ramBanks);
         }
+
+        dmgBoostrap = options.isUsingBootstrap() ? 0 : 1;
+        if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
+            gbc = false;
+        } else if (gameboyType == Cartridge.GameboyTypeFlag.CGB) {
+            gbc = true;
+        } else { // UNIVERSAL
+            gbc = !options.isForceDmg();
+        }
+
     }
 
-    public GameboyTypeFlag getGameboyType() {
-        return gameboyType;
+    public boolean isGbc() {
+        return gbc;
     }
 
     @Override
@@ -94,8 +111,12 @@ public class Cartridge implements AddressSpace {
 
     @Override
     public int getByte(int address) {
-        if (dmgBoostrap == 0 && (address >= 0x0000 && address < 0x0100)) {
+        if (dmgBoostrap == 0 && !gbc && (address >= 0x0000 && address < 0x0100)) {
             return BootRom.GAMEBOY_CLASSIC[address];
+        } else if (dmgBoostrap == 0 && gbc && address >= 0x000 && address < 0x0100) {
+            return BootRom.GAMEBOY_COLOR[address];
+        } else if (dmgBoostrap == 0 && gbc && address >= 0x200 && address < 0x0900) {
+            return BootRom.GAMEBOY_COLOR[address - 0x0100];
         } else if (address == 0xff50) {
             return dmgBoostrap;
         } else {
