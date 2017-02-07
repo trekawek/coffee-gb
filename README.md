@@ -15,19 +15,13 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 ## Features
 
 * Cycle-exact Gameboy CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
-* Gameboy Color support
+* GPU
 * Joypad
 * Timer
 * Sound
-* MBC1-5 support.
+* MBC1-5 support
 * Battery saves
 * ROM-based compatibility tests run from Maven
-
-## Playable titles
-
-* Tetris
-* Dr Mario
-* Super Mario Land
 
 ## Running Blargg's tests
 
@@ -67,3 +61,4 @@ All the tests meant to be run on the DMG are green:
 * [BGB emulator](http://bgb.bircd.org/) --- good for testing / debugging, works fine with Wine
 * [The Cycle-Accurate Game Boy Docs](https://github.com/AntonioND/giibiiadvance/tree/master/docs)
 * [Test ROMs](http://slack.net/~ant/old/gb-tests/) - included in the [src/test/resources/roms](src/test/resources/roms)
+* [Pandocs](http://bgb.bircd.org/pandocs.htm)
