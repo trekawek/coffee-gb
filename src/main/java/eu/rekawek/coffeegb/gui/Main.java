@@ -93,7 +93,7 @@ public class Main {
     }
 
     private void start() {
-        mainWindow = new JFrame("Coffee GB");
+        mainWindow = new JFrame("Coffee GB: " + rom.getTitle());
         mainWindow.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         mainWindow.setLocationRelativeTo(null);
 

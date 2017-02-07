@@ -42,18 +42,18 @@ public class Cartridge implements AddressSpace {
 
     private final GameboyTypeFlag gameboyType;
 
-    private final GameboyOptions options;
-
     private final boolean gbc;
+
+    private final String title;
 
     private int dmgBoostrap;
 
     public Cartridge(GameboyOptions options) throws IOException {
-        this.options = options;
         File file = options.getRomFile();
         int[] rom = loadFile(file);
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
-        LOG.debug("Cartridge type: {}", type);
+        title = getTitle(rom);
+        LOG.debug("Cartridge {}, type: {}", title, type);
         gameboyType = GameboyTypeFlag.getFlag(rom[0x0143]);
         int romBanks = getRomBanks(rom[0x0148]);
         int ramBanks = getRamBanks(rom[0x0149]);
@@ -88,7 +88,22 @@ public class Cartridge implements AddressSpace {
         } else { // UNIVERSAL
             gbc = !options.isForceDmg();
         }
+    }
 
+    private String getTitle(int[] rom) {
+        StringBuilder t = new StringBuilder();
+        for (int i = 0x0134; i < 0x0143; i++) {
+            char c = (char) rom[i];
+            if (c == 0) {
+                break;
+            }
+            t.append(c);
+        }
+        return t.toString();
+    }
+
+    public String getTitle() {
+        return title;
     }
 
     public boolean isGbc() {
