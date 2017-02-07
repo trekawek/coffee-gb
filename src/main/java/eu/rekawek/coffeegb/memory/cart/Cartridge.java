@@ -48,9 +48,9 @@ public class Cartridge implements AddressSpace {
 
     private int dmgBoostrap;
 
-    public Cartridge(File file, GameboyOptions options) throws IOException {
+    public Cartridge(GameboyOptions options) throws IOException {
         this.options = options;
-
+        File file = options.getRomFile();
         int[] rom = loadFile(file);
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
         LOG.debug("Cartridge type: {}", type);

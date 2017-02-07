@@ -27,8 +27,9 @@ public class MemoryTestRunner {
     private boolean testStarted;
 
     public MemoryTestRunner(File romFile, OutputStream os) throws IOException {
-        Cartridge cart = new Cartridge(romFile, GameboyOptions.DEFAULT);
-        gb = new Gameboy(new GameboyOptions(), cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
+        GameboyOptions options = new GameboyOptions(romFile);
+        Cartridge cart = new Cartridge(options);
+        gb = new Gameboy(options, cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
         text = new StringBuilder();
         this.os = os;
     }
