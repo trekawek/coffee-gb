@@ -105,8 +105,12 @@ public class Hdma implements AddressSpace {
     private void startTransfer(int reg) {
         hblankTransfer = (reg & (1 << 7)) != 0;
         length = reg & 0x7f;
+
         src = (hdma1234.getByte(HDMA1) << 8) | (hdma1234.getByte(HDMA2) & 0xf0);
         dst = ((hdma1234.getByte(HDMA3) & 0x1f) << 8) | (hdma1234.getByte(HDMA4) & 0xf0);
+        src = src & 0xfff0;
+        dst = (dst & 0x1fff) | 0x8000;
+
         transferInProgress = true;
     }
 
