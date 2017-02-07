@@ -160,6 +160,9 @@ public class Fetcher {
                 if (spriteAttributes.isYflip()) {
                     spriteTileLine = lcdc.getSpriteHeight() - 1 - spriteTileLine;
                 }
+                if (lcdc.getSpriteHeight() == 16) {
+                    tileId &= 0xfe;
+                }
                 tileData1 = getTileData(tileId, spriteTileLine, 0, 0x8000, false, spriteAttributes);
                 state = State.READ_SPRITE_DATA_2;
                 break;
