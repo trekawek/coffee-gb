@@ -83,7 +83,7 @@ public class ColorPixelFifo implements PixelFifo {
             if ((oldPriority == -1 || oldPriority == 100) && !lcdc.isBgAndWindowDisplay()) { // this one takes precedence
                 put = true;
             } else if (oldPriority == 100) { // bg with priority
-                put = true;
+                put = pixels.get(i) == 0;
             } else if (oldPriority == -1 && !spriteAttr.isPriority()) { // bg without priority
                 put = true;
             } else if (oldPriority == -1 && spriteAttr.isPriority() && pixels.get(i) == 0) { // bg without priority
