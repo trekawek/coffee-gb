@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.blargg;
 
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -8,6 +9,12 @@ import static eu.rekawek.coffeegb.blargg.support.RomTestUtils.testRomWithMemory;
 import static eu.rekawek.coffeegb.blargg.support.RomTestUtils.testRomWithSerial;
 
 public class BlarggRomTest {
+
+    @Test
+    @Ignore
+    public void testCgbSound() throws IOException {
+        testRomWithMemory("cgb_sound.gb");
+    }
 
     @Test
     public void testCpuInstrs() throws IOException {
@@ -27,6 +34,12 @@ public class BlarggRomTest {
     @Test
     public void testInstrTiming() throws IOException {
         testRomWithSerial("instr_timing.gb");
+    }
+
+    @Test
+    @Ignore
+    public void testInterruptTime() throws IOException {
+        testRomWithMemory("interrupt_time.gb");
     }
 
     @Test
