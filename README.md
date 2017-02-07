@@ -5,7 +5,6 @@
 Coffee GB is a Gameboy Color emulator written in Java 8. It's meant to be a development exercise.
 
 ![Coffee GB running game](doc/tetris.gif)
-![Coffee GB running game](doc/screenshot1.png)![Coffee GB running game](doc/screenshot2.png)![Coffee GB running game](doc/screenshot3.png)![Coffee GB running game](doc/screenshot4.png)![Coffee GB running game](doc/screenshot5.png)
 
 ## Usage
 
@@ -56,6 +55,14 @@ All the tests meant to be run on the DMG are green:
 * oam_bug-2
 * halt_bug
 * dmg_sound-2
+
+## Screenshots
+
+![Coffee GB running game](doc/screenshot1.png)
+![Coffee GB running game](doc/screenshot2.png)
+![Coffee GB running game](doc/screenshot3.png)
+![Coffee GB running game](doc/screenshot4.png)
+![Coffee GB running game](doc/screenshot5.png)
 
 ## Resources
 
