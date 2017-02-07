@@ -50,7 +50,7 @@ public class Mbc5 implements AddressSpace {
         } else if (address >= 0x2000 && address < 0x3000) {
             selectedRomBank = (selectedRomBank & 0x100) | value;
         } else if (address >= 0x3000 && address < 0x4000) {
-            selectedRomBank = (selectedRomBank & 0x0ff) | ((value & 1) << 9);
+            selectedRomBank = (selectedRomBank & 0x0ff) | ((value & 1) << 8);
         } else if (address >= 0x4000 && address < 0x6000) {
             int bank = value & 0x0f;
             if (bank < ramBanks) {
