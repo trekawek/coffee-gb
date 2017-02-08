@@ -1,12 +1,8 @@
 package eu.rekawek.coffeegb.memory.cart.rtc;
 
-import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-
 public class RealTimeClock {
 
     private final Clock clock;
-
-    private final Battery battery;
 
     private long offsetSec;
 
@@ -24,12 +20,9 @@ public class RealTimeClock {
 
     private int haltDays;
 
-    public RealTimeClock(Battery battery, Clock clock) {
+    public RealTimeClock(Clock clock) {
         this.clock = clock;
-        this.battery = battery;
-        long[] data = battery.loadClock();
-        offsetSec = data[0];
-        clockStart = data[1] == 0 ? clock.currentTimeMillis() : data[1];
+        this.clockStart = clock.currentTimeMillis();
     }
 
     public void latch() {
@@ -103,7 +96,6 @@ public class RealTimeClock {
         } else if (!halt && this.halt) {
             offsetSec = haltSeconds + haltMinutes * 60 + haltHours * 60 * 60 + haltDays * 60 * 60 * 24;
             clockStart = clock.currentTimeMillis();
-            battery.saveClock(new long[] {offsetSec, clockStart});
         }
         this.halt = halt;
     }
@@ -122,5 +114,30 @@ public class RealTimeClock {
             now = latchStart;
         }
         return (now - clockStart) / 1000 + offsetSec;
+    }
+
+    public void deserialize(long[] clockData) {
+        long seconds = clockData[0];
+        long minutes = clockData[1];
+        long hours = clockData[2];
+        long days = clockData[3];
+        long daysHigh = clockData[4];
+        long timestamp = clockData[10];
+
+        this.clockStart = timestamp * 1000;
+        this.offsetSec = seconds + minutes * 60 + hours * 60 * 60 + days * 24 * 60 * 60 + daysHigh * 256 * 24 * 60 * 60;
+    }
+
+    public long[] serialize() {
+        long[] clockData = new long[11];
+        latch();
+        clockData[0] = clockData[5] = getSeconds();
+        clockData[1] = clockData[6] = getMinutes();
+        clockData[2] = clockData[7] = getHours();
+        clockData[3] = clockData[8] = getDayCounter() % 256;
+        clockData[4] = clockData[9] = getDayCounter() / 256;
+        clockData[10] = latchStart / 1000;
+        unlatch();
+        return clockData;
     }
 }

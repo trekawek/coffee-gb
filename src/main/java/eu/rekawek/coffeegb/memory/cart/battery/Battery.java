@@ -6,9 +6,9 @@ public interface Battery {
 
     void saveRam(int[] ram);
 
-    long[] loadClock();
+    void loadRamWithClock(int[] ram, long[] clockData);
 
-    void saveClock(long[] clockData);
+    void saveRamWithClock(int[] ram, long[] clockData);
 
     Battery NULL_BATTERY = new Battery() {
         @Override
@@ -20,12 +20,11 @@ public interface Battery {
         }
 
         @Override
-        public long[] loadClock() {
-            return new long[2];
+        public void loadRamWithClock(int[] ram, long[] clockData) {
         }
 
         @Override
-        public void saveClock(long[] clockData) {
+        public void saveRamWithClock(int[] ram, long[] clockData) {
         }
     };
 }

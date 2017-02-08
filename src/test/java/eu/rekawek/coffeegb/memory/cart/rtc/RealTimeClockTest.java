@@ -19,7 +19,7 @@ public class RealTimeClockTest {
     @Before
     public void setup() {
         clock = new VirtualClock();
-        rtc = new RealTimeClock(Battery.NULL_BATTERY, clock);
+        rtc = new RealTimeClock(clock);
     }
 
     @Test

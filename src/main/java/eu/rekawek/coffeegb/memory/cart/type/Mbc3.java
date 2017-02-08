@@ -35,9 +35,12 @@ public class Mbc3 implements AddressSpace {
         this.ramBanks = ramBanks;
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
         this.type = type;
-        this.clock = new RealTimeClock(battery, Clock.SYSTEM_CLOCK);
+        this.clock = new RealTimeClock(Clock.SYSTEM_CLOCK);
         this.battery = battery;
-        battery.loadRam(ram);
+
+        long[] clockData = new long[12 ];
+        battery.loadRamWithClock(ram, clockData);
+        clock.deserialize(clockData);
     }
 
     @Override
@@ -51,7 +54,7 @@ public class Mbc3 implements AddressSpace {
         if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = (value & 0b1010) != 0;
             if (!ramWriteEnabled) {
-                battery.saveRam(ram);
+                battery.saveRamWithClock(ram, clock.serialize());
             }
         } else if (address >= 0x2000 && address < 0x4000) {
             int bank = value & 0b01111111;

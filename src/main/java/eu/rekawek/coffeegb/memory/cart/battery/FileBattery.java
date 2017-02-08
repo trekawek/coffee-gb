@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.memory.cart.battery;
 
-import com.google.common.base.Charsets;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,8 +10,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.Arrays;
-import java.util.stream.Collectors;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 public class FileBattery implements Battery {
 
@@ -20,61 +19,83 @@ public class FileBattery implements Battery {
 
     private final File saveFile;
 
-    private final File clockFile;
-
     public FileBattery(File parent, String baseName) {
         this.saveFile = new File(parent, baseName + ".sav");
-        this.clockFile = new File(parent, baseName + ".clk");
     }
 
     @Override
     public void loadRam(int[] ram) {
+        loadRamWithClock(ram, null);
+    }
+
+    @Override
+    public void saveRam(int[] ram) {
+        saveRamWithClock(ram, null);
+    }
+
+    @Override
+    public void loadRamWithClock(int[] ram, long[] clockData) {
         if (!saveFile.exists()) {
             return;
         }
-        byte[] buffer = new byte[ram.length];
+        long saveLength = saveFile.length();
+        saveLength = saveLength - (saveLength % 0x2000);
         try (InputStream is = new FileInputStream(saveFile)) {
-            IOUtils.read(is, buffer);
+            loadRam(ram, is, saveLength);
+            if (clockData != null) {
+                loadClock(clockData, is);
+            }
         } catch (IOException e) {
-            LOG.info("Can't load battery save file", e);
+            throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public void saveRamWithClock(int[] ram, long[] clockData) {
+        try (OutputStream os = new FileOutputStream(saveFile)) {
+            saveRam(ram, os);
+            if (clockData != null) {
+                saveClock(clockData, os);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void loadClock(long[] clockData, InputStream is) throws IOException {
+        byte[] byteBuff = new byte[4 * clockData.length];
+        IOUtils.read(is, byteBuff);
+        ByteBuffer buff = ByteBuffer.wrap(byteBuff);
+        buff.order(ByteOrder.LITTLE_ENDIAN);
+        int i = 0;
+        while (buff.hasRemaining()) {
+            clockData[i++] = buff.getInt() & 0xffffffff;
+        }
+    }
+
+    private void saveClock(long[] clockData, OutputStream os) throws IOException {
+        byte[] byteBuff = new byte[4 * clockData.length];
+        ByteBuffer buff = ByteBuffer.wrap(byteBuff);
+        buff.order(ByteOrder.LITTLE_ENDIAN);
+        for (long d : clockData) {
+            buff.putInt((int) d);
+        }
+        IOUtils.write(byteBuff, os);
+    }
+
+    private void loadRam(int[] ram, InputStream is, long length) throws IOException {
+        byte[] buffer = new byte[ram.length];
+        IOUtils.read(is, buffer, 0, Math.min((int) length, ram.length));
         for (int i = 0; i < ram.length; i++) {
             ram[i] = buffer[i] & 0xff;
         }
     }
 
-    @Override
-    public void saveRam(int[] ram) {
+    private void saveRam(int[] ram, OutputStream os) throws IOException {
         byte[] buffer = new byte[ram.length];
         for (int i = 0; i < ram.length; i++) {
             buffer[i] = (byte) (ram[i]);
         }
-        try (OutputStream os = new FileOutputStream(saveFile)) {
-            IOUtils.write(buffer, os);
-        } catch (IOException e) {
-            LOG.info("Can't save to battery save file", e);
-        }
-    }
-
-    @Override
-    public long[] loadClock() {
-        if (!clockFile.exists()) {
-            return new long[2];
-        }
-        try (InputStream is = new FileInputStream(clockFile)) {
-            return IOUtils.readLines(is, Charsets.UTF_8).stream().mapToLong(Long::parseLong).toArray();
-        } catch (IOException e) {
-            LOG.info("Can't load clock data", e);
-            return new long[2];
-        }
-    }
-
-    @Override
-    public void saveClock(long[] clockData) {
-        try (OutputStream os = new FileOutputStream(clockFile)) {
-            IOUtils.writeLines(Arrays.stream(clockData).mapToObj(Long::toString).collect(Collectors.toList()), "\n", os, Charsets.UTF_8);
-        } catch (IOException e) {
-            LOG.info("Can't store clock data", e);
-        }
+        IOUtils.write(buffer, os);
     }
 }
