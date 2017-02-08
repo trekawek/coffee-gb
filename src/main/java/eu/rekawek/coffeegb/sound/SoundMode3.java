@@ -118,9 +118,11 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void trigger() {
         i = 0;
-        resetFreqDivider();
-        freqDivider += 2;
+        freqDivider = 6;
         triggered = !gbc;
+        if (gbc) {
+            getWaveEntry();
+        }
     }
 
     @Override

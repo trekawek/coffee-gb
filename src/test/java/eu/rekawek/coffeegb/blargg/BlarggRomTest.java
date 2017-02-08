@@ -11,7 +11,6 @@ import static eu.rekawek.coffeegb.blargg.support.RomTestUtils.testRomWithSerial;
 public class BlarggRomTest {
 
     @Test
-    @Ignore
     public void testCgbSound() throws IOException {
         testRomWithMemory("cgb_sound.gb");
     }

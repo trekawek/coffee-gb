@@ -46,12 +46,12 @@ public class PolynomialCounter {
                 throw new IllegalStateException();
         }
         shiftedDivisor = divisor << clockShift;
-        i = 0;
+        i = 1;
     }
 
     public boolean tick() {
-        if (++i == shiftedDivisor) {
-            i = 0;
+        if (--i == 0) {
+            i = shiftedDivisor;
             return true;
         } else {
             return false;

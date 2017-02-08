@@ -28,7 +28,7 @@ public class SoundMode2 extends AbstractSoundMode {
     @Override
     public void trigger() {
         this.i = 0;
-        resetFreqDivider();
+        freqDivider = 1;
         volumeEnvelope.trigger();
     }
 
@@ -43,7 +43,7 @@ public class SoundMode2 extends AbstractSoundMode {
             return 0;
         }
 
-        if (freqDivider-- == 0) {
+        if (--freqDivider == 0) {
             resetFreqDivider();
             lastOutput = ((getDuty() & (1 << i)) >> i);
             i = (i + 1) % 8;
