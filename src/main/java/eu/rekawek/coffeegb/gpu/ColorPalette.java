@@ -8,9 +8,11 @@ public class ColorPalette implements AddressSpace {
 
     private final int dataAddr;
 
-    private int[] data = new int[0x40];
+    private int[][] palettes = new int[8][4];
 
     private int index;
+
+    private boolean autoIncrement;
 
     public ColorPalette(int offset) {
         this.indexAddr = offset;
@@ -25,11 +27,18 @@ public class ColorPalette implements AddressSpace {
     @Override
     public void setByte(int address, int value) {
         if (address == indexAddr) {
-            index = value;
+            index = value & 0x3f;
+            autoIncrement = (value & (1 << 7)) != 0;
         } else if (address == dataAddr) {
-            data[getIndex()] = value;
-            if (isIncrementAfterWrite()) {
-                index = (index & 0b11000000) | ((getIndex() + 1) & 0b00111111);
+            int color = palettes[index / 8][(index % 8) / 2];
+            if (index % 2 == 0) {
+                color = (color & 0xff00) | value;
+            } else {
+                color = (color & 0x00ff) | (value << 8);
+            }
+            palettes[index / 8][(index % 8) / 2] = color;
+            if (autoIncrement) {
+                index = (index + 1) & 0x3f;
             }
         } else {
             throw new IllegalArgumentException();
@@ -39,34 +48,21 @@ public class ColorPalette implements AddressSpace {
     @Override
     public int getByte(int address) {
         if (address == indexAddr) {
-            return index;
+            return index | (autoIncrement ? 0x80 : 0xc0);
         } else if (address == dataAddr) {
-            return data[getIndex()];
+            int color = palettes[index / 8][(index % 8) / 2];
+            if (index % 2 == 0) {
+                return color & 0xff;
+            } else {
+                return (color >> 8) & 0xff;
+            }
         } else {
             throw new IllegalArgumentException();
         }
     }
 
-    // TODO optimize this
     public int[] getPalette(int index) {
-        if (index < 0 || index >= 8) {
-            throw new IllegalArgumentException();
-        }
-        int[] palette = new int[4];
-        for (int i = 0; i < palette.length; i++) {
-            int b1 = data[index * 8 + i * 2];
-            int b2 = data[index * 8 + i * 2 + 1];
-            palette[i] = (b2 << 8) | b1;
-        }
-        return palette;
-    }
-
-    private boolean isIncrementAfterWrite() {
-        return (index & (1 << 7)) != 0;
-    }
-
-    private int getIndex() {
-        return index & 0x3f;
+        return palettes[index];
     }
 
     @Override
