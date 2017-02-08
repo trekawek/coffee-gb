@@ -71,6 +71,7 @@ Coffee GB passes all the tests:
 ![Coffee GB running game](doc/screenshot7.png)
 ![Coffee GB running game](doc/screenshot8.png)
 ![Coffee GB running game](doc/screenshot9.png)
+![Coffee GB running game](doc/screenshot10.png)
 
 ## Resources
 
