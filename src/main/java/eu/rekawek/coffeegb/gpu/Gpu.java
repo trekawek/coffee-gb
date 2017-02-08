@@ -138,7 +138,13 @@ public class Gpu implements AddressSpace {
 
         Mode oldMode = mode;
         ticksInLine++;
-        if (!phase.tick()) {
+        if (phase.tick()) {
+            // switch line 153 to 0
+            if (ticksInLine == 4 && mode == Mode.VBlank && r.get(LY) == 153) {
+                r.put(LY, 0);
+                requestLycEqualsLyInterrupt();
+            }
+        } else {
             switch (oldMode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
@@ -168,7 +174,7 @@ public class Gpu implements AddressSpace {
 
                 case VBlank:
                     ticksInLine = 0;
-                    if (r.preIncrement(LY) == 154) {
+                    if (r.preIncrement(LY) == 1) {
                         mode = Mode.OamSearch;
                         r.put(LY, 0);
                         phase = new OamSearch(oemRam, r);
