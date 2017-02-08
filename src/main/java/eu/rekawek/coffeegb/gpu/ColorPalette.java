@@ -47,6 +47,7 @@ public class ColorPalette implements AddressSpace {
         }
     }
 
+    // TODO optimize this
     public int[] getPalette(int index) {
         if (index < 0 || index >= 8) {
             throw new IllegalArgumentException();
@@ -66,5 +67,19 @@ public class ColorPalette implements AddressSpace {
 
     private int getIndex() {
         return index & 0x3f;
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            b.append(i).append(": ");
+            int[] palette = getPalette(i);
+            for (int c : palette) {
+                b.append(String.format("%04X", c)).append(' ');
+            }
+            b.setCharAt(b.length() - 1, '\n');
+        }
+        return b.toString();
     }
 }
