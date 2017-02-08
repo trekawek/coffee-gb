@@ -20,13 +20,14 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 ## Features
 
 * Cycle-exact Gameboy CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
-* Highly compatible (all the Blargg's tests are passed)
+* Quite compatible (all the Blargg's tests are passed, although some game still doesn't work)
 * GPU
 * Joypad
 * Timer
 * Sound
 * MBC1-5 support
 * Battery saves
+* Support for zipped ROMs
 * ROM-based compatibility tests run from Maven
 
 ## Running Blargg's tests
@@ -66,6 +67,10 @@ Coffee GB passes all the tests:
 ![Coffee GB running game](doc/screenshot3.png)
 ![Coffee GB running game](doc/screenshot4.png)
 ![Coffee GB running game](doc/screenshot5.png)
+![Coffee GB running game](doc/screenshot6.png)
+![Coffee GB running game](doc/screenshot7.png)
+![Coffee GB running game](doc/screenshot8.png)
+![Coffee GB running game](doc/screenshot9.png)
 
 ## Resources
 
