@@ -19,6 +19,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class Cartridge implements AddressSpace {
 
@@ -140,10 +143,29 @@ public class Cartridge implements AddressSpace {
     }
 
     private static int[] loadFile(File file) throws IOException {
-        byte[] byteArray;
+        String ext = FilenameUtils.getExtension(file.getName());
         try (InputStream is = new FileInputStream(file)) {
-            byteArray = IOUtils.toByteArray(is);
+            if ("zip".equalsIgnoreCase(ext)) {
+                try (ZipInputStream zis = new ZipInputStream(is)) {
+                    ZipEntry entry;
+                    while ((entry = zis.getNextEntry()) != null) {
+                        String name = entry.getName();
+                        String entryExt = FilenameUtils.getExtension(name);
+                        if (Stream.of("gb", "gbc", "rom").anyMatch(e -> e.equalsIgnoreCase(entryExt))) {
+                            return load(zis, (int) entry.getSize());
+                        }
+                        zis.closeEntry();
+                    }
+                }
+                throw new IllegalArgumentException("Can't find ROM file inside the zip.");
+            } else {
+                return load(is, (int) file.length());
+            }
         }
+    }
+
+    private static int[] load(InputStream is, int length) throws IOException {
+        byte[] byteArray = IOUtils.toByteArray(is, length);
         int[] intArray = new int[byteArray.length];
         for (int i = 0; i < byteArray.length; i++) {
             intArray[i] = byteArray[i] & 0xff;
