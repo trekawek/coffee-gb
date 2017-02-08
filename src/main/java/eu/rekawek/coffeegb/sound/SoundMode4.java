@@ -10,14 +10,17 @@ public class SoundMode4 extends AbstractSoundMode {
 
     private Lfsr lfsr = new Lfsr();
 
-    public SoundMode4() {
-        super(0xff1f, 64);
+    public SoundMode4(boolean gbc) {
+        super(0xff1f, 64, gbc);
         this.volumeEnvelope = new VolumeEnvelope();
         this.polynomialCounter = new PolynomialCounter();
     }
 
     @Override
     public void start() {
+        if (gbc) {
+            length.reset();
+        }
         length.start();
         lfsr.start();
         volumeEnvelope.start();

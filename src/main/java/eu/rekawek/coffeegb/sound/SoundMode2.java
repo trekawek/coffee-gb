@@ -10,14 +10,17 @@ public class SoundMode2 extends AbstractSoundMode {
 
     private VolumeEnvelope volumeEnvelope;
 
-    public SoundMode2() {
-        super(0xff15, 64);
+    public SoundMode2(boolean gbc) {
+        super(0xff15, 64, gbc);
         this.volumeEnvelope = new VolumeEnvelope();
     }
 
     @Override
     public void start() {
         i = 0;
+        if (gbc) {
+            length.reset();
+        }
         length.start();
         volumeEnvelope.start();
     }

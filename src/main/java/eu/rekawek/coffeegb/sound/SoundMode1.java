@@ -12,8 +12,8 @@ public class SoundMode1 extends AbstractSoundMode {
 
     private VolumeEnvelope volumeEnvelope;
 
-    public SoundMode1() {
-        super(0xff10, 64);
+    public SoundMode1(boolean gbc) {
+        super(0xff10, 64, gbc);
         this.frequencySweep = new FrequencySweep();
         this.volumeEnvelope = new VolumeEnvelope();
     }
@@ -21,6 +21,9 @@ public class SoundMode1 extends AbstractSoundMode {
     @Override
     public void start() {
         i = 0;
+        if (gbc) {
+            length.reset();
+        }
         length.start();
         frequencySweep.start();
         volumeEnvelope.start();

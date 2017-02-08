@@ -24,11 +24,11 @@ public class Sound implements AddressSpace {
 
     private boolean enabled;
 
-    public Sound(SoundOutput output) {
-        allModes[0] = new SoundMode1();
-        allModes[1] = new SoundMode2();
-        allModes[2] = new SoundMode3();
-        allModes[3] = new SoundMode4();
+    public Sound(SoundOutput output, boolean gbc) {
+        allModes[0] = new SoundMode1(gbc);
+        allModes[1] = new SoundMode2(gbc);
+        allModes[2] = new SoundMode3(gbc);
+        allModes[3] = new SoundMode4(gbc);
         this.output = output;
     }
 

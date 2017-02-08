@@ -6,6 +6,8 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     protected final int offset;
 
+    protected final boolean gbc;
+
     protected boolean channelEnabled;
 
     protected boolean dacEnabled;
@@ -14,9 +16,10 @@ public abstract class AbstractSoundMode implements AddressSpace {
 
     protected LengthCounter length;
 
-    public AbstractSoundMode(int offset, int length) {
+    public AbstractSoundMode(int offset, int length, boolean gbc) {
         this.offset = offset;
         this.length = new LengthCounter(length);
+        this.gbc = gbc;
     }
 
     public abstract int tick();

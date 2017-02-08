@@ -62,7 +62,7 @@ public class Gameboy implements Runnable {
         mmu = new Mmu();
         dma = new Dma(mmu, speedMode);
         hdma = new Hdma(mmu);
-        sound = new Sound(soundOutput);
+        sound = new Sound(soundOutput, gbc);
         serialPort = new SerialPort(interruptManager, serialEndpoint, speedMode);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);

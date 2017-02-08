@@ -4,6 +4,16 @@ import eu.rekawek.coffeegb.memory.Ram;
 
 public class SoundMode3 extends AbstractSoundMode {
 
+    private static final int[] DMG_WAVE = new int[] {
+            0x84, 0x40, 0x43, 0xaa, 0x2d, 0x78, 0x92, 0x3c,
+            0x60, 0x59, 0x59, 0xb0, 0x34, 0xb8, 0x2e, 0xda
+    };
+
+    private static final int[] CGB_WAVE = new int[] {
+            0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff,
+            0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff
+    };
+
     private final Ram waveRam = new Ram(0xff30, 0x10);
 
     private int freqDivider;
@@ -20,12 +30,9 @@ public class SoundMode3 extends AbstractSoundMode {
 
     private boolean triggered;
 
-    public SoundMode3() {
-        super(0xff1a, 256);
-        for (int v : new int[] {
-                0x84, 0x40, 0x43, 0xaa, 0x2d, 0x78, 0x92, 0x3c,
-                0x60, 0x59, 0x59, 0xb0, 0x34, 0xb8, 0x2e, 0xda
-        }) {
+    public SoundMode3(boolean gbc) {
+        super(0xff1a, 256, gbc);
+        for (int v : gbc ? CGB_WAVE : DMG_WAVE) {
             waveRam.setByte(0xff30, v);
         }
     }
@@ -42,7 +49,7 @@ public class SoundMode3 extends AbstractSoundMode {
         }
         if (!isEnabled()) {
             return waveRam.getByte(address);
-        } else if (ticksSinceRead < 2) {
+        } else if (waveRam.accepts(lastReadAddr) && (gbc || ticksSinceRead < 2)) {
             return waveRam.getByte(lastReadAddr);
         } else {
             return 0xff;
@@ -82,7 +89,7 @@ public class SoundMode3 extends AbstractSoundMode {
 
     @Override
     public void setNr4(int value) {
-        if ((value & (1 << 7)) != 0) {
+        if (!gbc && (value & (1 << 7)) != 0) {
             if (isEnabled() && freqDivider == 2) {
                 int pos = i / 2;
                 if (pos < 4) {
@@ -102,6 +109,9 @@ public class SoundMode3 extends AbstractSoundMode {
     public void start() {
         i = 0;
         buffer = 0;
+        if (gbc) {
+            length.reset();
+        }
         length.start();
     }
 
@@ -110,7 +120,7 @@ public class SoundMode3 extends AbstractSoundMode {
         i = 0;
         resetFreqDivider();
         freqDivider += 2;
-        triggered = true;
+        triggered = !gbc;
     }
 
     @Override
