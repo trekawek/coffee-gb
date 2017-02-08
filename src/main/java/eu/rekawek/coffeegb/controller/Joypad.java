@@ -2,15 +2,11 @@ package eu.rekawek.coffeegb.controller;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
 import java.util.Set;
 
 public class Joypad implements AddressSpace {
-
-    private static final Logger LOG = LoggerFactory.getLogger(Joypad.class);
 
     private Set<ButtonListener.Button> buttons = new HashSet<>();
 
