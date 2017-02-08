@@ -20,6 +20,7 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 ## Features
 
 * Cycle-exact Gameboy CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
+* Highly compatible (all the Blargg's tests are passed)
 * GPU
 * Joypad
 * Timer
@@ -47,14 +48,16 @@ cpu_instrs
 Passed all tests
 ```
 
-All the tests meant to be run on the DMG are green:
+Coffee GB passes all the tests:
 
+* cgb_sound
 * cpu_instrs
+* dmg_sound-2
+* halt_bug
 * instr_timing
+* interrupt_time
 * mem_timing-2
 * oam_bug-2
-* halt_bug
-* dmg_sound-2
 
 ## Screenshots
 

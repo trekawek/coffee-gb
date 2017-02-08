@@ -36,7 +36,6 @@ public class BlarggRomTest {
     }
 
     @Test
-    @Ignore
     public void testInterruptTime() throws IOException {
         testRomWithMemory("interrupt_time.gb");
     }

@@ -14,7 +14,7 @@ import java.util.List;
 public class Cpu {
 
     public enum State {
-        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2_AND_JUMP, STOPPED, HALTED
+        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED
     }
 
     private final Registers registers;
@@ -82,7 +82,7 @@ public class Cpu {
             }
         }
 
-        if (state == State.IRQ_READ_IF || state == State.IRQ_READ_IE || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2_AND_JUMP) {
+        if (state == State.IRQ_READ_IF || state == State.IRQ_READ_IE || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2 || state == State.IRQ_JUMP) {
             handleInterrupt();
             return;
         }
@@ -244,18 +244,21 @@ public class Cpu {
             case IRQ_PUSH_1:
                 registers.decrementSP();
                 addressSpace.setByte(registers.getSP(), (registers.getPC() & 0xff00) >> 8);
-                state = State.IRQ_PUSH_2_AND_JUMP;
+                state = State.IRQ_PUSH_2;
                 break;
 
-            case IRQ_PUSH_2_AND_JUMP:
+            case IRQ_PUSH_2:
                 registers.decrementSP();
                 addressSpace.setByte(registers.getSP(), registers.getPC() & 0x00ff);
+                state = State.IRQ_JUMP;
+                break;
 
+            case IRQ_JUMP:
                 registers.setPC(requestedIrq.getHandler());
                 requestedIrq = null;
-
                 state = State.OPCODE;
                 break;
+
         }
     }
 

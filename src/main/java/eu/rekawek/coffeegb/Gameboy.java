@@ -195,4 +195,8 @@ public class Gameboy implements Runnable {
     public Cpu getCpu() {
         return cpu;
     }
+
+    public SpeedMode getSpeedMode() {
+        return speedMode;
+    }
 }
