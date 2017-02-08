@@ -64,7 +64,7 @@ public class SoundMode3 extends AbstractSoundMode {
         }
         if (!isEnabled()) {
             waveRam.setByte(address, value);
-        } else if (ticksSinceRead < 2) {
+        } else if (waveRam.accepts(lastReadAddr) && (gbc || ticksSinceRead < 2)) {
             waveRam.setByte(lastReadAddr, value);
         }
     }
