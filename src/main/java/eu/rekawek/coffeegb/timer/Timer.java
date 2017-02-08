@@ -22,7 +22,7 @@ public class Timer implements AddressSpace {
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
         this.speedMode = speedMode;
-        this.div = new Counter(16384, speedMode);
+        this.div = new Counter(16384, null); // this one is actually affected by the speedmode
         setTima();
     }
 

@@ -19,7 +19,11 @@ public class Counter {
     }
 
     public boolean tick() {
-        if (++clocks >= Gameboy.TICKS_PER_SEC / frequency / speedMode.getSpeedMode()) {
+        int divider = Gameboy.TICKS_PER_SEC / frequency;
+        if (speedMode != null) {
+            divider /= speedMode.getSpeedMode();
+        }
+        if (++clocks >= divider) {
             clocks = 0;
             counter = (counter + 1) & 0xff;
             return true;
