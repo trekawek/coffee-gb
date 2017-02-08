@@ -25,6 +25,8 @@ public class Hdma implements AddressSpace {
 
     private boolean hblankTransfer;
 
+    private boolean lcdEnabled;
+
     private int length;
 
     private int src;
@@ -90,10 +92,14 @@ public class Hdma implements AddressSpace {
         this.gpuMode = newGpuMode;
     }
 
+    public void onLcdSwitch(boolean lcdEnabled) {
+        this.lcdEnabled = lcdEnabled;
+    }
+
     public boolean isTransferInProgress() {
         if (!transferInProgress) {
             return false;
-        } else if (hblankTransfer && gpuMode == Gpu.Mode.HBlank) {
+        } else if (hblankTransfer && (gpuMode == Gpu.Mode.HBlank || !lcdEnabled)) {
             return true;
         } else if (!hblankTransfer) {
             return true;
