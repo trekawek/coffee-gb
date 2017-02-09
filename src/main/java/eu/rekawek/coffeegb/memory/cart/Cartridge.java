@@ -196,6 +196,9 @@ public class Cartridge implements AddressSpace {
             case 6:
                 return 128;
 
+            case 7:
+                return 256;
+
             case 0x52:
                 return 72;
 
