@@ -2,12 +2,26 @@ package eu.rekawek.coffeegb.gpu;
 
 public class TileAttributes {
 
-    public static final TileAttributes EMPTY = new TileAttributes(0);
+    public static final TileAttributes EMPTY;
+
+    private static final TileAttributes[] ATTRIBUTES;
+
+    static {
+        ATTRIBUTES = new TileAttributes[256];
+        for (int i = 0; i < 256; i++) {
+            ATTRIBUTES[i] = new TileAttributes(i);
+        }
+        EMPTY = ATTRIBUTES[0];
+    }
 
     private final int value;
 
-    public TileAttributes(int flags) {
-        this.value = flags;
+    private TileAttributes(int value) {
+        this.value = value;
+    }
+
+    public static TileAttributes valueOf(int value) {
+        return ATTRIBUTES[value];
     }
 
     public boolean isPriority() {

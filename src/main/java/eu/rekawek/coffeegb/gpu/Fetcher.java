@@ -132,7 +132,7 @@ public class Fetcher {
             case READ_TILE_ID:
                 tileId = videoRam0.getByte(mapAddress + xOffset);
                 if (gbc) {
-                    tileAttributes = new TileAttributes(videoRam1.getByte(mapAddress + xOffset));
+                    tileAttributes = TileAttributes.valueOf(videoRam1.getByte(mapAddress + xOffset));
                 } else {
                     tileAttributes = TileAttributes.EMPTY;
                 }
@@ -162,7 +162,7 @@ public class Fetcher {
                 break;
 
             case READ_SPRITE_FLAGS:
-                spriteAttributes = new TileAttributes(oemRam.getByte(sprite.getAddress() + 3));
+                spriteAttributes = TileAttributes.valueOf(oemRam.getByte(sprite.getAddress() + 3));
                 state = State.READ_SPRITE_DATA_1;
                 break;
 
