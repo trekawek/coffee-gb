@@ -15,7 +15,9 @@ public class AudioSystemSoundOutput implements SoundOutput {
 
     private static final Logger LOG = LoggerFactory.getLogger(AudioSystemSoundOutput.class);
 
-    private static final int SAMPLE_RATE = 44010;
+    private static final int SAMPLE_RATE = 22050;
+
+    private static final int BUFFER_SIZE = 1024;
 
     private static final AudioFormat FORMAT = new AudioFormat(AudioFormat.Encoding.PCM_UNSIGNED, SAMPLE_RATE, 8, 2, 2, SAMPLE_RATE, false);
 
@@ -38,7 +40,7 @@ public class AudioSystemSoundOutput implements SoundOutput {
         LOG.debug("Start sound");
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
-            line.open(FORMAT, 4096);
+            line.open(FORMAT, BUFFER_SIZE);
         } catch (LineUnavailableException e) {
             throw new RuntimeException(e);
         }
@@ -72,7 +74,7 @@ public class AudioSystemSoundOutput implements SoundOutput {
 
         buffer[i++] = (byte) (left);
         buffer[i++] = (byte) (right);
-        if (i > 2048) {
+        if (i > BUFFER_SIZE / 2) {
             line.write(buffer, 0, i);
             i = 0;
         }
