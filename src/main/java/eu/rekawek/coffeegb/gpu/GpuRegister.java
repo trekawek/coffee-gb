@@ -8,7 +8,6 @@ import static eu.rekawek.coffeegb.memory.MemoryRegisters.RegisterType.W;
 
 public enum GpuRegister implements MemoryRegisters.Register {
 
-    LCDC(0xff40, RW),
     STAT(0xff41, RW),
     SCY(0xff42, RW),
     SCX(0xff43, RW),

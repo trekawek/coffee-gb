@@ -37,8 +37,6 @@ public class Cpu {
 
     private List<Op> ops;
 
-    private int commandStart;
-
     private int operandIndex;
 
     private int opIndex;
@@ -101,7 +99,6 @@ public class Cpu {
             switch (state) {
                 case OPCODE:
                     clearState();
-                    commandStart = pc;
                     opcode1 = addressSpace.getByte(pc);
                     accessedMemory = true;
                     if (opcode1 == 0xcb) {
@@ -263,8 +260,7 @@ public class Cpu {
     }
 
     private void handleSpriteBug(SpriteBug.CorruptionType type) {
-        Lcdc lcdc = new Lcdc(addressSpace.getByte(GpuRegister.LCDC.getAddress()));
-        if (!lcdc.isLcdEnabled()) {
+        if (!gpu.getLcdc().isLcdEnabled()) {
             return;
         }
         int stat = addressSpace.getByte(GpuRegister.STAT.getAddress());

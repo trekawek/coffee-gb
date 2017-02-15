@@ -39,16 +39,16 @@ public class PixelTransfer implements GpuPhase {
 
     private boolean window;
 
-    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, MemoryRegisters r, SpritePosition[] sprites, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
+    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, MemoryRegisters r, SpritePosition[] sprites, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
         this.r = r;
-        this.lcdc = new Lcdc(r);
+        this.lcdc = lcdc;
         this.gbc = gbc;
         if (gbc) {
             this.fifo = new ColorPixelFifo(lcdc, display, bgPalette, oamPalette);
         } else {
-            this.fifo = new DmgPixelFifo(display, r);
+            this.fifo = new DmgPixelFifo(display, lcdc, r);
         }
-        this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, r, gbc);
+        this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
         this.display = display;
         this.sprites = sprites;
 

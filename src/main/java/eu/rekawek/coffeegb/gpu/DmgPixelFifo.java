@@ -18,8 +18,8 @@ public class DmgPixelFifo implements PixelFifo {
 
     private final MemoryRegisters registers;
 
-    public DmgPixelFifo(Display display, MemoryRegisters registers) {
-        this.lcdc = new Lcdc(registers);
+    public DmgPixelFifo(Display display, Lcdc lcdc, MemoryRegisters registers) {
+        this.lcdc = lcdc;
         this.display = display;
         this.registers = registers;
     }

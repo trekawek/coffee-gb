@@ -51,6 +51,7 @@ public class Gpu implements AddressSpace {
 
     public Gpu(Display display, InterruptManager interruptManager, boolean gbc) {
         this.r = new MemoryRegisters(GpuRegister.values());
+        this.lcdc = new Lcdc();
         this.interruptManager = interruptManager;
         this.gbc = gbc;
         this.videoRam0 = new Ram(0x8000, 0x2000);
@@ -60,10 +61,9 @@ public class Gpu implements AddressSpace {
             this.videoRam1 = null;
         }
         this.oemRam = new Ram(0xfe00, 0x00a0);
-        this.phase = new OamSearch(oemRam, r);
+        this.phase = new OamSearch(oemRam, lcdc, r);
         this.mode = Mode.OamSearch;
         this.display = display;
-        this.lcdc = new Lcdc(r);
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
     }
@@ -77,6 +77,8 @@ public class Gpu implements AddressSpace {
             }
         } else if (oemRam.accepts(address)) {
             return oemRam;
+        } else if (lcdc.accepts(address)) {
+            return lcdc;
         } else if (r.accepts(address)) {
             return r;
         } else if (gbc && bgPalette.accepts(address)) {
@@ -97,11 +99,11 @@ public class Gpu implements AddressSpace {
     public void setByte(int address, int value) {
         if (address == STAT.getAddress()) {
             setStat(value);
-        } else if (address == LCDC.getAddress()) {
-            setLcdc(value);
         } else {
             AddressSpace space = getAddressSpace(address);
-            if (space != null) {
+            if (space == lcdc) {
+                setLcdc(value);
+            } else if (space != null) {
                 space.setByte(address, value);
             }
         }
@@ -111,8 +113,6 @@ public class Gpu implements AddressSpace {
     public int getByte(int address) {
         if (address == STAT.getAddress()) {
             return getStat();
-        } else if (address == LCDC.getAddress()) {
-            return getLcdc();
         } else {
             AddressSpace space = getAddressSpace(address);
             if (space == null) {
@@ -148,7 +148,7 @@ public class Gpu implements AddressSpace {
             switch (oldMode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, r, ((OamSearch) phase).getSprites(), gbc, bgPalette, oamPalette);
+                    phase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, lcdc, r, ((OamSearch) phase).getSprites(), gbc, bgPalette, oamPalette);
                     break;
 
                 case PixelTransfer:
@@ -166,7 +166,7 @@ public class Gpu implements AddressSpace {
                         requestLcdcInterrupt(4);
                     } else {
                         mode = Mode.OamSearch;
-                        phase = new OamSearch(oemRam, r);
+                        phase = new OamSearch(oemRam, lcdc, r);
                         requestLcdcInterrupt(5);
                     }
                     requestLycEqualsLyInterrupt();
@@ -177,7 +177,7 @@ public class Gpu implements AddressSpace {
                     if (r.preIncrement(LY) == 1) {
                         mode = Mode.OamSearch;
                         r.put(LY, 0);
-                        phase = new OamSearch(oemRam, r);
+                        phase = new OamSearch(oemRam, lcdc, r);
                         requestLcdcInterrupt(5);
                     } else {
                         phase = new VBlankPhase(r.get(LY));
@@ -217,12 +217,8 @@ public class Gpu implements AddressSpace {
         r.put(STAT, value & 0b11111000); // last three bits are read-only
     }
 
-    private int getLcdc() {
-        return r.get(LCDC);
-    }
-
     private void setLcdc(int value) {
-        r.put(LCDC, value);
+        lcdc.set(value);
         if ((value & (1 << 7)) == 0) {
             disableLcd();
         } else {
@@ -247,4 +243,9 @@ public class Gpu implements AddressSpace {
     public boolean isLcdEnabled() {
         return lcdEnabled;
     }
+
+    public Lcdc getLcdc() {
+        return lcdc;
+    }
+
 }

@@ -64,14 +64,14 @@ public class Fetcher {
 
     private int divider = 2;
 
-    public Fetcher(PixelFifo fifo, AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, MemoryRegisters registers, boolean gbc) {
+    public Fetcher(PixelFifo fifo, AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Lcdc lcdc, MemoryRegisters registers, boolean gbc) {
         this.gbc = gbc;
         this.fifo = fifo;
         this.videoRam0 = videoRam0;
         this.videoRam1 = videoRam1;
         this.oemRam = oemRam;
         this.r = registers;
-        this.lcdc = new Lcdc(r);
+        this.lcdc = lcdc;
     }
 
     public void startFetching(int mapAddress, int tileDataAddress, int xOffset, boolean tileIdSigned, int tileLine) {
