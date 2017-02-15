@@ -14,14 +14,17 @@ public class Opcode {
 
     private final List<Op> ops;
 
+    private final int length;
+
     Opcode(OpcodeBuilder builder) {
         this.opcode = builder.getOpcode();
         this.label = builder.getLabel();
         this.ops = Collections.unmodifiableList(new ArrayList<>(builder.getOps()));
+        this.length = ops.stream().mapToInt(o -> o.operandLength()).max().orElse(0);
     }
 
     public int getOperandLength() {
-        return ops.stream().mapToInt(o -> o.operandLength()).max().orElse(0);
+        return length;
     }
 
     @Override

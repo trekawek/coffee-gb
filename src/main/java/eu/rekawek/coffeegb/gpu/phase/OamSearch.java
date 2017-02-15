@@ -60,9 +60,19 @@ public class OamSearch implements GpuPhase {
         this.oemRam = oemRam;
         this.registers = registers;
         this.lcdc = lcdc;
-
         this.sprites = new SpritePosition[10];
-        this.state = State.READING_Y;
+    }
+
+    public OamSearch start() {
+        spritePosIndex = 0;
+        state = State.READING_Y;
+        spriteY = 0;
+        spriteX = 0;
+        i = 0;
+        for (int j = 0; j < sprites.length; j++) {
+            sprites[j] = null;
+        }
+        return this;
     }
 
     @Override

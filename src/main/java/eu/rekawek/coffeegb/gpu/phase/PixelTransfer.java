@@ -29,9 +29,9 @@ public class PixelTransfer implements GpuPhase {
 
     private final Lcdc lcdc;
 
-    private final SpritePosition[] sprites;
-
     private final boolean gbc;
+
+    private SpritePosition[] sprites;
 
     private int droppedPixels;
 
@@ -39,7 +39,7 @@ public class PixelTransfer implements GpuPhase {
 
     private boolean window;
 
-    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, MemoryRegisters r, SpritePosition[] sprites, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
+    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, MemoryRegisters r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
@@ -50,13 +50,24 @@ public class PixelTransfer implements GpuPhase {
         }
         this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
         this.display = display;
-        this.sprites = sprites;
 
-        if (lcdc.isBgAndWindowDisplay() || gbc) {
+    }
+
+    public PixelTransfer start(SpritePosition[] sprites) {
+        this.sprites = sprites;
+        droppedPixels = 0;
+        x = 0;
+        window = false;
+
+        fifo.clear();
+        fetcher.init();
+
+        if (gbc || lcdc.isBgAndWindowDisplay()) {
             startFetchingBackground();
         } else {
             fetcher.fetchingDisabled();
         }
+        return this;
     }
 
     @Override

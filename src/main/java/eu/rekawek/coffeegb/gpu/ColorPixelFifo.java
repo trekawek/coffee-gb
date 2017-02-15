@@ -104,6 +104,7 @@ public class ColorPixelFifo implements PixelFifo {
     public void clear() {
         pixels.clear();
         palettes.clear();
+        priorities.clear();
     }
 
     private int getColor(int[] palette, int color) {

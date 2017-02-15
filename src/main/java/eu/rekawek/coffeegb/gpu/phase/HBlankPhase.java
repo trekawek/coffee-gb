@@ -1,16 +1,12 @@
 package eu.rekawek.coffeegb.gpu.phase;
 
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
-
 public class HBlankPhase implements GpuPhase {
-
-    private final MemoryRegisters r;
 
     private int ticks;
 
-    public HBlankPhase(int ticksInLine, MemoryRegisters r) {
+    public HBlankPhase start(int ticksInLine) {
         this.ticks = ticksInLine;
-        this.r = r;
+        return this;
     }
 
     @Override
@@ -18,4 +14,5 @@ public class HBlankPhase implements GpuPhase {
         ticks++;
         return ticks < 456;
     }
+
 }

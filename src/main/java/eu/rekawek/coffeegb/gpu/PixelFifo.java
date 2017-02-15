@@ -14,4 +14,5 @@ public interface PixelFifo {
 
     void clear();
 
+
 }

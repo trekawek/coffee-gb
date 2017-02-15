@@ -37,6 +37,14 @@ public class Gpu implements AddressSpace {
 
     private final ColorPalette oamPalette;
 
+    private final HBlankPhase hBlankPhase;
+
+    private final OamSearch oamSearchPhase;
+
+    private final PixelTransfer pixelTransferPhase;
+
+    private final VBlankPhase vBlankPhase;
+
     private boolean lcdEnabled = true;
 
     private int lcdEnabledDelay;
@@ -61,11 +69,19 @@ public class Gpu implements AddressSpace {
             this.videoRam1 = null;
         }
         this.oemRam = new Ram(0xfe00, 0x00a0);
-        this.phase = new OamSearch(oemRam, lcdc, r);
-        this.mode = Mode.OamSearch;
-        this.display = display;
+
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
+
+        this.oamSearchPhase = new OamSearch(oemRam, lcdc, r);
+        this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, lcdc, r, gbc, bgPalette, oamPalette);
+        this.hBlankPhase = new HBlankPhase();
+        this.vBlankPhase = new VBlankPhase();
+
+        this.mode = Mode.OamSearch;
+        this.phase = oamSearchPhase.start();
+
+        this.display = display;
     }
 
     private AddressSpace getAddressSpace(int address) {
@@ -148,12 +164,12 @@ public class Gpu implements AddressSpace {
             switch (oldMode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, lcdc, r, ((OamSearch) phase).getSprites(), gbc, bgPalette, oamPalette);
+                    phase = pixelTransferPhase.start(oamSearchPhase.getSprites());
                     break;
 
                 case PixelTransfer:
                     mode = Mode.HBlank;
-                    phase = new HBlankPhase(ticksInLine, r);
+                    phase = hBlankPhase.start(ticksInLine);
                     requestLcdcInterrupt(3);
                     break;
 
@@ -161,12 +177,12 @@ public class Gpu implements AddressSpace {
                     ticksInLine = 0;
                     if (r.preIncrement(LY) == 144) {
                         mode = Mode.VBlank;
-                        phase = new VBlankPhase(r.get(LY));
+                        phase = vBlankPhase.start();
                         interruptManager.requestInterrupt(InterruptType.VBlank);
                         requestLcdcInterrupt(4);
                     } else {
                         mode = Mode.OamSearch;
-                        phase = new OamSearch(oemRam, lcdc, r);
+                        phase = oamSearchPhase.start();
                         requestLcdcInterrupt(5);
                     }
                     requestLycEqualsLyInterrupt();
@@ -177,10 +193,10 @@ public class Gpu implements AddressSpace {
                     if (r.preIncrement(LY) == 1) {
                         mode = Mode.OamSearch;
                         r.put(LY, 0);
-                        phase = new OamSearch(oemRam, lcdc, r);
+                        phase = oamSearchPhase.start();
                         requestLcdcInterrupt(5);
                     } else {
-                        phase = new VBlankPhase(r.get(LY));
+                        phase = vBlankPhase.start();
                     }
                     requestLycEqualsLyInterrupt();
                     break;
@@ -229,7 +245,7 @@ public class Gpu implements AddressSpace {
     private void disableLcd() {
         r.put(LY, 0);
         this.ticksInLine = 0;
-        this.phase = new HBlankPhase(250, r);
+        this.phase = hBlankPhase.start(250);
         this.mode = Mode.HBlank;
         this.lcdEnabled = false;
         this.lcdEnabledDelay = -1;

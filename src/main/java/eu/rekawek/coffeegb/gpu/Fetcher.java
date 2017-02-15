@@ -30,7 +30,7 @@ public class Fetcher {
 
     private final boolean gbc;
 
-    private State state = State.READ_TILE_ID;
+    private State state;
 
     private boolean fetchingDisabled;
 
@@ -72,6 +72,10 @@ public class Fetcher {
         this.oemRam = oemRam;
         this.r = registers;
         this.lcdc = lcdc;
+    }
+
+    public void init() {
+        state = State.READ_TILE_ID;
     }
 
     public void startFetching(int mapAddress, int tileDataAddress, int xOffset, boolean tileIdSigned, int tileLine) {
