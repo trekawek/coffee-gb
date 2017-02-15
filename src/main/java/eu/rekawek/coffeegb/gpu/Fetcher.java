@@ -80,6 +80,11 @@ public class Fetcher {
 
     public void init() {
         state = State.READ_TILE_ID;
+        tileId = 0;
+        tileData1 = 0;
+        tileData2 = 0;
+        divider = 2;
+        fetchingDisabled = false;
     }
 
     public void startFetching(int mapAddress, int tileDataAddress, int xOffset, boolean tileIdSigned, int tileLine) {

@@ -2,15 +2,11 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
-
 public class DmgPixelFifo implements PixelFifo {
 
-    private final List<Integer> pixels = new LinkedList<>();
+    private final IntQueue pixels = new IntQueue(16);
 
-    private final List<Integer> palettes = new LinkedList<>();
+    private final IntQueue palettes = new IntQueue(16);
 
     private final Display display;
 
@@ -40,14 +36,14 @@ public class DmgPixelFifo implements PixelFifo {
     }
 
     int dequeuePixel() {
-        return getColor(palettes.remove(0), pixels.remove(0));
+        return getColor(palettes.dequeue(), pixels.dequeue());
     }
 
     @Override
     public void enqueue8Pixels(int[] pixelLine, TileAttributes tileAttributes) {
         for (int p : pixelLine) {
-            pixels.add(p);
-            palettes.add(registers.get(GpuRegister.BGP));
+            pixels.enqueue(p);
+            palettes.enqueue(registers.get(GpuRegister.BGP));
         }
     }
 
@@ -66,8 +62,8 @@ public class DmgPixelFifo implements PixelFifo {
         }
     }
 
-    List<Integer> asList() {
-        return new ArrayList<>(pixels);
+    IntQueue getPixels() {
+        return pixels;
     }
 
     private static int getColor(int palette, int colorIndex) {

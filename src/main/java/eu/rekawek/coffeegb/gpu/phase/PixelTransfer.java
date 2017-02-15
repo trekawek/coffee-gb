@@ -59,9 +59,7 @@ public class PixelTransfer implements GpuPhase {
         x = 0;
         window = false;
 
-        fifo.clear();
         fetcher.init();
-
         if (gbc || lcdc.isBgAndWindowDisplay()) {
             startFetchingBackground();
         } else {

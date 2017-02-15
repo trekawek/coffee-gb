@@ -1,15 +1,12 @@
 package eu.rekawek.coffeegb.gpu;
 
-import java.util.LinkedList;
-import java.util.List;
-
 public class ColorPixelFifo implements PixelFifo {
 
-    private final List<Integer> pixels = new LinkedList<>();
+    private final IntQueue pixels = new IntQueue(16);
 
-    private final List<int[]> palettes = new LinkedList<>();
+    private final IntQueue palettes = new IntQueue(16);
 
-    private final List<Integer> priorities = new LinkedList<>();
+    private final IntQueue priorities = new IntQueue(16);
 
     private final Lcdc lcdc;
 
@@ -37,8 +34,7 @@ public class ColorPixelFifo implements PixelFifo {
     }
 
     private int dequeuePixel() {
-        priorities.remove(0);
-        return getColor(palettes.remove(0), pixels.remove(0));
+        return getColor(priorities.dequeue(), palettes.dequeue(), pixels.dequeue());
     }
 
     @Override
@@ -49,9 +45,9 @@ public class ColorPixelFifo implements PixelFifo {
     @Override
     public void enqueue8Pixels(int[] pixelLine, TileAttributes tileAttributes) {
         for (int p : pixelLine) {
-            pixels.add(p);
-            palettes.add(bgPalette.getPalette(tileAttributes.getColorPaletteIndex()));
-            priorities.add(tileAttributes.isPriority() ? 100 : -1);
+            pixels.enqueue(p);
+            palettes.enqueue(tileAttributes.getColorPaletteIndex());
+            priorities.enqueue(tileAttributes.isPriority() ? 100 : -1);
         }
     }
 
@@ -95,7 +91,7 @@ public class ColorPixelFifo implements PixelFifo {
 
             if (put) {
                 pixels.set(i, p);
-                palettes.set(i, oamPalette.getPalette(spriteAttr.getColorPaletteIndex()));
+                palettes.set(i, spriteAttr.getColorPaletteIndex());
                 priorities.set(i, oamIndex);
             }
         }
@@ -108,7 +104,11 @@ public class ColorPixelFifo implements PixelFifo {
         priorities.clear();
     }
 
-    private int getColor(int[] palette, int color) {
-        return palette[color];
+    private int getColor(int priority, int palette, int color) {
+        if (priority >= 0 && priority < 10) {
+            return oamPalette.getPalette(palette)[color];
+        } else {
+            return bgPalette.getPalette(palette)[color];
+        }
     }
 }

@@ -4,6 +4,9 @@ import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static java.util.Arrays.asList;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -22,7 +25,7 @@ public class PixelFifoTest {
     @Test
     public void testEnqueue() {
         fifo.enqueue8Pixels(zip(0b11001001, 0b11110000, false), TileAttributes.EMPTY);
-        assertEquals(asList(3, 3, 2, 2, 1, 0, 0, 1), fifo.asList());
+        assertEquals(asList(3, 3, 2, 2, 1, 0, 0, 1), arrayQueueAsList(fifo.getPixels()));
     }
 
     @Test
@@ -44,5 +47,13 @@ public class PixelFifoTest {
 
     private int[] zip(int data1, int data2, boolean reverse) {
         return Fetcher.zip(data1, data2, reverse, new int[8]);
+    }
+
+    private static List<Integer> arrayQueueAsList(IntQueue queue) {
+        List<Integer> l = new ArrayList<>(queue.size());
+        for (int i = 0; i < queue.size(); i++) {
+            l.add(queue.get(i));
+        }
+        return l;
     }
 }
