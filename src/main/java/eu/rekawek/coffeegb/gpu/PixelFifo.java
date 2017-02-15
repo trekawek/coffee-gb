@@ -10,7 +10,7 @@ public interface PixelFifo {
 
     void enqueue8Pixels(int[] pixels, TileAttributes tileAttributes);
 
-    void setOverlay(int[] pixelLine, TileAttributes flags, int oamIndex);
+    void setOverlay(int[] pixelLine, int offset, TileAttributes flags, int oamIndex);
 
     void clear();
 

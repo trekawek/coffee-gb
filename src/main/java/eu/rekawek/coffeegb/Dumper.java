@@ -32,7 +32,7 @@ public final class Dumper {
     }
 
     public static void dumpTileLine(int data1, int data2) {
-        for (int pixel : zip(data1, data2, false)) {
+        for (int pixel : zip(data1, data2, false, new int[8])) {
             if (pixel == 0) {
                 System.out.print('.');
             } else {

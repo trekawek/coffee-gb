@@ -52,12 +52,13 @@ public class DmgPixelFifo implements PixelFifo {
     }
 
     @Override
-    public void setOverlay(int[] pixelLine, TileAttributes flags, int oamIndex) {
+    public void setOverlay(int[] pixelLine, int offset, TileAttributes flags, int oamIndex) {
         boolean priority = flags.isPriority();
         int overlayPalette = registers.get(flags.getDmgPalette());
 
-        for (int i = 0; i < pixelLine.length; i++) {
-            int p = pixelLine[i];
+        for (int j = offset; j < pixelLine.length; j++) {
+            int p = pixelLine[j];
+            int i = j - offset;
             if ((priority && pixels.get(i) == 0) || !priority && p != 0) {
                 pixels.set(i, p);
                 palettes.set(i, overlayPalette);

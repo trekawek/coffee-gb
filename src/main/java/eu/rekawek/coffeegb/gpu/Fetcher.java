@@ -16,6 +16,8 @@ public class Fetcher {
         READ_SPRITE_TILE_ID, READ_SPRITE_FLAGS, READ_SPRITE_DATA_1, READ_SPRITE_DATA_2, PUSH_SPRITE
     }
 
+    private static final int[] EMPTY_PIXEL_LINE = new int[8];
+
     private final PixelFifo fifo;
 
     private final AddressSpace videoRam0;
@@ -29,6 +31,8 @@ public class Fetcher {
     private final Lcdc lcdc;
 
     private final boolean gbc;
+
+    private final int[] pixelLine = new int[8];
 
     private State state;
 
@@ -108,7 +112,7 @@ public class Fetcher {
     public void tick() {
         if (fetchingDisabled && state == State.READ_TILE_ID) {
             if (fifo.getLength() <= 8) {
-                fifo.enqueue8Pixels(new int[8], tileAttributes);
+                fifo.enqueue8Pixels(EMPTY_PIXEL_LINE, tileAttributes);
             }
             return;
         }
@@ -171,7 +175,7 @@ public class Fetcher {
                 break;
 
             case PUSH_SPRITE:
-                fifo.setOverlay(subArray(zip(tileData1, tileData2, spriteAttributes.isXflip()), spriteOffset), spriteAttributes, spriteOamIndex);
+                fifo.setOverlay(zip(tileData1, tileData2, spriteAttributes.isXflip()), spriteOffset, spriteAttributes, spriteOamIndex);
                 state = State.READ_TILE_ID;
                 break;
         }
@@ -199,8 +203,11 @@ public class Fetcher {
         return EnumSet.of(State.READ_SPRITE_TILE_ID, State.READ_SPRITE_FLAGS, State.READ_SPRITE_DATA_1, State.READ_SPRITE_DATA_2, State.PUSH_SPRITE).contains(state);
     }
 
-    public static int[] zip(int data1, int data2, boolean reverse) {
-        int[] pixelLine = new int[8];
+    public int[] zip(int data1, int data2, boolean reverse) {
+        return zip(data1, data2, reverse, pixelLine);
+    }
+
+    public static int[] zip(int data1, int data2, boolean reverse, int[] pixelLine) {
         for (int i = 7; i >= 0; i--) {
             int mask = (1 << i);
             int p = 2 * ((data2 & mask) == 0 ? 0 : 1) + ((data1 & mask) == 0 ? 0 : 1);
@@ -211,18 +218,6 @@ public class Fetcher {
             }
         }
         return pixelLine;
-    }
-
-    static int[] subArray(int[] array, int offset) {
-        if (offset == 0) {
-            return array;
-        } else {
-            int[] result = new int[array.length - offset];
-            for (int i = 0; i < result.length; i++) {
-                result[i] = array[i + offset];
-            }
-            return result;
-        }
     }
 
 }

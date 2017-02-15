@@ -22,6 +22,8 @@ public class Sound implements AddressSpace {
 
     private final SoundOutput output;
 
+    private int[] channels = new int[4];
+
     private boolean enabled;
 
     public Sound(SoundOutput output, boolean gbc) {
@@ -36,10 +38,9 @@ public class Sound implements AddressSpace {
         if (!enabled) {
             return;
         }
-        int[] sound = new int[4];
         for (int i = 0; i < allModes.length; i++) {
             AbstractSoundMode m = allModes[i];
-            sound[i] = m.tick();
+            channels[i] = m.tick();
         }
 
         int selection = r.getByte(0xff25);
@@ -47,10 +48,10 @@ public class Sound implements AddressSpace {
         int right = 0;
         for (int i = 0; i < 4; i++) {
             if ((selection & (1 << i)) != 0) {
-                left += sound[i];
+                left += channels[i];
             }
             if ((selection & (1 << i + 4)) != 0) {
-                right += sound[i];
+                right += channels[i];
             }
         }
         left /= 4;

@@ -71,9 +71,10 @@ public class ColorPixelFifo implements PixelFifo {
     when 1 => sprite above bg color 0
      */
     @Override
-    public void setOverlay(int[] pixelLine, TileAttributes spriteAttr, int oamIndex) {
-        for (int i = 0; i < pixelLine.length; i++) {
-            int p = pixelLine[i];
+    public void setOverlay(int[] pixelLine, int offset, TileAttributes spriteAttr, int oamIndex) {
+        for (int j = offset; j < pixelLine.length; j++) {
+            int p = pixelLine[j];
+            int i = j - offset;
             if (p == 0) {
                 continue; // color 0 is always transparent
             }

@@ -4,7 +4,6 @@ import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import org.junit.Before;
 import org.junit.Test;
 
-import static eu.rekawek.coffeegb.gpu.Fetcher.zip;
 import static java.util.Arrays.asList;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -41,5 +40,9 @@ public class PixelFifoTest {
     public void testZip() {
         assertArrayEquals(new int[] {3, 3, 2, 2, 1, 0, 0, 1}, zip(0b11001001, 0b11110000, false));
         assertArrayEquals(new int[] {1, 0, 0, 1, 2, 2, 3, 3}, zip(0b11001001, 0b11110000, true));
+    }
+
+    private int[] zip(int data1, int data2, boolean reverse) {
+        return Fetcher.zip(data1, data2, reverse, new int[8]);
     }
 }
