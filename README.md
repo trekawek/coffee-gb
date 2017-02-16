@@ -60,6 +60,12 @@ Coffee GB passes all the tests:
 * mem_timing-2
 * oam_bug-2
 
+## Mooneye tests
+
+The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a great set of test ROMs. They can be used to test the Coffee GB as well. Use -Ptest-mooneye profile:
+
+    mvn clean test -Ptest-mooneye
+
 ## Screenshots
 
 ![Coffee GB running game](doc/screenshot1.png)
