@@ -136,7 +136,7 @@ public class Cartridge implements AddressSpace {
         } else if (dmgBoostrap == 0 && gbc && address >= 0x200 && address < 0x0900) {
             return BootRom.GAMEBOY_COLOR[address - 0x0100];
         } else if (address == 0xff50) {
-            return dmgBoostrap;
+            return 0xff;
         } else {
             return addressSpace.getByte(address);
         }

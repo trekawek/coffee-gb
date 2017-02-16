@@ -95,7 +95,7 @@ public class MemoryRegisters implements AddressSpace {
         if (registers.get(address).getType().allowsRead) {
             return values.get(address);
         } else {
-            return 0;
+            return 0xff;
         }
     }
 }

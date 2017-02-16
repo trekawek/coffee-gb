@@ -226,7 +226,7 @@ public class Gpu implements AddressSpace {
     }
 
     private int getStat() {
-        return r.get(STAT) | mode.ordinal() | (r.get(LYC) == r.get(LY) ? (1 << 2) : 0);
+        return r.get(STAT) | mode.ordinal() | (r.get(LYC) == r.get(LY) ? (1 << 2) : 0) | 0x80;
     }
 
     private void setStat(int value) {

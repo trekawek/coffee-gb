@@ -71,7 +71,7 @@ public class SerialPort implements AddressSpace {
         if (address == 0xff01) {
             return sb;
         } else if (address == 0xff02) {
-            return sc;
+            return sc | 0b01111110;
         } else {
             throw new IllegalArgumentException();
         }
