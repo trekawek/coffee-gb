@@ -20,7 +20,7 @@ public class InterruptManager implements AddressSpace {
 
     private boolean ime;
 
-    private int interruptFlag;
+    private int interruptFlag = 0xe1;
 
     private int interruptEnabled;
 

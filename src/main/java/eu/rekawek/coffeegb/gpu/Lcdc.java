@@ -6,7 +6,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 public class Lcdc implements AddressSpace {
 
-    private int value;
+    private int value = 0x91;
 
     public boolean isBgAndWindowDisplay() {
         return (value & 0x01) != 0;

@@ -7,7 +7,6 @@ import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.gpu.Display;
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.sound.SoundOutput;
@@ -15,9 +14,6 @@ import eu.rekawek.coffeegb.sound.SoundOutput;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
-
-import static eu.rekawek.coffeegb.cpu.BitUtils.getLSB;
-import static eu.rekawek.coffeegb.cpu.BitUtils.getMSB;
 
 public class MooneyeTestRunner {
 

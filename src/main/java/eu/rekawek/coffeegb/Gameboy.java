@@ -87,7 +87,7 @@ public class Gameboy implements Runnable {
 
         cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
 
-        initIO();
+        interruptManager.disableInterrupts(false);
         if (!options.isUsingBootstrap()) {
             initRegs();
         }
@@ -105,42 +105,6 @@ public class Gameboy implements Runnable {
         r.setHL(0x014d);
         r.setSP(0xfffe);
         r.setPC(0x0100);
-    }
-
-    private void initIO() {
-        mmu.setByte(0xff05, 0x00);
-        mmu.setByte(0xff06, 0x00);
-        mmu.setByte(0xff07, 0x00);
-        mmu.setByte(0xff10, 0x80);
-        mmu.setByte(0xff11, 0xbf);
-        mmu.setByte(0xff12, 0xf3);
-        mmu.setByte(0xff14, 0xbf);
-        mmu.setByte(0xff16, 0x3f);
-        mmu.setByte(0xff17, 0x00);
-        mmu.setByte(0xff19, 0xbf);
-        mmu.setByte(0xff1a, 0x7f);
-        mmu.setByte(0xff1b, 0xff);
-        mmu.setByte(0xff1c, 0x9f);
-        mmu.setByte(0xff1e, 0xbf);
-        mmu.setByte(0xff20, 0xff);
-        mmu.setByte(0xff21, 0x00);
-        mmu.setByte(0xff22, 0x00);
-        mmu.setByte(0xff23, 0xbf);
-        mmu.setByte(0xff24, 0x77);
-        mmu.setByte(0xff25, 0xf3);
-        mmu.setByte(0xff26, 0xf1);
-        mmu.setByte(0xff40, 0x91);
-        mmu.setByte(0xff42, 0x00);
-        mmu.setByte(0xff43, 0x00);
-        mmu.setByte(0xff45, 0x00);
-        mmu.setByte(0xff47, 0xfc);
-        mmu.setByte(0xff48, 0xff);
-        mmu.setByte(0xff49, 0xff);
-        mmu.setByte(0xff4a, 0x00);
-        mmu.setByte(0xff4b, 0x00);
-        mmu.setByte(0xffff, 0x00);
-
-        interruptManager.disableInterrupts(false);
     }
 
     public void run() {
