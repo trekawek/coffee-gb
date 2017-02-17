@@ -35,15 +35,15 @@ public final class SpriteBug {
                 break;
 
             case PUSH_1:
-                if (cpuCycle >= 3) {
-                    copyValues(addressSpace, (cpuCycle - 3) * 8 + 2, (cpuCycle - 2) * 8 + 2, 8);
-                    copyValues(addressSpace, (cpuCycle - 2) * 8 + 2, (cpuCycle - 0) * 8 + 2, 6);
+                if (cpuCycle >= 4) {
+                    copyValues(addressSpace, (cpuCycle - 4) * 8 + 2, (cpuCycle - 3) * 8 + 2, 8);
+                    copyValues(addressSpace, (cpuCycle - 3) * 8 + 2, (cpuCycle - 1) * 8 + 2, 6);
                 }
                 break;
 
             case PUSH_2:
-                if (cpuCycle >= 4) {
-                    copyValues(addressSpace, (cpuCycle - 3) * 8 + 2, (cpuCycle - 2) * 8 + 2, 8);
+                if (cpuCycle >= 5) {
+                    copyValues(addressSpace, (cpuCycle - 4) * 8 + 2, (cpuCycle - 3) * 8 + 2, 8);
                 }
                 break;
 
