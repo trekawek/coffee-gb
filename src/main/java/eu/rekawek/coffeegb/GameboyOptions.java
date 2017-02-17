@@ -11,6 +11,8 @@ public class GameboyOptions {
 
     private final boolean forceDmg;
 
+    private final boolean forceCgb;
+
     private final boolean useBootstrap;
 
     public GameboyOptions(File romFile) {
@@ -19,7 +21,11 @@ public class GameboyOptions {
 
     public GameboyOptions(File romFile, Collection<String> params, Collection<String> shortParams) {
         this.romFile = romFile;
-        this.forceDmg = params.contains("force-classic") || shortParams.contains("f");
+        this.forceDmg = params.contains("force-dmg") || shortParams.contains("d");
+        this.forceCgb = params.contains("force-cgb") || shortParams.contains("c");
+        if (forceDmg && forceCgb) {
+            throw new IllegalArgumentException("force-dmg and force-cgb options are can't be used together");
+        }
         this.useBootstrap = params.contains("use-bootstrap") || shortParams.contains("b");
     }
 
@@ -31,6 +37,10 @@ public class GameboyOptions {
         return forceDmg;
     }
 
+    public boolean isForceCgb() {
+        return forceCgb;
+    }
+
     public boolean isUsingBootstrap() {
         return useBootstrap;
     }
@@ -40,7 +50,8 @@ public class GameboyOptions {
         stream.println("java -jar coffee-gb.jar [OPTIONS] ROM_FILE");
         stream.println();
         stream.println("Available options:");
-        stream.println("  -f --force-classic    Emulate classic GB (DMG) for universal ROMs");
+        stream.println("  -d --force-dmg        Emulate classic GB (DMG) for universal ROMs");
+        stream.println("  -c --force-cgb        Emulate color GB (CGB) for all ROMs");
         stream.println("  -b --use-bootstrap    Start with the GB bootstrap");
     }
 }

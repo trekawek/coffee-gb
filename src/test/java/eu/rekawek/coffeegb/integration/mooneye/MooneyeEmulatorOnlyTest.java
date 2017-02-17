@@ -12,26 +12,19 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
-@RunWith(Parameterized.class)
-public class MooneyeAcceptanceTest {
+import static eu.rekawek.coffeegb.integration.mooneye.MooneyeAcceptanceTest.EXCLUDES;
 
-    static final List<String> EXCLUDES = Arrays.asList(
-            "-dmgABCX.gb",
-            "-dmgABCXmgb.gb",
-            "-mgb.gb",
-            "-sgb.gb",
-            "-sgb2.gb",
-            "-S.gb"
-    );
+@RunWith(Parameterized.class)
+public class MooneyeEmulatorOnlyTest {
 
     private final Path romPath;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/acceptance", EXCLUDES);
+        return ParametersProvider.getParameters("mooneye/emulator-only", EXCLUDES);
     }
 
-    public MooneyeAcceptanceTest(String name, Path romPath) {
+    public MooneyeEmulatorOnlyTest(String name, Path romPath) {
         this.romPath = romPath;
     }
 

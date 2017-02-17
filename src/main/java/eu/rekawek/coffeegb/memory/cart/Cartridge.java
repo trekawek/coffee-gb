@@ -84,7 +84,9 @@ public class Cartridge implements AddressSpace {
         }
 
         dmgBoostrap = options.isUsingBootstrap() ? 0 : 1;
-        if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
+        if (options.isForceCgb()) {
+            gbc = true;
+        } else if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
             gbc = false;
         } else if (gameboyType == Cartridge.GameboyTypeFlag.CGB) {
             gbc = true;

@@ -14,6 +14,9 @@ import eu.rekawek.coffeegb.sound.SoundOutput;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 public class MooneyeTestRunner {
 
@@ -28,9 +31,18 @@ public class MooneyeTestRunner {
     private final OutputStream os;
 
     public MooneyeTestRunner(File romFile, OutputStream os) throws IOException {
-        GameboyOptions options = new GameboyOptions(romFile);
+        List<String> opts = new ArrayList<>();
+        if (romFile.toString().endsWith("-C.gb") || romFile.toString().endsWith("-cgb.gb")) {
+            opts.add("c");
+        }
+        if (romFile.getName().startsWith("boot_")) {
+            opts.add("b");
+        }
+        GameboyOptions options = new GameboyOptions(romFile, Collections.emptyList(), opts);
         Cartridge cart = new Cartridge(options);
         gb = new Gameboy(options, cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
+        System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
+        System.out.println("Bootstrap: " + (options.isUsingBootstrap() ? "enabled" : "disabled"));
         cpu = gb.getCpu();
         regs = cpu.getRegisters();
         mem = gb.getAddressSpace();

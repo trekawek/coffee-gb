@@ -10,28 +10,20 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
+
+import static eu.rekawek.coffeegb.integration.mooneye.MooneyeAcceptanceTest.EXCLUDES;
 
 @RunWith(Parameterized.class)
-public class MooneyeAcceptanceTest {
-
-    static final List<String> EXCLUDES = Arrays.asList(
-            "-dmgABCX.gb",
-            "-dmgABCXmgb.gb",
-            "-mgb.gb",
-            "-sgb.gb",
-            "-sgb2.gb",
-            "-S.gb"
-    );
+public class MooneyeMiscTest {
 
     private final Path romPath;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/acceptance", EXCLUDES);
+        return ParametersProvider.getParameters("mooneye/misc", Arrays.asList("-A.gb"));
     }
 
-    public MooneyeAcceptanceTest(String name, Path romPath) {
+    public MooneyeMiscTest(String name, Path romPath) {
         this.romPath = romPath;
     }
 
