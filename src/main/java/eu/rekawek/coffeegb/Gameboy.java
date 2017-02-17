@@ -58,9 +58,9 @@ public class Gameboy implements Runnable {
         speedMode = new SpeedMode();
         interruptManager = new InterruptManager();
         timer = new Timer(interruptManager, speedMode);
-        gpu = new Gpu(display, interruptManager, gbc);
         mmu = new Mmu();
         dma = new Dma(mmu, speedMode);
+        gpu = new Gpu(display, interruptManager, dma, gbc);
         hdma = new Hdma(mmu);
         sound = new Sound(soundOutput, gbc);
         serialPort = new SerialPort(interruptManager, serialEndpoint, speedMode);

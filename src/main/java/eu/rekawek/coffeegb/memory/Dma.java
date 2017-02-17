@@ -11,6 +11,8 @@ public class Dma implements AddressSpace {
 
     private boolean transferInProgress;
 
+    private boolean restarted;
+
     private int from;
 
     private int ticks;
@@ -27,8 +29,10 @@ public class Dma implements AddressSpace {
 
     public void tick() {
         if (transferInProgress) {
-            if (++ticks >= 671 / speedMode.getSpeedMode()) {
+            if (++ticks >= 648 / speedMode.getSpeedMode()) {
                 transferInProgress = false;
+                restarted = false;
+                ticks = 0;
                 for (int i = 0; i < 0xa0; i++) {
                     addressSpace.setByte(0xfe00 + i, addressSpace.getByte(from + i));
                 }
@@ -39,6 +43,7 @@ public class Dma implements AddressSpace {
     @Override
     public void setByte(int address, int value) {
         from = value * 0x100;
+        restarted = isOamBlocked();
         ticks = 0;
         transferInProgress = true;
     }
@@ -46,5 +51,9 @@ public class Dma implements AddressSpace {
     @Override
     public int getByte(int address) {
         return 0;
+    }
+
+    public boolean isOamBlocked() {
+        return restarted || (transferInProgress && ticks >= 5);
     }
 }

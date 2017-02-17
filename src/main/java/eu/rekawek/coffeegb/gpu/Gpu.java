@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.gpu.phase.HBlankPhase;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch;
 import eu.rekawek.coffeegb.gpu.phase.PixelTransfer;
 import eu.rekawek.coffeegb.gpu.phase.VBlankPhase;
+import eu.rekawek.coffeegb.memory.Dma;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import eu.rekawek.coffeegb.memory.Ram;
 
@@ -28,6 +29,8 @@ public class Gpu implements AddressSpace {
     private final Display display;
 
     private final InterruptManager interruptManager;
+
+    private final Dma dma;
 
     private final Lcdc lcdc;
 
@@ -57,8 +60,9 @@ public class Gpu implements AddressSpace {
 
     private GpuPhase phase;
 
-    public Gpu(Display display, InterruptManager interruptManager, boolean gbc) {
+    public Gpu(Display display, InterruptManager interruptManager, Dma dma, boolean gbc) {
         this.r = new MemoryRegisters(GpuRegister.values());
+        this.dma = dma;
         this.lcdc = new Lcdc();
         this.interruptManager = interruptManager;
         this.gbc = gbc;
@@ -92,7 +96,7 @@ public class Gpu implements AddressSpace {
             } else {
                 return videoRam0;
             }
-        } else if (oemRam.accepts(address)) {
+        } else if (oemRam.accepts(address) && !dma.isOamBlocked()) {
             return oemRam;
         } else if (lcdc.accepts(address)) {
             return lcdc;
@@ -135,7 +139,7 @@ public class Gpu implements AddressSpace {
             if (space == null) {
                 return 0xff;
             } else if (address == VBK.getAddress()) {
-                return 0xfe;
+                return gbc ? 0xfe : 0xff;
             } else {
                 return space.getByte(address);
             }
