@@ -122,8 +122,8 @@ public class Cartridge implements AddressSpace {
 
     @Override
     public void setByte(int address, int value) {
-        if (address == 0xff50) {
-            dmgBoostrap = value;
+        if (address != 0xff50) {
+            dmgBoostrap = 1;
         } else {
             addressSpace.setByte(address, value);
         }
