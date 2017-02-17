@@ -90,3 +90,4 @@ The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a gre
 * [The Cycle-Accurate Game Boy Docs](https://github.com/AntonioND/giibiiadvance/tree/master/docs)
 * [Test ROMs](http://slack.net/~ant/old/gb-tests/) - included in the [src/test/resources/roms](src/test/resources/roms)
 * [Pandocs](http://bgb.bircd.org/pandocs.htm)
+* [Mooneye GB](https://github.com/Gekkio/mooneye-gb) - an accurate emulator written in Rust, contains great ROM-based acceptance tests
