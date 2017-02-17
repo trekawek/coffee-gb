@@ -56,7 +56,7 @@ public class Gameboy implements Runnable {
         this.display = display;
         gbc = rom.isGbc();
         speedMode = new SpeedMode();
-        interruptManager = new InterruptManager();
+        interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
         mmu = new Mmu();
         dma = new Dma(mmu, speedMode);

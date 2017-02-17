@@ -18,6 +18,8 @@ public class InterruptManager implements AddressSpace {
         }
     }
 
+    private final boolean gbc;
+
     private boolean ime;
 
     private int interruptFlag = 0xe1;
@@ -27,6 +29,10 @@ public class InterruptManager implements AddressSpace {
     private int pendingEnableInterrupts = -1;
 
     private int pendingDisableInterrupts = -1;
+
+    public InterruptManager(boolean gbc) {
+        this.gbc = gbc;
+    }
 
     public void enableInterrupts(boolean withDelay) {
         if (withDelay) {
@@ -38,7 +44,7 @@ public class InterruptManager implements AddressSpace {
     }
 
     public void disableInterrupts(boolean withDelay) {
-        if (withDelay) {
+        if (withDelay && gbc) {
             pendingEnableInterrupts = -1;
             pendingDisableInterrupts = 1;
         } else {
@@ -72,7 +78,7 @@ public class InterruptManager implements AddressSpace {
     }
 
     public void flush() {
-        interruptFlag = 0;
+        interruptFlag = 0xe0;
     }
 
     public boolean isHaltBug() {
