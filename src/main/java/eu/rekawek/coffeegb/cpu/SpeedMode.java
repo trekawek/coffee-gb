@@ -20,7 +20,7 @@ public class SpeedMode implements AddressSpace {
 
     @Override
     public int getByte(int address) {
-        return 0xff;
+        return (currentSpeed ? (1 << 7) : 0) | (prepareSpeedSwitch ? (1 << 0) : 0) | 0b01111110;
     }
 
     boolean onStop() {
