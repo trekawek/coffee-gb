@@ -38,6 +38,10 @@ public class Counter {
 
     public void setCounter(int counter) {
         this.counter = counter;
+    }
+
+    public void reset() {
+        this.counter = 0;
         this.clocks = 0;
     }
 }

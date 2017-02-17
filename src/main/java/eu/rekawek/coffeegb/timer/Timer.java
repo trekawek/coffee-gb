@@ -47,7 +47,7 @@ public class Timer implements AddressSpace {
     public void setByte(int address, int value) {
         switch (address) {
             case 0xff04:
-                div.setCounter(0);
+                div.reset();
                 break;
 
             case 0xff05:
