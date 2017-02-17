@@ -10,6 +10,7 @@ public class UndocumentedGbcRegisters implements AddressSpace {
 
     public UndocumentedGbcRegisters() {
         xff6c = 0xfe;
+        ram.setByte(0xff74, 0xff);
         ram.setByte(0xff75, 0x8f);
     }
 

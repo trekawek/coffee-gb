@@ -48,7 +48,7 @@ public class ColorPalette implements AddressSpace {
     @Override
     public int getByte(int address) {
         if (address == indexAddr) {
-            return index | (autoIncrement ? 0x80 : 0xc0);
+            return index | (autoIncrement ? 0x80 : 0x00) | 0x40;
         } else if (address == dataAddr) {
             int color = palettes[index / 8][(index % 8) / 2];
             if (index % 2 == 0) {
@@ -77,5 +77,13 @@ public class ColorPalette implements AddressSpace {
             b.setCharAt(b.length() - 1, '\n');
         }
         return b.toString();
+    }
+
+    public void fillWithFF() {
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 4; j++) {
+                palettes[i][j] = 0x7fff;
+            }
+        }
     }
 }

@@ -25,7 +25,7 @@ public class GbcRam implements AddressSpace {
     @Override
     public int getByte(int address) {
         if (address == 0xff70) {
-            return svbk;
+            return 0xff;
         } else {
             return ram[translate(address)];
         }

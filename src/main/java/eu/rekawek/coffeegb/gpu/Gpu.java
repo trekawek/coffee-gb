@@ -72,6 +72,7 @@ public class Gpu implements AddressSpace {
 
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
+        oamPalette.fillWithFF();
 
         this.oamSearchPhase = new OamSearch(oemRam, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, lcdc, r, gbc, bgPalette, oamPalette);
@@ -133,6 +134,8 @@ public class Gpu implements AddressSpace {
             AddressSpace space = getAddressSpace(address);
             if (space == null) {
                 return 0xff;
+            } else if (address == VBK.getAddress()) {
+                return 0xfe;
             } else {
                 return space.getByte(address);
             }

@@ -80,7 +80,7 @@ public class Hdma implements AddressSpace {
     @Override
     public int getByte(int address) {
         if (hdma1234.accepts(address)) {
-            return hdma1234.getByte(address);
+            return 0xff;
         } else if (address == HDMA5) {
             return (transferInProgress ? 0 : (1 << 7)) | length;
         } else {
