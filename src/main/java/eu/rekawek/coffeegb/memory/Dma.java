@@ -7,6 +7,8 @@ public class Dma implements AddressSpace {
 
     private final AddressSpace addressSpace;
 
+    private final AddressSpace oam;
+
     private final SpeedMode speedMode;
 
     private boolean transferInProgress;
@@ -17,9 +19,10 @@ public class Dma implements AddressSpace {
 
     private int ticks;
 
-    public Dma(AddressSpace addressSpace, SpeedMode speedMode) {
+    public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
         this.addressSpace = addressSpace;
         this.speedMode = speedMode;
+        this.oam = oam;
     }
 
     @Override
@@ -34,7 +37,7 @@ public class Dma implements AddressSpace {
                 restarted = false;
                 ticks = 0;
                 for (int i = 0; i < 0xa0; i++) {
-                    addressSpace.setByte(0xfe00 + i, addressSpace.getByte(from + i));
+                    oam.setByte(0xfe00 + i, addressSpace.getByte(from + i));
                 }
             }
         }

@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.gpu.phase.GpuPhase;
 import eu.rekawek.coffeegb.gpu.phase.HBlankPhase;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch;
@@ -24,7 +25,7 @@ public class Gpu implements AddressSpace {
 
     private final AddressSpace videoRam1;
 
-    private final AddressSpace oemRam;
+    private final AddressSpace oamRam;
 
     private final Display display;
 
@@ -60,9 +61,8 @@ public class Gpu implements AddressSpace {
 
     private GpuPhase phase;
 
-    public Gpu(Display display, InterruptManager interruptManager, Dma dma, boolean gbc) {
+    public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, boolean gbc) {
         this.r = new MemoryRegisters(GpuRegister.values());
-        this.dma = dma;
         this.lcdc = new Lcdc();
         this.interruptManager = interruptManager;
         this.gbc = gbc;
@@ -72,14 +72,15 @@ public class Gpu implements AddressSpace {
         } else {
             this.videoRam1 = null;
         }
-        this.oemRam = new Ram(0xfe00, 0x00a0);
+        this.oamRam = oamRam;
+        this.dma = dma;
 
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
         oamPalette.fillWithFF();
 
-        this.oamSearchPhase = new OamSearch(oemRam, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oemRam, display, lcdc, r, gbc, bgPalette, oamPalette);
+        this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
+        this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oamRam, display, lcdc, r, gbc, bgPalette, oamPalette);
         this.hBlankPhase = new HBlankPhase();
         this.vBlankPhase = new VBlankPhase();
 
@@ -90,14 +91,14 @@ public class Gpu implements AddressSpace {
     }
 
     private AddressSpace getAddressSpace(int address) {
-        if (videoRam0.accepts(address)) {
+        if (videoRam0.accepts(address) && mode != Mode.PixelTransfer) {
             if (gbc && (r.get(VBK) & 1) == 1) {
                 return videoRam1;
             } else {
                 return videoRam0;
             }
-        } else if (oemRam.accepts(address) && !dma.isOamBlocked()) {
-            return oemRam;
+        } else if (oamRam.accepts(address) && !dma.isOamBlocked() && mode != Mode.OamSearch && mode != Mode.PixelTransfer) {
+            return oamRam;
         } else if (lcdc.accepts(address)) {
             return lcdc;
         } else if (r.accepts(address)) {
