@@ -190,8 +190,8 @@ public class Gpu implements AddressSpace {
                     } else {
                         mode = Mode.OamSearch;
                         phase = oamSearchPhase.start();
-                        requestLcdcInterrupt(5);
                     }
+                    requestLcdcInterrupt(5);
                     requestLycEqualsLyInterrupt();
                     break;
 
