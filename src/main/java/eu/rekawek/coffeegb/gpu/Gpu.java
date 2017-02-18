@@ -97,7 +97,7 @@ public class Gpu implements AddressSpace {
             } else {
                 return videoRam0;
             }
-        } else if (oamRam.accepts(address) && !dma.isOamBlocked() && mode != Mode.OamSearch && mode != Mode.PixelTransfer) {
+        } else if (oamRam.accepts(address) && !dma.isOamBlocked()/* && mode != Mode.OamSearch && mode != Mode.PixelTransfer*/) {
             return oamRam;
         } else if (lcdc.accepts(address)) {
             return lcdc;
