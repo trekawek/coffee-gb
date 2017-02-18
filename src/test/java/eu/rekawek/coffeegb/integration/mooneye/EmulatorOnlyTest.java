@@ -8,22 +8,21 @@ import org.junit.runners.Parameterized;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collection;
 
-import static eu.rekawek.coffeegb.integration.mooneye.MooneyeAcceptanceTest.EXCLUDES;
+import static eu.rekawek.coffeegb.integration.mooneye.GeneralTest.EXCLUDES;
 
 @RunWith(Parameterized.class)
-public class MooneyeMiscTest {
+public class EmulatorOnlyTest {
 
     private final Path romPath;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/misc", Arrays.asList("-A.gb"));
+        return ParametersProvider.getParameters("mooneye/emulator-only", EXCLUDES, Integer.MAX_VALUE);
     }
 
-    public MooneyeMiscTest(String name, Path romPath) {
+    public EmulatorOnlyTest(String name, Path romPath) {
         this.romPath = romPath;
     }
 

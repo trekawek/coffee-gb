@@ -13,7 +13,7 @@ import java.util.Collection;
 import java.util.List;
 
 @RunWith(Parameterized.class)
-public class MooneyeAcceptanceTest {
+public class TimerTest {
 
     static final List<String> EXCLUDES = Arrays.asList(
             "-dmgABCX.gb",
@@ -28,10 +28,10 @@ public class MooneyeAcceptanceTest {
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/acceptance", EXCLUDES);
+        return ParametersProvider.getParameters("mooneye/acceptance/timer", EXCLUDES, 1);
     }
 
-    public MooneyeAcceptanceTest(String name, Path romPath) {
+    public TimerTest(String name, Path romPath) {
         this.romPath = romPath;
     }
 

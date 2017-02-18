@@ -15,12 +15,12 @@ public final class ParametersProvider {
     }
 
     public static Collection<Object[]> getParameters(String dirName) throws IOException {
-        return getParameters(dirName, Collections.emptyList());
+        return getParameters(dirName, Collections.emptyList(), 1);
     }
 
-    public static Collection<Object[]> getParameters(String dirName, List<String> excludes) throws IOException {
+    public static Collection<Object[]> getParameters(String dirName, List<String> excludes, int maxDepth) throws IOException {
         Path dir = Paths.get("src/test/resources/roms", dirName);
-        return Files.walk(dir)
+        return Files.walk(dir, maxDepth)
                 .filter(Files::isRegularFile)
                 .filter(f -> f.toString().endsWith(".gb"))
                 .filter(f -> !excludes.stream().anyMatch(p -> f.toString().endsWith(p)))
