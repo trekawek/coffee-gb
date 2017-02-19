@@ -8,34 +8,24 @@ import org.junit.runners.Parameterized;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
+import java.util.Collections;
 
 @RunWith(Parameterized.class)
 public class TimerTest {
-
-    static final List<String> EXCLUDES = Arrays.asList(
-            "-dmgABCX.gb",
-            "-dmgABCXmgb.gb",
-            "-mgb.gb",
-            "-sgb.gb",
-            "-sgb2.gb",
-            "-S.gb"
-    );
 
     private final Path romPath;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/acceptance/timer", EXCLUDES, 1);
+        return ParametersProvider.getParameters("mooneye/acceptance/timer", Collections.emptyList(), 1);
     }
 
     public TimerTest(String name, Path romPath) {
         this.romPath = romPath;
     }
 
-    @Test(timeout = 5000)
+    @Test
     public void test() throws IOException {
         RomTestUtils.testMooneyeRom(romPath);
     }

@@ -2,58 +2,63 @@ package eu.rekawek.coffeegb.timer;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
-import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 
 public class Timer implements AddressSpace {
 
     private final SpeedMode speedMode;
 
-    private final Counter div;
-
-    private int divClock;
-
     private final InterruptManager interruptManager;
 
-    private Counter tima;
+    private static final int[] FREQ_TO_BIT = {9, 3, 5, 7};
 
-    private int timaClock;
+    private int div, tac, tma, tima;
 
-    private int tma;
+    private boolean previousBit;
 
-    private int tac;
+    private boolean overflow;
 
-    private int timaTickDivider;
+    private int ticksSinceOverflow;
 
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.speedMode = speedMode;
         this.interruptManager = interruptManager;
-        this.div = new Counter(0b11);
-        this.tima = new Counter(0b00);
     }
 
     public void tick() {
-        div.onClockUpdate(divClock, divClock + 1);
-        divClock = (divClock + 1) & 0x3ff;
-
-        if (speedMode.getSpeedMode() == 2 && ++timaTickDivider < 2) {
-            return;
+        updateDiv((div + 1) & 0xffff);
+        if (overflow) {
+            ticksSinceOverflow++;
+            if (ticksSinceOverflow == 4) {
+                interruptManager.requestInterrupt(InterruptManager.InterruptType.Timer);
+            }
+            if (ticksSinceOverflow == 6) {
+                tima = tma;
+                overflow = false;
+                ticksSinceOverflow = 0;
+            }
         }
-        timaTickDivider = 0;
-
-        updateTima(timaClock, timaClock + 1);
-        timaClock = (timaClock + 1) & 0x3ff;
     }
 
-    private void updateTima(int oldClock, int newClock) {
-        if ((tac & (1 << 2)) == 0) {
-            return;
+    private void incTima() {
+        tima++;
+        tima %= 0x100;
+        if (tima == 0) {
+            overflow = true;
+            ticksSinceOverflow = 0;
         }
-        boolean updated = tima.onClockUpdate(oldClock, newClock);
-        if (updated && tima.getCounter() == 0) {
-            tima.setDelayedCounter(tma);
-            interruptManager.requestInterrupt(InterruptType.Timer);
+    }
+
+    private void updateDiv(int newDiv) {
+        this.div = newDiv;
+        int bitPos = FREQ_TO_BIT[tac & 0b11];
+        bitPos <<= speedMode.getSpeedMode() - 1;
+        boolean bit = (div & (1 << bitPos)) != 0;
+        bit &= (tac & (1 << 2)) != 0;
+        if (!bit && previousBit) {
+            incTima();
         }
+        previousBit = bit;
     }
 
     @Override
@@ -65,30 +70,24 @@ public class Timer implements AddressSpace {
     public void setByte(int address, int value) {
         switch (address) {
             case 0xff04:
-                div.setCounter(0);
-                updateTima(timaClock, 0);
-                divClock = 0;
-                timaClock = 0;
+                updateDiv(0);
                 break;
 
             case 0xff05:
-                if (!tima.isReloading()) {
-                    tima.setCounter(value);
+                if (ticksSinceOverflow < 5) {
+                    tima = value;
+                    overflow = false;
+                    ticksSinceOverflow = 0;
                 }
                 break;
 
             case 0xff06:
                 tma = value;
-                if (tima.isReloading()) {
-                    tima.updateDelayedCounter(tma);
-                }
                 break;
 
             case 0xff07:
                 tac = value;
-                tima.setMode(tac & 0b11);
                 break;
-
         }
     }
 
@@ -96,17 +95,17 @@ public class Timer implements AddressSpace {
     public int getByte(int address) {
         switch (address) {
             case 0xff04:
-                return div.getCounter();
+                return div >> 8;
 
             case 0xff05:
-                return tima.getCounter();
+                return tima;
 
             case 0xff06:
                 return tma;
 
             case 0xff07:
-                return tac | 0b11111000;
+                return tac;
         }
-        throw new IllegalArgumentException("Illegal address: " + Integer.toHexString(address));
+        throw new IllegalArgumentException();
     }
 }
