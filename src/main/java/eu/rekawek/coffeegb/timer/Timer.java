@@ -32,6 +32,9 @@ public class Timer implements AddressSpace {
             if (ticksSinceOverflow == 4) {
                 interruptManager.requestInterrupt(InterruptManager.InterruptType.Timer);
             }
+            if (ticksSinceOverflow == 5) {
+                tima = tma;
+            }
             if (ticksSinceOverflow == 6) {
                 tima = tma;
                 overflow = false;
