@@ -34,6 +34,9 @@ public class Mbc3 implements AddressSpace {
         this.cartridge = cartridge;
         this.ramBanks = ramBanks;
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
+        for (int i = 0; i < ram.length; i++) {
+            ram[i] = 0xff;
+        }
         this.type = type;
         this.clock = new RealTimeClock(Clock.SYSTEM_CLOCK);
         this.battery = battery;

@@ -24,6 +24,9 @@ public class Mbc2 implements AddressSpace {
         this.cartridge = cartridge;
         this.romBanks = romBanks;
         this.ram = new int[0x0200];
+        for (int i = 0; i < ram.length; i++) {
+            ram[i] = 0xff;
+        }
         this.type = type;
         this.battery = battery;
         battery.loadRam(ram);

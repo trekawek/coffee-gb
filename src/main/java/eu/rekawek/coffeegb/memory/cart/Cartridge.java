@@ -67,7 +67,7 @@ public class Cartridge implements AddressSpace {
         LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
 
         Battery battery = Battery.NULL_BATTERY;
-        if (type.isBattery()) {
+        if (type.isBattery() && options.isSupportBatterySaves()) {
             battery = new FileBattery(file.getParentFile(), FilenameUtils.removeExtension(file.getName()));
         }
 

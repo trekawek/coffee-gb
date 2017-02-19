@@ -38,6 +38,7 @@ public class MooneyeTestRunner {
         if (romFile.getName().startsWith("boot_")) {
             opts.add("b");
         }
+        opts.add("db");
         GameboyOptions options = new GameboyOptions(romFile, Collections.emptyList(), opts);
         Cartridge cart = new Cartridge(options);
         gb = new Gameboy(options, cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);

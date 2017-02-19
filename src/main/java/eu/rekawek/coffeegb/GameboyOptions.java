@@ -15,6 +15,8 @@ public class GameboyOptions {
 
     private final boolean useBootstrap;
 
+    private final boolean disableBatterySaves;
+
     public GameboyOptions(File romFile) {
         this(romFile, Collections.emptyList(), Collections.emptyList());
     }
@@ -27,6 +29,7 @@ public class GameboyOptions {
             throw new IllegalArgumentException("force-dmg and force-cgb options are can't be used together");
         }
         this.useBootstrap = params.contains("use-bootstrap") || shortParams.contains("b");
+        this.disableBatterySaves = params.contains("disable-battery-saves") || shortParams.contains("db");
     }
 
     public File getRomFile() {
@@ -45,13 +48,18 @@ public class GameboyOptions {
         return useBootstrap;
     }
 
+    public boolean isSupportBatterySaves() {
+        return !disableBatterySaves;
+    }
+
     public static void printUsage(PrintStream stream) {
         stream.println("Usage:");
         stream.println("java -jar coffee-gb.jar [OPTIONS] ROM_FILE");
         stream.println();
         stream.println("Available options:");
-        stream.println("  -d --force-dmg        Emulate classic GB (DMG) for universal ROMs");
-        stream.println("  -c --force-cgb        Emulate color GB (CGB) for all ROMs");
-        stream.println("  -b --use-bootstrap    Start with the GB bootstrap");
+        stream.println("  -d  --force-dmg                Emulate classic GB (DMG) for universal ROMs");
+        stream.println("  -c  --force-cgb                Emulate color GB (CGB) for all ROMs");
+        stream.println("  -b  --use-bootstrap            Start with the GB bootstrap");
+        stream.println("  -db --disable-battery-saves    Disable battery saves");
     }
 }
