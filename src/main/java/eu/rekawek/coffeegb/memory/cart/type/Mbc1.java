@@ -10,6 +10,12 @@ public class Mbc1 implements AddressSpace {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mbc1.class);
 
+    private static int[] NINTENDO_LOGO = {
+            0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
+            0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
+            0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
+    };
+
     private final CartridgeType type;
 
     private final int romBanks;
@@ -21,6 +27,8 @@ public class Mbc1 implements AddressSpace {
     private final int[] ram;
 
     private final Battery battery;
+
+    private final boolean multicart;
 
     private int selectedRamBank;
 
@@ -35,6 +43,7 @@ public class Mbc1 implements AddressSpace {
     private int cachedRomBankFor0x4000 = -1;
 
     public Mbc1(int[] cartridge, CartridgeType type, Battery battery, int romBanks, int ramBanks) {
+        this.multicart = romBanks == 64 && isMulticart(cartridge);
         this.cartridge = cartridge;
         this.ramBanks = ramBanks;
         this.romBanks = romBanks;
@@ -118,10 +127,12 @@ public class Mbc1 implements AddressSpace {
             if (memoryModel == 0) {
                 cachedRomBankFor0x0000 = 0;
             } else {
-                int bank = selectedRomBank;
-                bank &= 0b00011111;
-                bank |= (selectedRamBank << 5);
-                cachedRomBankFor0x0000 = (bank / 0x20 * 0x20) % romBanks;
+                int bank = (selectedRamBank << 5);
+                if (multicart) {
+                    bank >>= 1;
+                }
+                bank %= romBanks;
+                cachedRomBankFor0x0000 = bank;
             }
         }
         return cachedRomBankFor0x0000;
@@ -136,6 +147,9 @@ public class Mbc1 implements AddressSpace {
             if (memoryModel == 1) {
                 bank &= 0b00011111;
                 bank |= (selectedRamBank << 5);
+            }
+            if (multicart) {
+                bank = ((bank >> 1) & 0x30) | (bank & 0x0f);
             }
             bank %= romBanks;
             cachedRomBankFor0x4000 = bank;
@@ -158,5 +172,22 @@ public class Mbc1 implements AddressSpace {
         } else {
             return (selectedRamBank % ramBanks) * 0x2000 + (address - 0xa000);
         }
+    }
+
+    private static boolean isMulticart(int[] rom) {
+        int logoCount = 0;
+        for (int i = 0; i < rom.length; i += 0x4000) {
+            boolean logoMatches = true;
+            for (int j = 0; j < NINTENDO_LOGO.length; j++) {
+                if (rom[i + 0x104 + j] != NINTENDO_LOGO[j]) {
+                    logoMatches = false;
+                    break;
+                }
+            }
+            if (logoMatches) {
+                logoCount++;
+            }
+        }
+        return logoCount > 1;
     }
 }
