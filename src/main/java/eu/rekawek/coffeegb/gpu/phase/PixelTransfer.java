@@ -110,9 +110,9 @@ public class PixelTransfer implements GpuPhase {
                     }
                     sprites[i] = null;
                 }
-                if (spriteAdded) {
-                    return true;
-                }
+            }
+            if (spriteAdded) {
+                return true;
             }
         }
 

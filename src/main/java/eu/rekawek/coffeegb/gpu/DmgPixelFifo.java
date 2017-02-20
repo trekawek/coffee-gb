@@ -8,6 +8,8 @@ public class DmgPixelFifo implements PixelFifo {
 
     private final IntQueue palettes = new IntQueue(16);
 
+    private final IntQueue pixelType = new IntQueue(16); // 0 - bg, 1 - sprite
+
     private final Display display;
 
     private final Lcdc lcdc;
@@ -36,6 +38,7 @@ public class DmgPixelFifo implements PixelFifo {
     }
 
     int dequeuePixel() {
+        pixelType.dequeue();
         return getColor(palettes.dequeue(), pixels.dequeue());
     }
 
@@ -44,6 +47,7 @@ public class DmgPixelFifo implements PixelFifo {
         for (int p : pixelLine) {
             pixels.enqueue(p);
             palettes.enqueue(registers.get(GpuRegister.BGP));
+            pixelType.enqueue(0);
         }
     }
 
@@ -55,9 +59,13 @@ public class DmgPixelFifo implements PixelFifo {
         for (int j = offset; j < pixelLine.length; j++) {
             int p = pixelLine[j];
             int i = j - offset;
+            if (pixelType.get(i) == 1) {
+                continue;
+            }
             if ((priority && pixels.get(i) == 0) || !priority && p != 0) {
                 pixels.set(i, p);
                 palettes.set(i, overlayPalette);
+                pixelType.set(i, 1);
             }
         }
     }
@@ -74,5 +82,6 @@ public class DmgPixelFifo implements PixelFifo {
     public void clear() {
         pixels.clear();
         palettes.clear();
+        pixelType.clear();
     }
 }
