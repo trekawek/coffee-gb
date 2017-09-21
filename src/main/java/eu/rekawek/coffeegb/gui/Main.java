@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.gui;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
+import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
@@ -11,6 +12,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.io.IOException;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 
 public class Main {
@@ -31,6 +33,8 @@ public class Main {
 
     private final Gameboy gameboy;
 
+    private final Optional<Console> console;
+
     private JFrame mainWindow;
 
     public Main(String[] args) throws IOException {
@@ -42,7 +46,10 @@ public class Main {
         display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
         serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
         controller = new SwingController();
-        gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint);
+
+        console = options.isDebug() ? Optional.of(new Console()) : Optional.empty();
+        gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
+        console.map(Thread::new).ifPresent(Thread::start);
     }
 
     private static GameboyOptions parseArgs(String[] args) {

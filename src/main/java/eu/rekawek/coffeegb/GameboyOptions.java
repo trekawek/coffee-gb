@@ -17,6 +17,8 @@ public class GameboyOptions {
 
     private final boolean disableBatterySaves;
 
+    private final boolean debug;
+
     public GameboyOptions(File romFile) {
         this(romFile, Collections.emptyList(), Collections.emptyList());
     }
@@ -30,6 +32,7 @@ public class GameboyOptions {
         }
         this.useBootstrap = params.contains("use-bootstrap") || shortParams.contains("b");
         this.disableBatterySaves = params.contains("disable-battery-saves") || shortParams.contains("db");
+        this.debug = params.contains("debug");
     }
 
     public File getRomFile() {
@@ -52,6 +55,10 @@ public class GameboyOptions {
         return !disableBatterySaves;
     }
 
+    public boolean isDebug() {
+        return debug;
+    }
+
     public static void printUsage(PrintStream stream) {
         stream.println("Usage:");
         stream.println("java -jar coffee-gb.jar [OPTIONS] ROM_FILE");
@@ -61,5 +68,6 @@ public class GameboyOptions {
         stream.println("  -c  --force-cgb                Emulate color GB (CGB) for all ROMs");
         stream.println("  -b  --use-bootstrap            Start with the GB bootstrap");
         stream.println("  -db --disable-battery-saves    Disable battery saves");
+        stream.println("      --debug                    Enable debug console");
     }
 }

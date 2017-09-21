@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
+import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.Dma;
@@ -21,6 +22,8 @@ import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.sound.SoundOutput;
 import eu.rekawek.coffeegb.timer.Timer;
+
+import java.util.Optional;
 
 public class Gameboy implements Runnable {
 
@@ -50,9 +53,15 @@ public class Gameboy implements Runnable {
 
     private final SpeedMode speedMode;
 
+    private final Optional<Console> console;
+
     private volatile boolean doStop;
 
     public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
+        this(options, rom, display, controller, soundOutput, serialEndpoint, Optional.empty());
+    }
+
+    public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Optional<Console> console) {
         this.display = display;
         gbc = rom.isGbc();
         speedMode = new SpeedMode();
@@ -93,6 +102,8 @@ public class Gameboy implements Runnable {
         if (!options.isUsingBootstrap()) {
             initRegs();
         }
+
+        this.console = console;
     }
 
     private void initRegs() {
@@ -136,6 +147,7 @@ public class Gameboy implements Runnable {
                 requestedScreenRefresh = false;
                 display.waitForRefresh();
             }
+            console.ifPresent(Console::tick);
         }
     }
 
