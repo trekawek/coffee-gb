@@ -68,6 +68,11 @@ public class OpcodeBuilder {
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
                 return arg.read(registers, addressSpace, args);
             }
+
+            @Override
+            public String toString() {
+                return String.format("_ <- %s", arg.getLabel());
+            }
         });
         return this;
     }
@@ -78,6 +83,11 @@ public class OpcodeBuilder {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
                 return value;
+            }
+
+            @Override
+            public String toString() {
+                return String.format("_ <- D16");
             }
         });
         return this;
@@ -102,6 +112,11 @@ public class OpcodeBuilder {
                     addressSpace.setByte(toWord(args), context & 0x00ff);
                     return context;
                 }
+
+                @Override
+                public String toString() {
+                    return String.format("_ -> %s (low)", arg.getLabel());
+                }
             });
             ops.add(new Op() {
                 @Override
@@ -118,6 +133,11 @@ public class OpcodeBuilder {
                 public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
                     addressSpace.setByte((toWord(args) + 1) & 0xffff, (context & 0xff00) >> 8);
                     return context;
+                }
+
+                @Override
+                public String toString() {
+                    return String.format("_ -> %s (high)", arg.getLabel());
                 }
             });
         } else if (lastDataType == arg.getDataType()) {
@@ -136,6 +156,11 @@ public class OpcodeBuilder {
                 public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
                     arg.write(registers, addressSpace, args, context);
                     return context;
+                }
+
+                @Override
+                public String toString() {
+                    return String.format("_ -> %s", arg.getLabel());
                 }
             });
         } else {
@@ -163,6 +188,11 @@ public class OpcodeBuilder {
                 }
                 return false;
             }
+
+            @Override
+            public String toString() {
+                return String.format("? %s", condition);
+            }
         });
         return this;
     }
@@ -186,6 +216,11 @@ public class OpcodeBuilder {
             public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
                 return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.PUSH_1 : null;
             }
+
+            @Override
+            public String toString() {
+                return String.format("_ -> SP-- (high)");
+            }
         });
         ops.add(new Op() {
             @Override
@@ -203,6 +238,11 @@ public class OpcodeBuilder {
             @Override
             public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
                 return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.PUSH_2 : null;
+            }
+
+            @Override
+            public String toString() {
+                return String.format("_ -> SP-- (low)");
             }
         });
         return this;
@@ -229,6 +269,11 @@ public class OpcodeBuilder {
             public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
                 return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.POP_1 : null;
             }
+
+            @Override
+            public String toString() {
+                return String.format("_ <- SP++ (low)");
+            }
         });
         ops.add(new Op() {
             @Override
@@ -246,6 +291,11 @@ public class OpcodeBuilder {
             @Override
             public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
                 return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.POP_2 : null;
+            }
+
+            @Override
+            public String toString() {
+                return String.format("_ <- SP++ (high)");
             }
         });
         return this;
@@ -270,6 +320,11 @@ public class OpcodeBuilder {
                 int v2 = arg2.read(registers, addressSpace, args);
                 return func.apply(registers.getFlags(), v1, v2);
             }
+
+            @Override
+            public String toString() {
+                return String.format("%s _, %s", operation, arg2);
+            }
         });
         if (lastDataType == DataType.D16) {
             extraCycle();
@@ -283,6 +338,11 @@ public class OpcodeBuilder {
             @Override
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int v1) {
                 return func.apply(registers.getFlags(), v1, d8Value);
+            }
+
+            @Override
+            public String toString() {
+                return String.format("%s _, #", operation);
             }
         });
         if (lastDataType == DataType.D16) {
@@ -303,6 +363,11 @@ public class OpcodeBuilder {
             public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
                 return OpcodeBuilder.causesOemBug(func, context) ? SpriteBug.CorruptionType.INC_DEC : null;
             }
+
+            @Override
+            public String toString() {
+                return String.format("%s _", operation);
+            }
         });
         if (lastDataType == DataType.D16) {
             extraCycle();
@@ -322,6 +387,11 @@ public class OpcodeBuilder {
             @Override
             public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
                 return OpcodeBuilder.causesOemBug(func, context) ? SpriteBug.CorruptionType.LD_HL : null;
+            }
+
+            @Override
+            public String toString() {
+                return String.format("%s HL");
             }
         });
         store("HL");
@@ -346,6 +416,11 @@ public class OpcodeBuilder {
                 }
                 return context;
             }
+
+            @Override
+            public String toString() {
+                return String.format("BIT HL");
+            }
         });
         return this;
     }
@@ -356,6 +431,11 @@ public class OpcodeBuilder {
             public int execute(Registers registers, AddressSpace addressSpace, int[] args, int context) {
                 registers.getFlags().setZ(false);
                 return context;
+            }
+
+            @Override
+            public String toString() {
+                return String.format("Z <- 0");
             }
         });
         return this;
@@ -370,6 +450,11 @@ public class OpcodeBuilder {
                 } else {
                     interruptManager.disableInterrupts(withDelay);
                 }
+            }
+
+            @Override
+            public String toString() {
+                return (enable ? "enable" : "disable") + " interrupts";
             }
         });
         return this;
@@ -386,6 +471,11 @@ public class OpcodeBuilder {
             public boolean readsMemory() {
                 return true;
             }
+
+            @Override
+            public String toString() {
+                return "wait cycle";
+            }
         });
         return this;
     }
@@ -395,6 +485,11 @@ public class OpcodeBuilder {
             @Override
             public boolean forceFinishCycle() {
                 return true;
+            }
+
+            @Override
+            public String toString() {
+                return "finish cycle";
             }
         });
         return this;

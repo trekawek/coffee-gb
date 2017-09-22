@@ -37,4 +37,6 @@ public interface Op {
     default SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
         return null;
     }
+
+    String toString();
 }

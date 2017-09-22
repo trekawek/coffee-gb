@@ -286,4 +286,8 @@ public enum Argument {
         }
         throw new IllegalArgumentException("Unknown argument: " + string);
     }
+
+    public String getLabel() {
+        return label;
+    }
 }
