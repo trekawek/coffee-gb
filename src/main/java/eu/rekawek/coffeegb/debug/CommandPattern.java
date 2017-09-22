@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.debug;
 
+import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 
 import java.util.ArrayList;
@@ -8,8 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableSet.copyOf;
 import static com.google.common.collect.Maps.newLinkedHashMap;
 
@@ -30,7 +31,10 @@ public class CommandPattern {
     public boolean matches(String commandLine) {
         return commandNames
                 .stream()
-                .anyMatch(commandLine::startsWith);
+                .filter(commandLine::startsWith)
+                .map(String::length)
+                .map(commandLine::substring)
+                .anyMatch(s -> s.isEmpty() || s.charAt(0) == ' ');
     }
 
     public List<String> getCommandNames() {

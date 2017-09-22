@@ -4,20 +4,28 @@ import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 import eu.rekawek.coffeegb.debug.command.Quit;
 import eu.rekawek.coffeegb.debug.command.ShowHelp;
 import eu.rekawek.coffeegb.debug.command.ShowOpcode;
+import eu.rekawek.coffeegb.debug.command.ShowOpcodes;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.UserInterruptException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.List;
-import java.util.concurrent.BlockingDeque;
-import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.Semaphore;
 
 public class Console implements Runnable {
 
-    private final BlockingDeque<CommandExecution> commandBuffer = new LinkedBlockingDeque<>(1);
+    private static final Logger LOG = LoggerFactory.getLogger(Console.class);
+
+    private final Deque<CommandExecution> commandBuffer = new ArrayDeque<>();
+
+    private final Semaphore semaphore = new Semaphore(0);
 
     private volatile boolean isStarted;
 
@@ -27,6 +35,7 @@ public class Console implements Runnable {
         commands = new ArrayList<>();
         commands.add(new ShowHelp(commands));
         commands.add(new ShowOpcode());
+        commands.add(new ShowOpcodes());
         commands.add(new Quit());
         Collections.sort(commands, Comparator.comparing(c -> c.getPattern().getCommandNames().get(0)));
     }
@@ -45,13 +54,17 @@ public class Console implements Runnable {
                 for (Command cmd : commands) {
                     if (cmd.getPattern().matches(line)) {
                             ParsedCommandLine parsed = cmd.getPattern().parse(line);
-                            commandBuffer.offer(new CommandExecution(cmd, parsed));
+                            commandBuffer.add(new CommandExecution(cmd, parsed));
+                            semaphore.acquire();
                     }
                 }
             } catch (IllegalArgumentException e) {
                 System.err.println(e.getMessage());
             } catch (UserInterruptException e) {
                 System.exit(0);
+            } catch (InterruptedException e) {
+                LOG.error("Interrupted", e);
+                break;
             }
         }
     }
@@ -63,6 +76,7 @@ public class Console implements Runnable {
 
         while (!commandBuffer.isEmpty()) {
             commandBuffer.poll().run();
+            semaphore.release();
         }
     }
 

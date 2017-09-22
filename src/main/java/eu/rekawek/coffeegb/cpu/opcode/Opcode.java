@@ -35,4 +35,8 @@ public class Opcode {
     public List<Op> getOps() {
         return ops;
     }
+
+    public String getLabel() {
+        return label;
+    }
 }
