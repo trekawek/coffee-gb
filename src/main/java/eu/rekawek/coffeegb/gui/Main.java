@@ -2,10 +2,13 @@ package eu.rekawek.coffeegb.gui;
 
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.GameboyOptions;
+import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.debug.Console;
+import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
+import eu.rekawek.coffeegb.sound.SoundOutput;
 
 import java.io.File;
 import javax.swing.*;
@@ -18,6 +21,8 @@ import java.util.Set;
 public class Main {
 
     private static final int SCALE = 2;
+
+    private final GameboyOptions options;
 
     private final Cartridge rom;
 
@@ -38,18 +43,24 @@ public class Main {
     private JFrame mainWindow;
 
     public Main(String[] args) throws IOException {
-        GameboyOptions options = parseArgs(args);
+        options = parseArgs(args);
         rom = new Cartridge(options);
         speedMode = new SpeedMode();
-        sound = new AudioSystemSoundOutput();
-        display = new SwingDisplay(SCALE);
-        display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
         serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
-        controller = new SwingController();
-
         console = options.isDebug() ? Optional.of(new Console()) : Optional.empty();
-        gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
         console.map(Thread::new).ifPresent(Thread::start);
+
+        if (options.isHeadless()) {
+            sound = null;
+            display = null;
+            controller = null;
+            gameboy = new Gameboy(options, rom, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, serialEndpoint, console);
+        } else {
+            sound = new AudioSystemSoundOutput();
+            display = new SwingDisplay(SCALE);
+            controller = new SwingController();
+            gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
+        }
     }
 
     private static GameboyOptions parseArgs(String[] args) {
@@ -94,12 +105,18 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         Main main = new Main(args);
-        System.setProperty("sun.java2d.opengl", "true");
-        UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        javax.swing.SwingUtilities.invokeLater(() -> main.start());
+        if (main.options.isHeadless()) {
+            main.gameboy.run();
+        } else {
+            System.setProperty("sun.java2d.opengl", "true");
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            javax.swing.SwingUtilities.invokeLater(() -> main.start());
+        }
     }
 
     private void start() {
+        display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
+
         mainWindow = new JFrame("Coffee GB: " + rom.getTitle());
         mainWindow.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         mainWindow.setLocationRelativeTo(null);

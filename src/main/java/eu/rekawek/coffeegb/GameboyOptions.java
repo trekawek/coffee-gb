@@ -19,6 +19,8 @@ public class GameboyOptions {
 
     private final boolean debug;
 
+    private final boolean headless;
+
     public GameboyOptions(File romFile) {
         this(romFile, Collections.emptyList(), Collections.emptyList());
     }
@@ -33,6 +35,7 @@ public class GameboyOptions {
         this.useBootstrap = params.contains("use-bootstrap") || shortParams.contains("b");
         this.disableBatterySaves = params.contains("disable-battery-saves") || shortParams.contains("db");
         this.debug = params.contains("debug");
+        this.headless = params.contains("headless");
     }
 
     public File getRomFile() {
@@ -59,6 +62,10 @@ public class GameboyOptions {
         return debug;
     }
 
+    public boolean isHeadless() {
+        return headless;
+    }
+
     public static void printUsage(PrintStream stream) {
         stream.println("Usage:");
         stream.println("java -jar coffee-gb.jar [OPTIONS] ROM_FILE");
@@ -69,5 +76,7 @@ public class GameboyOptions {
         stream.println("  -b  --use-bootstrap            Start with the GB bootstrap");
         stream.println("  -db --disable-battery-saves    Disable battery saves");
         stream.println("      --debug                    Enable debug console");
+        stream.println("      --headless                 Start in the headless mode");
     }
+
 }
