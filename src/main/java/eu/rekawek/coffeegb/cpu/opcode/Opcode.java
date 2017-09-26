@@ -39,4 +39,8 @@ public class Opcode {
     public String getLabel() {
         return label;
     }
+
+    public int getOpcode() {
+        return opcode;
+    }
 }

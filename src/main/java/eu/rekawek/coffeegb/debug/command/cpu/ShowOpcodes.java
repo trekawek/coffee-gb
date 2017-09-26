@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.debug.command;
+package eu.rekawek.coffeegb.debug.command.cpu;
 
 import eu.rekawek.coffeegb.cpu.Opcodes;
 import eu.rekawek.coffeegb.cpu.opcode.Opcode;
@@ -12,7 +12,7 @@ import java.util.Objects;
 public class ShowOpcodes implements Command {
 
     private static final CommandPattern PATTERN = CommandPattern.Builder
-            .create("show opcodes")
+            .create("cpu show opcodes")
             .withDescription("displays all opcodes")
             .build();
 
