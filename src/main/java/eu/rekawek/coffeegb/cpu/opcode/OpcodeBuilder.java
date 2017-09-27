@@ -71,7 +71,11 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("_ <- %s", arg.getLabel());
+                if (arg.getDataType() == DataType.D16) {
+                    return String.format("%s → [__]", arg.getLabel());
+                } else {
+                    return String.format("%s → [_]", arg.getLabel());
+                }
             }
         });
         return this;
@@ -87,7 +91,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("_ <- D16");
+                return String.format("0x%02X → [__]", value);
             }
         });
         return this;
@@ -115,7 +119,7 @@ public class OpcodeBuilder {
 
                 @Override
                 public String toString() {
-                    return String.format("_ -> %s (low)", arg.getLabel());
+                    return String.format("[ _] → %s", arg.getLabel());
                 }
             });
             ops.add(new Op() {
@@ -137,7 +141,7 @@ public class OpcodeBuilder {
 
                 @Override
                 public String toString() {
-                    return String.format("_ -> %s (high)", arg.getLabel());
+                    return String.format("[_ ] → %s", arg.getLabel());
                 }
             });
         } else if (lastDataType == arg.getDataType()) {
@@ -160,7 +164,11 @@ public class OpcodeBuilder {
 
                 @Override
                 public String toString() {
-                    return String.format("_ -> %s", arg.getLabel());
+                    if (arg.getDataType() == DataType.D16) {
+                        return String.format("[__] → %s", arg.getLabel());
+                    } else {
+                        return String.format("[_] → %s", arg.getLabel());
+                    }
                 }
             });
         } else {
@@ -191,7 +199,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("? %s", condition);
+                return String.format("? %s:", condition);
             }
         });
         return this;
@@ -219,7 +227,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("_ -> SP-- (high)");
+                return String.format("[_ ] → (SP--)");
             }
         });
         ops.add(new Op() {
@@ -242,7 +250,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("_ -> SP-- (low)");
+                return String.format("[ _] → (SP--)");
             }
         });
         return this;
@@ -272,7 +280,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("_ <- SP++ (low)");
+                return String.format("(SP++) → [ _]");
             }
         });
         ops.add(new Op() {
@@ -295,7 +303,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("_ <- SP++ (high)");
+                return String.format("(SP++) → [_ ]");
             }
         });
         return this;
@@ -323,7 +331,11 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("%s _, %s", operation, arg2);
+                if (lastDataType == DataType.D16) {
+                    return String.format("%s([__],%s) → [__]", operation, arg2);
+                } else {
+                    return String.format("%s([_],%s) → [_]", operation, arg2);
+                }
             }
         });
         if (lastDataType == DataType.D16) {
@@ -342,7 +354,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("%s _, #", operation);
+                return String.format("%s(%d,[_]) → [_]", operation, d8Value);
             }
         });
         if (lastDataType == DataType.D16) {
@@ -366,7 +378,11 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("%s _", operation);
+                if (lastDataType == DataType.D16) {
+                    return String.format("%s([__]) → [__]", operation);
+                } else {
+                    return String.format("%s([_]) → [_]", operation);
+                }
             }
         });
         if (lastDataType == DataType.D16) {
@@ -391,7 +407,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("%s HL");
+                return String.format("%s(HL) → [__]");
             }
         });
         store("HL");
@@ -419,7 +435,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("BIT HL");
+                return String.format("BIT(%d,HL)", bit);
             }
         });
         return this;
@@ -435,7 +451,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("Z <- 0");
+                return String.format("0 → Z");
             }
         });
         return this;
