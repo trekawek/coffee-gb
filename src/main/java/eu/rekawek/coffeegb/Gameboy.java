@@ -23,6 +23,8 @@ import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.sound.SoundOutput;
 import eu.rekawek.coffeegb.timer.Timer;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 public class Gameboy implements Runnable {
@@ -56,6 +58,8 @@ public class Gameboy implements Runnable {
     private final Optional<Console> console;
 
     private volatile boolean doStop;
+
+    private final List<Runnable> tickListeners = new ArrayList<>();
 
     public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
         this(options, rom, display, controller, soundOutput, serialEndpoint, Optional.empty());
@@ -148,6 +152,7 @@ public class Gameboy implements Runnable {
                 display.waitForRefresh();
             }
             console.ifPresent(Console::tick);
+            tickListeners.forEach(Runnable::run);
         }
     }
 
@@ -178,5 +183,17 @@ public class Gameboy implements Runnable {
 
     public SpeedMode getSpeedMode() {
         return speedMode;
+    }
+
+    public Gpu getGpu() {
+        return gpu;
+    }
+
+    public void registerTickListener(Runnable tickListener) {
+        tickListeners.add(tickListener);
+    }
+
+    public void unregisterTickListener(Runnable tickListener) {
+        tickListeners.remove(tickListener);
     }
 }

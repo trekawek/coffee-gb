@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.debug;
 
+import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 import eu.rekawek.coffeegb.debug.command.Quit;
 import eu.rekawek.coffeegb.debug.command.ShowHelp;
 import eu.rekawek.coffeegb.debug.command.cpu.ShowOpcode;
 import eu.rekawek.coffeegb.debug.command.cpu.ShowOpcodes;
+import eu.rekawek.coffeegb.debug.command.ppu.ShowBackground;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.UserInterruptException;
@@ -29,14 +31,20 @@ public class Console implements Runnable {
 
     private volatile boolean isStarted;
 
-    private final List<Command> commands;
+    private List<Command> commands;
 
     public Console() {
+    }
+
+    public void init(Gameboy gameboy) {
         commands = new ArrayList<>();
         commands.add(new ShowHelp(commands));
         commands.add(new ShowOpcode());
         commands.add(new ShowOpcodes());
         commands.add(new Quit());
+
+        commands.add(new ShowBackground(gameboy, ShowBackground.Type.WINDOW));
+        commands.add(new ShowBackground(gameboy, ShowBackground.Type.BACKGROUND));
         Collections.sort(commands, Comparator.comparing(c -> c.getPattern().getCommandNames().get(0)));
     }
 

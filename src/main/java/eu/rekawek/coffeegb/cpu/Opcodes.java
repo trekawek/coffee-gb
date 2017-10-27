@@ -99,7 +99,7 @@ public final class Opcodes {
             for (Entry<Integer, String> t : indexedList(o.getKey(), 0x01, "B", "C", "D", "E", "H", "L", "(HL)", "A")) {
                 regCmd(opcodes, t, o.getValue() + " {}").load("A").alu(o.getValue(), t.getValue()).store("A");
             }
-        }
+        } 
 
         for (Entry<Integer, String> c : indexedList(0xc0, 0x08, "NZ", "Z", "NC", "C")) {
             regCmd(opcodes, c, "RET {}").extraCycle().proceedIf(c.getValue()).pop().forceFinish().store("PC");

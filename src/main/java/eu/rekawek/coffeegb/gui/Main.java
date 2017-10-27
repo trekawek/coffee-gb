@@ -61,6 +61,7 @@ public class Main {
             controller = new SwingController();
             gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
         }
+        console.ifPresent(c -> c.init(gameboy));
     }
 
     private static GameboyOptions parseArgs(String[] args) {

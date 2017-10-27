@@ -92,11 +92,7 @@ public class Gpu implements AddressSpace {
 
     private AddressSpace getAddressSpace(int address) {
         if (videoRam0.accepts(address) && mode != Mode.PixelTransfer) {
-            if (gbc && (r.get(VBK) & 1) == 1) {
-                return videoRam1;
-            } else {
-                return videoRam0;
-            }
+            return getVideoRam();
         } else if (oamRam.accepts(address) && !dma.isOamBlocked()/* && mode != Mode.OamSearch && mode != Mode.PixelTransfer*/) {
             return oamRam;
         } else if (lcdc.accepts(address)) {
@@ -110,6 +106,22 @@ public class Gpu implements AddressSpace {
         } else {
             return null;
         }
+    }
+
+    private AddressSpace getVideoRam() {
+        if (gbc && (r.get(VBK) & 1) == 1) {
+            return videoRam1;
+        } else {
+            return videoRam0;
+        }
+    }
+
+    public AddressSpace getVideoRam0() {
+        return videoRam0;
+    }
+
+    public AddressSpace getVideoRam1() {
+        return videoRam1;
     }
 
     @Override
@@ -272,4 +284,19 @@ public class Gpu implements AddressSpace {
         return lcdc;
     }
 
+    public MemoryRegisters getRegisters() {
+        return r;
+    }
+
+    public boolean isGbc() {
+        return gbc;
+    }
+
+    public ColorPalette getBgPalette() {
+        return bgPalette;
+    }
+
+    public Mode getMode() {
+        return mode;
+    }
 }

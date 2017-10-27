@@ -38,6 +38,10 @@ public class Ram implements AddressSpace {
 
     @Override
     public int getByte(int address) {
-        return space[address - offset];
+        int index = address - offset;
+        if (index < 0 || index >= space.length) {
+            throw new IndexOutOfBoundsException("Address: " + address);
+        }
+        return space[index];
     }
 }

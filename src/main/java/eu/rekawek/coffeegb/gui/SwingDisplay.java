@@ -15,7 +15,7 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     private final BufferedImage img;
 
-    private static final int[] COLORS = new int[]{0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
+    public static final int[] COLORS = new int[]{0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
 
     private final int[] rgb;
 
@@ -50,7 +50,7 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
         rgb[i++] = translateGbcRgb(gbcRgb);
     }
 
-    private int translateGbcRgb(int gbcRgb) {
+    public static int translateGbcRgb(int gbcRgb) {
         int r = (gbcRgb >> 0) & 0x1f;
         int g = (gbcRgb >> 5) & 0x1f;
         int b = (gbcRgb >> 10) & 0x1f;
