@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 import eu.rekawek.coffeegb.debug.command.Quit;
 import eu.rekawek.coffeegb.debug.command.ShowHelp;
+import eu.rekawek.coffeegb.debug.command.apu.Channel;
 import eu.rekawek.coffeegb.debug.command.cpu.ShowOpcode;
 import eu.rekawek.coffeegb.debug.command.cpu.ShowOpcodes;
 import eu.rekawek.coffeegb.debug.command.ppu.ShowBackground;
@@ -45,6 +46,8 @@ public class Console implements Runnable {
 
         commands.add(new ShowBackground(gameboy, ShowBackground.Type.WINDOW));
         commands.add(new ShowBackground(gameboy, ShowBackground.Type.BACKGROUND));
+        commands.add(new Channel(gameboy.getSound()));
+
         Collections.sort(commands, Comparator.comparing(c -> c.getPattern().getCommandNames().get(0)));
     }
 

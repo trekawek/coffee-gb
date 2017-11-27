@@ -196,4 +196,8 @@ public class Gameboy implements Runnable {
     public void unregisterTickListener(Runnable tickListener) {
         tickListeners.remove(tickListener);
     }
+
+    public Sound getSound() {
+        return sound;
+    }
 }

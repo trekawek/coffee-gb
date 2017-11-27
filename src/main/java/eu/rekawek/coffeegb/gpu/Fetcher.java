@@ -200,7 +200,7 @@ public class Fetcher {
         } else {
             tileAddress = tileDataAddress + tileId * 0x10;
         }
-        AddressSpace videoRam = attr.getBank() == 0 ? videoRam0 : videoRam1;
+        AddressSpace videoRam = (attr.getBank() == 0 || !gbc) ? videoRam0 : videoRam1;
         return videoRam.getByte(tileAddress + effectiveLine * 2 + byteNumber);
     }
 
