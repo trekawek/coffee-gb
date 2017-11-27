@@ -91,7 +91,7 @@ public class Gpu implements AddressSpace {
     }
 
     private AddressSpace getAddressSpace(int address) {
-        if (videoRam0.accepts(address) && mode != Mode.PixelTransfer) {
+        if (videoRam0.accepts(address)/* && mode != Mode.PixelTransfer*/) {
             return getVideoRam();
         } else if (oamRam.accepts(address) && !dma.isOamBlocked()/* && mode != Mode.OamSearch && mode != Mode.PixelTransfer*/) {
             return oamRam;
