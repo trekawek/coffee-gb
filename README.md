@@ -6,6 +6,14 @@ Coffee GB is a Gameboy Color emulator written in Java 8. It's meant to be a deve
 
 ![Coffee GB running game](doc/tetris.gif)
 
+## Building
+
+The emulator can be build with [Maven](https://maven.apache.org/):
+
+    mvn clean package
+
+The jar file will be available in the `./target` directory.
+
 ## Usage
 
     Usage:
