@@ -18,10 +18,14 @@ The jar file will be available in the `./target` directory.
 
     Usage:
     java -jar coffee-gb.jar [OPTIONS] ROM_FILE
-    
+
     Available options:
-      -f --force-classic    Emulate classic GB (DMG) for universal ROMs
-      -b --use-bootstrap    Start with the GB bootstrap
+      -d  --force-dmg                Emulate classic GB (DMG) for universal ROMs
+      -c  --force-cgb                Emulate color GB (CGB) for all ROMs
+      -b  --use-bootstrap            Start with the GB bootstrap
+      -db --disable-battery-saves    Disable battery saves
+          --debug                    Enable debug console
+          --headless                 Start in the headless mode
 
 Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd>.
 
