@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.Set;
 
 public class Emulator {
@@ -42,7 +43,7 @@ public class Emulator {
 
     private JFrame mainWindow;
 
-    public Emulator(String[] args) throws IOException {
+    public Emulator(String[] args, Properties properties) throws IOException {
         options = parseArgs(args);
         rom = new Cartridge(options);
         speedMode = new SpeedMode();
@@ -58,7 +59,7 @@ public class Emulator {
         } else {
             sound = new AudioSystemSoundOutput();
             display = new SwingDisplay(SCALE);
-            controller = new SwingController();
+            controller = new SwingController(properties);
             gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
         }
         console.ifPresent(c -> c.init(gameboy));

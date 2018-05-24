@@ -91,6 +91,23 @@ The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a gre
 ![Coffee GB running game](doc/screenshot9.png)
 ![Coffee GB running game](doc/screenshot10.png)
 
+## Key bindings
+
+The default key bindings can be changed with the `~/.coffeegb.properties` file. The file has following format:
+
+```
+btn_up=VK_UP
+btn_down=VK_DOWN
+btn_left=VK_LEFT
+btn_right=VK_RIGHT
+btn_a=VK_Z
+btn_b=VK_X
+btn_start=VK_ENTER
+btn_select=VK_BACK_SPACE
+```
+
+The key list can be found in the [KeyEvent JavaDoc](https://docs.oracle.com/javase/10/docs/api/java/awt/event/KeyEvent.html#field.summary).
+
 ## Resources
 
 * [GameBoy CPU manual](http://marc.rawer.de/Gameboy/Docs/GBCPUman.pdf)
