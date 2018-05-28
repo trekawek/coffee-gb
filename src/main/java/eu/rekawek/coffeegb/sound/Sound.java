@@ -53,10 +53,10 @@ public class Sound implements AddressSpace {
             if (!overridenEnabled[i]) {
                 continue;
             }
-            if ((selection & (1 << i)) != 0) {
+            if ((selection & (1 << i + 4)) != 0) {
                 left += channels[i];
             }
-            if ((selection & (1 << i + 4)) != 0) {
+            if ((selection & (1 << i)) != 0) {
                 right += channels[i];
             }
         }
@@ -64,8 +64,8 @@ public class Sound implements AddressSpace {
         right /= 4;
 
         int volumes = r.getByte(0xff24);
-        left *= (volumes & 0b111);
-        right *= ((volumes >> 4) & 0b111);
+        left *= ((volumes >> 4) & 0b111);
+        right *= (volumes & 0b111);
 
         output.play((byte) left, (byte) right);
     }
