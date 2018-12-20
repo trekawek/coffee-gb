@@ -229,11 +229,11 @@ public class Cpu {
                         break;
                     }
                 }
-                interruptManager.flush();
                 if (requestedIrq == null) {
                     state = State.OPCODE;
                 } else {
                     state = State.IRQ_PUSH_1;
+                    interruptManager.clearInterrupt(requestedIrq);
                     interruptManager.disableInterrupts(false);
                 }
                 break;

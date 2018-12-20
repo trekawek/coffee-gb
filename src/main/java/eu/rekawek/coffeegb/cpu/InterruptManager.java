@@ -58,6 +58,10 @@ public class InterruptManager implements AddressSpace {
         interruptFlag = interruptFlag | (1 << type.ordinal());
     }
 
+    public void clearInterrupt(InterruptType type) {
+        interruptFlag = interruptFlag & ~(1 << type.ordinal());
+    }
+
     public void onInstructionFinished() {
         if (pendingEnableInterrupts != -1) {
             if (pendingEnableInterrupts-- == 0) {
@@ -77,10 +81,6 @@ public class InterruptManager implements AddressSpace {
 
     public boolean isInterruptRequested() {
         return (interruptFlag & interruptEnabled) != 0;
-    }
-
-    public void flush() {
-        interruptFlag = 0xe0;
     }
 
     public boolean isHaltBug() {
