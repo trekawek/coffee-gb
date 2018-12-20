@@ -35,21 +35,25 @@ public class InterruptManager implements AddressSpace {
     }
 
     public void enableInterrupts(boolean withDelay) {
-        pendingEnableInterrupts = -1;
         pendingDisableInterrupts = -1;
         if (withDelay) {
-            pendingEnableInterrupts = 1;
+            if (pendingEnableInterrupts == -1) {
+                pendingEnableInterrupts = 1;
+            }
         } else {
+            pendingEnableInterrupts = -1;
             ime = true;
         }
     }
 
     public void disableInterrupts(boolean withDelay) {
         pendingEnableInterrupts = -1;
-        pendingDisableInterrupts = -1;
         if (withDelay && gbc) {
-            pendingDisableInterrupts = 1;
+            if (pendingDisableInterrupts == -1) {
+                pendingDisableInterrupts = 1;
+            }
         } else {
+            pendingDisableInterrupts = -1;
             ime = false;
         }
     }
