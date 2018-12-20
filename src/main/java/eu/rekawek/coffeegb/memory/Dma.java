@@ -19,6 +19,8 @@ public class Dma implements AddressSpace {
 
     private int ticks;
 
+    private int regValue = 0xff;
+
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
         this.addressSpace = addressSpace;
         this.speedMode = speedMode;
@@ -49,11 +51,12 @@ public class Dma implements AddressSpace {
         restarted = isOamBlocked();
         ticks = 0;
         transferInProgress = true;
+        regValue = value;
     }
 
     @Override
     public int getByte(int address) {
-        return 0;
+        return regValue;
     }
 
     public boolean isOamBlocked() {
