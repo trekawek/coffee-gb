@@ -107,7 +107,7 @@ public class Timer implements AddressSpace {
                 return tma;
 
             case 0xff07:
-                return tac;
+                return tac | 0b11111000;
         }
         throw new IllegalArgumentException();
     }
