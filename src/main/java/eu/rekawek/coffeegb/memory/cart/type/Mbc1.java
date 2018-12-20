@@ -111,9 +111,13 @@ public class Mbc1 implements AddressSpace {
         } else if (address >= 0x4000 && address < 0x8000) {
             return getRomByte(getRomBankFor0x4000(), address - 0x4000);
         } else if (address >= 0xa000 && address < 0xc000) {
-            int ramAddress = getRamAddress(address);
-            if (ramAddress < ram.length) {
-                return ram[ramAddress];
+            if (ramWriteEnabled) {
+                int ramAddress = getRamAddress(address);
+                if (ramAddress < ram.length) {
+                    return ram[ramAddress];
+                } else {
+                    return 0xff;
+                }
             } else {
                 return 0xff;
             }
