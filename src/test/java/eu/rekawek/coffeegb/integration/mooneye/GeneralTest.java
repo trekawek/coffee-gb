@@ -8,27 +8,16 @@ import org.junit.runners.Parameterized;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
 
 @RunWith(Parameterized.class)
 public class GeneralTest {
-
-    static final List<String> EXCLUDES = Arrays.asList(
-            "-dmgABCX.gb",
-            "-dmgABCXmgb.gb",
-            "-mgb.gb",
-            "-sgb.gb",
-            "-sgb2.gb",
-            "-S.gb"
-    );
 
     private final Path romPath;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/acceptance", EXCLUDES, 1);
+        return ParametersProvider.getParameters("mooneye/acceptance");
     }
 
     public GeneralTest(String name, Path romPath) {

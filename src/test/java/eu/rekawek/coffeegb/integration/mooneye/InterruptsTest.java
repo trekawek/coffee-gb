@@ -8,34 +8,23 @@ import org.junit.runners.Parameterized;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
 
 @RunWith(Parameterized.class)
-public class GpuTest {
-
-    static final List<String> EXCLUDES = Arrays.asList(
-            "-dmgABCX.gb",
-            "-dmgABCXmgb.gb",
-            "-mgb.gb",
-            "-sgb.gb",
-            "-sgb2.gb",
-            "-S.gb"
-    );
+public class InterruptsTest {
 
     private final Path romPath;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/acceptance/gpu", EXCLUDES, 1);
+        return ParametersProvider.getParameters("mooneye/acceptance/interrupts");
     }
 
-    public GpuTest(String name, Path romPath) {
+    public InterruptsTest(String name, Path romPath) {
         this.romPath = romPath;
     }
 
-    @Test(timeout = 5000)
+    @Test
     public void test() throws IOException {
         RomTestUtils.testMooneyeRom(romPath);
     }

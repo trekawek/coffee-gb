@@ -9,7 +9,6 @@ import org.junit.runners.Parameterized;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collection;
-import java.util.Collections;
 
 @RunWith(Parameterized.class)
 public class TimerTest {
@@ -18,7 +17,7 @@ public class TimerTest {
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/acceptance/timer", Collections.emptyList(), 1);
+        return ParametersProvider.getParameters("mooneye/acceptance/timer");
     }
 
     public TimerTest(String name, Path romPath) {

@@ -8,7 +8,6 @@ import org.junit.runners.Parameterized;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collection;
 
 @RunWith(Parameterized.class)
@@ -18,7 +17,7 @@ public class MiscTest {
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/misc", Arrays.asList("-A.gb"), Integer.MAX_VALUE);
+        return ParametersProvider.getParameters("mooneye/misc");
     }
 
     public MiscTest(String name, Path romPath) {

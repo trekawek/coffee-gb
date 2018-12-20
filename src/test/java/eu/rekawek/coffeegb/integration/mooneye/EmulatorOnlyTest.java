@@ -10,8 +10,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collection;
 
-import static eu.rekawek.coffeegb.integration.mooneye.GeneralTest.EXCLUDES;
-
 @RunWith(Parameterized.class)
 public class EmulatorOnlyTest {
 
@@ -19,7 +17,7 @@ public class EmulatorOnlyTest {
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() throws IOException {
-        return ParametersProvider.getParameters("mooneye/emulator-only", EXCLUDES, Integer.MAX_VALUE);
+        return ParametersProvider.getParameters("mooneye/emulator-only", Integer.MAX_VALUE);
     }
 
     public EmulatorOnlyTest(String name, Path romPath) {
