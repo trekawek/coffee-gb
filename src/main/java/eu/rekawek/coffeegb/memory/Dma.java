@@ -22,7 +22,7 @@ public class Dma implements AddressSpace {
     private int regValue = 0xff;
 
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
-        this.addressSpace = addressSpace;
+        this.addressSpace = new DmaAddressSpace(addressSpace);
         this.speedMode = speedMode;
         this.oam = oam;
     }
