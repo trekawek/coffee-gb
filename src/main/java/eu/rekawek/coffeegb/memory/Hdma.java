@@ -69,7 +69,7 @@ public class Hdma implements AddressSpace {
         if (hdma1234.accepts(address)) {
             hdma1234.setByte(address, value);
         } else if (address == HDMA5) {
-            if (transferInProgress && (address & (1 << 7)) == 0) {
+            if (transferInProgress && (value & (1 << 7)) == 0) {
                 stopTransfer();
             } else {
                 startTransfer(value);
