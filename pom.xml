@@ -59,6 +59,7 @@
             <descriptorRef>jar-with-dependencies</descriptorRef>
           </descriptorRefs>
           <appendAssemblyId>false</appendAssemblyId>
+          <finalName>${project.name}-${project.version}-complete</finalName>
         </configuration>
         <executions>
           <execution>
@@ -110,6 +111,7 @@
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>
       <version>1.7.16</version>
+      <scope>runtime</scope>
     </dependency>
 
     <dependency>
