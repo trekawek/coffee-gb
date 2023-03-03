@@ -195,6 +195,10 @@ public class Gpu implements AddressSpace {
 
                 case HBlank:
                     ticksInLine = 0;
+                    if(r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) >= r.get(WY)
+                        && lcdc.isWindowDisplay()){
+                        r.preIncrement(WILC); // Window internal line counter
+                    }
                     if (r.preIncrement(LY) == 144) {
                         mode = Mode.VBlank;
                         phase = vBlankPhase.start();
@@ -213,6 +217,7 @@ public class Gpu implements AddressSpace {
                     if (r.preIncrement(LY) == 1) {
                         mode = Mode.OamSearch;
                         r.put(LY, 0);
+                        r.put(WILC,0); // Window internal line counter
                         phase = oamSearchPhase.start();
                         requestLcdcInterrupt(5);
                     } else {

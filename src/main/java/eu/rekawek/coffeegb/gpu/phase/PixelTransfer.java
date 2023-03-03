@@ -11,11 +11,7 @@ import eu.rekawek.coffeegb.gpu.PixelFifo;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
-import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
-import static eu.rekawek.coffeegb.gpu.GpuRegister.SCX;
-import static eu.rekawek.coffeegb.gpu.GpuRegister.SCY;
-import static eu.rekawek.coffeegb.gpu.GpuRegister.WX;
-import static eu.rekawek.coffeegb.gpu.GpuRegister.WY;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
 public class PixelTransfer implements GpuPhase {
 
@@ -132,7 +128,7 @@ public class PixelTransfer implements GpuPhase {
 
     private void startFetchingWindow() {
         int winX = (this.x - r.get(WX) + 7) / 0x08;
-        int winY = r.get(LY) - r.get(WY);
+        int winY = r.get(WILC); // Window internal line counter
 
         fetcher.startFetching(lcdc.getWindowTileMapDisplay() + (winY / 0x08) * 0x20, lcdc.getBgWindowTileData(), winX, lcdc.isBgWindowTileDataSigned(), winY % 0x08);
     }
