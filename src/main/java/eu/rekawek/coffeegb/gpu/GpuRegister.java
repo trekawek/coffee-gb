@@ -18,7 +18,9 @@ public enum GpuRegister implements MemoryRegisters.Register {
     OBP1(0xff49, RW),
     WY(0xff4a, RW),
     WX(0xff4b, RW),
-    VBK(0xff4f, W);
+    VBK(0xff4f, W),
+    // Window internal line counter
+    WILC(0xcafebebe,RW);
 
     private final int address;
 
