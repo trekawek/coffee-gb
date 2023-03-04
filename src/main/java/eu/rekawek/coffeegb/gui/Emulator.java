@@ -58,7 +58,7 @@ public class Emulator {
             gameboy = new Gameboy(options, rom, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, serialEndpoint, console);
         } else {
             sound = new AudioSystemSoundOutput();
-            display = new SwingDisplay(SCALE);
+            display = new SwingDisplay(SCALE, options.isGrayscale());
             controller = new SwingController(properties);
             gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
         }

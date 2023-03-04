@@ -17,6 +17,8 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     public static final int[] COLORS = new int[]{0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
 
+    public static final int[] COLORS_GRAYSCALE = new int[]{0xFFFFFF,0xAAAAAA, 0x555555, 0x000000};
+
     private final int[] rgb;
 
     private boolean enabled;
@@ -27,9 +29,11 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     private boolean doRefresh;
 
+    private boolean grayscale;
+
     private int i;
 
-    public SwingDisplay(int scale) {
+    public SwingDisplay(int scale, boolean grayscale) {
         super();
         GraphicsConfiguration gfxConfig = GraphicsEnvironment.
                 getLocalGraphicsEnvironment().getDefaultScreenDevice().
@@ -37,11 +41,12 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
         img = gfxConfig.createCompatibleImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
         rgb = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
         this.scale = scale;
+        this.grayscale = grayscale;
     }
 
     @Override
     public void putDmgPixel(int color) {
-        rgb[i++] = COLORS[color];
+        rgb[i++] = grayscale ? COLORS_GRAYSCALE[color] : COLORS[color];
         i = i % rgb.length;
     }
 
@@ -131,5 +136,9 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     public void stop() {
         doStop = true;
+    }
+
+    public BufferedImage getImg(){
+        return img;
     }
 }

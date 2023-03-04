@@ -21,6 +21,8 @@ public class GameboyOptions {
 
     private final boolean headless;
 
+    private final boolean grayscale;
+
     public GameboyOptions(File romFile) {
         this(romFile, Collections.emptyList(), Collections.emptyList());
     }
@@ -36,6 +38,7 @@ public class GameboyOptions {
         this.disableBatterySaves = params.contains("disable-battery-saves") || shortParams.contains("db");
         this.debug = params.contains("debug");
         this.headless = params.contains("headless");
+        this.grayscale = params.contains("grayscale");
     }
 
     public File getRomFile() {
@@ -66,6 +69,10 @@ public class GameboyOptions {
         return headless;
     }
 
+    public boolean isGrayscale() {
+        return grayscale;
+    }
+
     public static void printUsage(PrintStream stream) {
         stream.println("Usage:");
         stream.println("java -jar coffee-gb.jar [OPTIONS] ROM_FILE");
@@ -77,6 +84,7 @@ public class GameboyOptions {
         stream.println("  -db --disable-battery-saves    Disable battery saves");
         stream.println("      --debug                    Enable debug console");
         stream.println("      --headless                 Start in the headless mode");
+        stream.println("      --grayscale                Start in grayscale mode (DMG)");
     }
 
 }

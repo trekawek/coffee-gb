@@ -25,6 +25,12 @@ public final class RomTestUtils {
         assertTrue(result.contains("Passed"));
     }
 
+    public static void testRomWithImage(Path romPath) throws Exception {
+        System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
+        ImageTestRunner runner = new ImageTestRunner(romPath.toFile());
+        assertTrue(runner.runTest());
+    }
+
     public static void testMooneyeRom(Path romPath) throws IOException {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
         MooneyeTestRunner runner = new MooneyeTestRunner(romPath.toFile(), System.out);
