@@ -12,7 +12,7 @@ The emulator can be build with [Maven](https://maven.apache.org/):
 
     mvn clean package
 
-The jar file will be available in the `./target` directory.
+The coffee-gb-*-complete.jar executable file will be available in the `./target` directory.
 
 ## Usage
 
