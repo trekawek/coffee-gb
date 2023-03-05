@@ -7,6 +7,9 @@
   <packaging>jar</packaging>
   <url>https://github.com/trekawek/coffee-gb</url>
 
+  <name>coffee-gb</name>
+  <description>coffee-gb emulator</description>
+
   <licenses>
     <license>
       <name>MIT License</name>
