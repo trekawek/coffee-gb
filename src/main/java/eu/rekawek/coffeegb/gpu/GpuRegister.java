@@ -20,7 +20,7 @@ public enum GpuRegister implements MemoryRegisters.Register {
     WX(0xff4b, RW),
     VBK(0xff4f, W),
     // Window internal line counter
-    WILC(0xcafebebe,RW);
+    WILC(0xcafebebe, RW);
 
     private final int address;
 

@@ -178,6 +178,7 @@ public class Gpu implements AddressSpace {
             // switch line 153 to 0
             if (ticksInLine == 4 && mode == Mode.VBlank && r.get(LY) == 153) {
                 r.put(LY, 0);
+                r.put(WILC, 0);
                 requestLycEqualsLyInterrupt();
             }
         } else {
@@ -196,7 +197,7 @@ public class Gpu implements AddressSpace {
                 case HBlank:
                     ticksInLine = 0;
                     if(r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) >= r.get(WY)
-                        && lcdc.isWindowDisplay()){
+                        && lcdc.isWindowDisplay()) {
                         r.preIncrement(WILC); // Window internal line counter
                     }
                     if (r.preIncrement(LY) == 144) {
@@ -269,6 +270,7 @@ public class Gpu implements AddressSpace {
 
     private void disableLcd() {
         r.put(LY, 0);
+        r.put(WILC, 0);
         this.ticksInLine = 0;
         this.phase = hBlankPhase.start(250);
         this.mode = Mode.HBlank;
