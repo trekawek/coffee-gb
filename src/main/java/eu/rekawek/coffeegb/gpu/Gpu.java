@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
-import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.gpu.phase.GpuPhase;
 import eu.rekawek.coffeegb.gpu.phase.HBlankPhase;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch;
@@ -178,7 +177,7 @@ public class Gpu implements AddressSpace {
             // switch line 153 to 0
             if (ticksInLine == 4 && mode == Mode.VBlank && r.get(LY) == 153) {
                 r.put(LY, 0);
-                r.put(WILC, 0);
+                pixelTransferPhase.resetWindowLineCounter();
                 requestLycEqualsLyInterrupt();
             }
         } else {
@@ -198,7 +197,7 @@ public class Gpu implements AddressSpace {
                     ticksInLine = 0;
                     if(r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) >= r.get(WY)
                         && lcdc.isWindowDisplay()) {
-                        r.preIncrement(WILC); // Window internal line counter
+                        pixelTransferPhase.incrementWindowLineCounter();
                     }
                     if (r.preIncrement(LY) == 144) {
                         mode = Mode.VBlank;
@@ -218,7 +217,7 @@ public class Gpu implements AddressSpace {
                     if (r.preIncrement(LY) == 1) {
                         mode = Mode.OamSearch;
                         r.put(LY, 0);
-                        r.put(WILC,0); // Window internal line counter
+                        pixelTransferPhase.resetWindowLineCounter();
                         phase = oamSearchPhase.start();
                         requestLcdcInterrupt(5);
                     } else {
@@ -270,7 +269,7 @@ public class Gpu implements AddressSpace {
 
     private void disableLcd() {
         r.put(LY, 0);
-        r.put(WILC, 0);
+        pixelTransferPhase.resetWindowLineCounter();
         this.ticksInLine = 0;
         this.phase = hBlankPhase.start(250);
         this.mode = Mode.HBlank;

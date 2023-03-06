@@ -35,6 +35,8 @@ public class PixelTransfer implements GpuPhase {
 
     private boolean window;
 
+    private int windowLineCounter;
+
     public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, MemoryRegisters r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
         this.r = r;
         this.lcdc = lcdc;
@@ -62,6 +64,14 @@ public class PixelTransfer implements GpuPhase {
             fetcher.fetchingDisabled();
         }
         return this;
+    }
+
+    public void resetWindowLineCounter() {
+        windowLineCounter = 0;
+    }
+
+    public void incrementWindowLineCounter() {
+        windowLineCounter++;
     }
 
     @Override
@@ -128,7 +138,7 @@ public class PixelTransfer implements GpuPhase {
 
     private void startFetchingWindow() {
         int winX = (this.x - r.get(WX) + 7) / 0x08;
-        int winY = r.get(WILC); // Window internal line counter
+        int winY = windowLineCounter;
 
         fetcher.startFetching(lcdc.getWindowTileMapDisplay() + (winY / 0x08) * 0x20, lcdc.getBgWindowTileData(), winX, lcdc.isBgWindowTileDataSigned(), winY % 0x08);
     }
