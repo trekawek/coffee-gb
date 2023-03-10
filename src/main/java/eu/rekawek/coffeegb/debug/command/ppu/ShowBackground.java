@@ -5,10 +5,7 @@ import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.debug.Command;
 import eu.rekawek.coffeegb.debug.CommandPattern;
 import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
-import eu.rekawek.coffeegb.gpu.Gpu;
-import eu.rekawek.coffeegb.gpu.GpuRegister;
-import eu.rekawek.coffeegb.gpu.Lcdc;
-import eu.rekawek.coffeegb.gpu.TileAttributes;
+import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.gui.SwingDisplay;
 import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import org.slf4j.Logger;
@@ -177,7 +174,7 @@ public class ShowBackground implements Command {
                     if (gpu.isGbc()) {
                         int[] gbcPalette = gpu.getBgPalette().getPalette(attr.getColorPaletteIndex());
                         for (int i = 0; i < palette.length; i++) {
-                            palette[i] = SwingDisplay.translateGbcRgb(gbcPalette[i]);
+                            palette[i] = Display.translateGbcRgb(gbcPalette[i]);
                         }
                     } else {
                         for (int i = 0; i < palette.length; i++) {
