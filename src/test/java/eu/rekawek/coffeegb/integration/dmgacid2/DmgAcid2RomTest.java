@@ -15,7 +15,6 @@ public class DmgAcid2RomTest {
         testRomWithImage(getPath("dmg-acid2.gb"));
     }
 
-
     private static Path getPath(String name) {
         return Paths.get("src/test/resources/roms/dmg-acid2", name);
     }

@@ -1,9 +1,11 @@
 package eu.rekawek.coffeegb.integration.support;
 
+import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.cpu.Cpu;
+
+import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Array;
 import java.nio.file.Path;
-import java.util.Arrays;
 
 import static org.junit.Assert.*;
 
@@ -30,12 +32,31 @@ public final class RomTestUtils {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
         ImageTestRunner runner = new ImageTestRunner(romPath.toFile());
         ImageTestRunner.TestResult result = runner.runTest();
-        assertArrayEquals(result.getErrorMessage(),result.getExpectedRGB(),result.getResultRGB());
+
+        File resultFile = File.createTempFile(romPath.getFileName().toString(), "-result.png");
+        result.writeResultToFile(resultFile);
+        assertArrayEquals("The result image is different from expected: " + resultFile, result.getExpectedRGB(), result.getResultRGB());
     }
 
     public static void testMooneyeRom(Path romPath) throws IOException {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
         MooneyeTestRunner runner = new MooneyeTestRunner(romPath.toFile(), System.out);
         assertTrue(runner.runTest());
+    }
+
+    static boolean isByteSequenceAtPc(Gameboy gameboy, int... seq) {
+        if (gameboy.getCpu().getState() != Cpu.State.OPCODE) {
+            return false;
+        }
+
+        int i = gameboy.getCpu().getRegisters().getPC();
+        boolean found = true;
+        for (int v : seq) {
+            if (gameboy.getAddressSpace().getByte(i++) != v) {
+                found = false;
+                break;
+            }
+        }
+        return found;
     }
 }
