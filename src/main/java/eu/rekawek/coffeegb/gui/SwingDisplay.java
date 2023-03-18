@@ -9,10 +9,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class SwingDisplay extends JPanel implements Display, Runnable {
 
-    public static final int DISPLAY_WIDTH = 160;
-
-    public static final int DISPLAY_HEIGHT = 144;
-
     private final BufferedImage img;
 
     public static final int[] COLORS = new int[]{0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
@@ -52,17 +48,7 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     @Override
     public void putColorPixel(int gbcRgb) {
-        rgb[i++] = translateGbcRgb(gbcRgb);
-    }
-
-    public static int translateGbcRgb(int gbcRgb) {
-        int r = (gbcRgb >> 0) & 0x1f;
-        int g = (gbcRgb >> 5) & 0x1f;
-        int b = (gbcRgb >> 10) & 0x1f;
-        int result = (r * 8) << 16;
-        result |= (g * 8) << 8;
-        result |= (b * 8) << 0;
-        return result;
+        rgb[i++] = Display.translateGbcRgb(gbcRgb);
     }
 
     @Override
@@ -136,9 +122,5 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     public void stop() {
         doStop = true;
-    }
-
-    public BufferedImage getImg(){
-        return img;
     }
 }

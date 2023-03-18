@@ -11,17 +11,22 @@ import eu.rekawek.coffeegb.gui.SwingDisplay;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.sound.SoundOutput;
+import org.junit.Test;
 
 import javax.imageio.ImageIO;
+import javax.swing.*;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.stream.Stream;
 
 public class ImageTestRunner {
 
-    private final SwingDisplay display;
+    private final TestDisplay display;
 
     private final Gameboy gb;
 
@@ -30,38 +35,101 @@ public class ImageTestRunner {
     public ImageTestRunner(File romFile) throws IOException {
         GameboyOptions options = new GameboyOptions(romFile, Collections.singletonList("grayscale"),Collections.emptyList());
         Cartridge cart = new Cartridge(options);
-        display = new SwingDisplay(1, options.isGrayscale());
+        display = new TestDisplay();
         gb = new Gameboy(options, cart, display, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
         imageFile = new File(romFile.getParentFile(),romFile.getName().replace(".gb",".png"));
     }
 
-    public boolean runTest() throws Exception {
-        new Thread(display).start();
+    public TestResult runTest() throws Exception {
         new Thread(gb).start();
         Thread.sleep(2000);
         gb.stop();
+        String errorMsg = "The screen does not correspond to the expected image: "+imageFile;
+        return new TestResult(display.getRGB(), getExpectedRGB(),errorMsg);
+    }
+
+    private int[] getExpectedRGB() throws Exception {
         BufferedImage expectedImg = ImageIO.read(imageFile);
-        boolean result = bufferedImagesEquals(expectedImg, display.getImg());
-        if(!result){
-            System.err.print("The screen does not correspond to the expected image: "+imageFile);
-        }
-        return result;
-    }
-
-    boolean bufferedImagesEquals(BufferedImage img1, BufferedImage img2) {
-        if (img1.getWidth() == img2.getWidth() && img1.getHeight() == img2.getHeight()) {
-            for (int x = 0; x < img1.getWidth(); x++) {
-                for (int y = 0; y < img1.getHeight(); y++) {
-                    if (img1.getRGB(x, y) != img2.getRGB(x, y))
-                        return false;
-                }
+        int[] rgb = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        for (int h = 0; h < Display.DISPLAY_HEIGHT; h++){
+            for (int w = 0; w < Display.DISPLAY_WIDTH; w++) {
+                rgb[h*Display.DISPLAY_WIDTH+w] = expectedImg.getRGB(w, h) & 0xffffff;
             }
-        } else {
-            return false;
         }
-        return true;
+        return rgb;
     }
 
+    public class TestDisplay implements Display {
+
+        private /*static*/ final int[] COLORS = new int[]{0xFFFFFF,0xAAAAAA, 0x555555, 0x000000};
+
+        private final int[] rgb;
+
+        private int i=0;
+
+        public TestDisplay() {
+            super();
+            rgb = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+        }
+
+        @Override
+        public void putDmgPixel(int color) {
+            rgb[i++] = COLORS[color];
+            i = i % rgb.length;
+        }
+
+        @Override
+        public void putColorPixel(int gbcRgb) {
+            rgb[i++] = Display.translateGbcRgb(gbcRgb);
+        }
+
+        @Override
+        public void requestRefresh() {
+            i=0;
+        }
+
+        @Override
+        public void waitForRefresh() {
+        }
+
+        @Override
+        public void enableLcd() {
+        }
+
+        @Override
+        public void disableLcd() {
+        }
+
+        public int[] getRGB(){
+            return rgb;
+        }
+    }
+
+
+    public static class TestResult {
+
+        private final int[] resultRGB;
+
+        private final int[] expectedRGB;
+
+        private final String errorMessage;
+
+        public TestResult(int[] resultRGB, int[] expectedRGB, String errorMessage) {
+            this.resultRGB = resultRGB;
+            this.expectedRGB = expectedRGB;
+            this.errorMessage = errorMessage;
+        }
+
+        public int[] getResultRGB() {
+            return resultRGB;
+        }
+
+        public int[] getExpectedRGB() {
+            return expectedRGB;
+        }
+
+        public String getErrorMessage(){return errorMessage;};
+    }
 
 
 }

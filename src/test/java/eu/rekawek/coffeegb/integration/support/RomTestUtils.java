@@ -1,10 +1,11 @@
 package eu.rekawek.coffeegb.integration.support;
 
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.nio.file.Path;
+import java.util.Arrays;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 public final class RomTestUtils {
 
@@ -28,7 +29,8 @@ public final class RomTestUtils {
     public static void testRomWithImage(Path romPath) throws Exception {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
         ImageTestRunner runner = new ImageTestRunner(romPath.toFile());
-        assertTrue(runner.runTest());
+        ImageTestRunner.TestResult result = runner.runTest();
+        assertArrayEquals(result.getErrorMessage(),result.getExpectedRGB(),result.getResultRGB());
     }
 
     public static void testMooneyeRom(Path romPath) throws IOException {
