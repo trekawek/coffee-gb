@@ -37,7 +37,7 @@ public class MemoryTestRunner {
         int status = 0x80;
         int divider = 0;
         while(status == 0x80 && !SerialTestRunner.isInfiniteLoop(gb)) {
-            gb.tick();
+            gb.tickSubsystems();
             if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 1 : 4)) {
                 status = getTestResult(gb);
                 divider = 0;

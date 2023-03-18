@@ -1,30 +1,24 @@
 package eu.rekawek.coffeegb.integration.support;
 
-import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.controller.Controller;
-import eu.rekawek.coffeegb.cpu.Cpu;
-import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.gpu.Display;
-import eu.rekawek.coffeegb.gui.SwingDisplay;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.sound.SoundOutput;
-import org.junit.Test;
 
 import javax.imageio.ImageIO;
-import javax.swing.*;
-import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.stream.Stream;
+
+import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
 
 public class ImageTestRunner {
+
+    private static final int MAX_TICKS = 2_000_000;
 
     private final TestDisplay display;
 
@@ -33,39 +27,42 @@ public class ImageTestRunner {
     private final File imageFile;
 
     public ImageTestRunner(File romFile) throws IOException {
-        GameboyOptions options = new GameboyOptions(romFile, Collections.singletonList("grayscale"),Collections.emptyList());
+        GameboyOptions options = new GameboyOptions(romFile, Collections.singletonList("grayscale"), Collections.emptyList());
         Cartridge cart = new Cartridge(options);
         display = new TestDisplay();
         gb = new Gameboy(options, cart, display, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
-        imageFile = new File(romFile.getParentFile(),romFile.getName().replace(".gb",".png"));
+        imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
     }
 
     public TestResult runTest() throws Exception {
-        new Thread(gb).start();
-        Thread.sleep(2000);
-        gb.stop();
-        String errorMsg = "The screen does not correspond to the expected image: "+imageFile;
-        return new TestResult(display.getRGB(), getExpectedRGB(),errorMsg);
+        int i = 0;
+        while (!isByteSequenceAtPc(gb, 0x40)) {
+            gb.tick();
+            if (i++ > MAX_TICKS) {
+                throw new Exception("The test is not finished after " + i + " ticks.");
+            }
+        }
+        return new TestResult(display.getRGB(), getExpectedRGB());
     }
 
     private int[] getExpectedRGB() throws Exception {
         BufferedImage expectedImg = ImageIO.read(imageFile);
         int[] rgb = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
-        for (int h = 0; h < Display.DISPLAY_HEIGHT; h++){
-            for (int w = 0; w < Display.DISPLAY_WIDTH; w++) {
-                rgb[h*Display.DISPLAY_WIDTH+w] = expectedImg.getRGB(w, h) & 0xffffff;
+        for (int y = 0; y < Display.DISPLAY_HEIGHT; y++) {
+            for (int x = 0; x < Display.DISPLAY_WIDTH; x++) {
+                rgb[y * Display.DISPLAY_WIDTH + x] = expectedImg.getRGB(x, y) & 0xffffff;
             }
         }
         return rgb;
     }
 
-    public class TestDisplay implements Display {
+    public static class TestDisplay implements Display {
 
-        private /*static*/ final int[] COLORS = new int[]{0xFFFFFF,0xAAAAAA, 0x555555, 0x000000};
+        private static final int[] COLORS = new int[]{0xFFFFFF, 0xAAAAAA, 0x555555, 0x000000};
 
         private final int[] rgb;
 
-        private int i=0;
+        private int i = 0;
 
         public TestDisplay() {
             super();
@@ -85,7 +82,7 @@ public class ImageTestRunner {
 
         @Override
         public void requestRefresh() {
-            i=0;
+            i = 0;
         }
 
         @Override
@@ -100,7 +97,7 @@ public class ImageTestRunner {
         public void disableLcd() {
         }
 
-        public int[] getRGB(){
+        public int[] getRGB() {
             return rgb;
         }
     }
@@ -112,12 +109,9 @@ public class ImageTestRunner {
 
         private final int[] expectedRGB;
 
-        private final String errorMessage;
-
-        public TestResult(int[] resultRGB, int[] expectedRGB, String errorMessage) {
+        public TestResult(int[] resultRGB, int[] expectedRGB) {
             this.resultRGB = resultRGB;
             this.expectedRGB = expectedRGB;
-            this.errorMessage = errorMessage;
         }
 
         public int[] getResultRGB() {
@@ -128,8 +122,14 @@ public class ImageTestRunner {
             return expectedRGB;
         }
 
-        public String getErrorMessage(){return errorMessage;};
+        public void writeResultToFile(File file) throws IOException {
+            BufferedImage img = new BufferedImage(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, BufferedImage.TYPE_INT_RGB);
+            for (int y = 0; y < Display.DISPLAY_HEIGHT; y++) {
+                for (int x = 0; x < Display.DISPLAY_WIDTH; x++) {
+                    img.setRGB(x, y, resultRGB[y * Display.DISPLAY_WIDTH + x]);
+                }
+            }
+            ImageIO.write(img, "png", file);
+        }
     }
-
-
 }

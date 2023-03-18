@@ -61,6 +61,10 @@ public class Gameboy implements Runnable {
 
     private final List<Runnable> tickListeners = new ArrayList<>();
 
+    private boolean requestedScreenRefresh;
+
+    private boolean lcdDisabled;
+
     public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
         this(options, rom, display, controller, soundOutput, serialEndpoint, Optional.empty());
     }
@@ -125,34 +129,9 @@ public class Gameboy implements Runnable {
     }
 
     public void run() {
-        boolean requestedScreenRefresh = false;
-        boolean lcdDisabled = false;
         doStop = false;
         while (!doStop) {
-            Gpu.Mode newMode = tick();
-            if (newMode != null) {
-                hdma.onGpuUpdate(newMode);
-            }
-
-            if (!lcdDisabled && !gpu.isLcdEnabled()) {
-                lcdDisabled = true;
-                display.requestRefresh();
-                hdma.onLcdSwitch(false);
-            } else if (newMode == Gpu.Mode.VBlank) {
-                requestedScreenRefresh = true;
-                display.requestRefresh();
-            }
-
-            if (lcdDisabled && gpu.isLcdEnabled()) {
-                lcdDisabled = false;
-                display.waitForRefresh();
-                hdma.onLcdSwitch(true);
-            } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
-                requestedScreenRefresh = false;
-                display.waitForRefresh();
-            }
-            console.ifPresent(Console::tick);
-            tickListeners.forEach(Runnable::run);
+            tick();
         }
     }
 
@@ -160,7 +139,34 @@ public class Gameboy implements Runnable {
         doStop = true;
     }
 
-    public Gpu.Mode tick() {
+    public void tick() {
+        Gpu.Mode newMode = tickSubsystems();
+        if (newMode != null) {
+            hdma.onGpuUpdate(newMode);
+        }
+
+        if (!lcdDisabled && !gpu.isLcdEnabled()) {
+            lcdDisabled = true;
+            display.requestRefresh();
+            hdma.onLcdSwitch(false);
+        } else if (newMode == Gpu.Mode.VBlank) {
+            requestedScreenRefresh = true;
+            display.requestRefresh();
+        }
+
+        if (lcdDisabled && gpu.isLcdEnabled()) {
+            lcdDisabled = false;
+            display.waitForRefresh();
+            hdma.onLcdSwitch(true);
+        } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
+            requestedScreenRefresh = false;
+            display.waitForRefresh();
+        }
+        console.ifPresent(Console::tick);
+        tickListeners.forEach(Runnable::run);
+    }
+
+    public Gpu.Mode tickSubsystems() {
         timer.tick();
         if (hdma.isTransferInProgress()) {
             hdma.tick();

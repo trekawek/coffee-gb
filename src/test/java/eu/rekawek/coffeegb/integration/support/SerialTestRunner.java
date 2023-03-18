@@ -37,7 +37,7 @@ public class SerialTestRunner implements SerialEndpoint {
     public String runTest() throws IOException {
         int divider = 0;
         while (true) {
-            gb.tick();
+            gb.tickSubsystems();
             if (++divider == 4) {
                 if (isInfiniteLoop(gb)) {
                     break;

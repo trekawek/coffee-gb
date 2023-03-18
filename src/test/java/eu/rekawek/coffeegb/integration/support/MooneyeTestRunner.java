@@ -18,6 +18,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
+
 public class MooneyeTestRunner {
 
     private final Gameboy gb;
@@ -52,8 +54,8 @@ public class MooneyeTestRunner {
 
     public boolean runTest() throws IOException {
         int divider = 0;
-        while(!isByteSequenceAtPc(0x00, 0x18, 0xfd)) { // infinite loop
-            gb.tick();
+        while(!isByteSequenceAtPc(gb, 0x00, 0x18, 0xfd)) { // infinite loop
+            gb.tickSubsystems();
             if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 1 : 4)) {
                 displayProgress();
                 divider = 0;
@@ -67,25 +69,8 @@ public class MooneyeTestRunner {
             if (regs.getA() != 0) {
                 os.write(regs.getA());
             }
-        } else if (isByteSequenceAtPc(0x7d, 0xe6, 0x1f, 0xee, 0x1f)) {
+        } else if (isByteSequenceAtPc(gb, 0x7d, 0xe6, 0x1f, 0xee, 0x1f)) {
             os.write('\n');
         }
     }
-
-    private boolean isByteSequenceAtPc(int... seq) {
-        if (cpu.getState() != Cpu.State.OPCODE) {
-            return false;
-        }
-
-        int i = regs.getPC();
-        boolean found = true;
-        for (int v : seq) {
-            if (mem.getByte(i++) != v) {
-                found = false;
-                break;
-            }
-        }
-        return found;
-    }
-
 }
