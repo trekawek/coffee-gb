@@ -166,7 +166,7 @@ public class Gameboy implements Runnable {
         tickListeners.forEach(Runnable::run);
     }
 
-    public Gpu.Mode tickSubsystems() {
+    private Gpu.Mode tickSubsystems() {
         timer.tick();
         if (hdma.isTransferInProgress()) {
             hdma.tick();

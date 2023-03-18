@@ -34,10 +34,10 @@ public class SerialTestRunner implements SerialEndpoint {
         this.os = os;
     }
 
-    public String runTest() throws IOException {
+    public String runTest() {
         int divider = 0;
         while (true) {
-            gb.tickSubsystems();
+            gb.tick();
             if (++divider == 4) {
                 if (isInfiniteLoop(gb)) {
                     break;
