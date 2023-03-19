@@ -1,26 +1,31 @@
 package eu.rekawek.coffeegb.memory.cart.battery;
 
 import org.apache.commons.io.IOUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
 
 public class FileBattery implements Battery {
 
-    private static final Logger LOG = LoggerFactory.getLogger(FileBattery.class);
-
     private final File saveFile;
 
-    public FileBattery(File parent, String baseName) {
+    private final byte[] clockBuffer;
+
+    private final byte[] ramBuffer;
+
+    private boolean isClockPresent;
+
+    private boolean isDirty;
+
+    public FileBattery(File parent, String baseName, int ramSize) {
         this.saveFile = new File(parent, baseName + ".sav");
+        this.clockBuffer = new byte[11 * 4];
+        this.ramBuffer = new byte[ramSize];
     }
 
     @Override
@@ -40,7 +45,7 @@ public class FileBattery implements Battery {
         }
         long saveLength = saveFile.length();
         saveLength = saveLength - (saveLength % 0x2000);
-        try (InputStream is = new FileInputStream(saveFile)) {
+        try (InputStream is = Files.newInputStream(saveFile.toPath())) {
             loadRam(ram, is, saveLength);
             if (clockData != null) {
                 loadClock(clockData, is);
@@ -52,11 +57,25 @@ public class FileBattery implements Battery {
 
     @Override
     public void saveRamWithClock(int[] ram, long[] clockData) {
-        try (OutputStream os = new FileOutputStream(saveFile)) {
-            saveRam(ram, os);
-            if (clockData != null) {
-                saveClock(clockData, os);
+        doSaveRam(ram);
+        if (clockData != null) {
+            doSaveClock(clockData);
+            isClockPresent = true;
+        }
+        isDirty = true;
+    }
+
+    public void flush() {
+        if (!isDirty) {
+            return;
+        }
+        try (OutputStream os = Files.newOutputStream(saveFile.toPath())) {
+            os.write(ramBuffer);
+            if (isClockPresent) {
+                os.write(clockBuffer);
             }
+            isClockPresent = false;
+            isDirty = false;
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -69,18 +88,8 @@ public class FileBattery implements Battery {
         buff.order(ByteOrder.LITTLE_ENDIAN);
         int i = 0;
         while (buff.hasRemaining()) {
-            clockData[i++] = buff.getInt() & 0xffffffff;
+            clockData[i++] = buff.getInt();
         }
-    }
-
-    private void saveClock(long[] clockData, OutputStream os) throws IOException {
-        byte[] byteBuff = new byte[4 * clockData.length];
-        ByteBuffer buff = ByteBuffer.wrap(byteBuff);
-        buff.order(ByteOrder.LITTLE_ENDIAN);
-        for (long d : clockData) {
-            buff.putInt((int) d);
-        }
-        IOUtils.write(byteBuff, os);
     }
 
     private void loadRam(int[] ram, InputStream is, long length) throws IOException {
@@ -91,11 +100,17 @@ public class FileBattery implements Battery {
         }
     }
 
-    private void saveRam(int[] ram, OutputStream os) throws IOException {
-        byte[] buffer = new byte[ram.length];
-        for (int i = 0; i < ram.length; i++) {
-            buffer[i] = (byte) (ram[i]);
+    private void doSaveClock(long[] clockData) {
+        ByteBuffer buff = ByteBuffer.wrap(clockBuffer);
+        buff.order(ByteOrder.LITTLE_ENDIAN);
+        for (long d : clockData) {
+            buff.putInt((int) d);
         }
-        IOUtils.write(buffer, os);
+    }
+
+    private void doSaveRam(int[] ram) {
+        for (int i = 0; i < ram.length; i++) {
+            ramBuffer[i] = (byte) (ram[i]);
+        }
     }
 }

@@ -10,6 +10,8 @@ public interface Battery {
 
     void saveRamWithClock(int[] ram, long[] clockData);
 
+    void flush();
+
     Battery NULL_BATTERY = new Battery() {
         @Override
         public void loadRam(int[] ram) {
@@ -25,6 +27,10 @@ public interface Battery {
 
         @Override
         public void saveRamWithClock(int[] ram, long[] clockData) {
+        }
+
+        @Override
+        public void flush() {
         }
     };
 }

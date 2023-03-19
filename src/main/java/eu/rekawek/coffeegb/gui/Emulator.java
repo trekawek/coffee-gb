@@ -142,6 +142,7 @@ public class Emulator {
         display.stop();
         sound.stopThread();
         gameboy.stop();
+        rom.flushBattery();
         System.exit(0);
     }
 }

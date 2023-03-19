@@ -16,9 +16,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -49,6 +49,8 @@ public class Cartridge implements AddressSpace {
 
     private final String title;
 
+    private final Battery battery;
+
     private int dmgBoostrap;
 
     public Cartridge(GameboyOptions options) throws IOException {
@@ -66,9 +68,10 @@ public class Cartridge implements AddressSpace {
         }
         LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
 
-        Battery battery = Battery.NULL_BATTERY;
         if (type.isBattery() && options.isSupportBatterySaves()) {
-            battery = new FileBattery(file.getParentFile(), FilenameUtils.removeExtension(file.getName()));
+            battery = new FileBattery(file.getParentFile(), FilenameUtils.removeExtension(file.getName()), 0x2000 * romBanks);
+        } else {
+            battery = Battery.NULL_BATTERY;
         }
 
         if (type.isMbc1()) {
@@ -144,9 +147,13 @@ public class Cartridge implements AddressSpace {
         }
     }
 
+    public void flushBattery() {
+        battery.flush();
+    }
+
     private static int[] loadFile(File file) throws IOException {
         String ext = FilenameUtils.getExtension(file.getName());
-        try (InputStream is = new FileInputStream(file)) {
+        try (InputStream is = Files.newInputStream(file.toPath())) {
             if ("zip".equalsIgnoreCase(ext)) {
                 try (ZipInputStream zis = new ZipInputStream(is)) {
                     ZipEntry entry;
