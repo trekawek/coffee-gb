@@ -131,11 +131,13 @@ public class Emulator {
         mainWindow.addKeyListener(controller);
 
         new Thread(display).start();
+        new Thread(sound).start();
         new Thread(gameboy).start();
     }
 
     private void stopGui() {
         display.stop();
+        sound.stopThread();
         gameboy.stop();
         mainWindow.dispose();
     }

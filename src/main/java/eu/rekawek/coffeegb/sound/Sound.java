@@ -39,6 +39,7 @@ public class Sound implements AddressSpace {
 
     public void tick() {
         if (!enabled) {
+            output.play(0, 0);
             return;
         }
         for (int i = 0; i < allModes.length; i++) {

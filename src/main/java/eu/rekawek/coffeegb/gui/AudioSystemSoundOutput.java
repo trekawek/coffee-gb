@@ -11,13 +11,13 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 
-public class AudioSystemSoundOutput implements SoundOutput {
+public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(AudioSystemSoundOutput.class);
 
     private static final int SAMPLE_RATE = 22050;
 
-    private static final int BUFFER_SIZE = 1024;
+    private static final int BUFFER_SIZE = 4096;
 
     private static final AudioFormat FORMAT = new AudioFormat(AudioFormat.Encoding.PCM_UNSIGNED, SAMPLE_RATE, 8, 2, 2, SAMPLE_RATE, false);
 
@@ -25,19 +25,20 @@ public class AudioSystemSoundOutput implements SoundOutput {
 
     private byte[] buffer;
 
-    private int i;
+    private byte[] copiedBuffer;
+
+    private int pos;
 
     private int tick;
 
     private int divider;
 
+    private volatile boolean doStop;
+
+    private volatile boolean isPlaying;
+
     @Override
-    public void start() {
-        if (line != null) {
-            LOG.debug("Sound already started");
-            return;
-        }
-        LOG.debug("Start sound");
+    public void run() {
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
             line.open(FORMAT, BUFFER_SIZE);
@@ -46,18 +47,37 @@ public class AudioSystemSoundOutput implements SoundOutput {
         }
         line.start();
         buffer = new byte[line.getBufferSize()];
+        copiedBuffer = new byte[buffer.length];
         divider = (int) (Gameboy.TICKS_PER_SEC / FORMAT.getSampleRate());
+
+        while (!doStop) {
+            boolean isPlayingLocal = isPlaying;
+            synchronized (this) {
+                for (int i = 0; i < buffer.length; i++) {
+                    copiedBuffer[i] = isPlayingLocal ? buffer[i] : 0;
+                }
+                this.pos = 0;
+                this.notify();
+            }
+            line.write(copiedBuffer, 0, copiedBuffer.length);
+        }
+
+        line.drain();
+        line.stop();
+    }
+
+    public void stopThread() {
+        doStop = true;
+    }
+
+    @Override
+    public void start() {
+        isPlaying = true;
     }
 
     @Override
     public void stop() {
-        if (line == null) {
-            LOG.debug("Can't stop - sound wasn't started");
-        }
-        LOG.debug("Stop sound");
-        line.drain();
-        line.stop();
-        line = null;
+        isPlaying = false;
     }
 
     @Override
@@ -72,11 +92,18 @@ public class AudioSystemSoundOutput implements SoundOutput {
         Preconditions.checkArgument(right >= 0);
         Preconditions.checkArgument(right < 256);
 
-        buffer[i++] = (byte) (left);
-        buffer[i++] = (byte) (right);
-        if (i > BUFFER_SIZE / 2) {
-            line.write(buffer, 0, i);
-            i = 0;
+        synchronized (this) {
+            while (buffer == null || pos >= buffer.length) {
+                try {
+                    this.wait();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            buffer[pos] = (byte) (left);
+            buffer[pos + 1] = (byte) (right);
+            pos += 2;
         }
     }
+
 }
