@@ -21,8 +21,6 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     private static final AudioFormat FORMAT = new AudioFormat(AudioFormat.Encoding.PCM_UNSIGNED, SAMPLE_RATE, 8, 2, 2, SAMPLE_RATE, false);
 
-    private SourceDataLine line;
-
     private byte[] buffer;
 
     private byte[] copiedBuffer;
@@ -39,6 +37,7 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     @Override
     public void run() {
+        SourceDataLine line;
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
             line.open(FORMAT, BUFFER_SIZE);
@@ -53,6 +52,9 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
         while (!doStop) {
             boolean isPlayingLocal = isPlaying;
             synchronized (this) {
+                if (pos < copiedBuffer.length) {
+                    LOG.warn("Sound buffer under-run: {}", pos);
+                }
                 for (int i = 0; i < buffer.length; i++) {
                     copiedBuffer[i] = isPlayingLocal ? buffer[i] : 0;
                 }
