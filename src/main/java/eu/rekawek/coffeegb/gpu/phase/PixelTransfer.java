@@ -9,7 +9,7 @@ import eu.rekawek.coffeegb.gpu.Lcdc;
 import eu.rekawek.coffeegb.gpu.DmgPixelFifo;
 import eu.rekawek.coffeegb.gpu.PixelFifo;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
+import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
@@ -21,7 +21,7 @@ public class PixelTransfer implements GpuPhase {
 
     private final Display display;
 
-    private final MemoryRegisters r;
+    private final GpuRegisterValues r;
 
     private final Lcdc lcdc;
 
@@ -37,7 +37,7 @@ public class PixelTransfer implements GpuPhase {
 
     private int windowLineCounter;
 
-    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, MemoryRegisters r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
+    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, GpuRegisterValues r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;

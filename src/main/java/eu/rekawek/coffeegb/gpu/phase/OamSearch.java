@@ -3,7 +3,7 @@ package eu.rekawek.coffeegb.gpu.phase;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.Lcdc;
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
+import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 
 public class OamSearch implements GpuPhase {
 
@@ -40,7 +40,7 @@ public class OamSearch implements GpuPhase {
 
     private final AddressSpace oemRam;
 
-    private final MemoryRegisters registers;
+    private final GpuRegisterValues registers;
 
     private final SpritePosition[] sprites;
 
@@ -56,7 +56,7 @@ public class OamSearch implements GpuPhase {
 
     private int i;
 
-    public OamSearch(AddressSpace oemRam, Lcdc lcdc, MemoryRegisters registers) {
+    public OamSearch(AddressSpace oemRam, Lcdc lcdc, GpuRegisterValues registers) {
         this.oemRam = oemRam;
         this.registers = registers;
         this.lcdc = lcdc;

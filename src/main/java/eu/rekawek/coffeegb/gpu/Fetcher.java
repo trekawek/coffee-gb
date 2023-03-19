@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
 
 import java.util.EnumSet;
 
@@ -26,7 +25,7 @@ public class Fetcher {
 
     private final AddressSpace oemRam;
 
-    private final MemoryRegisters r;
+    private final GpuRegisterValues r;
 
     private final Lcdc lcdc;
 
@@ -68,7 +67,7 @@ public class Fetcher {
 
     private int divider = 2;
 
-    public Fetcher(PixelFifo fifo, AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Lcdc lcdc, MemoryRegisters registers, boolean gbc) {
+    public Fetcher(PixelFifo fifo, AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Lcdc lcdc, GpuRegisterValues registers, boolean gbc) {
         this.gbc = gbc;
         this.fifo = fifo;
         this.videoRam0 = videoRam0;

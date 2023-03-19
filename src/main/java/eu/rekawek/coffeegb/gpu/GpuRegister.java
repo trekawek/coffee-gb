@@ -1,12 +1,10 @@
 package eu.rekawek.coffeegb.gpu;
 
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.R;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.RW;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.W;
 
-import static eu.rekawek.coffeegb.memory.MemoryRegisters.RegisterType.R;
-import static eu.rekawek.coffeegb.memory.MemoryRegisters.RegisterType.RW;
-import static eu.rekawek.coffeegb.memory.MemoryRegisters.RegisterType.W;
-
-public enum GpuRegister implements MemoryRegisters.Register {
+public enum GpuRegister {
 
     STAT(0xff41, RW),
     SCY(0xff42, RW),
@@ -22,21 +20,39 @@ public enum GpuRegister implements MemoryRegisters.Register {
 
     private final int address;
 
-    private final MemoryRegisters.RegisterType type;
+    private final RegisterType type;
 
-    GpuRegister(int address, MemoryRegisters.RegisterType type) {
+    GpuRegister(int address, RegisterType type) {
         this.address = address;
         this.type = type;
     }
 
-    @Override
     public int getAddress() {
         return address;
     }
 
-    @Override
-    public MemoryRegisters.RegisterType getType() {
+    public RegisterType getType() {
         return type;
     }
 
+    public enum RegisterType {
+        R(true, false), W(false, true), RW(true, true);
+
+        private final boolean allowsRead;
+
+        private final boolean allowsWrite;
+
+        RegisterType(boolean allowsRead, boolean allowsWrite) {
+            this.allowsRead = allowsRead;
+            this.allowsWrite = allowsWrite;
+        }
+
+        public boolean isAllowsRead() {
+            return allowsRead;
+        }
+
+        public boolean isAllowsWrite() {
+            return allowsWrite;
+        }
+    }
 }

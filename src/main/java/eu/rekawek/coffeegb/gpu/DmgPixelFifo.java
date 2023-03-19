@@ -1,7 +1,5 @@
 package eu.rekawek.coffeegb.gpu;
 
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
-
 public class DmgPixelFifo implements PixelFifo {
 
     private final IntQueue pixels = new IntQueue(16);
@@ -14,9 +12,9 @@ public class DmgPixelFifo implements PixelFifo {
 
     private final Lcdc lcdc;
 
-    private final MemoryRegisters registers;
+    private final GpuRegisterValues registers;
 
-    public DmgPixelFifo(Display display, Lcdc lcdc, MemoryRegisters registers) {
+    public DmgPixelFifo(Display display, Lcdc lcdc, GpuRegisterValues registers) {
         this.lcdc = lcdc;
         this.display = display;
         this.registers = registers;

@@ -9,7 +9,6 @@ import eu.rekawek.coffeegb.gpu.phase.OamSearch;
 import eu.rekawek.coffeegb.gpu.phase.PixelTransfer;
 import eu.rekawek.coffeegb.gpu.phase.VBlankPhase;
 import eu.rekawek.coffeegb.memory.Dma;
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
 import eu.rekawek.coffeegb.memory.Ram;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
@@ -52,7 +51,7 @@ public class Gpu implements AddressSpace {
 
     private int lcdEnabledDelay;
 
-    private MemoryRegisters r;
+    private GpuRegisterValues r;
 
     private int ticksInLine;
 
@@ -61,7 +60,7 @@ public class Gpu implements AddressSpace {
     private GpuPhase phase;
 
     public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, boolean gbc) {
-        this.r = new MemoryRegisters(GpuRegister.values());
+        this.r = new GpuRegisterValues();
         this.lcdc = new Lcdc();
         this.interruptManager = interruptManager;
         this.gbc = gbc;
@@ -290,7 +289,7 @@ public class Gpu implements AddressSpace {
         return lcdc;
     }
 
-    public MemoryRegisters getRegisters() {
+    public GpuRegisterValues getRegisters() {
         return r;
     }
 

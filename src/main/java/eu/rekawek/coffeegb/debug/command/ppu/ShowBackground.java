@@ -7,7 +7,7 @@ import eu.rekawek.coffeegb.debug.CommandPattern;
 import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.gui.SwingDisplay;
-import eu.rekawek.coffeegb.memory.MemoryRegisters;
+import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -135,7 +135,7 @@ public class ShowBackground implements Command {
             Lcdc lcdc = gpu.getLcdc();
             AddressSpace videoRam0 = gpu.getVideoRam0();
             AddressSpace videoRam1 = gpu.getVideoRam1();
-            MemoryRegisters reg = gpu.getRegisters();
+            GpuRegisterValues reg = gpu.getRegisters();
 
             int tileMap = type == Type.BACKGROUND ? lcdc.getBgTileMapDisplay() : lcdc.getWindowTileMapDisplay();
             int tileData = lcdc.getBgWindowTileData();
