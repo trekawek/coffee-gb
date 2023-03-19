@@ -81,12 +81,8 @@ public class ImageTestRunner {
         }
 
         @Override
-        public void requestRefresh() {
+        public void frameIsReady() {
             i = 0;
-        }
-
-        @Override
-        public void waitForRefresh() {
         }
 
         @Override

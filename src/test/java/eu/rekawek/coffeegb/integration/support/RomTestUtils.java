@@ -36,6 +36,7 @@ public final class RomTestUtils {
         File resultFile = File.createTempFile(romPath.getFileName().toString(), "-result.png");
         result.writeResultToFile(resultFile);
         assertArrayEquals("The result image is different from expected: " + resultFile, result.getExpectedRGB(), result.getResultRGB());
+        resultFile.delete();
     }
 
     public static void testMooneyeRom(Path romPath) throws IOException {

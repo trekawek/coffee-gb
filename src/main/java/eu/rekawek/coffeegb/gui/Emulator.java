@@ -35,8 +35,6 @@ public class Emulator {
 
     private final SerialEndpoint serialEndpoint;
 
-    private final SpeedMode speedMode;
-
     private final Gameboy gameboy;
 
     private final Optional<Console> console;
@@ -46,7 +44,6 @@ public class Emulator {
     public Emulator(String[] args, Properties properties) throws IOException {
         options = parseArgs(args);
         rom = new Cartridge(options);
-        speedMode = new SpeedMode();
         serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
         console = options.isDebug() ? Optional.of(new Console()) : Optional.empty();
         console.map(Thread::new).ifPresent(Thread::start);
@@ -120,7 +117,13 @@ public class Emulator {
         display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
 
         mainWindow = new JFrame("Coffee GB: " + rom.getTitle());
-        mainWindow.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        mainWindow.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        mainWindow.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent windowEvent) {
+                stopGui();
+            }
+        });
         mainWindow.setLocationRelativeTo(null);
 
         mainWindow.setContentPane(display);
@@ -139,6 +142,6 @@ public class Emulator {
         display.stop();
         sound.stopThread();
         gameboy.stop();
-        mainWindow.dispose();
+        System.exit(0);
     }
 }

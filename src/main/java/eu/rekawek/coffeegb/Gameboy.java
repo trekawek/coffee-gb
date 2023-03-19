@@ -147,20 +147,18 @@ public class Gameboy implements Runnable {
 
         if (!lcdDisabled && !gpu.isLcdEnabled()) {
             lcdDisabled = true;
-            display.requestRefresh();
+            display.frameIsReady();
             hdma.onLcdSwitch(false);
         } else if (newMode == Gpu.Mode.VBlank) {
             requestedScreenRefresh = true;
-            display.requestRefresh();
+            display.frameIsReady();
         }
 
         if (lcdDisabled && gpu.isLcdEnabled()) {
             lcdDisabled = false;
-            display.waitForRefresh();
             hdma.onLcdSwitch(true);
         } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
             requestedScreenRefresh = false;
-            display.waitForRefresh();
         }
         console.ifPresent(Console::tick);
         tickListeners.forEach(Runnable::run);

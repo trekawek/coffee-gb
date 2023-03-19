@@ -10,9 +10,7 @@ public interface Display {
 
     void putColorPixel(int gbcRgb);
 
-    void requestRefresh();
-
-    void waitForRefresh();
+    void frameIsReady();
 
     void enableLcd();
 
@@ -39,11 +37,7 @@ public interface Display {
         }
 
         @Override
-        public void requestRefresh() {
-        }
-
-        @Override
-        public void waitForRefresh() {
+        public void frameIsReady() {
         }
 
         @Override
