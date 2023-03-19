@@ -78,17 +78,17 @@ public class PixelTransfer implements GpuPhase {
     public boolean tick() {
         fetcher.tick();
         if (lcdc.isBgAndWindowDisplay() || gbc) {
+            if (!window && lcdc.isWindowDisplay() && r.get(LY) >= r.get(WY) && x >= r.get(WX) - 7) {
+                window = true;
+                startFetchingWindow();
+                return true;
+            }
             if (fifo.getLength() <= 8) {
                 return true;
             }
             if (droppedPixels < r.get(SCX) % 8) {
                 fifo.dropPixel();
                 droppedPixels++;
-                return true;
-            }
-            if (!window && lcdc.isWindowDisplay() && r.get(LY) >= r.get(WY) && x == r.get(WX) - 7) {
-                window = true;
-                startFetchingWindow();
                 return true;
             }
         }
