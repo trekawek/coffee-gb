@@ -44,8 +44,23 @@ public class Mmu implements AddressSpace {
 
     private final List<AddressSpace> spaces = new ArrayList<>();
 
+    private AddressSpace[] addressToSpace;
+
     public void addAddressSpace(AddressSpace space) {
         spaces.add(space);
+    }
+
+    public void indexSpaces() {
+        addressToSpace = new AddressSpace[0x10000];
+        for (int i = 0; i < addressToSpace.length; i++) {
+            addressToSpace[i] = VOID;
+            for (AddressSpace s : spaces) {
+                if (s.accepts(i)) {
+                    addressToSpace[i] = s;
+                    break;
+                }
+            }
+        }
     }
 
     @Override
@@ -67,12 +82,9 @@ public class Mmu implements AddressSpace {
     }
 
     private AddressSpace getSpace(int address) {
-        for (AddressSpace s : spaces) {
-            if (s.accepts(address)) {
-                return s;
-            }
+        if (addressToSpace == null) {
+            throw new IllegalStateException("Address spaces hasn't been indexed yet");
         }
-        return VOID;
+        return addressToSpace[address];
     }
-
 }

@@ -103,6 +103,7 @@ public class Gameboy implements Runnable {
         }
         mmu.addAddressSpace(new Ram(0xff80, 0x7f));
         mmu.addAddressSpace(new ShadowAddressSpace(mmu, 0xe000, 0xc000, 0x1e00));
+        mmu.indexSpaces();
 
         cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
 
