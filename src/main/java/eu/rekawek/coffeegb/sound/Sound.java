@@ -72,13 +72,13 @@ public class Sound implements AddressSpace {
     }
 
     private AddressSpace getAddressSpace(int address) {
+        if (r.accepts(address)) {
+            return r;
+        }
         for (AbstractSoundMode m : allModes) {
             if (m.accepts(address)) {
                 return m;
             }
-        }
-        if (r.accepts(address)) {
-            return r;
         }
         return null;
     }
