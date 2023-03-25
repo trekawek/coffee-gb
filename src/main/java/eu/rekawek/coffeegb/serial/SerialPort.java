@@ -3,21 +3,14 @@ package eu.rekawek.coffeegb.serial;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
-import eu.rekawek.coffeegb.cpu.SpeedMode;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
 
 public class SerialPort implements AddressSpace {
-
-    private static final Logger LOG = LoggerFactory.getLogger(SerialPort.class);
 
     private final SerialEndpoint serialEndpoint;
 
     private final InterruptManager interruptManager;
 
-    private final SpeedMode speedMode;
+    private final boolean gbc;
 
     private int sb;
 
@@ -27,25 +20,41 @@ public class SerialPort implements AddressSpace {
 
     private int divider;
 
-    public SerialPort(InterruptManager interruptManager, SerialEndpoint serialEndpoint, SpeedMode speedMode) {
+    private ClockType clockType;
+
+    private int speed;
+
+    private int receivedBits;
+
+    public SerialPort(InterruptManager interruptManager, SerialEndpoint serialEndpoint, boolean gbc) {
         this.interruptManager = interruptManager;
         this.serialEndpoint = serialEndpoint;
-        this.speedMode = speedMode;
+        this.gbc = gbc;
     }
 
     public void tick() {
         if (!transferInProgress) {
             return;
         }
-        if (++divider >= Gameboy.TICKS_PER_SEC / 8192 / speedMode.getSpeedMode()) {
-            transferInProgress = false;
-            try {
-                sb = serialEndpoint.transfer(sb);
-            } catch (IOException e) {
-                LOG.error("Can't transfer byte", e);
-                sb = 0;
+
+        int bitToTransfer = (sb & (1 << 7)) != 0 ? 1 : 0;
+        int incomingBit = -1;
+        if (clockType == ClockType.EXTERNAL) {
+            incomingBit = serialEndpoint.receive(bitToTransfer);
+        } else {
+            if (divider++ == Gameboy.TICKS_PER_SEC / speed) {
+                divider = 0;
+                incomingBit = serialEndpoint.send(bitToTransfer);
             }
-            interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
+        }
+
+        if (incomingBit != -1) {
+            sb = (sb << 1) & 0xff | (incomingBit & 1);
+            receivedBits++;
+            if (receivedBits == 8) {
+                interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
+                transferInProgress = false;
+            }
         }
     }
 
@@ -80,5 +89,16 @@ public class SerialPort implements AddressSpace {
     private void startTransfer() {
         transferInProgress = true;
         divider = 0;
+        clockType = ClockType.getFromSc(sc);
+        receivedBits = 0;
+        if (gbc) {
+            if ((sc & (1 << 1)) == 0) {
+                speed = 8192;
+            } else {
+                speed = 262144;
+            }
+        } else {
+            speed = 8192;
+        }
     }
 }

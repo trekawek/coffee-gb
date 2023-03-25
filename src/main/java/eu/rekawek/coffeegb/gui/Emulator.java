@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb.gui;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.controller.Controller;
-import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
@@ -33,19 +32,13 @@ public class Emulator {
 
     private final SwingController controller;
 
-    private final SerialEndpoint serialEndpoint;
-
     private final Gameboy gameboy;
-
-    private final Optional<Console> console;
-
-    private JFrame mainWindow;
 
     public Emulator(String[] args, Properties properties) throws IOException {
         options = parseArgs(args);
         rom = new Cartridge(options);
-        serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
-        console = options.isDebug() ? Optional.of(new Console()) : Optional.empty();
+        SerialEndpoint serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
+        Optional<Console> console = options.isDebug() ? Optional.of(new Console()) : Optional.empty();
         console.map(Thread::new).ifPresent(Thread::start);
 
         if (options.isHeadless()) {
@@ -109,14 +102,14 @@ public class Emulator {
             System.setProperty("sun.java2d.opengl", "true");
 
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            SwingUtilities.invokeLater(() -> startGui());
+            SwingUtilities.invokeLater(this::startGui);
         }
     }
 
     private void startGui() {
         display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
 
-        mainWindow = new JFrame("Coffee GB: " + rom.getTitle());
+        JFrame mainWindow = new JFrame("Coffee GB: " + rom.getTitle());
         mainWindow.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         mainWindow.addWindowListener(new java.awt.event.WindowAdapter() {
             @Override

@@ -8,7 +8,8 @@ import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
-import eu.rekawek.coffeegb.serial.SerialEndpoint;
+import eu.rekawek.coffeegb.serial.ByteReceiver;
+import eu.rekawek.coffeegb.serial.ByteReceivingSerialEndpoint;
 import eu.rekawek.coffeegb.sound.SoundOutput;
 
 import java.io.File;
@@ -18,7 +19,7 @@ import java.io.OutputStream;
 import static eu.rekawek.coffeegb.cpu.BitUtils.getLSB;
 import static eu.rekawek.coffeegb.cpu.BitUtils.getMSB;
 
-public class SerialTestRunner implements SerialEndpoint {
+public class SerialTestRunner implements ByteReceiver {
 
     private final Gameboy gb;
 
@@ -29,7 +30,7 @@ public class SerialTestRunner implements SerialEndpoint {
     public SerialTestRunner(File romFile, OutputStream os) throws IOException {
         GameboyOptions options = new GameboyOptions(romFile);
         Cartridge cart = new Cartridge(options);
-        gb = new Gameboy(options, cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, this);
+        gb = new Gameboy(options, cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, new ByteReceivingSerialEndpoint(this));
         text = new StringBuilder();
         this.os = os;
     }
@@ -49,11 +50,14 @@ public class SerialTestRunner implements SerialEndpoint {
     }
 
     @Override
-    public int transfer(int outgoing) throws IOException {
-        text.append((char) outgoing);
-        os.write(outgoing);
-        os.flush();
-        return 0;
+    public void onNewByte(int b) {
+        text.append((char) b);
+        try {
+            os.write(b);
+            os.flush();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     static boolean isInfiniteLoop(Gameboy gb) {
@@ -66,7 +70,7 @@ public class SerialTestRunner implements SerialEndpoint {
 
         int i = regs.getPC();
         boolean found = true;
-        for (int v : new int[] { 0x18, 0xfe }) { // jr fe
+        for (int v : new int[]{0x18, 0xfe}) { // jr fe
             if (mem.getByte(i++) != v) {
                 found = false;
                 break;
@@ -77,7 +81,7 @@ public class SerialTestRunner implements SerialEndpoint {
         }
 
         i = regs.getPC();
-        for (int v : new int[] { 0xc3, getLSB(i), getMSB(i) }) { // jp pc
+        for (int v : new int[]{0xc3, getLSB(i), getMSB(i)}) { // jp pc
             if (mem.getByte(i++) != v) {
                 return false;
             }

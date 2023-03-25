@@ -31,8 +31,6 @@ public class Gameboy implements Runnable {
 
     public static final int TICKS_PER_SEC = 4_194_304;
 
-    private final InterruptManager interruptManager;
-
     private final Gpu gpu;
 
     private final Mmu mmu;
@@ -73,7 +71,7 @@ public class Gameboy implements Runnable {
         this.display = display;
         gbc = rom.isGbc();
         speedMode = new SpeedMode();
-        interruptManager = new InterruptManager(gbc);
+        InterruptManager interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
         mmu = new Mmu();
 
@@ -82,7 +80,7 @@ public class Gameboy implements Runnable {
         gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
         hdma = new Hdma(mmu);
         sound = new Sound(soundOutput, gbc);
-        serialPort = new SerialPort(interruptManager, serialEndpoint, speedMode);
+        serialPort = new SerialPort(interruptManager, serialEndpoint, gbc);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(new Joypad(interruptManager, controller));
