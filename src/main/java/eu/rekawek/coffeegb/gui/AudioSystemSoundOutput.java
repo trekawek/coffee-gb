@@ -21,22 +21,36 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     private static final AudioFormat FORMAT = new AudioFormat(AudioFormat.Encoding.PCM_UNSIGNED, SAMPLE_RATE, 8, 2, 2, SAMPLE_RATE, false);
 
-    private byte[] buffer;
+    private static final int DIVIDER = (int) (Gameboy.TICKS_PER_SEC / FORMAT.getSampleRate());
 
-    private byte[] copiedBuffer;
+    private final byte[] buffer = new byte[BUFFER_SIZE];
+
+    private final byte[] copiedBuffer = new byte[BUFFER_SIZE];
 
     private int pos;
 
     private int tick;
 
-    private int divider;
-
     private volatile boolean doStop;
 
     private volatile boolean isPlaying;
 
+    private volatile boolean bufferInitialized;
+
+    private final Object bufferInitializedMonitor = new Object();
+
     @Override
     public void run() {
+        while (!bufferInitialized) {
+            synchronized (bufferInitializedMonitor) {
+                try {
+                    bufferInitializedMonitor.wait();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+
         SourceDataLine line;
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
@@ -45,23 +59,19 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
             throw new RuntimeException(e);
         }
         line.start();
-        buffer = new byte[line.getBufferSize()];
-        copiedBuffer = new byte[buffer.length];
-        divider = (int) (Gameboy.TICKS_PER_SEC / FORMAT.getSampleRate());
-
         while (!doStop) {
             boolean isPlayingLocal = isPlaying;
             synchronized (this) {
-                if (pos < copiedBuffer.length) {
+                if (pos < BUFFER_SIZE) {
                     LOG.warn("Sound buffer under-run: {}", pos);
                 }
-                for (int i = 0; i < buffer.length; i++) {
+                for (int i = 0; i < BUFFER_SIZE; i++) {
                     copiedBuffer[i] = isPlayingLocal ? buffer[i] : 0;
                 }
                 this.pos = 0;
                 this.notify();
             }
-            line.write(copiedBuffer, 0, copiedBuffer.length);
+            line.write(copiedBuffer, 0, BUFFER_SIZE);
         }
 
         line.drain();
@@ -85,7 +95,7 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
     @Override
     public void play(int left, int right) {
         if (tick++ != 0) {
-            tick %= divider;
+            tick %= DIVIDER;
             return;
         }
 
@@ -95,7 +105,13 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
         Preconditions.checkArgument(right < 256);
 
         synchronized (this) {
-            while (buffer == null || pos >= buffer.length) {
+            while (pos >= BUFFER_SIZE) {
+                if (!bufferInitialized) {
+                    bufferInitialized = true;
+                    synchronized (bufferInitializedMonitor) {
+                        bufferInitializedMonitor.notify();
+                    }
+                }
                 try {
                     this.wait();
                 } catch (InterruptedException e) {
@@ -107,5 +123,4 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
             pos += 2;
         }
     }
-
 }
