@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.debug.command.apu.Channel;
 import eu.rekawek.coffeegb.memory.Ram;
 
 public class Sound implements AddressSpace {
@@ -23,11 +22,11 @@ public class Sound implements AddressSpace {
 
     private final SoundOutput output;
 
-    private int[] channels = new int[4];
+    private final int[] channels = new int[4];
 
     private boolean enabled;
 
-    private boolean[] overridenEnabled = {true, true, true, true};
+    private final boolean[] overridenEnabled = {true, true, true, true};
 
     public Sound(SoundOutput output, boolean gbc) {
         allModes[0] = new SoundMode1(gbc);
@@ -43,8 +42,7 @@ public class Sound implements AddressSpace {
             return;
         }
         for (int i = 0; i < allModes.length; i++) {
-            AbstractSoundMode m = allModes[i];
-            channels[i] = m.tick();
+            channels[i] = allModes[i].tick();
         }
 
         int selection = r.getByte(0xff25);
