@@ -51,7 +51,7 @@ public class Gpu implements AddressSpace {
 
     private int lcdEnabledDelay;
 
-    private GpuRegisterValues r;
+    private final GpuRegisterValues r;
 
     private int ticksInLine;
 
@@ -78,7 +78,7 @@ public class Gpu implements AddressSpace {
         oamPalette.fillWithFF();
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oamRam, display, lcdc, r, gbc, bgPalette, oamPalette);
+        this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oamRam, display, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites());
         this.hBlankPhase = new HBlankPhase();
         this.vBlankPhase = new VBlankPhase();
 
@@ -183,7 +183,7 @@ public class Gpu implements AddressSpace {
             switch (oldMode) {
                 case OamSearch:
                     mode = Mode.PixelTransfer;
-                    phase = pixelTransferPhase.start(oamSearchPhase.getSprites());
+                    phase = pixelTransferPhase.start();
                     break;
 
                 case PixelTransfer:

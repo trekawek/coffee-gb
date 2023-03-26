@@ -8,22 +8,18 @@ import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 public class OamSearch implements GpuPhase {
 
     private enum State {
-        READING_Y, READING_X;
+        READING_Y, READING_X
     }
 
     public static class SpritePosition {
 
-        private final int x;
+        private int x;
 
-        private final int y;
+        private int y;
 
-        private final int address;
+        private int address;
 
-        public SpritePosition(int x, int y, int address) {
-            this.x = x;
-            this.y = y;
-            this.address = address;
-        }
+        private boolean enabled;
 
         public int getX() {
             return x;
@@ -35,6 +31,21 @@ public class OamSearch implements GpuPhase {
 
         public int getAddress() {
             return address;
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void enable(int x, int y, int address) {
+            this.x = x;
+            this.y = y;
+            this.address = address;
+            this.enabled = true;
+        }
+
+        public void disable() {
+            this.enabled = false;
         }
     }
 
@@ -61,6 +72,9 @@ public class OamSearch implements GpuPhase {
         this.registers = registers;
         this.lcdc = lcdc;
         this.sprites = new SpritePosition[10];
+        for (int j = 0; j < sprites.length; j++) {
+            this.sprites[j] = new SpritePosition();
+        }
     }
 
     public OamSearch start() {
@@ -69,8 +83,8 @@ public class OamSearch implements GpuPhase {
         spriteY = 0;
         spriteX = 0;
         i = 0;
-        for (int j = 0; j < sprites.length; j++) {
-            sprites[j] = null;
+        for (SpritePosition sprite : sprites) {
+            sprite.disable();
         }
         return this;
     }
@@ -87,7 +101,7 @@ public class OamSearch implements GpuPhase {
             case READING_X:
                 spriteX = oemRam.getByte(spriteAddress + 1);
                 if (spritePosIndex < sprites.length && between(spriteY, registers.get(GpuRegister.LY) + 16, spriteY + lcdc.getSpriteHeight())) {
-                    sprites[spritePosIndex++] = new SpritePosition(spriteX, spriteY, spriteAddress);
+                    sprites[spritePosIndex++].enable(spriteX, spriteY, spriteAddress);
                 }
                 i++;
                 state = State.READING_Y;

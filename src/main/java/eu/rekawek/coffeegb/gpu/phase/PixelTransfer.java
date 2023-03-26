@@ -19,15 +19,13 @@ public class PixelTransfer implements GpuPhase {
 
     private final Fetcher fetcher;
 
-    private final Display display;
-
     private final GpuRegisterValues r;
 
     private final Lcdc lcdc;
 
     private final boolean gbc;
 
-    private SpritePosition[] sprites;
+    private final SpritePosition[] sprites;
 
     private int droppedPixels;
 
@@ -37,7 +35,7 @@ public class PixelTransfer implements GpuPhase {
 
     private int windowLineCounter;
 
-    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, GpuRegisterValues r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette) {
+    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, GpuRegisterValues r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette, SpritePosition[] sprites) {
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
@@ -47,12 +45,10 @@ public class PixelTransfer implements GpuPhase {
             this.fifo = new DmgPixelFifo(display, lcdc, r);
         }
         this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
-        this.display = display;
-
+        this.sprites = sprites;
     }
 
-    public PixelTransfer start(SpritePosition[] sprites) {
-        this.sprites = sprites;
+    public PixelTransfer start() {
         droppedPixels = 0;
         x = 0;
         window = false;
@@ -100,21 +96,17 @@ public class PixelTransfer implements GpuPhase {
             boolean spriteAdded = false;
             for (int i = 0; i < sprites.length; i++) {
                 SpritePosition s = sprites[i];
-                if (s == null) {
+                if (!s.isEnabled()) {
                     continue;
                 }
                 if (x == 0 && s.getX() < 8) {
-                    if (!spriteAdded) {
-                        fetcher.addSprite(s, 8 - s.getX(), i);
-                        spriteAdded = true;
-                    }
-                    sprites[i] = null;
+                    fetcher.addSprite(s, 8 - s.getX(), i);
+                    sprites[i].disable();
+                    spriteAdded = true;
                 } else if (s.getX() - 8 == x) {
-                    if (!spriteAdded) {
-                        fetcher.addSprite(s, 0, i);
-                        spriteAdded = true;
-                    }
-                    sprites[i] = null;
+                    fetcher.addSprite(s, 0, i);
+                    sprites[i].disable();
+                    spriteAdded = true;
                 }
                 if (spriteAdded) {
                     return true;
@@ -123,10 +115,7 @@ public class PixelTransfer implements GpuPhase {
         }
 
         fifo.putPixelToScreen();
-        if (++x == 160) {
-            return false;
-        }
-        return true;
+        return ++x != 160;
     }
 
     private void startFetchingBackground() {
