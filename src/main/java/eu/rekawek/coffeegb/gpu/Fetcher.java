@@ -3,8 +3,6 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 
-import java.util.EnumSet;
-
 import static eu.rekawek.coffeegb.cpu.BitUtils.toSigned;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 
@@ -204,7 +202,11 @@ public class Fetcher {
     }
 
     public boolean spriteInProgress() {
-        return EnumSet.of(State.READ_SPRITE_TILE_ID, State.READ_SPRITE_FLAGS, State.READ_SPRITE_DATA_1, State.READ_SPRITE_DATA_2, State.PUSH_SPRITE).contains(state);
+        return state == State.READ_SPRITE_TILE_ID ||
+                state == State.READ_SPRITE_FLAGS ||
+                state == State.READ_SPRITE_DATA_1 ||
+                state == State.READ_SPRITE_DATA_2 ||
+                state == State.PUSH_SPRITE;
     }
 
     public int[] zip(int data1, int data2, boolean reverse) {
