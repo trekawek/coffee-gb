@@ -6,7 +6,6 @@ import eu.rekawek.coffeegb.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
-import eu.rekawek.coffeegb.gpu.Lcdc;
 import eu.rekawek.coffeegb.gpu.SpriteBug;
 
 import java.util.List;
@@ -31,7 +30,7 @@ public class Cpu {
 
     private int opcode1, opcode2;
 
-    private int[] operand = new int[2];
+    private final int[] operand = new int[2];
 
     private Opcode currentOpcode;
 
@@ -130,7 +129,7 @@ public class Cpu {
                         currentOpcode = Opcodes.EXT_COMMANDS.get(opcode2);
                     }
                     if (currentOpcode == null) {
-                        throw new IllegalStateException(String.format("No command for %0xcb 0x%02x", opcode2));
+                        throw new IllegalStateException(String.format("No command for 0xcb 0x%02x", opcode2));
                     }
                     state = State.OPERAND;
                     registers.incrementPC();
@@ -223,7 +222,7 @@ public class Cpu {
             case IRQ_READ_IE:
                 interruptEnabled = addressSpace.getByte(0xffff);
                 requestedIrq = null;
-                for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.values()) {
+                for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.VALUES) {
                     if ((interruptFlag & interruptEnabled & (1 << irq.ordinal())) != 0) {
                         requestedIrq = irq;
                         break;

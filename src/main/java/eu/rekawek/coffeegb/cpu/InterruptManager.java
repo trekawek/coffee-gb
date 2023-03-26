@@ -16,6 +16,8 @@ public class InterruptManager implements AddressSpace {
         public int getHandler() {
             return handler;
         }
+
+        public static final InterruptType[] VALUES = InterruptType.values();
     }
 
     private final boolean gbc;
