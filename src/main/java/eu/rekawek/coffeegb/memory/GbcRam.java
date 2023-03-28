@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.AddressSpace;
 
 public class GbcRam implements AddressSpace {
 
-    private int[] ram = new int[7 * 0x1000];
+    private final int[] ram = new int[7 * 0x1000];
 
     private int svbk;
 

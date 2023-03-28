@@ -5,7 +5,7 @@ import eu.rekawek.coffeegb.AddressSpace;
 public final class SpriteBug {
 
     public enum CorruptionType {
-        INC_DEC, POP_1, POP_2, PUSH_1, PUSH_2, LD_HL;
+        INC_DEC, POP_1, POP_2, PUSH_1, PUSH_2, LD_HL
     }
 
     private SpriteBug() {
@@ -23,14 +23,14 @@ public final class SpriteBug {
             case POP_1:
                 if (cpuCycle >= 4) {
                     copyValues(addressSpace, (cpuCycle - 3) * 8 + 2, (cpuCycle - 4) * 8 + 2, 8);
-                    copyValues(addressSpace, (cpuCycle - 3) * 8 + 8, (cpuCycle - 4) * 8 + 0, 2);
+                    copyValues(addressSpace, (cpuCycle - 3) * 8 + 8, (cpuCycle - 4) * 8, 2);
                     copyValues(addressSpace, (cpuCycle - 4) * 8 + 2, (cpuCycle - 2) * 8 + 2, 6);
                 }
                 break;
 
             case POP_2:
                 if (cpuCycle >= 5) {
-                    copyValues(addressSpace, (cpuCycle - 5) * 8 + 0, (cpuCycle - 2) * 8 + 0, 8);
+                    copyValues(addressSpace, (cpuCycle - 5) * 8, (cpuCycle - 2) * 8, 8);
                 }
                 break;
 
@@ -50,7 +50,7 @@ public final class SpriteBug {
             case LD_HL:
                 if (cpuCycle >= 4) {
                     copyValues(addressSpace, (cpuCycle - 3) * 8 + 2, (cpuCycle - 4) * 8 + 2, 8);
-                    copyValues(addressSpace, (cpuCycle - 3) * 8 + 8, (cpuCycle - 4) * 8 + 0, 2);
+                    copyValues(addressSpace, (cpuCycle - 3) * 8 + 8, (cpuCycle - 4) * 8, 2);
                     copyValues(addressSpace, (cpuCycle - 4) * 8 + 2, (cpuCycle - 2) * 8 + 2, 6);
                 }
                 break;

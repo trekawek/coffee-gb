@@ -1,17 +1,9 @@
 package eu.rekawek.coffeegb.debug;
 
-import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.function.Predicate;
+import java.util.*;
 
-import static com.google.common.collect.ImmutableSet.copyOf;
 import static com.google.common.collect.Maps.newLinkedHashMap;
 
 public class CommandPattern {
@@ -20,12 +12,12 @@ public class CommandPattern {
 
     private final List<CommandArgument> arguments;
 
-    private final Optional<String> description;
+    private final String description;
 
     private CommandPattern(Builder builder) {
         this.commandNames = builder.commandNames;
         this.arguments = builder.arguments;
-        this.description = Optional.ofNullable(builder.description);
+        this.description = builder.description;
     }
 
     public boolean matches(String commandLine) {
@@ -46,7 +38,7 @@ public class CommandPattern {
     }
 
     public Optional<String> getDescription() {
-        return description;
+        return Optional.ofNullable(description);
     }
 
     public ParsedCommandLine parse(String commandLine) {
@@ -112,7 +104,7 @@ public class CommandPattern {
             } else {
                 switch (c) {
                     case '"':
-                        isEscaped = false;
+                        isEscaped = true;
                         break;
 
                     case ' ':
@@ -139,9 +131,9 @@ public class CommandPattern {
 
     public static class ParsedCommandLine {
 
-        private Map<String, String> argumentMap;
+        private final Map<String, String> argumentMap;
 
-        private List<String> remainingArguments;
+        private final List<String> remainingArguments;
 
         private ParsedCommandLine(Map<String, String> argumentMap, List<String> remainingArguments) {
             this.argumentMap = argumentMap;
@@ -178,27 +170,9 @@ public class CommandPattern {
             return new Builder(new String[] {longName, shortName});
         }
 
-        public Builder withOptionalArgument(String name) {
-            assertNoOptionalLastArgument();
-            arguments.add(new CommandArgument(name, false));
-            return this;
-        }
-
         public Builder withRequiredArgument(String name) {
             assertNoOptionalLastArgument();
             arguments.add(new CommandArgument(name, true));
-            return this;
-        }
-
-        public Builder withOptionalValue(String name, String... values) {
-            assertNoOptionalLastArgument();
-            arguments.add(new CommandArgument(name, false, copyOf(values)));
-            return this;
-        }
-
-        public Builder withRequiredValue(String name, String... values) {
-            assertNoOptionalLastArgument();
-            arguments.add(new CommandArgument(name, true, copyOf(values)));
             return this;
         }
 

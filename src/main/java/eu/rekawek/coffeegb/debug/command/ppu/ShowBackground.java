@@ -7,7 +7,6 @@ import eu.rekawek.coffeegb.debug.CommandPattern;
 import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.gui.SwingDisplay;
-import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,7 +24,7 @@ public class ShowBackground implements Command {
     private static final Logger LOG = LoggerFactory.getLogger(ShowBackground.class);
 
     public enum Type {
-        WINDOW, BACKGROUND;
+        WINDOW, BACKGROUND
     }
 
     private static final CommandPattern PATTERN_BACKGROUND = CommandPattern.Builder
@@ -105,15 +104,13 @@ public class ShowBackground implements Command {
 
         private final BufferedImage img;
 
-        private final GraphicsConfiguration gfxConfig;
-
         private final Gpu gpu;
 
         private Gpu.Mode lastMode;
 
         public BackgroundTiles(Gpu gpu) {
             super();
-            gfxConfig = GraphicsEnvironment.
+            GraphicsConfiguration gfxConfig = GraphicsEnvironment.
                     getLocalGraphicsEnvironment().getDefaultScreenDevice().
                     getDefaultConfiguration();
             img = gfxConfig.createCompatibleImage(272 * 2, 272 * 2);
@@ -159,9 +156,12 @@ public class ShowBackground implements Command {
                     }
                     for (int i = 0; i < 16; i += 2) {
                         AddressSpace bank = attr.getBank() == 0 ? videoRam0 : videoRam1;
+                        if (bank == null) {
+                            throw new IllegalStateException("Video bank " + attr.getBank() + " shouldn't be null");
+                        }
                         int b1 = bank.getByte(tileAddress + i);
                         int b2 = bank.getByte(tileAddress + i + 1);
-                        zip(b1, b2, attr.isXflip(), tile[i/2]);
+                        zip(b1, b2, attr.isXflip(), tile[i / 2]);
                     }
                     if (attr.isYflip()) {
                         for (int i = 0; i < 8; i++) {
@@ -220,7 +220,7 @@ public class ShowBackground implements Command {
                 drawLine(g2d, x1, y1, x1, y1 + 144);
             } else {
                 drawLine(g2d, x1, y1, x1, 255);
-                drawLine(g2d, x1, 0, x1 , y1+ 144 - 256);
+                drawLine(g2d, x1, 0, x1, y1 + 144 - 256);
             }
         }
 

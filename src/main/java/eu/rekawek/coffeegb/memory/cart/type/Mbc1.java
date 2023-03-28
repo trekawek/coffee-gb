@@ -2,21 +2,20 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Arrays;
 
 public class Mbc1 implements AddressSpace {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mbc1.class);
 
-    private static int[] NINTENDO_LOGO = {
+    private static final int[] NINTENDO_LOGO = {
             0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
             0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
             0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
     };
-
-    private final CartridgeType type;
 
     private final int romBanks;
 
@@ -42,16 +41,13 @@ public class Mbc1 implements AddressSpace {
 
     private int cachedRomBankFor0x4000 = -1;
 
-    public Mbc1(int[] cartridge, CartridgeType type, Battery battery, int romBanks, int ramBanks) {
+    public Mbc1(int[] cartridge, Battery battery, int romBanks, int ramBanks) {
         this.multicart = romBanks == 64 && isMulticart(cartridge);
         this.cartridge = cartridge;
         this.ramBanks = ramBanks;
         this.romBanks = romBanks;
         this.ram = new int[0x2000 * this.ramBanks];
-        for (int i = 0; i < ram.length; i++) {
-            ram[i] = 0xff;
-        }
-        this.type = type;
+        Arrays.fill(ram, 0xff);
         this.battery = battery;
         battery.loadRam(ram);
     }
@@ -84,8 +80,7 @@ public class Mbc1 implements AddressSpace {
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 1) {
             LOG.trace("RAM bank: {}", (value & 0b11));
-            int bank = value & 0b11;
-            selectedRamBank = bank;
+            selectedRamBank = value & 0b11;
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x6000 && address < 0x8000) {
             LOG.trace("Memory mode: {}", (value & 1));

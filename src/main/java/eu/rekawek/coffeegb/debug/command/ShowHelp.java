@@ -4,7 +4,6 @@ import eu.rekawek.coffeegb.debug.Command;
 import eu.rekawek.coffeegb.debug.CommandArgument;
 import eu.rekawek.coffeegb.debug.CommandPattern;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -46,9 +45,9 @@ public class ShowHelp implements Command {
         for (Command command : commands) {
             CommandPattern pattern = command.getPattern();
             String longName = commandMap.get(command);
-            System.out.print(String.format("%-" + max + "s", longName));
+            System.out.printf("%-" + max + "s", longName);
             if (pattern.getCommandNames().size() > 1) {
-                System.out.print(String.format("   %-5s", pattern.getCommandNames().get(1)));
+                System.out.printf("   %-5s", pattern.getCommandNames().get(1));
             } else {
                 System.out.print("        ");
             }
@@ -64,10 +63,10 @@ public class ShowHelp implements Command {
         StringBuilder builder = new StringBuilder(alias);
         if (!args.isEmpty()) {
             builder.append(' ')
-                    .append(String.join(" ", args
+                    .append(args
                             .stream()
                             .map(CommandArgument::toString)
-                            .collect(Collectors.toList())));
+                            .collect(Collectors.joining(" ")));
         }
         return builder.toString();
     }

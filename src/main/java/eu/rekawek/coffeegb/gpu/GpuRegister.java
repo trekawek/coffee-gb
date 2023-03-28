@@ -1,8 +1,6 @@
 package eu.rekawek.coffeegb.gpu;
 
-import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.R;
-import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.RW;
-import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.W;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.*;
 
 public enum GpuRegister {
 

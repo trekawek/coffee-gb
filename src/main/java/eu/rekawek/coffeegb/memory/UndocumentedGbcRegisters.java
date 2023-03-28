@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.AddressSpace;
 
 public class UndocumentedGbcRegisters implements AddressSpace {
 
-    private Ram ram = new Ram(0xff72, 6);
+    private final Ram ram = new Ram(0xff72, 6);
 
     private int xff6c;
 

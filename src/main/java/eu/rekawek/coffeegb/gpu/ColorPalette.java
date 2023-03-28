@@ -8,7 +8,7 @@ public class ColorPalette implements AddressSpace {
 
     private final int dataAddr;
 
-    private int[][] palettes = new int[8][4];
+    private final int[][] palettes = new int[8][4];
 
     private int index;
 

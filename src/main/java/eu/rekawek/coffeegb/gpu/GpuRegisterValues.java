@@ -2,8 +2,6 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-import java.util.*;
-
 public class GpuRegisterValues implements AddressSpace {
 
     private static final GpuRegister[] ADDRESS_TO_REG = new GpuRegister[0xf];
@@ -22,20 +20,12 @@ public class GpuRegisterValues implements AddressSpace {
         values = new int[GpuRegister.values().length];
     }
 
-    private GpuRegisterValues(GpuRegisterValues original) {
-        this.values = Arrays.copyOf(original.values, original.values.length);
-    }
-
     public int get(GpuRegister reg) {
         return values[reg.ordinal()];
     }
 
     public void put(GpuRegister reg, int value) {
         values[reg.ordinal()] = value;
-    }
-
-    public GpuRegisterValues freeze() {
-        return new GpuRegisterValues(this);
     }
 
     public int preIncrement(GpuRegister reg) {

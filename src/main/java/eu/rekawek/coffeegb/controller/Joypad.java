@@ -8,7 +8,7 @@ import java.util.Set;
 
 public class Joypad implements AddressSpace {
 
-    private Set<ButtonListener.Button> buttons = new HashSet<>();
+    private final Set<ButtonListener.Button> buttons = new HashSet<>();
 
     private int p1;
 

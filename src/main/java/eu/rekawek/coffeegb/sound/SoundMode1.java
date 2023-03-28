@@ -8,9 +8,9 @@ public class SoundMode1 extends AbstractSoundMode {
 
     private int i;
 
-    private FrequencySweep frequencySweep;
+    private final FrequencySweep frequencySweep;
 
-    private VolumeEnvelope volumeEnvelope;
+    private final VolumeEnvelope volumeEnvelope;
 
     public SoundMode1(boolean gbc) {
         super(0xff10, 64, gbc);
@@ -40,8 +40,8 @@ public class SoundMode1 extends AbstractSoundMode {
     public int tick() {
         volumeEnvelope.tick();
 
-        boolean e = true;
-        e = updateLength() && e;
+        boolean e;
+        e = updateLength();
         e = updateSweep() && e;
         e = dacEnabled && e;
         if (!e) {

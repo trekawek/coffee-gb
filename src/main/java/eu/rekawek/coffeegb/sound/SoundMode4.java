@@ -2,13 +2,13 @@ package eu.rekawek.coffeegb.sound;
 
 public class SoundMode4 extends AbstractSoundMode {
 
-    private VolumeEnvelope volumeEnvelope;
+    private final VolumeEnvelope volumeEnvelope;
 
-    private PolynomialCounter polynomialCounter;
+    private final PolynomialCounter polynomialCounter;
 
     private int lastResult;
 
-    private Lfsr lfsr = new Lfsr();
+    private final Lfsr lfsr = new Lfsr();
 
     public SoundMode4(boolean gbc) {
         super(0xff1f, 64, gbc);

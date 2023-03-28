@@ -103,17 +103,17 @@ public class ShowOpcode implements Command {
                 .sum();
 
         if (isExt) {
-            System.out.println(String.format("0xCB%02X %s", opcode.getOpcode(), opcode.getLabel()));
+            System.out.printf("0xCB%02X %s%n", opcode.getOpcode(), opcode.getLabel());
         } else {
-            System.out.println(String.format("0x%02X   %s", opcode.getOpcode(), opcode.getLabel()));
+            System.out.printf("0x%02X   %s%n", opcode.getOpcode(), opcode.getLabel());
         }
         printSeparator(stringLength);
         compacted.forEach(System.out::println);
         printSeparator(stringLength);
         if (totalCyclesUntilCondition != totalCycles) {
-            System.out.println(String.format("Total cycles: %d / %d", totalCycles, totalCyclesUntilCondition));
+            System.out.printf("Total cycles: %d / %d%n", totalCycles, totalCyclesUntilCondition);
         } else {
-            System.out.println(String.format("Total cycles: %d", totalCycles));
+            System.out.printf("Total cycles: %d%n", totalCycles);
         }
     }
 

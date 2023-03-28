@@ -5,11 +5,7 @@ import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.memory.BootRom;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
-import eu.rekawek.coffeegb.memory.cart.type.Mbc1;
-import eu.rekawek.coffeegb.memory.cart.type.Mbc2;
-import eu.rekawek.coffeegb.memory.cart.type.Mbc3;
-import eu.rekawek.coffeegb.memory.cart.type.Mbc5;
-import eu.rekawek.coffeegb.memory.cart.type.Rom;
+import eu.rekawek.coffeegb.memory.cart.type.*;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
@@ -43,8 +39,6 @@ public class Cartridge implements AddressSpace {
 
     private final AddressSpace addressSpace;
 
-    private final GameboyTypeFlag gameboyType;
-
     private final boolean gbc;
 
     private final String title;
@@ -59,7 +53,7 @@ public class Cartridge implements AddressSpace {
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
         title = getTitle(rom);
         LOG.debug("Cartridge {}, type: {}", title, type);
-        gameboyType = GameboyTypeFlag.getFlag(rom[0x0143]);
+        GameboyTypeFlag gameboyType = GameboyTypeFlag.getFlag(rom[0x0143]);
         int romBanks = getRomBanks(rom[0x0148]);
         int ramBanks = getRamBanks(rom[0x0149]);
         if (ramBanks == 0 && type.isRam()) {
@@ -75,13 +69,13 @@ public class Cartridge implements AddressSpace {
         }
 
         if (type.isMbc1()) {
-            addressSpace = new Mbc1(rom, type, battery, romBanks, ramBanks);
+            addressSpace = new Mbc1(rom, battery, romBanks, ramBanks);
         } else if (type.isMbc2()) {
-            addressSpace = new Mbc2(rom, type, battery, romBanks);
+            addressSpace = new Mbc2(rom, battery);
         } else if (type.isMbc3()) {
-            addressSpace = new Mbc3(rom, type, battery, romBanks, ramBanks);
+            addressSpace = new Mbc3(rom, battery, ramBanks);
         } else if (type.isMbc5()) {
-            addressSpace = new Mbc5(rom, type, battery, romBanks, ramBanks);
+            addressSpace = new Mbc5(rom, battery, ramBanks);
         } else {
             addressSpace = new Rom(rom, type, romBanks, ramBanks);
         }

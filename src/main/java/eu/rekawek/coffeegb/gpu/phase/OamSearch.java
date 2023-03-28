@@ -2,8 +2,8 @@ package eu.rekawek.coffeegb.gpu.phase;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
-import eu.rekawek.coffeegb.gpu.Lcdc;
 import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
+import eu.rekawek.coffeegb.gpu.Lcdc;
 
 public class OamSearch implements GpuPhase {
 

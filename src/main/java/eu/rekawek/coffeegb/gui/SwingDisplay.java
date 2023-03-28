@@ -20,13 +20,13 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     private boolean enabled;
 
-    private int scale;
+    private final int scale;
 
     private boolean doStop;
 
     private boolean frameIsWaiting;
 
-    private boolean grayscale;
+    private final boolean grayscale;
 
     private int pos;
 
@@ -60,9 +60,7 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
             return;
         }
         frameIsWaiting = true;
-        for (int i = 0; i < rgb.length; i++) {
-            waitingFrame[i] = rgb[i];
-        }
+        System.arraycopy(rgb, 0, waitingFrame, 0, rgb.length);
         notify();
     }
 

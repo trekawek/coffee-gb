@@ -14,12 +14,7 @@ import org.jline.reader.UserInterruptException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Deque;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.Semaphore;
 
 public class Console implements Runnable {
@@ -48,7 +43,7 @@ public class Console implements Runnable {
         commands.add(new ShowBackground(gameboy, ShowBackground.Type.BACKGROUND));
         commands.add(new Channel(gameboy.getSound()));
 
-        Collections.sort(commands, Comparator.comparing(c -> c.getPattern().getCommandNames().get(0)));
+        commands.sort(Comparator.comparing(c -> c.getPattern().getCommandNames().get(0)));
     }
 
     @Override
@@ -91,7 +86,7 @@ public class Console implements Runnable {
         }
     }
 
-    private class CommandExecution {
+    private static class CommandExecution {
 
         private final Command command;
 

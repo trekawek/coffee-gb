@@ -8,7 +8,7 @@ public class SoundMode2 extends AbstractSoundMode {
 
     private int i;
 
-    private VolumeEnvelope volumeEnvelope;
+    private final VolumeEnvelope volumeEnvelope;
 
     public SoundMode2(boolean gbc) {
         super(0xff15, 64, gbc);
@@ -36,8 +36,8 @@ public class SoundMode2 extends AbstractSoundMode {
     public int tick() {
         volumeEnvelope.tick();
 
-        boolean e = true;
-        e = updateLength() && e;
+        boolean e;
+        e = updateLength();
         e = dacEnabled && e;
         if (!e) {
             return 0;

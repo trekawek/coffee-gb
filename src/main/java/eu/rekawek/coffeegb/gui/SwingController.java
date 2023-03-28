@@ -9,9 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.lang.reflect.Field;
-import java.security.InvalidParameterException;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.stream.Collectors;
@@ -22,7 +20,7 @@ public class SwingController implements Controller, KeyListener {
 
     private ButtonListener listener;
 
-    private Map<Integer, Button> mapping;
+    private final Map<Integer, Button> mapping;
 
     public SwingController(Properties properties) {
         EnumMap<Button, Integer> buttonToKey = new EnumMap<>(Button.class);

@@ -3,11 +3,7 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
-import eu.rekawek.coffeegb.gpu.phase.GpuPhase;
-import eu.rekawek.coffeegb.gpu.phase.HBlankPhase;
-import eu.rekawek.coffeegb.gpu.phase.OamSearch;
-import eu.rekawek.coffeegb.gpu.phase.PixelTransfer;
-import eu.rekawek.coffeegb.gpu.phase.VBlankPhase;
+import eu.rekawek.coffeegb.gpu.phase.*;
 import eu.rekawek.coffeegb.memory.Dma;
 import eu.rekawek.coffeegb.memory.Ram;
 

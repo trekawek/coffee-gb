@@ -1,15 +1,8 @@
 package eu.rekawek.coffeegb.gpu.phase;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.gpu.ColorPalette;
-import eu.rekawek.coffeegb.gpu.ColorPixelFifo;
-import eu.rekawek.coffeegb.gpu.Display;
-import eu.rekawek.coffeegb.gpu.Fetcher;
-import eu.rekawek.coffeegb.gpu.Lcdc;
-import eu.rekawek.coffeegb.gpu.DmgPixelFifo;
-import eu.rekawek.coffeegb.gpu.PixelFifo;
+import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 

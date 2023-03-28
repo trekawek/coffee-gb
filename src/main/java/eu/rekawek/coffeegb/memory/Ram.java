@@ -4,26 +4,16 @@ import eu.rekawek.coffeegb.AddressSpace;
 
 public class Ram implements AddressSpace {
 
-    private int[] space;
+    private final int[] space;
 
-    private int length;
+    private final int length;
 
-    private int offset;
+    private final int offset;
 
     public Ram(int offset, int length) {
         this.space = new int[length];
         this.length = length;
         this.offset = offset;
-    }
-
-    private Ram(int offset, int length, Ram ram) {
-        this.offset = offset;
-        this.length = length;
-        this.space = ram.space;
-    }
-
-    public static Ram createShadow(int offset, int length, Ram ram) {
-        return new Ram(offset, length, ram);
     }
 
     @Override

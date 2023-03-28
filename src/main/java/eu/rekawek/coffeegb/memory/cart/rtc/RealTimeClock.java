@@ -94,7 +94,7 @@ public class RealTimeClock {
             haltDays = getDayCounter();
             unlatch();
         } else if (!halt && this.halt) {
-            offsetSec = haltSeconds + haltMinutes * 60 + haltHours * 60 * 60 + haltDays * 60 * 60 * 24;
+            offsetSec = haltSeconds + haltMinutes * 60L + (long) haltHours * 60 * 60 + (long) haltDays * 60 * 60 * 24;
             clockStart = clock.currentTimeMillis();
         }
         this.halt = halt;

@@ -101,11 +101,7 @@ public class Hdma implements AddressSpace {
             return false;
         } else if (hblankTransfer && (gpuMode == Gpu.Mode.HBlank || !lcdEnabled)) {
             return true;
-        } else if (!hblankTransfer) {
-            return true;
-        } else {
-            return false;
-        }
+        } else return !hblankTransfer;
     }
 
     private void startTransfer(int reg) {

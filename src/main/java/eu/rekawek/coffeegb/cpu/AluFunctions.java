@@ -4,12 +4,13 @@ import eu.rekawek.coffeegb.cpu.op.DataType;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 public class AluFunctions {
 
-    private Map<FunctionKey, IntRegistryFunction> functions = new HashMap<>();
+    private final Map<FunctionKey, IntRegistryFunction> functions = new HashMap<>();
 
-    private Map<FunctionKey, BiIntRegistryFunction> biFunctions = new HashMap<>();
+    private final Map<FunctionKey, BiIntRegistryFunction> biFunctions = new HashMap<>();
 
     public IntRegistryFunction findAluFunction(String name, DataType argumentType) {
         return functions.get(new FunctionKey(name, argumentType));
@@ -244,10 +245,9 @@ public class AluFunctions {
             return result;
         });
         registerAluFunction("BIT", DataType.D8, DataType.D8, (flags, arg1, arg2) -> {
-            int bit = arg2;
             flags.setN(false);
             flags.setH(true);
-            if (bit < 8) {
+            if (arg2 < 8) {
                 flags.setZ(!BitUtils.getBit(arg1, arg2));
             }
             return arg1;
@@ -293,7 +293,7 @@ public class AluFunctions {
 
             if (!name.equals(that.name)) return false;
             if (!type1.equals(that.type1)) return false;
-            return type2 != null ? type2.equals(that.type2) : that.type2 == null;
+            return Objects.equals(type2, that.type2);
         }
 
         @Override

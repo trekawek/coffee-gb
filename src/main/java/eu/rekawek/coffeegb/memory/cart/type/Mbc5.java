@@ -2,13 +2,10 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.memory.cart.CartridgeType;
+
+import java.util.Arrays;
 
 public class Mbc5 implements AddressSpace {
-
-    private final CartridgeType type;
-
-    private final int romBanks;
 
     private final int ramBanks;
 
@@ -24,15 +21,11 @@ public class Mbc5 implements AddressSpace {
 
     private boolean ramWriteEnabled;
 
-    public Mbc5(int[] cartridge, CartridgeType type, Battery battery, int romBanks, int ramBanks) {
+    public Mbc5(int[] cartridge, Battery battery, int ramBanks) {
         this.cartridge = cartridge;
         this.ramBanks = ramBanks;
-        this.romBanks = romBanks;
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
-        for (int i = 0; i < ram.length; i++) {
-            ram[i] = 0xff;
-        }
-        this.type = type;
+        Arrays.fill(ram, 0xff);
         this.battery = battery;
         battery.loadRam(ram);
     }

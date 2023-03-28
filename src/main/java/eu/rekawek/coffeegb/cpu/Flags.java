@@ -1,18 +1,16 @@
 package eu.rekawek.coffeegb.cpu;
 
-import static eu.rekawek.coffeegb.cpu.BitUtils.checkByteArgument;
-import static eu.rekawek.coffeegb.cpu.BitUtils.getBit;
-import static eu.rekawek.coffeegb.cpu.BitUtils.setBit;
+import static eu.rekawek.coffeegb.cpu.BitUtils.*;
 
 public class Flags {
 
-    private static int Z_POS = 7;
+    private static final int Z_POS = 7;
 
-    private static int N_POS = 6;
+    private static final int N_POS = 6;
 
-    private static int H_POS = 5;
+    private static final int H_POS = 5;
 
-    private static int C_POS = 4;
+    private static final int C_POS = 4;
 
     private int flags;
 
@@ -59,12 +57,10 @@ public class Flags {
 
     @Override
     public String toString() {
-        StringBuilder result = new StringBuilder();
-        result.append(isZ() ? 'Z' : '-');
-        result.append(isN() ? 'N' : '-');
-        result.append(isH() ? 'H' : '-');
-        result.append(isC() ? 'C' : '-');
-        result.append("----");
-        return result.toString();
+        return String.valueOf(isZ() ? 'Z' : '-') +
+                (isN() ? 'N' : '-') +
+                (isH() ? 'H' : '-') +
+                (isC() ? 'C' : '-') +
+                "----";
     }
 }

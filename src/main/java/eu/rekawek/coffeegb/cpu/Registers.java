@@ -1,9 +1,6 @@
 package eu.rekawek.coffeegb.cpu;
 
-import static eu.rekawek.coffeegb.cpu.BitUtils.checkByteArgument;
-import static eu.rekawek.coffeegb.cpu.BitUtils.checkWordArgument;
-import static eu.rekawek.coffeegb.cpu.BitUtils.getLSB;
-import static eu.rekawek.coffeegb.cpu.BitUtils.getMSB;
+import static eu.rekawek.coffeegb.cpu.BitUtils.*;
 
 public class Registers {
     private int a, b, c, d, e, h, l;
@@ -12,7 +9,7 @@ public class Registers {
 
     private int pc;
 
-    private Flags flags = new Flags();
+    private final Flags flags = new Flags();
 
     public int getA() {
         return a;
@@ -145,10 +142,6 @@ public class Registers {
 
     public void decrementSP() {
         sp = (sp - 1) & 0xffff;
-    }
-
-    public void incrementSP() {
-        sp = (sp + 1) & 0xffff;
     }
 
     @Override

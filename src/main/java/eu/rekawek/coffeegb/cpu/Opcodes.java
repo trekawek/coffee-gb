@@ -3,11 +3,7 @@ package eu.rekawek.coffeegb.cpu;
 import eu.rekawek.coffeegb.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.cpu.opcode.OpcodeBuilder;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
 
 public final class Opcodes {
@@ -221,6 +217,7 @@ public final class Opcodes {
         return regCmd(commands, opcode.getKey(), label.replace("{}", opcode.getValue()));
     }
 
+    @SafeVarargs
     private static <T> Iterable<Entry<Integer, T>> indexedList(int start, int step, T... values) {
         Map<Integer, T> map = new LinkedHashMap<>();
         int i = start;

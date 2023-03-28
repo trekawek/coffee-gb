@@ -2,15 +2,12 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 import eu.rekawek.coffeegb.memory.cart.rtc.Clock;
 import eu.rekawek.coffeegb.memory.cart.rtc.RealTimeClock;
 
+import java.util.Arrays;
+
 public class Mbc3 implements AddressSpace {
-
-    private final CartridgeType type;
-
-    private final int ramBanks;
 
     private final int[] cartridge;
 
@@ -30,14 +27,10 @@ public class Mbc3 implements AddressSpace {
 
     private boolean clockLatched;
 
-    public Mbc3(int[] cartridge, CartridgeType type, Battery battery, int romBanks, int ramBanks) {
+    public Mbc3(int[] cartridge, Battery battery, int ramBanks) {
         this.cartridge = cartridge;
-        this.ramBanks = ramBanks;
-        this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
-        for (int i = 0; i < ram.length; i++) {
-            ram[i] = 0xff;
-        }
-        this.type = type;
+        this.ram = new int[0x2000 * Math.max(ramBanks, 1)];
+        Arrays.fill(ram, 0xff);
         this.clock = new RealTimeClock(Clock.SYSTEM_CLOCK);
         this.battery = battery;
 
@@ -80,7 +73,7 @@ public class Mbc3 implements AddressSpace {
             if (ramAddress < ram.length) {
                 ram[ramAddress] = value;
             }
-        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled && selectedRamBank >= 4) {
+        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
             setTimer(value);
         }
     }
@@ -105,7 +98,7 @@ public class Mbc3 implements AddressSpace {
             } else {
                 return 0xff;
             }
-        } else if (address >= 0xa000 && address < 0xc000 && selectedRamBank >= 4) {
+        } else if (address >= 0xa000 && address < 0xc000) {
             return getTimer();
         } else {
             throw new IllegalArgumentException(Integer.toHexString(address));

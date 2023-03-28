@@ -1,21 +1,13 @@
 package eu.rekawek.coffeegb.cpu.opcode;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.cpu.BitUtils;
-import eu.rekawek.coffeegb.cpu.Flags;
-import eu.rekawek.coffeegb.cpu.InterruptManager;
-import eu.rekawek.coffeegb.cpu.Registers;
-import eu.rekawek.coffeegb.cpu.AluFunctions;
+import eu.rekawek.coffeegb.cpu.*;
 import eu.rekawek.coffeegb.cpu.op.Argument;
 import eu.rekawek.coffeegb.cpu.op.DataType;
 import eu.rekawek.coffeegb.cpu.op.Op;
 import eu.rekawek.coffeegb.gpu.SpriteBug;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.toWord;
 
@@ -227,7 +219,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("[_ ] → (SP--)");
+                return "[_ ] → (SP--)";
             }
         });
         ops.add(new Op() {
@@ -250,7 +242,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("[ _] → (SP--)");
+                return "[ _] → (SP--)";
             }
         });
         return this;
@@ -280,7 +272,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("(SP++) → [ _]");
+                return "(SP++) → [ _]";
             }
         });
         ops.add(new Op() {
@@ -303,7 +295,7 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("(SP++) → [_ ]");
+                return "(SP++) → [_ ]";
             }
         });
         return this;
@@ -391,7 +383,7 @@ public class OpcodeBuilder {
         return this;
     }
 
-    public OpcodeBuilder aluHL(String operation) {
+    public void aluHL(String operation) {
         load("HL");
         AluFunctions.IntRegistryFunction func = ALU.findAluFunction(operation, DataType.D16);
         ops.add(new Op() {
@@ -407,14 +399,13 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("%s(HL) → [__]");
+                return "%s(HL) → [__]";
             }
         });
         store("HL");
-        return this;
     }
 
-    public OpcodeBuilder bitHL(int bit) {
+    public void bitHL(int bit) {
         ops.add(new Op() {
             @Override
             public boolean readsMemory() {
@@ -438,7 +429,6 @@ public class OpcodeBuilder {
                 return String.format("BIT(%d,HL)", bit);
             }
         });
-        return this;
     }
 
     public OpcodeBuilder clearZ() {
@@ -451,13 +441,13 @@ public class OpcodeBuilder {
 
             @Override
             public String toString() {
-                return String.format("0 → Z");
+                return "0 → Z";
             }
         });
         return this;
     }
 
-    public OpcodeBuilder switchInterrupts(boolean enable, boolean withDelay) {
+    public void switchInterrupts(boolean enable, boolean withDelay) {
         ops.add(new Op() {
             @Override
             public void switchInterrupts(InterruptManager interruptManager) {
@@ -473,12 +463,6 @@ public class OpcodeBuilder {
                 return (enable ? "enable" : "disable") + " interrupts";
             }
         });
-        return this;
-    }
-
-    public OpcodeBuilder op(Op op) {
-        ops.add(op);
-        return this;
     }
 
     public OpcodeBuilder extraCycle() {

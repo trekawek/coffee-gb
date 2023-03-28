@@ -9,13 +9,7 @@ import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
-import eu.rekawek.coffeegb.memory.Dma;
-import eu.rekawek.coffeegb.memory.GbcRam;
-import eu.rekawek.coffeegb.memory.Hdma;
-import eu.rekawek.coffeegb.memory.Mmu;
-import eu.rekawek.coffeegb.memory.Ram;
-import eu.rekawek.coffeegb.memory.ShadowAddressSpace;
-import eu.rekawek.coffeegb.memory.UndocumentedGbcRegisters;
+import eu.rekawek.coffeegb.memory.*;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
@@ -25,7 +19,6 @@ import eu.rekawek.coffeegb.timer.Timer;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 public class Gameboy implements Runnable {
 
@@ -53,7 +46,7 @@ public class Gameboy implements Runnable {
 
     private final SpeedMode speedMode;
 
-    private final Optional<Console> console;
+    private final Console console;
 
     private volatile boolean doStop;
 
@@ -64,10 +57,10 @@ public class Gameboy implements Runnable {
     private boolean lcdDisabled;
 
     public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
-        this(options, rom, display, controller, soundOutput, serialEndpoint, Optional.empty());
+        this(options, rom, display, controller, soundOutput, serialEndpoint, null);
     }
 
-    public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Optional<Console> console) {
+    public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
         this.display = display;
         gbc = rom.isGbc();
         speedMode = new SpeedMode();
@@ -159,7 +152,9 @@ public class Gameboy implements Runnable {
         } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
             requestedScreenRefresh = false;
         }
-        console.ifPresent(Console::tick);
+        if (console != null) {
+            console.tick();
+        }
         tickListeners.forEach(Runnable::run);
     }
 
