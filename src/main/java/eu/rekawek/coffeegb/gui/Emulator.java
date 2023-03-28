@@ -14,7 +14,6 @@ import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashSet;
-import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 
@@ -38,9 +37,10 @@ public class Emulator {
         options = parseArgs(args);
         rom = new Cartridge(options);
         SerialEndpoint serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
-        Optional<Console> console = options.isDebug() ? Optional.of(new Console()) : Optional.empty();
-        console.map(Thread::new).ifPresent(Thread::start);
-
+        Console console = options.isDebug() ? new Console() : null;
+        if (console != null) {
+            new Thread(console).start();
+        }
         if (options.isHeadless()) {
             sound = null;
             display = null;
@@ -52,7 +52,9 @@ public class Emulator {
             controller = new SwingController(properties);
             gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
         }
-        console.ifPresent(c -> c.init(gameboy));
+        if (console != null) {
+            console.init(gameboy);
+        }
     }
 
     private static GameboyOptions parseArgs(String[] args) {
