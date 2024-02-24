@@ -1,21 +1,17 @@
 package eu.rekawek.coffeegb.gui;
 
-import com.google.common.base.Preconditions;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.sound.SoundOutput;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
+import java.util.Arrays;
 
 public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
-    private static final Logger LOG = LoggerFactory.getLogger(AudioSystemSoundOutput.class);
-
-    private static final int SAMPLE_RATE = 22050;
+    private static final int SAMPLE_RATE = 44100;
 
     private static final int BUFFER_SIZE = 4096;
 
@@ -23,34 +19,27 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     private static final int DIVIDER = (int) (Gameboy.TICKS_PER_SEC / FORMAT.getSampleRate());
 
-    private final byte[] buffer = new byte[BUFFER_SIZE];
+    private byte[] buffer = new byte[BUFFER_SIZE];
 
-    private final byte[] copiedBuffer = new byte[BUFFER_SIZE];
+    private byte[] copiedBuffer = new byte[BUFFER_SIZE];
 
-    private int pos;
+    private volatile int pos;
 
     private int tick;
 
     private volatile boolean doStop;
 
+    private volatile boolean isStopped;
+
     private volatile boolean isPlaying;
 
-    private volatile boolean bufferInitialized;
-
-    private final Object bufferInitializedMonitor = new Object();
+    public AudioSystemSoundOutput() {
+    }
 
     @Override
     public void run() {
-        while (!bufferInitialized) {
-            synchronized (bufferInitializedMonitor) {
-                try {
-                    bufferInitializedMonitor.wait();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-            }
+        while (pos < BUFFER_SIZE && !doStop) {
         }
-
         SourceDataLine line;
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
@@ -60,26 +49,31 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
         }
         line.start();
         while (!doStop) {
-            boolean isPlayingLocal = isPlaying;
-            synchronized (this) {
-                if (pos < BUFFER_SIZE) {
-                    LOG.warn("Sound buffer under-run: {}", pos);
+            if (pos < BUFFER_SIZE) {
+                while (pos < BUFFER_SIZE && !doStop) {
                 }
-                for (int i = 0; i < BUFFER_SIZE; i++) {
-                    copiedBuffer[i] = isPlayingLocal ? buffer[i] : 0;
+                if (doStop) {
+                    break;
                 }
-                this.pos = 0;
-                this.notify();
+            }
+            byte[] tmp = copiedBuffer;
+            copiedBuffer = buffer;
+            buffer = tmp;
+            pos = 0;
+            if (!isPlaying) {
+                Arrays.fill(copiedBuffer, (byte) 0);
             }
             line.write(copiedBuffer, 0, BUFFER_SIZE);
         }
-
         line.drain();
         line.stop();
+        isStopped = true;
     }
 
     public void stopThread() {
         doStop = true;
+        while (!isStopped) {
+        }
     }
 
     @Override
@@ -99,28 +93,11 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
             return;
         }
 
-        Preconditions.checkArgument(left >= 0);
-        Preconditions.checkArgument(left < 256);
-        Preconditions.checkArgument(right >= 0);
-        Preconditions.checkArgument(right < 256);
-
-        synchronized (this) {
-            while (pos >= BUFFER_SIZE) {
-                if (!bufferInitialized) {
-                    bufferInitialized = true;
-                    synchronized (bufferInitializedMonitor) {
-                        bufferInitializedMonitor.notify();
-                    }
-                }
-                try {
-                    this.wait();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-            }
-            buffer[pos] = (byte) (left);
-            buffer[pos + 1] = (byte) (right);
-            pos += 2;
+        while (pos >= BUFFER_SIZE) {
         }
+
+        buffer[pos] = (byte) (left);
+        buffer[pos + 1] = (byte) (right);
+        pos += 2;
     }
 }

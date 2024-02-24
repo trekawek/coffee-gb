@@ -47,10 +47,12 @@ public class Emulator {
             controller = null;
             gameboy = new Gameboy(options, rom, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, serialEndpoint, console);
         } else {
+            TimingTicker timingTicker = new TimingTicker();
             sound = new AudioSystemSoundOutput();
             display = new SwingDisplay(SCALE, options.isGrayscale());
             controller = new SwingController(properties);
             gameboy = new Gameboy(options, rom, display, controller, sound, serialEndpoint, console);
+            gameboy.registerTickListener(timingTicker);
         }
         if (console != null) {
             console.init(gameboy);
