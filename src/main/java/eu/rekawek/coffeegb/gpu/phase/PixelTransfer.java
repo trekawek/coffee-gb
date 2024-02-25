@@ -70,6 +70,10 @@ public class PixelTransfer implements GpuPhase {
             if (!window && lcdc.isWindowDisplay() && r.get(LY) >= r.get(WY) && x >= r.get(WX) - 7) {
                 window = true;
                 startFetchingWindow();
+                // ugly hack to avoid window stutter when WX=7
+                if (r.get(WX) == 7) {
+                    droppedPixels = 7;
+                }
                 return true;
             }
             if (fifo.getLength() <= 8) {
