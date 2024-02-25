@@ -1,7 +1,5 @@
 # Coffee GB
 
-[![Build Status](https://travis-ci.org/trekawek/coffee-gb.svg?branch=master)](https://travis-ci.org/trekawek/coffee-gb)
-
 Coffee GB is a Gameboy Color emulator written in Java 8. It's meant to be a development exercise. More info can be found in the blog post [Why did I spend 1.5 months creating a Gameboy emulator?](http://blog.rekawek.eu/2017/02/09/coffee-gb/)
 
 ![Coffee GB running game](doc/tetris.gif)
