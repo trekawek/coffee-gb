@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.Gameboy;
-import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
@@ -12,7 +11,6 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
-import java.util.Collections;
 
 import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
 
@@ -27,10 +25,9 @@ public class ImageTestRunner {
     private final File imageFile;
 
     public ImageTestRunner(File romFile) throws IOException {
-        GameboyOptions options = new GameboyOptions(romFile, Collections.singletonList("grayscale"), Collections.emptyList());
-        Cartridge cart = new Cartridge(options);
+        Cartridge cart = new Cartridge(romFile);
         display = new TestDisplay();
-        gb = new Gameboy(options, cart, display, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
+        gb = new Gameboy(cart, display, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
     }
 

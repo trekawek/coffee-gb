@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
-import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
@@ -28,9 +27,8 @@ public class SerialTestRunner implements ByteReceiver {
     private final OutputStream os;
 
     public SerialTestRunner(File romFile, OutputStream os) throws IOException {
-        GameboyOptions options = new GameboyOptions(romFile);
-        Cartridge cart = new Cartridge(options);
-        gb = new Gameboy(options, cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, new ByteReceivingSerialEndpoint(this));
+        Cartridge cart = new Cartridge(romFile);
+        gb = new Gameboy(cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, new ByteReceivingSerialEndpoint(this));
         text = new StringBuilder();
         this.os = os;
     }

@@ -15,53 +15,49 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Semaphore;
 
 public class Console implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Console.class);
 
-    private final Deque<CommandExecution> commandBuffer = new ArrayDeque<>();
+    private final Deque<CommandExecution> commandBuffer = new ConcurrentLinkedDeque<>();
 
     private final Semaphore semaphore = new Semaphore(0);
 
-    private volatile boolean isStarted;
+    private volatile boolean doStop;
 
     private List<Command> commands;
 
     public Console() {
-    }
-
-    public void init(Gameboy gameboy) {
         commands = new ArrayList<>();
         commands.add(new ShowHelp(commands));
         commands.add(new ShowOpcode());
         commands.add(new ShowOpcodes());
         commands.add(new Quit());
 
-        commands.add(new ShowBackground(gameboy, ShowBackground.Type.WINDOW));
-        commands.add(new ShowBackground(gameboy, ShowBackground.Type.BACKGROUND));
-        commands.add(new Channel(gameboy.getSound()));
-
         commands.sort(Comparator.comparing(c -> c.getPattern().getCommandNames().get(0)));
+    }
+
+    public void setGameboy(Gameboy gameboy) {
+        // TODO support for commands working in gameboy context
     }
 
     @Override
     public void run() {
-        isStarted = true;
-
         LineReader lineReader = LineReaderBuilder
                 .builder()
                 .build();
 
-        while (true) {
+        while (!doStop) {
             try {
                 String line = lineReader.readLine("coffee-gb> ");
                 for (Command cmd : commands) {
                     if (cmd.getPattern().matches(line)) {
-                            ParsedCommandLine parsed = cmd.getPattern().parse(line);
-                            commandBuffer.add(new CommandExecution(cmd, parsed));
-                            semaphore.acquire();
+                        ParsedCommandLine parsed = cmd.getPattern().parse(line);
+                        commandBuffer.add(new CommandExecution(cmd, parsed));
+                        semaphore.acquire();
                     }
                 }
             } catch (IllegalArgumentException e) {
@@ -76,14 +72,14 @@ public class Console implements Runnable {
     }
 
     public void tick() {
-        if (!isStarted) {
-            return;
-        }
-
         while (!commandBuffer.isEmpty()) {
             commandBuffer.poll().run();
             semaphore.release();
         }
+    }
+
+    public void stop() {
+        doStop = true;
     }
 
     private static class CommandExecution {

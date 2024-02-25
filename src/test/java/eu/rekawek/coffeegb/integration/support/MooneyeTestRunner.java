@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
-import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
@@ -14,9 +13,6 @@ import eu.rekawek.coffeegb.sound.SoundOutput;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 
 import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
 
@@ -33,19 +29,18 @@ public class MooneyeTestRunner {
     private final OutputStream os;
 
     public MooneyeTestRunner(File romFile, OutputStream os) throws IOException {
-        List<String> opts = new ArrayList<>();
+        Cartridge.GameboyType type = Cartridge.GameboyType.AUTOMATIC;
+        boolean useBootstrap = false;
         if (romFile.toString().endsWith("-C.gb") || romFile.toString().endsWith("-cgb.gb")) {
-            opts.add("c");
+            type = Cartridge.GameboyType.FORCE_CGB;
         }
         if (romFile.getName().startsWith("boot_")) {
-            opts.add("b");
+            useBootstrap = true;
         }
-        opts.add("db");
-        GameboyOptions options = new GameboyOptions(romFile, Collections.emptyList(), opts);
-        Cartridge cart = new Cartridge(options);
-        gb = new Gameboy(options, cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
+        Cartridge cart = new Cartridge(romFile, false, type, useBootstrap);
+        gb = new Gameboy(cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
         System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
-        System.out.println("Bootstrap: " + (options.isUsingBootstrap() ? "enabled" : "disabled"));
+        System.out.println("Bootstrap: " + (cart.isUseBootstrap() ? "enabled" : "disabled"));
         cpu = gb.getCpu();
         regs = cpu.getRegisters();
         mem = gb.getAddressSpace();

@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.memory.cart;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.GameboyOptions;
 import eu.rekawek.coffeegb.memory.BootRom;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
@@ -35,6 +34,10 @@ public class Cartridge implements AddressSpace {
         }
     }
 
+    public enum GameboyType {
+        FORCE_DMG, FORCE_CGB, AUTOMATIC
+    }
+
     private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
 
     private final AddressSpace addressSpace;
@@ -45,11 +48,16 @@ public class Cartridge implements AddressSpace {
 
     private final Battery battery;
 
+    private final boolean useBootstrap;
+
     private int dmgBoostrap;
 
-    public Cartridge(GameboyOptions options) throws IOException {
-        File file = options.getRomFile();
-        int[] rom = loadFile(file);
+    public Cartridge(File romFile) throws IOException {
+        this(romFile, true, GameboyType.AUTOMATIC, false);
+    }
+
+    public Cartridge(File romFile, boolean supportBatterySaves, GameboyType overrideGameboyType, boolean useBootstrap) throws IOException {
+        int[] rom = loadFile(romFile);
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
         title = getTitle(rom);
         LOG.debug("Cartridge {}, type: {}", title, type);
@@ -62,8 +70,8 @@ public class Cartridge implements AddressSpace {
         }
         LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
 
-        if (type.isBattery() && options.isSupportBatterySaves()) {
-            battery = new FileBattery(file.getParentFile(), FilenameUtils.removeExtension(file.getName()), 0x2000 * romBanks);
+        if (type.isBattery() && supportBatterySaves) {
+            battery = new FileBattery(romFile.getParentFile(), FilenameUtils.removeExtension(romFile.getName()), 0x2000 * romBanks);
         } else {
             battery = Battery.NULL_BATTERY;
         }
@@ -80,16 +88,17 @@ public class Cartridge implements AddressSpace {
             addressSpace = new Rom(rom, type, romBanks, ramBanks);
         }
 
-        dmgBoostrap = options.isUsingBootstrap() ? 0 : 1;
-        if (options.isForceCgb()) {
+        dmgBoostrap = useBootstrap ? 0 : 1;
+        if (overrideGameboyType == GameboyType.FORCE_CGB) {
             gbc = true;
         } else if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
             gbc = false;
         } else if (gameboyType == Cartridge.GameboyTypeFlag.CGB) {
             gbc = true;
         } else { // UNIVERSAL
-            gbc = !options.isForceDmg();
+            gbc = overrideGameboyType != GameboyType.FORCE_DMG;
         }
+        this.useBootstrap = useBootstrap;
     }
 
     private String getTitle(int[] rom) {
@@ -110,6 +119,10 @@ public class Cartridge implements AddressSpace {
 
     public boolean isGbc() {
         return gbc;
+    }
+
+    public boolean isUseBootstrap() {
+        return useBootstrap;
     }
 
     @Override

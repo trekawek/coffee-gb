@@ -38,6 +38,12 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     @Override
     public void run() {
+        pos = 0;
+        tick = 0;
+        doStop = false;
+        isStopped = false;
+        isPlaying = false;
+
         while (pos < BUFFER_SIZE && !doStop) {
         }
         SourceDataLine line;

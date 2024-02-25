@@ -56,11 +56,11 @@ public class Gameboy implements Runnable {
 
     private boolean lcdDisabled;
 
-    public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
-        this(options, rom, display, controller, soundOutput, serialEndpoint, null);
+    public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
+        this(rom, display, controller, soundOutput, serialEndpoint, null);
     }
 
-    public Gameboy(GameboyOptions options, Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
+    public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
         this.display = display;
         gbc = rom.isGbc();
         speedMode = new SpeedMode();
@@ -99,7 +99,7 @@ public class Gameboy implements Runnable {
         cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
 
         interruptManager.disableInterrupts(false);
-        if (!options.isUsingBootstrap()) {
+        if (!rom.isUseBootstrap()) {
             initRegs();
         }
 

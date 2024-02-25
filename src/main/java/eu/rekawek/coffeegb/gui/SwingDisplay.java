@@ -22,7 +22,9 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     private final int scale;
 
-    private boolean doStop;
+    private volatile boolean doStop;
+
+    private volatile boolean isStopped;
 
     private boolean frameIsWaiting;
 
@@ -91,8 +93,11 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
     @Override
     public void run() {
         doStop = false;
+        isStopped = false;
         frameIsWaiting = false;
         enabled = true;
+        pos = 0;
+
         while (!doStop) {
             synchronized (this) {
                 if (frameIsWaiting) {
@@ -102,16 +107,29 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
                     frameIsWaiting = false;
                 } else {
                     try {
-                        wait();
+                        wait(10);
                     } catch (InterruptedException e) {
                         throw new RuntimeException(e);
                     }
                 }
             }
         }
+        isStopped = true;
+        synchronized (this) {
+            notifyAll();
+        }
     }
 
     public void stop() {
         doStop = true;
+        synchronized (this) {
+            while (!isStopped) {
+                try {
+                    wait(10);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
     }
 }
