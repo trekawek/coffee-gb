@@ -23,6 +23,8 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     private byte[] copiedBuffer = new byte[BUFFER_SIZE];
 
+    private volatile boolean enabled = true;
+
     private volatile int pos;
 
     private int tick;
@@ -66,7 +68,7 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
             copiedBuffer = buffer;
             buffer = tmp;
             pos = 0;
-            if (!isPlaying) {
+            if (!isPlaying || !enabled) {
                 Arrays.fill(copiedBuffer, (byte) 0);
             }
             line.write(copiedBuffer, 0, BUFFER_SIZE);
@@ -105,5 +107,9 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
         buffer[pos] = (byte) (left);
         buffer[pos + 1] = (byte) (right);
         pos += 2;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
 }

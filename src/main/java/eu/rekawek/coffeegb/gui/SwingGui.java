@@ -131,25 +131,35 @@ public class SwingGui {
         }
 
         JMenuBar menuBar = new JMenuBar();
-        JMenu fileMenu = new JMenu("File");
-        JMenuItem load = new JMenuItem("Load ROM");
-        JMenu recent = new JMenu("Recent ROMs");
-        updateRecentRoms(recent);
         mainWindow.setJMenuBar(menuBar);
+
+        JMenu fileMenu = new JMenu("File");
         menuBar.add(fileMenu);
+
+        JMenuItem load = new JMenuItem("Load ROM");
         fileMenu.add(load);
-        fileMenu.add(recent);
+
+        JMenu recentRomsMenu = new JMenu("Recent ROMs");
+        fileMenu.add(recentRomsMenu);
+
         load.addActionListener(actionEvent -> {
             int code = fc.showOpenDialog(load);
             if (code == JFileChooser.APPROVE_OPTION) {
                 File rom = fc.getSelectedFile();
                 properties.setProperty("rom_dir", rom.getParent());
-                recentRoms.addRom(rom.getAbsolutePath());
-                saveProperties();
-                updateRecentRoms(recent);
-                startEmulation(rom);
+                launchRom(recentRomsMenu, rom);
             }
         });
+
+        updateRecentRoms(recentRomsMenu);
+
+        JMenu audioMenu = new JMenu("Audio");
+        menuBar.add(audioMenu);
+
+        JCheckBoxMenuItem enableSound = new JCheckBoxMenuItem("Enable", true);
+        audioMenu.add(enableSound);
+
+        enableSound.addActionListener(actionEvent -> sound.setEnabled(enableSound.getState()));
 
         mainWindow.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         mainWindow.addWindowListener(new java.awt.event.WindowAdapter() {
@@ -199,18 +209,22 @@ public class SwingGui {
         }
     }
 
-    private void updateRecentRoms(JMenu menu) {
-        menu.removeAll();
+    private void launchRom(JMenu recentRomsMenu, File rom) {
+        recentRoms.addRom(rom.getAbsolutePath());
+        saveProperties();
+        updateRecentRoms(recentRomsMenu);
+        startEmulation(rom);
+    }
+
+    private void updateRecentRoms(JMenu recentRomsMenu) {
+        recentRomsMenu.removeAll();
         for (String romPath : recentRoms.getRoms()) {
             File rom = new File(romPath);
             JMenuItem item = new JMenuItem(rom.getName());
             item.addActionListener(actionEvent -> {
-                recentRoms.addRom(rom.getAbsolutePath());
-                saveProperties();
-                updateRecentRoms(menu);
-                startEmulation(rom);
+                launchRom(recentRomsMenu, rom);
             });
-            menu.add(item);
+            recentRomsMenu.add(item);
         }
     }
 }
