@@ -35,7 +35,17 @@ public class Cartridge implements AddressSpace {
     }
 
     public enum GameboyType {
-        FORCE_DMG, FORCE_CGB, AUTOMATIC
+        AUTOMATIC("Automatic"), FORCE_DMG("Force DMG"), FORCE_CGB("Force GBC");
+
+        private final String label;
+
+        GameboyType(String label) {
+            this.label = label;
+        }
+
+        public String getLabel() {
+            return label;
+        }
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
@@ -93,8 +103,6 @@ public class Cartridge implements AddressSpace {
             gbc = true;
         } else if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
             gbc = false;
-        } else if (gameboyType == Cartridge.GameboyTypeFlag.CGB) {
-            gbc = true;
         } else { // UNIVERSAL
             gbc = overrideGameboyType != GameboyType.FORCE_DMG;
         }

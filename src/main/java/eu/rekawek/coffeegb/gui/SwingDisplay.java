@@ -20,7 +20,7 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     private boolean enabled;
 
-    private final int scale;
+    private volatile int scale;
 
     private volatile boolean doStop;
 
@@ -28,7 +28,7 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
 
     private boolean frameIsWaiting;
 
-    private final boolean grayscale;
+    private volatile boolean grayscale;
 
     private int pos;
 
@@ -80,12 +80,13 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
 
+        int localScale = scale;
         Graphics2D g2d = (Graphics2D) g.create();
         if (enabled) {
-            g2d.drawImage(img, 0, 0, DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale, null);
+            g2d.drawImage(img, 0, 0, DISPLAY_WIDTH * localScale, DISPLAY_HEIGHT * localScale, null);
         } else {
             g2d.setColor(new Color(COLORS[0]));
-            g2d.drawRect(0, 0, DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale);
+            g2d.drawRect(0, 0, DISPLAY_WIDTH * localScale, DISPLAY_HEIGHT * localScale);
         }
         g2d.dispose();
     }
@@ -131,5 +132,22 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
                 }
             }
         }
+    }
+
+    public void setScale(int scale) {
+        this.scale = scale;
+        setPreferredSize(new Dimension(DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale));
+    }
+
+    public int getScale() {
+        return scale;
+    }
+
+    public boolean isGrayscale() {
+        return grayscale;
+    }
+
+    public void setGrayscale(boolean grayscale) {
+        this.grayscale = grayscale;
     }
 }

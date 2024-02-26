@@ -6,8 +6,6 @@ import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
-import javax.swing.*;
-import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
@@ -15,18 +13,19 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Properties;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.swing.*;
 
 public class SwingGui {
 
     private static final Logger LOG = LoggerFactory.getLogger(SwingGui.class);
 
     private static final File PROPERTIES_FILE = new File(new File(System.getProperty("user.home")), ".coffeegb.properties");
-
-    private static final int SCALE = 2;
 
     private final RecentRoms recentRoms;
 
@@ -38,7 +37,7 @@ public class SwingGui {
 
     private final CartridgeOptions options;
 
-    private final File initialRom;
+    private File currentRom;
 
     private final Properties properties;
 
@@ -48,20 +47,31 @@ public class SwingGui {
 
     private JCheckBoxMenuItem pauseGame;
 
+    private JMenuItem resetGame;
+
     private Cartridge cart;
 
     private Gameboy gameboy;
 
     private boolean isRunning;
 
+    private Cartridge.GameboyType type;
+
     public SwingGui(CartridgeOptions options, boolean debug, File initialRom) throws IOException {
         this.options = options;
-        this.initialRom = initialRom;
+        this.currentRom = initialRom;
         properties = loadProperties();
         recentRoms = new RecentRoms(properties);
-        display = new SwingDisplay(SCALE, false);
+
+        int displayScale = Integer.parseInt(properties.getProperty("display.scale", "2"));
+        boolean displayGrayscale = Boolean.parseBoolean(properties.getProperty("display.grayscale", "false"));
+        boolean soundEnabled = Boolean.parseBoolean(properties.getProperty("sound.enabled", "true"));
+        type = Cartridge.GameboyType.valueOf(properties.getProperty("gameBoy.type", Cartridge.GameboyType.AUTOMATIC.name()));
+
+        display = new SwingDisplay(displayScale, displayGrayscale);
         controller = new SwingController(properties);
         sound = new AudioSystemSoundOutput();
+        sound.setEnabled(soundEnabled);
         console = debug ? new Console() : null;
     }
 
@@ -79,9 +89,7 @@ public class SwingGui {
             JOptionPane.showMessageDialog(mainWindow, e.getMessage(), "Can't load ROM", JOptionPane.ERROR_MESSAGE);
             return;
         }
-        if (isRunning) {
-            stopEmulation();
-        }
+        stopEmulation();
         cart = newCart;
         mainWindow.setTitle("Coffee GB: " + cart.getTitle());
         gameboy = new Gameboy(cart, display, controller, sound, SerialEndpoint.NULL_ENDPOINT, console);
@@ -95,9 +103,14 @@ public class SwingGui {
         isRunning = true;
         pauseGame.setEnabled(true);
         pauseGame.setState(false);
+        resetGame.setEnabled(true);
+        currentRom = rom;
     }
 
     private void stopEmulation() {
+        if (!isRunning) {
+            return;
+        }
         isRunning = false;
         if (gameboy != null) {
             gameboy.stop();
@@ -112,22 +125,17 @@ public class SwingGui {
         if (console != null) {
             console.setGameboy(null);
         }
+        pauseGame.setEnabled(false);
+        pauseGame.setState(false);
+        resetGame.setEnabled(false);
     }
 
     private Cartridge loadRom(File rom) throws IOException {
-        Cartridge.GameboyType type = Cartridge.GameboyType.AUTOMATIC;
-        if (options.isForceCgb()) {
-            type = Cartridge.GameboyType.FORCE_CGB;
-        }
-        if (options.isForceDmg()) {
-            type = Cartridge.GameboyType.FORCE_DMG;
-        }
         return new Cartridge(rom, options.isSupportBatterySaves(), type, options.isUsingBootstrap());
     }
 
     private void startGui() {
-        display.setPreferredSize(new Dimension(160 * SCALE, 144 * SCALE));
-
+        display.setScale(display.getScale());
         mainWindow = new JFrame("Coffee GB");
 
         final JFileChooser fc = new JFileChooser();
@@ -171,13 +179,69 @@ public class SwingGui {
             }
         });
 
+        JMenu typeMenu = new JMenu("GameBoy type");
+        gameMenu.add(typeMenu);
+
+        for (Cartridge.GameboyType type : Cartridge.GameboyType.values()) {
+            JCheckBoxMenuItem item = new JCheckBoxMenuItem(type.getLabel(), type == this.type);
+            item.addActionListener(actionEvent -> {
+                this.type = type;
+                if (isRunning) {
+                    startEmulation(currentRom);
+                }
+                uncheckAllBut(typeMenu, item);
+                properties.setProperty("gameBoy.type", type.name());
+                saveProperties();
+            });
+            typeMenu.add(item);
+        }
+
+        resetGame = new JMenuItem("Reset");
+        gameMenu.add(resetGame);
+        resetGame.addActionListener(actionEvent -> {
+            if (currentRom != null) {
+                startEmulation(currentRom);
+            }
+        });
+        resetGame.setEnabled(false);
+
+        JMenu screenMenu = new JMenu("Screen");
+        menuBar.add(screenMenu);
+
+        JMenu scale = new JMenu("Scale");
+        screenMenu.add(scale);
+
+        for (int s : Arrays.asList(1, 2, 4)) {
+            JCheckBoxMenuItem item = new JCheckBoxMenuItem(s + "x", s == display.getScale());
+            item.addActionListener(actionEvent -> {
+                display.setScale(s);
+                mainWindow.pack();
+                uncheckAllBut(scale, item);
+                properties.setProperty("display.scale", String.valueOf(s));
+                saveProperties();
+            });
+            scale.add(item);
+        }
+
+        JCheckBoxMenuItem grayscale = new JCheckBoxMenuItem("DMG grayscale", display.isGrayscale());
+        screenMenu.add(grayscale);
+        grayscale.addActionListener(actionEvent -> {
+            display.setGrayscale(grayscale.getState());
+            properties.setProperty("display.grayscale", String.valueOf(grayscale.getState()));
+            saveProperties();
+        });
+
         JMenu audioMenu = new JMenu("Audio");
         menuBar.add(audioMenu);
 
-        JCheckBoxMenuItem enableSound = new JCheckBoxMenuItem("Enable", true);
+        JCheckBoxMenuItem enableSound = new JCheckBoxMenuItem("Enable", sound.isEnabled());
         audioMenu.add(enableSound);
 
-        enableSound.addActionListener(actionEvent -> sound.setEnabled(enableSound.getState()));
+        enableSound.addActionListener(actionEvent -> {
+            sound.setEnabled(enableSound.getState());
+            properties.setProperty("sound.enabled", String.valueOf(enableSound.getState()));
+            saveProperties();
+        });
 
         mainWindow.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         mainWindow.addWindowListener(new java.awt.event.WindowAdapter() {
@@ -196,8 +260,8 @@ public class SwingGui {
         if (console != null) {
             new Thread(console).start();
         }
-        if (initialRom != null) {
-            startEmulation(initialRom);
+        if (currentRom != null) {
+            startEmulation(currentRom);
         }
     }
 
@@ -245,4 +309,15 @@ public class SwingGui {
             recentRomsMenu.add(item);
         }
     }
+
+    private static void uncheckAllBut(JMenu parent, JCheckBoxMenuItem selectedItem) {
+        for (int i = 0; i < parent.getItemCount(); i++) {
+            JMenuItem item = parent.getItem(i);
+            if (item == selectedItem) {
+                continue;
+            }
+            ((JCheckBoxMenuItem) item).setState(false);
+        }
+    }
+
 }
