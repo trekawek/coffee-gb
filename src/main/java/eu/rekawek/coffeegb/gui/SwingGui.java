@@ -82,7 +82,9 @@ public class SwingGui {
         mainWindow.setTitle("Coffee GB: " + cart.getTitle());
         gameboy = new Gameboy(cart, display, controller, sound, SerialEndpoint.NULL_ENDPOINT, console);
         gameboy.registerTickListener(new TimingTicker());
-        console.setGameboy(gameboy);
+        if (console != null) {
+            console.setGameboy(gameboy);
+        }
         new Thread(display).start();
         new Thread(sound).start();
         new Thread(gameboy).start();
@@ -101,7 +103,9 @@ public class SwingGui {
         }
         sound.stopThread();
         display.stop();
-        console.setGameboy(null);
+        if (console != null) {
+            console.setGameboy(null);
+        }
     }
 
     private Cartridge loadRom(File rom) throws IOException {
@@ -163,7 +167,9 @@ public class SwingGui {
 
     private void stopGui() {
         stopEmulation();
-        console.stop();
+        if (console != null) {
+            console.stop();
+        }
         System.exit(0);
     }
 
