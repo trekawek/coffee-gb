@@ -56,6 +56,8 @@ public class Gameboy implements Runnable {
 
     private boolean lcdDisabled;
 
+    private volatile boolean paused;
+
     public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
         this(rom, display, controller, soundOutput, serialEndpoint, null);
     }
@@ -123,6 +125,16 @@ public class Gameboy implements Runnable {
     public void run() {
         doStop = false;
         while (!doStop) {
+            if (paused) {
+                synchronized (this) {
+                    try {
+                        wait();
+                        continue;
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
             tick();
         }
     }
@@ -197,5 +209,12 @@ public class Gameboy implements Runnable {
 
     public Sound getSound() {
         return sound;
+    }
+
+    public void setPaused(boolean paused) {
+        this.paused = paused;
+        synchronized (this) {
+            notifyAll();
+        }
     }
 }

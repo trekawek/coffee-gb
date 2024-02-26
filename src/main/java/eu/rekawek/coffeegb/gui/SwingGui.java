@@ -10,6 +10,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.KeyEvent;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -44,6 +45,8 @@ public class SwingGui {
     private final Console console;
 
     private JFrame mainWindow;
+
+    private JCheckBoxMenuItem pauseGame;
 
     private Cartridge cart;
 
@@ -90,6 +93,8 @@ public class SwingGui {
         new Thread(sound).start();
         new Thread(gameboy).start();
         isRunning = true;
+        pauseGame.setEnabled(true);
+        pauseGame.setState(false);
     }
 
     private void stopEmulation() {
@@ -152,6 +157,19 @@ public class SwingGui {
         });
 
         updateRecentRoms(recentRomsMenu);
+
+        JMenu gameMenu = new JMenu("Game");
+        menuBar.add(gameMenu);
+
+        pauseGame = new JCheckBoxMenuItem("Pause", false);
+        pauseGame.setEnabled(false);
+        pauseGame.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0));
+        gameMenu.add(pauseGame);
+        pauseGame.addActionListener(actionEvent -> {
+            if (gameboy != null) {
+                gameboy.setPaused(pauseGame.getState());
+            }
+        });
 
         JMenu audioMenu = new JMenu("Audio");
         menuBar.add(audioMenu);
