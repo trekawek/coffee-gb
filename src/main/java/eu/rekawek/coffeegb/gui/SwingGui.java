@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -24,6 +26,8 @@ public class SwingGui {
     private static final File PROPERTIES_FILE = new File(new File(System.getProperty("user.home")), ".coffeegb.properties");
 
     private static final int SCALE = 2;
+
+    private final RecentRoms recentRoms;
 
     private final SwingDisplay display;
 
@@ -48,17 +52,14 @@ public class SwingGui {
     private boolean isRunning;
 
     public SwingGui(CartridgeOptions options, boolean debug, File initialRom) throws IOException {
-        properties = loadProperties();
-        AudioSystemSoundOutput sound = new AudioSystemSoundOutput();
-        SwingDisplay display = new SwingDisplay(SCALE, false);
-        SwingController controller = new SwingController(properties);
-
         this.options = options;
-        this.display = display;
-        this.controller = controller;
-        this.sound = sound;
         this.initialRom = initialRom;
-        this.console = debug ? new Console() : null;
+        properties = loadProperties();
+        recentRoms = new RecentRoms(properties);
+        display = new SwingDisplay(SCALE, false);
+        controller = new SwingController(properties);
+        sound = new AudioSystemSoundOutput();
+        console = debug ? new Console() : null;
     }
 
     public void run() throws Exception {
@@ -132,14 +133,21 @@ public class SwingGui {
         JMenuBar menuBar = new JMenuBar();
         JMenu fileMenu = new JMenu("File");
         JMenuItem load = new JMenuItem("Load ROM");
+        JMenu recent = new JMenu("Recent ROMs");
+        updateRecentRoms(recent);
         mainWindow.setJMenuBar(menuBar);
         menuBar.add(fileMenu);
         fileMenu.add(load);
+        fileMenu.add(recent);
         load.addActionListener(actionEvent -> {
             int code = fc.showOpenDialog(load);
             if (code == JFileChooser.APPROVE_OPTION) {
-                setProperty("rom_dir", fc.getSelectedFile().getParent());
-                startEmulation(fc.getSelectedFile());
+                File rom = fc.getSelectedFile();
+                properties.setProperty("rom_dir", rom.getParent());
+                recentRoms.addRom(rom.getAbsolutePath());
+                saveProperties();
+                updateRecentRoms(recent);
+                startEmulation(rom);
             }
         });
 
@@ -183,12 +191,26 @@ public class SwingGui {
         return props;
     }
 
-    private void setProperty(String key, String value) {
-        properties.setProperty(key, value);
+    private void saveProperties() {
         try (FileWriter writer = new FileWriter(PROPERTIES_FILE)) {
             properties.store(writer, "");
         } catch (IOException e) {
             LOG.error("Can't store properties", e);
+        }
+    }
+
+    private void updateRecentRoms(JMenu menu) {
+        menu.removeAll();
+        for (String romPath : recentRoms.getRoms()) {
+            File rom = new File(romPath);
+            JMenuItem item = new JMenuItem(rom.getName());
+            item.addActionListener(actionEvent -> {
+                recentRoms.addRom(rom.getAbsolutePath());
+                saveProperties();
+                updateRecentRoms(menu);
+                startEmulation(rom);
+            });
+            menu.add(item);
         }
     }
 }
