@@ -14,16 +14,9 @@ The coffee-gb-*-complete.jar executable file will be available in the `./target`
 
 ## Usage
 
-    Usage:
-    java -jar coffee-gb.jar [OPTIONS] ROM_FILE
-
-    Available options:
-      -d  --force-dmg                Emulate classic GB (DMG) for universal ROMs
-      -c  --force-cgb                Emulate color GB (CGB) for all ROMs
-      -b  --use-bootstrap            Start with the GB bootstrap
-      -db --disable-battery-saves    Disable battery saves
-          --debug                    Enable debug console
-          --headless                 Start in the headless mode
+1. Download the [most recent release](https://github.com/trekawek/coffee-gb/releases/download/coffee-gb-1.2.0/coffee-gb-1.2.0.jar).
+2. Double-click the JAR or launch it with `java -jar coffee-gb-*.jar` command.
+3. Load a game.
 
 Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd>.
 
