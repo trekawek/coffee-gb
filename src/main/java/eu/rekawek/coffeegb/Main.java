@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb;
 
-import eu.rekawek.coffeegb.gui.SwingGui;
+import eu.rekawek.coffeegb.swing.gui.SwingGui;
 
 import java.io.File;
 import java.io.PrintStream;
@@ -26,7 +26,7 @@ public class Main {
         if (parsedArgs.args.size() == 1) {
             initialRom = new File(parsedArgs.args.get(0));
         }
-        SwingGui emulator = new SwingGui(options, debug, initialRom);
+        SwingGui emulator = new SwingGui(debug, initialRom);
         emulator.run();
     }
 

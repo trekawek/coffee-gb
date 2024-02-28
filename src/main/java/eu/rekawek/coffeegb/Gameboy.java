@@ -217,4 +217,8 @@ public class Gameboy implements Runnable {
             notifyAll();
         }
     }
+
+    public Boolean isPaused() {
+        return paused;
+    }
 }

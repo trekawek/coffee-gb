@@ -6,7 +6,7 @@ import eu.rekawek.coffeegb.debug.Command;
 import eu.rekawek.coffeegb.debug.CommandPattern;
 import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 import eu.rekawek.coffeegb.gpu.*;
-import eu.rekawek.coffeegb.gui.SwingDisplay;
+import eu.rekawek.coffeegb.swing.io.SwingDisplay;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

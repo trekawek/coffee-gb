@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.gui;
+package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.sound.SoundOutput;

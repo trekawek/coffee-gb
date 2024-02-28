@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.gui;
+package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.gpu.Display;
 
@@ -143,11 +143,12 @@ public class SwingDisplay extends JPanel implements Display, Runnable {
         return scale;
     }
 
+    public void setGrayscale(boolean grayscale) {
+        this.grayscale = grayscale;
+    }
+
     public boolean isGrayscale() {
         return grayscale;
     }
 
-    public void setGrayscale(boolean grayscale) {
-        this.grayscale = grayscale;
-    }
 }
