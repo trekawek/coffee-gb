@@ -1,13 +1,14 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
 
-public class Mbc1 implements AddressSpace {
+public class Mbc1 implements MemoryController {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mbc1.class);
 
@@ -41,6 +42,8 @@ public class Mbc1 implements AddressSpace {
 
     private int cachedRomBankFor0x4000 = -1;
 
+    private boolean ramUpdated;
+
     public Mbc1(int[] cartridge, Battery battery, int romBanks, int ramBanks) {
         this.multicart = romBanks == 64 && isMulticart(cartridge);
         this.cartridge = cartridge;
@@ -62,9 +65,6 @@ public class Mbc1 implements AddressSpace {
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = (value & 0b1111) == 0b1010;
-            if (!ramWriteEnabled) {
-                battery.saveRam(ram);
-            }
             LOG.trace("RAM write: {}", ramWriteEnabled);
         } else if (address >= 0x2000 && address < 0x4000) {
             LOG.trace("Low 5 bits of ROM bank: {}", (value & 0b00011111));
@@ -90,7 +90,16 @@ public class Mbc1 implements AddressSpace {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
                 ram[ramAddress] = value;
+                ramUpdated = true;
             }
+        }
+    }
+
+    @Override
+    public void flushRam() {
+        if (ramUpdated) {
+            battery.saveRam(ram);
+            battery.flush();
         }
     }
 

@@ -50,7 +50,7 @@ public class Cartridge implements AddressSpace {
 
     private static final Logger LOG = LoggerFactory.getLogger(Cartridge.class);
 
-    private final AddressSpace addressSpace;
+    private final MemoryController addressSpace;
 
     private final boolean gbc;
 
@@ -81,7 +81,7 @@ public class Cartridge implements AddressSpace {
         LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
 
         if (type.isBattery() && supportBatterySaves) {
-            battery = new FileBattery(romFile.getParentFile(), FilenameUtils.removeExtension(romFile.getName()), 0x2000 * romBanks);
+            battery = new FileBattery(romFile.getParentFile(), FilenameUtils.removeExtension(romFile.getName()), 0x2000 * ramBanks);
         } else {
             battery = Battery.NULL_BATTERY;
         }
@@ -163,7 +163,7 @@ public class Cartridge implements AddressSpace {
     }
 
     public void flushBattery() {
-        battery.flush();
+        addressSpace.flushRam();
     }
 
     private static int[] loadFile(File file) throws IOException {

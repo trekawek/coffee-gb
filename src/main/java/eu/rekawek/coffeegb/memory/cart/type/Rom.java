@@ -2,8 +2,9 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.CartridgeType;
+import eu.rekawek.coffeegb.memory.cart.MemoryController;
 
-public class Rom implements AddressSpace {
+public class Rom implements MemoryController {
 
     private final int[] rom;
 

@@ -1,13 +1,14 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.rtc.Clock;
 import eu.rekawek.coffeegb.memory.cart.rtc.RealTimeClock;
 
 import java.util.Arrays;
 
-public class Mbc3 implements AddressSpace {
+public class Mbc3 implements MemoryController {
 
     private final int[] cartridge;
 
@@ -34,7 +35,7 @@ public class Mbc3 implements AddressSpace {
         this.clock = new RealTimeClock(Clock.SYSTEM_CLOCK);
         this.battery = battery;
 
-        long[] clockData = new long[12 ];
+        long[] clockData = new long[12];
         battery.loadRamWithClock(ram, clockData);
         clock.deserialize(clockData);
     }
@@ -42,16 +43,13 @@ public class Mbc3 implements AddressSpace {
     @Override
     public boolean accepts(int address) {
         return (address >= 0x0000 && address < 0x8000) ||
-               (address >= 0xa000 && address < 0xc000);
+                (address >= 0xa000 && address < 0xc000);
     }
 
     @Override
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = (value & 0b1010) != 0;
-            if (!ramWriteEnabled) {
-                battery.saveRamWithClock(ram, clock.serialize());
-            }
         } else if (address >= 0x2000 && address < 0x4000) {
             int bank = value & 0b01111111;
             selectRomBank(bank);
@@ -76,6 +74,12 @@ public class Mbc3 implements AddressSpace {
         } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
             setTimer(value);
         }
+    }
+
+    @Override
+    public void flushRam() {
+        battery.saveRamWithClock(ram, clock.serialize());
+        battery.flush();
     }
 
     private void selectRomBank(int bank) {
