@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import java.io.File
 import javax.swing.JFrame
+import javax.swing.JOptionPane
 
 class SwingEmulator(
         private val console: Console?,

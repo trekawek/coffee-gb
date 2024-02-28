@@ -39,7 +39,7 @@ class SwingGui(debug: Boolean, private val initialRom: File?) {
 
     private fun startGui() {
         mainWindow = JFrame("Coffee GB")
-        SwingMenu(emulator, properties).addMenu(mainWindow)
+        SwingMenu(emulator, properties, mainWindow).addMenu()
         emulator.addEmulatorStateListener(object : EmulatorStateListener {
             override fun onEmulationStart(cartTitle: String) {
                 mainWindow.title = "Coffee GB: $cartTitle"

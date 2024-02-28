@@ -8,18 +8,18 @@ import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.*
 
-class SwingMenu(private val emulator: SwingEmulator, private val properties: EmulatorProperties) {
-    fun addMenu(window: JFrame) {
+class SwingMenu(private val emulator: SwingEmulator, private val properties: EmulatorProperties, private val window: JFrame) {
+    fun addMenu() {
         val menuBar = JMenuBar()
         window.jMenuBar = menuBar
 
-        menuBar.add(createFileMenu(window))
+        menuBar.add(createFileMenu())
         menuBar.add(createGameMenu())
-        menuBar.add(createScreenMenu(window))
+        menuBar.add(createScreenMenu())
         menuBar.add(createAudioMenu())
     }
 
-    private fun createFileMenu(window: JFrame): JMenu {
+    private fun createFileMenu(): JMenu {
         val fileMenu = JMenu("File")
 
         val load = JMenuItem("Load ROM")
@@ -94,7 +94,7 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         return gameMenu
     }
 
-    private fun createScreenMenu(window: JFrame): JMenu {
+    private fun createScreenMenu(): JMenu {
         val screenMenu = JMenu("Screen")
 
         val scale = JMenu("Scale")
@@ -159,7 +159,11 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
     private fun launchRom(recentRomsMenu: JMenu, rom: File) {
         properties.recentRoms.addRom(rom.absolutePath)
         updateRecentRoms(recentRomsMenu)
-        emulator.startEmulation(rom)
+        try {
+            emulator.startEmulation(rom)
+        } catch (e: Exception) {
+            JOptionPane.showMessageDialog(window, "Can't open ${rom.name}: ${e.message}", "Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     companion object {
