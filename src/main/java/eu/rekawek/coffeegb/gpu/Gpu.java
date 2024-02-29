@@ -7,9 +7,11 @@ import eu.rekawek.coffeegb.gpu.phase.*;
 import eu.rekawek.coffeegb.memory.Dma;
 import eu.rekawek.coffeegb.memory.Ram;
 
+import java.io.Serializable;
+
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
-public class Gpu implements AddressSpace {
+public class Gpu implements AddressSpace, Serializable {
 
     public enum Mode {
         HBlank, VBlank, OamSearch, PixelTransfer
@@ -21,7 +23,7 @@ public class Gpu implements AddressSpace {
 
     private final AddressSpace oamRam;
 
-    private final Display display;
+    private transient Display display;
 
     private final InterruptManager interruptManager;
 
@@ -55,7 +57,7 @@ public class Gpu implements AddressSpace {
 
     private GpuPhase phase;
 
-    public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, boolean gbc) {
+    public Gpu(InterruptManager interruptManager, Dma dma, Ram oamRam, boolean gbc) {
         this.r = new GpuRegisterValues();
         this.lcdc = new Lcdc();
         this.interruptManager = interruptManager;
@@ -74,14 +76,17 @@ public class Gpu implements AddressSpace {
         oamPalette.fillWithFF();
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oamRam, display, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites());
+        this.pixelTransferPhase = new PixelTransfer(videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites());
         this.hBlankPhase = new HBlankPhase();
         this.vBlankPhase = new VBlankPhase();
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
+    }
 
+    public void init(Display display) {
         this.display = display;
+        pixelTransferPhase.init(display);
     }
 
     private AddressSpace getAddressSpace(int address) {

@@ -5,13 +5,15 @@ import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.gpu.Lcdc;
 
-public class OamSearch implements GpuPhase {
+import java.io.Serializable;
+
+public class OamSearch implements GpuPhase, Serializable {
 
     private enum State {
         READING_Y, READING_X
     }
 
-    public static class SpritePosition {
+    public static class SpritePosition implements Serializable {
 
         private int x;
 

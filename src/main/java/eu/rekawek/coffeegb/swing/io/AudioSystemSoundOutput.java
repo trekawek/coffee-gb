@@ -44,8 +44,6 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
         tick = 0;
         doStop = false;
         isStopped = false;
-        isPlaying = false;
-
         while (pos < BUFFER_SIZE && !doStop) {
         }
         SourceDataLine line;

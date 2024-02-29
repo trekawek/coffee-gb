@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.gpu.phase;
 
-public class VBlankPhase implements GpuPhase {
+import java.io.Serializable;
+
+public class VBlankPhase implements GpuPhase, Serializable {
 
     private int ticks;
 

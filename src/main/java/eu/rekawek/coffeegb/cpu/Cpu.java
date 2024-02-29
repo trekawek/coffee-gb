@@ -8,9 +8,10 @@ import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.SpriteBug;
 
+import java.io.Serializable;
 import java.util.List;
 
-public class Cpu {
+public class Cpu implements Serializable {
 
     public enum State {
         OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED
@@ -24,7 +25,7 @@ public class Cpu {
 
     private final Gpu gpu;
 
-    private final Display display;
+    private transient Display display;
 
     private final SpeedMode speedMode;
 
@@ -54,13 +55,16 @@ public class Cpu {
 
     private boolean haltBugMode;
 
-    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, Display display, SpeedMode speedMode) {
+    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode) {
         this.registers = new Registers();
         this.addressSpace = addressSpace;
         this.interruptManager = interruptManager;
         this.gpu = gpu;
-        this.display = display;
         this.speedMode = speedMode;
+    }
+
+    public void init(Display display) {
+        this.display = display;
     }
 
     public void tick() {

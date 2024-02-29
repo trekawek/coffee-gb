@@ -4,7 +4,9 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 
-public class Timer implements AddressSpace {
+import java.io.Serializable;
+
+public class Timer implements AddressSpace, Serializable {
 
     private final SpeedMode speedMode;
 

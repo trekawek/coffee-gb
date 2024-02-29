@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class ShadowAddressSpace implements AddressSpace {
+import java.io.Serializable;
+
+public class ShadowAddressSpace implements AddressSpace, Serializable {
 
     private final AddressSpace addressSpace;
 

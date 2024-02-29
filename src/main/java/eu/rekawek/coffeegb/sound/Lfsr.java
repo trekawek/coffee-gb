@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.sound;
 
-public class Lfsr {
+import java.io.Serializable;
+
+public class Lfsr implements Serializable {
 
     private int lfsr;
 

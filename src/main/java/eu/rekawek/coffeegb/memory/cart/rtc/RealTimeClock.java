@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.memory.cart.rtc;
 
-public class RealTimeClock {
+import java.io.Serializable;
 
-    private final Clock clock;
+public class RealTimeClock implements Serializable {
+
+    private final TimeSource timeSource;
 
     private long offsetSec;
 
@@ -20,13 +22,13 @@ public class RealTimeClock {
 
     private int haltDays;
 
-    public RealTimeClock(Clock clock) {
-        this.clock = clock;
-        this.clockStart = clock.currentTimeMillis();
+    public RealTimeClock(TimeSource timeSource) {
+        this.timeSource = timeSource;
+        this.clockStart = timeSource.currentTimeMillis();
     }
 
     public void latch() {
-        latchStart = clock.currentTimeMillis();
+        latchStart = timeSource.currentTimeMillis();
     }
 
     public void unlatch() {
@@ -95,7 +97,7 @@ public class RealTimeClock {
             unlatch();
         } else if (!halt && this.halt) {
             offsetSec = haltSeconds + haltMinutes * 60L + (long) haltHours * 60 * 60 + (long) haltDays * 60 * 60 * 24;
-            clockStart = clock.currentTimeMillis();
+            clockStart = timeSource.currentTimeMillis();
         }
         this.halt = halt;
     }
@@ -109,7 +111,7 @@ public class RealTimeClock {
     private long clockTimeInSec() {
         long now;
         if (latchStart == 0) {
-            now = clock.currentTimeMillis();
+            now = timeSource.currentTimeMillis();
         } else {
             now = latchStart;
         }

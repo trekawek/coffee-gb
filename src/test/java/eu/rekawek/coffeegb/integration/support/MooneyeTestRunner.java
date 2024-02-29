@@ -38,7 +38,8 @@ public class MooneyeTestRunner {
             useBootstrap = true;
         }
         Cartridge cart = new Cartridge(romFile, false, type, useBootstrap);
-        gb = new Gameboy(cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
+        gb = new Gameboy(cart);
+        gb.init(Display.NULL_DISPLAY, SoundOutput.NULL_OUTPUT, Controller.NULL_CONTROLLER, SerialEndpoint.NULL_ENDPOINT, null);
         System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
         System.out.println("Bootstrap: " + (cart.isUseBootstrap() ? "enabled" : "disabled"));
         cpu = gb.getCpu();
@@ -49,7 +50,7 @@ public class MooneyeTestRunner {
 
     public boolean runTest() throws IOException {
         int divider = 0;
-        while(!isByteSequenceAtPc(gb, 0x00, 0x18, 0xfd)) { // infinite loop
+        while (!isByteSequenceAtPc(gb, 0x00, 0x18, 0xfd)) { // infinite loop
             gb.tick();
             if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 1 : 4)) {
                 displayProgress();

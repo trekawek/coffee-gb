@@ -3,9 +3,11 @@ package eu.rekawek.coffeegb.sound;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.Ram;
 
-public class Sound implements AddressSpace {
+import java.io.Serializable;
 
-    private static final int[] MASKS = new int[] {
+public class Sound implements AddressSpace, Serializable {
+
+    private static final int[] MASKS = new int[]{
             0x80, 0x3f, 0x00, 0xff, 0xbf,
             0xff, 0x3f, 0x00, 0xff, 0xbf,
             0x7f, 0xff, 0x9f, 0xff, 0xbf,
@@ -18,9 +20,9 @@ public class Sound implements AddressSpace {
 
     private final AbstractSoundMode[] allModes = new AbstractSoundMode[4];
 
-    private final Ram r = new Ram(0xff24, 0x03);
+    private final AddressSpace r = new Ram(0xff24, 0x03);
 
-    private final SoundOutput output;
+    private transient SoundOutput output;
 
     private final int[] channels = new int[4];
 
@@ -28,12 +30,20 @@ public class Sound implements AddressSpace {
 
     private final boolean[] overridenEnabled = {true, true, true, true};
 
-    public Sound(SoundOutput output, boolean gbc) {
+    public Sound(boolean gbc) {
         allModes[0] = new SoundMode1(gbc);
         allModes[1] = new SoundMode2(gbc);
         allModes[2] = new SoundMode3(gbc);
         allModes[3] = new SoundMode4(gbc);
+    }
+
+    public void init(SoundOutput output) {
         this.output = output;
+        if (enabled) {
+            output.start();
+        } else {
+            output.stop();
+        }
     }
 
     public void tick() {

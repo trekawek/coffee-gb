@@ -1,10 +1,9 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
-import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.memory.cart.rtc.Clock;
 import eu.rekawek.coffeegb.memory.cart.rtc.RealTimeClock;
+import eu.rekawek.coffeegb.memory.cart.rtc.SystemTimeSource;
 
 import java.util.Arrays;
 
@@ -32,7 +31,7 @@ public class Mbc3 implements MemoryController {
         this.cartridge = cartridge;
         this.ram = new int[0x2000 * Math.max(ramBanks, 1)];
         Arrays.fill(ram, 0xff);
-        this.clock = new RealTimeClock(Clock.SYSTEM_CLOCK);
+        this.clock = new RealTimeClock(new SystemTimeSource());
         this.battery = battery;
 
         long[] clockData = new long[12];

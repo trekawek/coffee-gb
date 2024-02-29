@@ -9,6 +9,9 @@ import java.io.File
 import javax.swing.*
 
 class SwingMenu(private val emulator: SwingEmulator, private val properties: EmulatorProperties, private val window: JFrame) {
+
+    private var stateSlot = 0
+
     fun addMenu() {
         val menuBar = JMenuBar()
         window.jMenuBar = menuBar
@@ -67,6 +70,38 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
                 pauseGame.isEnabled = false
             }
         })
+
+        val saveSnapshot = JMenuItem("Save state")
+        val loadSnapshot = JMenuItem("Load state")
+        saveSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0)
+        gameMenu.add(saveSnapshot)
+        saveSnapshot.addActionListener {
+            emulator.saveSnapshot(stateSlot)
+            loadSnapshot.isEnabled = emulator.snapshotAvailable(stateSlot)
+        }
+        enableWhenEmulationActive(saveSnapshot)
+
+        loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
+        gameMenu.add(loadSnapshot)
+        loadSnapshot.addActionListener { emulator.restoreSnapshot(stateSlot) }
+        loadSnapshot.isEnabled = false
+        emulator.addEmulatorStateListener(object : EmulatorStateListener {
+            override fun onEmulationStart(cartTitle: String) {
+                loadSnapshot.isEnabled = emulator.snapshotAvailable(stateSlot)
+            }
+        })
+
+        val slotMenu = JMenu("State slot")
+        gameMenu.add(slotMenu)
+        for (i in (0..9)) {
+            val slotItem = JCheckBoxMenuItem("Slot $i", i == stateSlot)
+            slotItem.addActionListener {
+                stateSlot = i
+                loadSnapshot.isEnabled = emulator.snapshotAvailable(i)
+                uncheckAllBut(slotMenu, slotItem)
+            }
+            slotMenu.add(slotItem)
+        }
 
         val typeMenu = JMenu("GameBoy type")
         gameMenu.add(typeMenu)

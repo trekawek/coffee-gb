@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.cpu;
 
+import java.io.Serializable;
+
 import static eu.rekawek.coffeegb.cpu.BitUtils.*;
 
-public class Flags {
+public class Flags implements Serializable {
 
     private static final int Z_POS = 7;
 

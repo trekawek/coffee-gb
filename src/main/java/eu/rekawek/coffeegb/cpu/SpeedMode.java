@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class SpeedMode implements AddressSpace {
+import java.io.Serializable;
+
+public class SpeedMode implements AddressSpace, Serializable {
 
     private boolean currentSpeed;
 

@@ -3,7 +3,9 @@ package eu.rekawek.coffeegb.memory;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 
-public class Dma implements AddressSpace {
+import java.io.Serializable;
+
+public class Dma implements AddressSpace, Serializable {
 
     private final AddressSpace addressSpace;
 

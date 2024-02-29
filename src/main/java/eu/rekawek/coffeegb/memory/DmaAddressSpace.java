@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class DmaAddressSpace implements AddressSpace {
+import java.io.Serializable;
+
+public class DmaAddressSpace implements AddressSpace, Serializable {
 
     private final AddressSpace addressSpace;
 

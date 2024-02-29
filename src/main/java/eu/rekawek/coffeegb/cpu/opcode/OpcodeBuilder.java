@@ -7,11 +7,12 @@ import eu.rekawek.coffeegb.cpu.op.DataType;
 import eu.rekawek.coffeegb.cpu.op.Op;
 import eu.rekawek.coffeegb.gpu.SpriteBug;
 
+import java.io.Serializable;
 import java.util.*;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.toWord;
 
-public class OpcodeBuilder {
+public class OpcodeBuilder implements Serializable {
 
     private static final AluFunctions ALU = new AluFunctions();
 

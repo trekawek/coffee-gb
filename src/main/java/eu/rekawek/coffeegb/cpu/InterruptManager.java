@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class InterruptManager implements AddressSpace {
+import java.io.Serializable;
+
+public class InterruptManager implements AddressSpace, Serializable {
 
     public enum InterruptType {
         VBlank(0x0040), LCDC(0x0048), Timer(0x0050), Serial(0x0058), P10_13(0x0060);

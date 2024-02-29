@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class GpuRegisterValues implements AddressSpace {
+import java.io.Serializable;
+
+public class GpuRegisterValues implements AddressSpace, Serializable {
 
     private static final GpuRegister[] ADDRESS_TO_REG = new GpuRegister[0xf];
 

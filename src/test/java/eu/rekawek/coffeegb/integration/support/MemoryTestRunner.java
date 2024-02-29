@@ -26,7 +26,8 @@ public class MemoryTestRunner {
 
     public MemoryTestRunner(File romFile, OutputStream os) throws IOException {
         Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
+        gb = new Gameboy(cart);
+        gb.init(Display.NULL_DISPLAY, SoundOutput.NULL_OUTPUT, Controller.NULL_CONTROLLER, SerialEndpoint.NULL_ENDPOINT, null);
         text = new StringBuilder();
         this.os = os;
     }
@@ -34,7 +35,7 @@ public class MemoryTestRunner {
     public TestResult runTest() throws IOException {
         int status = 0x80;
         int divider = 0;
-        while(status == 0x80 && !SerialTestRunner.isInfiniteLoop(gb)) {
+        while (status == 0x80 && !SerialTestRunner.isInfiniteLoop(gb)) {
             gb.tick();
             if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 1 : 4)) {
                 status = getTestResult(gb);
@@ -48,7 +49,7 @@ public class MemoryTestRunner {
         AddressSpace mem = gb.getAddressSpace();
         if (!testStarted) {
             int i = 0xa000;
-            for (int v : new int[] { 0x80, 0xde, 0xb0, 0x61 } ) {
+            for (int v : new int[]{0x80, 0xde, 0xb0, 0x61}) {
                 if (mem.getByte(i++) != v) {
                     return 0x80;
                 }

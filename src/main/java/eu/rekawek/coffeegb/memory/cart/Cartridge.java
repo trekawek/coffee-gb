@@ -13,12 +13,13 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.Serializable;
 import java.nio.file.Files;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-public class Cartridge implements AddressSpace {
+public class Cartridge implements AddressSpace, Serializable {
 
     public enum GameboyTypeFlag {
         UNIVERSAL, CGB, NON_CGB;

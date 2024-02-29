@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.gpu;
 
-public class DmgPixelFifo implements PixelFifo {
+import java.io.Serializable;
+
+public class DmgPixelFifo implements PixelFifo, Serializable {
 
     private final IntQueue pixels = new IntQueue(16);
 
@@ -8,16 +10,17 @@ public class DmgPixelFifo implements PixelFifo {
 
     private final IntQueue pixelType = new IntQueue(16); // 0 - bg, 1 - sprite
 
-    private final Display display;
-
-    private final Lcdc lcdc;
+    private transient Display display;
 
     private final GpuRegisterValues registers;
 
-    public DmgPixelFifo(Display display, Lcdc lcdc, GpuRegisterValues registers) {
-        this.lcdc = lcdc;
-        this.display = display;
+    public DmgPixelFifo(GpuRegisterValues registers) {
         this.registers = registers;
+    }
+
+    @Override
+    public void init(Display display) {
+        this.display = display;
     }
 
     @Override

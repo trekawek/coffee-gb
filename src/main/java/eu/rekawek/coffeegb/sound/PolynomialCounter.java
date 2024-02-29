@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.sound;
 
-public class PolynomialCounter {
+import java.io.Serializable;
+
+public class PolynomialCounter implements Serializable {
 
     private int shiftedDivisor;
 

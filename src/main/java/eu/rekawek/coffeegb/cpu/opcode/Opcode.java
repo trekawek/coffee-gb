@@ -2,11 +2,12 @@ package eu.rekawek.coffeegb.cpu.opcode;
 
 import eu.rekawek.coffeegb.cpu.op.Op;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-public class Opcode {
+public class Opcode implements Serializable {
 
     private final int opcode;
 
@@ -19,8 +20,8 @@ public class Opcode {
     Opcode(OpcodeBuilder builder) {
         this.opcode = builder.getOpcode();
         this.label = builder.getLabel();
-        this.ops = Collections.unmodifiableList(new ArrayList<>(builder.getOps()));
-        this.length = ops.stream().mapToInt(o -> o.operandLength()).max().orElse(0);
+        this.ops = List.copyOf(builder.getOps());
+        this.length = ops.stream().mapToInt(Op::operandLength).max().orElse(0);
     }
 
     public int getOperandLength() {

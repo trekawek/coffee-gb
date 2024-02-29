@@ -28,7 +28,8 @@ public class SerialTestRunner implements ByteReceiver {
 
     public SerialTestRunner(File romFile, OutputStream os) throws IOException {
         Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart, Display.NULL_DISPLAY, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, new ByteReceivingSerialEndpoint(this));
+        gb = new Gameboy(cart);
+        gb.init(Display.NULL_DISPLAY, SoundOutput.NULL_OUTPUT, Controller.NULL_CONTROLLER, new ByteReceivingSerialEndpoint(this), null);
         text = new StringBuilder();
         this.os = os;
     }

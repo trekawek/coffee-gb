@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.sound;
 
+import java.io.Serializable;
+
 import static eu.rekawek.coffeegb.Gameboy.TICKS_PER_SEC;
 
-public class LengthCounter {
+public class LengthCounter implements Serializable {
 
     private final int DIVIDER = TICKS_PER_SEC / 256;
 

@@ -4,43 +4,18 @@ import eu.rekawek.coffeegb.AddressSpace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.checkByteArgument;
 import static eu.rekawek.coffeegb.cpu.BitUtils.checkWordArgument;
 
-public class Mmu implements AddressSpace {
+public class Mmu implements AddressSpace, Serializable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mmu.class);
 
-    private static final AddressSpace VOID = new AddressSpace() {
-        @Override
-        public boolean accepts(int address) {
-            return true;
-        }
-
-        @Override
-        public void setByte(int address, int value) {
-            if (address < 0 || address > 0xffff) {
-                throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
-            }
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Writing value {} to void address {}", Integer.toHexString(value), Integer.toHexString(address));
-            }
-        }
-
-        @Override
-        public int getByte(int address) {
-            if (address < 0 || address > 0xffff) {
-                throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
-            }
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Reading value from void address {}", Integer.toHexString(address));
-            }
-            return 0xff;
-        }
-    };
+    private static final AddressSpace VOID = new Void();
 
     private final List<AddressSpace> spaces = new ArrayList<>();
 
@@ -86,5 +61,33 @@ public class Mmu implements AddressSpace {
             throw new IllegalStateException("Address spaces hasn't been indexed yet");
         }
         return addressToSpace[address];
+    }
+
+    private static class Void implements AddressSpace, Serializable {
+        @Override
+        public boolean accepts(int address) {
+            return true;
+        }
+
+        @Override
+        public void setByte(int address, int value) {
+            if (address < 0 || address > 0xffff) {
+                throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
+            }
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Writing value {} to void address {}", Integer.toHexString(value), Integer.toHexString(address));
+            }
+        }
+
+        @Override
+        public int getByte(int address) {
+            if (address < 0 || address > 0xffff) {
+                throw new IllegalArgumentException("Invalid address: " + Integer.toHexString(address));
+            }
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Reading value from void address {}", Integer.toHexString(address));
+            }
+            return 0xff;
+        }
     }
 }

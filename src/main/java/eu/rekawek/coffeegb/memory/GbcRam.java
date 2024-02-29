@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class GbcRam implements AddressSpace {
+import java.io.Serializable;
+
+public class GbcRam implements AddressSpace, Serializable {
 
     private final int[] ram = new int[7 * 0x1000];
 

@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.memory.cart.rtc;
 
-import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -10,15 +9,15 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-public class RealTimeClockTest {
+public class RealTimeTimeSourceTest {
 
     private RealTimeClock rtc;
 
-    private VirtualClock clock;
+    private VirtualTimeSource clock;
 
     @Before
     public void setup() {
-        clock = new VirtualClock();
+        clock = new VirtualTimeSource();
         rtc = new RealTimeClock(clock);
     }
 

@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.memory.cart.battery;
 
-public interface Battery {
+import java.io.Serializable;
+
+public interface Battery extends Serializable {
 
     void loadRam(int[] ram);
 

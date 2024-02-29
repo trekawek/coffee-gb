@@ -4,9 +4,11 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 
+import java.io.Serializable;
+
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
-public class PixelTransfer implements GpuPhase {
+public class PixelTransfer implements GpuPhase, Serializable {
 
     private final PixelFifo fifo;
 
@@ -28,17 +30,21 @@ public class PixelTransfer implements GpuPhase {
 
     private int windowLineCounter;
 
-    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Display display, Lcdc lcdc, GpuRegisterValues r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette, SpritePosition[] sprites) {
+    public PixelTransfer(AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam, Lcdc lcdc, GpuRegisterValues r, boolean gbc, ColorPalette bgPalette, ColorPalette oamPalette, SpritePosition[] sprites) {
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
         if (gbc) {
-            this.fifo = new ColorPixelFifo(lcdc, display, bgPalette, oamPalette);
+            this.fifo = new ColorPixelFifo(lcdc, bgPalette, oamPalette);
         } else {
-            this.fifo = new DmgPixelFifo(display, lcdc, r);
+            this.fifo = new DmgPixelFifo(r);
         }
         this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
         this.sprites = sprites;
+    }
+
+    public void init(Display display) {
+        fifo.init(display);
     }
 
     public PixelTransfer start() {

@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class UndocumentedGbcRegisters implements AddressSpace {
+import java.io.Serializable;
+
+public class UndocumentedGbcRegisters implements AddressSpace, Serializable {
 
     private final Ram ram = new Ram(0xff72, 6);
 

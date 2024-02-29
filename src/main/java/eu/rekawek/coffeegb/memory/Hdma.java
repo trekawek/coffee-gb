@@ -3,7 +3,9 @@ package eu.rekawek.coffeegb.memory;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.Gpu;
 
-public class Hdma implements AddressSpace {
+import java.io.Serializable;
+
+public class Hdma implements AddressSpace, Serializable {
 
     private static final int HDMA1 = 0xff51;
 
@@ -17,7 +19,7 @@ public class Hdma implements AddressSpace {
 
     private final AddressSpace addressSpace;
 
-    private final Ram hdma1234 = new Ram(HDMA1, 4);
+    private final AddressSpace hdma1234 = new Ram(HDMA1, 4);
 
     private Gpu.Mode gpuMode;
 

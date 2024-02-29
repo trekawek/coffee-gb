@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.gpu;
 
-public class ColorPixelFifo implements PixelFifo {
+import java.io.Serializable;
+
+public class ColorPixelFifo implements PixelFifo, Serializable {
 
     private final IntQueue pixels = new IntQueue(16);
 
@@ -10,17 +12,21 @@ public class ColorPixelFifo implements PixelFifo {
 
     private final Lcdc lcdc;
 
-    private final Display display;
+    private transient Display display;
 
     private final ColorPalette bgPalette;
 
     private final ColorPalette oamPalette;
 
-    public ColorPixelFifo(Lcdc lcdc, Display display, ColorPalette bgPalette, ColorPalette oamPalette) {
+    public ColorPixelFifo(Lcdc lcdc, ColorPalette bgPalette, ColorPalette oamPalette) {
         this.lcdc = lcdc;
-        this.display = display;
         this.bgPalette = bgPalette;
         this.oamPalette = oamPalette;
+    }
+
+    @Override
+    public void init(Display display) {
+        this.display = display;
     }
 
     @Override

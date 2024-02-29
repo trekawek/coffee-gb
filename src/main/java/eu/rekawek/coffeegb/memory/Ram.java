@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class Ram implements AddressSpace {
+import java.io.Serializable;
+
+public class Ram implements AddressSpace, Serializable {
 
     private final int[] space;
 

@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public class ColorPalette implements AddressSpace {
+import java.io.Serializable;
+
+public class ColorPalette implements AddressSpace, Serializable {
 
     private final int indexAddr;
 

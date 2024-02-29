@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.Gameboy;
 
-public class VolumeEnvelope {
+import java.io.Serializable;
+
+public class VolumeEnvelope implements Serializable {
 
     private int initialVolume;
 

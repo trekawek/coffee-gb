@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
-public abstract class AbstractSoundMode implements AddressSpace {
+import java.io.Serializable;
+
+public abstract class AbstractSoundMode implements AddressSpace, Serializable {
 
     protected final int offset;
 

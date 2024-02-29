@@ -10,8 +10,11 @@ import eu.rekawek.coffeegb.swing.io.AudioSystemSoundOutput
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
 import javax.swing.JFrame
-import javax.swing.JOptionPane
 
 class SwingEmulator(
         private val console: Console?,
@@ -39,11 +42,12 @@ class SwingEmulator(
         emulatorStateListeners.addFirst(listener)
     }
 
-    fun startEmulation(rom: File?) {
+    fun startEmulation(rom: File?, gameboySnapshot: Gameboy? = null) {
         val newCart = Cartridge(rom, true, gameboyType, false)
         stopEmulation()
         cart = newCart
-        gameboy = Gameboy(cart, display, controller, sound, SerialEndpoint.NULL_ENDPOINT, console)
+        gameboy = gameboySnapshot ?: Gameboy(cart)
+        gameboy!!.init(display, sound, controller, SerialEndpoint.NULL_ENDPOINT, console)
         gameboy!!.registerTickListener(TimingTicker())
         Thread(display).start()
         Thread(sound).start()
@@ -69,6 +73,48 @@ class SwingEmulator(
         emulatorStateListeners.forEach { it.onEmulationStop() }
     }
 
+    fun snapshotAvailable(slot: Int) = getSnapshotFile(slot)?.exists() ?: false
+
+    fun saveSnapshot(slot: Int) {
+        if (!isRunning) {
+            return
+        }
+        val gameboy = this.gameboy ?: return
+        val originalPauseState = gameboy.isPaused
+        if (!gameboy.isPaused) {
+            gameboy.pause()
+        }
+        val snapshotFile = getSnapshotFile(slot) ?: return
+        ObjectOutputStream(FileOutputStream(snapshotFile)).use {
+            it.writeObject(gameboy)
+        }
+        if (!originalPauseState) {
+            gameboy.resume()
+        }
+    }
+
+    fun restoreSnapshot(slot: Int) {
+        if (currentRom == null) {
+            return
+        }
+        val snapshotFile = getSnapshotFile(slot) ?: return
+        if (!snapshotFile.exists()) {
+            return
+        }
+        stopEmulation()
+        val gameboy = ObjectInputStream(FileInputStream(snapshotFile)).use {
+            it.readObject() as Gameboy
+        }
+        startEmulation(currentRom, gameboy)
+    }
+
+    private fun getSnapshotFile(slot: Int): File? {
+        val rom = currentRom ?: return null
+        val parentDir = rom.parentFile
+        val name = rom.nameWithoutExtension + ".sn${slot}"
+        return parentDir.resolve(name)
+    }
+
     var gameboyType: GameboyType = GameboyType.AUTOMATIC
         set(value) {
             field = value
@@ -80,7 +126,11 @@ class SwingEmulator(
     var paused: Boolean
         get() = gameboy?.isPaused ?: false
         set(value) {
-            gameboy?.setPaused(value)
+            if (value) {
+                gameboy?.pause()
+            } else {
+                gameboy?.resume()
+            }
         }
 
     fun reset() {

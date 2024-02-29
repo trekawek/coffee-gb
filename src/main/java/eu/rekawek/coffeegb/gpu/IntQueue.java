@@ -1,8 +1,9 @@
 package eu.rekawek.coffeegb.gpu;
 
+import java.io.Serializable;
 import java.util.NoSuchElementException;
 
-public class IntQueue {
+public class IntQueue implements Serializable {
 
     private final int[] array;
 

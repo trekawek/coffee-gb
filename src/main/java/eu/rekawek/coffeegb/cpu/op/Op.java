@@ -5,7 +5,9 @@ import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.gpu.SpriteBug;
 
-public interface Op {
+import java.io.Serializable;
+
+public interface Op extends Serializable {
 
     default boolean readsMemory() {
         return false;

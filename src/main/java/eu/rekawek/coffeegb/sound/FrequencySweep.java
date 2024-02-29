@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.Gameboy;
 
-public class FrequencySweep {
+import java.io.Serializable;
+
+public class FrequencySweep implements Serializable {
 
     private static final int DIVIDER = Gameboy.TICKS_PER_SEC / 128;
 

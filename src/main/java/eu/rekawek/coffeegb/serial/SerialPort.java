@@ -4,9 +4,11 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 
-public class SerialPort implements AddressSpace {
+import java.io.Serializable;
 
-    private final SerialEndpoint serialEndpoint;
+public class SerialPort implements AddressSpace, Serializable {
+
+    private transient SerialEndpoint serialEndpoint;
 
     private final InterruptManager interruptManager;
 
@@ -26,10 +28,13 @@ public class SerialPort implements AddressSpace {
 
     private int receivedBits;
 
-    public SerialPort(InterruptManager interruptManager, SerialEndpoint serialEndpoint, boolean gbc) {
+    public SerialPort(InterruptManager interruptManager, boolean gbc) {
         this.interruptManager = interruptManager;
-        this.serialEndpoint = serialEndpoint;
         this.gbc = gbc;
+    }
+
+    public void init(SerialEndpoint serialEndpoint) {
+        this.serialEndpoint = serialEndpoint;
     }
 
     public void tick() {

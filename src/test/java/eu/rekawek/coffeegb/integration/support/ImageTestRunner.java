@@ -27,7 +27,8 @@ public class ImageTestRunner {
     public ImageTestRunner(File romFile) throws IOException {
         Cartridge cart = new Cartridge(romFile);
         display = new TestDisplay();
-        gb = new Gameboy(cart, display, Controller.NULL_CONTROLLER, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT);
+        gb = new Gameboy(cart);
+        gb.init(display, SoundOutput.NULL_OUTPUT, Controller.NULL_CONTROLLER, SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
     }
 

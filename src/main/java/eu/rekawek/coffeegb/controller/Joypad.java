@@ -3,16 +3,21 @@ package eu.rekawek.coffeegb.controller;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 
+import java.io.Serializable;
 import java.util.HashSet;
 import java.util.Set;
 
-public class Joypad implements AddressSpace {
+public class Joypad implements AddressSpace, Serializable {
 
     private final Set<ButtonListener.Button> buttons = new HashSet<>();
-
+    private final InterruptManager interruptManager;
     private int p1;
 
-    public Joypad(InterruptManager interruptManager, Controller controller) {
+    public Joypad(InterruptManager interruptManager) {
+        this.interruptManager = interruptManager;
+    }
+
+    public void init(Controller controller) {
         controller.setButtonListener(new ButtonListener() {
             @Override
             public void onButtonPress(Button button) {

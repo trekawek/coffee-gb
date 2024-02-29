@@ -17,10 +17,11 @@ import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.sound.SoundOutput;
 import eu.rekawek.coffeegb.timer.Timer;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
-public class Gameboy implements Runnable {
+public class Gameboy implements Runnable, Serializable {
 
     public static final int TICKS_PER_SEC = 4_194_304;
 
@@ -36,9 +37,11 @@ public class Gameboy implements Runnable {
 
     private final Hdma hdma;
 
-    private final Display display;
+    private transient Display display;
 
     private final Sound sound;
+
+    private final Joypad joypad;
 
     private final SerialPort serialPort;
 
@@ -46,24 +49,21 @@ public class Gameboy implements Runnable {
 
     private final SpeedMode speedMode;
 
-    private final Console console;
+    private transient Console console;
 
-    private volatile boolean doStop;
+    private transient volatile boolean doStop;
 
-    private final List<Runnable> tickListeners = new ArrayList<>();
+    private transient List<Runnable> tickListeners;
 
     private boolean requestedScreenRefresh;
 
     private boolean lcdDisabled;
 
-    private volatile boolean paused;
+    private transient volatile boolean doPause;
 
-    public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint) {
-        this(rom, display, controller, soundOutput, serialEndpoint, null);
-    }
+    private transient volatile boolean paused;
 
-    public Gameboy(Cartridge rom, Display display, Controller controller, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
-        this.display = display;
+    public Gameboy(Cartridge rom) {
         gbc = rom.isGbc();
         speedMode = new SpeedMode();
         InterruptManager interruptManager = new InterruptManager(gbc);
@@ -72,13 +72,14 @@ public class Gameboy implements Runnable {
 
         Ram oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(mmu, oamRam, speedMode);
-        gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
+        gpu = new Gpu(interruptManager, dma, oamRam, gbc);
         hdma = new Hdma(mmu);
-        sound = new Sound(soundOutput, gbc);
-        serialPort = new SerialPort(interruptManager, serialEndpoint, gbc);
+        sound = new Sound(gbc);
+        joypad = new Joypad(interruptManager);
+        serialPort = new SerialPort(interruptManager, gbc);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
-        mmu.addAddressSpace(new Joypad(interruptManager, controller));
+        mmu.addAddressSpace(joypad);
         mmu.addAddressSpace(interruptManager);
         mmu.addAddressSpace(serialPort);
         mmu.addAddressSpace(timer);
@@ -98,14 +99,24 @@ public class Gameboy implements Runnable {
         mmu.addAddressSpace(new ShadowAddressSpace(mmu, 0xe000, 0xc000, 0x1e00));
         mmu.indexSpaces();
 
-        cpu = new Cpu(mmu, interruptManager, gpu, display, speedMode);
+        cpu = new Cpu(mmu, interruptManager, gpu, speedMode);
 
         interruptManager.disableInterrupts(false);
         if (!rom.isUseBootstrap()) {
             initRegs();
         }
+    }
 
+    public void init(Display display, SoundOutput soundOutput, Controller controller, SerialEndpoint serialEndpoint, Console console) {
+        this.display = display;
         this.console = console;
+        this.tickListeners = new ArrayList<>();
+
+        gpu.init(display);
+        cpu.init(display);
+        sound.init(soundOutput);
+        joypad.init(controller);
+        serialPort.init(serialEndpoint);
     }
 
     private void initRegs() {
@@ -125,22 +136,29 @@ public class Gameboy implements Runnable {
     public void run() {
         doStop = false;
         while (!doStop) {
-            if (paused) {
-                synchronized (this) {
-                    try {
-                        wait();
-                        continue;
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
-                    }
-                }
+            if (doPause) {
+                haltIfNeeded();
             }
             tick();
         }
     }
 
-    public void stop() {
+    private synchronized void haltIfNeeded() {
+        paused = true;
+        notifyAll();
+        while (doPause && !doStop) {
+            try {
+                wait(10);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        paused = false;
+    }
+
+    public synchronized void stop() {
         doStop = true;
+        notifyAll();
     }
 
     public void tick() {
@@ -211,14 +229,30 @@ public class Gameboy implements Runnable {
         return sound;
     }
 
-    public void setPaused(boolean paused) {
-        this.paused = paused;
-        synchronized (this) {
-            notifyAll();
+    public synchronized void pause() {
+        doPause = true;
+        while (!paused && !doStop) {
+            try {
+                wait(10);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
-    public Boolean isPaused() {
+    public synchronized void resume() {
+        doPause = false;
+        notifyAll();
+        while (paused && !doStop) {
+            try {
+                wait(10);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    public boolean isPaused() {
         return paused;
     }
 }

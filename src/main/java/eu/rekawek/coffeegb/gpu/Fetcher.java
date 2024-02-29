@@ -3,10 +3,12 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
 
+import java.io.Serializable;
+
 import static eu.rekawek.coffeegb.cpu.BitUtils.toSigned;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 
-public class Fetcher {
+public class Fetcher implements Serializable {
 
     private enum State {
         READ_TILE_ID, READ_DATA_1, READ_DATA_2, PUSH,

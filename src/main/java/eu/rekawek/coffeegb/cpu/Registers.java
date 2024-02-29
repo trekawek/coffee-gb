@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.cpu;
 
+import java.io.Serializable;
+
 import static eu.rekawek.coffeegb.cpu.BitUtils.*;
 
-public class Registers {
+public class Registers implements Serializable {
     private int a, b, c, d, e, h, l;
 
     private int sp;

@@ -2,9 +2,11 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 
+import java.io.Serializable;
+
 import static com.google.common.base.Preconditions.checkArgument;
 
-public class Lcdc implements AddressSpace {
+public class Lcdc implements AddressSpace, Serializable {
 
     private int value = 0x91;
 
