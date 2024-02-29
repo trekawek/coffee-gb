@@ -26,6 +26,7 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         val fileMenu = JMenu("File")
 
         val load = JMenuItem("Load ROM")
+        load.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_L, KEY_MODIFIER)
         fileMenu.add(load)
 
         val recentRomsMenu = JMenu("Recent ROMs")
@@ -45,6 +46,7 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         }
 
         val quit = JMenuItem("Quit")
+        quit.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_Q, KEY_MODIFIER)
         fileMenu.add(quit)
         quit.addActionListener { window.dispose() }
 
@@ -95,6 +97,7 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         gameMenu.add(slotMenu)
         for (i in (0..9)) {
             val slotItem = JCheckBoxMenuItem("Slot $i", i == stateSlot)
+            slotItem.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_0 + i, KEY_MODIFIER)
             slotItem.addActionListener {
                 stateSlot = i
                 loadSnapshot.isEnabled = emulator.snapshotAvailable(i)
@@ -117,11 +120,13 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         }
 
         val resetGame = JMenuItem("Reset")
+        resetGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_R, KEY_MODIFIER)
         gameMenu.add(resetGame)
         resetGame.addActionListener { emulator.reset() }
         enableWhenEmulationActive(resetGame)
 
         val stop = JMenuItem("Stop")
+        stop.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_S, KEY_MODIFIER)
         gameMenu.add(stop)
         stop.addActionListener { emulator.stopEmulation() }
         enableWhenEmulationActive(stop)
@@ -159,6 +164,7 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         val audioMenu = JMenu("Audio")
 
         val enableSound = JCheckBoxMenuItem("Enable", emulator.soundController.enabled)
+        enableSound.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
         audioMenu.add(enableSound)
 
         enableSound.addActionListener {
@@ -201,8 +207,14 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         }
     }
 
-    companion object {
-        private fun uncheckAllBut(parent: JMenu, selectedItem: JCheckBoxMenuItem) {
+    private companion object {
+        val KEY_MODIFIER: Int = if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
+            KeyEvent.META_DOWN_MASK
+        } else {
+            KeyEvent.CTRL_DOWN_MASK
+        }
+
+        fun uncheckAllBut(parent: JMenu, selectedItem: JCheckBoxMenuItem) {
             for (i in 0 until parent.itemCount) {
                 val item = parent.getItem(i)
                 if (item === selectedItem) {
