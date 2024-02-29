@@ -38,18 +38,14 @@ public class SerialPort implements AddressSpace, Serializable {
     }
 
     public void tick() {
-        if (!transferInProgress) {
-            return;
-        }
-
-        int bitToTransfer = (sb & (1 << 7)) != 0 ? 1 : 0;
         int incomingBit = -1;
+        // We're receiving bits even without the transfer in progress.
         if (clockType == ClockType.EXTERNAL) {
-            incomingBit = serialEndpoint.receive(bitToTransfer);
-        } else {
+            incomingBit = serialEndpoint.recvBit();
+        } else if (transferInProgress) {
             if (divider++ == Gameboy.TICKS_PER_SEC / speed) {
                 divider = 0;
-                incomingBit = serialEndpoint.send(bitToTransfer);
+                incomingBit = serialEndpoint.sendBit();
             }
         }
 
@@ -72,6 +68,7 @@ public class SerialPort implements AddressSpace, Serializable {
     public void setByte(int address, int value) {
         if (address == 0xff01) {
             sb = value;
+            serialEndpoint.setSb(sb);
         } else if (address == 0xff02) {
             sc = value;
             if ((sc & (1 << 7)) != 0) {
@@ -105,5 +102,6 @@ public class SerialPort implements AddressSpace, Serializable {
         } else {
             speed = 8192;
         }
+        serialEndpoint.startSending();
     }
 }

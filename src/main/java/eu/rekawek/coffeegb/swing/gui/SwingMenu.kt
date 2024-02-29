@@ -20,6 +20,7 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         menuBar.add(createGameMenu())
         menuBar.add(createScreenMenu())
         menuBar.add(createAudioMenu())
+        menuBar.add(createLinkMenu())
     }
 
     private fun createFileMenu(): JMenu {
@@ -172,6 +173,33 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
             properties.setProperty(EmulatorProperties.Key.SoundEnabled, enableSound.state.toString())
         }
         return audioMenu
+    }
+
+    private fun createLinkMenu(): JMenu {
+        val linkMenu = JMenu("Link")
+
+        val startServer = JCheckBoxMenuItem("Start server")
+        linkMenu.add(startServer)
+        startServer.addActionListener {
+            if (startServer.state) {
+                emulator.serialController.startServer()
+            } else {
+                emulator.serialController.stop()
+            }
+        }
+
+        val connectToServer = JCheckBoxMenuItem("Connect to server")
+        linkMenu.add(connectToServer)
+        connectToServer.addActionListener {
+            if (connectToServer.state) {
+                val host = JOptionPane.showInputDialog(window, "Please enter server IP address", "127.0.0.1")
+                emulator.serialController.startClient(host)
+            } else {
+                emulator.serialController.stop()
+            }
+        }
+
+        return linkMenu
     }
 
     private fun enableWhenEmulationActive(item: JMenuItem) {

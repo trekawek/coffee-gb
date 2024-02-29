@@ -1,26 +1,43 @@
 package eu.rekawek.coffeegb.serial;
 
 public interface SerialEndpoint {
+    /**
+     * Listener waiting for any updates of the SB byte, so it can be shared with the other side.
+     */
+    void setSb(int sb);
 
     /**
-     * Transfer the bit in the external clock mode (passive). Return the incoming bit or -1 if there's no bit to transfer.
+     * Returns the bit transferred from the active side or -1 if no bit has been received.
      */
-    int receive(int bitToTransfer);
+    int recvBit();
 
     /**
-     * Transfer the bit in the internal clock mode (active). Return the incoming bit.
+     * Starts byte transfer, should reset the index of bit to send.
      */
-    int send(int bitToTransfer);
+    void startSending();
+
+    /**
+     * Sends following SB bit. Returns the received bit.
+     */
+    int sendBit();
 
     SerialEndpoint NULL_ENDPOINT = new SerialEndpoint() {
         @Override
-        public int receive(int bitToTransfer) {
+        public void setSb(int sb) {
+        }
+
+        @Override
+        public int recvBit() {
             return -1;
         }
 
         @Override
-        public int send(int bitToTransfer) {
-            return 0;
+        public void startSending() {
+        }
+
+        @Override
+        public int sendBit() {
+            return 1;
         }
     };
 }

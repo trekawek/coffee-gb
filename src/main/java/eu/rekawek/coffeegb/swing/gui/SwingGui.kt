@@ -72,6 +72,7 @@ class SwingGui(debug: Boolean, private val initialRom: File?) {
 
     private fun stopGui() {
         emulator.stopEmulation()
+        emulator.serialController.stop()
         console?.stop()
         System.exit(0)
     }
