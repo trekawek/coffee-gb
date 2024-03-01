@@ -4,11 +4,17 @@ import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.swing.emulator.EmulatorStateListener
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
+import eu.rekawek.coffeegb.swing.io.serial.ClientEventListener
+import eu.rekawek.coffeegb.swing.io.serial.ServerEventListener
 import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.*
 
-class SwingMenu(private val emulator: SwingEmulator, private val properties: EmulatorProperties, private val window: JFrame) {
+class SwingMenu(
+    private val emulator: SwingEmulator,
+    private val properties: EmulatorProperties,
+    private val window: JFrame
+) {
 
     private var stateSlot = 0
 
@@ -199,6 +205,35 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
             }
         }
 
+        val connected = JCheckBoxMenuItem("Connected")
+        connected.isEnabled = false
+        linkMenu.add(connected)
+
+        emulator.serialController.registerClientListener(object : ClientEventListener {
+            override fun onConnectedToServer() {
+                connected.state = true
+            }
+
+            override fun onDisconnectedFromServer() {
+                connectToServer.state = false
+                connected.state = false
+            }
+        })
+
+        emulator.serialController.registerServerListener(object : ServerEventListener {
+            override fun onServerStopped() {
+                startServer.state = false
+            }
+
+            override fun onNewConnection(host: String?) {
+                connected.state = true
+            }
+
+            override fun onConnectionClosed() {
+                connected.state = false
+            }
+        })
+
         return linkMenu
     }
 
@@ -231,7 +266,12 @@ class SwingMenu(private val emulator: SwingEmulator, private val properties: Emu
         try {
             emulator.startEmulation(rom)
         } catch (e: Exception) {
-            JOptionPane.showMessageDialog(window, "Can't open ${rom.name}: ${e.message}", "Error", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(
+                window,
+                "Can't open ${rom.name}: ${e.message}",
+                "Error",
+                JOptionPane.ERROR_MESSAGE
+            );
         }
     }
 
