@@ -8,7 +8,7 @@ import java.util.*;
 
 public class Main {
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         ParsedArgs parsedArgs = ParsedArgs.parse(args);
         if (parsedArgs.shortParams.contains("h") || parsedArgs.params.contains("help")) {
             printUsage(System.out);
@@ -19,15 +19,13 @@ public class Main {
             return;
         }
 
-        CartridgeOptions options = new CartridgeOptions(parsedArgs.params, parsedArgs.shortParams);
         boolean debug = parsedArgs.params.contains("debug");
 
         File initialRom = null;
         if (parsedArgs.args.size() == 1) {
             initialRom = new File(parsedArgs.args.get(0));
         }
-        SwingGui emulator = new SwingGui(debug, initialRom);
-        emulator.run();
+        SwingGui.Companion.run(debug, initialRom);
     }
 
     private static class ParsedArgs {

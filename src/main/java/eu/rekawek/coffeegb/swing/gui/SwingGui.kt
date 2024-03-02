@@ -6,13 +6,14 @@ import eu.rekawek.coffeegb.swing.emulator.EmulatorStateListener
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties.Key
-import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
-import javax.swing.*
+import javax.swing.JFrame
+import javax.swing.SwingUtilities
 
-class SwingGui(debug: Boolean, private val initialRom: File?) {
+
+class SwingGui private constructor(debug: Boolean, private val initialRom: File?) {
 
     private val emulator: SwingEmulator
 
@@ -31,14 +32,9 @@ class SwingGui(debug: Boolean, private val initialRom: File?) {
         emulator.gameboyType = GameboyType.valueOf(properties.getProperty(Key.GameboyType, GameboyType.AUTOMATIC.name))
     }
 
-    fun run() {
-        System.setProperty("apple.awt.application.name", "Coffee GB")
-        System.setProperty("sun.java2d.opengl", "true")
-        SwingUtilities.invokeLater { this.startGui() }
-    }
-
     private fun startGui() {
         mainWindow = JFrame("Coffee GB")
+
         SwingMenu(emulator, properties, mainWindow).addMenu()
         emulator.addEmulatorStateListener(object : EmulatorStateListener {
             override fun onEmulationStart(cartTitle: String) {
@@ -58,10 +54,11 @@ class SwingGui(debug: Boolean, private val initialRom: File?) {
         })
 
         emulator.bind(mainWindow)
+        mainWindow.pack()
+        mainWindow.repaint()
+        mainWindow.setLocationRelativeTo(null)
         mainWindow.isResizable = false
         mainWindow.isVisible = true
-        mainWindow.pack()
-        mainWindow.setLocationRelativeTo(null)
         if (console != null) {
             Thread(console).start()
         }
@@ -77,5 +74,11 @@ class SwingGui(debug: Boolean, private val initialRom: File?) {
         System.exit(0)
     }
 
-
+    companion object {
+        fun run(debug: Boolean, initialRom: File?) {
+            System.setProperty("apple.awt.application.name", "Coffee GB")
+            System.setProperty("sun.java2d.opengl", "true")
+            SwingUtilities.invokeLater { SwingGui(debug, initialRom).startGui() }
+        }
+    }
 }

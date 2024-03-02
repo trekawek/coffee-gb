@@ -29,7 +29,7 @@ class SwingEmulator(
     val soundController = SoundController(sound)
     val serialController = SerialController(serial)
 
-    private val emulatorStateListeners: List<EmulatorStateListener> = mutableListOf()
+    private val emulatorStateListeners: MutableList<EmulatorStateListener> = mutableListOf()
     private var gameboy: Gameboy? = null
     private var cart: Cartridge? = null
     private var currentRom: File? = null
@@ -41,7 +41,7 @@ class SwingEmulator(
     }
 
     fun addEmulatorStateListener(listener: EmulatorStateListener) {
-        emulatorStateListeners.addFirst(listener)
+        emulatorStateListeners.add(listener)
     }
 
     fun startEmulation(rom: File?, gameboySnapshot: Gameboy? = null) {

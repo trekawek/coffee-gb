@@ -20,13 +20,13 @@ class SwingMenu(
 
     fun addMenu() {
         val menuBar = JMenuBar()
-        window.jMenuBar = menuBar
 
         menuBar.add(createFileMenu())
         menuBar.add(createGameMenu())
         menuBar.add(createScreenMenu())
         menuBar.add(createAudioMenu())
         menuBar.add(createLinkMenu())
+        window.jMenuBar = menuBar
     }
 
     private fun createFileMenu(): JMenu {

@@ -55,7 +55,7 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
         }
         line.start();
         while (!doStop) {
-            if (pos < BUFFER_SIZE) {
+            if (pos < BUFFER_SIZE && isPlaying) {
                 while (pos < BUFFER_SIZE && !doStop) {
                 }
                 if (doStop) {
