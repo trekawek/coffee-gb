@@ -19,9 +19,15 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     private static final int DIVIDER = (int) (Gameboy.TICKS_PER_SEC / FORMAT.getSampleRate());
 
+    private static final long NANOS_IN_SEC = 1000000000L;
+
+    private static final long BUFFER_LENGTH_NANOS = (BUFFER_SIZE / 2) * NANOS_IN_SEC / SAMPLE_RATE;
+
     private byte[] buffer = new byte[BUFFER_SIZE];
 
-    private byte[] copiedBuffer = new byte[BUFFER_SIZE];
+    private byte[] lockedBuffer = new byte[BUFFER_SIZE];
+
+    private final byte[] finalBuffer = new byte[BUFFER_SIZE];
 
     private volatile boolean enabled = true;
 
@@ -35,8 +41,7 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     private volatile boolean isPlaying;
 
-    public AudioSystemSoundOutput() {
-    }
+    private volatile long writeStart;
 
     @Override
     public void run() {
@@ -49,27 +54,32 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
         SourceDataLine line;
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
-            line.open(FORMAT, BUFFER_SIZE);
+            line.open(FORMAT, BUFFER_SIZE / 2);
         } catch (LineUnavailableException e) {
             throw new RuntimeException(e);
         }
         line.start();
         while (!doStop) {
-            if (pos < BUFFER_SIZE && isPlaying) {
-                while (pos < BUFFER_SIZE && !doStop) {
-                }
-                if (doStop) {
+            while (pos < BUFFER_SIZE && !doStop) {
+                if (System.nanoTime() - writeStart > BUFFER_LENGTH_NANOS * 1.1f) {
                     break;
                 }
             }
-            byte[] tmp = copiedBuffer;
-            copiedBuffer = buffer;
+            if (doStop) {
+                break;
+            }
+            int localPos = pos;
+            byte[] tmp = lockedBuffer;
+            lockedBuffer = buffer;
             buffer = tmp;
             pos = 0;
             if (!isPlaying || !enabled) {
-                Arrays.fill(copiedBuffer, (byte) 0);
+                Arrays.fill(finalBuffer, (byte) 0);
+            } else {
+                fill(lockedBuffer, localPos, finalBuffer);
             }
-            line.write(copiedBuffer, 0, BUFFER_SIZE);
+            writeStart = System.nanoTime();
+            line.write(finalBuffer, 0, BUFFER_SIZE);
         }
         line.drain();
         line.stop();
@@ -113,5 +123,17 @@ public class AudioSystemSoundOutput implements SoundOutput, Runnable {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    private static void fill(byte[] src, int srcLen, byte[] dst) {
+        for (int i = 0; i < dst.length; i++) {
+            if (srcLen == 0) {
+                dst[i] = 0;
+            } else if (i >= srcLen) {
+                dst[i] = src[srcLen - 1];
+            } else {
+                dst[i] = src[i];
+            }
+        }
     }
 }
