@@ -12,6 +12,13 @@ public interface SerialEndpoint {
     int recvBit();
 
     /**
+     * Returns the received byte.
+     */
+    default int recvByte() {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
      * Starts byte transfer, should reset the index of bit to send.
      */
     void startSending();
@@ -20,6 +27,13 @@ public interface SerialEndpoint {
      * Sends following SB bit. Returns the received bit.
      */
     int sendBit();
+
+    /**
+     * Sends the SB bit and returns the received byte.
+     */
+    default int sendByte() {
+        throw new UnsupportedOperationException();
+    }
 
     SerialEndpoint NULL_ENDPOINT = new SerialEndpoint() {
         @Override

@@ -26,6 +26,13 @@ class SerialEndpointWrapper : SerialEndpoint {
         return -1
     }
 
+    override fun recvByte(): Int {
+        if (delegate != null) {
+            return delegate!!.recvByte()
+        }
+        return -1
+    }
+
     override fun startSending() {
         if (delegate != null) {
             delegate!!.startSending()
@@ -37,5 +44,12 @@ class SerialEndpointWrapper : SerialEndpoint {
             return delegate!!.sendBit()
         }
         return 1
+    }
+
+    override fun sendByte(): Int {
+        if (delegate != null) {
+            return delegate!!.sendByte()
+        }
+        return 0xFF;
     }
 }

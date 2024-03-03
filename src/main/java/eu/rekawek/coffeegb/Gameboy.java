@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.*;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
+import eu.rekawek.coffeegb.serial.NaiveSerialPort;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
@@ -43,7 +44,7 @@ public class Gameboy implements Runnable, Serializable {
 
     private final Joypad joypad;
 
-    private final SerialPort serialPort;
+    private final NaiveSerialPort serialPort;
 
     private final boolean gbc;
 
@@ -76,7 +77,7 @@ public class Gameboy implements Runnable, Serializable {
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager);
-        serialPort = new SerialPort(interruptManager, gbc);
+        serialPort = new NaiveSerialPort(interruptManager);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(joypad);

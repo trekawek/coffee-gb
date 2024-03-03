@@ -39,14 +39,27 @@ class StreamSerialEndpoint(private val inputStream: InputStream, private val out
         return shift()
     }
 
+    override fun recvByte(): Int {
+        if (bitsReceived.get() < 8) {
+            return -1
+        }
+        bitsReceived.addAndGet(-8)
+        return remoteSb
+    }
+
     override fun startSending() {
         getBitIndex = 7
         bitsReceived.set(0)
     }
 
     override fun sendBit(): Int {
-        sendCommand(Command.SEND_BIT, 0)
+        sendCommand(Command.SEND_BIT, 1)
         return shift()
+    }
+
+    override fun sendByte(): Int {
+        sendCommand(Command.SEND_BIT, 8)
+        return remoteSb
     }
 
     private fun shift(): Int {
@@ -101,7 +114,7 @@ class StreamSerialEndpoint(private val inputStream: InputStream, private val out
         val argument = buffer.getInt()
         when (command) {
             Command.SET_SB -> remoteSb = argument
-            Command.SEND_BIT -> bitsReceived.incrementAndGet()
+            Command.SEND_BIT -> bitsReceived.addAndGet(argument)
         }
     }
 
