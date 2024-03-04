@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.serial;
 
 public class ByteReceivingSerialEndpoint implements SerialEndpoint {
-    private ByteReceiver byteReceiver;
+    private final ByteReceiver byteReceiver;
     private int sb;
     private int bits;
 
@@ -20,6 +20,11 @@ public class ByteReceivingSerialEndpoint implements SerialEndpoint {
     }
 
     @Override
+    public int recvByte() {
+        return -1;
+    }
+
+    @Override
     public void startSending() {
         bits = 0;
     }
@@ -31,5 +36,11 @@ public class ByteReceivingSerialEndpoint implements SerialEndpoint {
             bits = 0;
         }
         return 1;
+    }
+
+    @Override
+    public int sendByte() {
+        byteReceiver.onNewByte(sb);
+        return 0xFF;
     }
 }
