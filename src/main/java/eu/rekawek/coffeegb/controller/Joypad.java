@@ -6,10 +6,11 @@ import eu.rekawek.coffeegb.cpu.InterruptManager;
 import java.io.Serializable;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 public class Joypad implements AddressSpace, Serializable {
 
-    private final Set<ButtonListener.Button> buttons = new HashSet<>();
+    private final Set<ButtonListener.Button> buttons = new CopyOnWriteArraySet<>();
     private final InterruptManager interruptManager;
     private int p1;
 
