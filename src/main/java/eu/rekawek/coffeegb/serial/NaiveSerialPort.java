@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.serial;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 
 import java.io.Serializable;
 
@@ -24,8 +25,18 @@ public class NaiveSerialPort implements AddressSpace, Serializable {
 
     private ClockType clockType;
 
-    public NaiveSerialPort(InterruptManager interruptManager) {
+    private final boolean gbc;
+
+    private final SpeedMode speedMode;
+
+    private int speed;
+
+    private int divider;
+
+    public NaiveSerialPort(InterruptManager interruptManager, boolean gbc, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
+        this.speedMode = speedMode;
+        this.gbc = gbc;
     }
 
     public void init(SerialEndpoint serialEndpoint) {
@@ -38,8 +49,10 @@ public class NaiveSerialPort implements AddressSpace, Serializable {
         if (clockType == ClockType.EXTERNAL) {
             incomingByte = serialEndpoint.recvByte();
         } else if (transferInProgress) {
-            incomingByte = serialEndpoint.sendByte();
-            transferInProgress = false;
+            if (divider++ == 8 * Gameboy.TICKS_PER_SEC / speed) {
+                incomingByte = serialEndpoint.sendByte();
+                transferInProgress = false;
+            }
         }
 
         if (incomingByte != -1) {
@@ -79,7 +92,14 @@ public class NaiveSerialPort implements AddressSpace, Serializable {
 
     private void startTransfer() {
         transferInProgress = true;
+        divider = 0;
         clockType = ClockType.getFromSc(sc);
+        if (gbc && (sc & (1 << 1)) != 0) {
+            speed = 262144;
+        } else {
+            speed = 8192;
+        }
+        speed *= speedMode.getSpeedMode();
         serialEndpoint.startSending();
     }
 }

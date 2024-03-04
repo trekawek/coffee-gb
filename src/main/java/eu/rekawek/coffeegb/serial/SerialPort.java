@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.serial;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
+import eu.rekawek.coffeegb.cpu.SpeedMode;
 
 import java.io.Serializable;
 
@@ -13,6 +14,8 @@ public class SerialPort implements AddressSpace, Serializable {
     private final InterruptManager interruptManager;
 
     private final boolean gbc;
+
+    private final SpeedMode speedMode;
 
     private int sb;
 
@@ -28,9 +31,10 @@ public class SerialPort implements AddressSpace, Serializable {
 
     private int receivedBits;
 
-    public SerialPort(InterruptManager interruptManager, boolean gbc) {
+    public SerialPort(InterruptManager interruptManager, boolean gbc, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
         this.gbc = gbc;
+        this.speedMode = speedMode;
     }
 
     public void init(SerialEndpoint serialEndpoint) {
@@ -93,15 +97,12 @@ public class SerialPort implements AddressSpace, Serializable {
         divider = 0;
         clockType = ClockType.getFromSc(sc);
         receivedBits = 0;
-        if (gbc) {
-            if ((sc & (1 << 1)) == 0) {
-                speed = 8192;
-            } else {
-                speed = 262144;
-            }
+        if (gbc && (sc & (1 << 1)) != 0) {
+            speed = 262144;
         } else {
             speed = 8192;
         }
+        speed *= speedMode.getSpeedMode();
         serialEndpoint.startSending();
     }
 }

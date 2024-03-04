@@ -77,7 +77,7 @@ public class Gameboy implements Runnable, Serializable {
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager);
-        serialPort = new NaiveSerialPort(interruptManager);
+        serialPort = new NaiveSerialPort(interruptManager, gbc, speedMode);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(joypad);
