@@ -44,7 +44,7 @@ public class Gameboy implements Runnable, Serializable {
 
     private final Joypad joypad;
 
-    private final NaiveSerialPort serialPort;
+    private final SerialPort serialPort;
 
     private final boolean gbc;
 
@@ -77,7 +77,7 @@ public class Gameboy implements Runnable, Serializable {
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager);
-        serialPort = new NaiveSerialPort(interruptManager, gbc, speedMode);
+        serialPort = new SerialPort(interruptManager, gbc, speedMode);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(joypad);
