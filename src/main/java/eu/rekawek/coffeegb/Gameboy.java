@@ -1,17 +1,16 @@
 package eu.rekawek.coffeegb;
 
-import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.Joypad;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.debug.Console;
+import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memory.*;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
-import eu.rekawek.coffeegb.serial.NaiveSerialPort;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
@@ -42,8 +41,6 @@ public class Gameboy implements Runnable, Serializable {
 
     private final Sound sound;
 
-    private final Joypad joypad;
-
     private final SerialPort serialPort;
 
     private final boolean gbc;
@@ -64,7 +61,7 @@ public class Gameboy implements Runnable, Serializable {
 
     private transient volatile boolean paused;
 
-    public Gameboy(Cartridge rom) {
+    public Gameboy(Cartridge rom, EventBus eventBus) {
         gbc = rom.isGbc();
         speedMode = new SpeedMode();
         InterruptManager interruptManager = new InterruptManager(gbc);
@@ -76,7 +73,7 @@ public class Gameboy implements Runnable, Serializable {
         gpu = new Gpu(interruptManager, dma, oamRam, gbc);
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
-        joypad = new Joypad(interruptManager);
+        Joypad joypad = new Joypad(interruptManager, eventBus);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
         mmu.addAddressSpace(rom);
         mmu.addAddressSpace(gpu);
@@ -108,7 +105,7 @@ public class Gameboy implements Runnable, Serializable {
         }
     }
 
-    public void init(Display display, SoundOutput soundOutput, Controller controller, SerialEndpoint serialEndpoint, Console console) {
+    public void init(Display display, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
         this.display = display;
         this.console = console;
         this.tickListeners = new ArrayList<>();
@@ -116,7 +113,6 @@ public class Gameboy implements Runnable, Serializable {
         gpu.init(display);
         cpu.init(display);
         sound.init(soundOutput);
-        joypad.init(controller);
         serialPort.init(serialEndpoint);
     }
 

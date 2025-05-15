@@ -1,15 +1,12 @@
 package eu.rekawek.coffeegb.swing.gui.properties
 
-import eu.rekawek.coffeegb.controller.ButtonListener
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.awt.event.KeyEvent
 import java.io.File
 import java.io.FileReader
 import java.io.FileWriter
 import java.io.IOException
 import java.util.*
-import java.util.stream.Collectors
 
 class EmulatorProperties() {
 

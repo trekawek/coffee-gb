@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.Gameboy;
-import eu.rekawek.coffeegb.controller.Controller;
+import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
@@ -25,10 +25,11 @@ public class ImageTestRunner {
     private final File imageFile;
 
     public ImageTestRunner(File romFile) throws IOException {
+        EventBus eventBus = new EventBus();
         Cartridge cart = new Cartridge(romFile);
         display = new TestDisplay();
-        gb = new Gameboy(cart);
-        gb.init(display, SoundOutput.NULL_OUTPUT, Controller.NULL_CONTROLLER, SerialEndpoint.NULL_ENDPOINT, null);
+        gb = new Gameboy(cart, eventBus);
+        gb.init(display, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
     }
 
