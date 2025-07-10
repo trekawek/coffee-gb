@@ -174,11 +174,11 @@ public class ShowBackground implements Command {
                     if (gpu.isGbc()) {
                         int[] gbcPalette = gpu.getBgPalette().getPalette(attr.getColorPaletteIndex());
                         for (int i = 0; i < palette.length; i++) {
-                            palette[i] = Display.translateGbcRgb(gbcPalette[i]);
+                            palette[i] = Display.GbcFrameReady.translateGbcRgb(gbcPalette[i]);
                         }
                     } else {
                         for (int i = 0; i < palette.length; i++) {
-                            palette[i] = SwingDisplay.COLORS[0b11 & (dmgPalette >> (i * 2))];
+                            palette[i] = Display.DmgFrameReady.COLORS[0b11 & (dmgPalette >> (i * 2))];
                         }
                     }
                     drawTile(g2d, tile, palette, x, y);

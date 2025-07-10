@@ -37,7 +37,7 @@ public class Gameboy implements Runnable, Serializable {
 
     private final Hdma hdma;
 
-    private transient Display display;
+    private final Display display;
 
     private final Sound sound;
 
@@ -67,6 +67,7 @@ public class Gameboy implements Runnable, Serializable {
         InterruptManager interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
         mmu = new Mmu();
+        display = new Display(eventBus, gbc);
 
         Ram oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(mmu, oamRam, speedMode);
@@ -105,8 +106,7 @@ public class Gameboy implements Runnable, Serializable {
         }
     }
 
-    public void init(Display display, SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
-        this.display = display;
+    public void init(SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
         this.console = console;
         this.tickListeners = new ArrayList<>();
 

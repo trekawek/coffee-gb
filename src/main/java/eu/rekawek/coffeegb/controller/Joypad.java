@@ -10,7 +10,7 @@ import java.io.Serializable;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
-public class Joypad implements AddressSpace, Serializable, Subscriber {
+public class Joypad implements AddressSpace, Serializable {
 
   private final Set<Button> buttons = new CopyOnWriteArraySet<>();
   private final InterruptManager interruptManager;
@@ -18,17 +18,17 @@ public class Joypad implements AddressSpace, Serializable, Subscriber {
 
   public Joypad(InterruptManager interruptManager, EventBus eventBus) {
     this.interruptManager = interruptManager;
-    eventBus.register(this);
+    eventBus.register(event -> onPress(event.button()), ButtonPressEvent.class);
+    eventBus.register(event -> onRelease(event.button()), ButtonReleaseEvent.class);
   }
 
-  @Override
-  public void onEvent(Event event) {
-    if (event instanceof ButtonPressEvent) {
-      interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
-      buttons.add(((ButtonPressEvent) event).button());
-    } else if (event instanceof ButtonReleaseEvent) {
-      buttons.remove(((ButtonReleaseEvent) event).button());
-    }
+  private void onPress(Button button) {
+    interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
+    buttons.add(button);
+  }
+
+  private void onRelease(Button button) {
+    buttons.remove(button);
   }
 
   @Override

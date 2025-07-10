@@ -40,7 +40,7 @@ public class MooneyeTestRunner {
         }
         Cartridge cart = new Cartridge(romFile, false, type, useBootstrap);
         gb = new Gameboy(cart, eventBus);
-        gb.init(Display.NULL_DISPLAY, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
+        gb.init(SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
         System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
         System.out.println("Bootstrap: " + (cart.isUseBootstrap() ? "enabled" : "disabled"));
         cpu = gb.getCpu();

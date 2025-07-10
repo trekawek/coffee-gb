@@ -16,21 +16,32 @@ import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenc
 
 public class ImageTestRunner {
 
-    private static final int MAX_TICKS = 2_000_000;
+    private static final int[] COLORS = new int[]{0xFFFFFF, 0xAAAAAA, 0x555555, 0x000000};
 
-    private final TestDisplay display;
+    private static final int MAX_TICKS = 2_000_000;
 
     private final Gameboy gb;
 
     private final File imageFile;
 
+    private final int[] resultRGB = new int[Display.DISPLAY_HEIGHT * Display.DISPLAY_WIDTH];
+
     public ImageTestRunner(File romFile) throws IOException {
         EventBus eventBus = new EventBus();
         Cartridge cart = new Cartridge(romFile);
-        display = new TestDisplay();
         gb = new Gameboy(cart, eventBus);
-        gb.init(display, SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
+        gb.init(SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
+        eventBus.register(this::onDmgFrame, Display.DmgFrameReady.class);
+        eventBus.register(this::onGbcFrame, Display.GbcFrameReady.class);
+    }
+
+    private void onGbcFrame(Display.GbcFrameReady gbcFrameReady) {
+        gbcFrameReady.toRgb(resultRGB);
+    }
+
+    private void onDmgFrame(Display.DmgFrameReady dmgFrameReady) {
+        dmgFrameReady.toRgb(resultRGB, COLORS);
     }
 
     public TestResult runTest() throws Exception {
@@ -41,7 +52,8 @@ public class ImageTestRunner {
                 throw new Exception("The test is not finished after " + i + " ticks.");
             }
         }
-        return new TestResult(display.getRGB(), getExpectedRGB());
+
+        return new TestResult(resultRGB, getExpectedRGB());
     }
 
     private int[] getExpectedRGB() throws Exception {
@@ -54,49 +66,6 @@ public class ImageTestRunner {
         }
         return rgb;
     }
-
-    public static class TestDisplay implements Display {
-
-        private static final int[] COLORS = new int[]{0xFFFFFF, 0xAAAAAA, 0x555555, 0x000000};
-
-        private final int[] rgb;
-
-        private int i = 0;
-
-        public TestDisplay() {
-            super();
-            rgb = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
-        }
-
-        @Override
-        public void putDmgPixel(int color) {
-            rgb[i++] = COLORS[color];
-            i = i % rgb.length;
-        }
-
-        @Override
-        public void putColorPixel(int gbcRgb) {
-            rgb[i++] = Display.translateGbcRgb(gbcRgb);
-        }
-
-        @Override
-        public void frameIsReady() {
-            i = 0;
-        }
-
-        @Override
-        public void enableLcd() {
-        }
-
-        @Override
-        public void disableLcd() {
-        }
-
-        public int[] getRGB() {
-            return rgb;
-        }
-    }
-
 
     public static class TestResult {
 

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.opcode.Opcode;
+import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.Ram;
 import org.junit.Test;
@@ -17,9 +18,10 @@ public class TimingTest {
     private final AddressSpace memory;
 
     public TimingTest() {
+        EventBus eventBus = new EventBus();
         memory = new Ram(0x00, 0x10000);
         cpu = new Cpu(memory, new InterruptManager(false), null, new SpeedMode());
-        cpu.init(Display.NULL_DISPLAY);
+        cpu.init(new Display(eventBus, false));
     }
 
     @Test

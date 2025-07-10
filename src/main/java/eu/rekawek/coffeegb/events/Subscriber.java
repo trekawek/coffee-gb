@@ -1,7 +1,5 @@
 package eu.rekawek.coffeegb.events;
 
-public interface Subscriber {
-
-    void onEvent(Event event);
-
+public interface Subscriber<E extends Event> {
+  void onEvent(E event);
 }
