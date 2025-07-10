@@ -6,12 +6,13 @@ import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.memory.cart.Cartridge.GameboyType
+import eu.rekawek.coffeegb.serial.SerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
-import eu.rekawek.coffeegb.swing.io.serial.SerialEndpointWrapper
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController
 import java.io.File
 import javax.swing.JFrame
 
@@ -24,9 +25,8 @@ class SwingEmulator(
   private val display: SwingDisplay
   private val controller: SwingController
   private val sound: AudioSystemSound
-  private val serial: SerialEndpointWrapper
 
-  val serialController: SerialController
+  val connectionController: ConnectionController
 
   private var currentRom: File? = null
   private var gameboyType: GameboyType
@@ -35,9 +35,7 @@ class SwingEmulator(
     display = SwingDisplay(properties.display, eventBus)
     sound = AudioSystemSound(properties.sound, eventBus)
     controller = SwingController(properties.controllerMapping, eventBus)
-
-    serial = SerialEndpointWrapper()
-    serialController = SerialController(serial)
+    connectionController = ConnectionController(eventBus)
 
     gameboyType = properties.gameboy.gameboyType
 
@@ -71,7 +69,7 @@ class SwingEmulator(
     val gameboy = gameboySnapshot ?: Gameboy(cart)
     val localEventBus = eventBus.fork()
 
-    gameboy.init(eventBus, serial, console)
+    gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, console)
     gameboy.registerTickListener(TimingTicker())
 
     localEventBus.register<PauseEmulationEvent> { gameboy.pause() }

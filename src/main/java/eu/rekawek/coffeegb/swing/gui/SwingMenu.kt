@@ -3,16 +3,16 @@ package eu.rekawek.coffeegb.swing.gui
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.sound.Sound
-import eu.rekawek.coffeegb.swing.emulator.SerialController
-import eu.rekawek.coffeegb.swing.emulator.SerialController.ClientConnectedToServerEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerGotConnectionEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerLostConnectionEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerStartedEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerStoppedEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.StartClientEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.StartServerEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.StopClientEvent
-import eu.rekawek.coffeegb.swing.emulator.SerialController.StopServerEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnectedToServerEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerLostConnectionEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerStartedEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerStoppedEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartClientEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartServerEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStartedEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStoppedEvent
@@ -236,7 +236,7 @@ class SwingMenu(
     linkMenu.add(connected)
 
     eventBus.register<ClientConnectedToServerEvent> { connected.state = true }
-    eventBus.register<SerialController.ClientDisconnectedFromServerEvent> {
+    eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       connected.state = false
       connectToServer.state = false
     }

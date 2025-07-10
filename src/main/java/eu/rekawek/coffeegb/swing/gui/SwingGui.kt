@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.swing.gui
 
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
-import eu.rekawek.coffeegb.memory.cart.Cartridge.GameboyType
 import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStartedEvent
@@ -11,12 +10,14 @@ import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StartEmulationEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
-import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties.Key
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
+import kotlin.system.exitProcess
 
 class SwingGui private constructor(debug: Boolean, private val initialRom: File?) {
 
@@ -69,10 +70,11 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
 
   private fun stopGui() {
     eventBus.post(StopEmulationEvent())
-    emulator.serialController.stop()
+    eventBus.post(StopServerEvent())
+    eventBus.post(StopClientEvent())
     console?.stop()
     emulator.stop()
-    System.exit(0)
+    exitProcess(0)
   }
 
   companion object {
