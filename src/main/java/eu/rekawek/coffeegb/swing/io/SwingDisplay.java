@@ -115,6 +115,7 @@ public class SwingDisplay extends JPanel implements Runnable {
       }
     }
   }
+
   public record SetScale(int scale) implements Event {}
 
   public record SetGrayscale(boolean grayscale) implements Event {}

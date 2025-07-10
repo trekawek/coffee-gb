@@ -2,23 +2,21 @@ package eu.rekawek.coffeegb.sound;
 
 public interface SoundOutput {
 
-    void start();
+  void start();
 
-    void stop();
+  void stop();
 
-    void play(int left, int right);
+  void play(int left, int right);
 
-    SoundOutput NULL_OUTPUT = new SoundOutput() {
+  SoundOutput NULL_OUTPUT =
+      new SoundOutput() {
         @Override
-        public void start() {
-        }
-
-        @Override
-        public void stop() {
-        }
+        public void start() {}
 
         @Override
-        public void play(int left, int right) {
-        }
-    };
+        public void stop() {}
+
+        @Override
+        public void play(int left, int right) {}
+      };
 }

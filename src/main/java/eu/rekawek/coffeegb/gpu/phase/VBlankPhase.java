@@ -4,15 +4,15 @@ import java.io.Serializable;
 
 public class VBlankPhase implements GpuPhase, Serializable {
 
-    private int ticks;
+  private int ticks;
 
-    public VBlankPhase start() {
-        ticks = 0;
-        return this;
-    }
+  public VBlankPhase start() {
+    ticks = 0;
+    return this;
+  }
 
-    @Override
-    public boolean tick() {
-        return ++ticks < 456;
-    }
+  @Override
+  public boolean tick() {
+    return ++ticks < 456;
+  }
 }

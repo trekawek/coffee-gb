@@ -4,17 +4,16 @@ import java.io.Serializable;
 
 public class HBlankPhase implements GpuPhase, Serializable {
 
-    private int ticks;
+  private int ticks;
 
-    public HBlankPhase start(int ticksInLine) {
-        this.ticks = ticksInLine;
-        return this;
-    }
+  public HBlankPhase start(int ticksInLine) {
+    this.ticks = ticksInLine;
+    return this;
+  }
 
-    @Override
-    public boolean tick() {
-        ticks++;
-        return ticks < 456;
-    }
-
+  @Override
+  public boolean tick() {
+    ticks++;
+    return ticks < 456;
+  }
 }
