@@ -14,7 +14,6 @@ import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
-import eu.rekawek.coffeegb.sound.SoundOutput;
 import eu.rekawek.coffeegb.timer.Timer;
 
 import java.io.Serializable;
@@ -73,7 +72,7 @@ public class Gameboy implements Runnable, Serializable {
     dma = new Dma(mmu, oamRam, speedMode);
     gpu = new Gpu(interruptManager, dma, oamRam, gbc);
     hdma = new Hdma(mmu);
-    sound = new Sound(gbc);
+    sound = new Sound(eventBus, gbc);
     Joypad joypad = new Joypad(interruptManager, eventBus);
     serialPort = new SerialPort(interruptManager, gbc, speedMode);
     mmu.addAddressSpace(rom);
@@ -106,13 +105,12 @@ public class Gameboy implements Runnable, Serializable {
     }
   }
 
-  public void init(SoundOutput soundOutput, SerialEndpoint serialEndpoint, Console console) {
+  public void init(SerialEndpoint serialEndpoint, Console console) {
     this.console = console;
     this.tickListeners = new ArrayList<>();
 
     gpu.init(display);
     cpu.init(display);
-    sound.init(soundOutput);
     serialPort.init(serialEndpoint);
   }
 

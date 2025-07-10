@@ -5,7 +5,6 @@ import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
-import eu.rekawek.coffeegb.sound.SoundOutput;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -30,7 +29,7 @@ public class ImageTestRunner {
         EventBus eventBus = new EventBus();
         Cartridge cart = new Cartridge(romFile);
         gb = new Gameboy(cart, eventBus);
-        gb.init(SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
+        gb.init(SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
         eventBus.register(this::onDmgFrame, Display.DmgFrameReady.class);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReady.class);

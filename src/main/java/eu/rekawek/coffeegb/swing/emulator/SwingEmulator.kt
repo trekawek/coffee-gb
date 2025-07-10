@@ -6,7 +6,7 @@ import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.memory.cart.Cartridge.GameboyType
-import eu.rekawek.coffeegb.swing.io.AudioSystemSoundOutput
+import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.serial.SerialEndpointWrapper
@@ -24,7 +24,7 @@ class SwingEmulator(
   private val eventBus = EventBus()
   private val display: SwingDisplay = SwingDisplay(eventBus)
   private val controller: SwingController = SwingController(controllerProperties, eventBus)
-  private val sound: AudioSystemSoundOutput = AudioSystemSoundOutput()
+  private val sound: AudioSystemSound = AudioSystemSound(eventBus)
   private val serial: SerialEndpointWrapper = SerialEndpointWrapper()
 
   val displayController = DisplayController(eventBus)
@@ -51,7 +51,7 @@ class SwingEmulator(
     stopEmulation()
     cart = newCart
     gameboy = gameboySnapshot ?: Gameboy(cart, eventBus)
-    gameboy!!.init(sound, serial, console)
+    gameboy!!.init(serial, console)
     gameboy!!.registerTickListener(TimingTicker())
     Thread(display).start()
     Thread(sound).start()

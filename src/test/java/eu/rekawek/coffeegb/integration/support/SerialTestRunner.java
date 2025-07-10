@@ -5,11 +5,9 @@ import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.events.EventBus;
-import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.ByteReceiver;
 import eu.rekawek.coffeegb.serial.ByteReceivingSerialEndpoint;
-import eu.rekawek.coffeegb.sound.SoundOutput;
 
 import java.io.File;
 import java.io.IOException;
@@ -30,7 +28,7 @@ public class SerialTestRunner implements ByteReceiver {
         EventBus eventBus = new EventBus();
         Cartridge cart = new Cartridge(romFile);
         gb = new Gameboy(cart, eventBus);
-        gb.init(SoundOutput.NULL_OUTPUT, new ByteReceivingSerialEndpoint(this), null);
+        gb.init(new ByteReceivingSerialEndpoint(this), null);
         text = new StringBuilder();
         this.os = os;
     }

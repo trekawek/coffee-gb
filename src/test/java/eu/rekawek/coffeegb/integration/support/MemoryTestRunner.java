@@ -5,10 +5,8 @@ import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.events.EventBus;
-import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
-import eu.rekawek.coffeegb.sound.SoundOutput;
 
 import java.io.File;
 import java.io.IOException;
@@ -28,7 +26,7 @@ public class MemoryTestRunner {
         EventBus eventBus = new EventBus();
         Cartridge cart = new Cartridge(romFile);
         gb = new Gameboy(cart, eventBus);
-        gb.init(SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
+        gb.init(SerialEndpoint.NULL_ENDPOINT, null);
         text = new StringBuilder();
         this.os = os;
     }

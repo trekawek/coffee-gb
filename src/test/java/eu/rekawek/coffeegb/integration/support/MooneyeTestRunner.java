@@ -5,10 +5,8 @@ import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.events.EventBus;
-import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
-import eu.rekawek.coffeegb.sound.SoundOutput;
 
 import java.io.File;
 import java.io.IOException;
@@ -40,7 +38,7 @@ public class MooneyeTestRunner {
         }
         Cartridge cart = new Cartridge(romFile, false, type, useBootstrap);
         gb = new Gameboy(cart, eventBus);
-        gb.init(SoundOutput.NULL_OUTPUT, SerialEndpoint.NULL_ENDPOINT, null);
+        gb.init(SerialEndpoint.NULL_ENDPOINT, null);
         System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
         System.out.println("Bootstrap: " + (cart.isUseBootstrap() ? "enabled" : "disabled"));
         cpu = gb.getCpu();

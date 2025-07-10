@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.events.Event;
+import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.memory.Ram;
 
 import java.io.Serializable;
@@ -19,33 +21,25 @@ public class Sound implements AddressSpace, Serializable {
 
   private final AddressSpace r = new Ram(0xff24, 0x03);
 
-  private transient SoundOutput output;
-
   private final int[] channels = new int[4];
 
   private boolean enabled;
 
   private final boolean[] overridenEnabled = {true, true, true, true};
 
-  public Sound(boolean gbc) {
+  private final EventBus eventBus;
+
+  public Sound(EventBus eventBus, boolean gbc) {
+    this.eventBus = eventBus;
     allModes[0] = new SoundMode1(gbc);
     allModes[1] = new SoundMode2(gbc);
     allModes[2] = new SoundMode3(gbc);
     allModes[3] = new SoundMode4(gbc);
   }
 
-  public void init(SoundOutput output) {
-    this.output = output;
-    if (enabled) {
-      output.start();
-    } else {
-      output.stop();
-    }
-  }
-
   public void tick() {
     if (!enabled) {
-      output.play(0, 0);
+      eventBus.post(SoundSampleEvent.createEvent((byte) 0, (byte) 0));
       return;
     }
     for (int i = 0; i < allModes.length; i++) {
@@ -73,7 +67,7 @@ public class Sound implements AddressSpace, Serializable {
     left *= ((volumes >> 4) & 0b111);
     right *= (volumes & 0b111);
 
-    output.play((byte) left, (byte) right);
+    eventBus.post(SoundSampleEvent.createEvent((byte) left, (byte) right));
   }
 
   private AddressSpace getAddressSpace(int address) {
@@ -154,11 +148,9 @@ public class Sound implements AddressSpace, Serializable {
     for (AbstractSoundMode m : allModes) {
       m.start();
     }
-    output.start();
   }
 
   private void stop() {
-    output.stop();
     for (AbstractSoundMode s : allModes) {
       s.stop();
     }
@@ -166,5 +158,22 @@ public class Sound implements AddressSpace, Serializable {
 
   public void enableChannel(int i, boolean enabled) {
     overridenEnabled[i] = enabled;
+  }
+
+  public record SoundSampleEvent(byte left, byte right) implements Event {
+    private static final SoundSampleEvent[][] SAMPLES = new SoundSampleEvent[0x80][];
+
+    static {
+      for (int i = 0; i < 0x80; i++) {
+        SAMPLES[i] = new SoundSampleEvent[0x80];
+        for (int j = 0; j < 0x80; j++) {
+          SAMPLES[i][j] = new SoundSampleEvent((byte) i, (byte) j);
+        }
+      }
+    }
+
+    private static SoundSampleEvent createEvent(byte left, byte right) {
+      return SAMPLES[left][right];
+    }
   }
 }
