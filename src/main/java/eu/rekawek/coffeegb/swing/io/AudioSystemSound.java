@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing.io;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.sound.Sound;
+import eu.rekawek.coffeegb.swing.gui.properties.SoundProperties;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
@@ -22,15 +23,17 @@ public class AudioSystemSound implements Runnable {
   private byte[] buffer = new byte[BUFFER_SIZE];
   private byte[] lockedBuffer = new byte[BUFFER_SIZE];
   private final byte[] finalBuffer = new byte[BUFFER_SIZE];
-  private volatile boolean enabled = true;
+  private volatile boolean enabled;
   private volatile int pos;
   private int tick;
   private volatile boolean doStop;
   private volatile boolean isStopped;
   private volatile long writeStart;
 
-  public AudioSystemSound(EventBus eventBus) {
+  public AudioSystemSound(SoundProperties properties, EventBus eventBus) {
+    this.enabled = properties.getSoundEnabled();
     eventBus.register(this::play, Sound.SoundSampleEvent.class);
+    eventBus.register(e -> this.enabled = e.enabled(), Sound.SoundEnabledEvent.class);
   }
 
   @Override
@@ -94,14 +97,6 @@ public class AudioSystemSound implements Runnable {
     buffer[pos] = left;
     buffer[pos + 1] = right;
     pos += 2;
-  }
-
-  public void setEnabled(boolean enabled) {
-    this.enabled = enabled;
-  }
-
-  public boolean isEnabled() {
-    return enabled;
   }
 
   private static void fill(byte[] src, int srcLen, byte[] dst) {

@@ -14,6 +14,12 @@ class EmulatorProperties() {
 
   val recentRoms = RecentRoms(this)
 
+  val display = DisplayProperties(this)
+
+  val sound = SoundProperties(this)
+
+  val gameboy = GameboyProperties(this)
+
   val controllerMapping = ControllerProperties.getControllerMapping(properties)
 
   fun getProperty(key: Key, defaultValue: String? = null) =

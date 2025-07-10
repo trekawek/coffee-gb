@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing.emulator
 
+import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.swing.io.serial.*
 
 class SerialController(private val serialEndpointWrapper: SerialEndpointWrapper) {
@@ -40,4 +41,24 @@ class SerialController(private val serialEndpointWrapper: SerialEndpointWrapper)
     clientListeners.add(listener)
     client?.registerListener(listener)
   }
+
+  class StartServerEvent : Event
+
+  class StopServerEvent : Event
+
+  data class StartClientEvent(val host: String) : Event
+
+  class StopClientEvent : Event
+
+  class ServerStartedEvent : Event
+
+  class ServerStoppedEvent : Event
+
+  data class ServerGotConnectionEvent(val host: String) : Event
+
+  class ServerLostConnectionEvent : Event
+
+  class ClientConnectedToServerEvent : Event
+
+  class ClientDisconnectedFromServerEvent : Event
 }

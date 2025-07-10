@@ -1,19 +1,42 @@
 package eu.rekawek.coffeegb.swing.gui
 
+import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge
-import eu.rekawek.coffeegb.swing.emulator.EmulatorStateListener
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
+import eu.rekawek.coffeegb.sound.Sound
+import eu.rekawek.coffeegb.swing.emulator.SerialController
+import eu.rekawek.coffeegb.swing.emulator.SerialController.ClientConnectedToServerEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerGotConnectionEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerLostConnectionEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerStartedEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.ServerStoppedEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.StartClientEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.StartServerEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.StopClientEvent
+import eu.rekawek.coffeegb.swing.emulator.SerialController.StopServerEvent
+import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStartedEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStoppedEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.PauseEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResetEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.RestoreSnapshotEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResumeEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SaveSnapshotEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SetGameboyType
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StartEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
+import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
-import eu.rekawek.coffeegb.swing.io.serial.ClientEventListener
-import eu.rekawek.coffeegb.swing.io.serial.ServerEventListener
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.*
 
 class SwingMenu(
-    private val emulator: SwingEmulator,
     private val properties: EmulatorProperties,
-    private val window: JFrame
+    private val window: JFrame,
+    private val eventBus: EventBus,
+    private val snapshotManager: SnapshotManager,
 ) {
 
   private var stateSlot = 0
@@ -69,40 +92,38 @@ class SwingMenu(
     pauseGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0)
     pauseGame.state = false
     gameMenu.add(pauseGame)
-    pauseGame.addActionListener { emulator.paused = pauseGame.state }
+    pauseGame.addActionListener {
+      if (pauseGame.state) {
+        eventBus.post(PauseEmulationEvent())
+      } else {
+        eventBus.post(ResumeEmulationEvent())
+      }
+    }
     enableWhenEmulationActive(pauseGame)
-    emulator.addEmulatorStateListener(
-        object : EmulatorStateListener {
-          override fun onEmulationStart(cartTitle: String) {
-            pauseGame.isEnabled = true
-            pauseGame.state = false
-          }
-
-          override fun onEmulationStop() {
-            pauseGame.isEnabled = false
-          }
-        })
+    eventBus.register<EmulationStartedEvent> {
+      pauseGame.isEnabled = true
+      pauseGame.state = false
+    }
+    eventBus.register<EmulationStoppedEvent> { pauseGame.isEnabled = false }
 
     val saveSnapshot = JMenuItem("Save state")
     val loadSnapshot = JMenuItem("Load state")
     saveSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0)
     gameMenu.add(saveSnapshot)
     saveSnapshot.addActionListener {
-      emulator.saveSnapshot(stateSlot)
-      loadSnapshot.isEnabled = emulator.snapshotAvailable(stateSlot)
+      eventBus.post(SaveSnapshotEvent(stateSlot))
+      loadSnapshot.isEnabled = snapshotManager.snapshotAvailable(stateSlot)
     }
     enableWhenEmulationActive(saveSnapshot)
 
     loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
     gameMenu.add(loadSnapshot)
-    loadSnapshot.addActionListener { emulator.restoreSnapshot(stateSlot) }
+    loadSnapshot.addActionListener { eventBus.post(RestoreSnapshotEvent(stateSlot)) }
     loadSnapshot.isEnabled = false
-    emulator.addEmulatorStateListener(
-        object : EmulatorStateListener {
-          override fun onEmulationStart(cartTitle: String) {
-            loadSnapshot.isEnabled = emulator.snapshotAvailable(stateSlot)
-          }
-        })
+
+    eventBus.register<EmulationStartedEvent> {
+      loadSnapshot.isEnabled = snapshotManager.snapshotAvailable(stateSlot)
+    }
 
     val slotMenu = JMenu("State slot")
     gameMenu.add(slotMenu)
@@ -111,7 +132,7 @@ class SwingMenu(
       slotItem.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_0 + i, KEY_MODIFIER)
       slotItem.addActionListener {
         stateSlot = i
-        loadSnapshot.isEnabled = emulator.snapshotAvailable(i)
+        loadSnapshot.isEnabled = snapshotManager.snapshotAvailable(i)
         uncheckAllBut(slotMenu, slotItem)
       }
       slotMenu.add(slotItem)
@@ -121,9 +142,9 @@ class SwingMenu(
     gameMenu.add(typeMenu)
 
     for (type in Cartridge.GameboyType.entries) {
-      val item = JCheckBoxMenuItem(type.label, type == emulator.gameboyType)
+      val item = JCheckBoxMenuItem(type.label, type == properties.gameboy.gameboyType)
       item.addActionListener {
-        emulator.gameboyType = type
+        eventBus.post(SetGameboyType(type))
         uncheckAllBut(typeMenu, item)
         properties.setProperty(EmulatorProperties.Key.GameboyType, type.name)
       }
@@ -133,13 +154,13 @@ class SwingMenu(
     val resetGame = JMenuItem("Reset")
     resetGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_R, KEY_MODIFIER)
     gameMenu.add(resetGame)
-    resetGame.addActionListener { emulator.reset() }
+    resetGame.addActionListener { eventBus.post(ResetEmulationEvent()) }
     enableWhenEmulationActive(resetGame)
 
     val stop = JMenuItem("Stop")
     stop.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_S, KEY_MODIFIER)
     gameMenu.add(stop)
-    stop.addActionListener { emulator.stopEmulation() }
+    stop.addActionListener { eventBus.post(StopEmulationEvent()) }
     enableWhenEmulationActive(stop)
 
     return gameMenu
@@ -152,9 +173,9 @@ class SwingMenu(
     screenMenu.add(scale)
 
     for (s in mutableListOf(1, 2, 4)) {
-      val item = JCheckBoxMenuItem(s.toString() + "x", s == emulator.displayController.scale)
+      val item = JCheckBoxMenuItem(s.toString() + "x", s == properties.display.scale)
       item.addActionListener {
-        emulator.displayController.scale = s
+        eventBus.post(SetScaleEvent(s))
         window.pack()
         uncheckAllBut(scale, item)
         properties.setProperty(EmulatorProperties.Key.DisplayScale, s.toString())
@@ -162,10 +183,10 @@ class SwingMenu(
       scale.add(item)
     }
 
-    val grayscale = JCheckBoxMenuItem("DMG grayscale", emulator.displayController.grayscale)
+    val grayscale = JCheckBoxMenuItem("DMG grayscale", properties.display.grayscale)
     screenMenu.add(grayscale)
     grayscale.addActionListener {
-      emulator.displayController.grayscale = grayscale.state
+      eventBus.post(SetGrayscaleEvent(grayscale.state))
       properties.setProperty(EmulatorProperties.Key.DisplayGrayscale, grayscale.state.toString())
     }
     return screenMenu
@@ -174,12 +195,12 @@ class SwingMenu(
   private fun createAudioMenu(): JMenu {
     val audioMenu = JMenu("Audio")
 
-    val enableSound = JCheckBoxMenuItem("Enable", emulator.soundController.enabled)
+    val enableSound = JCheckBoxMenuItem("Enable", properties.sound.soundEnabled)
     enableSound.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
     audioMenu.add(enableSound)
 
     enableSound.addActionListener {
-      emulator.soundController.enabled = enableSound.state
+      eventBus.post(Sound.SoundEnabledEvent(enableSound.state))
       properties.setProperty(EmulatorProperties.Key.SoundEnabled, enableSound.state.toString())
     }
     return audioMenu
@@ -192,9 +213,9 @@ class SwingMenu(
     linkMenu.add(startServer)
     startServer.addActionListener {
       if (startServer.state) {
-        emulator.serialController.startServer()
+        eventBus.post(StartServerEvent())
       } else {
-        emulator.serialController.stop()
+        eventBus.post(StopServerEvent())
       }
     }
 
@@ -204,9 +225,9 @@ class SwingMenu(
       if (connectToServer.state) {
         val host =
             JOptionPane.showInputDialog(window, "Please enter server IP address", "127.0.0.1")
-        emulator.serialController.startClient(host)
+        eventBus.post(StartClientEvent(host))
       } else {
-        emulator.serialController.stop()
+        eventBus.post(StopClientEvent())
       }
     }
 
@@ -214,48 +235,24 @@ class SwingMenu(
     connected.isEnabled = false
     linkMenu.add(connected)
 
-    emulator.serialController.registerClientListener(
-        object : ClientEventListener {
-          override fun onConnectedToServer() {
-            connected.state = true
-          }
-
-          override fun onDisconnectedFromServer() {
-            connectToServer.state = false
-            connected.state = false
-          }
-        })
-
-    emulator.serialController.registerServerListener(
-        object : ServerEventListener {
-          override fun onServerStopped() {
-            startServer.state = false
-          }
-
-          override fun onNewConnection(host: String?) {
-            connected.state = true
-          }
-
-          override fun onConnectionClosed() {
-            connected.state = false
-          }
-        })
-
+    eventBus.register<ClientConnectedToServerEvent> { connected.state = true }
+    eventBus.register<SerialController.ClientDisconnectedFromServerEvent> {
+      connected.state = false
+      connectToServer.state = false
+    }
+    eventBus.register<ServerStartedEvent> { connectToServer.isEnabled = false }
+    eventBus.register<ServerStoppedEvent> {
+      startServer.state = false
+      connectToServer.isEnabled = true
+    }
+    eventBus.register<ServerGotConnectionEvent> { connected.state = true }
+    eventBus.register<ServerLostConnectionEvent> { connected.state = false }
     return linkMenu
   }
 
   private fun enableWhenEmulationActive(item: JMenuItem) {
-    item.isEnabled = emulator.isRunning
-    emulator.addEmulatorStateListener(
-        object : EmulatorStateListener {
-          override fun onEmulationStart(cartTitle: String) {
-            item.isEnabled = true
-          }
-
-          override fun onEmulationStop() {
-            item.isEnabled = false
-          }
-        })
+    eventBus.register<EmulationStartedEvent> { item.isEnabled = true }
+    eventBus.register<EmulationStoppedEvent> { item.isEnabled = false }
   }
 
   private fun updateRecentRoms(recentRomsMenu: JMenu) {
@@ -272,8 +269,9 @@ class SwingMenu(
     properties.recentRoms.addRom(rom.absolutePath)
     updateRecentRoms(recentRomsMenu)
     try {
-      emulator.startEmulation(rom)
+      eventBus.post(StartEmulationEvent(rom))
     } catch (e: Exception) {
+      e.printStackTrace()
       JOptionPane.showMessageDialog(
           window, "Can't open ${rom.name}: ${e.message}", "Error", JOptionPane.ERROR_MESSAGE)
     }

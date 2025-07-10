@@ -1,9 +1,15 @@
 package eu.rekawek.coffeegb.swing.gui
 
 import eu.rekawek.coffeegb.debug.Console
+import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge.GameboyType
-import eu.rekawek.coffeegb.swing.emulator.EmulatorStateListener
+import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStartedEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStoppedEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StartEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
+import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties.Key
 import java.awt.event.WindowAdapter
@@ -14,6 +20,10 @@ import javax.swing.SwingUtilities
 
 class SwingGui private constructor(debug: Boolean, private val initialRom: File?) {
 
+  private val eventBus: EventBus
+
+  private val snapshotManager: SnapshotManager
+
   private val emulator: SwingEmulator
 
   private val console: Console? = if (debug) Console() else null
@@ -23,30 +33,17 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
   private lateinit var mainWindow: JFrame
 
   init {
-    emulator = SwingEmulator(console, properties.controllerMapping)
-
-    emulator.displayController.scale = properties.getProperty(Key.DisplayScale, "2").toInt()
-    emulator.displayController.grayscale =
-        properties.getProperty(Key.DisplayGrayscale, "false").toBoolean()
-    emulator.soundController.enabled = properties.getProperty(Key.SoundEnabled, "true").toBoolean()
-    emulator.gameboyType =
-        GameboyType.valueOf(properties.getProperty(Key.GameboyType, GameboyType.AUTOMATIC.name))
+    eventBus = EventBus()
+    snapshotManager = SnapshotManager(eventBus)
+    emulator = SwingEmulator(eventBus, console, snapshotManager, properties)
   }
 
   private fun startGui() {
     mainWindow = JFrame("Coffee GB")
 
-    SwingMenu(emulator, properties, mainWindow).addMenu()
-    emulator.addEmulatorStateListener(
-        object : EmulatorStateListener {
-          override fun onEmulationStart(cartTitle: String) {
-            mainWindow.title = "Coffee GB: $cartTitle"
-          }
-
-          override fun onEmulationStop() {
-            mainWindow.title = "Coffee GB"
-          }
-        })
+    SwingMenu(properties, mainWindow, eventBus, snapshotManager).addMenu()
+    eventBus.register<EmulationStartedEvent> { mainWindow.title = "Coffee GB: ${it.romName}" }
+    eventBus.register<EmulationStoppedEvent> { mainWindow.title = "Coffee GB" }
 
     mainWindow.defaultCloseOperation = JFrame.DISPOSE_ON_CLOSE
     mainWindow.addWindowListener(
@@ -66,14 +63,15 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
       Thread(console).start()
     }
     if (initialRom != null) {
-      emulator.startEmulation(initialRom)
+      eventBus.post(StartEmulationEvent(initialRom))
     }
   }
 
   private fun stopGui() {
-    emulator.stopEmulation()
+    eventBus.post(StopEmulationEvent())
     emulator.serialController.stop()
     console?.stop()
+    emulator.stop()
     System.exit(0)
   }
 

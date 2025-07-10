@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing.io;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
+import eu.rekawek.coffeegb.swing.gui.properties.DisplayProperties;
 
 import javax.swing.*;
 import java.awt.*;
@@ -27,7 +28,7 @@ public class SwingDisplay extends JPanel implements Runnable {
 
   private boolean grayscale;
 
-  public SwingDisplay(EventBus eventBus) {
+  public SwingDisplay(DisplayProperties properties, EventBus eventBus) {
     super();
     GraphicsConfiguration gfxConfig =
         GraphicsEnvironment.getLocalGraphicsEnvironment()
@@ -35,14 +36,15 @@ public class SwingDisplay extends JPanel implements Runnable {
             .getDefaultConfiguration();
     img = gfxConfig.createCompatibleImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
     waitingFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
-    eventBus.register(this::onDmgFrame, Display.DmgFrameReady.class);
-    eventBus.register(this::onGbcFrame, Display.GbcFrameReady.class);
-    eventBus.register(e -> setScale(e.scale), SetScale.class);
-    eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscale.class);
-    setScale(1);
+    eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class);
+    eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class);
+    eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
+    eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
+    this.grayscale = properties.getGrayscale();
+    setScale(properties.getScale());
   }
 
-  private synchronized void onGbcFrame(Display.GbcFrameReady e) {
+  private synchronized void onGbcFrame(Display.GbcFrameReadyEvent e) {
     if (frameIsWaiting) {
       return;
     }
@@ -51,7 +53,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     notify();
   }
 
-  private synchronized void onDmgFrame(Display.DmgFrameReady e) {
+  private synchronized void onDmgFrame(Display.DmgFrameReadyEvent e) {
     if (frameIsWaiting) {
       return;
     }
@@ -116,7 +118,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
   }
 
-  public record SetScale(int scale) implements Event {}
+  public record SetScaleEvent(int scale) implements Event {}
 
-  public record SetGrayscale(boolean grayscale) implements Event {}
+  public record SetGrayscaleEvent(boolean grayscale) implements Event {}
 }

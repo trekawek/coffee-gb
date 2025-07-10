@@ -11,7 +11,7 @@ public class Display implements Serializable {
 
   public static final int DISPLAY_HEIGHT = 144;
 
-  private volatile transient EventBus eventBus;
+  private transient volatile EventBus eventBus;
 
   private final int[] buffer = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
@@ -50,7 +50,7 @@ public class Display implements Serializable {
   }
 
   public void frameIsReady() {
-    eventBus.post(gbc ? new GbcFrameReady(buffer) : new DmgFrameReady(buffer));
+    eventBus.post(gbc ? new GbcFrameReadyEvent(buffer) : new DmgFrameReadyEvent(buffer));
     i = 0;
   }
 
@@ -67,7 +67,7 @@ public class Display implements Serializable {
     frameIsReady();
   }
 
-  public record GbcFrameReady(int[] pixels) implements Event {
+  public record GbcFrameReadyEvent(int[] pixels) implements Event {
 
     public static int translateGbcRgb(int gbcRgb) {
       int r = (gbcRgb >> 0) & 0x1f;
@@ -86,7 +86,7 @@ public class Display implements Serializable {
     }
   }
 
-  public record DmgFrameReady(int[] pixels) implements Event {
+  public record DmgFrameReadyEvent(int[] pixels) implements Event {
 
     public static final int[] COLORS = new int[] {0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
 

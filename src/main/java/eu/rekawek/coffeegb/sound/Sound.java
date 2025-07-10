@@ -179,4 +179,6 @@ public class Sound implements AddressSpace, Serializable {
       return SAMPLES[left][right];
     }
   }
+
+  public record SoundEnabledEvent(boolean enabled) implements Event {}
 }

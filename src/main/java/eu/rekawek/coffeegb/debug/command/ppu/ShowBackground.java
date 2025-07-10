@@ -6,7 +6,6 @@ import eu.rekawek.coffeegb.debug.Command;
 import eu.rekawek.coffeegb.debug.CommandPattern;
 import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 import eu.rekawek.coffeegb.gpu.*;
-import eu.rekawek.coffeegb.swing.io.SwingDisplay;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -180,11 +179,11 @@ public class ShowBackground implements Command {
           if (gpu.isGbc()) {
             int[] gbcPalette = gpu.getBgPalette().getPalette(attr.getColorPaletteIndex());
             for (int i = 0; i < palette.length; i++) {
-              palette[i] = Display.GbcFrameReady.translateGbcRgb(gbcPalette[i]);
+              palette[i] = Display.GbcFrameReadyEvent.translateGbcRgb(gbcPalette[i]);
             }
           } else {
             for (int i = 0; i < palette.length; i++) {
-              palette[i] = Display.DmgFrameReady.COLORS[0b11 & (dmgPalette >> (i * 2))];
+              palette[i] = Display.DmgFrameReadyEvent.COLORS[0b11 & (dmgPalette >> (i * 2))];
             }
           }
           drawTile(g2d, tile, palette, x, y);

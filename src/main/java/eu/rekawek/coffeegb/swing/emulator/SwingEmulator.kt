@@ -1,143 +1,120 @@
 package eu.rekawek.coffeegb.swing.emulator
 
 import eu.rekawek.coffeegb.Gameboy
-import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.debug.Console
+import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.memory.cart.Cartridge.GameboyType
+import eu.rekawek.coffeegb.swing.events.register
+import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.serial.SerialEndpointWrapper
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.io.ObjectInputStream
-import java.io.ObjectOutputStream
 import javax.swing.JFrame
 
 class SwingEmulator(
+    private val eventBus: EventBus,
     private val console: Console?,
-    controllerProperties: Map<Int, Button>,
+    private val snapshotManager: SnapshotManager,
+    properties: EmulatorProperties,
 ) {
-  private val eventBus = EventBus()
-  private val display: SwingDisplay = SwingDisplay(eventBus)
-  private val controller: SwingController = SwingController(controllerProperties, eventBus)
-  private val sound: AudioSystemSound = AudioSystemSound(eventBus)
-  private val serial: SerialEndpointWrapper = SerialEndpointWrapper()
+  private val display: SwingDisplay
+  private val controller: SwingController
+  private val sound: AudioSystemSound
+  private val serial: SerialEndpointWrapper
 
-  val displayController = DisplayController(eventBus)
-  val soundController = SoundController(sound)
-  val serialController = SerialController(serial)
+  val serialController: SerialController
 
-  private val emulatorStateListeners: MutableList<EmulatorStateListener> = mutableListOf()
-  private var gameboy: Gameboy? = null
-  private var cart: Cartridge? = null
   private var currentRom: File? = null
-  var isRunning = false
+  private var gameboyType: GameboyType
+
+  init {
+    display = SwingDisplay(properties.display, eventBus)
+    sound = AudioSystemSound(properties.sound, eventBus)
+    controller = SwingController(properties.controllerMapping, eventBus)
+
+    serial = SerialEndpointWrapper()
+    serialController = SerialController(serial)
+
+    gameboyType = properties.gameboy.gameboyType
+
+    Thread(display).start()
+    Thread(sound).start()
+
+    eventBus.register<StartEmulationEvent> { startEmulation(it.rom) }
+    eventBus.register<RestoreSnapshotEvent> { e ->
+      snapshotManager.loadSnapshot(e.slot)?.let { startEmulation(currentRom, it) }
+    }
+    eventBus.register<SetGameboyType> {
+      gameboyType = it.type
+      reset()
+    }
+  }
+
+  fun stop() {
+    sound.stopThread()
+    display.stop()
+  }
 
   fun bind(jFrame: JFrame) {
     jFrame.contentPane = display
     jFrame.addKeyListener(controller)
   }
 
-  fun addEmulatorStateListener(listener: EmulatorStateListener) {
-    emulatorStateListeners.add(listener)
-  }
+  private fun startEmulation(rom: File?, gameboySnapshot: Gameboy? = null) {
+    eventBus.post(StopEmulationEvent())
 
-  fun startEmulation(rom: File?, gameboySnapshot: Gameboy? = null) {
-    val newCart = Cartridge(rom, true, gameboyType, false)
-    stopEmulation()
-    cart = newCart
-    gameboy = gameboySnapshot ?: Gameboy(cart)
-    gameboy!!.init(eventBus, serial, console)
-    gameboy!!.registerTickListener(TimingTicker())
-    Thread(display).start()
-    Thread(sound).start()
+    val cart = Cartridge(rom, true, gameboyType, false)
+    val gameboy = gameboySnapshot ?: Gameboy(cart)
+    val localEventBus = eventBus.fork()
+
+    gameboy.init(eventBus, serial, console)
+    gameboy.registerTickListener(TimingTicker())
+
+    localEventBus.register<PauseEmulationEvent> { gameboy.pause() }
+    localEventBus.register<ResumeEmulationEvent> { gameboy.resume() }
+    localEventBus.register<ResetEmulationEvent> { reset() }
+    localEventBus.register<StopEmulationEvent> {
+      gameboy.stop()
+      cart.flushBattery()
+      console?.setGameboy(null)
+      localEventBus.post(EmulationStoppedEvent())
+      localEventBus.stop()
+    }
+    localEventBus.register<SaveSnapshotEvent> { snapshotManager.saveSnapshot(it.slot, gameboy) }
+
     Thread(gameboy).start()
-    isRunning = true
     currentRom = rom
     console?.setGameboy(gameboy)
-    emulatorStateListeners.forEach { it.onEmulationStart(cart!!.title) }
+    eventBus.post(EmulationStartedEvent(cart.title))
   }
-
-  fun stopEmulation() {
-    if (!isRunning) {
-      return
-    }
-    isRunning = false
-    gameboy?.stop()
-    gameboy = null
-    cart?.flushBattery()
-    cart = null
-    sound.stopThread()
-    display.stop()
-    console?.setGameboy(null)
-    emulatorStateListeners.forEach { it.onEmulationStop() }
-  }
-
-  fun snapshotAvailable(slot: Int) = getSnapshotFile(slot)?.exists() ?: false
-
-  fun saveSnapshot(slot: Int) {
-    if (!isRunning) {
-      return
-    }
-    val gameboy = this.gameboy ?: return
-    val originalPauseState = gameboy.isPaused
-    if (!gameboy.isPaused) {
-      gameboy.pause()
-    }
-    val snapshotFile = getSnapshotFile(slot) ?: return
-    ObjectOutputStream(FileOutputStream(snapshotFile)).use { it.writeObject(gameboy) }
-    if (!originalPauseState) {
-      gameboy.resume()
-    }
-  }
-
-  fun restoreSnapshot(slot: Int) {
-    if (currentRom == null) {
-      return
-    }
-    val snapshotFile = getSnapshotFile(slot) ?: return
-    if (!snapshotFile.exists()) {
-      return
-    }
-    stopEmulation()
-    val gameboy =
-        ObjectInputStream(FileInputStream(snapshotFile)).use { it.readObject() as Gameboy }
-    startEmulation(currentRom, gameboy)
-  }
-
-  private fun getSnapshotFile(slot: Int): File? {
-    val rom = currentRom ?: return null
-    val parentDir = rom.parentFile
-    val name = rom.nameWithoutExtension + ".sn${slot}"
-    return parentDir.resolve(name)
-  }
-
-  var gameboyType: GameboyType = GameboyType.AUTOMATIC
-    set(value) {
-      field = value
-      if (isRunning) {
-        reset()
-      }
-    }
-
-  var paused: Boolean
-    get() = gameboy?.isPaused ?: false
-    set(value) {
-      if (value) {
-        gameboy?.pause()
-      } else {
-        gameboy?.resume()
-      }
-    }
 
   fun reset() {
-    stopEmulation()
     if (currentRom != null) {
-      startEmulation(currentRom)
+      eventBus.post(StartEmulationEvent(currentRom!!))
     }
   }
+
+  class EmulationStartedEvent(val romName: String) : Event
+
+  class EmulationStoppedEvent : Event
+
+  data class StartEmulationEvent(val rom: File) : Event
+
+  class PauseEmulationEvent : Event
+
+  class ResumeEmulationEvent : Event
+
+  class ResetEmulationEvent : Event
+
+  class StopEmulationEvent : Event
+
+  data class SaveSnapshotEvent(val slot: Int) : Event
+
+  data class RestoreSnapshotEvent(val slot: Int) : Event
+
+  data class SetGameboyType(val type: GameboyType) : Event
 }

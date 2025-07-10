@@ -31,15 +31,15 @@ public class ImageTestRunner {
         gb = new Gameboy(cart, eventBus);
         gb.init(SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
-        eventBus.register(this::onDmgFrame, Display.DmgFrameReady.class);
-        eventBus.register(this::onGbcFrame, Display.GbcFrameReady.class);
+        eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class);
+        eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class);
     }
 
-    private void onGbcFrame(Display.GbcFrameReady gbcFrameReady) {
-        gbcFrameReady.toRgb(resultRGB);
+    private void onGbcFrame(Display.GbcFrameReadyEvent gbcFrameReadyEvent) {
+        gbcFrameReadyEvent.toRgb(resultRGB);
     }
 
-    private void onDmgFrame(Display.DmgFrameReady dmgFrameReady) {
+    private void onDmgFrame(Display.DmgFrameReadyEvent dmgFrameReady) {
         dmgFrameReady.toRgb(resultRGB, COLORS);
     }
 
