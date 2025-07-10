@@ -31,6 +31,7 @@ public class PixelTransfer implements GpuPhase, Serializable {
   private int windowLineCounter;
 
   public PixelTransfer(
+      Display display,
       AddressSpace videoRam0,
       AddressSpace videoRam1,
       AddressSpace oemRam,
@@ -44,16 +45,12 @@ public class PixelTransfer implements GpuPhase, Serializable {
     this.lcdc = lcdc;
     this.gbc = gbc;
     if (gbc) {
-      this.fifo = new ColorPixelFifo(lcdc, bgPalette, oamPalette);
+      this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette);
     } else {
-      this.fifo = new DmgPixelFifo(r);
+      this.fifo = new DmgPixelFifo(display, r);
     }
     this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
     this.sprites = sprites;
-  }
-
-  public void init(Display display) {
-    fifo.init(display);
   }
 
   public PixelTransfer start() {

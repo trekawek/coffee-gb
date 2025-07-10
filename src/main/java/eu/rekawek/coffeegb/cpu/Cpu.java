@@ -35,7 +35,7 @@ public class Cpu implements Serializable {
 
   private final Gpu gpu;
 
-  private transient Display display;
+  private final Display display;
 
   private final SpeedMode speedMode;
 
@@ -66,15 +66,16 @@ public class Cpu implements Serializable {
   private boolean haltBugMode;
 
   public Cpu(
-      AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode) {
+      AddressSpace addressSpace,
+      InterruptManager interruptManager,
+      Gpu gpu,
+      SpeedMode speedMode,
+      Display display) {
     this.registers = new Registers();
     this.addressSpace = addressSpace;
     this.interruptManager = interruptManager;
     this.gpu = gpu;
     this.speedMode = speedMode;
-  }
-
-  public void init(Display display) {
     this.display = display;
   }
 

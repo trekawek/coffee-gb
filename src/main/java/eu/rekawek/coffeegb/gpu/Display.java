@@ -3,13 +3,15 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 
-public class Display {
+import java.io.Serializable;
+
+public class Display implements Serializable {
 
   public static final int DISPLAY_WIDTH = 160;
 
   public static final int DISPLAY_HEIGHT = 144;
 
-  private final EventBus eventBus;
+  private volatile transient EventBus eventBus;
 
   private final int[] buffer = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
@@ -19,8 +21,11 @@ public class Display {
 
   private boolean enabled;
 
-  public Display(EventBus eventBus, boolean gbc) {
+  public Display(boolean gbc) {
     this.gbc = gbc;
+  }
+
+  public void init(EventBus eventBus) {
     this.eventBus = eventBus;
   }
 

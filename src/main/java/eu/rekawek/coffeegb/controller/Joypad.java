@@ -16,8 +16,11 @@ public class Joypad implements AddressSpace, Serializable {
   private final InterruptManager interruptManager;
   private int p1;
 
-  public Joypad(InterruptManager interruptManager, EventBus eventBus) {
+  public Joypad(InterruptManager interruptManager) {
     this.interruptManager = interruptManager;
+  }
+
+  public void init(EventBus eventBus) {
     eventBus.register(event -> onPress(event.button()), ButtonPressEvent.class);
     eventBus.register(event -> onRelease(event.button()), ButtonReleaseEvent.class);
   }

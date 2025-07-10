@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.gpu;
 
+import eu.rekawek.coffeegb.events.EventBus;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -18,7 +19,7 @@ public class PixelFifoTest {
     public void createFifo() {
         GpuRegisterValues r = new GpuRegisterValues();
         r.put(GpuRegister.BGP, 0b11100100);
-        fifo = new DmgPixelFifo(r);
+        fifo = new DmgPixelFifo(new Display(new EventBus(), false), r);
     }
 
     @Test

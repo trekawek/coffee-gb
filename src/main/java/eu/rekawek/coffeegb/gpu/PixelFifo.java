@@ -2,8 +2,6 @@ package eu.rekawek.coffeegb.gpu;
 
 public interface PixelFifo {
 
-  void init(Display display);
-
   int getLength();
 
   void putPixelToScreen();

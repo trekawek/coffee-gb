@@ -25,16 +25,19 @@ public class Sound implements AddressSpace, Serializable {
 
   private boolean enabled;
 
-  private final boolean[] overridenEnabled = {true, true, true, true};
+  private final boolean[] overriddenEnabled = {true, true, true, true};
 
-  private final EventBus eventBus;
+  private transient EventBus eventBus;
 
-  public Sound(EventBus eventBus, boolean gbc) {
-    this.eventBus = eventBus;
+  public Sound(boolean gbc) {
     allModes[0] = new SoundMode1(gbc);
     allModes[1] = new SoundMode2(gbc);
     allModes[2] = new SoundMode3(gbc);
     allModes[3] = new SoundMode4(gbc);
+  }
+
+  public void init(EventBus eventBus) {
+    this.eventBus = eventBus;
   }
 
   public void tick() {
@@ -50,7 +53,7 @@ public class Sound implements AddressSpace, Serializable {
     int left = 0;
     int right = 0;
     for (int i = 0; i < 4; i++) {
-      if (!overridenEnabled[i]) {
+      if (!overriddenEnabled[i]) {
         continue;
       }
       if ((selection & (1 << i + 4)) != 0) {
@@ -157,7 +160,7 @@ public class Sound implements AddressSpace, Serializable {
   }
 
   public void enableChannel(int i, boolean enabled) {
-    overridenEnabled[i] = enabled;
+    overriddenEnabled[i] = enabled;
   }
 
   public record SoundSampleEvent(byte left, byte right) implements Event {

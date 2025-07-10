@@ -10,17 +10,13 @@ public class DmgPixelFifo implements PixelFifo, Serializable {
 
   private final IntQueue pixelType = new IntQueue(16); // 0 - bg, 1 - sprite
 
-  private transient Display display;
+  private final Display display;
 
   private final GpuRegisterValues registers;
 
-  public DmgPixelFifo(GpuRegisterValues registers) {
-    this.registers = registers;
-  }
-
-  @Override
-  public void init(Display display) {
+  public DmgPixelFifo(Display display, GpuRegisterValues registers) {
     this.display = display;
+    this.registers = registers;
   }
 
   @Override

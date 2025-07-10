@@ -42,6 +42,8 @@ public class Gameboy implements Runnable, Serializable {
 
   private final SerialPort serialPort;
 
+  private final Joypad joypad;
+
   private final boolean gbc;
 
   private final SpeedMode speedMode;
@@ -60,20 +62,20 @@ public class Gameboy implements Runnable, Serializable {
 
   private transient volatile boolean paused;
 
-  public Gameboy(Cartridge rom, EventBus eventBus) {
+  public Gameboy(Cartridge rom) {
     gbc = rom.isGbc();
     speedMode = new SpeedMode();
     InterruptManager interruptManager = new InterruptManager(gbc);
     timer = new Timer(interruptManager, speedMode);
     mmu = new Mmu();
-    display = new Display(eventBus, gbc);
+    display = new Display(gbc);
 
     Ram oamRam = new Ram(0xfe00, 0x00a0);
     dma = new Dma(mmu, oamRam, speedMode);
-    gpu = new Gpu(interruptManager, dma, oamRam, gbc);
+    gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
     hdma = new Hdma(mmu);
-    sound = new Sound(eventBus, gbc);
-    Joypad joypad = new Joypad(interruptManager, eventBus);
+    sound = new Sound(gbc);
+    joypad = new Joypad(interruptManager);
     serialPort = new SerialPort(interruptManager, gbc, speedMode);
     mmu.addAddressSpace(rom);
     mmu.addAddressSpace(gpu);
@@ -97,7 +99,7 @@ public class Gameboy implements Runnable, Serializable {
     mmu.addAddressSpace(new ShadowAddressSpace(mmu, 0xe000, 0xc000, 0x1e00));
     mmu.indexSpaces();
 
-    cpu = new Cpu(mmu, interruptManager, gpu, speedMode);
+    cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
 
     interruptManager.disableInterrupts(false);
     if (!rom.isUseBootstrap()) {
@@ -105,12 +107,13 @@ public class Gameboy implements Runnable, Serializable {
     }
   }
 
-  public void init(SerialEndpoint serialEndpoint, Console console) {
+  public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
     this.console = console;
     this.tickListeners = new ArrayList<>();
 
-    gpu.init(display);
-    cpu.init(display);
+    joypad.init(eventBus);
+    display.init(eventBus);
+    sound.init(eventBus);
     serialPort.init(serialEndpoint);
   }
 

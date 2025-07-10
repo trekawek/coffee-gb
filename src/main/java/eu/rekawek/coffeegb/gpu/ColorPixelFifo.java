@@ -12,21 +12,18 @@ public class ColorPixelFifo implements PixelFifo, Serializable {
 
   private final Lcdc lcdc;
 
-  private transient Display display;
+  private final Display display;
 
   private final ColorPalette bgPalette;
 
   private final ColorPalette oamPalette;
 
-  public ColorPixelFifo(Lcdc lcdc, ColorPalette bgPalette, ColorPalette oamPalette) {
+  public ColorPixelFifo(
+      Display display, Lcdc lcdc, ColorPalette bgPalette, ColorPalette oamPalette) {
+    this.display = display;
     this.lcdc = lcdc;
     this.bgPalette = bgPalette;
     this.oamPalette = oamPalette;
-  }
-
-  @Override
-  public void init(Display display) {
-    this.display = display;
   }
 
   @Override

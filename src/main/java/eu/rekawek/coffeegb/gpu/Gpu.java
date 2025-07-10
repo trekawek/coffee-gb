@@ -26,7 +26,7 @@ public class Gpu implements AddressSpace, Serializable {
 
   private final AddressSpace oamRam;
 
-  private transient Display display;
+  private final Display display;
 
   private final InterruptManager interruptManager;
 
@@ -60,7 +60,8 @@ public class Gpu implements AddressSpace, Serializable {
 
   private GpuPhase phase;
 
-  public Gpu(InterruptManager interruptManager, Dma dma, Ram oamRam, boolean gbc) {
+  public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, boolean gbc) {
+    this.display = display;
     this.r = new GpuRegisterValues();
     this.lcdc = new Lcdc();
     this.interruptManager = interruptManager;
@@ -81,6 +82,7 @@ public class Gpu implements AddressSpace, Serializable {
     this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
     this.pixelTransferPhase =
         new PixelTransfer(
+            display,
             videoRam0,
             videoRam1,
             oamRam,
@@ -95,11 +97,6 @@ public class Gpu implements AddressSpace, Serializable {
 
     this.mode = Mode.OamSearch;
     this.phase = oamSearchPhase.start();
-  }
-
-  public void init(Display display) {
-    this.display = display;
-    pixelTransferPhase.init(display);
   }
 
   private AddressSpace getAddressSpace(int address) {

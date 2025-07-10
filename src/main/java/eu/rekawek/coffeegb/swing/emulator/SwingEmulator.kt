@@ -50,8 +50,8 @@ class SwingEmulator(
     val newCart = Cartridge(rom, true, gameboyType, false)
     stopEmulation()
     cart = newCart
-    gameboy = gameboySnapshot ?: Gameboy(cart, eventBus)
-    gameboy!!.init(serial, console)
+    gameboy = gameboySnapshot ?: Gameboy(cart)
+    gameboy!!.init(eventBus, serial, console)
     gameboy!!.registerTickListener(TimingTicker())
     Thread(display).start()
     Thread(sound).start()
