@@ -19,7 +19,7 @@ class TcpClient(
       LOG.info("Connected to {}", clientSocket!!.inetAddress)
       eventBus.post(ConnectionController.ClientConnectedToServerEvent())
       connection =
-          Connection(false, clientSocket!!.getInputStream(), clientSocket!!.getOutputStream())
+          Connection(clientSocket!!.getInputStream(), clientSocket!!.getOutputStream(), eventBus)
       connection!!.run()
     } catch (e: IOException) {
       LOG.error("Error in making connection", e)

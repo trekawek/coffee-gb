@@ -25,7 +25,7 @@ class TcpServer(private val eventBus: EventBus) : Runnable {
           socket = serverSocket.accept()
           LOG.info("Got new connection: {}", socket.inetAddress)
           eventBus.post(ConnectionController.ServerGotConnectionEvent(socket.inetAddress.hostName))
-          connection = Connection(true, socket.getInputStream(), socket.getOutputStream())
+          connection = Connection(socket.getInputStream(), socket.getOutputStream(), eventBus)
           connection!!.run()
         } catch (e: SocketTimeoutException) {
           // do nothing
