@@ -1,23 +1,22 @@
 package eu.rekawek.coffeegb.serial
 
 import eu.rekawek.coffeegb.cpu.BitUtils
+import java.io.Serializable
 import java.util.concurrent.atomic.AtomicInteger
 
-class Peer2PeerSerialEndpoint(peer: Peer2PeerSerialEndpoint?) : SerialEndpoint {
+class Peer2PeerSerialEndpoint() : SerialEndpoint, Serializable {
 
-  private lateinit var peer: Peer2PeerSerialEndpoint
+  @Transient private lateinit var peer: Peer2PeerSerialEndpoint
 
-  @Volatile private var sb: Int = 0xFF;
+  private var sb: Int = 0xFF
 
   private var bitsReceived = AtomicInteger()
 
   private var bitIndex: Int = 7
 
-  init {
-    if (peer != null) {
-      this.peer = peer
-      peer.peer = this
-    }
+  fun init(peer: Peer2PeerSerialEndpoint) {
+    this.peer = peer
+    peer.peer = this
   }
 
   override fun setSb(sb: Int) {
@@ -58,5 +57,4 @@ class Peer2PeerSerialEndpoint(peer: Peer2PeerSerialEndpoint?) : SerialEndpoint {
     }
     return bit
   }
-
 }

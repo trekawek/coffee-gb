@@ -50,7 +50,7 @@ class Connection(
         outputStream.write(button.ordinal)
       }
       outputStream.flush()
-      LOG.atDebug().log("Sent {}", it)
+      LOG.atInfo().log("Sent {}", it)
     }
   }
 
@@ -86,7 +86,7 @@ class Connection(
           val pressed = readButtons(pressedCount.toInt())
           val released = readButtons(releasedCount.toInt())
           val event = LinkedSession.RemoteButtonStateEvent(frame, pressed, released)
-          LOG.atDebug().log("Received message: {}", event)
+          LOG.atInfo().log("Received message: {}", event)
           eventBus.post(event)
         }
       }

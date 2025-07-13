@@ -108,9 +108,8 @@ class SwingMenu(
         eventBus.post(ResumeEmulationEvent())
       }
     }
-    eventBus.register<EmulationStartedEvent> { pauseGame.isEnabled = pauseSupport }
     eventBus.register<EmulationStartedEvent> {
-      pauseGame.isEnabled = true
+      pauseGame.isEnabled = pauseSupport
       pauseGame.state = false
     }
     eventBus.register<EmulationStoppedEvent> { pauseGame.isEnabled = false }
