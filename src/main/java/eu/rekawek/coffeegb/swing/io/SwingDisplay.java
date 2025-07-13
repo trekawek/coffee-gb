@@ -14,6 +14,8 @@ import static eu.rekawek.coffeegb.gpu.Display.DISPLAY_WIDTH;
 
 public class SwingDisplay extends JPanel implements Runnable {
 
+  private final EventBus eventBus;
+
   private final BufferedImage img;
 
   private final int[] waitingFrame;
@@ -29,15 +31,20 @@ public class SwingDisplay extends JPanel implements Runnable {
   private boolean grayscale;
 
   public SwingDisplay(DisplayProperties properties, EventBus eventBus) {
+    this(properties, eventBus, null);
+  }
+
+  public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
     super();
+    this.eventBus = eventBus;
     GraphicsConfiguration gfxConfig =
         GraphicsEnvironment.getLocalGraphicsEnvironment()
             .getDefaultScreenDevice()
             .getDefaultConfiguration();
     img = gfxConfig.createCompatibleImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
     waitingFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
-    eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class);
-    eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class);
+    eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
+    eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
     eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
     eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
     this.grayscale = properties.getGrayscale();
@@ -65,6 +72,7 @@ public class SwingDisplay extends JPanel implements Runnable {
   private void setScale(int scale) {
     this.scale = scale;
     setPreferredSize(new Dimension(DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale));
+    eventBus.post(new DisplaySizeUpdatedEvent(getPreferredSize()));
   }
 
   @Override
@@ -121,4 +129,6 @@ public class SwingDisplay extends JPanel implements Runnable {
   public record SetScaleEvent(int scale) implements Event {}
 
   public record SetGrayscaleEvent(boolean grayscale) implements Event {}
+
+  public record DisplaySizeUpdatedEvent(Dimension preferredSize) implements Event {}
 }

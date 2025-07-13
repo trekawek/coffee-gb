@@ -31,8 +31,12 @@ public class AudioSystemSound implements Runnable {
   private volatile long writeStart;
 
   public AudioSystemSound(SoundProperties properties, EventBus eventBus) {
+    this(properties, eventBus, null);
+  }
+
+  public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
     this.enabled = properties.getSoundEnabled();
-    eventBus.register(this::play, Sound.SoundSampleEvent.class);
+    eventBus.register(this::play, Sound.SoundSampleEvent.class, callerId);
     eventBus.register(e -> this.enabled = e.enabled(), Sound.SoundEnabledEvent.class);
   }
 

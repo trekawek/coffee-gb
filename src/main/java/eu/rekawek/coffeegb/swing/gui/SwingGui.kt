@@ -2,12 +2,10 @@ package eu.rekawek.coffeegb.swing.gui
 
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
-import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStartedEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStoppedEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StartEmulationEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStartedEvent
+import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStoppedEvent
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
@@ -23,8 +21,6 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
 
   private val eventBus: EventBus
 
-  private val snapshotManager: SnapshotManager
-
   private val emulator: SwingEmulator
 
   private val console: Console? = if (debug) Console() else null
@@ -35,14 +31,13 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
 
   init {
     eventBus = EventBus()
-    snapshotManager = SnapshotManager(eventBus)
-    emulator = SwingEmulator(eventBus, console, snapshotManager, properties)
+    emulator = SwingEmulator(eventBus, console, properties)
   }
 
   private fun startGui() {
     mainWindow = JFrame("Coffee GB")
 
-    SwingMenu(properties, mainWindow, eventBus, snapshotManager).addMenu()
+    SwingMenu(properties, mainWindow, eventBus).addMenu()
     eventBus.register<EmulationStartedEvent> { mainWindow.title = "Coffee GB: ${it.romName}" }
     eventBus.register<EmulationStoppedEvent> { mainWindow.title = "Coffee GB" }
 
@@ -64,7 +59,7 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
       Thread(console).start()
     }
     if (initialRom != null) {
-      eventBus.post(StartEmulationEvent(initialRom))
+      eventBus.post(SwingEmulator.LoadRomEvent(initialRom))
     }
   }
 

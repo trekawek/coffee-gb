@@ -5,8 +5,9 @@ import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ConnectedGameboyStartedEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.WaitingForPeerEvent
+import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
+import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
 import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.io.network.ButtonSender.SendSyncMessage
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
@@ -34,20 +35,19 @@ class Connection(
       outputStream.flush()
       LOG.atInfo().log("Sent {}", it)
     }
-    eventBus.register<SendSyncMessage> {
+    eventBus.register<LocalButtonStateEvent> {
       outputStream.write(0x03)
-      val buf = ByteBuffer.allocate(8)
-      buf.putInt(it.ticks)
-      buf.putInt(it.events.size)
+      val buf = ByteBuffer.allocate(10)
+      buf.putLong(it.frame)
+      buf.put(it.pressedButtons.size.toByte())
+      buf.put(it.releasedButtons.size.toByte())
       outputStream.write(buf.array())
 
-      val buttonBuffer = ByteBuffer.allocate(6)
-      for (button in it.events) {
-        buttonBuffer.putInt(button.tick)
-        buttonBuffer.put(button.buttonPressed?.ordinal?.toByte() ?: -1)
-        buttonBuffer.put(button.buttonReleased?.ordinal?.toByte() ?: -1)
-        outputStream.write(buttonBuffer.array())
-        buttonBuffer.rewind()
+      for (button in it.pressedButtons) {
+        outputStream.write(button.ordinal)
+      }
+      for (button in it.releasedButtons) {
+        outputStream.write(button.ordinal)
       }
       outputStream.flush()
       LOG.atDebug().log("Sent {}", it)
@@ -76,25 +76,16 @@ class Connection(
         }
         // sync
         0x03 -> {
-          val buf = ByteBuffer.allocate(8)
-          if (inputStream.read(buf.array()) < 8) {
+          val buf = ByteBuffer.allocate(10)
+          if (inputStream.read(buf.array()) < 10) {
             return
           }
-          val ticks = buf.getInt()
-          val count = buf.getInt()
-          val buttonBuffer = ByteBuffer.allocate(6)
-          val buttons =
-              (0 until count).map {
-                if (inputStream.read(buttonBuffer.array()) < 6) {
-                  return
-                }
-                val tick = buttonBuffer.getInt()
-                val pressed = buttonBuffer.get()
-                val released = buttonBuffer.get()
-                buttonBuffer.rewind()
-                ButtonEvent(tick, getButton(pressed), getButton(released))
-              }
-          val event = PeerButtonEvents(ticks, buttons)
+          val frame = buf.getLong()
+          val pressedCount = buf.get()
+          val releasedCount = buf.get()
+          val pressed = readButtons(pressedCount.toInt())
+          val released = readButtons(releasedCount.toInt())
+          val event = LinkedSession.RemoteButtonStateEvent(frame, pressed, released)
           LOG.atDebug().log("Received message: {}", event)
           eventBus.post(event)
         }
@@ -102,11 +93,10 @@ class Connection(
     }
   }
 
-  private fun getButton(i: Byte): Button? {
-    return if (i == (-1).toByte()) {
-      null
-    } else {
-      Button.entries[i.toInt()]
+  private fun readButtons(count: Int): List<Button> {
+    return (0 until count).map {
+      val buttonId = inputStream.read()
+      Button.entries[buttonId]
     }
   }
 
@@ -118,10 +108,6 @@ class Connection(
   data class PeerLoadedGameEvent(val romName: String) : Event
 
   class PeerIsReadyEvent : Event
-
-  data class ButtonEvent(val tick: Int, val buttonPressed: Button?, val buttonReleased: Button?)
-
-  data class PeerButtonEvents(val ticks: Int, val buttonEvents: List<ButtonEvent>) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)

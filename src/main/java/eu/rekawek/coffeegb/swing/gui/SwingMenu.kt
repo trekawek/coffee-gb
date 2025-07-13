@@ -1,8 +1,23 @@
 package eu.rekawek.coffeegb.swing.gui
 
 import eu.rekawek.coffeegb.events.EventBus
-import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.sound.Sound
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.LoadRomEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.PauseEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResetEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.RestoreSnapshotEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResumeEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SaveSnapshotEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SessionPauseSupportEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SessionSnapshotSupportEvent
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
+import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStartedEvent
+import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStoppedEvent
+import eu.rekawek.coffeegb.swing.emulator.session.SnapshotSupport
+import eu.rekawek.coffeegb.swing.events.register
+import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnectedToServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
@@ -13,21 +28,6 @@ import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartClientEven
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
-import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStartedEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.EmulationStoppedEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.PauseEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResetEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.RestoreSnapshotEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResumeEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SaveSnapshotEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SetGameboyType
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StartEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
-import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.*
@@ -36,10 +36,18 @@ class SwingMenu(
     private val properties: EmulatorProperties,
     private val window: JFrame,
     private val eventBus: EventBus,
-    private val snapshotManager: SnapshotManager,
 ) {
 
   private var stateSlot = 0
+
+  private var snapshotSupport: SnapshotSupport? = null
+
+  private var pauseSupport: Boolean = false
+
+  init {
+    eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
+    eventBus.register<SessionPauseSupportEvent> { pauseSupport = it.enabled }
+  }
 
   fun addMenu() {
     val menuBar = JMenuBar()
@@ -91,6 +99,7 @@ class SwingMenu(
     val pauseGame = JCheckBoxMenuItem("Pause", false)
     pauseGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0)
     pauseGame.state = false
+    pauseGame.isEnabled = false
     gameMenu.add(pauseGame)
     pauseGame.addActionListener {
       if (pauseGame.state) {
@@ -99,7 +108,7 @@ class SwingMenu(
         eventBus.post(ResumeEmulationEvent())
       }
     }
-    enableWhenEmulationActive(pauseGame)
+    eventBus.register<EmulationStartedEvent> { pauseGame.isEnabled = pauseSupport }
     eventBus.register<EmulationStartedEvent> {
       pauseGame.isEnabled = true
       pauseGame.state = false
@@ -108,13 +117,15 @@ class SwingMenu(
 
     val saveSnapshot = JMenuItem("Save state")
     val loadSnapshot = JMenuItem("Load state")
+    saveSnapshot.isEnabled = false
     saveSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0)
     gameMenu.add(saveSnapshot)
     saveSnapshot.addActionListener {
       eventBus.post(SaveSnapshotEvent(stateSlot))
-      loadSnapshot.isEnabled = snapshotManager.snapshotAvailable(stateSlot)
+      loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(stateSlot) == true
     }
-    enableWhenEmulationActive(saveSnapshot)
+    eventBus.register<EmulationStartedEvent> { saveSnapshot.isEnabled = snapshotSupport != null }
+    eventBus.register<EmulationStoppedEvent> { saveSnapshot.isEnabled = false }
 
     loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
     gameMenu.add(loadSnapshot)
@@ -122,7 +133,7 @@ class SwingMenu(
     loadSnapshot.isEnabled = false
 
     eventBus.register<EmulationStartedEvent> {
-      loadSnapshot.isEnabled = snapshotManager.snapshotAvailable(stateSlot)
+      loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(stateSlot) == true
     }
 
     val slotMenu = JMenu("State slot")
@@ -132,32 +143,21 @@ class SwingMenu(
       slotItem.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_0 + i, KEY_MODIFIER)
       slotItem.addActionListener {
         stateSlot = i
-        loadSnapshot.isEnabled = snapshotManager.snapshotAvailable(i)
+        loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(i) == true
         uncheckAllBut(slotMenu, slotItem)
       }
       slotMenu.add(slotItem)
     }
 
-    val typeMenu = JMenu("GameBoy type")
-    gameMenu.add(typeMenu)
-
-    for (type in Cartridge.GameboyType.entries) {
-      val item = JCheckBoxMenuItem(type.label, type == properties.gameboy.gameboyType)
-      item.addActionListener {
-        eventBus.post(SetGameboyType(type))
-        uncheckAllBut(typeMenu, item)
-        properties.setProperty(EmulatorProperties.Key.GameboyType, type.name)
-      }
-      typeMenu.add(item)
-    }
-
     val resetGame = JMenuItem("Reset")
+    resetGame.isEnabled = false
     resetGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_R, KEY_MODIFIER)
     gameMenu.add(resetGame)
     resetGame.addActionListener { eventBus.post(ResetEmulationEvent()) }
     enableWhenEmulationActive(resetGame)
 
     val stop = JMenuItem("Stop")
+    stop.isEnabled = false
     stop.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_S, KEY_MODIFIER)
     gameMenu.add(stop)
     stop.addActionListener { eventBus.post(StopEmulationEvent()) }
@@ -269,7 +269,7 @@ class SwingMenu(
     properties.recentRoms.addRom(rom.absolutePath)
     updateRecentRoms(recentRomsMenu)
     try {
-      eventBus.post(StartEmulationEvent(rom))
+      eventBus.post(LoadRomEvent(rom))
     } catch (e: Exception) {
       e.printStackTrace()
       JOptionPane.showMessageDialog(

@@ -1,28 +1,26 @@
 package eu.rekawek.coffeegb.swing.emulator
 
-import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
-import eu.rekawek.coffeegb.memory.cart.Cartridge
-import eu.rekawek.coffeegb.memory.cart.Cartridge.GameboyType
-import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
-import eu.rekawek.coffeegb.serial.SerialEndpoint
+import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
+import eu.rekawek.coffeegb.swing.emulator.session.PauseSupport
+import eu.rekawek.coffeegb.swing.emulator.session.Session
+import eu.rekawek.coffeegb.swing.emulator.session.SimpleSession
+import eu.rekawek.coffeegb.swing.emulator.session.SnapshotSupport
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
-import eu.rekawek.coffeegb.swing.io.network.ButtonReceiver
-import eu.rekawek.coffeegb.swing.io.network.ButtonSender
-import eu.rekawek.coffeegb.swing.io.network.Connection.PeerButtonEvents
-import eu.rekawek.coffeegb.swing.io.network.Connection.PeerIsReadyEvent
+import eu.rekawek.coffeegb.swing.io.network.Connection
 import eu.rekawek.coffeegb.swing.io.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnectedToServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientDisconnectedFromServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerLostConnectionEvent
+import java.awt.Dimension
 import java.io.File
 import javax.swing.BoxLayout
 import javax.swing.JFrame
@@ -33,39 +31,32 @@ import org.slf4j.LoggerFactory
 class SwingEmulator(
     private val eventBus: EventBus,
     private val console: Console?,
-    private val snapshotManager: SnapshotManager,
     properties: EmulatorProperties,
 ) {
   private val display: SwingDisplay
-
-  private val remoteEventBus = EventBus()
-  private val remoteDisplay: SwingDisplay
+  private val remoteDisplay: SwingDisplay?
 
   private val controller: SwingController
   private val sound: AudioSystemSound
 
   private val connectionController: ConnectionController
-
-  private var currentRom: File? = null
-  private var gameboyType: GameboyType
-
   private var isConnected = false
   private var remoteRomName: String? = null
 
+  private var session: Session? = null
+
   init {
-    display = SwingDisplay(properties.display, eventBus)
+    display = SwingDisplay(properties.display, eventBus, "main")
 
     remoteDisplay =
         if (SHOW_REMOTE_SCREEN) {
-          SwingDisplay(properties.display, remoteEventBus)
+          SwingDisplay(properties.display, eventBus, "secondary")
         } else {
-          SwingDisplay(properties.display, EventBus())
+          null
         }
-    sound = AudioSystemSound(properties.sound, eventBus)
+    sound = AudioSystemSound(properties.sound, eventBus, "main")
     controller = SwingController(properties.controllerMapping, eventBus)
     connectionController = ConnectionController(eventBus)
-
-    gameboyType = properties.gameboy.gameboyType
 
     Thread(display).start()
     if (SHOW_REMOTE_SCREEN) {
@@ -73,14 +64,75 @@ class SwingEmulator(
     }
     Thread(sound).start()
 
-    eventBus.register<StartEmulationEvent> { startEmulation(it.rom) }
+    eventBus.register<LoadRomEvent> {
+      session?.stop()
+
+      val session: Session =
+          if (isConnected) {
+            LinkedSession(eventBus, it.rom, console)
+          } else {
+            SimpleSession(eventBus, it.rom, console)
+          }
+
+      this.session = session
+      eventBus.post(SessionPauseSupportEvent(session is PauseSupport))
+      eventBus.post(SessionSnapshotSupportEvent(if (session is SnapshotSupport) session else null))
+      if (session is SimpleSession) {
+        eventBus.post(StartEmulationEvent())
+      }
+      if (session is LinkedSession) {
+        if (this.remoteRomName == session.getRomName()) {
+          eventBus.post(ConnectedGameboyStartedEvent())
+          eventBus.post(StartEmulationEvent())
+        } else {
+          eventBus.post(WaitingForPeerEvent(session.getRomName()))
+        }
+      }
+    }
+    eventBus.register<Connection.PeerIsReadyEvent> {
+      if (session is LinkedSession) {
+        eventBus.post(StartEmulationEvent())
+      }
+    }
+    eventBus.register<StartEmulationEvent> { session?.start() }
     eventBus.register<RestoreSnapshotEvent> { e ->
-      snapshotManager.loadSnapshot(e.slot)?.let { startEmulation(currentRom, it) }
+      session?.let {
+        if (it is SnapshotSupport) {
+          it.loadSnapshot(e.slot)
+        }
+      }
     }
-    eventBus.register<SetGameboyType> {
-      gameboyType = it.type
-      reset()
+    eventBus.register<PauseEmulationEvent> {
+      session?.let {
+        if (it is PauseSupport) {
+          it.pause()
+        }
+      }
     }
+    eventBus.register<ResumeEmulationEvent> {
+      session?.let {
+        if (it is PauseSupport) {
+          it.resume()
+        }
+      }
+    }
+    eventBus.register<ResetEmulationEvent> { session?.reset() }
+    eventBus.register<StopEmulationEvent> { session?.stop() }
+    eventBus.register<SaveSnapshotEvent> { e ->
+      session?.let {
+        if (it is SnapshotSupport) {
+          it.saveSnapshot(e.slot)
+        }
+      }
+    }
+    eventBus.register<RestoreSnapshotEvent> { e ->
+      session?.let {
+        if (it is SnapshotSupport) {
+          it.loadSnapshot(e.slot)
+        }
+      }
+    }
+
     eventBus.register<ServerGotConnectionEvent> { isConnected = true }
     eventBus.register<ServerLostConnectionEvent> {
       isConnected = false
@@ -113,74 +165,21 @@ class SwingEmulator(
 
     jFrame.contentPane = mainPanel
     jFrame.addKeyListener(controller)
-  }
 
-  private fun startEmulation(rom: File?, gameboySnapshot: Gameboy? = null) {
-    eventBus.post(StopEmulationEvent())
-
-    currentRom = rom
-    val cart = Cartridge(rom, true, gameboyType, false)
-    val gameboy = gameboySnapshot ?: Gameboy(cart)
-    console?.setGameboy(gameboy)
-
-    val localEventBus = eventBus.fork()
-    localEventBus.register<PauseEmulationEvent> { gameboy.pause() }
-    localEventBus.register<ResumeEmulationEvent> { gameboy.resume() }
-    localEventBus.register<ResetEmulationEvent> { reset() }
-    localEventBus.register<StopEmulationEvent> {
-      gameboy.stop()
-      cart.flushBattery()
-      console?.setGameboy(null)
-      localEventBus.post(EmulationStoppedEvent())
-      localEventBus.stop()
-    }
-    localEventBus.register<SaveSnapshotEvent> { snapshotManager.saveSnapshot(it.slot, gameboy) }
-
-    if (isConnected) {
-      val remoteGameboy = Gameboy(cart)
-      val remoteSerial = Peer2PeerSerialEndpoint(null)
-      val localRemoteEventBus = remoteEventBus.fork()
-      localEventBus.register<PeerButtonEvents> { localRemoteEventBus.post(it) }
-      ButtonReceiver.peerToLocalButtons(localRemoteEventBus)
-      remoteGameboy.init(localRemoteEventBus, remoteSerial, null)
-      localRemoteEventBus.register<RunTicksEvent> {
-        LOG.atDebug().log("Running {} ticks", it.ticks)
-        repeat(it.ticks) { remoteGameboy.tick() }
-      }
-      localEventBus.register<StopEmulationEvent> { localRemoteEventBus.stop() }
-
-      val localSerial = Peer2PeerSerialEndpoint(remoteSerial)
-      gameboy.init(localEventBus, localSerial, console)
-      gameboy.registerTickListener(TimingTicker())
-      gameboy.registerTickListener(ButtonSender(localEventBus))
-
-      if (cart.title == remoteRomName) {
-        Thread(gameboy).start()
-        localEventBus.post(ConnectedGameboyStartedEvent())
-      } else {
-        localEventBus.post(WaitingForPeerEvent(cart.title))
-        localEventBus.register<PeerIsReadyEvent> { Thread(gameboy).start() }
-      }
-    } else {
-      gameboy.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
-      gameboy.registerTickListener(TimingTicker())
-      Thread(gameboy).start()
-    }
-
-    eventBus.post(EmulationStartedEvent(cart.title))
-  }
-
-  fun reset() {
-    if (currentRom != null) {
-      eventBus.post(StartEmulationEvent(currentRom!!))
+    eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
+      val dimension =
+          if (SHOW_REMOTE_SCREEN) {
+            Dimension(it.preferredSize.width * 2, it.preferredSize.height)
+          } else {
+            it.preferredSize
+          }
+      mainPanel.preferredSize = dimension
     }
   }
 
-  class EmulationStartedEvent(val romName: String) : Event
+  data class LoadRomEvent(val rom: File) : Event
 
-  class EmulationStoppedEvent : Event
-
-  data class StartEmulationEvent(val rom: File) : Event
+  class StartEmulationEvent : Event
 
   class PauseEmulationEvent : Event
 
@@ -194,13 +193,13 @@ class SwingEmulator(
 
   data class RestoreSnapshotEvent(val slot: Int) : Event
 
-  data class SetGameboyType(val type: GameboyType) : Event
+  data class SessionPauseSupportEvent(val enabled: Boolean) : Event
+
+  data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event
 
   class ConnectedGameboyStartedEvent : Event
 
   data class WaitingForPeerEvent(val romName: String) : Event
-
-  data class RunTicksEvent(val ticks: Int) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(SwingEmulator::class.java)
