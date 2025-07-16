@@ -83,8 +83,7 @@ class SimpleSession(
 
   @Synchronized
   override fun loadSnapshot(slot: Int) {
-    val gameboy = snapshotManager.loadSnapshot(slot)
-    gameboy?.let { init(it) }
+    gameboy?.let { snapshotManager.loadSnapshot(slot, it) }
   }
 
   override fun snapshotAvailable(slot: Int): Boolean {
