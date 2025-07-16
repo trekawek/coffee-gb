@@ -20,13 +20,13 @@ import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnected
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientDisconnectedFromServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerLostConnectionEvent
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.awt.Dimension
 import java.io.File
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class SwingEmulator(
     private val eventBus: EventBus,

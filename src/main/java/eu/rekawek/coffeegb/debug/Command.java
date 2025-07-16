@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.debug.CommandPattern.ParsedCommandLine;
 
 public interface Command {
 
-  CommandPattern getPattern();
+    CommandPattern getPattern();
 
-  void run(ParsedCommandLine commandLine);
+    void run(ParsedCommandLine commandLine);
 }

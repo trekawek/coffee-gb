@@ -4,31 +4,36 @@ import java.io.Serializable;
 
 public interface Battery extends Serializable {
 
-  void loadRam(int[] ram);
+    void loadRam(int[] ram);
 
-  void saveRam(int[] ram);
+    void saveRam(int[] ram);
 
-  void loadRamWithClock(int[] ram, long[] clockData);
+    void loadRamWithClock(int[] ram, long[] clockData);
 
-  void saveRamWithClock(int[] ram, long[] clockData);
+    void saveRamWithClock(int[] ram, long[] clockData);
 
-  void flush();
+    void flush();
 
-  Battery NULL_BATTERY =
-      new Battery() {
-        @Override
-        public void loadRam(int[] ram) {}
+    Battery NULL_BATTERY =
+            new Battery() {
+                @Override
+                public void loadRam(int[] ram) {
+                }
 
-        @Override
-        public void saveRam(int[] ram) {}
+                @Override
+                public void saveRam(int[] ram) {
+                }
 
-        @Override
-        public void loadRamWithClock(int[] ram, long[] clockData) {}
+                @Override
+                public void loadRamWithClock(int[] ram, long[] clockData) {
+                }
 
-        @Override
-        public void saveRamWithClock(int[] ram, long[] clockData) {}
+                @Override
+                public void saveRamWithClock(int[] ram, long[] clockData) {
+                }
 
-        @Override
-        public void flush() {}
-      };
+                @Override
+                public void flush() {
+                }
+            };
 }

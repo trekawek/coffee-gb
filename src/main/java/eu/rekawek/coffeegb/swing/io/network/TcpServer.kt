@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.swing.io.network
 
 import eu.rekawek.coffeegb.events.EventBus
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import kotlin.concurrent.Volatile
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class TcpServer(private val eventBus: EventBus) : Runnable {
   @Volatile private var doStop = false

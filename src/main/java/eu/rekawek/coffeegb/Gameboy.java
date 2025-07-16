@@ -11,7 +11,10 @@ import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
-import eu.rekawek.coffeegb.memory.*;
+import eu.rekawek.coffeegb.memory.Dma;
+import eu.rekawek.coffeegb.memory.Hdma;
+import eu.rekawek.coffeegb.memory.Mmu;
+import eu.rekawek.coffeegb.memory.Ram;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
@@ -24,269 +27,274 @@ import java.util.List;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
-  public static final int TICKS_PER_SEC = 4_194_304;
+    public static final int TICKS_PER_SEC = 4_194_304;
 
-  private final Cartridge rom;
+    private final Cartridge rom;
 
-  private final Gpu gpu;
+    private final Gpu gpu;
 
-  private final Mmu mmu;
+    private final Mmu mmu;
 
-  private final Ram oamRam;
+    private final Ram oamRam;
 
-  private final Cpu cpu;
+    private final Cpu cpu;
 
-  private final InterruptManager interruptManager;
+    private final InterruptManager interruptManager;
 
-  private final Timer timer;
+    private final Timer timer;
 
-  private final Dma dma;
+    private final Dma dma;
 
-  private final Hdma hdma;
+    private final Hdma hdma;
 
-  private final Display display;
+    private final Display display;
 
-  private final Sound sound;
+    private final Sound sound;
 
-  private final SerialPort serialPort;
+    private final SerialPort serialPort;
 
-  private final Joypad joypad;
+    private final Joypad joypad;
 
-  private final boolean gbc;
+    private final boolean gbc;
 
-  private final SpeedMode speedMode;
+    private final SpeedMode speedMode;
 
-  private transient Console console;
+    private transient Console console;
 
-  private transient volatile boolean doStop;
+    private transient volatile boolean doStop;
 
-  private transient List<Runnable> tickListeners;
+    private transient List<Runnable> tickListeners;
 
-  private boolean requestedScreenRefresh;
+    private boolean requestedScreenRefresh;
 
-  private boolean lcdDisabled;
+    private boolean lcdDisabled;
 
-  private transient volatile boolean doPause;
+    private transient volatile boolean doPause;
 
-  private transient volatile boolean paused;
+    private transient volatile boolean paused;
 
-  public Gameboy(Cartridge rom) {
-    this.rom = rom;
-    gbc = rom.isGbc();
-    speedMode = new SpeedMode();
-    interruptManager = new InterruptManager(gbc);
-    timer = new Timer(interruptManager, speedMode);
-    mmu = new Mmu(gbc);
-    display = new Display(gbc);
+    public Gameboy(Cartridge rom) {
+        this.rom = rom;
+        gbc = rom.isGbc();
+        speedMode = new SpeedMode();
+        interruptManager = new InterruptManager(gbc);
+        timer = new Timer(interruptManager, speedMode);
+        mmu = new Mmu(gbc);
+        display = new Display(gbc);
 
-    oamRam = new Ram(0xfe00, 0x00a0);
-    dma = new Dma(mmu, oamRam, speedMode);
-    gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
-    hdma = new Hdma(mmu);
-    sound = new Sound(gbc);
-    joypad = new Joypad(interruptManager);
-    serialPort = new SerialPort(interruptManager, gbc, speedMode);
-    mmu.addAddressSpace(rom);
-    mmu.addAddressSpace(gpu);
-    mmu.addAddressSpace(joypad);
-    mmu.addAddressSpace(interruptManager);
-    mmu.addAddressSpace(serialPort);
-    mmu.addAddressSpace(timer);
-    mmu.addAddressSpace(dma);
-    mmu.addAddressSpace(sound);
+        oamRam = new Ram(0xfe00, 0x00a0);
+        dma = new Dma(mmu, oamRam, speedMode);
+        gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
+        hdma = new Hdma(mmu);
+        sound = new Sound(gbc);
+        joypad = new Joypad(interruptManager);
+        serialPort = new SerialPort(interruptManager, gbc, speedMode);
+        mmu.addAddressSpace(rom);
+        mmu.addAddressSpace(gpu);
+        mmu.addAddressSpace(joypad);
+        mmu.addAddressSpace(interruptManager);
+        mmu.addAddressSpace(serialPort);
+        mmu.addAddressSpace(timer);
+        mmu.addAddressSpace(dma);
+        mmu.addAddressSpace(sound);
 
-    if (gbc) {
-      mmu.addAddressSpace(speedMode);
-      mmu.addAddressSpace(hdma);
-    }
-    mmu.indexSpaces();
+        if (gbc) {
+            mmu.addAddressSpace(speedMode);
+            mmu.addAddressSpace(hdma);
+        }
+        mmu.indexSpaces();
 
-    cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
+        cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
 
-    interruptManager.disableInterrupts(false);
-    if (!rom.isUseBootstrap()) {
-      initRegs();
-    }
-  }
-
-  public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
-    this.console = console;
-    this.tickListeners = new ArrayList<>();
-    if (console != null) {
-      console.setGameboy(this);
+        interruptManager.disableInterrupts(false);
+        if (!rom.isUseBootstrap()) {
+            initRegs();
+        }
     }
 
-    joypad.init(eventBus);
-    display.init(eventBus);
-    sound.init(eventBus);
-    serialPort.init(serialEndpoint);
-  }
+    public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
+        this.console = console;
+        this.tickListeners = new ArrayList<>();
+        if (console != null) {
+            console.setGameboy(this);
+        }
 
-  private void initRegs() {
-    Registers r = cpu.getRegisters();
-
-    r.setAF(0x01b0);
-    if (gbc) {
-      r.setA(0x11);
-    }
-    r.setBC(0x0013);
-    r.setDE(0x00d8);
-    r.setHL(0x014d);
-    r.setSP(0xfffe);
-    r.setPC(0x0100);
-  }
-
-  public void run() {
-    doStop = false;
-    while (!doStop) {
-      if (doPause) {
-        haltIfNeeded();
-      }
-      tick();
-    }
-  }
-
-  private synchronized void haltIfNeeded() {
-    paused = true;
-    notifyAll();
-    while (doPause && !doStop) {
-      try {
-        wait(10);
-      } catch (InterruptedException e) {
-        throw new RuntimeException(e);
-      }
-    }
-    paused = false;
-  }
-
-  public synchronized void stop() {
-    doStop = true;
-    notifyAll();
-  }
-
-  public void tick() {
-    Gpu.Mode newMode = tickSubsystems();
-    if (newMode != null) {
-      hdma.onGpuUpdate(newMode);
+        joypad.init(eventBus);
+        display.init(eventBus);
+        sound.init(eventBus);
+        serialPort.init(serialEndpoint);
     }
 
-    if (!lcdDisabled && !gpu.isLcdEnabled()) {
-      lcdDisabled = true;
-      display.frameIsReady();
-      hdma.onLcdSwitch(false);
-    } else if (newMode == Gpu.Mode.VBlank) {
-      requestedScreenRefresh = true;
-      display.frameIsReady();
+    private void initRegs() {
+        Registers r = cpu.getRegisters();
+
+        r.setAF(0x01b0);
+        if (gbc) {
+            r.setA(0x11);
+        }
+        r.setBC(0x0013);
+        r.setDE(0x00d8);
+        r.setHL(0x014d);
+        r.setSP(0xfffe);
+        r.setPC(0x0100);
     }
 
-    if (lcdDisabled && gpu.isLcdEnabled()) {
-      lcdDisabled = false;
-      hdma.onLcdSwitch(true);
-    } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
-      requestedScreenRefresh = false;
+    public void run() {
+        doStop = false;
+        while (!doStop) {
+            if (doPause) {
+                haltIfNeeded();
+            }
+            tick();
+        }
     }
-    if (console != null) {
-      console.tick();
+
+    private synchronized void haltIfNeeded() {
+        paused = true;
+        notifyAll();
+        while (doPause && !doStop) {
+            try {
+                wait(10);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        paused = false;
     }
-    tickListeners.forEach(Runnable::run);
-  }
 
-  private Gpu.Mode tickSubsystems() {
-    timer.tick();
-    if (hdma.isTransferInProgress()) {
-      hdma.tick();
-    } else {
-      cpu.tick();
+    public synchronized void stop() {
+        doStop = true;
+        notifyAll();
     }
-    dma.tick();
-    sound.tick();
-    serialPort.tick();
-    return gpu.tick();
-  }
 
-  public AddressSpace getAddressSpace() {
-    return mmu;
-  }
+    public void tick() {
+        Gpu.Mode newMode = tickSubsystems();
+        if (newMode != null) {
+            hdma.onGpuUpdate(newMode);
+        }
 
-  public Cpu getCpu() {
-    return cpu;
-  }
+        if (!lcdDisabled && !gpu.isLcdEnabled()) {
+            lcdDisabled = true;
+            display.frameIsReady();
+            hdma.onLcdSwitch(false);
+        } else if (newMode == Gpu.Mode.VBlank) {
+            requestedScreenRefresh = true;
+            display.frameIsReady();
+        }
 
-  public SpeedMode getSpeedMode() {
-    return speedMode;
-  }
-
-  public Gpu getGpu() {
-    return gpu;
-  }
-
-  public void registerTickListener(Runnable tickListener) {
-    tickListeners.add(tickListener);
-  }
-
-  public void unregisterTickListener(Runnable tickListener) {
-    tickListeners.remove(tickListener);
-  }
-
-  public Sound getSound() {
-    return sound;
-  }
-
-  public synchronized void pause() {
-    doPause = true;
-    while (!paused && !doStop) {
-      try {
-        wait(10);
-      } catch (InterruptedException e) {
-        throw new RuntimeException(e);
-      }
+        if (lcdDisabled && gpu.isLcdEnabled()) {
+            lcdDisabled = false;
+            hdma.onLcdSwitch(true);
+        } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
+            requestedScreenRefresh = false;
+        }
+        if (console != null) {
+            console.tick();
+        }
+        tickListeners.forEach(Runnable::run);
     }
-  }
 
-  public synchronized void resume() {
-    doPause = false;
-    notifyAll();
-    while (paused && !doStop) {
-      try {
-        wait(10);
-      } catch (InterruptedException e) {
-        throw new RuntimeException(e);
-      }
+    private Gpu.Mode tickSubsystems() {
+        timer.tick();
+        if (hdma.isTransferInProgress()) {
+            hdma.tick();
+        } else {
+            cpu.tick();
+        }
+        dma.tick();
+        sound.tick();
+        serialPort.tick();
+        return gpu.tick();
     }
-  }
 
-  public boolean isPaused() {
-    return paused;
-  }
-
-  @Override
-  public Memento<Gameboy> saveToMemento() {
-    return new GameboyMemento(gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
-  }
-
-  @Override
-  public void restoreFromMemento(Memento<Gameboy> memento) {
-    if (!(memento instanceof GameboyMemento mem)) {
-      throw new IllegalArgumentException();
+    public AddressSpace getAddressSpace() {
+        return mmu;
     }
-    gpu.restoreFromMemento(mem.gpuMemento());
-    mmu.restoreFromMemento(mem.mmuMemento());
-    oamRam.restoreFromMemento(mem.oamRamMemento());
-    cpu.restoreFromMemento(mem.cpuMemento());
-    interruptManager.restoreFromMemento(mem.interruptManagerMemento());
-    timer.restoreFromMemento(mem.timerMemento());
-    dma.restoreFromMemento(mem.dmaMemento());
-    hdma.restoreFromMemento(mem.hdmaMemento());
-    display.restoreFromMemento(mem.displayMemento());
-    sound.restoreFromMemento(mem.soundMemento());
-    serialPort.restoreFromMemento(mem.serialPortMemento());
-    joypad.restoreFromMemento(mem.joypadMemento());
-    speedMode.restoreFromMemento(mem.speedModeMemento());
-    requestedScreenRefresh = mem.requestScreenRefresh();
-    lcdDisabled = mem.lcdDisabled();
-  }
 
-  private record GameboyMemento(
-      Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento, Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento, Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento, Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento, Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento, Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento, boolean requestScreenRefresh, boolean lcdDisabled)
-      implements Memento<Gameboy> {}
+    public Cpu getCpu() {
+        return cpu;
+    }
+
+    public SpeedMode getSpeedMode() {
+        return speedMode;
+    }
+
+    public Gpu getGpu() {
+        return gpu;
+    }
+
+    public void registerTickListener(Runnable tickListener) {
+        tickListeners.add(tickListener);
+    }
+
+    public void unregisterTickListener(Runnable tickListener) {
+        tickListeners.remove(tickListener);
+    }
+
+    public Sound getSound() {
+        return sound;
+    }
+
+    public synchronized void pause() {
+        doPause = true;
+        while (!paused && !doStop) {
+            try {
+                wait(10);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    public synchronized void resume() {
+        doPause = false;
+        notifyAll();
+        while (paused && !doStop) {
+            try {
+                wait(10);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    public boolean isPaused() {
+        return paused;
+    }
+
+    @Override
+    public Memento<Gameboy> saveToMemento() {
+        return new GameboyMemento(gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<Gameboy> memento) {
+        if (!(memento instanceof GameboyMemento mem)) {
+            throw new IllegalArgumentException();
+        }
+        gpu.restoreFromMemento(mem.gpuMemento());
+        mmu.restoreFromMemento(mem.mmuMemento());
+        oamRam.restoreFromMemento(mem.oamRamMemento());
+        cpu.restoreFromMemento(mem.cpuMemento());
+        interruptManager.restoreFromMemento(mem.interruptManagerMemento());
+        timer.restoreFromMemento(mem.timerMemento());
+        dma.restoreFromMemento(mem.dmaMemento());
+        hdma.restoreFromMemento(mem.hdmaMemento());
+        display.restoreFromMemento(mem.displayMemento());
+        sound.restoreFromMemento(mem.soundMemento());
+        serialPort.restoreFromMemento(mem.serialPortMemento());
+        joypad.restoreFromMemento(mem.joypadMemento());
+        speedMode.restoreFromMemento(mem.speedModeMemento());
+        requestedScreenRefresh = mem.requestScreenRefresh();
+        lcdDisabled = mem.lcdDisabled();
+    }
+
+    private record GameboyMemento(
+            Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento, Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
+            Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento, Memento<Dma> dmaMemento,
+            Memento<Hdma> hdmaMemento, Memento<Display> displayMemento, Memento<Sound> soundMemento,
+            Memento<SerialPort> serialPortMemento, Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
+            boolean requestScreenRefresh, boolean lcdDisabled)
+            implements Memento<Gameboy> {
+    }
 }

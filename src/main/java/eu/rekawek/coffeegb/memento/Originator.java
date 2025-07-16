@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.memento;
 
 public interface Originator<T> {
-  Memento<T> saveToMemento();
+    Memento<T> saveToMemento();
 
-  void restoreFromMemento(Memento<T> memento);
+    void restoreFromMemento(Memento<T> memento);
 }

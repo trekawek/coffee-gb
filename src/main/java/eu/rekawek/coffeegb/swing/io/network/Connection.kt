@@ -8,12 +8,12 @@ import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.WaitingForPeerEvent
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
 import eu.rekawek.coffeegb.swing.events.register
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,

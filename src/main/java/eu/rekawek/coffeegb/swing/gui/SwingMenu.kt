@@ -30,7 +30,14 @@ import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
 import java.awt.event.KeyEvent
 import java.io.File
-import javax.swing.*
+import javax.swing.JCheckBoxMenuItem
+import javax.swing.JFileChooser
+import javax.swing.JFrame
+import javax.swing.JMenu
+import javax.swing.JMenuBar
+import javax.swing.JMenuItem
+import javax.swing.JOptionPane
+import javax.swing.KeyStroke
 
 class SwingMenu(
     private val properties: EmulatorProperties,

@@ -14,15 +14,15 @@ import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.events.register
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
-import java.util.LinkedList
+import java.util.*
 import kotlin.reflect.KClass
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class LinkedSession(
     private val eventBus: EventBus,

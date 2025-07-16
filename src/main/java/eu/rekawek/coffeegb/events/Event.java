@@ -1,3 +1,4 @@
 package eu.rekawek.coffeegb.events;
 
-public interface Event {}
+public interface Event {
+}
