@@ -324,7 +324,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
         int[] operand = new int[2];
         operand[0] = this.operand[0];
         operand[1] = this.operand[1];
-        return new CpuMemento(registers.saveToMemento(), operand, currentOpcode.getOpcode(), operandIndex, opIndex, state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode);
+        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, currentOpcode.getOpcode(), operandIndex, opIndex, state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode);
     }
 
     @Override
@@ -333,10 +333,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
             throw new IllegalArgumentException("Invalid memento type");
         }
         this.registers.restoreFromMemento(mem.registersMemento);
+        this.opcode1 = mem.opcode1;
+        this.opcode2 = mem.opcode2;
         this.operand[0] = mem.operand[0];
         this.operand[1] = mem.operand[1];
-        this.currentOpcode = Opcodes.COMMANDS.get(mem.currentOpcode);
-        this.ops = currentOpcode.getOps();
         this.operandIndex = mem.operandIndex;
         this.opIndex = mem.opIndex;
         this.state = mem.state;
@@ -346,9 +346,13 @@ public class Cpu implements Serializable, Originator<Cpu> {
         this.requestedIrq = mem.requestedIrq;
         this.clockCycle = mem.clockCycle;
         this.haltBugMode = mem.haltBugMode;
+
+        this.currentOpcode = (opcode1 == 0xcb) ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1);
+        this.ops = (currentOpcode == null) ? null : currentOpcode.getOps();
     }
 
-    private record CpuMemento(Memento<Registers> registersMemento, int[] operand, int currentOpcode, int operandIndex,
+    private record CpuMemento(Memento<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
+                              int currentOpcode, int operandIndex,
                               int opIndex, State state, int opContext, int interruptFlag, int interruptEnabled,
                               InterruptManager.InterruptType requestedIrq, int clockCycle,
                               boolean haltBugMode) implements Memento<Cpu> {
