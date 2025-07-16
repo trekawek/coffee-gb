@@ -3,10 +3,14 @@ package eu.rekawek.coffeegb.timer;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+import eu.rekawek.coffeegb.memory.Ram;
+import eu.rekawek.coffeegb.memory.UndocumentedGbcRegisters;
 
 import java.io.Serializable;
 
-public class Timer implements AddressSpace, Serializable {
+public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
   private final SpeedMode speedMode;
 
@@ -113,4 +117,26 @@ public class Timer implements AddressSpace, Serializable {
     }
     throw new IllegalArgumentException();
   }
+
+  @Override
+  public Memento<Timer> saveToMemento() {
+    return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Timer> memento) {
+    if (!(memento instanceof TimerMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.div = mem.div;
+    this.tac = mem.tac;
+    this.tma = mem.tma;
+    this.tima = mem.tima;
+    this.previousBit = mem.previousBit;
+    this.overflow = mem.overflow;
+    this.ticksSinceOverflow = mem.ticksSinceOverflow;
+  }
+
+  public record TimerMemento(int div, int tac, int tma, int tima, boolean previousBit, boolean overflow, int ticksSinceOverflow) implements Memento<Timer> {}
+
 }

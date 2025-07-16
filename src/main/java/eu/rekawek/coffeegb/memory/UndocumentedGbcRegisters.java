@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class UndocumentedGbcRegisters implements AddressSpace, Serializable {
+public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Originator<UndocumentedGbcRegisters> {
 
   private final Ram ram = new Ram(0xff72, 6);
 
@@ -49,4 +51,20 @@ public class UndocumentedGbcRegisters implements AddressSpace, Serializable {
       throw new IllegalArgumentException();
     }
   }
+  @Override
+  public Memento<UndocumentedGbcRegisters> saveToMemento() {
+    return new UndocumentedGbcRegistersMemento(ram.saveToMemento(), xff6c);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<UndocumentedGbcRegisters> memento) {
+    if (!(memento instanceof UndocumentedGbcRegistersMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    ram.restoreFromMemento(mem.ramMemento);
+    xff6c = mem.xff6c;
+  }
+
+  public record UndocumentedGbcRegistersMemento(Memento<Ram> ramMemento, int xff6c) implements Memento<UndocumentedGbcRegisters> {}
+
 }

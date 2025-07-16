@@ -1,8 +1,11 @@
 package eu.rekawek.coffeegb.gpu;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 
-public class ColorPixelFifo implements PixelFifo, Serializable {
+public class ColorPixelFifo implements PixelFifo, Serializable, Originator<ColorPixelFifo> {
 
   private final IntQueue pixels = new IntQueue(16);
 
@@ -117,4 +120,24 @@ public class ColorPixelFifo implements PixelFifo, Serializable {
       return bgPalette.getPalette(palette)[color];
     }
   }
+
+  @Override
+  public Memento<ColorPixelFifo> saveToMemento() {
+    return new ColorPixelFifoMemento(
+            pixels.saveToMemento(), palettes.saveToMemento(), priorities.saveToMemento());
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<ColorPixelFifo> memento) {
+    if (!(memento instanceof ColorPixelFifoMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    pixels.restoreFromMemento(mem.pixels);
+    palettes.restoreFromMemento(mem.palettes);
+    priorities.restoreFromMemento(mem.priorities);
+  }
+
+  private record ColorPixelFifoMemento(
+          Memento<IntQueue> pixels, Memento<IntQueue> palettes, Memento<IntQueue> priorities)
+          implements Memento<ColorPixelFifo> {}
 }

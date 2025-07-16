@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.swing.emulator
 
 import eu.rekawek.coffeegb.Gameboy
+import eu.rekawek.coffeegb.memento.Memento
+import eu.rekawek.coffeegb.memory.cart.Cartridge
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -17,7 +19,7 @@ class SnapshotManager(private val rom: File) {
       gameboy.pause()
     }
     val snapshotFile = getSnapshotFile(slot)
-    ObjectOutputStream(FileOutputStream(snapshotFile)).use { it.writeObject(gameboy) }
+    ObjectOutputStream(FileOutputStream(snapshotFile)).use { it.writeObject(gameboy.saveToMemento()) }
     if (!originalPauseState) {
       gameboy.resume()
     }
@@ -28,7 +30,10 @@ class SnapshotManager(private val rom: File) {
     if (!snapshotFile.exists()) {
       return null
     }
-    return ObjectInputStream(FileInputStream(snapshotFile)).use { it.readObject() as Gameboy }
+    val memento = ObjectInputStream(FileInputStream(snapshotFile)).use { it.readObject() as Memento<Gameboy> }
+    val gameboy = Gameboy(Cartridge(rom))
+    gameboy.restoreFromMemento(memento)
+    return gameboy
   }
 
   private fun getSnapshotFile(slot: Int): File {

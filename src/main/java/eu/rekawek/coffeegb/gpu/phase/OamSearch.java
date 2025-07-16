@@ -4,17 +4,20 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.gpu.Lcdc;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
+import java.util.Arrays;
 
-public class OamSearch implements GpuPhase, Serializable {
+public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> {
 
   private enum State {
     READING_Y,
     READING_X
   }
 
-  public static class SpritePosition implements Serializable {
+  public static class SpritePosition implements Serializable, Originator<SpritePosition> {
 
     private int x;
 
@@ -50,6 +53,25 @@ public class OamSearch implements GpuPhase, Serializable {
     public void disable() {
       this.enabled = false;
     }
+
+    @Override
+    public Memento<SpritePosition> saveToMemento() {
+      return new SpritePositionMemento(x, y, address, enabled);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<SpritePosition> memento) {
+      if (!(memento instanceof SpritePositionMemento mem)) {
+        throw new IllegalArgumentException("Invalid memento type");
+      }
+      this.x = mem.x;
+      this.y = mem.y;
+      this.address = mem.address;
+      this.enabled = mem.enabled;
+    }
+
+    private record SpritePositionMemento(int x, int y, int address, boolean enabled)
+            implements Memento<SpritePosition> {}
   }
 
   private final AddressSpace oemRam;
@@ -122,4 +144,33 @@ public class OamSearch implements GpuPhase, Serializable {
   private static boolean between(int from, int x, int to) {
     return from <= x && x < to;
   }
+
+  @Override
+  public Memento<OamSearch> saveToMemento() {
+    Memento<?>[] spriteMementos =
+            Arrays.stream(sprites).map(SpritePosition::saveToMemento).toArray(Memento[]::new);
+    return new OamSearchMemento(spriteMementos, spritePosIndex, state, spriteY, spriteX, i);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<OamSearch> memento) {
+    if (!(memento instanceof OamSearchMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    if (this.sprites.length != mem.sprites.length) {
+      throw new IllegalArgumentException("Memento array length doesn't match");
+    }
+    for (int j = 0; j < sprites.length; j++) {
+      sprites[j].restoreFromMemento((Memento<SpritePosition>) mem.sprites[j]);
+    }
+    this.spritePosIndex = mem.spritePosIndex;
+    this.state = mem.state;
+    this.spriteY = mem.spriteY;
+    this.spriteX = mem.spriteX;
+    this.i = mem.i;
+  }
+
+  private record OamSearchMemento(
+          Memento<?>[] sprites, int spritePosIndex, State state, int spriteY, int spriteX, int i)
+          implements Memento<OamSearch> {}
 }

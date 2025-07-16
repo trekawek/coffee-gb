@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class InterruptManager implements AddressSpace, Serializable {
+public class InterruptManager implements AddressSpace, Serializable, Originator<InterruptManager> {
 
   public enum InterruptType {
     VBlank(0x0040),
@@ -130,4 +132,24 @@ public class InterruptManager implements AddressSpace, Serializable {
         return 0xff;
     }
   }
+
+  @Override
+  public Memento<InterruptManager> saveToMemento() {
+    return new InterruptManagerMemento(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts, pendingDisableInterrupts);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<InterruptManager> memento) {
+    if (!(memento instanceof InterruptManagerMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.ime = mem.ime;
+    this.interruptFlag = mem.interruptFlag;
+    this.interruptEnabled = mem.interruptEnabled;
+    this.pendingEnableInterrupts = mem.pendingEnableInterrupts;
+    this.pendingDisableInterrupts = mem.pendingDisableInterrupts;
+  }
+
+  private record InterruptManagerMemento(boolean ime, int interruptFlag, int interruptEnabled, int pendingEnableInterrupts, int pendingDisableInterrupts) implements Memento<InterruptManager> {}
+
 }

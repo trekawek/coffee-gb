@@ -1,12 +1,14 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-public class Lcdc implements AddressSpace, Serializable {
+public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
   private int value = 0x91;
 
@@ -69,5 +71,21 @@ public class Lcdc implements AddressSpace, Serializable {
 
   public int get() {
     return value;
+  }
+
+  @Override
+  public Memento<Lcdc> saveToMemento() {
+    return new LcdcMemento(value);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Lcdc> memento) {
+    if (!(memento instanceof LcdcMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.value = mem.value;
+  }
+
+  private record LcdcMemento(int value) implements Memento<Lcdc> {
   }
 }

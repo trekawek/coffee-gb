@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
-import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 

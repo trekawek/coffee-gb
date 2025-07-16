@@ -5,12 +5,16 @@ import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.Subscriber;
+import eu.rekawek.coffeegb.gpu.ColorPalette;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
-public class Joypad implements AddressSpace, Serializable {
+public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
 
   private final Set<Button> buttons = new CopyOnWriteArraySet<>();
   private final InterruptManager interruptManager;
@@ -53,5 +57,23 @@ public class Joypad implements AddressSpace, Serializable {
       }
     }
     return result;
+  }
+
+  @Override
+  public Memento<Joypad> saveToMemento() {
+    return new JoypadMemento(new HashSet<>(buttons), p1);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Joypad> memento) {
+    if (!(memento instanceof JoypadMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.buttons.clear();
+    this.buttons.addAll(mem.buttons);
+    this.p1 = mem.p1;
+  }
+
+  private record JoypadMemento(Set<Button> buttons, int p1) implements Memento<Joypad> {
   }
 }

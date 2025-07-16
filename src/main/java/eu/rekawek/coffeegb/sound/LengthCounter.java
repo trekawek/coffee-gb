@@ -1,10 +1,13 @@
 package eu.rekawek.coffeegb.sound;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 
 import static eu.rekawek.coffeegb.Gameboy.TICKS_PER_SEC;
 
-public class LengthCounter implements Serializable {
+public class LengthCounter implements Serializable, Originator<LengthCounter> {
 
   private final int DIVIDER = TICKS_PER_SEC / 256;
 
@@ -87,5 +90,23 @@ public class LengthCounter implements Serializable {
     this.enabled = true;
     this.i = 0;
     this.length = 0;
+  }
+
+  @Override
+  public Memento<LengthCounter> saveToMemento() {
+    return new LengthCounterMemento(length, i, enabled);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<LengthCounter> memento) {
+    if (!(memento instanceof LengthCounterMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.length = mem.length;
+    this.i = mem.i;
+    this.enabled = mem.enabled;
+  }
+
+  private record LengthCounterMemento(int length, long i, boolean enabled) implements Memento<LengthCounter> {
   }
 }

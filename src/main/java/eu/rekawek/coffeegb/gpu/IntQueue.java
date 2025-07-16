@@ -1,20 +1,21 @@
 package eu.rekawek.coffeegb.gpu;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 import java.util.NoSuchElementException;
 
-public class IntQueue implements Serializable {
+public class IntQueue implements Serializable, Originator<IntQueue> {
 
   private final int[] array;
 
   private int size;
 
-  private int offset = 0;
+  private int offset;
 
   public IntQueue(int capacity) {
     this.array = new int[capacity];
-    this.size = 0;
-    this.offset = 0;
   }
 
   public int size() {
@@ -58,5 +59,26 @@ public class IntQueue implements Serializable {
   public void clear() {
     size = 0;
     offset = 0;
+  }
+
+  @Override
+  public Memento<IntQueue> saveToMemento() {
+    return new IntQueueMemento(array.clone(), size, offset);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<IntQueue> memento) {
+    if (!(memento instanceof IntQueueMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    if (this.array.length != mem.array.length) {
+      throw new IllegalArgumentException("Memento array length doesn't match");
+    }
+    System.arraycopy(mem.array, 0, this.array, 0, this.array.length);
+    this.size = mem.size;
+    this.offset = mem.offset;
+  }
+
+  private record IntQueueMemento(int[] array, int size, int offset) implements Memento<IntQueue> {
   }
 }

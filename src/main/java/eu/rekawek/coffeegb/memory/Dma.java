@@ -2,10 +2,12 @@ package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class Dma implements AddressSpace, Serializable {
+public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
   private final AddressSpace addressSpace;
 
@@ -63,5 +65,26 @@ public class Dma implements AddressSpace, Serializable {
 
   public boolean isOamBlocked() {
     return restarted || (transferInProgress && ticks >= 5);
+  }
+
+  @Override
+  public Memento<Dma> saveToMemento() {
+    return new DmaMemento(transferInProgress, restarted, from, ticks, regValue);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Dma> memento) {
+    if (!(memento instanceof DmaMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.transferInProgress = mem.transferInProgress;
+    this.restarted = mem.restarted;
+    this.from = mem.from;
+    this.ticks = mem.ticks;
+    this.regValue = mem.regValue;
+  }
+
+  public record DmaMemento(boolean transferInProgress, boolean restarted, int from, int ticks,
+                           int regValue) implements Memento<Dma> {
   }
 }

@@ -2,13 +2,15 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.toSigned;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 
-public class Fetcher implements Serializable {
+public class Fetcher implements Serializable, Originator<Fetcher> {
 
   private enum State {
     READ_TILE_ID,
@@ -259,4 +261,84 @@ public class Fetcher implements Serializable {
     }
     return pixelLine;
   }
+
+
+  public void setSprite(SpritePosition sprite) {
+    this.sprite = sprite;
+  }
+
+  public int getSpriteOamIndex() {
+    return spriteOamIndex;
+  }
+
+  @Override
+  public Memento<Fetcher> saveToMemento() {
+    return new FetcherMemento(
+            pixelLine.clone(),
+            state,
+            fetchingDisabled,
+            mapAddress,
+            xOffset,
+            tileDataAddress,
+            tileIdSigned,
+            tileLine,
+            tileId,
+            tileAttributes.getValue(),
+            tileData1,
+            tileData2,
+            spriteTileLine,
+            spriteAttributes == null ? -1 : spriteAttributes.getValue(),
+            spriteOffset,
+            spriteOamIndex,
+            divider);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Fetcher> memento) {
+    if (!(memento instanceof FetcherMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+
+    System.arraycopy(mem.pixelLine, 0, this.pixelLine, 0, this.pixelLine.length);
+    this.state = mem.state;
+    this.fetchingDisabled = mem.fetchingDisabled;
+    this.mapAddress = mem.mapAddress;
+    this.xOffset = mem.xOffset;
+    this.tileDataAddress = mem.tileDataAddress;
+    this.tileIdSigned = mem.tileIdSigned;
+    this.tileLine = mem.tileLine;
+    this.tileId = mem.tileId;
+    this.tileAttributes = TileAttributes.valueOf(mem.tileAttributesValue);
+    this.tileData1 = mem.tileData1;
+    this.tileData2 = mem.tileData2;
+    this.spriteTileLine = mem.spriteTileLine;
+    if (mem.spriteAttributesValue != -1) {
+      this.spriteAttributes = TileAttributes.valueOf(mem.spriteAttributesValue);
+    } else {
+      this.spriteAttributes = null;
+    }
+    this.spriteOffset = mem.spriteOffset;
+    this.spriteOamIndex = mem.spriteOamIndex;
+    this.divider = mem.divider;
+  }
+
+  private record FetcherMemento(
+          int[] pixelLine,
+          State state,
+          boolean fetchingDisabled,
+          int mapAddress,
+          int xOffset,
+          int tileDataAddress,
+          boolean tileIdSigned,
+          int tileLine,
+          int tileId,
+          int tileAttributesValue,
+          int tileData1,
+          int tileData2,
+          int spriteTileLine,
+          int spriteAttributesValue,
+          int spriteOffset,
+          int spriteOamIndex,
+          int divider)
+          implements Memento<Fetcher> {}
 }

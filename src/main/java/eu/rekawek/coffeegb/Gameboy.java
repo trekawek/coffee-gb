@@ -9,6 +9,8 @@ import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.memory.*;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
@@ -20,15 +22,21 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
-public class Gameboy implements Runnable, Serializable {
+public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
   public static final int TICKS_PER_SEC = 4_194_304;
+
+  private final Cartridge rom;
 
   private final Gpu gpu;
 
   private final Mmu mmu;
 
+  private final Ram oamRam;
+
   private final Cpu cpu;
+
+  private final InterruptManager interruptManager;
 
   private final Timer timer;
 
@@ -63,14 +71,15 @@ public class Gameboy implements Runnable, Serializable {
   private transient volatile boolean paused;
 
   public Gameboy(Cartridge rom) {
+    this.rom = rom;
     gbc = rom.isGbc();
     speedMode = new SpeedMode();
-    InterruptManager interruptManager = new InterruptManager(gbc);
+    interruptManager = new InterruptManager(gbc);
     timer = new Timer(interruptManager, speedMode);
-    mmu = new Mmu();
+    mmu = new Mmu(gbc);
     display = new Display(gbc);
 
-    Ram oamRam = new Ram(0xfe00, 0x00a0);
+    oamRam = new Ram(0xfe00, 0x00a0);
     dma = new Dma(mmu, oamRam, speedMode);
     gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
     hdma = new Hdma(mmu);
@@ -86,17 +95,10 @@ public class Gameboy implements Runnable, Serializable {
     mmu.addAddressSpace(dma);
     mmu.addAddressSpace(sound);
 
-    mmu.addAddressSpace(new Ram(0xc000, 0x1000));
     if (gbc) {
       mmu.addAddressSpace(speedMode);
       mmu.addAddressSpace(hdma);
-      mmu.addAddressSpace(new GbcRam());
-      mmu.addAddressSpace(new UndocumentedGbcRegisters());
-    } else {
-      mmu.addAddressSpace(new Ram(0xd000, 0x1000));
     }
-    mmu.addAddressSpace(new Ram(0xff80, 0x7f));
-    mmu.addAddressSpace(new ShadowAddressSpace(mmu, 0xe000, 0xc000, 0x1e00));
     mmu.indexSpaces();
 
     cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
@@ -256,4 +258,35 @@ public class Gameboy implements Runnable, Serializable {
   public boolean isPaused() {
     return paused;
   }
+
+  @Override
+  public Memento<Gameboy> saveToMemento() {
+    return new GameboyMemento(gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Gameboy> memento) {
+    if (!(memento instanceof GameboyMemento mem)) {
+      throw new IllegalArgumentException();
+    }
+    gpu.restoreFromMemento(mem.gpuMemento());
+    mmu.restoreFromMemento(mem.mmuMemento());
+    oamRam.restoreFromMemento(mem.oamRamMemento());
+    cpu.restoreFromMemento(mem.cpuMemento());
+    interruptManager.restoreFromMemento(mem.interruptManagerMemento());
+    timer.restoreFromMemento(mem.timerMemento());
+    dma.restoreFromMemento(mem.dmaMemento());
+    hdma.restoreFromMemento(mem.hdmaMemento());
+    display.restoreFromMemento(mem.displayMemento());
+    sound.restoreFromMemento(mem.soundMemento());
+    serialPort.restoreFromMemento(mem.serialPortMemento());
+    joypad.restoreFromMemento(mem.joypadMemento());
+    speedMode.restoreFromMemento(mem.speedModeMemento());
+    requestedScreenRefresh = mem.requestScreenRefresh();
+    lcdDisabled = mem.lcdDisabled();
+  }
+
+  private record GameboyMemento(
+      Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento, Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento, Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento, Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento, Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento, Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento, boolean requestScreenRefresh, boolean lcdDisabled)
+      implements Memento<Gameboy> {}
 }

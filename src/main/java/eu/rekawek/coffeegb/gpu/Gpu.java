@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.gpu.phase.*;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.memory.Dma;
 import eu.rekawek.coffeegb.memory.Ram;
 
@@ -11,7 +13,7 @@ import java.io.Serializable;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
-public class Gpu implements AddressSpace, Serializable {
+public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
   public enum Mode {
     HBlank,
@@ -318,4 +320,92 @@ public class Gpu implements AddressSpace, Serializable {
   public Mode getMode() {
     return mode;
   }
+
+    @Override
+    public Memento<Gpu> saveToMemento() {
+        Memento<Ram> videoRam0Memento =
+                videoRam0 instanceof Ram ? ((Ram) videoRam0).saveToMemento() : null;
+        Memento<Ram> videoRam1Memento =
+                videoRam1 instanceof Ram ? ((Ram) videoRam1).saveToMemento() : null;
+
+        return new GpuMemento(
+                videoRam0Memento,
+                videoRam1Memento,
+                display.saveToMemento(),
+                lcdc.saveToMemento(),
+                bgPalette.saveToMemento(),
+                oamPalette.saveToMemento(),
+                hBlankPhase.saveToMemento(),
+                oamSearchPhase.saveToMemento(),
+                pixelTransferPhase.saveToMemento(),
+                vBlankPhase.saveToMemento(),
+                r.saveToMemento(),
+                lcdEnabled,
+                lcdEnabledDelay,
+                ticksInLine,
+                mode);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<Gpu> memento) {
+        if (!(memento instanceof GpuMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+
+        if (videoRam0 instanceof Ram) {
+            ((Ram) videoRam0).restoreFromMemento(mem.videoRam0Memento);
+        }
+        if (videoRam1 instanceof Ram) {
+            ((Ram) videoRam1).restoreFromMemento(mem.videoRam1Memento);
+        }
+
+        display.restoreFromMemento(mem.displayMemento);
+        lcdc.restoreFromMemento(mem.lcdcMemento);
+        bgPalette.restoreFromMemento(mem.bgPaletteMemento);
+        oamPalette.restoreFromMemento(mem.oamPaletteMemento);
+        hBlankPhase.restoreFromMemento(mem.hBlankPhaseMemento);
+        oamSearchPhase.restoreFromMemento(mem.oamSearchPhaseMemento);
+        pixelTransferPhase.restoreFromMemento(mem.pixelTransferPhaseMemento);
+        vBlankPhase.restoreFromMemento(mem.vBlankPhaseMemento);
+        r.restoreFromMemento(mem.rMemento);
+
+        this.lcdEnabled = mem.lcdEnabled;
+        this.lcdEnabledDelay = mem.lcdEnabledDelay;
+        this.ticksInLine = mem.ticksInLine;
+        this.mode = mem.mode;
+
+        switch (mode) {
+            case OamSearch:
+                phase = oamSearchPhase;
+                break;
+            case PixelTransfer:
+                phase = pixelTransferPhase;
+                break;
+            case HBlank:
+                phase = hBlankPhase;
+                break;
+            case VBlank:
+                phase = vBlankPhase;
+                break;
+        }
+    }
+
+    private record GpuMemento(
+            Memento<Ram> videoRam0Memento,
+            Memento<Ram> videoRam1Memento,
+            Memento<Display> displayMemento,
+            Memento<Lcdc> lcdcMemento,
+            Memento<ColorPalette> bgPaletteMemento,
+            Memento<ColorPalette> oamPaletteMemento,
+            Memento<HBlankPhase> hBlankPhaseMemento,
+            Memento<OamSearch> oamSearchPhaseMemento,
+            Memento<PixelTransfer> pixelTransferPhaseMemento,
+            Memento<VBlankPhase> vBlankPhaseMemento,
+            Memento<GpuRegisterValues> rMemento,
+            boolean lcdEnabled,
+            int lcdEnabledDelay,
+            int ticksInLine,
+            Mode mode)
+            implements Memento<Gpu> {
+    }
 }

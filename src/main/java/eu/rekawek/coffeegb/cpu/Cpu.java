@@ -1,17 +1,23 @@
 package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.controller.Button;
+import eu.rekawek.coffeegb.controller.Joypad;
 import eu.rekawek.coffeegb.cpu.op.Op;
 import eu.rekawek.coffeegb.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.gpu.GpuRegister;
 import eu.rekawek.coffeegb.gpu.SpriteBug;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
-public class Cpu implements Serializable {
+public class Cpu implements Serializable, Originator<Cpu> {
 
   public enum State {
     OPCODE,
@@ -316,4 +322,40 @@ public class Cpu implements Serializable {
   Opcode getCurrentOpcode() {
     return currentOpcode;
   }
+
+  @Override
+  public Memento<Cpu> saveToMemento() {
+    int[] operand = new int[2];
+    operand[0] = this.operand[0];
+    operand[1] = this.operand[1];
+    return new CpuMemento(registers.saveToMemento(), operand, currentOpcode.getOpcode(), operandIndex, opIndex, state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Cpu> memento) {
+    if (!(memento instanceof CpuMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.registers.restoreFromMemento(mem.registersMemento);
+    this.operand[0] = mem.operand[0];
+    this.operand[1] = mem.operand[1];
+    this.currentOpcode = Opcodes.COMMANDS.get(mem.currentOpcode);
+    this.ops = currentOpcode.getOps();
+    this.operandIndex = mem.operandIndex;
+    this.opIndex = mem.opIndex;
+    this.state = mem.state;
+    this.opContext = mem.opContext;
+    this.interruptFlag = mem.interruptFlag;
+    this.interruptEnabled = mem.interruptEnabled;
+    this.requestedIrq = mem.requestedIrq;
+    this.clockCycle = mem.clockCycle;
+    this.haltBugMode = mem.haltBugMode;
+  }
+
+  private record CpuMemento(Memento<Registers> registersMemento, int[] operand, int currentOpcode, int operandIndex,
+                            int opIndex, State state, int opContext, int interruptFlag, int interruptEnabled,
+                            InterruptManager.InterruptType requestedIrq, int clockCycle,
+                            boolean haltBugMode) implements Memento<Cpu> {
+  }
+
 }

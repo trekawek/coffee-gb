@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class GpuRegisterValues implements AddressSpace, Serializable {
+public class GpuRegisterValues implements AddressSpace, Serializable, Originator<GpuRegisterValues> {
 
   private static final GpuRegister[] ADDRESS_TO_REG = new GpuRegister[0xf];
 
@@ -65,4 +67,23 @@ public class GpuRegisterValues implements AddressSpace, Serializable {
       return null;
     }
   }
+  
+    @Override
+    public Memento<GpuRegisterValues> saveToMemento() {
+        return new GpuRegisterValuesMemento(values.clone());
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<GpuRegisterValues> memento) {
+        if (!(memento instanceof GpuRegisterValuesMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.values.length != mem.values.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        System.arraycopy(mem.values, 0, this.values, 0, this.values.length);
+    }
+
+    private record GpuRegisterValuesMemento(int[] values) implements Memento<GpuRegisterValues> {
+    }
 }

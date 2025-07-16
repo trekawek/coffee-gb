@@ -3,12 +3,14 @@ package eu.rekawek.coffeegb.gpu.phase;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.gpu.phase.OamSearch.SpritePosition;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
-public class PixelTransfer implements GpuPhase, Serializable {
+public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTransfer> {
 
   private final PixelFifo fifo;
 
@@ -150,4 +152,56 @@ public class PixelTransfer implements GpuPhase, Serializable {
         lcdc.isBgWindowTileDataSigned(),
         winY % 0x08);
   }
+
+
+  @Override
+  public Memento<PixelTransfer> saveToMemento() {
+    Memento<?> fifoMemento = null;
+    if (fifo instanceof DmgPixelFifo) {
+      fifoMemento = ((DmgPixelFifo) fifo).saveToMemento();
+    } else if (fifo instanceof ColorPixelFifo) {
+      fifoMemento = ((ColorPixelFifo) fifo).saveToMemento();
+    }
+
+    return new PixelTransferMemento(
+            fetcher.saveToMemento(),
+            fifoMemento,
+            droppedPixels,
+            x,
+            window,
+            windowLineCounter);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<PixelTransfer> memento) {
+    if (!(memento instanceof PixelTransferMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+
+    fetcher.restoreFromMemento(mem.fetcherMemento);
+
+    if (fifo instanceof DmgPixelFifo && mem.fifoMemento != null) {
+      ((DmgPixelFifo) fifo).restoreFromMemento((Memento<DmgPixelFifo>) mem.fifoMemento);
+    } else if (fifo instanceof ColorPixelFifo && mem.fifoMemento != null) {
+      ((ColorPixelFifo) fifo).restoreFromMemento((Memento<ColorPixelFifo>) mem.fifoMemento);
+    }
+
+    if (fetcher.spriteInProgress()) {
+      fetcher.setSprite(sprites[fetcher.getSpriteOamIndex()]);
+    }
+
+    this.droppedPixels = mem.droppedPixels;
+    this.x = mem.x;
+    this.window = mem.window;
+    this.windowLineCounter = mem.windowLineCounter;
+  }
+
+  private record PixelTransferMemento(
+          Memento<Fetcher> fetcherMemento,
+          Memento<?> fifoMemento,
+          int droppedPixels,
+          int x,
+          boolean window,
+          int windowLineCounter)
+          implements Memento<PixelTransfer> {}
 }

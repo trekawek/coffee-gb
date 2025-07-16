@@ -1,8 +1,11 @@
 package eu.rekawek.coffeegb.sound;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 
-public class Lfsr implements Serializable {
+public class Lfsr implements Serializable, Originator<Lfsr> {
 
   private int lfsr;
 
@@ -31,4 +34,19 @@ public class Lfsr implements Serializable {
   int getValue() {
     return lfsr;
   }
+
+  @Override
+  public Memento<Lfsr> saveToMemento() {
+    return new LfsrMemento(lfsr);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Lfsr> memento) {
+    if (!(memento instanceof LfsrMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.lfsr = mem.lfsr;
+  }
+
+  public record LfsrMemento(int lfsr) implements Memento<Lfsr> {}
 }

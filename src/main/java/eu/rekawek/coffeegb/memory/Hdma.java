@@ -2,10 +2,12 @@ package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.gpu.Gpu;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class Hdma implements AddressSpace, Serializable {
+public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
   private static final int HDMA1 = 0xff51;
 
@@ -19,7 +21,7 @@ public class Hdma implements AddressSpace, Serializable {
 
   private final AddressSpace addressSpace;
 
-  private final AddressSpace hdma1234 = new Ram(HDMA1, 4);
+  private final Ram hdma1234 = new Ram(HDMA1, 4);
 
   private Gpu.Mode gpuMode;
 
@@ -121,4 +123,30 @@ public class Hdma implements AddressSpace, Serializable {
   private void stopTransfer() {
     transferInProgress = false;
   }
+
+  @Override
+  public Memento<Hdma> saveToMemento() {
+    return new HdmaMemento(hdma1234.saveToMemento(), gpuMode, transferInProgress, hblankTransfer, lcdEnabled, length, src, dst, tick);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Hdma> memento) {
+    if (!(memento instanceof HdmaMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    hdma1234.restoreFromMemento(mem.hdma1234);
+    this.gpuMode = mem.gpuMode;
+    this.transferInProgress = mem.transferInProgress;
+    this.hblankTransfer = mem.hblankTransfer;
+    this.lcdEnabled = mem.lcdEnabled;
+    this.length = mem.length;
+    this.src = mem.src;
+    this.dst = mem.dst;
+    this.tick = mem.tick;
+  }
+
+  public record HdmaMemento(Memento<Ram> hdma1234, Gpu.Mode gpuMode, boolean transferInProgress, boolean hblankTransfer, boolean lcdEnabled, int length, int src, int dst, int tick
+  ) implements Memento<Hdma> {
+  }
+
 }

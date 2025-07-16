@@ -49,4 +49,8 @@ public class TileAttributes implements Serializable {
   public int getColorPaletteIndex() {
     return value & 0x07;
   }
+
+  public int getValue() {
+    return value;
+  }
 }

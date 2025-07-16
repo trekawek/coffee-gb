@@ -2,10 +2,12 @@ package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class Display implements Serializable {
+public class Display implements Serializable, Originator<Display> {
 
   public static final int DISPLAY_WIDTH = 160;
 
@@ -67,6 +69,24 @@ public class Display implements Serializable {
     frameIsReady();
   }
 
+  @Override
+  public Memento<Display> saveToMemento() {
+    return new DisplayMemento(buffer.clone(), i, enabled);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Display> memento) {
+    if (!(memento instanceof DisplayMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    if (this.buffer.length != mem.buffer.length) {
+      throw new IllegalArgumentException("Memento array length doesn't match");
+    }
+    System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
+    this.i = mem.i;
+    this.enabled = mem.enabled;
+  }
+
   public record GbcFrameReadyEvent(int[] pixels) implements Event {
 
     public static int translateGbcRgb(int gbcRgb) {
@@ -102,4 +122,6 @@ public class Display implements Serializable {
       toRgb(dest, grayscale ? COLORS_GRAYSCALE : COLORS);
     }
   }
+
+  private record DisplayMemento(int[] buffer, int i, boolean enabled) implements Memento<Display> {}
 }

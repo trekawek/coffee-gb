@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class FrequencySweep implements Serializable {
+public class FrequencySweep implements Serializable, Originator<FrequencySweep> {
 
   private static final int DIVIDER = Gameboy.TICKS_PER_SEC / 128;
 
@@ -113,5 +115,31 @@ public class FrequencySweep implements Serializable {
 
   public boolean isEnabled() {
     return !overflow;
+  }
+
+  @Override
+  public Memento<FrequencySweep> saveToMemento() {
+    return new FrequencySweepMemento(period, negate, shift, timer, shadowFreq, nr13, nr14, i, overflow, counterEnabled, negging);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<FrequencySweep> memento) {
+    if (!(memento instanceof FrequencySweepMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.period = mem.period;
+    this.negate = mem.negate;
+    this.shift = mem.shift;
+    this.timer = mem.timer;
+    this.shadowFreq = mem.shadowFreq;
+    this.nr13 = mem.nr13;
+    this.nr14 = mem.nr14;
+    this.i = mem.i;
+    this.overflow = mem.overflow;
+    this.counterEnabled = mem.counterEnabled;
+    this.negging = mem.negging;
+  }
+
+  private record FrequencySweepMemento(int period, boolean negate, int shift, int timer, int shadowFreq, int nr13, int nr14, int i, boolean overflow, boolean counterEnabled, boolean negging) implements Memento<FrequencySweep> {
   }
 }

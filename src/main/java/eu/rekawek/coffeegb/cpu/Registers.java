@@ -1,10 +1,13 @@
 package eu.rekawek.coffeegb.cpu;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 
 import static eu.rekawek.coffeegb.cpu.BitUtils.*;
 
-public class Registers implements Serializable {
+public class Registers implements Serializable, Originator<Registers> {
   private int a, b, c, d, e, h, l;
 
   private int sp;
@@ -152,4 +155,28 @@ public class Registers implements Serializable {
         "AF=%04x, BC=%04x, DE=%04x, HL=%04x, SP=%04x, PC=%04x, %s",
         getAF(), getBC(), getDE(), getHL(), getSP(), getPC(), getFlags().toString());
   }
+
+  @Override
+  public Memento<Registers> saveToMemento() {
+    return new RegistersMemento(a, b, c, d, e, h, l, sp, pc, flags.getFlagsByte());
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Registers> memento) {
+    if (!(memento instanceof RegistersMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.a = mem.a;
+    this.b = mem.b;
+    this.c = mem.c;
+    this.d = mem.d;
+    this.e = mem.e;
+    this.h = mem.h;
+    this.l = mem.l;
+    this.sp = mem.sp;
+    this.pc = mem.pc;
+    this.flags.setFlagsByte(mem.flags);
+  }
+
+  private record RegistersMemento(int a, int b, int c, int d, int e, int h, int l, int sp, int pc, int flags) implements Memento<Registers> {}
 }

@@ -1,8 +1,11 @@
 package eu.rekawek.coffeegb.sound;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 
-public class PolynomialCounter implements Serializable {
+public class PolynomialCounter implements Serializable, Originator<PolynomialCounter> {
 
   private int shiftedDivisor;
 
@@ -59,4 +62,20 @@ public class PolynomialCounter implements Serializable {
       return false;
     }
   }
+
+  @Override
+  public Memento<PolynomialCounter> saveToMemento() {
+    return new PolynomialCounterMemento(shiftedDivisor, i);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<PolynomialCounter> memento) {
+    if (!(memento instanceof PolynomialCounterMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.shiftedDivisor = mem.shiftedDivisor;
+    this.i = mem.i;
+  }
+
+  private record PolynomialCounterMemento(int shiftedDivisor, int i) implements Memento<PolynomialCounter> {}
 }

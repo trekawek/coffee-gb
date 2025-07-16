@@ -4,10 +4,12 @@ import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class SerialPort implements AddressSpace, Serializable {
+public class SerialPort implements AddressSpace, Serializable, Originator<SerialPort> {
 
   private transient SerialEndpoint serialEndpoint;
 
@@ -105,4 +107,25 @@ public class SerialPort implements AddressSpace, Serializable {
     speed *= speedMode.getSpeedMode();
     serialEndpoint.startSending();
   }
+
+  @Override
+  public Memento<SerialPort> saveToMemento() {
+    return new SerialPortMemento(sb, sc, transferInProgress, divider, clockType, speed, receivedBits);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<SerialPort> memento) {
+    if (!(memento instanceof SerialPortMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.sb = mem.sb;
+    this.sc = mem.sc;
+    this.transferInProgress = mem.transferInProgress;
+    this.divider = mem.divider;
+    this.clockType = mem.clockType;
+    this.speed = mem.speed;
+    this.receivedBits = mem.receivedBits;
+  }
+
+  private record SerialPortMemento(int sb, int sc, boolean transferInProgress, int divider, ClockType clockType, int speed, int receivedBits) implements Memento<SerialPort> {}
 }

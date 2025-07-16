@@ -3,11 +3,13 @@ package eu.rekawek.coffeegb.sound;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.memory.Ram;
 
 import java.io.Serializable;
 
-public class Sound implements AddressSpace, Serializable {
+public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
   private static final int[] MASKS =
       new int[] {
@@ -19,7 +21,7 @@ public class Sound implements AddressSpace, Serializable {
 
   private final AbstractSoundMode[] allModes = new AbstractSoundMode[4];
 
-  private final AddressSpace r = new Ram(0xff24, 0x03);
+  private final Ram r = new Ram(0xff24, 0x03);
 
   private final int[] channels = new int[4];
 
@@ -163,6 +165,38 @@ public class Sound implements AddressSpace, Serializable {
     overriddenEnabled[i] = enabled;
   }
 
+  @Override
+  public Memento<Sound> saveToMemento() {
+    var allModeMementos = new Memento[allModes.length];
+    for (int i = 0; i < allModes.length; i++) {
+      allModeMementos[i] = allModes[i].saveToMemento();
+    }
+    return new SoundMemento(allModeMementos, r.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone());
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Sound> memento) {
+    if (!(memento instanceof SoundMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    if (this.allModes.length != mem.allModeMementos.length) {
+      throw new IllegalArgumentException("Memento allModes length doesn't match");
+    }
+    if (this.channels.length != mem.channels.length) {
+      throw new IllegalArgumentException("Memento channels length doesn't match");
+    }
+    if (this.overriddenEnabled.length != mem.overriddenEnabled.length) {
+      throw new IllegalArgumentException("Memento overriddenEnabled length doesn't match");
+    }
+    for (int i = 0; i < allModes.length; i++) {
+      this.allModes[i].restoreFromMemento(mem.allModeMementos[i]);
+    }
+    this.r.restoreFromMemento(mem.ramMemento());
+    System.arraycopy(mem.channels, 0, this.channels, 0, this.channels.length);
+    this.enabled = mem.enabled();
+    System.arraycopy(mem.overriddenEnabled, 0, this.overriddenEnabled, 0, this.overriddenEnabled.length);
+  }
+
   public record SoundSampleEvent(byte left, byte right) implements Event {
     private static final SoundSampleEvent[][] SAMPLES = new SoundSampleEvent[0x80][];
 
@@ -181,4 +215,6 @@ public class Sound implements AddressSpace, Serializable {
   }
 
   public record SoundEnabledEvent(boolean enabled) implements Event {}
+
+  private record SoundMemento(Memento<AbstractSoundMode>[] allModeMementos, Memento<Ram> ramMemento, int[] channels, boolean enabled, boolean[] overriddenEnabled) implements Memento<Sound> {}
 }

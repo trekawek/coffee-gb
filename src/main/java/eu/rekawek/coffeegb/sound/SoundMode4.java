@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.sound;
 
+import eu.rekawek.coffeegb.memento.Memento;
+
 public class SoundMode4 extends AbstractSoundMode {
 
   private final VolumeEnvelope volumeEnvelope;
@@ -68,4 +70,23 @@ public class SoundMode4 extends AbstractSoundMode {
     super.setNr3(value);
     polynomialCounter.setNr43(value);
   }
+
+  @Override
+  public Memento<AbstractSoundMode> saveToMemento() {
+    return new SoundMode4Memento(super.saveToMemento(), volumeEnvelope.saveToMemento(), polynomialCounter.saveToMemento(), lastResult, lfsr.saveToMemento());
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
+    if (!(memento instanceof SoundMode4Memento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    super.restoreFromMemento(mem.abstractSoundMemento);
+    this.volumeEnvelope.restoreFromMemento(mem.volumeEnvelopeMemento);
+    this.polynomialCounter.restoreFromMemento(mem.polynomialCounterMemento);
+    this.lastResult = mem.lastResult;
+    this.lfsr.restoreFromMemento(mem.lfsrMemento);
+  }
+
+  private record SoundMode4Memento(Memento<AbstractSoundMode> abstractSoundMemento, Memento<VolumeEnvelope> volumeEnvelopeMemento, Memento<PolynomialCounter> polynomialCounterMemento, int lastResult, Memento<Lfsr> lfsrMemento) implements Memento<AbstractSoundMode> {}
 }

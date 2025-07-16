@@ -1,10 +1,13 @@
 package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.gpu.IntQueue;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class Ram implements AddressSpace, Serializable {
+public class Ram implements AddressSpace, Serializable, Originator<Ram> {
 
   private final int[] space;
 
@@ -36,4 +39,22 @@ public class Ram implements AddressSpace, Serializable {
     }
     return space[index];
   }
+
+  @Override
+  public Memento<Ram> saveToMemento() {
+    return new RamMemento(space.clone());
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<Ram> memento) {
+    if (!(memento instanceof RamMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    if (this.space.length != mem.space.length) {
+      throw new IllegalArgumentException("Memento space length doesn't match");
+    }
+    System.arraycopy(mem.space, 0, this.space, 0, this.space.length);
+  }
+
+  public record RamMemento(int[] space) implements Memento<Ram> {}
 }

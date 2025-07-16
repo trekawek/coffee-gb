@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public abstract class AbstractSoundMode implements AddressSpace, Serializable {
+public abstract class AbstractSoundMode implements AddressSpace, Serializable, Originator<AbstractSoundMode> {
 
   protected final int offset;
 
@@ -151,4 +153,27 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable {
     }
     return channelEnabled;
   }
+
+  @Override
+  public Memento<AbstractSoundMode> saveToMemento() {
+    return new AbstractSoundModeMemento(channelEnabled, dacEnabled, nr0, nr1, nr2, nr3, nr4, length.saveToMemento());
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
+    if (!(memento instanceof AbstractSoundModeMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.channelEnabled = mem.channelEnabled;
+    this.dacEnabled = mem.dacEnabled;
+    this.nr0 = mem.nr0;
+    this.nr1 = mem.nr1;
+    this.nr2 = mem.nr2;
+    this.nr3 = mem.nr3;
+    this.nr4 = mem.nr4;
+    this.length.restoreFromMemento(mem.lengthMemento);
+  }
+
+  private record AbstractSoundModeMemento(boolean channelEnabled, boolean dacEnabled, int nr0, int nr1, int nr2, int nr3, int nr4, Memento<LengthCounter> lengthMemento) implements Memento<AbstractSoundMode> {}
 }
+

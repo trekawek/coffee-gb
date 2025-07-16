@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class ColorPalette implements AddressSpace, Serializable {
+public class ColorPalette implements AddressSpace, Serializable, Originator<ColorPalette> {
 
   private final int indexAddr;
 
@@ -87,5 +89,35 @@ public class ColorPalette implements AddressSpace, Serializable {
         palettes[i][j] = 0x7fff;
       }
     }
+  }
+
+  @Override
+  public Memento<ColorPalette> saveToMemento() {
+    int[][] palettesCopy = new int[palettes.length][];
+    for (int i = 0; i < palettes.length; i++) {
+      palettesCopy[i] = palettes[i].clone();
+    }
+    return new ColorPaletteMemento(palettesCopy, index, autoIncrement);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<ColorPalette> memento) {
+    if (!(memento instanceof ColorPaletteMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    if (this.palettes.length != mem.palettes.length) {
+      throw new IllegalArgumentException("Memento array length doesn't match");
+    }
+    for (int i = 0; i < this.palettes.length; i++) {
+      if (this.palettes[i].length != mem.palettes[i].length) {
+        throw new IllegalArgumentException("Memento array length doesn't match");
+      }
+      System.arraycopy(mem.palettes[i], 0, this.palettes[i], 0, this.palettes[i].length);
+    }
+    this.index = mem.index;
+    this.autoIncrement = mem.autoIncrement;
+  }
+
+  private record ColorPaletteMemento(int[][] palettes, int index, boolean autoIncrement) implements Memento<ColorPalette> {
   }
 }

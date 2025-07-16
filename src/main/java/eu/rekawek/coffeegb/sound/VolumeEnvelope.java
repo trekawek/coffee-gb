@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class VolumeEnvelope implements Serializable {
+public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> {
 
   private int initialVolume;
 
@@ -60,4 +62,25 @@ public class VolumeEnvelope implements Serializable {
       return initialVolume;
     }
   }
+
+  @Override
+  public Memento<VolumeEnvelope> saveToMemento() {
+    return new VolumeEnvelopeMemento(initialVolume, envelopeDirection, sweep, volume, i, finished);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<VolumeEnvelope> memento) {
+    if (!(memento instanceof VolumeEnvelopeMemento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.initialVolume = mem.initialVolume;
+    this.envelopeDirection = mem.envelopeDirection;
+    this.sweep = mem.sweep;
+    this.volume = mem.volume;
+    this.i = mem.i;
+    this.finished = mem.finished;
+  }
+
+  private record VolumeEnvelopeMemento(int initialVolume, int envelopeDirection, int sweep, int volume, int i, boolean finished) implements Memento<VolumeEnvelope> {}
+
 }

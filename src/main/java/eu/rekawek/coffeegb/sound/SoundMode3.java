@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.sound;
 
+import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.Ram;
 
 public class SoundMode3 extends AbstractSoundMode {
@@ -185,4 +186,27 @@ public class SoundMode3 extends AbstractSoundMode {
   private void resetFreqDivider() {
     freqDivider = getFrequency() * 2;
   }
+
+  @Override
+  public Memento<AbstractSoundMode> saveToMemento() {
+    return new SoundMode3Memento(super.saveToMemento(), waveRam.saveToMemento(), freqDivider, lastOutput, i, ticksSinceRead, lastReadAddr, buffer, triggered);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
+    if (!(memento instanceof SoundMode3Memento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    super.restoreFromMemento(mem.abstractSoundMemento);
+    this.waveRam.restoreFromMemento(mem.waveRamMemento);
+    this.freqDivider = mem.freqDivider;
+    this.lastOutput = mem.lastOutput;
+    this.i = mem.i;
+    this.ticksSinceRead = mem.ticksSinceRead;
+    this.lastReadAddr = mem.lastReadAddr;
+    this.buffer = mem.buffer;
+    this.triggered = mem.triggered;
+  }
+
+  private record SoundMode3Memento(Memento<AbstractSoundMode> abstractSoundMemento, Memento<Ram> waveRamMemento, int freqDivider, int lastOutput, int i, int ticksSinceRead, int lastReadAddr, int buffer, boolean triggered) implements Memento<AbstractSoundMode> {}
 }

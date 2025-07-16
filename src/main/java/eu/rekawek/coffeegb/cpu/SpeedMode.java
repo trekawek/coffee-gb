@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.cpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
 import java.io.Serializable;
 
-public class SpeedMode implements AddressSpace, Serializable {
+public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMode> {
 
   private boolean currentSpeed;
 
@@ -38,4 +40,20 @@ public class SpeedMode implements AddressSpace, Serializable {
   public int getSpeedMode() {
     return currentSpeed ? 2 : 1;
   }
+
+  @Override
+  public Memento<SpeedMode> saveToMemento() {
+    return new SpeedModeMomento(currentSpeed, prepareSpeedSwitch);
+  }
+
+  @Override
+  public void restoreFromMemento(Memento<SpeedMode> memento) {
+    if (!(memento instanceof SpeedModeMomento mem)) {
+      throw new IllegalArgumentException("Invalid memento type");
+    }
+    this.currentSpeed = mem.currentSpeed;
+    this.prepareSpeedSwitch = mem.prepareSpeedSwitch;
+  }
+
+  private record SpeedModeMomento(boolean currentSpeed, boolean prepareSpeedSwitch) implements Memento<SpeedMode> {}
 }
