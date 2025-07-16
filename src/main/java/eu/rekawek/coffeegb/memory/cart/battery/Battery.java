@@ -1,8 +1,11 @@
 package eu.rekawek.coffeegb.memory.cart.battery;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 
-public interface Battery extends Serializable {
+public interface Battery extends Serializable, Originator<Battery> {
 
     void loadRam(int[] ram);
 
@@ -16,6 +19,15 @@ public interface Battery extends Serializable {
 
     Battery NULL_BATTERY =
             new Battery() {
+                @Override
+                public Memento<Battery> saveToMemento() {
+                    return null;
+                }
+
+                @Override
+                public void restoreFromMemento(Memento<Battery> memento) {
+                }
+
                 @Override
                 public void loadRam(int[] ram) {
                 }

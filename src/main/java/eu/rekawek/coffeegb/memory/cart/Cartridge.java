@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.memory.cart;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.memory.BootRom;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.battery.FileBattery;
@@ -19,7 +21,7 @@ import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-public class Cartridge implements AddressSpace, Serializable {
+public class Cartridge implements AddressSpace, Serializable, Originator<Cartridge> {
 
     public enum GameboyTypeFlag {
         UNIVERSAL,
@@ -271,5 +273,25 @@ public class Cartridge implements AddressSpace, Serializable {
             default:
                 throw new IllegalArgumentException("Unsupported RAM size: " + Integer.toHexString(id));
         }
+    }
+
+
+    @Override
+    public Memento<Cartridge> saveToMemento() {
+        return new CartridgeMemento(addressSpace.saveToMemento(), battery.saveToMemento(), dmgBoostrap);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<Cartridge> memento) {
+        if (!(memento instanceof CartridgeMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        this.addressSpace.restoreFromMemento(mem.memoryControllerMemento);
+        this.battery.restoreFromMemento(mem.batteryMemento);
+        this.dmgBoostrap = mem.dmgBoostrap;
+    }
+
+    private record CartridgeMemento(Memento<MemoryController> memoryControllerMemento, Memento<Battery> batteryMemento,
+                                    int dmgBoostrap) implements Memento<Cartridge> {
     }
 }

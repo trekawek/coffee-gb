@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
+import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.rtc.RealTimeClock;
@@ -170,5 +171,34 @@ public class Mbc3 implements MemoryController {
                 }
                 break;
         }
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento() {
+        return new Mbc3Memento(ram.clone(), clock.saveToMemento(), battery.saveToMemento(), selectedRamBank, selectedRomBank, ramWriteEnabled, latchClockReg, clockLatched);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<MemoryController> memento) {
+        if (!(memento instanceof Mbc3Memento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.ram.length != mem.ram.length) {
+            throw new IllegalArgumentException("Memento ram length doesn't match");
+        }
+        clock.restoreFromMemento(mem.clockMemento);
+        battery.restoreFromMemento(mem.batteryMemento);
+        System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
+        this.selectedRamBank = mem.selectedRamBank;
+        this.selectedRomBank = mem.selectedRomBank;
+        this.ramWriteEnabled = mem.ramWriteEnabled;
+        this.latchClockReg = mem.latchClockReg;
+        this.clockLatched = mem.clockLatched;
+    }
+
+    private record Mbc3Memento(int[] ram, Memento<RealTimeClock> clockMemento, Memento<Battery> batteryMemento,
+                               int selectedRamBank, int selectedRomBank,
+                               boolean ramWriteEnabled, int latchClockReg,
+                               boolean clockLatched) implements Memento<MemoryController> {
     }
 }

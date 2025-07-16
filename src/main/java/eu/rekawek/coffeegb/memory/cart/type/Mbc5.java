@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
+import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 
@@ -96,5 +97,31 @@ public class Mbc5 implements MemoryController {
 
     private int getRamAddress(int address) {
         return selectedRamBank * 0x2000 + (address - 0xa000);
+    }
+
+
+    @Override
+    public Memento<MemoryController> saveToMemento() {
+        return new Mbc5Memento(battery.saveToMemento(), ram.clone(), selectedRamBank, selectedRomBank, ramWriteEnabled, ramUpdated);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<MemoryController> memento) {
+        if (!(memento instanceof Mbc5Memento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.ram.length != mem.ram.length) {
+            throw new IllegalArgumentException("Memento ram length doesn't match");
+        }
+        battery.restoreFromMemento(mem.batteryMemento);
+        System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
+        this.selectedRamBank = mem.selectedRamBank;
+        this.selectedRomBank = mem.selectedRomBank;
+        this.ramWriteEnabled = mem.ramWriteEnabled;
+        this.ramUpdated = mem.ramUpdated;
+    }
+
+    private record Mbc5Memento(Memento<Battery> batteryMemento, int[] ram, int selectedRamBank, int selectedRomBank,
+                               boolean ramWriteEnabled, boolean ramUpdated) implements Memento<MemoryController> {
     }
 }

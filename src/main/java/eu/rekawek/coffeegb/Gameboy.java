@@ -264,7 +264,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+        return new GameboyMemento(rom.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
@@ -272,6 +272,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         if (!(memento instanceof GameboyMemento mem)) {
             throw new IllegalArgumentException();
         }
+        rom.restoreFromMemento(mem.cartridgeMemento());
         gpu.restoreFromMemento(mem.gpuMemento());
         mmu.restoreFromMemento(mem.mmuMemento());
         oamRam.restoreFromMemento(mem.oamRamMemento());
@@ -289,12 +290,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         lcdDisabled = mem.lcdDisabled();
     }
 
-    private record GameboyMemento(
-            Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento, Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
-            Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento, Memento<Dma> dmaMemento,
-            Memento<Hdma> hdmaMemento, Memento<Display> displayMemento, Memento<Sound> soundMemento,
-            Memento<SerialPort> serialPortMemento, Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
-            boolean requestScreenRefresh, boolean lcdDisabled)
-            implements Memento<Gameboy> {
+    private record GameboyMemento(Memento<Cartridge> cartridgeMemento, Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento,
+                                  Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
+                                  Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento,
+                                  Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
+                                  Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
+                                  Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
+                                  boolean requestScreenRefresh, boolean lcdDisabled) implements Memento<Gameboy> {
     }
 }

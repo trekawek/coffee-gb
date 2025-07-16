@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
+import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
 
@@ -27,5 +28,14 @@ public class Rom implements MemoryController {
         } else {
             return 0;
         }
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento() {
+        return null;
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<MemoryController> memento) {
     }
 }

@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
+import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import org.slf4j.Logger;
@@ -11,11 +12,7 @@ public class Mbc1 implements MemoryController {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mbc1.class);
 
-    private static final int[] NINTENDO_LOGO = {
-            0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
-            0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
-            0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
-    };
+    private static final int[] NINTENDO_LOGO = {0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E};
 
     private final int romBanks;
 
@@ -195,5 +192,34 @@ public class Mbc1 implements MemoryController {
             }
         }
         return logoCount > 1;
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento() {
+        return new Mbc1Memento(battery.saveToMemento(), ram.clone(), selectedRamBank, selectedRomBank, memoryModel, ramWriteEnabled, cachedRomBankFor0x0000, cachedRomBankFor0x4000, ramUpdated);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<MemoryController> memento) {
+        if (!(memento instanceof Mbc1Memento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.ram.length != mem.ram.length) {
+            throw new IllegalArgumentException("Memento ram length doesn't match");
+        }
+        battery.restoreFromMemento(mem.batteryMemento);
+        System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
+        this.selectedRamBank = mem.selectedRamBank;
+        this.selectedRomBank = mem.selectedRomBank;
+        this.memoryModel = mem.memoryModel;
+        this.ramWriteEnabled = mem.ramWriteEnabled;
+        this.cachedRomBankFor0x0000 = mem.cachedRomBankFor0x0000;
+        this.cachedRomBankFor0x4000 = mem.cachedRomBankFor0x4000;
+        this.ramUpdated = mem.ramUpdated;
+    }
+
+    private record Mbc1Memento(Memento<Battery> batteryMemento, int[] ram, int selectedRamBank, int selectedRomBank,
+                               int memoryModel, boolean ramWriteEnabled, int cachedRomBankFor0x0000,
+                               int cachedRomBankFor0x4000, boolean ramUpdated) implements Memento<MemoryController> {
     }
 }

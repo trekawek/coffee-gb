@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.memory.cart.battery;
 
+import eu.rekawek.coffeegb.memento.Memento;
 import org.apache.commons.io.IOUtils;
 
 import java.io.File;
@@ -112,5 +113,31 @@ public class FileBattery implements Battery {
         for (int i = 0; i < ram.length; i++) {
             ramBuffer[i] = (byte) (ram[i]);
         }
+    }
+
+    @Override
+    public Memento<Battery> saveToMemento() {
+        return new FileBatteryMemento(clockBuffer.clone(), ramBuffer.clone(), isClockPresent, isDirty);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<Battery> memento) {
+        if (!(memento instanceof FileBatteryMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.clockBuffer.length != mem.clockBuffer.length) {
+            throw new IllegalArgumentException("Memento clockBuffer length doesn't match");
+        }
+        if (this.ramBuffer.length != mem.ramBuffer.length) {
+            throw new IllegalArgumentException("Memento ramBuffer length doesn't match");
+        }
+        System.arraycopy(mem.clockBuffer, 0, this.clockBuffer, 0, this.clockBuffer.length);
+        System.arraycopy(mem.ramBuffer, 0, this.ramBuffer, 0, this.ramBuffer.length);
+        this.isClockPresent = mem.isClockPresent;
+        this.isDirty = mem.isDirty;
+    }
+
+    private record FileBatteryMemento(byte[] clockBuffer, byte[] ramBuffer, boolean isClockPresent,
+                                      boolean isDirty) implements Memento<Battery> {
     }
 }

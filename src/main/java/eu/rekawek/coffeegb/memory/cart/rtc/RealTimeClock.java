@@ -1,8 +1,11 @@
 package eu.rekawek.coffeegb.memory.cart.rtc;
 
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
 import java.io.Serializable;
 
-public class RealTimeClock implements Serializable {
+public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
 
     private final TimeSource timeSource;
 
@@ -150,5 +153,30 @@ public class RealTimeClock implements Serializable {
         clockData[10] = latchStart / 1000;
         unlatch();
         return clockData;
+    }
+
+    @Override
+    public Memento<RealTimeClock> saveToMemento() {
+        return new RealTimeClockMemento(offsetSec, clockStart, halt, latchStart, haltSeconds, haltMinutes, haltHours, haltDays);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<RealTimeClock> memento) {
+        if (!(memento instanceof RealTimeClockMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        this.offsetSec = mem.offsetSec;
+        this.clockStart = mem.clockStart;
+        this.halt = mem.halt;
+        this.latchStart = mem.latchStart;
+        this.haltSeconds = mem.haltSeconds;
+        this.haltMinutes = mem.haltMinutes;
+        this.haltHours = mem.haltHours;
+        this.haltDays = mem.haltDays;
+    }
+
+    private record RealTimeClockMemento(long offsetSec, long clockStart, boolean halt, long latchStart, int haltSeconds,
+                                        int haltMinutes, int haltHours,
+                                        int haltDays) implements Memento<RealTimeClock> {
     }
 }
