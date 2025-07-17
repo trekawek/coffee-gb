@@ -204,6 +204,6 @@ class SwingEmulator(
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(SwingEmulator::class.java)
 
-    const val SHOW_REMOTE_SCREEN = false
+    const val SHOW_REMOTE_SCREEN = true
   }
 }

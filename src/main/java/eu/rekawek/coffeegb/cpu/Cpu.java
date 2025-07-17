@@ -16,17 +16,7 @@ import java.util.List;
 public class Cpu implements Serializable, Originator<Cpu> {
 
     public enum State {
-        OPCODE,
-        EXT_OPCODE,
-        OPERAND,
-        RUNNING,
-        IRQ_READ_IF,
-        IRQ_READ_IE,
-        IRQ_PUSH_1,
-        IRQ_PUSH_2,
-        IRQ_JUMP,
-        STOPPED,
-        HALTED
+        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED
     }
 
     private final Registers registers;
@@ -67,12 +57,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private boolean haltBugMode;
 
-    public Cpu(
-            AddressSpace addressSpace,
-            InterruptManager interruptManager,
-            Gpu gpu,
-            SpeedMode speedMode,
-            Display display) {
+    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode, Display display) {
         this.registers = new Registers();
         this.addressSpace = addressSpace;
         this.interruptManager = interruptManager;
@@ -97,11 +82,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
             }
         }
 
-        if (state == State.IRQ_READ_IF
-                || state == State.IRQ_READ_IE
-                || state == State.IRQ_PUSH_1
-                || state == State.IRQ_PUSH_2
-                || state == State.IRQ_JUMP) {
+        if (state == State.IRQ_READ_IF || state == State.IRQ_READ_IE || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2 || state == State.IRQ_JUMP) {
             handleInterrupt();
             return;
         }
@@ -324,7 +305,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
         int[] operand = new int[2];
         operand[0] = this.operand[0];
         operand[1] = this.operand[1];
-        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, currentOpcode.getOpcode(), operandIndex, opIndex, state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode);
+        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex, state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode);
     }
 
     @Override
@@ -352,9 +333,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     private record CpuMemento(Memento<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
-                              int currentOpcode, int operandIndex,
-                              int opIndex, State state, int opContext, int interruptFlag, int interruptEnabled,
-                              InterruptManager.InterruptType requestedIrq, int clockCycle,
+                              int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
+                              int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
                               boolean haltBugMode) implements Memento<Cpu> {
     }
 

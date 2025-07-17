@@ -1,10 +1,13 @@
 package eu.rekawek.coffeegb.serial
 
 import eu.rekawek.coffeegb.cpu.BitUtils
+import eu.rekawek.coffeegb.memento.Memento
+import eu.rekawek.coffeegb.memento.Originator
 import java.io.Serializable
 import java.util.concurrent.atomic.AtomicInteger
 
-class Peer2PeerSerialEndpoint() : SerialEndpoint, Serializable {
+class Peer2PeerSerialEndpoint() :
+    SerialEndpoint, Serializable, Originator<Peer2PeerSerialEndpoint> {
 
   @Transient private lateinit var peer: Peer2PeerSerialEndpoint
 
@@ -57,4 +60,24 @@ class Peer2PeerSerialEndpoint() : SerialEndpoint, Serializable {
     }
     return bit
   }
+
+  override fun saveToMemento(): Memento<Peer2PeerSerialEndpoint> {
+    return Peer2PeerSerialEndpointMemento(sb, bitsReceived.get(), bitIndex)
+  }
+
+  override fun restoreFromMemento(memento: Memento<Peer2PeerSerialEndpoint>) {
+    if (memento is Peer2PeerSerialEndpointMemento) {
+      sb = memento.sb
+      bitsReceived.set(memento.bitsReceived)
+      bitIndex = memento.bitIndex
+    } else {
+      throw IllegalArgumentException("Invalid memento type")
+    }
+  }
+
+  private data class Peer2PeerSerialEndpointMemento(
+      val sb: Int,
+      val bitsReceived: Int,
+      val bitIndex: Int
+  ) : Memento<Peer2PeerSerialEndpoint>
 }

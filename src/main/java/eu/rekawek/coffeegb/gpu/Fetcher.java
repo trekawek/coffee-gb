@@ -283,7 +283,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 tileIdSigned,
                 tileLine,
                 tileId,
-                tileAttributes.getValue(),
+                tileAttributes == null ? -1 : tileAttributes.getValue(),
                 tileData1,
                 tileData2,
                 spriteTileLine,
@@ -308,7 +308,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         this.tileIdSigned = mem.tileIdSigned;
         this.tileLine = mem.tileLine;
         this.tileId = mem.tileId;
-        this.tileAttributes = TileAttributes.valueOf(mem.tileAttributesValue);
+        if (mem.tileAttributesValue != -1) {
+            this.tileAttributes = TileAttributes.valueOf(mem.tileAttributesValue);
+        }
         this.tileData1 = mem.tileData1;
         this.tileData2 = mem.tileData2;
         this.spriteTileLine = mem.spriteTileLine;

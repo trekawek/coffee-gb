@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ConnectedGameboyStartedEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.WaitingForPeerEvent
+import eu.rekawek.coffeegb.swing.emulator.session.Input
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
 import eu.rekawek.coffeegb.swing.events.register
@@ -39,14 +40,14 @@ class Connection(
       outputStream.write(0x03)
       val buf = ByteBuffer.allocate(10)
       buf.putLong(it.frame)
-      buf.put(it.pressedButtons.size.toByte())
-      buf.put(it.releasedButtons.size.toByte())
+      buf.put(it.input.pressedButtons.size.toByte())
+      buf.put(it.input.releasedButtons.size.toByte())
       outputStream.write(buf.array())
 
-      for (button in it.pressedButtons) {
+      for (button in it.input.pressedButtons) {
         outputStream.write(button.ordinal)
       }
-      for (button in it.releasedButtons) {
+      for (button in it.input.releasedButtons) {
         outputStream.write(button.ordinal)
       }
       outputStream.flush()
@@ -85,7 +86,7 @@ class Connection(
           val releasedCount = buf.get()
           val pressed = readButtons(pressedCount.toInt())
           val released = readButtons(releasedCount.toInt())
-          val event = LinkedSession.RemoteButtonStateEvent(frame, pressed, released)
+          val event = LinkedSession.RemoteButtonStateEvent(frame, Input(pressed, released))
           LOG.atInfo().log("Received message: {}", event)
           eventBus.post(event)
         }

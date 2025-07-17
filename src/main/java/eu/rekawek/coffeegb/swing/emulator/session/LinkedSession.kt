@@ -14,15 +14,10 @@ import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.events.register
+import java.io.File
+import kotlin.reflect.KClass
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.ObjectInputStream
-import java.io.ObjectOutputStream
-import java.util.*
-import kotlin.reflect.KClass
 
 class LinkedSession(
     private val eventBus: EventBus,
@@ -43,6 +38,8 @@ class LinkedSession(
 
   @Synchronized
   override fun start() {
+    val stateHistory = StateHistory(cart)
+
     val localMainEventBus = EventBus()
     val mainEventBus = eventBus.fork("main")
     funnel(
@@ -67,25 +64,28 @@ class LinkedSession(
 
     val mainPressedButtons = mutableSetOf<Button>()
     val mainReleasedButtons = mutableSetOf<Button>()
+    var mainInput = Input(emptyList(), emptyList())
+    var lastInput = mainInput
     mainEventBus.register<ButtonPressEvent> {
       synchronized(this) {
         mainPressedButtons.add(it.button)
         mainReleasedButtons.remove(it.button)
+        mainInput =
+            Input(mainPressedButtons.toList().sorted(), mainReleasedButtons.toList().sorted())
       }
     }
     mainEventBus.register<ButtonReleaseEvent> {
       synchronized(this) {
         mainPressedButtons.remove(it.button)
         mainReleasedButtons.add(it.button)
+        mainInput =
+            Input(mainPressedButtons.toList().sorted(), mainReleasedButtons.toList().sorted())
       }
     }
 
-    val remoteButtonEvents = LinkedList<RemoteButtonStateEvent>()
     secondaryEventBus.register<RemoteButtonStateEvent> {
-      synchronized(this) { remoteButtonEvents.addLast(it) }
+      synchronized(this) { stateHistory.addSecondaryInput(it.frame, it.input) }
     }
-
-    val states = LinkedList<SavedState>()
 
     doStop = false
     val ticker = TimingTicker()
@@ -93,102 +93,43 @@ class LinkedSession(
           var tick = 0
           var frame: Long = 0
           while (!doStop) {
-            mainGameboy.tick()
-            secondaryGameboy.tick()
-            if (tick == 69905) {
+            if (tick % StateHistory.TICKS_PER_FRAME == 0) {
               synchronized(this) {
-                val pastEvents = remoteButtonEvents.filter { it.frame <= frame }
-                remoteButtonEvents.removeAll(pastEvents.toSet())
-                for (e in pastEvents) {
-                  var stateIndex: Int = states.size
-                  if (e.frame < frame) {
-                    LOG.atInfo().log("Rewinding to frame ${e.frame}")
+                if (stateHistory.merge()) {
+                  val head = stateHistory.getHead()
+                  mainGameboy.restoreFromMemento(head.mainMemento)
+                  secondaryGameboy.restoreFromMemento(head.secondaryMemento)
+                  mainSerialEndpoint.restoreFromMemento(head.mainLinkMemento)
+                  secondarySerialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
+                  frame = head.frame
+                  LOG.atInfo().log("State merged to {}", frame)
+                } else {
+                  stateHistory.addState(
+                      frame,
+                      mainInput,
+                      mainGameboy.saveToMemento(),
+                      secondaryGameboy.saveToMemento(),
+                      mainSerialEndpoint.saveToMemento(),
+                      secondarySerialEndpoint.saveToMemento())
+                  frame++
+                }
 
-                    stateIndex = states.indexOfFirst { it.frame == e.frame }
-                    if (stateIndex == -1) {
-                      throw IllegalStateException(
-                          "Desynchronized; can't find frame ${e.frame}; last frame is ${states.lastOrNull()?.frame}")
-                    }
-                    val state = states[stateIndex]
-
-                    ObjectInputStream(ByteArrayInputStream(state.mainSnapshot)).use {
-                      mainGameboy = it.readObject() as Gameboy
-                      mainSerialEndpoint = it.readObject() as Peer2PeerSerialEndpoint
-                    }
-                    ObjectInputStream(ByteArrayInputStream(state.secondarySnapshot)).use {
-                      secondaryGameboy = it.readObject() as Gameboy
-                      secondarySerialEndpoint = it.readObject() as Peer2PeerSerialEndpoint
-                    }
-                    mainSerialEndpoint.init(secondarySerialEndpoint)
-                    mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
-                    secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, null)
-                  }
-
-                  LOG.atInfo().log("Applying buttons ${e.pressedButtons}, ${e.releasedButtons}")
-                  e.pressedButtons.forEach { localSecondaryEventBus.post(ButtonPressEvent(it)) }
-                  e.releasedButtons.forEach { localSecondaryEventBus.post(ButtonReleaseEvent(it)) }
-
-                  if (e.frame < frame) {
-                    (stateIndex until states.size).forEach { i ->
-                      val s = states[i]
-                      LOG.atInfo().log("Applying state ${s.frame}")
-
-                      s.mainPressedButtons.forEach { localMainEventBus.post(ButtonPressEvent(it)) }
-                      s.mainReleasedButtons.forEach {
-                        localMainEventBus.post(ButtonReleaseEvent(it))
-                      }
-                      repeat(69905) {
-                        mainGameboy.tick()
-                        secondaryGameboy.tick()
-                      }
-                      // TODO update past states
-                    }
-                  }
+                if (mainInput != lastInput) {
+                  mainEventBus.post(LocalButtonStateEvent(frame, mainInput))
+                  lastInput = mainInput
                 }
 
                 mainPressedButtons.forEach { localMainEventBus.post(ButtonPressEvent(it)) }
                 mainReleasedButtons.forEach { localMainEventBus.post(ButtonReleaseEvent(it)) }
 
-                val lastState = states.lastOrNull()
-                if (lastState == null ||
-                    mainPressedButtons != lastState.mainPressedButtons ||
-                    mainReleasedButtons != lastState.mainReleasedButtons) {
-                  mainEventBus.post(
-                      LocalButtonStateEvent(
-                          frame,
-                          mainPressedButtons.toList().sorted(),
-                          mainReleasedButtons.toList().sorted()))
-                }
-
-                val mainBos = ByteArrayOutputStream()
-                val secondaryBos = ByteArrayOutputStream()
-                ObjectOutputStream(mainBos).use {
-                  it.writeObject(mainGameboy)
-                  it.writeObject(mainSerialEndpoint)
-                }
-                ObjectOutputStream(secondaryBos).use {
-                  it.writeObject(secondaryGameboy)
-                  it.writeObject(secondarySerialEndpoint)
-                }
-
-                states.addLast(
-                    SavedState(
-                        frame,
-                        mainBos.toByteArray(),
-                        secondaryBos.toByteArray(),
-                        mainPressedButtons.toSet(),
-                        mainReleasedButtons.toSet()))
-                if (states.size > 60) {
-                  states.removeFirst()
-                }
-
                 mainPressedButtons.clear()
                 mainReleasedButtons.clear()
 
                 tick = 0
-                frame++
               }
             }
+            mainGameboy.tick()
+            secondaryGameboy.tick()
             ticker.run()
             tick++
           }
@@ -241,23 +182,13 @@ class LinkedSession(
     val LOG: Logger = LoggerFactory.getLogger(LinkedSession::class.java)
   }
 
-  data class SavedState(
-      val frame: Long,
-      val mainSnapshot: ByteArray,
-      val secondarySnapshot: ByteArray,
-      val mainPressedButtons: Set<Button>,
-      val mainReleasedButtons: Set<Button>,
-  )
-
   data class LocalButtonStateEvent(
       val frame: Long,
-      val pressedButtons: List<Button>,
-      val releasedButtons: List<Button>
+      val input: Input,
   ) : Event
 
   data class RemoteButtonStateEvent(
       val frame: Long,
-      val pressedButtons: List<Button>,
-      val releasedButtons: List<Button>
+      val input: Input,
   ) : Event
 }
