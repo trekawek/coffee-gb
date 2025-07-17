@@ -5,6 +5,8 @@ import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.HashSet;
@@ -13,9 +15,11 @@ import java.util.concurrent.CopyOnWriteArraySet;
 
 public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
 
+    private static final Logger LOG = LoggerFactory.getLogger(Joypad.class);
     private final Set<Button> buttons = new CopyOnWriteArraySet<>();
     private final InterruptManager interruptManager;
     private int p1;
+    private long tick;
 
     public Joypad(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;
@@ -27,12 +31,17 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     }
 
     private void onPress(Button button) {
+        LOG.atDebug().log("Button {} pressed in tick {}", button, tick);
         interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         buttons.add(button);
     }
 
     private void onRelease(Button button) {
         buttons.remove(button);
+    }
+
+    public void tick() {
+        tick++;
     }
 
     @Override
@@ -58,7 +67,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
 
     @Override
     public Memento<Joypad> saveToMemento() {
-        return new JoypadMemento(new HashSet<>(buttons), p1);
+        return new JoypadMemento(new HashSet<>(buttons), p1, tick);
     }
 
     @Override
@@ -69,8 +78,9 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         this.buttons.clear();
         this.buttons.addAll(mem.buttons);
         this.p1 = mem.p1;
+        this.tick = mem.tick;
     }
 
-    private record JoypadMemento(Set<Button> buttons, int p1) implements Memento<Joypad> {
+    private record JoypadMemento(Set<Button> buttons, int p1, long tick) implements Memento<Joypad> {
     }
 }

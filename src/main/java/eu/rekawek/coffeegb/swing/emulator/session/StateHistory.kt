@@ -7,11 +7,11 @@ import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.*
 import kotlin.math.min
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class StateHistory(private val rom: File) {
 
@@ -48,7 +48,7 @@ class StateHistory(private val rom: File) {
     }
     val baseFrame = min(patches.first().frame, states.last().frame)
     val toFrame = patches.last().frame
-    LOG.atInfo().log("Rebasing from $baseFrame to $toFrame")
+    LOG.atDebug().log("Rebasing from $baseFrame to $toFrame")
 
     val mainInputs = states.groupBy { it.frame }.mapValues { it.value.first().mainInput }
     val secondaryInputs = patches.groupBy { it.frame }.mapValues { it.value.first().secondaryInput }
@@ -95,7 +95,7 @@ class StateHistory(private val rom: File) {
         sendInput(mainInput, mainEventBus)
         val secondaryInput = secondaryInputs[i]
         if (secondaryInput != null) {
-          LOG.atInfo().log("Sending secondary input $secondaryInput on frame $i")
+          LOG.atDebug().log("Sending secondary input $secondaryInput on frame $i")
           sendInput(secondaryInput, secondaryEventBus)
         }
 
@@ -105,7 +105,7 @@ class StateHistory(private val rom: File) {
         }
       }
     }
-    LOG.atInfo().log("Rebase from $baseFrame to $toFrame completed.")
+    LOG.atDebug().log("Rebase from $baseFrame to $toFrame completed.")
     return true
   }
 
@@ -137,6 +137,6 @@ class StateHistory(private val rom: File) {
     // 60 frames per second
     const val TICKS_PER_FRAME = Gameboy.TICKS_PER_SEC / 60
 
-    val LOG: Logger = LoggerFactory.getLogger(LinkedSession::class.java)
+    val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)
   }
 }

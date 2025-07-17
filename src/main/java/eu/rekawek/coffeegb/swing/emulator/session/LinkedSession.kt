@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
+import eu.rekawek.coffeegb.swing.emulator.session.StateHistory.Companion.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -93,8 +94,11 @@ class LinkedSession(
           var tick = 0
           var frame: Long = 0
           while (!doStop) {
-            if (tick % StateHistory.TICKS_PER_FRAME == 0) {
+            if (tick == TICKS_PER_FRAME) {
               synchronized(this) {
+                frame++
+                tick = 0
+
                 if (stateHistory.merge()) {
                   val head = stateHistory.getHead()
                   mainGameboy.restoreFromMemento(head.mainMemento)
@@ -102,7 +106,7 @@ class LinkedSession(
                   mainSerialEndpoint.restoreFromMemento(head.mainLinkMemento)
                   secondarySerialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
                   frame = head.frame
-                  LOG.atInfo().log("State merged to {}", frame)
+                  LOG.atDebug().log("State merged to {}", frame)
                 } else {
                   stateHistory.addState(
                       frame,
@@ -111,7 +115,6 @@ class LinkedSession(
                       secondaryGameboy.saveToMemento(),
                       mainSerialEndpoint.saveToMemento(),
                       secondarySerialEndpoint.saveToMemento())
-                  frame++
                 }
 
                 if (mainInput != lastInput) {
@@ -124,8 +127,6 @@ class LinkedSession(
 
                 mainPressedButtons.clear()
                 mainReleasedButtons.clear()
-
-                tick = 0
               }
             }
             mainGameboy.tick()

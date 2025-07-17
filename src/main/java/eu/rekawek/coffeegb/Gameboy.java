@@ -204,6 +204,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         dma.tick();
         sound.tick();
         serialPort.tick();
+        joypad.tick();
         return gpu.tick();
     }
 
