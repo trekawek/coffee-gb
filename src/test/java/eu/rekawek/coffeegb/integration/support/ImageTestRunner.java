@@ -28,8 +28,8 @@ public class ImageTestRunner {
     public ImageTestRunner(File romFile) throws IOException {
         EventBus eventBus = new EventBus();
         Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart, eventBus);
-        gb.init(SerialEndpoint.NULL_ENDPOINT, null);
+        gb = new Gameboy(cart);
+        gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class);

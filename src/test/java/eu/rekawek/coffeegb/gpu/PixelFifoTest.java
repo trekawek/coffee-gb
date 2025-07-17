@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.gpu;
 
-import eu.rekawek.coffeegb.events.EventBus;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -19,7 +18,7 @@ public class PixelFifoTest {
     public void createFifo() {
         GpuRegisterValues r = new GpuRegisterValues();
         r.put(GpuRegister.BGP, 0b11100100);
-        fifo = new DmgPixelFifo(new Display(new EventBus(), false), r);
+        fifo = new DmgPixelFifo(new Display(false), r);
     }
 
     @Test
@@ -41,8 +40,8 @@ public class PixelFifoTest {
 
     @Test
     public void testZip() {
-        assertArrayEquals(new int[] {3, 3, 2, 2, 1, 0, 0, 1}, zip(0b11001001, 0b11110000, false));
-        assertArrayEquals(new int[] {1, 0, 0, 1, 2, 2, 3, 3}, zip(0b11001001, 0b11110000, true));
+        assertArrayEquals(new int[]{3, 3, 2, 2, 1, 0, 0, 1}, zip(0b11001001, 0b11110000, false));
+        assertArrayEquals(new int[]{1, 0, 0, 1, 2, 2, 3, 3}, zip(0b11001001, 0b11110000, true));
     }
 
     private int[] zip(int data1, int data2, boolean reverse) {
