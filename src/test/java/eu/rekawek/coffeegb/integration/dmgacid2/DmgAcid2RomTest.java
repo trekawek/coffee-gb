@@ -2,11 +2,10 @@ package eu.rekawek.coffeegb.integration.dmgacid2;
 
 import org.junit.Test;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import static eu.rekawek.coffeegb.integration.support.RomTestUtils.*;
+import static eu.rekawek.coffeegb.integration.support.RomTestUtils.testRomWithImage;
 
 public class DmgAcid2RomTest {
 

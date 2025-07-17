@@ -23,8 +23,8 @@ public class ColorPaletteTest {
         p.setByte(0xff69, 0xee);
         p.setByte(0xff69, 0x55);
         p.setByte(0xff69, 0xff);
-        assertArrayEquals(new int[] {0xaa00, 0xbb11, 0xcc22, 0xdd33}, p.getPalette(0));
-        assertArrayEquals(new int[] {0xee44, 0xff55, 0x0000, 0x0000}, p.getPalette(1));
+        assertArrayEquals(new int[]{0xaa00, 0xbb11, 0xcc22, 0xdd33}, p.getPalette(0));
+        assertArrayEquals(new int[]{0xee44, 0xff55, 0x0000, 0x0000}, p.getPalette(1));
     }
 
     private static void assertArrayEquals(int[] expected, int[] actual) {

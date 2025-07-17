@@ -6,7 +6,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -37,7 +36,7 @@ public final class ParametersProvider {
                 .filter(Files::isRegularFile)
                 .filter(f -> f.toString().endsWith(".gb"))
                 .filter(f -> !excludes.stream().anyMatch(p -> f.toString().endsWith(p)))
-                .map(p -> new Object[] { dir.relativize(p).toString(), p })
+                .map(p -> new Object[]{dir.relativize(p).toString(), p})
                 .collect(Collectors.toList());
     }
 

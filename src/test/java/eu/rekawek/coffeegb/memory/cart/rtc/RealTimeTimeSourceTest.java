@@ -5,9 +5,7 @@ import org.junit.Test;
 
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 public class RealTimeTimeSourceTest {
 
@@ -45,7 +43,7 @@ public class RealTimeTimeSourceTest {
         assertFalse(rtc.isCounterOverflow());
 
         clock.forward(1, TimeUnit.SECONDS);
-        assertClockEquals(0, 0, 0 ,0);
+        assertClockEquals(0, 0, 0, 0);
         assertTrue(rtc.isCounterOverflow());
 
         forward(10, 5, 19, 4);
