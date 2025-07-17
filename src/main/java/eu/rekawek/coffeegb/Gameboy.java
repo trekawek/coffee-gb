@@ -20,16 +20,12 @@ import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.timer.Timer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
-
-    private static final Logger LOG = LoggerFactory.getLogger(Gameboy.class);
 
     public static final int TICKS_PER_SEC = 4_194_304;
 
@@ -268,13 +264,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        //LOG.atInfo().log("Saving gameboy state");
         return new GameboyMemento(rom.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
     public void restoreFromMemento(Memento<Gameboy> memento) {
-        LOG.atInfo().log("Restoring gameboy state");
         if (!(memento instanceof GameboyMemento mem)) {
             throw new IllegalArgumentException();
         }

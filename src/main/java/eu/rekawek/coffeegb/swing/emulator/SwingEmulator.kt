@@ -15,6 +15,8 @@ import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.network.Connection
 import eu.rekawek.coffeegb.swing.io.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.swing.io.network.Connection.ReceivedRomEvent
+import eu.rekawek.coffeegb.swing.io.network.Connection.RequestRomEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnectedToServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientDisconnectedFromServerEvent
@@ -24,9 +26,15 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.awt.Dimension
 import java.io.File
+import java.nio.file.Path
+import java.nio.file.Paths
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
+import kotlin.io.path.Path
+import kotlin.io.path.createTempDirectory
+import kotlin.io.path.exists
+import kotlin.io.path.writeBytes
 
 class SwingEmulator(
     private val eventBus: EventBus,
@@ -45,7 +53,11 @@ class SwingEmulator(
 
   private var session: Session? = null
 
+  private val remoteRoms: Path
+
   init {
+    remoteRoms = createTempDirectory("roms")
+
     display = SwingDisplay(properties.display, eventBus, "main")
 
     remoteDisplay =
@@ -85,7 +97,7 @@ class SwingEmulator(
           eventBus.post(ConnectedGameboyStartedEvent())
           eventBus.post(StartEmulationEvent())
         } else {
-          eventBus.post(WaitingForPeerEvent(session.getRomName()))
+          eventBus.post(WaitingForPeerEvent(session.getRomName(), it.rom))
         }
       }
     }
@@ -146,7 +158,22 @@ class SwingEmulator(
     eventBus.register<PeerLoadedGameEvent> {
       if (isConnected) {
         remoteRomName = it.romName
+        loadRemoteRom()
       }
+    }
+    eventBus.register<ReceivedRomEvent> {
+      val path = remoteRoms.resolve("$remoteRomName.rom")
+      path.writeBytes(it.rom)
+      eventBus.post(LoadRomEvent(path.toFile()))
+    }
+  }
+
+  fun loadRemoteRom() {
+    val path = remoteRoms.resolve("$remoteRomName.rom")
+    if (path.exists()) {
+      eventBus.post(LoadRomEvent(path.toFile()))
+    } else {
+      eventBus.post(RequestRomEvent())
     }
   }
 
@@ -199,7 +226,7 @@ class SwingEmulator(
 
   class ConnectedGameboyStartedEvent : Event
 
-  data class WaitingForPeerEvent(val romName: String) : Event
+  data class WaitingForPeerEvent(val romName: String, val romFile: File) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(SwingEmulator::class.java)

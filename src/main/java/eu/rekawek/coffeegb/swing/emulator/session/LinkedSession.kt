@@ -14,14 +14,14 @@ import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.events.register
-import java.io.File
-import kotlin.reflect.KClass
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.io.File
+import kotlin.reflect.KClass
 
 class LinkedSession(
     private val eventBus: EventBus,
-    rom: File,
+    private val rom: File,
     private val console: Console?,
 ) : Session {
   private val cart = Cartridge(rom)
@@ -38,7 +38,7 @@ class LinkedSession(
 
   @Synchronized
   override fun start() {
-    val stateHistory = StateHistory(cart)
+    val stateHistory = StateHistory(rom)
 
     val localMainEventBus = EventBus()
     val mainEventBus = eventBus.fork("main")
@@ -47,7 +47,7 @@ class LinkedSession(
         mainEventBus,
         setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class, SoundSampleEvent::class))
     var mainSerialEndpoint = Peer2PeerSerialEndpoint()
-    var mainGameboy = Gameboy(cart)
+    var mainGameboy = Gameboy(Cartridge(rom))
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
     val localSecondaryEventBus = EventBus()
@@ -57,7 +57,7 @@ class LinkedSession(
         secondaryEventBus,
         setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class))
     var secondarySerialEndpoint = Peer2PeerSerialEndpoint()
-    var secondaryGameboy = Gameboy(cart)
+    var secondaryGameboy = Gameboy(Cartridge(rom))
     secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, console)
 
     secondarySerialEndpoint.init(mainSerialEndpoint)
@@ -191,4 +191,6 @@ class LinkedSession(
       val frame: Long,
       val input: Input,
   ) : Event
+
+  data class SendRomEvent(val rom: File) : Event
 }

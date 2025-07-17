@@ -9,12 +9,13 @@ import eu.rekawek.coffeegb.swing.emulator.session.Input
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
 import eu.rekawek.coffeegb.swing.events.register
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
+import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,
@@ -24,8 +25,11 @@ class Connection(
 
   @Volatile private var doStop = false
 
+  @Volatile private var romFile: File? = null
+
   init {
     eventBus.register<WaitingForPeerEvent> {
+      romFile = it.romFile
       outputStream.write(0x01)
       outputStream.write(it.romName.padEnd(16).toByteArray(Charsets.US_ASCII))
       outputStream.flush()
@@ -52,6 +56,10 @@ class Connection(
       }
       outputStream.flush()
       LOG.atInfo().log("Sent {}", it)
+    }
+    eventBus.register<RequestRomEvent> {
+      outputStream.write(0x04)
+      outputStream.flush()
     }
   }
 
@@ -87,8 +95,29 @@ class Connection(
           val pressed = readButtons(pressedCount.toInt())
           val released = readButtons(releasedCount.toInt())
           val event = LinkedSession.RemoteButtonStateEvent(frame, Input(pressed, released))
-          LOG.atInfo().log("Received message: {}", event)
           eventBus.post(event)
+        }
+        // request rom
+        0x04 -> {
+          LOG.atInfo().log("Sending ROM")
+
+          val rom = romFile?.readBytes() ?: ByteArray(0)
+          val buf = ByteBuffer.allocate(4)
+          buf.putInt(rom.size)
+          outputStream.write(0x05)
+          outputStream.write(buf.array())
+          outputStream.write(rom)
+          outputStream.flush()
+        }
+        // receiver rom
+        0x05 -> {
+          LOG.atInfo().log("Receiving ROM")
+
+          val buf = ByteBuffer.allocate(4)
+          inputStream.read(buf.array())
+          val size = buf.getInt()
+          val rom = inputStream.readNBytes(size)
+          eventBus.post(ReceivedRomEvent(rom))
         }
       }
     }
@@ -109,6 +138,10 @@ class Connection(
   data class PeerLoadedGameEvent(val romName: String) : Event
 
   class PeerIsReadyEvent : Event
+
+  class RequestRomEvent : Event
+
+  data class ReceivedRomEvent(val rom: ByteArray) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
