@@ -45,12 +45,16 @@ public class EventBus {
         // this event bus
         doPost(event, this.callerId);
 
+        // not siblings, nieces, uncles, etc.
+        postToDescendants(event);
+    }
+
+    private <E extends Event> void postToDescendants(E event) {
         // all children
         for (EventBus c : children) {
             c.doPost(event, this.callerId);
+            c.postToDescendants(event);
         }
-
-        // not siblings, nieces, uncles, etc.
     }
 
     private <E extends Event> void doPost(E event, String callerId) {

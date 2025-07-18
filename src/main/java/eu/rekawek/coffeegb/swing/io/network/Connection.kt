@@ -9,13 +9,13 @@ import eu.rekawek.coffeegb.swing.emulator.session.Input
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
 import eu.rekawek.coffeegb.swing.events.register
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,
@@ -59,6 +59,22 @@ class Connection(
     }
     eventBus.register<RequestRomEvent> {
       outputStream.write(0x04)
+      outputStream.flush()
+    }
+    eventBus.register<RequestResetEvent> {
+      outputStream.write(0x06)
+      outputStream.flush()
+    }
+    eventBus.register<RequestStopEvent> {
+      outputStream.write(0x07)
+      outputStream.flush()
+    }
+    eventBus.register<RequestPauseEvent> {
+      outputStream.write(0x08)
+      outputStream.flush()
+    }
+    eventBus.register<RequestResumeEvent> {
+      outputStream.write(0x09)
       outputStream.flush()
     }
   }
@@ -119,6 +135,30 @@ class Connection(
           val rom = inputStream.readNBytes(size)
           eventBus.post(ReceivedRomEvent(rom))
         }
+
+        // reset
+        0x06 -> {
+          LOG.atInfo().log("Remote reset")
+          eventBus.post(ReceivedRemoteResetEvent())
+        }
+
+        // stop
+        0x07 -> {
+          LOG.atInfo().log("Remote stop")
+          eventBus.post(ReceivedRemoteStopEvent())
+        }
+
+        // pause
+        0x08 -> {
+          LOG.atInfo().log("Remote pause")
+          eventBus.post(ReceivedRemotePauseEvent())
+        }
+
+        // stop
+        0x09 -> {
+          LOG.atInfo().log("Remote resume")
+          eventBus.post(ReceivedRemoteResumeEvent())
+        }
       }
     }
   }
@@ -142,6 +182,22 @@ class Connection(
   class RequestRomEvent : Event
 
   data class ReceivedRomEvent(val rom: ByteArray) : Event
+
+  class RequestResetEvent : Event
+
+  class RequestStopEvent : Event
+
+  class RequestPauseEvent : Event
+
+  class RequestResumeEvent : Event
+
+  class ReceivedRemoteResetEvent : Event
+
+  class ReceivedRemoteStopEvent : Event
+
+  class ReceivedRemotePauseEvent : Event
+
+  class ReceivedRemoteResumeEvent : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)

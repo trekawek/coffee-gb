@@ -9,9 +9,15 @@ interface Session {
 
   fun reset()
 
+  fun pause()
+
+  fun resume()
+
   fun getRomName(): String
 
-  class EmulationStartedEvent(val romName: String) : Event
+  fun shutDown()
+
+    class EmulationStartedEvent(val romName: String) : Event
 
   class EmulationStoppedEvent : Event
 }

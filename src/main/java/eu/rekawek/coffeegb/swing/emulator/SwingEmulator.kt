@@ -4,7 +4,6 @@ import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
-import eu.rekawek.coffeegb.swing.emulator.session.PauseSupport
 import eu.rekawek.coffeegb.swing.emulator.session.Session
 import eu.rekawek.coffeegb.swing.emulator.session.SimpleSession
 import eu.rekawek.coffeegb.swing.emulator.session.SnapshotSupport
@@ -27,11 +26,9 @@ import org.slf4j.LoggerFactory
 import java.awt.Dimension
 import java.io.File
 import java.nio.file.Path
-import java.nio.file.Paths
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
-import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.exists
 import kotlin.io.path.writeBytes
@@ -77,18 +74,18 @@ class SwingEmulator(
     Thread(sound).start()
 
     eventBus.register<LoadRomEvent> {
-      session?.stop()
+      session?.shutDown()
 
       val session: Session =
           if (isConnected) {
-            LinkedSession(eventBus, it.rom, console)
+            LinkedSession(eventBus.fork("session"), it.rom, console)
           } else {
-            SimpleSession(eventBus, it.rom, console)
+            SimpleSession(eventBus.fork("session"), it.rom, console)
           }
 
       this.session = session
-      eventBus.post(SessionPauseSupportEvent(session is PauseSupport))
-      eventBus.post(SessionSnapshotSupportEvent(if (session is SnapshotSupport) session else null))
+      eventBus.post(SessionPauseSupportEvent(true))
+      eventBus.post(SessionSnapshotSupportEvent(session as? SnapshotSupport))
       if (session is SimpleSession) {
         eventBus.post(StartEmulationEvent())
       }
@@ -115,21 +112,33 @@ class SwingEmulator(
       }
     }
     eventBus.register<PauseEmulationEvent> {
-      session?.let {
-        if (it is PauseSupport) {
-          it.pause()
-        }
+      session?.pause()
+      if (session is LinkedSession) {
+        eventBus.post(Connection.RequestPauseEvent())
       }
     }
+    eventBus.register<Connection.ReceivedRemotePauseEvent> { session?.pause() }
     eventBus.register<ResumeEmulationEvent> {
-      session?.let {
-        if (it is PauseSupport) {
-          it.resume()
-        }
+      session?.resume()
+      if (session is LinkedSession) {
+        eventBus.post(Connection.RequestResumeEvent())
       }
     }
-    eventBus.register<ResetEmulationEvent> { session?.reset() }
-    eventBus.register<StopEmulationEvent> { session?.stop() }
+    eventBus.register<Connection.ReceivedRemoteResumeEvent> { session?.resume() }
+    eventBus.register<ResetEmulationEvent> {
+      session?.reset()
+      if (session is LinkedSession) {
+        eventBus.post(Connection.RequestResetEvent())
+      }
+    }
+    eventBus.register<Connection.ReceivedRemoteResetEvent> { session?.reset() }
+    eventBus.register<StopEmulationEvent> {
+      session?.stop()
+      if (session is LinkedSession) {
+        eventBus.post(Connection.RequestStopEvent())
+      }
+    }
+    eventBus.register<Connection.ReceivedRemoteStopEvent> { session?.stop() }
     eventBus.register<SaveSnapshotEvent> { e ->
       session?.let {
         if (it is SnapshotSupport) {

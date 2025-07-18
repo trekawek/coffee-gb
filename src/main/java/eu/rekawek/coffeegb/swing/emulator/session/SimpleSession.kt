@@ -15,7 +15,7 @@ class SimpleSession(
     private val eventBus: EventBus,
     rom: File,
     private val console: Console?,
-) : Session, PauseSupport, SnapshotSupport {
+) : Session, SnapshotSupport {
 
   private val cart = Cartridge(rom)
 
@@ -88,5 +88,10 @@ class SimpleSession(
 
   override fun snapshotAvailable(slot: Int): Boolean {
     return snapshotManager.snapshotAvailable(slot)
+  }
+
+  override fun shutDown() {
+    stop()
+    eventBus.stop()
   }
 }

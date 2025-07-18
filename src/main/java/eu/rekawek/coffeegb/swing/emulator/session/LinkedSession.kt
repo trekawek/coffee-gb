@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.lang.Thread.sleep
 import kotlin.reflect.KClass
 
 class LinkedSession(
@@ -36,6 +37,8 @@ class LinkedSession(
   private var secondaryEventBus: EventBus? = null
 
   @Volatile private var doStop = false
+
+  @Volatile private var doPause = false
 
   @Synchronized
   override fun start() {
@@ -94,6 +97,10 @@ class LinkedSession(
           var tick = 0
           var frame: Long = 0
           while (!doStop) {
+            if (doPause) {
+              sleep(1L)
+              continue
+            }
             if (tick == TICKS_PER_FRAME) {
               synchronized(this) {
                 frame++
@@ -151,6 +158,7 @@ class LinkedSession(
       return
     }
     doStop = true
+    doPause = false
 
     cart.flushBattery()
     console?.setGameboy(null)
@@ -173,6 +181,19 @@ class LinkedSession(
 
   override fun getRomName(): String {
     return cart.title
+  }
+
+  override fun shutDown() {
+    stop()
+    eventBus.stop()
+  }
+
+  override fun pause() {
+    doPause = true
+  }
+
+  override fun resume() {
+    doPause = false
   }
 
   private companion object {
