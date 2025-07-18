@@ -74,8 +74,6 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
 
   companion object {
     fun run(debug: Boolean, initialRom: File?) {
-      System.setProperty("apple.awt.application.name", "Coffee GB")
-      System.setProperty("sun.java2d.opengl", "true")
       SwingUtilities.invokeLater { SwingGui(debug, initialRom).startGui() }
     }
   }
