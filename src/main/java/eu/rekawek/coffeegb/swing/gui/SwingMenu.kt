@@ -229,9 +229,11 @@ class SwingMenu(
     linkMenu.add(connectToServer)
     connectToServer.addActionListener {
       if (connectToServer.state) {
-        val host =
+        val host: String? =
             JOptionPane.showInputDialog(window, "Please enter server IP address", "127.0.0.1")
-        eventBus.post(StartClientEvent(host))
+        if (host != null) {
+          eventBus.post(StartClientEvent(host))
+        }
       } else {
         eventBus.post(StopClientEvent())
       }

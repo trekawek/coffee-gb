@@ -39,7 +39,9 @@ public class AudioSystemSound implements Runnable {
 
     @Override
     public void run() {
-        while (bufferDequeue.isEmpty()) {
+        doStop = false;
+
+        while (bufferDequeue.isEmpty() && !doStop) {
             try {
                 Thread.sleep(10);
             } catch (InterruptedException e) {
@@ -48,7 +50,6 @@ public class AudioSystemSound implements Runnable {
 
         byte[] finalBuffer = new byte[Gameboy.TICKS_PER_FRAME * 2 / DIVIDER + 1];
 
-        doStop = false;
         isStopped = false;
         SourceDataLine line;
         try {
