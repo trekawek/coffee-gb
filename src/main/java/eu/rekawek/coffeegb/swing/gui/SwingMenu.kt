@@ -154,6 +154,9 @@ class SwingMenu(
       }
       slotMenu.add(slotItem)
     }
+    slotMenu.isEnabled = false
+    eventBus.register<EmulationStartedEvent> { slotMenu.isEnabled = snapshotSupport != null }
+    eventBus.register<EmulationStoppedEvent> { slotMenu.isEnabled = false }
 
     val resetGame = JMenuItem("Reset")
     resetGame.isEnabled = false
