@@ -24,10 +24,7 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 
 * Cycle-exact Gameboy CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
 * Quite compatible (all the Blargg's tests are passed, although some game still doesn't work)
-* GPU
-* Joypad
-* Timer
-* Sound
+* Online multiplayer even on high-latency connections 
 * MBC1-5 support
 * Battery saves
 * Support for zipped ROMs
