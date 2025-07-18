@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing.emulator.session
 
 import eu.rekawek.coffeegb.Gameboy
+import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.ButtonPressEvent
 import eu.rekawek.coffeegb.controller.ButtonReleaseEvent
@@ -13,7 +14,6 @@ import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
-import eu.rekawek.coffeegb.swing.emulator.session.StateHistory.Companion.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -192,6 +192,4 @@ class LinkedSession(
       val frame: Long,
       val input: Input,
   ) : Event
-
-  data class SendRomEvent(val rom: File) : Event
 }

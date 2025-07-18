@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.swing.emulator
 
-import eu.rekawek.coffeegb.Gameboy
+import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import kotlin.concurrent.Volatile
 
 class TimingTicker : Runnable {
@@ -10,12 +10,12 @@ class TimingTicker : Runnable {
   @Volatile private var delayEnabled = true
 
   override fun run() {
-    if (++ticks < TICKS_PER_PERIOD) {
+    if (++ticks < TICKS_PER_FRAME) {
       return
     }
     ticks = 0
     if (delayEnabled) {
-      while (System.nanoTime() - lastSleep < PERIOD_IN_NANOS) {}
+      while (System.nanoTime() - lastSleep < FRAME_DURATION_NANOS) {}
     }
     lastSleep = System.nanoTime()
   }
@@ -25,8 +25,6 @@ class TimingTicker : Runnable {
   }
 
   private companion object {
-    const val PERIODS_PER_SECOND: Long = 65536
-    const val TICKS_PER_PERIOD = Gameboy.TICKS_PER_SEC / PERIODS_PER_SECOND
-    const val PERIOD_IN_NANOS = 1000000000 / PERIODS_PER_SECOND
+    const val FRAME_DURATION_NANOS = 1000000000 / 60
   }
 }

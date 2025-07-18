@@ -26,8 +26,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
-
     public static final int TICKS_PER_SEC = 4_194_304;
+
+    // 60 frames per second
+    public static final int TICKS_PER_FRAME = Gameboy.TICKS_PER_SEC / 60;
 
     private final Cartridge rom;
 

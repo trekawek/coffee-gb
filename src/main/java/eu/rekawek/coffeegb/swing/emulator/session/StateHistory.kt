@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing.emulator.session
 
 import eu.rekawek.coffeegb.Gameboy
+import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.controller.ButtonPressEvent
 import eu.rekawek.coffeegb.controller.ButtonReleaseEvent
 import eu.rekawek.coffeegb.events.EventBus
@@ -134,9 +135,6 @@ class StateHistory(private val rom: File) {
   )
 
   companion object {
-    // 60 frames per second
-    const val TICKS_PER_FRAME = Gameboy.TICKS_PER_SEC / 60
-
     val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)
   }
 }
