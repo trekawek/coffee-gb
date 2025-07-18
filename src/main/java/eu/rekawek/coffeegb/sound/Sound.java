@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.sound;
 
 import eu.rekawek.coffeegb.AddressSpace;
+import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.memento.Memento;
@@ -29,6 +30,10 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     private final boolean[] overriddenEnabled = {true, true, true, true};
 
+    private final int[] buffer = new int[Gameboy.TICKS_PER_FRAME * 2];
+
+    private int i = 0;
+
     private transient EventBus eventBus;
 
     public Sound(boolean gbc) {
@@ -44,9 +49,9 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     public void tick() {
         if (!enabled) {
-            eventBus.post(SoundSampleEvent.createEvent((byte) 0, (byte) 0));
-            return;
+            play(0, 0);
         }
+
         for (int i = 0; i < allModes.length; i++) {
             channels[i] = allModes[i].tick();
         }
@@ -72,7 +77,17 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         left *= ((volumes >> 4) & 0b111);
         right *= (volumes & 0b111);
 
-        eventBus.post(SoundSampleEvent.createEvent((byte) left, (byte) right));
+        play(left, right);
+    }
+
+    private void play(int left, int right) {
+        buffer[i] = left;
+        buffer[i + 1] = right;
+        i += 2;
+        if (i == buffer.length) {
+            eventBus.post(new SoundSampleEvent(buffer));
+            i = 0;
+        }
     }
 
     private AddressSpace getAddressSpace(int address) {
@@ -171,7 +186,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         for (int i = 0; i < allModes.length; i++) {
             allModeMementos[i] = allModes[i].saveToMemento();
         }
-        return new SoundMemento(allModeMementos, r.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone());
+        return new SoundMemento(allModeMementos, r.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone(), buffer.clone(), i);
     }
 
     @Override
@@ -188,6 +203,9 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         if (this.overriddenEnabled.length != mem.overriddenEnabled.length) {
             throw new IllegalArgumentException("Memento overriddenEnabled length doesn't match");
         }
+        if (this.buffer.length != mem.buffer.length) {
+            throw new IllegalArgumentException("Memento buffer length doesn't match");
+        }
         for (int i = 0; i < allModes.length; i++) {
             this.allModes[i].restoreFromMemento(mem.allModeMementos[i]);
         }
@@ -195,29 +213,19 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         System.arraycopy(mem.channels, 0, this.channels, 0, this.channels.length);
         this.enabled = mem.enabled();
         System.arraycopy(mem.overriddenEnabled, 0, this.overriddenEnabled, 0, this.overriddenEnabled.length);
+        System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
+        this.i = mem.i;
+
     }
 
-    public record SoundSampleEvent(byte left, byte right) implements Event {
-        private static final SoundSampleEvent[][] SAMPLES = new SoundSampleEvent[0x80][];
-
-        static {
-            for (int i = 0; i < 0x80; i++) {
-                SAMPLES[i] = new SoundSampleEvent[0x80];
-                for (int j = 0; j < 0x80; j++) {
-                    SAMPLES[i][j] = new SoundSampleEvent((byte) i, (byte) j);
-                }
-            }
-        }
-
-        private static SoundSampleEvent createEvent(byte left, byte right) {
-            return SAMPLES[left][right];
-        }
+    public record SoundSampleEvent(int[] buffer) implements Event {
     }
 
     public record SoundEnabledEvent(boolean enabled) implements Event {
     }
 
     private record SoundMemento(Memento<AbstractSoundMode>[] allModeMementos, Memento<Ram> ramMemento, int[] channels,
-                                boolean enabled, boolean[] overriddenEnabled) implements Memento<Sound> {
+                                boolean enabled, boolean[] overriddenEnabled, int[] buffer,
+                                int i) implements Memento<Sound> {
     }
 }
