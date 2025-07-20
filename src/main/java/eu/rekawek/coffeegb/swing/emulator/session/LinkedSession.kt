@@ -14,12 +14,12 @@ import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
+import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.lang.Thread.sleep
-import kotlin.reflect.KClass
 
 class LinkedSession(
     private val eventBus: EventBus,
@@ -125,7 +125,7 @@ class LinkedSession(
                 }
 
                 if (mainInput != lastInput) {
-                  mainEventBus.post(LocalButtonStateEvent(frame, mainInput))
+                  eventBus.post(LocalButtonStateEvent(frame, mainInput))
                   lastInput = mainInput
                 }
 
@@ -196,14 +196,6 @@ class LinkedSession(
     doPause = false
   }
 
-  private companion object {
-    fun funnel(from: EventBus, to: EventBus, eventTypes: Set<KClass<out Event>>) {
-      eventTypes.forEach { et -> from.register({ event -> to.post(event) }, et.java) }
-    }
-
-    val LOG: Logger = LoggerFactory.getLogger(LinkedSession::class.java)
-  }
-
   data class LocalButtonStateEvent(
       val frame: Long,
       val input: Input,
@@ -213,4 +205,8 @@ class LinkedSession(
       val frame: Long,
       val input: Input,
   ) : Event
+
+  private companion object {
+    val LOG: Logger = LoggerFactory.getLogger(LinkedSession::class.java)
+  }
 }

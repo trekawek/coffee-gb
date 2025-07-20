@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.Session
 import eu.rekawek.coffeegb.swing.emulator.session.SimpleSession
 import eu.rekawek.coffeegb.swing.emulator.session.SnapshotSupport
+import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
@@ -76,11 +77,12 @@ class SwingEmulator(
     eventBus.register<LoadRomEvent> {
       session?.shutDown()
 
+      val sessionEventBus = eventBus.fork("session")
       val session: Session =
           if (isConnected) {
-            LinkedSession(eventBus.fork("session"), it.rom, console)
+            LinkedSession(sessionEventBus, it.rom, console)
           } else {
-            SimpleSession(eventBus.fork("session"), it.rom, console)
+            SimpleSession(sessionEventBus, it.rom, console)
           }
 
       this.session = session

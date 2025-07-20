@@ -20,8 +20,10 @@ import kotlin.concurrent.Volatile
 class Connection(
     private val inputStream: InputStream,
     private val outputStream: OutputStream,
-    private val eventBus: EventBus,
+    mainEventBus: EventBus,
 ) : Runnable {
+
+  private val eventBus: EventBus = mainEventBus.fork("connection")
 
   @Volatile private var doStop = false
 
@@ -60,22 +62,27 @@ class Connection(
     eventBus.register<RequestRomEvent> {
       outputStream.write(0x04)
       outputStream.flush()
+      LOG.atInfo().log("Sent {}", it)
     }
     eventBus.register<RequestResetEvent> {
       outputStream.write(0x06)
       outputStream.flush()
+      LOG.atInfo().log("Sent {}", it)
     }
     eventBus.register<RequestStopEvent> {
       outputStream.write(0x07)
       outputStream.flush()
+      LOG.atInfo().log("Sent {}", it)
     }
     eventBus.register<RequestPauseEvent> {
       outputStream.write(0x08)
       outputStream.flush()
+      LOG.atInfo().log("Sent {}", it)
     }
     eventBus.register<RequestResumeEvent> {
       outputStream.write(0x09)
       outputStream.flush()
+      LOG.atInfo().log("Sent {}", it)
     }
   }
 
@@ -85,80 +92,87 @@ class Connection(
       if (command == -1) {
         return
       }
-      when (command) {
-        // peer loaded game
-        0x01 -> {
-          val title = inputStream.readNBytes(16).toString(Charsets.US_ASCII).trim()
-          val event = PeerLoadedGameEvent(title)
-          LOG.atInfo().log("Received message: {}", event)
-          eventBus.post(event)
-        }
-        // peer is ready
-        0x02 -> {
-          val event = PeerIsReadyEvent()
-          LOG.atInfo().log("Received message: {}", event)
-          eventBus.post(event)
-        }
-        // sync
-        0x03 -> {
-          val buf = ByteBuffer.allocate(10)
-          if (inputStream.read(buf.array()) < 10) {
-            return
+      val event: Event? =
+          when (command) {
+            // peer loaded game
+            0x01 -> {
+              val title = inputStream.readNBytes(16).toString(Charsets.US_ASCII).trim()
+              PeerLoadedGameEvent(title)
+            }
+            // peer is ready
+            0x02 -> {
+              PeerIsReadyEvent()
+            }
+            // sync
+            0x03 -> {
+              val buf = ByteBuffer.allocate(10)
+              inputStream.read(buf.array())
+
+              val frame = buf.getLong()
+              val pressedCount = buf.get()
+              val releasedCount = buf.get()
+              val pressed = readButtons(pressedCount.toInt())
+              val released = readButtons(releasedCount.toInt())
+              LinkedSession.RemoteButtonStateEvent(frame, Input(pressed, released))
+            }
+            // request rom
+            0x04 -> {
+              LOG.atInfo().log("Received remote command $command, sending ROM $romFile")
+
+              val rom = romFile?.readBytes() ?: ByteArray(0)
+              val buf = ByteBuffer.allocate(4)
+              buf.putInt(rom.size)
+              outputStream.write(0x05)
+              outputStream.write(buf.array())
+              outputStream.write(rom)
+              outputStream.flush()
+
+              null
+            }
+
+            // receiver rom
+            0x05 -> {
+              val buf = ByteBuffer.allocate(4)
+              inputStream.read(buf.array())
+              val size = buf.getInt()
+              val rom = inputStream.readNBytes(size)
+              ReceivedRomEvent(rom)
+            }
+
+            // reset
+            0x06 -> {
+              ReceivedRemoteResetEvent()
+            }
+
+            // stop
+            0x07 -> {
+              ReceivedRemoteStopEvent()
+            }
+
+            // pause
+            0x08 -> {
+              ReceivedRemotePauseEvent()
+            }
+
+            // stop
+            0x09 -> {
+              ReceivedRemoteResumeEvent()
+            }
+
+            else -> {
+              LOG.atWarn().log("Received remote unknown command $command")
+              null
+            }
           }
-          val frame = buf.getLong()
-          val pressedCount = buf.get()
-          val releasedCount = buf.get()
-          val pressed = readButtons(pressedCount.toInt())
-          val released = readButtons(releasedCount.toInt())
-          val event = LinkedSession.RemoteButtonStateEvent(frame, Input(pressed, released))
-          eventBus.post(event)
-        }
-        // request rom
-        0x04 -> {
-          LOG.atInfo().log("Sending ROM")
-
-          val rom = romFile?.readBytes() ?: ByteArray(0)
-          val buf = ByteBuffer.allocate(4)
-          buf.putInt(rom.size)
-          outputStream.write(0x05)
-          outputStream.write(buf.array())
-          outputStream.write(rom)
-          outputStream.flush()
-        }
-        // receiver rom
-        0x05 -> {
-          LOG.atInfo().log("Receiving ROM")
-
-          val buf = ByteBuffer.allocate(4)
-          inputStream.read(buf.array())
-          val size = buf.getInt()
-          val rom = inputStream.readNBytes(size)
-          eventBus.post(ReceivedRomEvent(rom))
+      if (event != null) {
+        when (event) {
+          is ReceivedRomEvent ->
+              LOG.atInfo()
+                  .log("Received remote command $command, posting event: ${event.javaClass}")
+          else -> LOG.atInfo().log("Received remote command $command, posting event: $event")
         }
 
-        // reset
-        0x06 -> {
-          LOG.atInfo().log("Remote reset")
-          eventBus.post(ReceivedRemoteResetEvent())
-        }
-
-        // stop
-        0x07 -> {
-          LOG.atInfo().log("Remote stop")
-          eventBus.post(ReceivedRemoteStopEvent())
-        }
-
-        // pause
-        0x08 -> {
-          LOG.atInfo().log("Remote pause")
-          eventBus.post(ReceivedRemotePauseEvent())
-        }
-
-        // stop
-        0x09 -> {
-          LOG.atInfo().log("Remote resume")
-          eventBus.post(ReceivedRemoteResumeEvent())
-        }
+        eventBus.post(event)
       }
     }
   }
@@ -172,6 +186,7 @@ class Connection(
 
   fun stop() {
     doStop = true
+    eventBus.stop()
     inputStream.close()
   }
 

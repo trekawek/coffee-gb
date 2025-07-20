@@ -35,25 +35,22 @@ public class EventBus {
     }
 
     public <E extends Event> void post(E event) {
-        // all ancestors
-        EventBus ancestor = parent;
-        while (ancestor != null) {
-            ancestor.doPost(event, this.callerId);
-            ancestor = ancestor.parent;
-        }
-
-        // this event bus
-        doPost(event, this.callerId);
-
-        // not siblings, nieces, uncles, etc.
-        postToDescendants(event);
+        getRoot().postToDescendants(event, callerId);
     }
 
-    private <E extends Event> void postToDescendants(E event) {
+    private EventBus getRoot() {
+        var current = this;
+        while (current.parent != null) {
+            current = current.parent;
+        }
+        return current;
+    }
+
+    private <E extends Event> void postToDescendants(E event, String callerId) {
+        doPost(event, callerId);
         // all children
         for (EventBus c : children) {
-            c.doPost(event, this.callerId);
-            c.postToDescendants(event);
+            c.postToDescendants(event, callerId);
         }
     }
 
