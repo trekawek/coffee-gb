@@ -37,11 +37,13 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         if (eventBus != null) {
             eventBus.post(new JoypadPressEvent(button, tick));
         }
+        LOG.atDebug().log("Pressed button {} at tick {}", button, tick);
         interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         buttons.add(button);
     }
 
     private void onRelease(Button button) {
+        LOG.atDebug().log("Released button {} at tick {}", button, tick);
         buttons.remove(button);
     }
 

@@ -75,29 +75,25 @@ class LinkedSession(
 
     secondarySerialEndpoint.init(mainSerialEndpoint)
 
+    val mainButtonMonitor = Object()
     val mainPressedButtons = mutableSetOf<Button>()
     val mainReleasedButtons = mutableSetOf<Button>()
-    var mainInput = Input(emptyList(), emptyList())
-    var lastInput = mainInput
+    var lastInput: Input = Input(emptyList(), emptyList())
     mainEventBus.register<ButtonPressEvent> {
-      synchronized(this) {
+      synchronized(mainButtonMonitor) {
         mainPressedButtons.add(it.button)
         mainReleasedButtons.remove(it.button)
-        mainInput =
-            Input(mainPressedButtons.toList().sorted(), mainReleasedButtons.toList().sorted())
       }
     }
     mainEventBus.register<ButtonReleaseEvent> {
-      synchronized(this) {
+      synchronized(mainButtonMonitor) {
         mainPressedButtons.remove(it.button)
         mainReleasedButtons.add(it.button)
-        mainInput =
-            Input(mainPressedButtons.toList().sorted(), mainReleasedButtons.toList().sorted())
       }
     }
 
     secondaryEventBus.register<RemoteButtonStateEvent> {
-      synchronized(this) { stateHistory!!.addSecondaryInput(it.frame, it.input) }
+      stateHistory!!.addSecondaryInput(it.frame, it.input)
     }
 
     this.mainGameboy = mainGameboy
@@ -115,46 +111,50 @@ class LinkedSession(
           return
         }
         if (tick == TICKS_PER_FRAME) {
-          synchronized(this) {
-            frame++
-            tick = 0
+          val mainInput =
+              synchronized(mainButtonMonitor) {
+                val input =
+                    Input(
+                        mainPressedButtons.toList().sorted(), mainReleasedButtons.toList().sorted())
+                mainPressedButtons.clear()
+                mainReleasedButtons.clear()
+                input
+              }
+          frame++
+          tick = 0
 
-            val effectiveInput =
-                if (mainInput != lastInput) {
-                  mainInput
-                } else {
-                  Input(emptyList(), emptyList())
-                }
-            lastInput = mainInput
+          val effectiveInput =
+              if (mainInput != lastInput) {
+                mainInput
+              } else {
+                Input(emptyList(), emptyList())
+              }
+          lastInput = mainInput
 
-            if (stateHistory!!.merge()) {
-              val head = stateHistory!!.getHead()
-              mainGameboy.restoreFromMemento(head.mainMemento)
-              secondaryGameboy.restoreFromMemento(head.secondaryMemento)
-              mainSerialEndpoint.restoreFromMemento(head.mainLinkMemento)
-              secondarySerialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
-              frame = head.frame
-              LOG.atDebug().log("State merged to {}", frame)
-            }
+          if (stateHistory!!.merge()) {
+            val head = stateHistory!!.getHead()
+            mainGameboy.restoreFromMemento(head.mainMemento)
+            secondaryGameboy.restoreFromMemento(head.secondaryMemento)
+            mainSerialEndpoint.restoreFromMemento(head.mainLinkMemento)
+            secondarySerialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
+            frame = head.frame
+            LOG.atDebug().log("State merged to {}", frame)
+          }
 
-            stateHistory!!.addState(
-                frame,
-                effectiveInput,
-                mainGameboy.saveToMemento(),
-                secondaryGameboy.saveToMemento(),
-                mainSerialEndpoint.saveToMemento(),
-                secondarySerialEndpoint.saveToMemento())
+          stateHistory!!.addState(
+              frame,
+              effectiveInput,
+              mainGameboy.saveToMemento(),
+              secondaryGameboy.saveToMemento(),
+              mainSerialEndpoint.saveToMemento(),
+              secondarySerialEndpoint.saveToMemento())
 
-            if (!effectiveInput.isEmpty()) {
-              eventBus.post(LocalButtonStateEvent(frame, effectiveInput))
-              mainPressedButtons.forEach { localMainEventBus.post(ButtonPressEvent(it)) }
-              mainReleasedButtons.forEach { localMainEventBus.post(ButtonReleaseEvent(it)) }
-            }
-
-            mainPressedButtons.clear()
-            mainReleasedButtons.clear()
+          if (!effectiveInput.isEmpty()) {
+            eventBus.post(LocalButtonStateEvent(frame, effectiveInput))
+            effectiveInput.send(localMainEventBus)
           }
         }
+
         mainGameboy.tick()
         secondaryGameboy.tick()
         tick++

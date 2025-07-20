@@ -7,7 +7,6 @@ import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.Session
 import eu.rekawek.coffeegb.swing.emulator.session.SimpleSession
 import eu.rekawek.coffeegb.swing.emulator.session.SnapshotSupport
-import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
@@ -22,8 +21,6 @@ import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnected
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientDisconnectedFromServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerLostConnectionEvent
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.awt.Dimension
 import java.io.File
 import java.nio.file.Path
@@ -240,8 +237,6 @@ class SwingEmulator(
   data class WaitingForPeerEvent(val romName: String, val romFile: File) : Event
 
   companion object {
-    private val LOG: Logger = LoggerFactory.getLogger(SwingEmulator::class.java)
-
     const val SHOW_REMOTE_SCREEN = false
   }
 }

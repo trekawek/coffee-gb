@@ -4,8 +4,6 @@ import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.controller.Button
-import eu.rekawek.coffeegb.controller.ButtonPressEvent
-import eu.rekawek.coffeegb.controller.ButtonReleaseEvent
 import eu.rekawek.coffeegb.controller.Joypad
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
@@ -13,12 +11,12 @@ import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
-import java.io.File
-import java.util.*
-import kotlin.math.min
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.io.File
+import java.util.*
 import kotlin.math.max
+import kotlin.math.min
 
 class StateHistory(private val rom: File) {
 
@@ -28,6 +26,7 @@ class StateHistory(private val rom: File) {
 
   var debugEventBus: EventBus? = null
 
+  @Synchronized
   fun addState(
       frame: Long,
       mainInput: Input,
@@ -44,6 +43,7 @@ class StateHistory(private val rom: File) {
     }
   }
 
+  @Synchronized
   fun addSecondaryInput(
       frame: Long,
       secondaryInput: Input,
@@ -51,6 +51,7 @@ class StateHistory(private val rom: File) {
     patches.add(Patch(frame, secondaryInput))
   }
 
+  @Synchronized
   fun merge(): Boolean {
     if (patches.isEmpty() || states.isEmpty()) {
       return false
@@ -107,11 +108,11 @@ class StateHistory(private val rom: File) {
               secondaryLink.saveToMemento()))
 
       if (i <= toFrame) {
-        sendInput(mainInput, mainEventBus)
+        mainInput.send(mainEventBus)
         val secondaryInput = secondaryInputs[i]
         if (secondaryInput != null) {
-          LOG.atDebug().log("Sending secondary input $secondaryInput on frame $i")
-          sendInput(secondaryInput, secondaryEventBus)
+          LOG.atDebug().log("Sending secondary input {} on frame {}", secondaryInput, i)
+          secondaryInput.send(secondaryEventBus)
         }
 
         repeat(TICKS_PER_FRAME) {
@@ -125,14 +126,6 @@ class StateHistory(private val rom: File) {
   }
 
   fun getHead() = states.last()
-
-  private fun sendInput(
-      input: Input,
-      eventBus: EventBus,
-  ) {
-    input.pressedButtons.forEach { eventBus.post(ButtonPressEvent(it)) }
-    input.releasedButtons.forEach { eventBus.post(ButtonReleaseEvent(it)) }
-  }
 
   data class State(
       val frame: Long,
