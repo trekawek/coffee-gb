@@ -28,7 +28,6 @@ class Peer2PeerSerialEndpoint() :
 
   override fun startSending() {
     bitIndex = 7
-    bitsReceived.set(0)
     peer.bitsReceived.set(0)
   }
 
