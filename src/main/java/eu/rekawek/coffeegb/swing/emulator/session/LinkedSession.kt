@@ -22,6 +22,8 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.lang.Thread.sleep
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class LinkedSession(
     private val eventBus: EventBus,
@@ -103,6 +105,7 @@ class LinkedSession(
 
     var tick = 0
     var frame: Long = 0
+    var lastSync = TimeSource.Monotonic.markNow()
 
     return object : Runnable {
       override fun run() {
@@ -149,9 +152,11 @@ class LinkedSession(
               mainSerialEndpoint.saveToMemento(),
               secondarySerialEndpoint.saveToMemento())
 
-          if (!effectiveInput.isEmpty()) {
+          val now = TimeSource.Monotonic.markNow()
+          if (!effectiveInput.isEmpty() || now - lastSync > 5.seconds) {
             eventBus.post(LocalButtonStateEvent(frame, effectiveInput))
             effectiveInput.send(localMainEventBus)
+            lastSync = now
           }
         }
 
