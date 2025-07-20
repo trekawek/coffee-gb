@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.swing.emulator.session
 
+import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.ButtonPressEvent
 import eu.rekawek.coffeegb.controller.ButtonReleaseEvent
+import eu.rekawek.coffeegb.controller.Joypad
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
@@ -36,22 +38,29 @@ class LinkedSession(
 
   private var secondaryEventBus: EventBus? = null
 
+  @VisibleForTesting internal var stateHistory: StateHistory? = null
+
   @Volatile private var doStop = false
 
   @Volatile private var doPause = false
 
   @Synchronized
-  override fun start() {
-    val stateHistory = StateHistory(rom)
+  @VisibleForTesting
+  internal fun init(): Runnable {
+    stateHistory = StateHistory(rom)
 
     val localMainEventBus = EventBus()
     val mainEventBus = eventBus.fork("main")
     funnel(
         localMainEventBus,
         mainEventBus,
-        setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class, SoundSampleEvent::class))
-    var mainSerialEndpoint = Peer2PeerSerialEndpoint()
-    var mainGameboy = Gameboy(Cartridge(rom))
+        setOf(
+            DmgFrameReadyEvent::class,
+            GbcFrameReadyEvent::class,
+            SoundSampleEvent::class,
+            Joypad.JoypadPressEvent::class))
+    val mainSerialEndpoint = Peer2PeerSerialEndpoint()
+    val mainGameboy = Gameboy(Cartridge(rom))
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
     val localSecondaryEventBus = EventBus()
@@ -60,8 +69,8 @@ class LinkedSession(
         localSecondaryEventBus,
         secondaryEventBus,
         setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class))
-    var secondarySerialEndpoint = Peer2PeerSerialEndpoint()
-    var secondaryGameboy = Gameboy(Cartridge(rom))
+    val secondarySerialEndpoint = Peer2PeerSerialEndpoint()
+    val secondaryGameboy = Gameboy(Cartridge(rom))
     secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, console)
 
     secondarySerialEndpoint.init(mainSerialEndpoint)
@@ -88,68 +97,83 @@ class LinkedSession(
     }
 
     secondaryEventBus.register<RemoteButtonStateEvent> {
-      synchronized(this) { stateHistory.addSecondaryInput(it.frame, it.input) }
+      synchronized(this) { stateHistory!!.addSecondaryInput(it.frame, it.input) }
     }
-
-    doStop = false
-    val ticker = TimingTicker()
-    Thread {
-          var tick = 0
-          var frame: Long = 0
-          while (!doStop) {
-            if (doPause) {
-              sleep(1L)
-              continue
-            }
-            if (tick == TICKS_PER_FRAME) {
-              synchronized(this) {
-                frame++
-                tick = 0
-
-                if (stateHistory.merge()) {
-                  val head = stateHistory.getHead()
-                  mainGameboy.restoreFromMemento(head.mainMemento)
-                  secondaryGameboy.restoreFromMemento(head.secondaryMemento)
-                  mainSerialEndpoint.restoreFromMemento(head.mainLinkMemento)
-                  secondarySerialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
-                  frame = head.frame
-                  LOG.atDebug().log("State merged to {}", frame)
-                } else {
-                  stateHistory.addState(
-                      frame,
-                      mainInput,
-                      mainGameboy.saveToMemento(),
-                      secondaryGameboy.saveToMemento(),
-                      mainSerialEndpoint.saveToMemento(),
-                      secondarySerialEndpoint.saveToMemento())
-                }
-
-                if (mainInput != lastInput) {
-                  eventBus.post(LocalButtonStateEvent(frame, mainInput))
-                  lastInput = mainInput
-                }
-
-                mainPressedButtons.forEach { localMainEventBus.post(ButtonPressEvent(it)) }
-                mainReleasedButtons.forEach { localMainEventBus.post(ButtonReleaseEvent(it)) }
-
-                mainPressedButtons.clear()
-                mainReleasedButtons.clear()
-              }
-            }
-            mainGameboy.tick()
-            secondaryGameboy.tick()
-            ticker.run()
-            tick++
-          }
-        }
-        .start()
-
-    mainEventBus.post(Session.EmulationStartedEvent(cart.title))
 
     this.mainGameboy = mainGameboy
     this.mainEventBus = mainEventBus
     this.secondaryGameboy = secondaryGameboy
     this.secondaryEventBus = secondaryEventBus
+
+    var tick = 0
+    var frame: Long = 0
+
+    return object : Runnable {
+      override fun run() {
+        if (doPause) {
+          sleep(1L)
+          return
+        }
+        if (tick == TICKS_PER_FRAME) {
+          synchronized(this) {
+            frame++
+            tick = 0
+
+            val effectiveInput =
+                if (mainInput != lastInput) {
+                  mainInput
+                } else {
+                  Input(emptyList(), emptyList())
+                }
+            lastInput = mainInput
+
+            if (stateHistory!!.merge()) {
+              val head = stateHistory!!.getHead()
+              mainGameboy.restoreFromMemento(head.mainMemento)
+              secondaryGameboy.restoreFromMemento(head.secondaryMemento)
+              mainSerialEndpoint.restoreFromMemento(head.mainLinkMemento)
+              secondarySerialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
+              frame = head.frame
+              LOG.atDebug().log("State merged to {}", frame)
+            }
+
+            stateHistory!!.addState(
+                frame,
+                effectiveInput,
+                mainGameboy.saveToMemento(),
+                secondaryGameboy.saveToMemento(),
+                mainSerialEndpoint.saveToMemento(),
+                secondarySerialEndpoint.saveToMemento())
+
+            if (!effectiveInput.isEmpty()) {
+              eventBus.post(LocalButtonStateEvent(frame, effectiveInput))
+              mainPressedButtons.forEach { localMainEventBus.post(ButtonPressEvent(it)) }
+              mainReleasedButtons.forEach { localMainEventBus.post(ButtonReleaseEvent(it)) }
+            }
+
+            mainPressedButtons.clear()
+            mainReleasedButtons.clear()
+          }
+        }
+        mainGameboy.tick()
+        secondaryGameboy.tick()
+        tick++
+      }
+    }
+  }
+
+  @Synchronized
+  override fun start() {
+    val tick = init()
+    val timingTicker = TimingTicker()
+    doStop = false
+    Thread {
+          while (!doStop) {
+            tick.run()
+            timingTicker.run()
+          }
+        }
+        .start()
   }
 
   @Synchronized

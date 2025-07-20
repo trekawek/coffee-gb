@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
+import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
@@ -20,18 +21,22 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     private final InterruptManager interruptManager;
     private int p1;
     private long tick;
+    private EventBus eventBus;
 
     public Joypad(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;
     }
 
     public void init(EventBus eventBus) {
+        this.eventBus = eventBus;
         eventBus.register(event -> onPress(event.button()), ButtonPressEvent.class);
         eventBus.register(event -> onRelease(event.button()), ButtonReleaseEvent.class);
     }
 
     private void onPress(Button button) {
-        LOG.atDebug().log("Button {} pressed in tick {}", button, tick);
+        if (eventBus != null) {
+            eventBus.post(new JoypadPressEvent(button, tick));
+        }
         interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         buttons.add(button);
     }
@@ -82,5 +87,8 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     }
 
     private record JoypadMemento(Set<Button> buttons, int p1, long tick) implements Memento<Joypad> {
+    }
+
+    public record JoypadPressEvent(Button button, long tick) implements Event {
     }
 }

@@ -1,24 +1,32 @@
 package eu.rekawek.coffeegb.swing.emulator.session
 
+import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
+import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.ButtonPressEvent
 import eu.rekawek.coffeegb.controller.ButtonReleaseEvent
+import eu.rekawek.coffeegb.controller.Joypad
+import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
+import eu.rekawek.coffeegb.swing.events.register
 import java.io.File
 import java.util.*
 import kotlin.math.min
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import kotlin.math.max
 
 class StateHistory(private val rom: File) {
 
   private val states = LinkedList<State>()
 
   private val patches = mutableListOf<Patch>()
+
+  var debugEventBus: EventBus? = null
 
   fun addState(
       frame: Long,
@@ -48,7 +56,7 @@ class StateHistory(private val rom: File) {
       return false
     }
     val baseFrame = min(patches.first().frame, states.last().frame)
-    val toFrame = patches.last().frame
+    val toFrame = max(states.last().frame, patches.last().frame)
     LOG.atDebug().log("Rebasing from $baseFrame to $toFrame")
 
     val mainInputs = states.groupBy { it.frame }.mapValues { it.value.first().mainInput }
@@ -69,6 +77,12 @@ class StateHistory(private val rom: File) {
 
     val mainEventBus = EventBus()
     val secondaryEventBus = EventBus()
+    mainEventBus.register<Joypad.JoypadPressEvent> {
+      debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, 0))
+    }
+    secondaryEventBus.register<Joypad.JoypadPressEvent> {
+      debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, 1))
+    }
 
     mainGameboy.init(mainEventBus, mainLink, null)
     secondaryGameboy.init(secondaryEventBus, secondaryLink, null)
@@ -133,6 +147,13 @@ class StateHistory(private val rom: File) {
       val frame: Long,
       val secondaryInput: Input,
   )
+
+  @VisibleForTesting
+  internal data class GameboyJoypadPressEvent(
+      val button: Button,
+      val tick: Long,
+      val gameboy: Int
+  ) : Event
 
   companion object {
     val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)

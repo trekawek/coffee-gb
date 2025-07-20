@@ -57,7 +57,7 @@ class Connection(
         outputStream.write(button.ordinal)
       }
       outputStream.flush()
-      LOG.atInfo().log("Sent {}", it)
+      LOG.atDebug().log("Sent {}", it)
     }
     eventBus.register<RequestRomEvent> {
       outputStream.write(0x04)
@@ -169,6 +169,8 @@ class Connection(
           is ReceivedRomEvent ->
               LOG.atInfo()
                   .log("Received remote command $command, posting event: ${event.javaClass}")
+          is LinkedSession.RemoteButtonStateEvent ->
+              LOG.atDebug().log("Received remote command $command, posting event: $event")
           else -> LOG.atInfo().log("Received remote command $command, posting event: $event")
         }
 
