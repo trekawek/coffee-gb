@@ -18,12 +18,12 @@ import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.File
 import java.lang.Thread.sleep
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class LinkedSession(
     private val eventBus: EventBus,
@@ -80,7 +80,7 @@ class LinkedSession(
     val mainButtonMonitor = Object()
     val mainPressedButtons = mutableSetOf<Button>()
     val mainReleasedButtons = mutableSetOf<Button>()
-    var lastInput: Input = Input(emptyList(), emptyList())
+    var lastInput = Input(emptyList(), emptyList())
     mainEventBus.register<ButtonPressEvent> {
       synchronized(mainButtonMonitor) {
         mainPressedButtons.add(it.button)
@@ -179,6 +179,7 @@ class LinkedSession(
           }
         }
         .start()
+    mainEventBus?.post(Session.EmulationStartedEvent(cart.title))
   }
 
   @Synchronized
