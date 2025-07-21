@@ -153,15 +153,23 @@ class SwingEmulator(
       }
     }
 
-    eventBus.register<ServerGotConnectionEvent> { isConnected = true }
+    eventBus.register<ServerGotConnectionEvent> {
+      isConnected = true
+      session?.stop()
+    }
     eventBus.register<ServerLostConnectionEvent> {
       isConnected = false
       remoteRomName = null
+      session?.stop()
     }
-    eventBus.register<ClientConnectedToServerEvent> { isConnected = true }
+    eventBus.register<ClientConnectedToServerEvent> {
+      isConnected = true
+      session?.stop()
+    }
     eventBus.register<ClientDisconnectedFromServerEvent> {
       isConnected = false
       remoteRomName = null
+      session?.stop()
     }
     eventBus.register<PeerLoadedGameEvent> {
       if (isConnected) {

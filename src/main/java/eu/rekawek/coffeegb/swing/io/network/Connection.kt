@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonState
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.io.Closeable
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -21,7 +22,7 @@ class Connection(
     private val inputStream: InputStream,
     private val outputStream: OutputStream,
     mainEventBus: EventBus,
-) : Runnable {
+) : Runnable, AutoCloseable {
 
   private val eventBus: EventBus = mainEventBus.fork("connection")
 
@@ -188,8 +189,12 @@ class Connection(
 
   fun stop() {
     doStop = true
+  }
+
+  override fun close() {
     eventBus.stop()
     inputStream.close()
+    outputStream.close()
   }
 
   data class PeerLoadedGameEvent(val romName: String) : Event
