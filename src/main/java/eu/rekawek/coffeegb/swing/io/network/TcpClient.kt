@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.swing.io.network
 
 import eu.rekawek.coffeegb.events.EventBus
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.net.Socket
 import java.net.SocketException
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class TcpClient(
     private val host: String,

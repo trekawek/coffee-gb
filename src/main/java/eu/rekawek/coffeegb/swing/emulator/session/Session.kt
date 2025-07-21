@@ -17,7 +17,7 @@ interface Session {
 
   fun shutDown()
 
-    class EmulationStartedEvent(val romName: String) : Event
+  class EmulationStartedEvent(val romName: String) : Event
 
   class EmulationStoppedEvent : Event
 }

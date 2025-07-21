@@ -171,9 +171,7 @@ class SwingEmulator(
   private fun startLinkedSession() {
     if (mainRom != null && peerRom != null) {
       session?.shutDown()
-      session =
-        LinkedSession(eventBus.fork("session"), mainRom!!, peerRom!!, peerBattery, console)
-      //eventBus.post(ConnectedGameboyStartedEvent())
+      session = LinkedSession(eventBus.fork("session"), mainRom!!, peerRom!!, peerBattery, console)
       eventBus.post(StartEmulationEvent())
     }
   }

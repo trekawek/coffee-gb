@@ -243,13 +243,14 @@ class SwingMenu(
     }
 
     val connected = JCheckBoxMenuItem()
-    val setConnected = fun(state: Boolean) {
-      if (state) {
-        connected.text = "\uD83D\uDFE2  Connected"
-      } else {
-        connected.text = "\uD83D\uDD34  Disconnected"
-      }
-    }
+    val setConnected =
+        fun(state: Boolean) {
+          if (state) {
+            connected.text = "\uD83D\uDFE2  Connected"
+          } else {
+            connected.text = "\uD83D\uDD34  Disconnected"
+          }
+        }
     connected.isEnabled = false
     setConnected(false)
     linkMenu.add(connected)
