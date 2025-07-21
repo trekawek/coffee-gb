@@ -27,8 +27,12 @@ class TcpServer(private val eventBus: EventBus) : Runnable {
           this.socket = socket
           LOG.info("Got new connection: {}", socket.inetAddress)
           eventBus.post(ConnectionController.ServerGotConnectionEvent(socket.inetAddress.hostName))
-          Connection(socket.getInputStream(), socket.getOutputStream(), eventBus).use { it.run() }
-          LOG.info("Client disconnected: {}", socket.inetAddress)
+          try {
+            Connection(socket.getInputStream(), socket.getOutputStream(), eventBus).use { it.run() }
+          } finally {
+            LOG.info("Client disconnected: {}", socket.inetAddress)
+            eventBus.post(ConnectionController.ServerLostConnectionEvent())
+          }
         } catch (_: SocketTimeoutException) {
           // do nothing
         } catch (e: SocketException) {
@@ -42,7 +46,6 @@ class TcpServer(private val eventBus: EventBus) : Runnable {
         } finally {
           socket = null
         }
-        eventBus.post(ConnectionController.ServerLostConnectionEvent())
       }
     }
     eventBus.post(ConnectionController.ServerStoppedEvent())
