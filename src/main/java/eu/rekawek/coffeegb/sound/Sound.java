@@ -26,7 +26,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     private final int[] channels = new int[4];
 
-    private boolean enabled;
+    private boolean enabled = true;
 
     private final boolean[] overriddenEnabled = {true, true, true, true};
 
@@ -41,6 +41,8 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         allModes[1] = new SoundMode2(gbc);
         allModes[2] = new SoundMode3(gbc);
         allModes[3] = new SoundMode4(gbc);
+        // Initial volume
+        r.setByte(0xFF24, 0x77);
     }
 
     public void init(EventBus eventBus) {
@@ -109,6 +111,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     @Override
     public void setByte(int address, int value) {
+        //LOG.atInfo().log("setByte({}, {})", Integer.toHexString(address), Integer.toHexString(value));
         if (address == 0xff26) {
             if ((value & (1 << 7)) == 0) {
                 if (enabled) {
