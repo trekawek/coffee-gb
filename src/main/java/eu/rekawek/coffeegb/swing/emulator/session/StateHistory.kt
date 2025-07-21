@@ -11,12 +11,12 @@ import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.*
 import kotlin.math.max
 import kotlin.math.min
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class StateHistory(private val rom: File) {
 
@@ -70,8 +70,8 @@ class StateHistory(private val rom: File) {
         states.firstOrNull { it.frame == baseFrame }
             ?: throw IllegalStateException("No frame $baseFrame")
 
-    val mainGameboy = Gameboy(Cartridge(rom))
-    val secondaryGameboy = Gameboy(Cartridge(rom))
+    val mainGameboy = Gameboy(Cartridge(rom, false, Cartridge.GameboyType.AUTOMATIC, false))
+    val secondaryGameboy = Gameboy(Cartridge(rom, false, Cartridge.GameboyType.AUTOMATIC, false))
     val mainLink = Peer2PeerSerialEndpoint()
     val secondaryLink = Peer2PeerSerialEndpoint()
     mainLink.init(secondaryLink)

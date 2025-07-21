@@ -18,19 +18,19 @@ import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.io.File
 import java.lang.Thread.sleep
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class LinkedSession(
     private val eventBus: EventBus,
     private val rom: File,
     private val console: Console?,
 ) : Session {
-  private val cart = Cartridge(rom)
+  private val cart = getCartridge()
 
   private var mainGameboy: Gameboy? = null
 
@@ -62,7 +62,7 @@ class LinkedSession(
             SoundSampleEvent::class,
             Joypad.JoypadPressEvent::class))
     val mainSerialEndpoint = Peer2PeerSerialEndpoint()
-    val mainGameboy = Gameboy(Cartridge(rom))
+    val mainGameboy = Gameboy(getCartridge())
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
     val localSecondaryEventBus = EventBus()
@@ -72,7 +72,7 @@ class LinkedSession(
         secondaryEventBus,
         setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class))
     val secondarySerialEndpoint = Peer2PeerSerialEndpoint()
-    val secondaryGameboy = Gameboy(Cartridge(rom))
+    val secondaryGameboy = Gameboy(getCartridge())
     secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, console)
 
     secondarySerialEndpoint.init(mainSerialEndpoint)
@@ -224,6 +224,10 @@ class LinkedSession(
 
   override fun resume() {
     doPause = false
+  }
+
+  private fun getCartridge(): Cartridge {
+    return Cartridge(rom, false, Cartridge.GameboyType.AUTOMATIC, false)
   }
 
   data class LocalButtonStateEvent(
