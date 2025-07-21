@@ -6,10 +6,14 @@ import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 
 public class SerialPort implements AddressSpace, Serializable, Originator<SerialPort> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SerialPort.class);
 
     private transient SerialEndpoint serialEndpoint;
 
@@ -23,13 +27,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private int sc;
 
-    private boolean transferInProgress;
-
     private int divider;
-
-    private ClockType clockType;
-
-    private int speed;
 
     private int receivedBits;
 
@@ -44,12 +42,13 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
     }
 
     public void tick() {
+        boolean transferInProgress = (sc & (1 << 7)) != 0;
         int incomingBit = -1;
         // We're receiving bits even without the transfer in progress.
-        if (clockType == ClockType.EXTERNAL) {
+        if (ClockType.getFromSc(sc) == ClockType.EXTERNAL) {
             incomingBit = serialEndpoint.recvBit();
         } else if (transferInProgress) {
-            if (divider++ == Gameboy.TICKS_PER_SEC / speed) {
+            if (divider++ == Gameboy.TICKS_PER_SEC / getSpeed()) {
                 divider = 0;
                 incomingBit = serialEndpoint.sendBit();
             }
@@ -60,9 +59,21 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
             receivedBits++;
             if (receivedBits == 8) {
                 interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
-                transferInProgress = false;
+                sc = sc & 0b01111111; // stop transfer
+                LOG.atDebug().log("[{}] Received sb = {}", this.hashCode(), Integer.toBinaryString(sb));
             }
         }
+    }
+
+    private int getSpeed() {
+        int speed;
+        if (gbc && (sc & (1 << 1)) != 0) {
+            speed = 262144;
+        } else {
+            speed = 8192;
+        }
+        speed *= speedMode.getSpeedMode();
+        return speed;
     }
 
     @Override
@@ -75,59 +86,50 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         if (address == 0xff01) {
             sb = value;
             serialEndpoint.setSb(sb);
+            LOG.atDebug().log("[{}] Set SB = {}", this.hashCode(), Integer.toBinaryString(sb));
         } else if (address == 0xff02) {
-            sc = value;
-            if ((sc & (1 << 7)) != 0) {
-                startTransfer();
+            if ((sc & (1 << 7)) == 0 && (value & (1 << 7)) != 0) {
+                divider = 0;
+                receivedBits = 0;
+                serialEndpoint.startSending();
+                LOG.atDebug().log("[{}] Start transfer", this.hashCode());
             }
+            sc = value;
+            LOG.atDebug().log("[{}] Set SC = {}", this.hashCode(), Integer.toBinaryString(sc));
         }
     }
 
     @Override
     public int getByte(int address) {
         if (address == 0xff01) {
+            LOG.atDebug().log("[{}] Get SB = {}", this.hashCode(), Integer.toBinaryString(sb));
             return sb;
         } else if (address == 0xff02) {
-            return sc | 0b01111110;
+            var effectiveSc = sc | 0b01111100;
+            LOG.atDebug().log("[{}] Get SC = {}", this.hashCode(), Integer.toBinaryString(effectiveSc));
+            return effectiveSc;
         } else {
             throw new IllegalArgumentException();
         }
     }
 
-    private void startTransfer() {
-        transferInProgress = true;
-        divider = 0;
-        clockType = ClockType.getFromSc(sc);
-        receivedBits = 0;
-        if (gbc && (sc & (1 << 1)) != 0) {
-            speed = 262144;
-        } else {
-            speed = 8192;
-        }
-        speed *= speedMode.getSpeedMode();
-        serialEndpoint.startSending();
-    }
-
     @Override
     public Memento<SerialPort> saveToMemento() {
-        return new SerialPortMemento(sb, sc, transferInProgress, divider, clockType, speed, receivedBits);
+        return new SerialPortMemento(sb, sc, divider, receivedBits);
     }
 
     @Override
     public void restoreFromMemento(Memento<SerialPort> memento) {
+        LOG.atDebug().log("[{}] Restore from memento", this.hashCode());
         if (!(memento instanceof SerialPortMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
         this.sb = mem.sb;
         this.sc = mem.sc;
-        this.transferInProgress = mem.transferInProgress;
         this.divider = mem.divider;
-        this.clockType = mem.clockType;
-        this.speed = mem.speed;
         this.receivedBits = mem.receivedBits;
     }
 
-    private record SerialPortMemento(int sb, int sc, boolean transferInProgress, int divider, ClockType clockType,
-                                     int speed, int receivedBits) implements Memento<SerialPort> {
+    private record SerialPortMemento(int sb, int sc, int divider, int receivedBits) implements Memento<SerialPort> {
     }
 }
