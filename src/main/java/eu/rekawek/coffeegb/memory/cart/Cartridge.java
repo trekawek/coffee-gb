@@ -79,7 +79,15 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             GameboyType overrideGameboyType,
             boolean useBootstrap)
             throws IOException {
-        int[] rom = loadFile(romFile);
+        this(loadFile(romFile), supportBatterySaves ? createBattery(romFile) : Battery.NULL_BATTERY, overrideGameboyType, useBootstrap);
+    }
+
+    public Cartridge(
+            int[] rom,
+            Battery battery,
+            GameboyType overrideGameboyType,
+            boolean useBootstrap)
+            throws IOException {
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
         title = getTitle(rom);
         LOG.debug("Cartridge {}, type: {}", title, type);
@@ -92,15 +100,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         }
         LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
 
-        if (type.isBattery() && supportBatterySaves) {
-            battery =
-                    new FileBattery(
-                            romFile.getParentFile(),
-                            FilenameUtils.removeExtension(romFile.getName()),
-                            0x2000 * ramBanks);
-        } else {
-            battery = Battery.NULL_BATTERY;
-        }
+        this.battery = battery;
 
         if (type.isMbc1()) {
             addressSpace = new Mbc1(rom, battery, romBanks, ramBanks);
@@ -275,6 +275,26 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         }
     }
 
+    private static Battery createBattery(File romFile) throws IOException {
+        int[] rom = loadFile(romFile);
+        CartridgeType type = CartridgeType.getById(rom[0x0147]);
+        if (type.isBattery()) {
+            int ramBanks = getRamBanks(rom[0x0149]);
+            if (ramBanks == 0 && type.isRam()) {
+                ramBanks = 1;
+            }
+
+            File parent = romFile.getParentFile();
+            String baseName = FilenameUtils.removeExtension(romFile.getName());
+            File saveFile = new File(parent, baseName + ".sav");
+
+            return new FileBattery(
+                    saveFile,
+                    0x2000 * ramBanks);
+        } else {
+            return Battery.NULL_BATTERY;
+        }
+    }
 
     @Override
     public Memento<Cartridge> saveToMemento() {

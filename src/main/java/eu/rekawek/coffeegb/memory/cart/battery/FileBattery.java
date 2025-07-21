@@ -23,8 +23,8 @@ public class FileBattery implements Battery {
 
     private boolean isDirty;
 
-    public FileBattery(File parent, String baseName, int ramSize) {
-        this.saveFile = new File(parent, baseName + ".sav");
+    public FileBattery(File saveFile, int ramSize) {
+        this.saveFile = saveFile;
         this.clockBuffer = new byte[11 * 4];
         this.ramBuffer = new byte[ramSize];
     }
