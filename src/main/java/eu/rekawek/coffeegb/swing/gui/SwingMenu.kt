@@ -242,13 +242,21 @@ class SwingMenu(
       }
     }
 
-    val connected = JCheckBoxMenuItem("Connected")
+    val connected = JCheckBoxMenuItem()
+    val setConnected = fun(state: Boolean) {
+      if (state) {
+        connected.text = "\uD83D\uDFE2  Connected"
+      } else {
+        connected.text = "\uD83D\uDD34  Disconnected"
+      }
+    }
     connected.isEnabled = false
+    setConnected(false)
     linkMenu.add(connected)
 
-    eventBus.register<ClientConnectedToServerEvent> { connected.state = true }
+    eventBus.register<ClientConnectedToServerEvent> { setConnected(true) }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      connected.state = false
+      setConnected(false)
       connectToServer.state = false
     }
     eventBus.register<ServerStartedEvent> { connectToServer.isEnabled = false }
@@ -256,8 +264,8 @@ class SwingMenu(
       startServer.state = false
       connectToServer.isEnabled = true
     }
-    eventBus.register<ServerGotConnectionEvent> { connected.state = true }
-    eventBus.register<ServerLostConnectionEvent> { connected.state = false }
+    eventBus.register<ServerGotConnectionEvent> { setConnected(true) }
+    eventBus.register<ServerLostConnectionEvent> { setConnected(false) }
     return linkMenu
   }
 
