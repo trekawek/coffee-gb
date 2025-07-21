@@ -82,12 +82,9 @@ class SwingEmulator(
         startLinkedSession()
         eventBus.post(WaitingForPeerEvent(romBuffer, batteryBuffer))
       } else {
-        this.session = SimpleSession(eventBus.fork("session"), it.rom, console)
-      }
-
-      eventBus.post(SessionPauseSupportEvent(true))
-      eventBus.post(SessionSnapshotSupportEvent(session as? SnapshotSupport))
-      if (session is SimpleSession) {
+        session = SimpleSession(eventBus.fork("session"), it.rom, console)
+        eventBus.post(SessionPauseSupportEvent(true))
+        eventBus.post(SessionSnapshotSupportEvent(session as? SnapshotSupport))
         eventBus.post(StartEmulationEvent())
       }
     }
@@ -172,6 +169,8 @@ class SwingEmulator(
     if (mainRom != null && peerRom != null) {
       session?.shutDown()
       session = LinkedSession(eventBus.fork("session"), mainRom!!, peerRom!!, peerBattery, console)
+      eventBus.post(SessionPauseSupportEvent(true))
+      eventBus.post(SessionSnapshotSupportEvent(null))
       eventBus.post(StartEmulationEvent())
     }
   }

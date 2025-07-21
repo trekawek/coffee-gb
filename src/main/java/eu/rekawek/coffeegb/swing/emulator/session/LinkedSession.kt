@@ -46,6 +46,8 @@ class LinkedSession(
 
   @Volatile private var doStop = false
 
+  @Volatile private var isStopped = false
+
   @Volatile private var doPause = false
 
   @Synchronized
@@ -177,11 +179,13 @@ class LinkedSession(
     val tick = init()
     val timingTicker = TimingTicker()
     doStop = false
+    isStopped = false
     Thread {
           while (!doStop) {
             tick.run()
             timingTicker.run()
           }
+          isStopped = true
         }
         .start()
     mainEventBus?.post(Session.EmulationStartedEvent(mainCartridge!!.title))
@@ -193,6 +197,7 @@ class LinkedSession(
       return
     }
     doStop = true
+    while (!isStopped) {}
     doPause = false
 
     mainCartridge?.flushBattery()
