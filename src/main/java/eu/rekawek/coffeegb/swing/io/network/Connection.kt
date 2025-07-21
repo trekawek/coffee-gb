@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb.swing.io.network
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ConnectedGameboyStartedEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.WaitingForPeerEvent
 import eu.rekawek.coffeegb.swing.emulator.session.Input
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
@@ -11,8 +10,6 @@ import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonState
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.io.Closeable
-import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
@@ -28,20 +25,20 @@ class Connection(
 
   @Volatile private var doStop = false
 
-  @Volatile private var romFile: File? = null
-
   init {
     eventBus.register<WaitingForPeerEvent> {
-      romFile = it.romFile
       outputStream.write(0x01)
-      outputStream.write(it.romName.padEnd(16).toByteArray(Charsets.US_ASCII))
-      outputStream.flush()
-      LOG.atInfo().log("Sent {}", it)
-    }
-    eventBus.register<ConnectedGameboyStartedEvent> {
-      outputStream.write(0x02)
-      outputStream.flush()
-      LOG.atInfo().log("Sent {}", it)
+
+      val buf = ByteBuffer.allocate(8)
+      buf.putInt(it.romFile.size)
+      buf.putInt(it.batteryFile?.size ?: 0)
+      buf.rewind()
+
+      outputStream.write(buf.array())
+      outputStream.write(it.romFile)
+      if (it.batteryFile != null) {
+        outputStream.write(it.batteryFile)
+      }
     }
     eventBus.register<LocalButtonStateEvent> {
       outputStream.write(0x03)
@@ -59,11 +56,6 @@ class Connection(
       }
       outputStream.flush()
       LOG.atDebug().log("Sent {}", it)
-    }
-    eventBus.register<RequestRomEvent> {
-      outputStream.write(0x04)
-      outputStream.flush()
-      LOG.atInfo().log("Sent {}", it)
     }
     eventBus.register<RequestResetEvent> {
       outputStream.write(0x06)
@@ -97,12 +89,21 @@ class Connection(
           when (command) {
             // peer loaded game
             0x01 -> {
-              val title = inputStream.readNBytes(16).toString(Charsets.US_ASCII).trim()
-              PeerLoadedGameEvent(title)
-            }
-            // peer is ready
-            0x02 -> {
-              PeerIsReadyEvent()
+              val buf = ByteBuffer.allocate(8)
+              inputStream.read(buf.array())
+
+              val romSize = buf.getInt()
+              val batterySize = buf.getInt()
+
+              val rom = inputStream.readNBytes(romSize)
+              val battery =
+                  if (batterySize > 0) {
+                    inputStream.readNBytes(batterySize)
+                  } else {
+                    null
+                  }
+
+              PeerLoadedGameEvent(rom, battery)
             }
             // sync
             0x03 -> {
@@ -115,29 +116,6 @@ class Connection(
               val pressed = readButtons(pressedCount.toInt())
               val released = readButtons(releasedCount.toInt())
               LinkedSession.RemoteButtonStateEvent(frame, Input(pressed, released))
-            }
-            // request rom
-            0x04 -> {
-              LOG.atInfo().log("Received remote command $command, sending ROM $romFile")
-
-              val rom = romFile?.readBytes() ?: ByteArray(0)
-              val buf = ByteBuffer.allocate(4)
-              buf.putInt(rom.size)
-              outputStream.write(0x05)
-              outputStream.write(buf.array())
-              outputStream.write(rom)
-              outputStream.flush()
-
-              null
-            }
-
-            // receiver rom
-            0x05 -> {
-              val buf = ByteBuffer.allocate(4)
-              inputStream.read(buf.array())
-              val size = buf.getInt()
-              val rom = inputStream.readNBytes(size)
-              ReceivedRomEvent(rom)
             }
 
             // reset
@@ -167,7 +145,7 @@ class Connection(
           }
       if (event != null) {
         when (event) {
-          is ReceivedRomEvent ->
+          is PeerLoadedGameEvent ->
               LOG.atInfo()
                   .log("Received remote command $command, posting event: ${event.javaClass}")
           is LinkedSession.RemoteButtonStateEvent ->
@@ -197,13 +175,7 @@ class Connection(
     outputStream.close()
   }
 
-  data class PeerLoadedGameEvent(val romName: String) : Event
-
-  class PeerIsReadyEvent : Event
-
-  class RequestRomEvent : Event
-
-  data class ReceivedRomEvent(val rom: ByteArray) : Event
+  data class PeerLoadedGameEvent(val rom: ByteArray, val battery: ByteArray?) : Event
 
   class RequestResetEvent : Event
 

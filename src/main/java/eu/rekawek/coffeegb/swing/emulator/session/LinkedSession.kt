@@ -27,10 +27,12 @@ import kotlin.time.TimeSource
 
 class LinkedSession(
     private val eventBus: EventBus,
-    private val rom: File,
+    private val mainRom: File,
+    private val peerRom: ByteArray,
+    private val peerBattery: ByteArray?,
     private val console: Console?,
 ) : Session {
-  private val cart = getCartridge()
+  private var mainCartridge: Cartridge? = null
 
   private var mainGameboy: Gameboy? = null
 
@@ -49,9 +51,10 @@ class LinkedSession(
   @Synchronized
   @VisibleForTesting
   internal fun init(): Runnable {
-    stateHistory = StateHistory(rom)
+    stateHistory = StateHistory(mainRom, peerRom, peerBattery)
 
     val localMainEventBus = EventBus()
+    val mainCartridge = CartridgeUtils.createCartridge(mainRom)
     val mainEventBus = eventBus.fork("main")
     funnel(
         localMainEventBus,
@@ -62,7 +65,7 @@ class LinkedSession(
             SoundSampleEvent::class,
             Joypad.JoypadPressEvent::class))
     val mainSerialEndpoint = Peer2PeerSerialEndpoint()
-    val mainGameboy = Gameboy(getCartridge())
+    val mainGameboy = Gameboy(mainCartridge)
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
     val localSecondaryEventBus = EventBus()
@@ -72,7 +75,8 @@ class LinkedSession(
         secondaryEventBus,
         setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class))
     val secondarySerialEndpoint = Peer2PeerSerialEndpoint()
-    val secondaryGameboy = Gameboy(getCartridge())
+    val secondaryCartridge = CartridgeUtils.createCartridge(peerRom, peerBattery)
+    val secondaryGameboy = Gameboy(secondaryCartridge)
     secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, console)
 
     secondarySerialEndpoint.init(mainSerialEndpoint)
@@ -98,6 +102,7 @@ class LinkedSession(
       stateHistory!!.addSecondaryInput(it.frame, it.input)
     }
 
+    this.mainCartridge = mainCartridge
     this.mainGameboy = mainGameboy
     this.mainEventBus = mainEventBus
     this.secondaryGameboy = secondaryGameboy
@@ -179,7 +184,7 @@ class LinkedSession(
           }
         }
         .start()
-    mainEventBus?.post(Session.EmulationStartedEvent(cart.title))
+    mainEventBus?.post(Session.EmulationStartedEvent(mainCartridge!!.title))
   }
 
   @Synchronized
@@ -190,7 +195,7 @@ class LinkedSession(
     doStop = true
     doPause = false
 
-    cart.flushBattery()
+    mainCartridge?.flushBattery()
     console?.setGameboy(null)
     mainEventBus?.post(Session.EmulationStoppedEvent())
 
@@ -210,7 +215,7 @@ class LinkedSession(
   }
 
   override fun getRomName(): String {
-    return cart.title
+    return mainCartridge!!.title
   }
 
   override fun shutDown() {
@@ -224,10 +229,6 @@ class LinkedSession(
 
   override fun resume() {
     doPause = false
-  }
-
-  private fun getCartridge(): Cartridge {
-    return Cartridge(rom, false, Cartridge.GameboyType.AUTOMATIC, false)
   }
 
   data class LocalButtonStateEvent(

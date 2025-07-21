@@ -83,11 +83,16 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     }
 
     public Cartridge(
-            int[] rom,
+            byte[] romByteArray,
             Battery battery,
             GameboyType overrideGameboyType,
             boolean useBootstrap)
             throws IOException {
+        int[] rom = new int[romByteArray.length];
+        for (int i = 0; i < romByteArray.length; i++) {
+            rom[i] = romByteArray[i] & 0xFF;
+        }
+
         CartridgeType type = CartridgeType.getById(rom[0x0147]);
         title = getTitle(rom);
         LOG.debug("Cartridge {}, type: {}", title, type);
@@ -182,7 +187,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         addressSpace.flushRam();
     }
 
-    private static int[] loadFile(File file) throws IOException {
+    private static byte[] loadFile(File file) throws IOException {
         String ext = FilenameUtils.getExtension(file.getName());
         try (InputStream is = Files.newInputStream(file.toPath())) {
             if ("zip".equalsIgnoreCase(ext)) {
@@ -192,25 +197,16 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
                         String name = entry.getName();
                         String entryExt = FilenameUtils.getExtension(name);
                         if (Stream.of("gb", "gbc", "rom").anyMatch(e -> e.equalsIgnoreCase(entryExt))) {
-                            return load(zis, (int) entry.getSize());
+                            return IOUtils.toByteArray(zis, (int) entry.getSize());
                         }
                         zis.closeEntry();
                     }
                 }
                 throw new IllegalArgumentException("Can't find ROM file inside the zip.");
             } else {
-                return load(is, (int) file.length());
+                return IOUtils.toByteArray(is, (int) file.length());
             }
         }
-    }
-
-    private static int[] load(InputStream is, int length) throws IOException {
-        byte[] byteArray = IOUtils.toByteArray(is, length);
-        int[] intArray = new int[byteArray.length];
-        for (int i = 0; i < byteArray.length; i++) {
-            intArray[i] = byteArray[i] & 0xff;
-        }
-        return intArray;
     }
 
     private static int getRomBanks(int id) {
@@ -276,24 +272,26 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     }
 
     private static Battery createBattery(File romFile) throws IOException {
-        int[] rom = loadFile(romFile);
-        CartridgeType type = CartridgeType.getById(rom[0x0147]);
+        byte[] rom = loadFile(romFile);
+        CartridgeType type = CartridgeType.getById(rom[0x0147] & 0xFF);
         if (type.isBattery()) {
-            int ramBanks = getRamBanks(rom[0x0149]);
+            int ramBanks = getRamBanks(rom[0x0149] & 0xFF);
             if (ramBanks == 0 && type.isRam()) {
                 ramBanks = 1;
             }
 
-            File parent = romFile.getParentFile();
-            String baseName = FilenameUtils.removeExtension(romFile.getName());
-            File saveFile = new File(parent, baseName + ".sav");
-
             return new FileBattery(
-                    saveFile,
+                    getSaveName(romFile),
                     0x2000 * ramBanks);
         } else {
             return Battery.NULL_BATTERY;
         }
+    }
+
+    public static File getSaveName(File romFile) {
+        File parent = romFile.getParentFile();
+        String baseName = FilenameUtils.removeExtension(romFile.getName());
+        return new File(parent, baseName + ".sav");
     }
 
     @Override

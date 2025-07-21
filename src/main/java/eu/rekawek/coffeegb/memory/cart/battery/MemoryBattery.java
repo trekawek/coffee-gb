@@ -10,7 +10,7 @@ public class MemoryBattery implements Battery, Originator<Battery> {
 
     private final byte[] buffer;
 
-    private MemoryBattery(byte[] buffer) {
+    public MemoryBattery(byte[] buffer) {
         this.buffer = buffer.clone();
     }
 
@@ -32,11 +32,13 @@ public class MemoryBattery implements Battery, Originator<Battery> {
     public void loadRamWithClock(int[] ram, long[] clockData) {
         loadRam(ram);
 
-        ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, 4 * clockData.length);
-        buff.order(ByteOrder.LITTLE_ENDIAN);
-        int i = 0;
-        while (buff.hasRemaining()) {
-            clockData[i++] = buff.getInt();
+        if (clockData != null) {
+            ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, buffer.length - ram.length);
+            buff.order(ByteOrder.LITTLE_ENDIAN);
+            int i = 0;
+            while (buff.hasRemaining()) {
+                clockData[i++] = buff.getInt();
+            }
         }
     }
 
@@ -44,10 +46,15 @@ public class MemoryBattery implements Battery, Originator<Battery> {
     public void saveRamWithClock(int[] ram, long[] clockData) {
         saveRam(ram);
 
-        ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, 4 * clockData.length);
-        buff.order(ByteOrder.LITTLE_ENDIAN);
-        for (long d : clockData) {
-            buff.putInt((int) d);
+        if (clockData != null) {
+            ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, buffer.length - ram.length);
+            buff.order(ByteOrder.LITTLE_ENDIAN);
+            for (long d : clockData) {
+                if (buff.limit() - buff.position() < 4) {
+                    break;
+                }
+                buff.putInt((int) d);
+            }
         }
     }
 
