@@ -161,7 +161,7 @@ class LinkedSession(
 
           val now = TimeSource.Monotonic.markNow()
           if (!effectiveInput.isEmpty() || now - lastSync > 5.seconds) {
-            eventBus.post(LocalButtonStateEvent(frame, effectiveInput))
+            eventBus.postAsync(LocalButtonStateEvent(frame, effectiveInput))
             effectiveInput.send(localMainEventBus)
             lastSync = now
           }
