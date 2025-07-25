@@ -15,7 +15,7 @@ class TcpClient(
 
   override fun run() {
     try {
-      clientSocket = Socket(host, TcpServer.PORT)
+      clientSocket = createSocket(host)
       LOG.info("Connected to {}", clientSocket!!.inetAddress)
       eventBus.post(ConnectionController.ClientConnectedToServerEvent())
       Connection(clientSocket!!.getInputStream(), clientSocket!!.getOutputStream(), eventBus).use {
@@ -44,5 +44,13 @@ class TcpClient(
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(TcpClient::class.java)
+
+    private fun createSocket(host: String): Socket {
+      return if (host.contains(":")) {
+        Socket(host.substringBefore(":"), host.substringAfter(":").toInt())
+      } else {
+        Socket(host, TcpServer.PORT)
+      }
+    }
   }
 }
