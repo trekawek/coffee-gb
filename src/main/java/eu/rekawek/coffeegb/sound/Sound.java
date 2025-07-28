@@ -54,9 +54,10 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             play(0, 0);
         }
 
-        for (int i = 0; i < allModes.length; i++) {
-            channels[i] = allModes[i].tick();
-        }
+        channels[0] = allModes[0].tick();
+        channels[1] = allModes[1].tick();
+        channels[2] = allModes[2].tick();
+        channels[3] = allModes[3].tick();
 
         int selection = r.getByte(0xff25);
         int left = 0;
