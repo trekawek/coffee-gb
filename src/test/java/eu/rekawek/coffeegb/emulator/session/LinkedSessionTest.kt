@@ -86,7 +86,7 @@ class LinkedSessionTest {
         randomJoypad.tick()
       }
     }
-    repeat(Gameboy.TICKS_PER_FRAME) {
+    repeat(Gameboy.TICKS_PER_FRAME * 5) {
       tickRunnable1.run()
       tickRunnable2.run()
     }
@@ -132,7 +132,7 @@ class LinkedSessionTest {
         randomJoypad2.tick()
       }
     }
-    repeat(Gameboy.TICKS_PER_FRAME) {
+    repeat(Gameboy.TICKS_PER_FRAME * 5) {
       tickRunnable1.run()
       tickRunnable2.run()
     }
