@@ -1,6 +1,6 @@
 # Coffee GB
 
-Coffee GB is a Gameboy Color emulator written in Java 8. It's meant to be a development exercise. More info can be found in the blog post [Why did I spend 1.5 months creating a Gameboy emulator?](http://blog.rekawek.eu/2017/02/09/coffee-gb/)
+Coffee GB is a Gameboy Color emulator written in Java 21 (core) and Kotlin (UI). It's meant to be a development exercise. More info can be found in the blog post [Why did I spend 1.5 months creating a Gameboy emulator?](http://blog.rekawek.eu/2017/02/09/coffee-gb/)
 
 ![Coffee GB running game](doc/tetris.gif)
 
@@ -24,7 +24,7 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 
 * Cycle-exact Gameboy CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
 * Quite compatible (all the Blargg's tests are passed, although some game still doesn't work)
-* Online multiplayer even on high-latency connections 
+* [Rollback-based netplay](https://blog.rekawek.eu/2025/07/26/rollback-netplay-gb/) 
 * MBC1-5 support
 * Battery saves
 * Support for zipped ROMs
