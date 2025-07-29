@@ -1,6 +1,6 @@
 # Coffee GB
 
-Coffee GB is a Gameboy Color emulator written in Java 21 (core) and Kotlin (UI). It's meant to be a development exercise. More info can be found in the blog post [Why did I spend 1.5 months creating a Gameboy emulator?](http://blog.rekawek.eu/2017/02/09/coffee-gb/)
+Coffee GB is a Gameboy Color emulator written in Java 16 (core) and Kotlin (UI). It's meant to be a development exercise. More info can be found in the blog post [Why did I spend 1.5 months creating a Gameboy emulator?](http://blog.rekawek.eu/2017/02/09/coffee-gb/)
 
 ![Coffee GB running game](doc/tetris.gif)
 
