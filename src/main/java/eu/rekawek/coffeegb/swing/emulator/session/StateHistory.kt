@@ -10,12 +10,12 @@ import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.*
 import kotlin.math.max
 import kotlin.math.min
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class StateHistory(
     private val mainRom: File,
