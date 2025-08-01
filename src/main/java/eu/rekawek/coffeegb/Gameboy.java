@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb;
 import eu.rekawek.coffeegb.controller.Joypad;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
-import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.events.EventBus;
@@ -26,6 +25,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
+
+    private static final boolean BOOTSTRAP_FAST_FORWARD = true;
+
     public static final int TICKS_PER_SEC = 4_194_304;
 
     // 60 frames per second
@@ -57,15 +59,13 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
     private final Joypad joypad;
 
-    private final boolean gbc;
-
     private final SpeedMode speedMode;
 
     private transient Console console;
 
     private transient volatile boolean doStop;
 
-    private transient List<Runnable> tickListeners;
+    private final List<Runnable> tickListeners = new ArrayList<>();
 
     private boolean requestedScreenRefresh;
 
@@ -77,7 +77,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
     public Gameboy(Cartridge rom) {
         this.rom = rom;
-        gbc = rom.isGbc();
+        boolean gbc = rom.isGbc();
         speedMode = new SpeedMode();
         interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
@@ -109,14 +109,29 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
-        if (!rom.isUseBootstrap()) {
-            initRegs();
+        if (BOOTSTRAP_FAST_FORWARD) {
+            rom.setByte(0xff50, 0);
+            var r = cpu.getRegisters();
+            if (gbc) {
+                r.setAF(0x1180);
+                r.setBC(0x0000);
+                r.setDE(0xff56);
+                r.setHL(0x000d);
+                gpu.getOamPalette().getPalette(0)[0] = 0x7f00;
+                gpu.getOamPalette().setByte(0xff6a, 1);
+            } else {
+                r.setAF(0x01b0);
+                r.setBC(0x0013);
+                r.setDE(0x00d8);
+                r.setHL(0x014d);
+            }
+            r.setSP(0xfffe);
+            r.setPC(0x0100);
         }
     }
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
         this.console = console;
-        this.tickListeners = new ArrayList<>();
         if (console != null) {
             console.setGameboy(this);
         }
@@ -125,20 +140,6 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         display.init(eventBus);
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
-    }
-
-    private void initRegs() {
-        Registers r = cpu.getRegisters();
-
-        r.setAF(0x01b0);
-        if (gbc) {
-            r.setA(0x11);
-        }
-        r.setBC(0x0013);
-        r.setDE(0x00d8);
-        r.setHL(0x014d);
-        r.setSP(0xfffe);
-        r.setPC(0x0100);
     }
 
     public void run() {

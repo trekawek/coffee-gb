@@ -13,9 +13,9 @@ object CartridgeUtils {
 
   fun createCartridge(rom: ByteArray, battery: ByteArray?): Cartridge {
     if (battery == null) {
-      return Cartridge(rom, Battery.NULL_BATTERY, Cartridge.GameboyType.AUTOMATIC, false)
+      return Cartridge(rom, Battery.NULL_BATTERY, Cartridge.GameboyType.AUTOMATIC)
     } else {
-      return Cartridge(rom, MemoryBattery(battery), Cartridge.GameboyType.AUTOMATIC, false)
+      return Cartridge(rom, MemoryBattery(battery), Cartridge.GameboyType.AUTOMATIC)
     }
   }
 }

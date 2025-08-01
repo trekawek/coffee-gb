@@ -15,7 +15,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private static final Logger LOG = LoggerFactory.getLogger(SerialPort.class);
 
-    private transient SerialEndpoint serialEndpoint;
+    private transient SerialEndpoint serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
 
     private final InterruptManager interruptManager;
 

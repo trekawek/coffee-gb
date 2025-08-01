@@ -13,11 +13,11 @@ import java.io.File
 
 class SimpleSession(
     private val eventBus: EventBus,
-    rom: File,
+    private val rom: File,
     private val console: Console?,
 ) : Session, SnapshotSupport {
 
-  private val cart = Cartridge(rom)
+  private var cart: Cartridge? = null
 
   private val snapshotManager = SnapshotManager(rom)
 
@@ -27,18 +27,13 @@ class SimpleSession(
 
   @Synchronized
   override fun start() {
-    init(Gameboy(cart))
-  }
-
-  private fun init(gameboy: Gameboy) {
-    stop()
-
-    this.gameboy = gameboy
+    cart = Cartridge(rom, true, Cartridge.GameboyType.AUTOMATIC)
+    gameboy = Gameboy(cart)
     localEventBus = eventBus.fork("main")
-    gameboy.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
-    gameboy.registerTickListener(TimingTicker())
+    gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
+    gameboy?.registerTickListener(TimingTicker())
     Thread(gameboy).start()
-    localEventBus!!.post(EmulationStartedEvent(cart.title))
+    localEventBus!!.post(EmulationStartedEvent(cart!!.title))
   }
 
   @Synchronized
@@ -47,23 +42,20 @@ class SimpleSession(
       return
     }
     gameboy?.stop()
-    cart.flushBattery()
+    cart?.flushBattery()
     console?.setGameboy(null)
     localEventBus!!.post(EmulationStoppedEvent())
     localEventBus!!.stop()
 
     localEventBus = null
     gameboy = null
+    cart = null
   }
 
   @Synchronized
   override fun reset() {
     stop()
     start()
-  }
-
-  override fun getRomName(): String {
-    return cart.title
   }
 
   @Synchronized

@@ -21,7 +21,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     private final InterruptManager interruptManager;
     private int p1;
     private long tick;
-    private EventBus eventBus;
+    private EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
     public Joypad(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;

@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.events.EventBus;
+import eu.rekawek.coffeegb.events.EventBusImpl;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
@@ -27,7 +28,7 @@ public class MooneyeTestRunner {
     private final OutputStream os;
 
     public MooneyeTestRunner(File romFile, OutputStream os) throws IOException {
-        EventBus eventBus = new EventBus();
+        EventBus eventBus = new EventBusImpl();
         Cartridge.GameboyType type = Cartridge.GameboyType.AUTOMATIC;
         boolean useBootstrap = false;
         if (romFile.toString().endsWith("-C.gb") || romFile.toString().endsWith("-cgb.gb")) {
@@ -36,11 +37,11 @@ public class MooneyeTestRunner {
         if (romFile.getName().startsWith("boot_")) {
             useBootstrap = true;
         }
-        Cartridge cart = new Cartridge(romFile, false, type, useBootstrap);
+        Cartridge cart = new Cartridge(romFile, false, type);
         gb = new Gameboy(cart);
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
-        System.out.println("Bootstrap: " + (cart.isUseBootstrap() ? "enabled" : "disabled"));
+        System.out.println("Bootstrap required: " + (useBootstrap ? "enabled" : "disabled"));
         cpu = gb.getCpu();
         regs = cpu.getRegisters();
         mem = gb.getAddressSpace();

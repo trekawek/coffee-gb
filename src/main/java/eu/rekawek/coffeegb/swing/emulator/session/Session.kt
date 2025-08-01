@@ -13,8 +13,6 @@ interface Session {
 
   fun resume()
 
-  fun getRomName(): String
-
   fun shutDown()
 
   class EmulationStartedEvent(val romName: String) : Event

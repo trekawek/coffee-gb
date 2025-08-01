@@ -317,6 +317,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return bgPalette;
     }
 
+    public ColorPalette getOamPalette() {
+        return oamPalette;
+    }
+
     public Mode getMode() {
         return mode;
     }

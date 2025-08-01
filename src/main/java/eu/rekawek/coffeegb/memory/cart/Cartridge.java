@@ -65,28 +65,24 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
 
     private final Battery battery;
 
-    private final boolean useBootstrap;
-
     private int dmgBoostrap;
 
     public Cartridge(File romFile) throws IOException {
-        this(romFile, true, GameboyType.AUTOMATIC, false);
+        this(romFile, true, GameboyType.AUTOMATIC);
     }
 
     public Cartridge(
             File romFile,
             boolean supportBatterySaves,
-            GameboyType overrideGameboyType,
-            boolean useBootstrap)
+            GameboyType overrideGameboyType)
             throws IOException {
-        this(loadFile(romFile), supportBatterySaves ? createBattery(romFile) : Battery.NULL_BATTERY, overrideGameboyType, useBootstrap);
+        this(loadFile(romFile), supportBatterySaves ? createBattery(romFile) : Battery.NULL_BATTERY, overrideGameboyType);
     }
 
     public Cartridge(
             byte[] romByteArray,
             Battery battery,
-            GameboyType overrideGameboyType,
-            boolean useBootstrap)
+            GameboyType overrideGameboyType)
             throws IOException {
         int[] rom = new int[romByteArray.length];
         for (int i = 0; i < romByteArray.length; i++) {
@@ -119,7 +115,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Rom(rom, type, romBanks, ramBanks);
         }
 
-        dmgBoostrap = useBootstrap ? 0 : 1;
+        dmgBoostrap = 0;
         if (overrideGameboyType == GameboyType.FORCE_CGB) {
             gbc = true;
         } else if (gameboyType == Cartridge.GameboyTypeFlag.NON_CGB) {
@@ -127,7 +123,6 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         } else { // UNIVERSAL
             gbc = overrideGameboyType != GameboyType.FORCE_DMG;
         }
-        this.useBootstrap = useBootstrap;
     }
 
     private String getTitle(int[] rom) {
@@ -148,10 +143,6 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
 
     public boolean isGbc() {
         return gbc;
-    }
-
-    public boolean isUseBootstrap() {
-        return useBootstrap;
     }
 
     @Override

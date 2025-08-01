@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.swing.gui
 
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
+import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
 import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStartedEvent
@@ -30,7 +31,7 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
   private lateinit var mainWindow: JFrame
 
   init {
-    eventBus = EventBus()
+    eventBus = EventBusImpl()
     emulator = SwingEmulator(eventBus, console, properties)
   }
 

@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.controller.Joypad
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
+import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent
 import eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent
 import eu.rekawek.coffeegb.memory.cart.Cartridge
@@ -55,7 +56,7 @@ class LinkedSession(
   internal fun init(): Runnable {
     stateHistory = StateHistory(mainRom, peerRom, peerBattery)
 
-    val localMainEventBus = EventBus()
+    val localMainEventBus = EventBusImpl()
     val mainCartridge = CartridgeUtils.createCartridge(mainRom)
     val mainEventBus = eventBus.fork("main")
     funnel(
@@ -70,7 +71,7 @@ class LinkedSession(
     val mainGameboy = Gameboy(mainCartridge)
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
-    val localSecondaryEventBus = EventBus()
+    val localSecondaryEventBus = EventBusImpl()
     val secondaryEventBus = eventBus.fork("secondary")
     funnel(
         localSecondaryEventBus,
@@ -217,10 +218,6 @@ class LinkedSession(
   override fun reset() {
     stop()
     start()
-  }
-
-  override fun getRomName(): String {
-    return mainCartridge!!.title
   }
 
   override fun shutDown() {

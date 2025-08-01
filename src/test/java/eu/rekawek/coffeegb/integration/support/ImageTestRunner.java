@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.events.EventBus;
+import eu.rekawek.coffeegb.events.EventBusImpl;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
@@ -26,7 +27,7 @@ public class ImageTestRunner {
     private final int[] resultRGB = new int[Display.DISPLAY_HEIGHT * Display.DISPLAY_WIDTH];
 
     public ImageTestRunner(File romFile) throws IOException {
-        EventBus eventBus = new EventBus();
+        EventBus eventBus = new EventBusImpl();
         Cartridge cart = new Cartridge(romFile);
         gb = new Gameboy(cart);
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);

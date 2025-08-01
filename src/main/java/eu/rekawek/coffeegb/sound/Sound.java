@@ -34,7 +34,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     private int i = 0;
 
-    private transient EventBus eventBus;
+    private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
     public Sound(boolean gbc) {
         allModes[0] = new SoundMode1(gbc);

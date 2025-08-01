@@ -13,7 +13,7 @@ public class Display implements Serializable, Originator<Display> {
 
     public static final int DISPLAY_HEIGHT = 144;
 
-    private transient volatile EventBus eventBus;
+    private transient volatile EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
     private final int[] buffer = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
@@ -21,7 +21,7 @@ public class Display implements Serializable, Originator<Display> {
 
     private int i;
 
-    private boolean enabled;
+    private boolean enabled = true;
 
     public Display(boolean gbc) {
         this.gbc = gbc;
