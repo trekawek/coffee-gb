@@ -26,8 +26,6 @@ import java.util.List;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
-    private static final boolean BOOTSTRAP_FAST_FORWARD = true;
-
     public static final int TICKS_PER_SEC = 4_194_304;
 
     // 60 frames per second
@@ -76,6 +74,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
     private transient volatile boolean paused;
 
     public Gameboy(Cartridge rom) {
+        this(rom, BootstrapMode.SKIP);
+    }
+
+    public Gameboy(Cartridge rom, BootstrapMode bootstrapMode) {
         this.rom = rom;
         boolean gbc = rom.isGbc();
         speedMode = new SpeedMode();
@@ -109,7 +111,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
-        if (BOOTSTRAP_FAST_FORWARD) {
+        if (bootstrapMode == BootstrapMode.FAST_FORWARD) {
+            while (cpu.getRegisters().getPC() != 0x100) {
+                tick();
+            }
+        } else if (bootstrapMode == BootstrapMode.SKIP) {
             rom.setByte(0xff50, 0);
             var r = cpu.getRegisters();
             if (gbc) {
@@ -301,5 +307,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
                                   boolean requestScreenRefresh, boolean lcdDisabled) implements Memento<Gameboy> {
+    }
+
+    public enum BootstrapMode {
+        NORMAL, FAST_FORWARD, SKIP,
     }
 }

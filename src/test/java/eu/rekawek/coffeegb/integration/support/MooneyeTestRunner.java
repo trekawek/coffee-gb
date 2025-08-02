@@ -13,6 +13,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 
+import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.FAST_FORWARD;
+import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.SKIP;
 import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
 
 public class MooneyeTestRunner {
@@ -38,7 +40,7 @@ public class MooneyeTestRunner {
             useBootstrap = true;
         }
         Cartridge cart = new Cartridge(romFile, false, type);
-        gb = new Gameboy(cart);
+        gb = new Gameboy(cart, useBootstrap ? FAST_FORWARD : SKIP);
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
         System.out.println("Bootstrap required: " + (useBootstrap ? "enabled" : "disabled"));

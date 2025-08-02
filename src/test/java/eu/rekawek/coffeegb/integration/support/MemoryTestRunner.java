@@ -26,7 +26,7 @@ public class MemoryTestRunner {
     public MemoryTestRunner(File romFile, OutputStream os) throws IOException {
         EventBus eventBus = new EventBusImpl();
         Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart);
+        gb = new Gameboy(cart, Gameboy.BootstrapMode.SKIP);
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         text = new StringBuilder();
         this.os = os;

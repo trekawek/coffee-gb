@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.swing.emulator.session
 
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
+import eu.rekawek.coffeegb.Gameboy.BootstrapMode.SKIP
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.Joypad
@@ -11,12 +12,12 @@ import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.*
 import kotlin.math.max
 import kotlin.math.min
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class StateHistory(
     private val mainRom: File,
@@ -74,8 +75,8 @@ class StateHistory(
         states.firstOrNull { it.frame == baseFrame }
             ?: throw IllegalStateException("No frame $baseFrame")
 
-    val mainGameboy = Gameboy(CartridgeUtils.createCartridge(mainRom))
-    val secondaryGameboy = Gameboy(CartridgeUtils.createCartridge(peerRom, peerBattery))
+    val mainGameboy = Gameboy(CartridgeUtils.createCartridge(mainRom), SKIP)
+    val secondaryGameboy = Gameboy(CartridgeUtils.createCartridge(peerRom, peerBattery), SKIP)
     val mainLink = Peer2PeerSerialEndpoint()
     val secondaryLink = Peer2PeerSerialEndpoint()
     mainLink.init(secondaryLink)
