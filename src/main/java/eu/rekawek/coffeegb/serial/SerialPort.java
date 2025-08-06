@@ -23,9 +23,9 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private final SpeedMode speedMode;
 
-    private int sb;
+    private int sb = 0;
 
-    private int sc;
+    private int sc = 0b01111110;
 
     private int divider;
 
@@ -105,7 +105,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
             LOG.atDebug().log("[{}] Get SB = {}", this.hashCode(), Integer.toBinaryString(sb));
             return sb;
         } else if (address == 0xff02) {
-            var effectiveSc = sc | 0b01111100;
+            int effectiveSc = sc | (gbc ? 0b01111100 : 0b01111110);
             LOG.atDebug().log("[{}] Get SC = {}", this.hashCode(), Integer.toBinaryString(effectiveSc));
             return effectiveSc;
         } else {

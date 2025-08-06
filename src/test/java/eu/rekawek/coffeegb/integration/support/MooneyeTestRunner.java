@@ -13,8 +13,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 
-import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.FAST_FORWARD;
-import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.SKIP;
+import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.*;
 import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
 
 public class MooneyeTestRunner {
@@ -33,14 +32,14 @@ public class MooneyeTestRunner {
         EventBus eventBus = new EventBusImpl();
         Cartridge.GameboyType type = Cartridge.GameboyType.AUTOMATIC;
         boolean useBootstrap = false;
-        if (romFile.toString().endsWith("-C.gb") || romFile.toString().endsWith("-cgb.gb")) {
+        if (romFile.toString().endsWith("-C.gb") || romFile.toString().contains("-cgb")) {
             type = Cartridge.GameboyType.FORCE_CGB;
         }
         if (romFile.getName().startsWith("boot_")) {
             useBootstrap = true;
         }
         Cartridge cart = new Cartridge(romFile, false, type);
-        gb = new Gameboy(cart, useBootstrap ? FAST_FORWARD : SKIP);
+        gb = new Gameboy(cart, useBootstrap ? NORMAL : SKIP);
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
         System.out.println("Bootstrap required: " + (useBootstrap ? "enabled" : "disabled"));
@@ -54,7 +53,7 @@ public class MooneyeTestRunner {
         int divider = 0;
         while (!isByteSequenceAtPc(gb, 0x00, 0x18, 0xfd)) { // infinite loop
             gb.tick();
-            if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 1 : 4)) {
+            if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 2 : 4)) {
                 displayProgress();
                 divider = 0;
             }
