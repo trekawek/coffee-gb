@@ -31,6 +31,8 @@ public class Rom {
 
     private final GameboyColorFlag gameboyColorFlag;
 
+    private final boolean superGameboyFlag;
+
     public Rom(File romFile) throws IOException {
         this(loadFile(romFile), romFile);
     }
@@ -49,6 +51,7 @@ public class Rom {
         title = getTitle(rom);
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
         gameboyColorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
+        superGameboyFlag = rom[0x0146] == 0x03;
         romBanks = getRomBanks(rom[0x0148]);
         int ramBanks = getRamBanks(rom[0x0149]);
         if (ramBanks == 0 && cartridgeType.isRam()) {
@@ -86,6 +89,10 @@ public class Rom {
 
     public GameboyColorFlag getGameboyColorFlag() {
         return gameboyColorFlag;
+    }
+
+    public boolean isSuperGameboyFlag() {
+        return superGameboyFlag;
     }
 
     private static String getTitle(int[] rom) {
@@ -163,5 +170,4 @@ public class Rom {
             }
         }
     }
-
 }

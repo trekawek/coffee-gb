@@ -32,12 +32,18 @@ class SimpleSession(
   @Synchronized
   override fun start() {
     val config = Gameboy.GameboyConfiguration(rom)
-    if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB) {
-      config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
-    } else {
-      config.setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-    }
     config.setGameboyType(GameboyType.CGB)
+
+    if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB) {
+      if (rom.isSuperGameboyFlag && SUPPORT_SGB) {
+        config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
+        config.setGameboyType(GameboyType.SGB)
+      } else {
+        config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
+        config.setGameboyType(GameboyType.CGB)
+      }
+    }
+
     gameboy = config.build()
     localEventBus = eventBus.fork("main")
     gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
@@ -96,5 +102,9 @@ class SimpleSession(
   override fun shutDown() {
     stop()
     eventBus.stop()
+  }
+
+  private companion object {
+    const val SUPPORT_SGB = false
   }
 }

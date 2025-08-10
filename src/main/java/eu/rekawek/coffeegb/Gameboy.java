@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.events.EventBus;
+import eu.rekawek.coffeegb.events.EventBusImpl;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memento.Memento;
@@ -16,6 +17,7 @@ import eu.rekawek.coffeegb.memory.cart.Rom;
 import eu.rekawek.coffeegb.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
+import eu.rekawek.coffeegb.sgb.SuperGameboy;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.timer.Timer;
 
@@ -63,6 +65,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final SpeedMode speedMode;
 
+    private final SuperGameboy superGameboy;
+
     private transient Console console;
 
     private transient volatile boolean doStop;
@@ -83,6 +87,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     public Gameboy(GameboyConfiguration configuration) {
         boolean gbc = configuration.gameboyType == GameboyType.CGB;
+        boolean sgb = configuration.gameboyType == GameboyType.SGB;
 
         speedMode = new SpeedMode(gbc);
         interruptManager = new InterruptManager(gbc);
@@ -90,12 +95,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         mmu = new Mmu(gbc);
         display = new Display(gbc);
 
+        EventBus sgbBus = new EventBusImpl();
+        superGameboy = new SuperGameboy(sgbBus);
         oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(mmu, oamRam, speedMode);
         gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
-        joypad = new Joypad(interruptManager);
+        joypad = new Joypad(interruptManager, sgbBus, sgb);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
 
         if (configuration.batteryData != null) {
@@ -285,7 +292,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
@@ -308,6 +315,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         serialPort.restoreFromMemento(mem.serialPortMemento());
         joypad.restoreFromMemento(mem.joypadMemento());
         speedMode.restoreFromMemento(mem.speedModeMemento());
+        superGameboy.restoreFromMemento(mem.superGameboyMemento());
         requestedScreenRefresh = mem.requestScreenRefresh();
         lcdDisabled = mem.lcdDisabled();
     }
@@ -324,6 +332,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
+                                  Memento<SuperGameboy> superGameboyMemento,
                                   boolean requestScreenRefresh, boolean lcdDisabled) implements Memento<Gameboy> {
     }
 
