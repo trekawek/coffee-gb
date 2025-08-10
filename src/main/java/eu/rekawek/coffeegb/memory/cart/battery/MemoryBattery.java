@@ -70,7 +70,7 @@ public class MemoryBattery implements Battery, Originator<Battery> {
     @Override
     public void restoreFromMemento(Memento<Battery> memento) {
         if (!(memento instanceof MemoryBatteryMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+            throw new IllegalArgumentException("Invalid memento type: " + memento);
         }
         if (this.buffer.length != mem.buffer.length) {
             throw new IllegalArgumentException("Memento buffer length doesn't match");

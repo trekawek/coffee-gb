@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
+import eu.rekawek.coffeegb.memory.cart.Rom;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 
 import java.util.Arrays;
@@ -24,9 +25,9 @@ public class Mbc5 implements MemoryController {
 
     private boolean ramUpdated;
 
-    public Mbc5(int[] cartridge, Battery battery, int ramBanks) {
-        this.cartridge = cartridge;
-        this.ramBanks = ramBanks;
+    public Mbc5(Rom rom, Battery battery) {
+        this.cartridge = rom.getRom();
+        this.ramBanks = rom.getRamBanks();
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
         Arrays.fill(ram, 0xff);
         this.battery = battery;

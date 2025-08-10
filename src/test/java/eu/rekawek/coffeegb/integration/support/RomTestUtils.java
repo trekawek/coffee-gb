@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.cpu.Cpu;
 
 import java.io.File;
@@ -14,23 +15,23 @@ public final class RomTestUtils {
     private RomTestUtils() {
     }
 
-    public static void testRomWithMemory(Path romPath) throws IOException {
+    public static void testRomWithMemory(Path romPath, GameboyType gameboyType) throws IOException {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
-        MemoryTestRunner runner = new MemoryTestRunner(romPath.toFile(), System.out);
+        MemoryTestRunner runner = new MemoryTestRunner(romPath.toFile(), System.out, gameboyType);
         MemoryTestRunner.TestResult result = runner.runTest();
         assertEquals("Non-zero return value", 0, result.getStatus());
     }
 
-    public static void testRomWithSerial(Path romPath) throws IOException {
+    public static void testRomWithSerial(Path romPath, GameboyType gameboyType) throws IOException {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
-        SerialTestRunner runner = new SerialTestRunner(romPath.toFile(), System.out);
+        SerialTestRunner runner = new SerialTestRunner(romPath.toFile(), System.out, gameboyType);
         String result = runner.runTest();
         assertTrue(result.contains("Passed"));
     }
 
-    public static void testRomWithImage(Path romPath) throws Exception {
+    public static void testRomWithImage(Path romPath, GameboyType gameboyType) throws Exception {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
-        ImageTestRunner runner = new ImageTestRunner(romPath.toFile());
+        ImageTestRunner runner = new ImageTestRunner(romPath.toFile(), gameboyType);
         ImageTestRunner.TestResult result = runner.runTest();
 
         File resultFile = File.createTempFile(romPath.getFileName().toString(), "-result.png");

@@ -1,15 +1,15 @@
 package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.memento.Memento;
-import eu.rekawek.coffeegb.memory.cart.CartridgeType;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
+import eu.rekawek.coffeegb.memory.cart.Rom;
 
-public class Rom implements MemoryController {
+public class BasicRom implements MemoryController {
 
     private final int[] rom;
 
-    public Rom(int[] rom, CartridgeType type, int romBanks, int ramBanks) {
-        this.rom = rom;
+    public BasicRom(Rom rom) {
+        this.rom = rom.getRom();
     }
 
     @Override

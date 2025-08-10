@@ -10,28 +10,32 @@ import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
-import eu.rekawek.coffeegb.memory.Dma;
-import eu.rekawek.coffeegb.memory.Hdma;
-import eu.rekawek.coffeegb.memory.Mmu;
-import eu.rekawek.coffeegb.memory.Ram;
+import eu.rekawek.coffeegb.memory.*;
 import eu.rekawek.coffeegb.memory.cart.Cartridge;
+import eu.rekawek.coffeegb.memory.cart.Rom;
+import eu.rekawek.coffeegb.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.timer.Timer;
 
+import java.io.Closeable;
+import java.io.File;
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
-public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
+public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Closeable {
 
     public static final int TICKS_PER_SEC = 4_194_304;
 
     // 60 frames per second
     public static final int TICKS_PER_FRAME = Gameboy.TICKS_PER_SEC / 60;
 
-    private final Cartridge rom;
+    private final Cartridge cartridge;
+
+    private final BiosShadow biosShadow;
 
     private final Gpu gpu;
 
@@ -73,14 +77,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
     private transient volatile boolean paused;
 
-    public Gameboy(Cartridge rom) {
-        this(rom, BootstrapMode.SKIP);
+    public Gameboy(Rom rom) {
+        this(new GameboyConfiguration(rom));
     }
 
-    public Gameboy(Cartridge rom, BootstrapMode bootstrapMode) {
-        this.rom = rom;
-        boolean gbc = rom.isGbc();
-        speedMode = new SpeedMode();
+    public Gameboy(GameboyConfiguration configuration) {
+        boolean gbc = configuration.gameboyType == GameboyType.CGB;
+
+        speedMode = new SpeedMode(gbc);
         interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
         mmu = new Mmu(gbc);
@@ -93,7 +97,16 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
-        mmu.addAddressSpace(rom);
+
+        if (configuration.batteryData != null) {
+            cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData));
+        } else {
+            cartridge = new Cartridge(configuration.rom, configuration.supportBatterySave);
+        }
+        Bios bios = new Bios(configuration.gameboyType);
+        biosShadow = new BiosShadow(bios, cartridge);
+
+        mmu.addAddressSpace(biosShadow);
         mmu.addAddressSpace(gpu);
         mmu.addAddressSpace(joypad);
         mmu.addAddressSpace(interruptManager);
@@ -111,20 +124,18 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
-        if (bootstrapMode == BootstrapMode.FAST_FORWARD) {
+        if (configuration.bootstrapMode == BootstrapMode.FAST_FORWARD) {
             while (cpu.getRegisters().getPC() != 0x100) {
                 tick();
             }
-        } else if (bootstrapMode == BootstrapMode.SKIP) {
-            rom.setByte(0xff50, 0);
+        } else if (configuration.bootstrapMode == BootstrapMode.SKIP) {
+            biosShadow.setByte(0xff50, 0);
             var r = cpu.getRegisters();
             if (gbc) {
                 r.setAF(0x1180);
                 r.setBC(0x0000);
                 r.setDE(0xff56);
                 r.setHL(0x000d);
-                gpu.getOamPalette().getPalette(0)[0] = 0x7f00;
-                gpu.getOamPalette().setByte(0xff6a, 1);
             } else {
                 r.setAF(0x01b0);
                 r.setBC(0x0013);
@@ -274,7 +285,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(rom.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
@@ -282,7 +293,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         if (!(memento instanceof GameboyMemento mem)) {
             throw new IllegalArgumentException();
         }
-        rom.restoreFromMemento(mem.cartridgeMemento());
+        biosShadow.restoreFromMemento(mem.biosShadowMemento());
+        cartridge.restoreFromMemento(mem.cartridgeMemento());
         gpu.restoreFromMemento(mem.gpuMemento());
         mmu.restoreFromMemento(mem.mmuMemento());
         oamRam.restoreFromMemento(mem.oamRamMemento());
@@ -300,7 +312,13 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
         lcdDisabled = mem.lcdDisabled();
     }
 
-    private record GameboyMemento(Memento<Cartridge> cartridgeMemento, Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento,
+    @Override
+    public void close() {
+        cartridge.flushBattery();
+    }
+
+    private record GameboyMemento(Memento<BiosShadow> biosShadowMemento, Memento<Cartridge> cartridgeMemento,
+                                  Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento,
                                   Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
                                   Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento,
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
@@ -311,5 +329,55 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy> {
 
     public enum BootstrapMode {
         NORMAL, FAST_FORWARD, SKIP,
+    }
+
+    public static class GameboyConfiguration {
+
+        private final Rom rom;
+
+        private GameboyType gameboyType;
+
+        private BootstrapMode bootstrapMode = BootstrapMode.SKIP;
+
+        private byte[] batteryData;
+
+        private boolean supportBatterySave = true;
+
+        public GameboyConfiguration(File romFile) throws IOException {
+            this(new Rom(romFile));
+        }
+
+        public GameboyConfiguration(Rom rom) {
+            this.rom = rom;
+            if (rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB) {
+                gameboyType = GameboyType.DMG;
+            } else {
+                gameboyType = GameboyType.CGB;
+            }
+        }
+
+        public GameboyConfiguration setGameboyType(GameboyType gameboyType) {
+            this.gameboyType = gameboyType;
+            return this;
+        }
+
+        public GameboyConfiguration setBootstrapMode(BootstrapMode bootstrapMode) {
+            this.bootstrapMode = bootstrapMode;
+            return this;
+        }
+
+        public GameboyConfiguration setBatteryData(byte[] batteryData) {
+            this.batteryData = batteryData;
+            return this;
+        }
+
+        public GameboyConfiguration setSupportBatterySave(boolean supportBatterySave) {
+            this.supportBatterySave = supportBatterySave;
+            return this;
+        }
+
+        public Gameboy build() {
+            return new Gameboy(this);
+        }
     }
 }

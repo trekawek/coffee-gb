@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
+import eu.rekawek.coffeegb.memory.cart.Rom;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.memory.cart.rtc.SystemTimeSource;
@@ -28,9 +29,9 @@ public class Mbc3 implements MemoryController {
 
     private boolean clockLatched;
 
-    public Mbc3(int[] cartridge, Battery battery, int ramBanks) {
-        this.cartridge = cartridge;
-        this.ram = new int[0x2000 * Math.max(ramBanks, 1)];
+    public Mbc3(Rom rom, Battery battery) {
+        this.cartridge = rom.getRom();
+        this.ram = new int[0x2000 * Math.max(rom.getRamBanks(), 1)];
         Arrays.fill(ram, 0xff);
         this.clock = new RealTimeClock(new SystemTimeSource());
         this.battery = battery;

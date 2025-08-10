@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.integration.blargg.individual;
 
+import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.integration.support.ParametersProvider;
 import eu.rekawek.coffeegb.integration.support.RomTestUtils;
 import org.junit.Test;
@@ -26,6 +27,6 @@ public class OamBug2Test {
 
     @Test
     public void test() throws IOException {
-        RomTestUtils.testRomWithMemory(rom);
+        RomTestUtils.testRomWithMemory(rom, GameboyType.DMG);
     }
 }

@@ -8,9 +8,15 @@ import java.io.Serializable;
 
 public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMode> {
 
-    private boolean currentSpeed = false;
+    private final boolean gbc;
 
-    private boolean prepareSpeedSwitch = false;
+    private boolean currentSpeed;
+
+    private boolean prepareSpeedSwitch;
+
+    public SpeedMode(boolean gbc) {
+        this.gbc = gbc;
+    }
 
     @Override
     public boolean accepts(int address) {
@@ -24,7 +30,11 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
 
     @Override
     public int getByte(int address) {
-        return 0xff;
+        if (gbc) {
+            return (currentSpeed ? (1 << 7) : 0) | (prepareSpeedSwitch ? (1 << 0) : 0) | 0b01111110;
+        } else {
+            return 0xff;
+        }
     }
 
     boolean onStop() {

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.memory.cart.type;
 
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memory.cart.MemoryController;
+import eu.rekawek.coffeegb.memory.cart.Rom;
 import eu.rekawek.coffeegb.memory.cart.battery.Battery;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,11 +41,11 @@ public class Mbc1 implements MemoryController {
 
     private boolean ramUpdated;
 
-    public Mbc1(int[] cartridge, Battery battery, int romBanks, int ramBanks) {
-        this.multicart = romBanks == 64 && isMulticart(cartridge);
-        this.cartridge = cartridge;
-        this.ramBanks = ramBanks;
-        this.romBanks = romBanks;
+    public Mbc1(Rom rom, Battery battery) {
+        this.cartridge = rom.getRom();
+        this.multicart = rom.getRomBanks() == 64 && isMulticart(this.cartridge);
+        this.ramBanks = rom.getRamBanks();
+        this.romBanks = rom.getRomBanks();
         this.ram = new int[0x2000 * this.ramBanks];
         Arrays.fill(ram, 0xff);
         this.battery = battery;

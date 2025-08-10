@@ -19,7 +19,7 @@ public class TimingTest {
     public TimingTest() {
         memory = new Ram(0x00, 0x10000);
         cpu =
-                new Cpu(memory, new InterruptManager(false), null, new SpeedMode(), new Display(false));
+                new Cpu(memory, new InterruptManager(false), null, new SpeedMode(false), new Display(false));
     }
 
     @Test

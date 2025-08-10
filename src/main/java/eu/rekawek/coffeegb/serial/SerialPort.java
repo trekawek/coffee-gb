@@ -23,9 +23,9 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private final SpeedMode speedMode;
 
-    private int sb = 0;
+    private int sb;
 
-    private int sc = 0b01111110;
+    private int sc;
 
     private int divider;
 

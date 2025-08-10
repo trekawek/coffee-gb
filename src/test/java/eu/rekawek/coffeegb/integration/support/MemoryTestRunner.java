@@ -2,11 +2,11 @@ package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.EventBusImpl;
-import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
 import java.io.File;
@@ -23,10 +23,9 @@ public class MemoryTestRunner {
 
     private boolean testStarted;
 
-    public MemoryTestRunner(File romFile, OutputStream os) throws IOException {
+    public MemoryTestRunner(File romFile, OutputStream os, GameboyType gameboyType) throws IOException {
         EventBus eventBus = new EventBusImpl();
-        Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart, Gameboy.BootstrapMode.SKIP);
+        gb = new Gameboy.GameboyConfiguration(romFile).setBootstrapMode(Gameboy.BootstrapMode.SKIP).setGameboyType(gameboyType).setSupportBatterySave(false).build();
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         text = new StringBuilder();
         this.os = os;

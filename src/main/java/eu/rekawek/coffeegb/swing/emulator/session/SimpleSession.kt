@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge
+import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.SerialEndpoint
 import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
@@ -13,13 +14,15 @@ import java.io.File
 
 class SimpleSession(
     private val eventBus: EventBus,
-    private val rom: File,
+    romFile: File,
     private val console: Console?,
 ) : Session, SnapshotSupport {
 
+  private val rom = Rom(romFile)
+
   private var cart: Cartridge? = null
 
-  private val snapshotManager = SnapshotManager(rom)
+  private val snapshotManager = SnapshotManager(romFile)
 
   private var gameboy: Gameboy? = null
 
@@ -27,13 +30,12 @@ class SimpleSession(
 
   @Synchronized
   override fun start() {
-    cart = Cartridge(rom, true, Cartridge.GameboyType.AUTOMATIC)
-    gameboy = Gameboy(cart)
+    gameboy = Gameboy(rom)
     localEventBus = eventBus.fork("main")
     gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
     gameboy?.registerTickListener(TimingTicker())
     Thread(gameboy).start()
-    localEventBus!!.post(EmulationStartedEvent(cart!!.title))
+    localEventBus!!.post(EmulationStartedEvent(rom.title))
   }
 
   @Synchronized
@@ -42,6 +44,7 @@ class SimpleSession(
       return
     }
     gameboy?.stop()
+    gameboy?.close()
     cart?.flushBattery()
     console?.setGameboy(null)
     localEventBus!!.post(EmulationStoppedEvent())

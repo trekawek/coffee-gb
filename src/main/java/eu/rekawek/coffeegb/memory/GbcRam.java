@@ -29,7 +29,7 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     @Override
     public int getByte(int address) {
         if (address == 0xff70) {
-            return 0xff;
+            return svbk;
         } else {
             return ram[translate(address)];
         }

@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.integration.dmgacid2;
 
+import eu.rekawek.coffeegb.GameboyType;
 import org.junit.Test;
 
 import java.nio.file.Path;
@@ -11,7 +12,7 @@ public class DmgAcid2RomTest {
 
     @Test
     public void testDmgAcid2() throws Exception {
-        testRomWithImage(getPath("dmg-acid2.gb"));
+        testRomWithImage(getPath("dmg-acid2.gb"), GameboyType.DMG);
     }
 
     private static Path getPath(String name) {

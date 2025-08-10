@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.swing.emulator.session
 
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
+import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.ButtonPressEvent
@@ -13,7 +14,7 @@ import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent
 import eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent
-import eu.rekawek.coffeegb.memory.cart.Cartridge
+import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
@@ -28,12 +29,15 @@ import kotlin.time.TimeSource
 
 class LinkedSession(
     private val eventBus: EventBus,
-    private val mainRom: File,
-    private val peerRom: ByteArray,
+    mainRomFile: File,
+    peerRomData: ByteArray,
     private val peerBattery: ByteArray?,
     private val console: Console?,
 ) : Session {
-  private var mainCartridge: Cartridge? = null
+
+  private val mainRom = Rom(mainRomFile)
+
+  private val peerRom = Rom(peerRomData)
 
   private var mainGameboy: Gameboy? = null
 
@@ -57,7 +61,6 @@ class LinkedSession(
     stateHistory = StateHistory(mainRom, peerRom, peerBattery)
 
     val localMainEventBus = EventBusImpl()
-    val mainCartridge = CartridgeUtils.createCartridge(mainRom)
     val mainEventBus = eventBus.fork("main")
     funnel(
         localMainEventBus,
@@ -68,7 +71,7 @@ class LinkedSession(
             SoundSampleEvent::class,
             Joypad.JoypadPressEvent::class))
     val mainSerialEndpoint = Peer2PeerSerialEndpoint()
-    val mainGameboy = Gameboy(mainCartridge)
+    val mainGameboy = Gameboy(mainRom)
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
     val localSecondaryEventBus = EventBusImpl()
@@ -78,8 +81,7 @@ class LinkedSession(
         secondaryEventBus,
         setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class))
     val secondarySerialEndpoint = Peer2PeerSerialEndpoint()
-    val secondaryCartridge = CartridgeUtils.createCartridge(peerRom, peerBattery)
-    val secondaryGameboy = Gameboy(secondaryCartridge)
+    val secondaryGameboy = GameboyConfiguration(peerRom).setBatteryData(peerBattery).build()
     secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, console)
 
     secondarySerialEndpoint.init(mainSerialEndpoint)
@@ -105,7 +107,6 @@ class LinkedSession(
       stateHistory!!.addSecondaryInput(it.frame, it.input)
     }
 
-    this.mainCartridge = mainCartridge
     this.mainGameboy = mainGameboy
     this.mainEventBus = mainEventBus
     this.secondaryGameboy = secondaryGameboy
@@ -189,7 +190,7 @@ class LinkedSession(
           isStopped = true
         }
         .start()
-    mainEventBus?.post(Session.EmulationStartedEvent(mainCartridge!!.title))
+    mainEventBus?.post(Session.EmulationStartedEvent(mainRom.title))
   }
 
   @Synchronized
@@ -201,7 +202,8 @@ class LinkedSession(
     while (!isStopped) {}
     doPause = false
 
-    mainCartridge?.flushBattery()
+    mainGameboy?.stop()
+    secondaryGameboy?.stop()
     console?.setGameboy(null)
     mainEventBus?.post(Session.EmulationStoppedEvent())
 

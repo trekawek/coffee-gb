@@ -2,18 +2,20 @@ package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration;
+import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.EventBusImpl;
-import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 
-import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.*;
+import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.NORMAL;
+import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.SKIP;
 import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
 
 public class MooneyeTestRunner {
@@ -30,19 +32,19 @@ public class MooneyeTestRunner {
 
     public MooneyeTestRunner(File romFile, OutputStream os) throws IOException {
         EventBus eventBus = new EventBusImpl();
-        Cartridge.GameboyType type = Cartridge.GameboyType.AUTOMATIC;
-        boolean useBootstrap = false;
+        GameboyConfiguration config = new GameboyConfiguration(romFile).setSupportBatterySave(false);
         if (romFile.toString().endsWith("-C.gb") || romFile.toString().contains("-cgb")) {
-            type = Cartridge.GameboyType.FORCE_CGB;
+            config.setGameboyType(GameboyType.CGB);
+        } else {
+            config.setGameboyType(GameboyType.DMG);
         }
         if (romFile.getName().startsWith("boot_")) {
-            useBootstrap = true;
+            config.setBootstrapMode(NORMAL);
+        } else {
+            config.setBootstrapMode(SKIP);
         }
-        Cartridge cart = new Cartridge(romFile, false, type);
-        gb = new Gameboy(cart, useBootstrap ? NORMAL : SKIP);
+        gb = config.build();
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
-        System.out.println("System type: " + (cart.isGbc() ? "CGB" : "DMG"));
-        System.out.println("Bootstrap required: " + (useBootstrap ? "enabled" : "disabled"));
         cpu = gb.getCpu();
         regs = cpu.getRegisters();
         mem = gb.getAddressSpace();

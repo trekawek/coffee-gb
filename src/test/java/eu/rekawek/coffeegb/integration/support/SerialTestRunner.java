@@ -2,11 +2,11 @@ package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.Registers;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.EventBusImpl;
-import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.ByteReceiver;
 import eu.rekawek.coffeegb.serial.ByteReceivingSerialEndpoint;
 
@@ -25,10 +25,9 @@ public class SerialTestRunner implements ByteReceiver {
 
     private final OutputStream os;
 
-    public SerialTestRunner(File romFile, OutputStream os) throws IOException {
+    public SerialTestRunner(File romFile, OutputStream os, GameboyType gameboyType) throws IOException {
         EventBus eventBus = new EventBusImpl();
-        Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart, Gameboy.BootstrapMode.SKIP);
+        gb = new Gameboy.GameboyConfiguration(romFile).setBootstrapMode(Gameboy.BootstrapMode.SKIP).setGameboyType(gameboyType).setSupportBatterySave(false).build();
         gb.init(eventBus, new ByteReceivingSerialEndpoint(this), null);
         text = new StringBuilder();
         this.os = os;

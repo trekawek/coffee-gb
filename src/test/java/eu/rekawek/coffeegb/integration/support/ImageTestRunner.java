@@ -1,10 +1,11 @@
 package eu.rekawek.coffeegb.integration.support;
 
 import eu.rekawek.coffeegb.Gameboy;
+import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration;
+import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.EventBusImpl;
 import eu.rekawek.coffeegb.gpu.Display;
-import eu.rekawek.coffeegb.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 
 import javax.imageio.ImageIO;
@@ -12,6 +13,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 
+import static eu.rekawek.coffeegb.Gameboy.BootstrapMode.SKIP;
 import static eu.rekawek.coffeegb.integration.support.RomTestUtils.isByteSequenceAtPc;
 
 public class ImageTestRunner {
@@ -26,10 +28,9 @@ public class ImageTestRunner {
 
     private final int[] resultRGB = new int[Display.DISPLAY_HEIGHT * Display.DISPLAY_WIDTH];
 
-    public ImageTestRunner(File romFile) throws IOException {
+    public ImageTestRunner(File romFile, GameboyType gameboyType) throws IOException {
         EventBus eventBus = new EventBusImpl();
-        Cartridge cart = new Cartridge(romFile);
-        gb = new Gameboy(cart, Gameboy.BootstrapMode.SKIP);
+        gb = new GameboyConfiguration(romFile).setBootstrapMode(SKIP).setGameboyType(gameboyType).setSupportBatterySave(false).build();
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class);
