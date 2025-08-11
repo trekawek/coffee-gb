@@ -47,7 +47,6 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
             players = event.getMultiplayerControl();
             currentPlayer = currentPlayer & players;
             LOG.atDebug().log("Players: {}, current player: {}", players, currentPlayer);
-
         }, Commands.MltReqCmd.class);
     }
 

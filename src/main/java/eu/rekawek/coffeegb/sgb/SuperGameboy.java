@@ -52,6 +52,7 @@ public class SuperGameboy implements Originator<SuperGameboy> {
             LOG.warn("Unknown command: {} {}", Integer.toHexString(transfer[0] / 8), Arrays.toString(transfer));
         }
         if (cmd != null) {
+            LOG.atInfo().log("Received command: {}", cmd);
             sgbBus.post(cmd);
         }
     }
