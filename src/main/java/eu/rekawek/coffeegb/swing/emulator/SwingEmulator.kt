@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing.emulator
 
+import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
@@ -199,6 +200,7 @@ class SwingEmulator(
             it.preferredSize
           }
       mainPanel.preferredSize = dimension
+      jFrame.pack()
     }
   }
 
@@ -223,6 +225,8 @@ class SwingEmulator(
   data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event
 
   data class WaitingForPeerEvent(val romFile: ByteArray, val batteryFile: ByteArray?) : Event
+
+  data class GameboyTypeEvent(val gameboyType: GameboyType) : Event
 
   companion object {
     const val SHOW_REMOTE_SCREEN = false

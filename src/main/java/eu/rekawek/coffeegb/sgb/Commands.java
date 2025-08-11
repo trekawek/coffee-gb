@@ -73,7 +73,7 @@ public class Commands {
         }
 
         public void setDataTransfer(int[] dataTransfer) {
-            this.dataTransfer = dataTransfer.clone();
+            this.dataTransfer = dataTransfer;
         }
     }
 
@@ -693,7 +693,7 @@ public class Commands {
             int offset = 2 + (objPalette - 4) * 2;
             return packet[offset] | packet[offset + 1] << 8;
         }
-        
+
         public String toString() {
             return "OBJ_TRN [enableSnesObjMode=" + enableSnesObjMode() + ", changeObjColor=" + changeObjColor() + "]";
         }

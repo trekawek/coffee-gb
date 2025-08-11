@@ -7,6 +7,23 @@ public final class Dumper {
     private Dumper() {
     }
 
+    public static void dump(int[] data, int offset, int length) {
+        for (int i = offset; i < (offset + length); i++) {
+            System.out.printf("%02X ", data[i]);
+            if ((i - offset + 1) % 16 == 0) {
+                System.out.print(" ");
+                //dumpText(data, i - 16);
+                System.out.println();
+            }
+        }
+    }
+
+    private static void dumpText(int[] data, int offset) {
+        for (int i = 0; i < 16; i++) {
+            System.out.print((char) data[offset + i]);
+        }
+    }
+
     public static void dump(AddressSpace addressSpace, int offset, int length) {
         for (int i = offset; i < (offset + length); i++) {
             System.out.printf("%02X ", addressSpace.getByte(i));

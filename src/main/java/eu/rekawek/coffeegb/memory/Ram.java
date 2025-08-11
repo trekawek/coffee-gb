@@ -39,6 +39,10 @@ public class Ram implements AddressSpace, Serializable, Originator<Ram> {
         return space[index];
     }
 
+    public int[] getSpace() {
+        return space;
+    }
+
     @Override
     public Memento<Ram> saveToMemento() {
         return new RamMemento(space.clone());

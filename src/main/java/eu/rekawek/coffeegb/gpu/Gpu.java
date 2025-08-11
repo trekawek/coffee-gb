@@ -22,9 +22,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         PixelTransfer
     }
 
-    private final AddressSpace videoRam0;
+    private final Ram videoRam0;
 
-    private final AddressSpace videoRam1;
+    private final Ram videoRam1;
 
     private final AddressSpace oamRam;
 
@@ -120,7 +120,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
     }
 
-    private AddressSpace getVideoRam() {
+    public Ram getVideoRam() {
         if (gbc && (r.get(VBK) & 1) == 1) {
             return videoRam1;
         } else {
@@ -128,11 +128,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
     }
 
-    public AddressSpace getVideoRam0() {
+    public Ram getVideoRam0() {
         return videoRam0;
     }
 
-    public AddressSpace getVideoRam1() {
+    public Ram getVideoRam1() {
         return videoRam1;
     }
 

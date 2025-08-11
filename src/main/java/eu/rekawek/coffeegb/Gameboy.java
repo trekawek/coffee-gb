@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.EventBusImpl;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
+import eu.rekawek.coffeegb.gpu.VBlankEvent;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.memory.*;
@@ -67,6 +68,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final SuperGameboy superGameboy;
 
+    private final EventBus sgbBus;
+
     private transient Console console;
 
     private transient volatile boolean doStop;
@@ -95,7 +98,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         mmu = new Mmu(gbc);
         display = new Display(gbc);
 
-        EventBus sgbBus = new EventBusImpl();
+        sgbBus = new EventBusImpl();
         superGameboy = new SuperGameboy(sgbBus);
         oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(mmu, oamRam, speedMode);
@@ -207,6 +210,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         } else if (newMode == Gpu.Mode.VBlank) {
             requestedScreenRefresh = true;
             display.frameIsReady();
+            if (sgbBus != null) {
+                sgbBus.post(new VBlankEvent(gpu.getVideoRam()));
+            }
         }
 
         if (lcdDisabled && gpu.isLcdEnabled()) {

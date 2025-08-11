@@ -185,7 +185,6 @@ class SwingMenu(
       val item = JCheckBoxMenuItem(s.toString() + "x", s == properties.display.scale)
       item.addActionListener {
         eventBus.post(SetScaleEvent(s))
-        window.pack()
         uncheckAllBut(scale, item)
         properties.setProperty(EmulatorProperties.Key.DisplayScale, s.toString())
       }

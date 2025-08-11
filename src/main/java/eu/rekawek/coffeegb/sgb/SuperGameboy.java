@@ -2,8 +2,10 @@ package eu.rekawek.coffeegb.sgb;
 
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
+import eu.rekawek.coffeegb.gpu.VBlankEvent;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
+import eu.rekawek.coffeegb.memory.Ram;
 import org.slf4j.Logger;
 
 import java.util.Arrays;
@@ -14,15 +16,36 @@ public class SuperGameboy implements Originator<SuperGameboy> {
 
     private static final Logger LOG = getLogger(SuperGameboy.class);
 
+    public static final int SGB_DISPLAY_WIDTH = 256;
+
+    public static final int SGB_DISPLAY_HEIGHT = 244;
+
     private final EventBus sgbBus;
 
     private int multipacketIndex;
     private int multipacketLength;
     private final int[][] multipacket = new int[7][16];
 
+    private Commands.TransferCommand waitingTransferCommand;
+
     public SuperGameboy(EventBus sgbBus) {
         this.sgbBus = sgbBus;
         sgbBus.register(event -> handlePacket(event.packet()), PacketReceivedEvent.class);
+        sgbBus.register(event -> {
+            handleVBlank(event.videoRam());
+        }, VBlankEvent.class);
+
+    }
+
+    private void handleVBlank(Ram ram) {
+        if (waitingTransferCommand != null) {
+            var buffer = new int[0x1000];
+            System.arraycopy(ram.getSpace(), 0, buffer, 0, 0x1000);
+            waitingTransferCommand.setDataTransfer(buffer);
+            LOG.atInfo().log("Transfer command: {}", waitingTransferCommand);
+            sgbBus.post(waitingTransferCommand);
+            waitingTransferCommand = null;
+        }
     }
 
     private void handlePacket(int[] packet) {
@@ -49,10 +72,12 @@ public class SuperGameboy implements Originator<SuperGameboy> {
         }
         var cmd = Commands.toCommand(transfer);
         if (cmd == null) {
-            LOG.warn("Unknown command: {} {}", Integer.toHexString(transfer[0] / 8), Arrays.toString(transfer));
+            LOG.warn("Unknown SGB command: {} {}", Integer.toHexString(transfer[0] / 8), Arrays.toString(transfer));
         }
-        if (cmd != null) {
-            LOG.atInfo().log("Received command: {}", cmd);
+        if (cmd instanceof Commands.TransferCommand) {
+            waitingTransferCommand = (Commands.TransferCommand) cmd;
+        } else if (cmd != null) {
+            LOG.atInfo().log("SGB command: {}", cmd);
             sgbBus.post(cmd);
         }
     }
