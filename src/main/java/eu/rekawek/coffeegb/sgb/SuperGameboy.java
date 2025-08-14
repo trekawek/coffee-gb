@@ -2,10 +2,9 @@ package eu.rekawek.coffeegb.sgb;
 
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
-import eu.rekawek.coffeegb.gpu.VBlankEvent;
+import eu.rekawek.coffeegb.gpu.VRamTransfer;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
-import eu.rekawek.coffeegb.memory.Ram;
 import org.slf4j.Logger;
 
 import java.util.Arrays;
@@ -26,22 +25,21 @@ public class SuperGameboy implements Originator<SuperGameboy> {
     private int multipacketLength;
     private final int[][] multipacket = new int[7][16];
 
+    private int transferCountdown;
     private Commands.TransferCommand waitingTransferCommand;
 
     public SuperGameboy(EventBus sgbBus) {
         this.sgbBus = sgbBus;
         sgbBus.register(event -> handlePacket(event.packet()), PacketReceivedEvent.class);
         sgbBus.register(event -> {
-            handleVBlank(event.videoRam());
-        }, VBlankEvent.class);
+            handleVBlank(event.buffer());
+        }, VRamTransfer.VRamTransferComplete.class);
 
     }
 
-    private void handleVBlank(Ram ram) {
-        if (waitingTransferCommand != null) {
-            var buffer = new int[0x1000];
-            System.arraycopy(ram.getSpace(), 0, buffer, 0, 0x1000);
-            waitingTransferCommand.setDataTransfer(buffer);
+    private void handleVBlank(int[] buffer) {
+        if (waitingTransferCommand != null && transferCountdown-- == 0) {
+            waitingTransferCommand.setDataTransfer(buffer.clone());
             LOG.atInfo().log("Transfer command: {}", waitingTransferCommand);
             sgbBus.post(waitingTransferCommand);
             waitingTransferCommand = null;
@@ -76,6 +74,7 @@ public class SuperGameboy implements Originator<SuperGameboy> {
         }
         if (cmd instanceof Commands.TransferCommand) {
             waitingTransferCommand = (Commands.TransferCommand) cmd;
+            transferCountdown = 3;
         } else if (cmd != null) {
             LOG.atInfo().log("SGB command: {}", cmd);
             sgbBus.post(cmd);

@@ -9,7 +9,7 @@ import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.EventBusImpl;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.gpu.Gpu;
-import eu.rekawek.coffeegb.gpu.VBlankEvent;
+import eu.rekawek.coffeegb.gpu.VRamTransfer;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.memory.*;
@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.memory.cart.Rom;
 import eu.rekawek.coffeegb.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
+import eu.rekawek.coffeegb.sgb.Background;
 import eu.rekawek.coffeegb.sgb.SuperGameboy;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.timer.Timer;
@@ -70,6 +71,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final EventBus sgbBus;
 
+    private final Background background;
+
+    private final VRamTransfer vRamTransfer;
+
     private transient Console console;
 
     private transient volatile boolean doStop;
@@ -99,10 +104,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display = new Display(gbc);
 
         sgbBus = new EventBusImpl();
+        vRamTransfer = new VRamTransfer(sgbBus);
         superGameboy = new SuperGameboy(sgbBus);
+        background = new Background(sgbBus);
         oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(mmu, oamRam, speedMode);
-        gpu = new Gpu(display, interruptManager, dma, oamRam, gbc);
+        gpu = new Gpu(display, interruptManager, dma, oamRam, vRamTransfer, gbc);
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
@@ -167,6 +174,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display.init(eventBus);
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
+        background.init(eventBus);
     }
 
     public void run() {
@@ -210,9 +218,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         } else if (newMode == Gpu.Mode.VBlank) {
             requestedScreenRefresh = true;
             display.frameIsReady();
-            if (sgbBus != null) {
-                sgbBus.post(new VBlankEvent(gpu.getVideoRam()));
-            }
+            vRamTransfer.frameIsReady();
         }
 
         if (lcdDisabled && gpu.isLcdEnabled()) {

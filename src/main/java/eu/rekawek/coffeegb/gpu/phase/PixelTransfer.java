@@ -42,14 +42,15 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             boolean gbc,
             ColorPalette bgPalette,
             ColorPalette oamPalette,
-            SpritePosition[] sprites) {
+            SpritePosition[] sprites,
+            VRamTransfer vRamTransfer) {
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
         if (gbc) {
             this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette);
         } else {
-            this.fifo = new DmgPixelFifo(display, r);
+            this.fifo = new DmgPixelFifo(display, r, vRamTransfer);
         }
         this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
         this.sprites = sprites;

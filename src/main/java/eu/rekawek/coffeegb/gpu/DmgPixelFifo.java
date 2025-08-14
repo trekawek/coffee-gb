@@ -17,9 +17,12 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
 
     private final GpuRegisterValues registers;
 
-    public DmgPixelFifo(Display display, GpuRegisterValues registers) {
+    private final VRamTransfer vRamTransfer;
+
+    public DmgPixelFifo(Display display, GpuRegisterValues registers, VRamTransfer vRamTransfer) {
         this.display = display;
         this.registers = registers;
+        this.vRamTransfer = vRamTransfer;
     }
 
     @Override
@@ -29,7 +32,8 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
 
     @Override
     public void putPixelToScreen() {
-        display.putDmgPixel(dequeuePixel());
+        int pixel = dequeuePixel();
+        display.putDmgPixel(pixel);
     }
 
     @Override
@@ -39,7 +43,13 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
 
     int dequeuePixel() {
         pixelType.dequeue();
-        return getColor(palettes.dequeue(), pixels.dequeue());
+
+        var pixel = pixels.dequeue();
+        if (vRamTransfer != null) {
+            vRamTransfer.putPixel(pixel);
+        }
+
+        return getColor(palettes.dequeue(), pixel);
     }
 
     @Override

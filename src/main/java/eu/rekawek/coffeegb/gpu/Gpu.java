@@ -62,7 +62,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private GpuPhase phase;
 
-    public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, boolean gbc) {
+    public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, boolean gbc) {
         this.display = display;
         this.r = new GpuRegisterValues();
         this.lcdc = new Lcdc();
@@ -93,7 +93,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         gbc,
                         bgPalette,
                         oamPalette,
-                        oamSearchPhase.getSprites());
+                        oamSearchPhase.getSprites(),
+                        vRamTransfer);
         this.hBlankPhase = new HBlankPhase();
         this.vBlankPhase = new VBlankPhase();
 

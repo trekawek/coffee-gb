@@ -588,12 +588,9 @@ public class Commands {
             return new BgMapEntry(index);
         }
 
-        public int[] getPalette(int paletteId) {
-            int offset = 0x0800 + (paletteId - 4) * 8;
-            return new int[]{dataTransfer[offset] | dataTransfer[offset + 1] << 8,
-                    dataTransfer[offset + 2] | dataTransfer[offset + 3] << 8,
-                    dataTransfer[offset + 4] | dataTransfer[offset + 5] << 8,
-                    dataTransfer[offset + 6] | dataTransfer[offset + 7] << 8};
+        public int getPaletteColor(int paletteId, int colorId) {
+            int offset = 0x0800 + (paletteId - 4) * 16 * 2 + colorId * 2;
+            return dataTransfer[offset] | dataTransfer[offset + 1] << 8;
         }
 
         public class BgMapEntry {
@@ -605,7 +602,7 @@ public class Commands {
             }
 
             public int getCharNumber() {
-                return value & 0b0000001111111111;
+                return value & 0b0000000011111111;
             }
 
             public int getPaletteNumber() {
@@ -616,12 +613,12 @@ public class Commands {
                 return (value >> 13) & 0b00000001;
             }
 
-            public int getXFlip() {
-                return (value >> 14) & 0b00000001;
+            public boolean getXFlip() {
+                return ((value >> 14) & 0b00000001) == 1;
             }
 
-            public int getYFlip() {
-                return (value >> 15) & 0b00000001;
+            public boolean getYFlip() {
+                return ((value >> 15) & 0b00000001) == 1;
             }
         }
 

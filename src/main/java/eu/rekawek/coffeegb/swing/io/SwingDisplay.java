@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
+import eu.rekawek.coffeegb.sgb.Background;
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator;
 import eu.rekawek.coffeegb.swing.gui.properties.DisplayProperties;
 
@@ -23,6 +24,8 @@ public class SwingDisplay extends JPanel implements Runnable {
     private final BufferedImage img;
 
     private final BufferedImage sgbImg;
+
+    private final int[] waitingSgbFrame;
 
     private final int[] waitingFrame;
 
@@ -51,9 +54,11 @@ public class SwingDisplay extends JPanel implements Runnable {
                         .getDefaultConfiguration();
         img = gfxConfig.createCompatibleImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
         sgbImg = gfxConfig.createCompatibleImage(SGB_DISPLAY_WIDTH, SGB_DISPLAY_HEIGHT);
+        waitingSgbFrame = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
         waitingFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
+        eventBus.register(this::onSgbBackground, Background.SgbBackgroundReadyEvent.class, callerId);
         eventBus.register(this::onGameboyType, SwingEmulator.GameboyTypeEvent.class, callerId);
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
         eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
@@ -84,6 +89,10 @@ public class SwingDisplay extends JPanel implements Runnable {
         frameIsWaiting = true;
         e.toRgb(waitingFrame, grayscale);
         notify();
+    }
+
+    private synchronized void onSgbBackground(Background.SgbBackgroundReadyEvent sgbBackgroundReadyEvent) {
+        System.arraycopy(sgbBackgroundReadyEvent.buffer(), 0, waitingSgbFrame, 0, waitingSgbFrame.length);
     }
 
     private void setScale(int scale) {
@@ -124,9 +133,8 @@ public class SwingDisplay extends JPanel implements Runnable {
             synchronized (this) {
                 if (frameIsWaiting) {
                     if (gameboyType == GameboyType.SGB) {
-                        int offsetX = (SGB_DISPLAY_WIDTH - DISPLAY_WIDTH) / 2;
-                        int offsetY = (SGB_DISPLAY_HEIGHT - DISPLAY_HEIGHT) / 2;
-                        sgbImg.setRGB(offsetX, offsetY, DISPLAY_WIDTH, DISPLAY_HEIGHT, waitingFrame, 0, DISPLAY_WIDTH);
+                        sgbImg.setRGB(0, 0, SGB_DISPLAY_WIDTH, SGB_DISPLAY_HEIGHT, waitingSgbFrame, 0, SGB_DISPLAY_WIDTH);
+                        sgbImg.setRGB(48, 40, DISPLAY_WIDTH, DISPLAY_HEIGHT, waitingFrame, 0, DISPLAY_WIDTH);
                     } else {
                         img.setRGB(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, waitingFrame, 0, DISPLAY_WIDTH);
                     }

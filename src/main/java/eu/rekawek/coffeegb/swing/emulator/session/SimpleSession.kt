@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.SerialEndpoint
 import eu.rekawek.coffeegb.swing.emulator.SnapshotManager
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStartedEvent
 import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStoppedEvent
@@ -34,18 +35,21 @@ class SimpleSession(
     val config = Gameboy.GameboyConfiguration(rom)
     config.setGameboyType(GameboyType.CGB)
 
+    localEventBus = eventBus.fork("main")
+
     if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB) {
       if (rom.isSuperGameboyFlag && SUPPORT_SGB) {
         config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
         config.setGameboyType(GameboyType.SGB)
+        localEventBus?.post(SwingEmulator.GameboyTypeEvent(GameboyType.SGB))
       } else {
         config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
         config.setGameboyType(GameboyType.CGB)
+        localEventBus?.post(SwingEmulator.GameboyTypeEvent(GameboyType.CGB))
       }
     }
 
     gameboy = config.build()
-    localEventBus = eventBus.fork("main")
     gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
     gameboy?.registerTickListener(TimingTicker())
     Thread(gameboy).start()
