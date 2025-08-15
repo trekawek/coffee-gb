@@ -178,7 +178,7 @@ public class Commands {
                 return (packet[offset] & 0b00000001) != 0;
             }
 
-            public boolean changeColorsOfChar() {
+            public boolean changeLineColor() {
                 return (packet[offset] & 0b00000010) != 0;
             }
 
@@ -194,7 +194,7 @@ public class Commands {
                 return packet[offset + 1] & 0b00000011;
             }
 
-            public int paletteNumberOfChar() {
+            public int paletteNumberLine() {
                 return (packet[offset + 1] >> 2) & 0b00000011;
             }
 
@@ -216,6 +216,22 @@ public class Commands {
 
             public int getY2() {
                 return packet[offset + 5];
+            }
+
+            public boolean isOutside(int x, int y) {
+                return x > getX2() || y > getY2() || x < getX1() || y < getY1();
+            }
+
+            public boolean isInside(int x, int y) {
+                return x > getX1() && y > getY1() && x < getX2() && y < getY2();
+            }
+
+
+            public boolean isOnLine(int x, int y) {
+                return (x == getX1() && y >= getY1() && y <= getY2())
+                        || (x == getX2() && y >= getY1() && y <= getY2())
+                        || (y == getY1() && x >= getX1() && x <= getX2())
+                        || (y == getY2() && x >= getX1() && x <= getX2());
             }
         }
 
@@ -632,8 +648,26 @@ public class Commands {
             super(packet);
         }
 
+        public AttributeFile getAttributeFile(int atfId) {
+            return new AttributeFile(atfId);
+        }
+
         public String toString() {
             return "ATTR_TRN";
+        }
+
+        public class AttributeFile {
+
+            private final int offset;
+
+            public AttributeFile(int atfId) {
+                this.offset = atfId * 90;
+            }
+
+            public int getColor(int charId) {
+                int b = dataTransfer[offset + charId / 4];
+                return (b >> 2 * (3 - (charId % 4))) & 0b11;
+            }
         }
     }
 

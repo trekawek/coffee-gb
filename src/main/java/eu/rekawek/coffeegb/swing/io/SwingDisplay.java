@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.GameboyType;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
-import eu.rekawek.coffeegb.sgb.Background;
+import eu.rekawek.coffeegb.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator;
 import eu.rekawek.coffeegb.swing.gui.properties.DisplayProperties;
 
@@ -19,15 +19,18 @@ import static eu.rekawek.coffeegb.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
 
 public class SwingDisplay extends JPanel implements Runnable {
 
+    private static final GraphicsConfiguration GFX_CONFIG =
+            GraphicsEnvironment.getLocalGraphicsEnvironment()
+                    .getDefaultScreenDevice()
+                    .getDefaultConfiguration();
+
     private final EventBus eventBus;
 
-    private final BufferedImage img;
-
-    private final BufferedImage sgbImg;
-
-    private final int[] waitingSgbFrame;
+    private BufferedImage img;
 
     private final int[] waitingFrame;
+
+    private boolean isSgbBorder;
 
     private volatile boolean doStop;
 
@@ -41,24 +44,14 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private GameboyType gameboyType;
 
-    public SwingDisplay(DisplayProperties properties, EventBus eventBus) {
-        this(properties, eventBus, null);
-    }
-
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
         super();
         this.eventBus = eventBus;
-        GraphicsConfiguration gfxConfig =
-                GraphicsEnvironment.getLocalGraphicsEnvironment()
-                        .getDefaultScreenDevice()
-                        .getDefaultConfiguration();
-        img = gfxConfig.createCompatibleImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
-        sgbImg = gfxConfig.createCompatibleImage(SGB_DISPLAY_WIDTH, SGB_DISPLAY_HEIGHT);
-        waitingSgbFrame = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
-        waitingFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+        img = GFX_CONFIG.createCompatibleImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        waitingFrame = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
-        eventBus.register(this::onSgbBackground, Background.SgbBackgroundReadyEvent.class, callerId);
+        eventBus.register(this::onSgbFrame, SgbDisplay.SgbFrameReadyEvent.class, callerId);
         eventBus.register(this::onGameboyType, SwingEmulator.GameboyTypeEvent.class, callerId);
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
         eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
@@ -67,10 +60,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private synchronized void onGameboyType(SwingEmulator.GameboyTypeEvent e) {
-        if (this.gameboyType != e.getGameboyType()) {
-            this.gameboyType = e.getGameboyType();
-            setScale(scale);
-        }
+        this.gameboyType = e.getGameboyType();
     }
 
     private synchronized void onGbcFrame(Display.GbcFrameReadyEvent e) {
@@ -79,23 +69,39 @@ public class SwingDisplay extends JPanel implements Runnable {
         }
         frameIsWaiting = true;
         e.toRgb(waitingFrame);
+        setBorder(false);
         notify();
     }
 
     private synchronized void onDmgFrame(Display.DmgFrameReadyEvent e) {
+        if (frameIsWaiting || gameboyType == GameboyType.SGB) {
+            return;
+        }
+        frameIsWaiting = true;
+        e.toRgb(waitingFrame, grayscale);
+        setBorder(false);
+        notify();
+    }
+
+    private synchronized void onSgbFrame(SgbDisplay.SgbFrameReadyEvent e) {
         if (frameIsWaiting) {
             return;
         }
         frameIsWaiting = true;
         e.toRgb(waitingFrame, grayscale);
+        setBorder(e.includeBorder());
         notify();
     }
 
-    private synchronized void onSgbBackground(Background.SgbBackgroundReadyEvent sgbBackgroundReadyEvent) {
-        System.arraycopy(sgbBackgroundReadyEvent.buffer(), 0, waitingSgbFrame, 0, waitingSgbFrame.length);
+    private void setBorder(boolean isSgbBorder) {
+        if (isSgbBorder != this.isSgbBorder) {
+            this.isSgbBorder = isSgbBorder;
+            img = GFX_CONFIG.createCompatibleImage(getDisplayWidth(), getDisplayHeight());
+            setScale(scale);
+        }
     }
 
-    private void setScale(int scale) {
+    private synchronized void setScale(int scale) {
         this.scale = scale;
         setPreferredSize(new Dimension(getDisplayWidth() * scale, getDisplayHeight() * scale));
         eventBus.post(new DisplaySizeUpdatedEvent(getPreferredSize()));
@@ -107,20 +113,16 @@ public class SwingDisplay extends JPanel implements Runnable {
 
         int localScale = scale;
         Graphics2D g2d = (Graphics2D) g.create();
-        if (gameboyType == GameboyType.SGB) {
-            g2d.drawImage(sgbImg, 0, 0, getDisplayWidth() * localScale, getDisplayHeight() * localScale, null);
-        } else {
-            g2d.drawImage(img, 0, 0, getDisplayWidth() * localScale, getDisplayHeight() * localScale, null);
-        }
+        g2d.drawImage(img, 0, 0, getDisplayWidth() * localScale, getDisplayHeight() * localScale, null);
         g2d.dispose();
     }
 
     private int getDisplayWidth() {
-        return gameboyType == GameboyType.SGB ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
+        return isSgbBorder ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
     }
 
     private int getDisplayHeight() {
-        return gameboyType == GameboyType.SGB ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
+        return isSgbBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
     }
 
     @Override
@@ -132,12 +134,7 @@ public class SwingDisplay extends JPanel implements Runnable {
         while (!doStop) {
             synchronized (this) {
                 if (frameIsWaiting) {
-                    if (gameboyType == GameboyType.SGB) {
-                        sgbImg.setRGB(0, 0, SGB_DISPLAY_WIDTH, SGB_DISPLAY_HEIGHT, waitingSgbFrame, 0, SGB_DISPLAY_WIDTH);
-                        sgbImg.setRGB(48, 40, DISPLAY_WIDTH, DISPLAY_HEIGHT, waitingFrame, 0, DISPLAY_WIDTH);
-                    } else {
-                        img.setRGB(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, waitingFrame, 0, DISPLAY_WIDTH);
-                    }
+                    img.setRGB(0, 0, getDisplayWidth(), getDisplayHeight(), waitingFrame, 0, getDisplayWidth());
                     validate();
                     repaint();
                     frameIsWaiting = false;

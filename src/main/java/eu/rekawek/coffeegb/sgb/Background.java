@@ -29,6 +29,7 @@ public class Background {
 
     private void onPictureTransfer(Commands.PctTrnCmd picture) {
         int[] buffer = new int[SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
+        int[] mask = new int[SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
         for (int i = 0; i < buffer.length; i++) {
             int x = i % SuperGameboy.SGB_DISPLAY_WIDTH;
             int y = i / SuperGameboy.SGB_DISPLAY_WIDTH;
@@ -49,10 +50,11 @@ public class Background {
             }
 
             int pixel = getPixel(e.getCharNumber(), charPixelX, charPixelY);
-            buffer[i] = translateGbcRgb(picture.getPaletteColor(e.getPaletteNumber(), pixel));
+            mask[i] = pixel;
+            buffer[i] = picture.getPaletteColor(e.getPaletteNumber(), pixel);
         }
         if (eventBus != null) {
-            eventBus.post(new SgbBackgroundReadyEvent(buffer));
+            eventBus.post(new SgbBackgroundReadyEvent(buffer, mask));
         }
     }
 
@@ -65,6 +67,6 @@ public class Background {
         return result;
     }
 
-    public record SgbBackgroundReadyEvent(int[] buffer) implements Event {
+    public record SgbBackgroundReadyEvent(int[] buffer, int[] mask) implements Event {
     }
 }

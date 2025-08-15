@@ -19,6 +19,7 @@ import eu.rekawek.coffeegb.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.serial.SerialPort;
 import eu.rekawek.coffeegb.sgb.Background;
+import eu.rekawek.coffeegb.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.sgb.SuperGameboy;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.timer.Timer;
@@ -75,6 +76,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final VRamTransfer vRamTransfer;
 
+    private final SgbDisplay sgbDisplay;
+
     private transient Console console;
 
     private transient volatile boolean doStop;
@@ -104,6 +107,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display = new Display(gbc);
 
         sgbBus = new EventBusImpl();
+        sgbDisplay = new SgbDisplay(sgbBus, sgb, configuration.displaySgbBorder);
         vRamTransfer = new VRamTransfer(sgbBus);
         superGameboy = new SuperGameboy(sgbBus);
         background = new Background(sgbBus);
@@ -175,6 +179,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
         background.init(eventBus);
+        sgbDisplay.init(eventBus);
     }
 
     public void run() {
@@ -364,6 +369,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         private boolean supportBatterySave = true;
 
+        private boolean displaySgbBorder = true;
+
         public GameboyConfiguration(File romFile) throws IOException {
             this(new Rom(romFile));
         }
@@ -379,6 +386,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public GameboyConfiguration setGameboyType(GameboyType gameboyType) {
             this.gameboyType = gameboyType;
+            return this;
+        }
+
+        public GameboyConfiguration setDisplaySgbBorder(boolean displaySgbBorder) {
+            this.displaySgbBorder = displaySgbBorder;
             return this;
         }
 
