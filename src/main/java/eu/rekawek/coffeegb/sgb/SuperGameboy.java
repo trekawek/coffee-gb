@@ -18,7 +18,7 @@ public class SuperGameboy implements Originator<SuperGameboy> {
 
     public static final int SGB_DISPLAY_WIDTH = 256;
 
-    public static final int SGB_DISPLAY_HEIGHT = 244;
+    public static final int SGB_DISPLAY_HEIGHT = 224;
 
     private final EventBus sgbBus;
 
