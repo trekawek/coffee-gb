@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.sgb;
 
 import eu.rekawek.coffeegb.events.Event;
+import eu.rekawek.coffeegb.memento.Memento;
 
 import java.util.Arrays;
 
@@ -72,8 +73,28 @@ public class Commands {
             super(packet);
         }
 
+        public static TransferCommand restoreFromMemento(Memento<TransferCommand> memento) {
+            if (!(memento instanceof TransferCommandMemento mem)) {
+                throw new IllegalArgumentException("Invalid memento type");
+            }
+            var command = Commands.toCommand(mem.packet);
+            if (command instanceof TransferCommand transferCommand) {
+                transferCommand.setDataTransfer(mem.dataTransfer);
+                return transferCommand;
+            } else {
+                throw new IllegalArgumentException("Memento does not contain a transfer command");
+            }
+        }
+
         public void setDataTransfer(int[] dataTransfer) {
             this.dataTransfer = dataTransfer;
+        }
+
+        public Memento<TransferCommand> saveToMemento() {
+            return new TransferCommandMemento(packet, dataTransfer);
+        }
+
+        private record TransferCommandMemento(int[] packet, int[] dataTransfer) implements Memento<TransferCommand> {
         }
     }
 

@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.sgb;
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.sgb.Commands.MaskEnCmd.GameboyScreenMask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,7 +15,7 @@ import static eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent.translateGbcRgb
 import static eu.rekawek.coffeegb.sgb.SuperGameboy.SGB_DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
 
-public class SgbDisplay {
+public class SgbDisplay implements Originator<SgbDisplay> {
 
     private static final Logger LOG = LoggerFactory.getLogger(SgbDisplay.class);
 
@@ -33,19 +35,19 @@ public class SgbDisplay {
 
     private EventBus eventBus;
 
+    private final int[] sgbBuffer = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+
+    private final int[] sgbMask = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+
+    private final int[][] palettes = new int[4][4];
+
+    private final int[][] systemPalettes = new int[512][];
+
+    private final int[] paletteMap = new int[DMG_TILES_WIDTH * DMG_TILES_HEIGHT];
+
+    private final int[][] attributeFiles = new int[45][DMG_TILES_WIDTH * DMG_TILES_HEIGHT];
+
     private GameboyScreenMask screenMask = GameboyScreenMask.CANCEL;
-
-    private int[] sgbBuffer = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
-
-    private int[] sgbMask = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
-
-    private int[][] palettes = new int[4][4];
-
-    private int[][] systemPalettes = new int[512][];
-
-    private int[] paletteMap = new int[DMG_TILES_WIDTH * DMG_TILES_HEIGHT];
-
-    private Commands.AttrTrnCmd atfs;
 
     private int atfNumber = -1;
 
@@ -91,7 +93,11 @@ public class SgbDisplay {
     }
 
     private void onAttrTransfer(Commands.AttrTrnCmd attrTrnCmd) {
-        atfs = attrTrnCmd;
+        for (int atfId = 0; atfId < 45; atfId++) {
+            for (int i = 0; i < DMG_TILES_WIDTH * DMG_TILES_HEIGHT; i++) {
+                attributeFiles[atfId][i] = attrTrnCmd.getAttributeFile(atfId).getColor(i);
+            }
+        }
     }
 
     private void onPalSet(Commands.PalSetCmd palSetCmd) {
@@ -160,8 +166,8 @@ public class SgbDisplay {
                     int tileY = dmgY / 8;
                     int charId = tileX + tileY * DMG_TILES_WIDTH;
                     int paletteId = paletteMap[charId];
-                    if (atfs != null && atfNumber >= 0) {
-                        paletteId = atfs.getAttributeFile(atfNumber).getColor(charId);
+                    if (atfNumber >= 0) {
+                        paletteId = attributeFiles[atfNumber][charId];
                     }
                     int p = dmgFrameReadyEvent.pixels()[dmgX + dmgY * DISPLAY_WIDTH];
                     if (screenMask == GameboyScreenMask.BLANK_COLOR0) {
@@ -188,6 +194,61 @@ public class SgbDisplay {
     private void onSgbBackground(Background.SgbBackgroundReadyEvent sgbBackgroundReadyEvent) {
         System.arraycopy(sgbBackgroundReadyEvent.buffer(), 0, sgbBuffer, 0, sgbBuffer.length);
         System.arraycopy(sgbBackgroundReadyEvent.mask(), 0, sgbMask, 0, sgbMask.length);
+    }
+
+    @Override
+    public Memento<SgbDisplay> saveToMemento() {
+        return new SgbDisplayMemento(sgbBuffer.clone(), sgbMask.clone(), palettes.clone(), systemPalettes.clone(), paletteMap.clone(), attributeFiles.clone(), screenMask, atfNumber);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<SgbDisplay> memento) {
+        if (!(memento instanceof SgbDisplayMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.sgbBuffer.length != mem.sgbBuffer.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        if (this.sgbMask.length != mem.sgbMask.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        if (this.palettes.length != mem.palettes.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        if (this.systemPalettes.length != mem.systemPalettes.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        if (this.paletteMap.length != mem.paletteMap.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        if (this.attributeFiles.length != mem.attributeFiles.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        System.arraycopy(mem.sgbBuffer, 0, this.sgbBuffer, 0, this.sgbBuffer.length);
+        System.arraycopy(mem.sgbMask, 0, this.sgbMask, 0, this.sgbMask.length);
+        arraycopy2(mem.palettes, this.palettes);
+        arraycopy2(mem.systemPalettes, this.systemPalettes);
+        System.arraycopy(mem.paletteMap, 0, this.paletteMap, 0, this.paletteMap.length);
+        arraycopy2(mem.attributeFiles, this.attributeFiles);
+        this.screenMask = mem.screenMask;
+        this.atfNumber = mem.atfNumber;
+    }
+
+    private static void arraycopy2(int[][] src, int[][] dst) {
+        if (src.length != dst.length) {
+            throw new IllegalArgumentException("Array length doesn't match");
+        }
+        for (int i = 0; i < src.length; i++) {
+            if (src[i].length != dst[i].length) {
+                throw new IllegalArgumentException("Array length doesn't match at i=" + i);
+            }
+            System.arraycopy(src[i], 0, dst[i], 0, src[i].length);
+        }
+    }
+
+    private record SgbDisplayMemento(int[] sgbBuffer, int[] sgbMask, int[][] palettes, int[][] systemPalettes,
+                                     int[] paletteMap, int[][] attributeFiles, GameboyScreenMask screenMask,
+                                     int atfNumber) implements Memento<SgbDisplay> {
     }
 
     public record SgbFrameReadyEvent(int[] buffer, boolean includeBorder) implements Event {

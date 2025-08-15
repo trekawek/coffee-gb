@@ -309,7 +309,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
@@ -333,6 +333,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         joypad.restoreFromMemento(mem.joypadMemento());
         speedMode.restoreFromMemento(mem.speedModeMemento());
         superGameboy.restoreFromMemento(mem.superGameboyMemento());
+        background.restoreFromMemento(mem.backgroundMemento());
+        vRamTransfer.restoreFromMemento(mem.vRamTransferMemento());
+        sgbDisplay.restoreFromMemento(mem.sgbDisplayMemento());
         requestedScreenRefresh = mem.requestScreenRefresh();
         lcdDisabled = mem.lcdDisabled();
     }
@@ -349,7 +352,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
-                                  Memento<SuperGameboy> superGameboyMemento,
+                                  Memento<SuperGameboy> superGameboyMemento, Memento<Background> backgroundMemento,
+                                  Memento<VRamTransfer> vRamTransferMemento, Memento<SgbDisplay> sgbDisplayMemento,
                                   boolean requestScreenRefresh, boolean lcdDisabled) implements Memento<Gameboy> {
     }
 

@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.VRamTransfer;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
+import eu.rekawek.coffeegb.sgb.Commands.TransferCommand;
 import org.slf4j.Logger;
 
 import java.util.Arrays;
@@ -26,7 +27,7 @@ public class SuperGameboy implements Originator<SuperGameboy> {
     private final int[][] multipacket = new int[7][16];
 
     private int transferCountdown;
-    private Commands.TransferCommand waitingTransferCommand;
+    private TransferCommand waitingTransferCommand;
 
     public SuperGameboy(EventBus sgbBus) {
         this.sgbBus = sgbBus;
@@ -72,8 +73,8 @@ public class SuperGameboy implements Originator<SuperGameboy> {
         if (cmd == null) {
             LOG.warn("Unknown SGB command: {} {}", Integer.toHexString(transfer[0] / 8), Arrays.toString(transfer));
         }
-        if (cmd instanceof Commands.TransferCommand) {
-            waitingTransferCommand = (Commands.TransferCommand) cmd;
+        if (cmd instanceof TransferCommand) {
+            waitingTransferCommand = (TransferCommand) cmd;
             transferCountdown = 3;
         } else if (cmd != null) {
             LOG.atInfo().log("SGB command: {}", cmd);
@@ -83,7 +84,7 @@ public class SuperGameboy implements Originator<SuperGameboy> {
 
     @Override
     public Memento<SuperGameboy> saveToMemento() {
-        return new SuperGameboyMemento(multipacket, multipacketIndex, multipacketLength);
+        return new SuperGameboyMemento(multipacket, multipacketIndex, multipacketLength, transferCountdown, waitingTransferCommand == null ? null : waitingTransferCommand.saveToMemento());
     }
 
     @Override
@@ -99,10 +100,15 @@ public class SuperGameboy implements Originator<SuperGameboy> {
         for (int i = 0; i < this.multipacket.length; i++) {
             System.arraycopy(mem.multipacket[i], 0, this.multipacket[i], 0, 16);
         }
+        this.transferCountdown = mem.transferCountdown;
+        if (mem.waitingTransferCommandMemento != null) {
+            this.waitingTransferCommand = TransferCommand.restoreFromMemento(mem.waitingTransferCommandMemento);
+        }
     }
 
     private record SuperGameboyMemento(int[][] multipacket, int multipacketIndex,
-                                       int multipacketLength) implements Memento<SuperGameboy> {
+                                       int multipacketLength, int transferCountdown,
+                                       Memento<TransferCommand> waitingTransferCommandMemento) implements Memento<SuperGameboy> {
     }
 
     public record PacketReceivedEvent(int[] packet) implements Event {

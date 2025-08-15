@@ -2,10 +2,10 @@ package eu.rekawek.coffeegb.sgb;
 
 import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
-import static eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent.translateGbcRgb;
-
-public class Background {
+public class Background implements Originator<Background> {
 
     private final int[] tiles = new int[0x2000];
 
@@ -65,6 +65,25 @@ public class Background {
         result |= (tiles[offset + 16] & (1 << (7 - x))) == 0 ? 0 : 4;
         result |= (tiles[offset + 17] & (1 << (7 - x))) == 0 ? 0 : 8;
         return result;
+    }
+
+    @Override
+    public Memento<Background> saveToMemento() {
+        return new BackgroundMemento(tiles.clone());
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<Background> memento) {
+        if (!(memento instanceof BackgroundMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.tiles.length != mem.tiles.length) {
+            throw new IllegalArgumentException("Memento array length doesn't match");
+        }
+        System.arraycopy(mem.tiles, 0, this.tiles, 0, this.tiles.length);
+    }
+
+    private record BackgroundMemento(int[] tiles) implements Memento<Background> {
     }
 
     public record SgbBackgroundReadyEvent(int[] buffer, int[] mask) implements Event {
