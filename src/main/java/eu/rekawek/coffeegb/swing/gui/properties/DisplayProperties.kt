@@ -6,4 +6,7 @@ class DisplayProperties(private val properties: EmulatorProperties) {
 
   val grayscale
     get() = properties.getProperty(EmulatorProperties.Key.DisplayGrayscale, "false").toBoolean()
+
+  val showSgbBorder
+    get() = properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, "false").toBoolean()
 }

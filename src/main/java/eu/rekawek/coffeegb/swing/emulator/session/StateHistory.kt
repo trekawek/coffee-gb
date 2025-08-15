@@ -21,9 +21,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 class StateHistory(
-    private val mainRom: Rom,
-    private val peerRom: Rom,
-    private val peerBattery: ByteArray?
+  private val mainConfig: GameboyConfiguration,
+  private val peerConfig: GameboyConfiguration,
 ) {
 
   private val states = LinkedList<State>()
@@ -76,8 +75,8 @@ class StateHistory(
         states.firstOrNull { it.frame == baseFrame }
             ?: throw IllegalStateException("No frame $baseFrame")
 
-    val mainGameboy = GameboyConfiguration(mainRom).setBootstrapMode(SKIP).build()
-    val secondaryGameboy = GameboyConfiguration(peerRom).setBootstrapMode(SKIP).build()
+    val mainGameboy = mainConfig.build()
+    val secondaryGameboy = peerConfig.build()
     val mainLink = Peer2PeerSerialEndpoint()
     val secondaryLink = Peer2PeerSerialEndpoint()
     mainLink.init(secondaryLink)

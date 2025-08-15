@@ -18,7 +18,7 @@ class EmulatorProperties() {
 
   val sound = SoundProperties(this)
 
-  val gameboy = GameboyProperties(this)
+  val system = SystemProperties(this)
 
   val controllerMapping = ControllerProperties.getControllerMapping(properties)
 
@@ -39,9 +39,11 @@ class EmulatorProperties() {
   }
 
   enum class Key(val propertyName: String) {
-    GameboyType("gameboy.type"),
+    DmgGamesType("system.dmgGames"),
+    CgbGamesType("system.cgbGames"),
     DisplayScale("display.scale"),
     DisplayGrayscale("display.grayscale"),
+    ShowSgbBorder("display.showSgbBorder"),
     SoundEnabled("sound.enabled"),
     RomDirectory("rom.directory"),
   }

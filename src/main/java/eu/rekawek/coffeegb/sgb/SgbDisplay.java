@@ -239,6 +239,10 @@ public class SgbDisplay implements Originator<SgbDisplay> {
             throw new IllegalArgumentException("Array length doesn't match");
         }
         for (int i = 0; i < src.length; i++) {
+            if (src[i] == null) {
+                dst[i] = null;
+                continue;
+            }
             if (src[i].length != dst[i].length) {
                 throw new IllegalArgumentException("Array length doesn't match at i=" + i);
             }

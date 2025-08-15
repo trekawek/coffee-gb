@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.swing.io.network
 
+import eu.rekawek.coffeegb.Gameboy.BootstrapMode
+import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
@@ -8,12 +10,12 @@ import eu.rekawek.coffeegb.swing.emulator.session.Input
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
 import eu.rekawek.coffeegb.swing.events.register
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,
@@ -29,7 +31,9 @@ class Connection(
     eventBus.register<WaitingForPeerEvent> {
       outputStream.write(0x01)
 
-      val buf = ByteBuffer.allocate(8)
+      val buf = ByteBuffer.allocate(10)
+      buf.put(it.gameboyType.ordinal.toByte())
+      buf.put(it.bootstrapMode.ordinal.toByte())
       buf.putInt(it.romFile.size)
       buf.putInt(it.batteryFile?.size ?: 0)
       buf.rewind()
@@ -89,9 +93,11 @@ class Connection(
           when (command) {
             // peer loaded game
             0x01 -> {
-              val buf = ByteBuffer.allocate(8)
+              val buf = ByteBuffer.allocate(10)
               inputStream.read(buf.array())
 
+              val gameboyType = GameboyType.entries[buf.get().toInt()]
+              val bootstrapMode = BootstrapMode.entries[buf.get().toInt()]
               val romSize = buf.getInt()
               val batterySize = buf.getInt()
 
@@ -103,7 +109,7 @@ class Connection(
                     null
                   }
 
-              PeerLoadedGameEvent(rom, battery)
+              PeerLoadedGameEvent(rom, battery, gameboyType, bootstrapMode)
             }
             // sync
             0x03 -> {
@@ -175,7 +181,12 @@ class Connection(
     outputStream.close()
   }
 
-  data class PeerLoadedGameEvent(val rom: ByteArray, val battery: ByteArray?) : Event
+  data class PeerLoadedGameEvent(
+      val rom: ByteArray,
+      val battery: ByteArray?,
+      val gameboyType: GameboyType,
+      val bootstrapMode: BootstrapMode
+  ) : Event
 
   class RequestResetEvent : Event
 

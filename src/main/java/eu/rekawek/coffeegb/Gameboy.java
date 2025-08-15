@@ -23,6 +23,7 @@ import eu.rekawek.coffeegb.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.sgb.SuperGameboy;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.timer.Timer;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.Closeable;
 import java.io.File;
@@ -393,6 +394,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             return this;
         }
 
+        public GameboyType getGameboyType() {
+            return gameboyType;
+        }
+
         public GameboyConfiguration setDisplaySgbBorder(boolean displaySgbBorder) {
             this.displaySgbBorder = displaySgbBorder;
             return this;
@@ -401,6 +406,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         public GameboyConfiguration setBootstrapMode(BootstrapMode bootstrapMode) {
             this.bootstrapMode = bootstrapMode;
             return this;
+        }
+
+        public BootstrapMode getBootstrapMode() {
+            return bootstrapMode;
         }
 
         public GameboyConfiguration setBatteryData(byte[] batteryData) {
@@ -415,6 +424,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public Gameboy build() {
             return new Gameboy(this);
+        }
+
+        public Rom getRom() {
+            return rom;
         }
     }
 }

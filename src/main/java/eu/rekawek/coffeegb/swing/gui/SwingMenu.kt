@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing.gui
 
+import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.sound.Sound
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.LoadRomEvent
@@ -16,6 +17,8 @@ import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStoppedEvent
 import eu.rekawek.coffeegb.swing.emulator.session.SnapshotSupport
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
+import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties.Key.CgbGamesType
+import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties.Key.DmgGamesType
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController
@@ -61,6 +64,7 @@ class SwingMenu(
 
     menuBar.add(createFileMenu())
     menuBar.add(createGameMenu())
+    menuBar.add(createSystemMenu())
     menuBar.add(createScreenMenu())
     menuBar.add(createAudioMenu())
     menuBar.add(createLinkMenu())
@@ -175,6 +179,33 @@ class SwingMenu(
     return gameMenu
   }
 
+  private fun createSystemMenu(): JMenu {
+    val systemMenu = JMenu("System")
+
+    for (gameType in listOf(DmgGamesType, CgbGamesType)) {
+      val (title, value) =
+          when (gameType) {
+            DmgGamesType -> "DMG games" to properties.system.dmgGamesType
+            CgbGamesType -> "CGB games" to properties.system.cgbGamesType
+            else -> throw IllegalStateException()
+          }
+
+      val menu = JMenu(title)
+      systemMenu.add(menu)
+
+      for (systemType in GameboyType.entries) {
+        val item = JCheckBoxMenuItem(systemType.name, systemType == value)
+        menu.add(item)
+        item.addActionListener {
+          properties.setProperty(gameType, systemType.name)
+          uncheckAllBut(menu, item)
+        }
+      }
+    }
+
+    return systemMenu
+  }
+
   private fun createScreenMenu(): JMenu {
     val screenMenu = JMenu("Screen")
 
@@ -197,6 +228,13 @@ class SwingMenu(
       eventBus.post(SetGrayscaleEvent(grayscale.state))
       properties.setProperty(EmulatorProperties.Key.DisplayGrayscale, grayscale.state.toString())
     }
+
+    val showSgbBorder = JCheckBoxMenuItem("Show SGB border", properties.display.showSgbBorder)
+    screenMenu.add(showSgbBorder)
+    showSgbBorder.addActionListener {
+      properties.setProperty(EmulatorProperties.Key.ShowSgbBorder, showSgbBorder.state.toString())
+    }
+
     return screenMenu
   }
 

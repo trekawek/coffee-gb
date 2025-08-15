@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.swing.emulator.session
 
 import eu.rekawek.coffeegb.Gameboy
-import eu.rekawek.coffeegb.GameboyType
+import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Cartridge
@@ -16,6 +16,7 @@ import java.io.File
 
 class SimpleSession(
     private val eventBus: EventBus,
+    private val config: GameboyConfiguration,
     romFile: File,
     private val console: Console?,
 ) : Session, SnapshotSupport {
@@ -32,22 +33,8 @@ class SimpleSession(
 
   @Synchronized
   override fun start() {
-    val config = Gameboy.GameboyConfiguration(rom)
-    config.setGameboyType(GameboyType.CGB)
-
     localEventBus = eventBus.fork("main")
-
-    if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB) {
-      if (rom.isSuperGameboyFlag && SUPPORT_SGB) {
-        config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
-        config.setGameboyType(GameboyType.SGB)
-        localEventBus?.post(SwingEmulator.GameboyTypeEvent(GameboyType.SGB))
-      } else {
-        config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
-        config.setGameboyType(GameboyType.CGB)
-        localEventBus?.post(SwingEmulator.GameboyTypeEvent(GameboyType.CGB))
-      }
-    }
+    localEventBus?.post(SwingEmulator.GameboyTypeEvent(config.gameboyType))
 
     gameboy = config.build()
     gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
@@ -106,9 +93,5 @@ class SimpleSession(
   override fun shutDown() {
     stop()
     eventBus.stop()
-  }
-
-  private companion object {
-    const val SUPPORT_SGB = false
   }
 }

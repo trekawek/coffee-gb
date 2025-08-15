@@ -14,30 +14,23 @@ import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent
 import eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent
-import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
-import java.io.File
 import java.lang.Thread.sleep
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class LinkedSession(
     private val eventBus: EventBus,
-    mainRomFile: File,
-    peerRomData: ByteArray,
-    private val peerBattery: ByteArray?,
+    private val mainConfig: GameboyConfiguration,
+    private val peerConfig: GameboyConfiguration,
     private val console: Console?,
 ) : Session {
-
-  private val mainRom = Rom(mainRomFile)
-
-  private val peerRom = Rom(peerRomData)
 
   private var mainGameboy: Gameboy? = null
 
@@ -58,7 +51,7 @@ class LinkedSession(
   @Synchronized
   @VisibleForTesting
   internal fun init(): Runnable {
-    stateHistory = StateHistory(mainRom, peerRom, peerBattery)
+    stateHistory = StateHistory(mainConfig, peerConfig)
 
     val localMainEventBus = EventBusImpl()
     val mainEventBus = eventBus.fork("main")
@@ -71,7 +64,7 @@ class LinkedSession(
             SoundSampleEvent::class,
             Joypad.JoypadPressEvent::class))
     val mainSerialEndpoint = Peer2PeerSerialEndpoint()
-    val mainGameboy = Gameboy(mainRom)
+    val mainGameboy = mainConfig.build()
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
     val localSecondaryEventBus = EventBusImpl()
@@ -81,7 +74,7 @@ class LinkedSession(
         secondaryEventBus,
         setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class))
     val secondarySerialEndpoint = Peer2PeerSerialEndpoint()
-    val secondaryGameboy = GameboyConfiguration(peerRom).setBatteryData(peerBattery).build()
+    val secondaryGameboy = peerConfig.build()
     secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, console)
 
     secondarySerialEndpoint.init(mainSerialEndpoint)
@@ -190,7 +183,7 @@ class LinkedSession(
           isStopped = true
         }
         .start()
-    mainEventBus?.post(Session.EmulationStartedEvent(mainRom.title))
+    mainEventBus?.post(Session.EmulationStartedEvent(mainConfig.rom.title))
   }
 
   @Synchronized
