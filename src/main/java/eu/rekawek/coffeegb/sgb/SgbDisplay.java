@@ -154,6 +154,13 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         int width = sgbBorder ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
         int height = sgbBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
         int[] result = new int[width * height];
+
+        int lastPaletteId = paletteMap[paletteMap.length - 1];
+        if (atfNumber != -1) {
+            var atf = attributeFiles[atfNumber];
+            lastPaletteId = atf[atf.length - 1];
+        }
+
         for (int x = offsetX; x < offsetX + width; x++) {
             for (int y = offsetY; y < offsetY + height; y++) {
                 int sgbPixel = sgbBuffer[x + y * SGB_DISPLAY_WIDTH];
@@ -172,6 +179,9 @@ public class SgbDisplay implements Originator<SgbDisplay> {
                     int p = dmgFrameReadyEvent.pixels()[dmgX + dmgY * DISPLAY_WIDTH];
                     if (screenMask == GameboyScreenMask.BLANK_COLOR0) {
                         p = 0;
+                    }
+                    if (p == 0) {
+                        paletteId = lastPaletteId;
                     }
                     dmgPixel = palettes[paletteId][p];
                     if (screenMask == GameboyScreenMask.BLANK_BLACK) {
