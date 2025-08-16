@@ -14,7 +14,7 @@ The coffee-gb-*-complete.jar executable file will be available in the `./target`
 
 ## Usage
 
-1. Download the [most recent release](https://github.com/trekawek/coffee-gb/releases/download/coffee-gb-1.2.0/coffee-gb-1.2.0.jar).
+1. Download the [most recent release](https://github.com/trekawek/coffee-gb/releases).
 2. Double-click the JAR or launch it with `java -jar coffee-gb-*.jar` command.
 3. Load a game.
 
