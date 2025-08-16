@@ -48,6 +48,8 @@ class SwingEmulator(
 
   private var session: Session? = null
 
+  private var config: Gameboy.GameboyConfiguration? = null
+
   private var mainConfig: Gameboy.GameboyConfiguration? = null
   private var peerConfig: Gameboy.GameboyConfiguration? = null
 
@@ -88,9 +90,8 @@ class SwingEmulator(
             WaitingForPeerEvent(
                 romBuffer, batteryBuffer, mainConfig!!.gameboyType, mainConfig!!.bootstrapMode))
       } else {
-        session =
-            SimpleSession(
-                eventBus.fork("session"), createGameboyConfig(Rom(it.rom)), it.rom, console)
+        config = createGameboyConfig(Rom(it.rom))
+        session = SimpleSession(eventBus.fork("session"), config!!, console)
         eventBus.post(SessionPauseSupportEvent(true))
         eventBus.post(SessionSnapshotSupportEvent(session as? SnapshotSupport))
         eventBus.post(StartEmulationEvent())
@@ -126,6 +127,14 @@ class SwingEmulator(
       }
     }
     eventBus.register<Connection.ReceivedRemoteResumeEvent> { session?.resume() }
+    eventBus.register<UpdatedSystemMappingEvent> {
+      if (session is SimpleSession && config != null) {
+        val newType = gameboyTypeResolver.getGameboyType(config!!.rom)
+        if (newType != config!!.gameboyType) {
+          eventBus.post(LoadRomEvent(config!!.rom.file))
+        }
+      }
+    }
     eventBus.register<ResetEmulationEvent> {
       session?.reset()
       if (session is LinkedSession) {
@@ -246,6 +255,8 @@ class SwingEmulator(
   data class SessionPauseSupportEvent(val enabled: Boolean) : Event
 
   data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event
+
+  class UpdatedSystemMappingEvent : Event
 
   data class WaitingForPeerEvent(
       val romFile: ByteArray,

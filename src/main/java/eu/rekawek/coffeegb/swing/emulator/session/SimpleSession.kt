@@ -17,15 +17,12 @@ import java.io.File
 class SimpleSession(
     private val eventBus: EventBus,
     private val config: GameboyConfiguration,
-    romFile: File,
     private val console: Console?,
 ) : Session, SnapshotSupport {
 
-  private val rom = Rom(romFile)
-
   private var cart: Cartridge? = null
 
-  private val snapshotManager = SnapshotManager(romFile)
+  private val snapshotManager = SnapshotManager(config.rom.file)
 
   private var gameboy: Gameboy? = null
 
@@ -40,7 +37,7 @@ class SimpleSession(
     gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
     gameboy?.registerTickListener(TimingTicker())
     Thread(gameboy).start()
-    localEventBus!!.post(EmulationStartedEvent(rom.title))
+    localEventBus!!.post(EmulationStartedEvent(config.rom.title))
   }
 
   @Synchronized

@@ -6,8 +6,6 @@ import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.sgb.Commands.MaskEnCmd.GameboyScreenMask;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import static eu.rekawek.coffeegb.gpu.Display.DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.gpu.Display.DISPLAY_WIDTH;
@@ -17,8 +15,6 @@ import static eu.rekawek.coffeegb.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
 
 public class SgbDisplay implements Originator<SgbDisplay> {
 
-    private static final Logger LOG = LoggerFactory.getLogger(SgbDisplay.class);
-
     private static final int DMG_TILES_WIDTH = DISPLAY_WIDTH / 8;
 
     private static final int DMG_TILES_HEIGHT = DISPLAY_HEIGHT / 8;
@@ -27,7 +23,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private static final int DMG_WINDOW_Y = 40;
 
-    private final boolean sgbBorder;
+    private volatile boolean sgbBorder;
 
     private final boolean sgb;
 
@@ -62,6 +58,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
             this.eventBus = eventBus;
             eventBus.register(this::onSgbBackground, Background.SgbBackgroundReadyEvent.class);
             eventBus.register(this::onDmgFrame, DmgFrameReadyEvent.class);
+            eventBus.register(e -> this.sgbBorder = e.borderEnabled, SetSgbBorder.class);
 
             sgbBus.register(this::onAttrBlk, Commands.AttrBlkCmd.class);
             sgbBus.register(e -> {
@@ -269,5 +266,8 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         public void toRgb(int[] target, boolean unused) {
             System.arraycopy(buffer, 0, target, 0, buffer.length);
         }
+    }
+
+    public record SetSgbBorder(boolean borderEnabled) implements Event {
     }
 }

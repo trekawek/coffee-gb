@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.swing.gui
 
 import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.events.EventBus
+import eu.rekawek.coffeegb.sgb.SgbDisplay
 import eu.rekawek.coffeegb.sound.Sound
+import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.LoadRomEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.PauseEmulationEvent
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResetEmulationEvent
@@ -199,6 +201,7 @@ class SwingMenu(
         item.addActionListener {
           properties.setProperty(gameType, systemType.name)
           uncheckAllBut(menu, item)
+          eventBus.post(SwingEmulator.UpdatedSystemMappingEvent())
         }
       }
     }
@@ -233,6 +236,7 @@ class SwingMenu(
     screenMenu.add(showSgbBorder)
     showSgbBorder.addActionListener {
       properties.setProperty(EmulatorProperties.Key.ShowSgbBorder, showSgbBorder.state.toString())
+      eventBus.post(SgbDisplay.SetSgbBorder(showSgbBorder.state))
     }
 
     return screenMenu
