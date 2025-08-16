@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.Joypad
 import eu.rekawek.coffeegb.events.EventBusImpl
+import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.swing.emulator.session.Input
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
 import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
@@ -11,9 +12,9 @@ import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.RemoteButtonStat
 import eu.rekawek.coffeegb.swing.emulator.session.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.testing.RandomJoypad
-import org.junit.Test
 import java.nio.file.Paths
 import kotlin.test.assertEquals
+import org.junit.Test
 
 class LinkedSessionTest {
 
@@ -22,7 +23,9 @@ class LinkedSessionTest {
     val eventBus = EventBusImpl()
     val buttons = mutableListOf<Joypad.JoypadPressEvent>()
     eventBus.register<Joypad.JoypadPressEvent> { buttons += it }
-    val sut = LinkedSession(eventBus, ROM, ROM_BYTES, null, null)
+    val mainConfig = Gameboy.GameboyConfiguration(ROM)
+    val peerConfig = Gameboy.GameboyConfiguration(Rom(ROM_BYTES))
+    val sut = LinkedSession(eventBus, mainConfig, peerConfig, null)
     val randomJoypad = RandomJoypad(eventBus)
     val tickRunnable = sut.init()
     repeat(Gameboy.TICKS_PER_FRAME * 100) {
@@ -58,13 +61,15 @@ class LinkedSessionTest {
     val eventBus1 = EventBusImpl()
     val buttons1 = mutableListOf<Joypad.JoypadPressEvent>()
     eventBus1.register<Joypad.JoypadPressEvent> { buttons1 += it }
-    val sut1 = LinkedSession(eventBus1, ROM, ROM_BYTES, null, null)
+    val mainConfig = Gameboy.GameboyConfiguration(ROM)
+    val peerConfig = Gameboy.GameboyConfiguration(Rom(ROM_BYTES))
+    val sut1 = LinkedSession(eventBus1, mainConfig, peerConfig, null)
     val randomJoypad = RandomJoypad(eventBus1)
     val tickRunnable1 = sut1.init()
 
     val eventBus2 = EventBusImpl()
     val buttons2 = mutableListOf<Joypad.JoypadPressEvent>()
-    val sut2 = LinkedSession(eventBus2, ROM, ROM_BYTES, null, null)
+    val sut2 = LinkedSession(eventBus2, mainConfig, peerConfig, null)
     val tickRunnable2 = sut2.init()
     sut2.stateHistory!!.debugEventBus =
         EventBusImpl().also { eb ->
@@ -99,13 +104,15 @@ class LinkedSessionTest {
     val eventBus1 = EventBusImpl()
     val buttons1 = mutableListOf<Joypad.JoypadPressEvent>()
     eventBus1.register<Joypad.JoypadPressEvent> { buttons1 += it }
-    val sut1 = LinkedSession(eventBus1, ROM, ROM_BYTES, null, null)
+    val mainConfig = Gameboy.GameboyConfiguration(ROM)
+    val peerConfig = Gameboy.GameboyConfiguration(Rom(ROM_BYTES))
+    val sut1 = LinkedSession(eventBus1, mainConfig, peerConfig, null)
     val randomJoypad1 = RandomJoypad(eventBus1)
     val tickRunnable1 = sut1.init()
 
     val eventBus2 = EventBusImpl()
     val buttons2 = mutableListOf<Joypad.JoypadPressEvent>()
-    val sut2 = LinkedSession(eventBus2, ROM, ROM_BYTES, null, null)
+    val sut2 = LinkedSession(eventBus2, mainConfig, peerConfig, null)
     val randomJoypad2 = RandomJoypad(eventBus2)
     val tickRunnable2 = sut2.init()
     sut2.stateHistory!!.debugEventBus =
