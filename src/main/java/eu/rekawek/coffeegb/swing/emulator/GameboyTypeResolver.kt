@@ -13,9 +13,6 @@ class GameboyTypeResolver(private val props: SystemProperties) {
       }
       return props.cgbGamesType
     }
-    if (props.dmgGamesType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
-      return GameboyType.DMG
-    }
     return props.dmgGamesType
   }
 }

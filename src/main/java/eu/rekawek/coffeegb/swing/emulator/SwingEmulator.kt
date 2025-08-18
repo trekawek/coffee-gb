@@ -232,7 +232,12 @@ class SwingEmulator(
     } else {
       config.setBootstrapMode(Gameboy.BootstrapMode.SKIP)
     }
-    config.setDisplaySgbBorder(properties.display.showSgbBorder)
+    if (config.gameboyType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
+      config.setDisplaySgbBorder(false)
+    } else {
+      config.setDisplaySgbBorder(properties.display.showSgbBorder)
+    }
+
     return config
   }
 

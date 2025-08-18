@@ -111,6 +111,9 @@ public class FileBattery implements Battery {
 
     private void doSaveRam(int[] ram) {
         for (int i = 0; i < ram.length; i++) {
+            if (i >= ramBuffer.length) {
+                return;
+            }
             ramBuffer[i] = (byte) (ram[i]);
         }
     }

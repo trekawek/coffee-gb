@@ -536,7 +536,7 @@ public class Commands {
         }
 
         public String toString() {
-            return "DATA_SND [snesAddress=" + getSnesAddress() + ", bankAddress=" + getBankAddress() + ", length=" + getLength() + "]";
+            return "DATA_SND [snesAddress=" + String.format("0x%04X", getSnesAddress()) + ", bankAddress=" + getBankAddress() + ", length=" + getLength() + "]";
         }
     }
 

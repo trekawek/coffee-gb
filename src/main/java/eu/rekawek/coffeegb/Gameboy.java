@@ -108,7 +108,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display = new Display(gbc);
 
         sgbBus = new EventBusImpl();
-        sgbDisplay = new SgbDisplay(sgbBus, sgb, configuration.displaySgbBorder);
+        sgbDisplay = new SgbDisplay(configuration.rom, sgbBus, sgb, configuration.displaySgbBorder);
         vRamTransfer = new VRamTransfer(sgbBus);
         superGameboy = new SuperGameboy(sgbBus);
         background = new Background(sgbBus);

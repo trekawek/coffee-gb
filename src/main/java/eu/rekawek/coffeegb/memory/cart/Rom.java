@@ -97,7 +97,7 @@ public class Rom {
 
     private static String getTitle(int[] rom) {
         StringBuilder t = new StringBuilder();
-        for (int i = 0x0134; i < 0x0143; i++) {
+        for (int i = 0x0134; i <= 0x0143; i++) {
             char c = (char) rom[i];
             if (c == 0) {
                 break;

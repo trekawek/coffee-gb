@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
+import eu.rekawek.coffeegb.memory.cart.Rom;
 import eu.rekawek.coffeegb.sgb.Commands.MaskEnCmd.GameboyScreenMask;
 
 import static eu.rekawek.coffeegb.gpu.Display.DISPLAY_HEIGHT;
@@ -31,6 +32,8 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private EventBus eventBus;
 
+    private final int[] predefinedPalette;
+
     private final int[] sgbBuffer = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
 
     private final int[] sgbMask = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
@@ -47,13 +50,15 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private int atfNumber = -1;
 
-    public SgbDisplay(EventBus sgbBus, boolean sgb, boolean sgbBorder) {
+    public SgbDisplay(Rom rom, EventBus sgbBus, boolean sgb, boolean sgbBorder) {
         this.sgbBorder = sgbBorder;
         this.sgb = sgb;
         this.sgbBus = sgbBus;
+        predefinedPalette = DefinedPalettes.getPalette(rom.getTitle().trim());
     }
 
     public void init(EventBus eventBus) {
+        this.palettes[0] = predefinedPalette;
         if (sgb) {
             this.eventBus = eventBus;
             eventBus.register(this::onSgbBackground, Background.SgbBackgroundReadyEvent.class);
