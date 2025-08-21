@@ -23,7 +23,6 @@ import eu.rekawek.coffeegb.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.sgb.SuperGameboy;
 import eu.rekawek.coffeegb.sound.Sound;
 import eu.rekawek.coffeegb.timer.Timer;
-import org.jetbrains.annotations.NotNull;
 
 import java.io.Closeable;
 import java.io.File;
@@ -107,7 +106,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         mmu = new Mmu(gbc);
         display = new Display(gbc);
 
-        sgbBus = new EventBusImpl();
+        sgbBus = new EventBusImpl(null, null, false);
         sgbDisplay = new SgbDisplay(configuration.rom, sgbBus, sgb, configuration.displaySgbBorder);
         vRamTransfer = new VRamTransfer(sgbBus);
         superGameboy = new SuperGameboy(sgbBus);
@@ -344,6 +343,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     @Override
     public void close() {
         cartridge.flushBattery();
+        sgbBus.close();
     }
 
     private record GameboyMemento(Memento<BiosShadow> biosShadowMemento, Memento<Cartridge> cartridgeMemento,

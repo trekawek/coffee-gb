@@ -50,7 +50,7 @@ class SimpleSession(
     cart?.flushBattery()
     console?.setGameboy(null)
     localEventBus!!.post(EmulationStoppedEvent())
-    localEventBus!!.stop()
+    localEventBus!!.close()
 
     localEventBus = null
     gameboy = null
@@ -89,6 +89,6 @@ class SimpleSession(
 
   override fun shutDown() {
     stop()
-    eventBus.stop()
+    eventBus.close()
   }
 }

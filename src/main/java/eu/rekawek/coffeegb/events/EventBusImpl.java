@@ -17,6 +17,7 @@ public class EventBusImpl implements EventBus {
     private final EventBusImpl parent;
     private final List<EventBusImpl> children = new CopyOnWriteArrayList<>();
     private final String callerId;
+    private final boolean asyncEventsEnabled;
 
     private volatile boolean doStop;
     private volatile boolean stopped;
@@ -24,13 +25,16 @@ public class EventBusImpl implements EventBus {
     private final BlockingDeque<Event> asyncEvents = new LinkedBlockingDeque<>();
 
     public EventBusImpl() {
-        this(null, null);
+        this(null, null, true);
     }
 
-    public EventBusImpl(EventBusImpl parent, String callerId) {
+    public EventBusImpl(EventBusImpl parent, String callerId, boolean asyncEventsEnabled) {
         this.parent = parent;
         this.callerId = callerId;
-        new Thread(new AsyncRunnable()).start();
+        this.asyncEventsEnabled = asyncEventsEnabled;
+        if (asyncEventsEnabled) {
+            new Thread(new AsyncRunnable()).start();
+        }
     }
 
     @Override
@@ -54,6 +58,9 @@ public class EventBusImpl implements EventBus {
 
     @Override
     public <E extends Event> void postAsync(E event) {
+        if (!asyncEventsEnabled) {
+            throw new IllegalStateException("Async events are disabled");
+        }
         asyncEvents.addLast(event);
     }
 
@@ -75,7 +82,8 @@ public class EventBusImpl implements EventBus {
 
     private <E extends Event> void doPost(E event, String callerId) {
         if (stopped) {
-            throw new IllegalStateException("This EventBus is no longer active.");
+            LOG.atInfo().log("This EventBus is no longer active.");
+            return;
         }
         for (Registration r : registrations) {
             if (!r.eventType.isInstance(event)) {
@@ -92,7 +100,7 @@ public class EventBusImpl implements EventBus {
     @Override
     @NotNull
     public EventBusImpl fork(String callerId) {
-        EventBusImpl child = new EventBusImpl(this, callerId);
+        EventBusImpl child = new EventBusImpl(this, callerId, asyncEventsEnabled);
         children.add(child);
         return child;
     }
@@ -102,9 +110,11 @@ public class EventBusImpl implements EventBus {
     }
 
     @Override
-    public void stop() {
+    public void close() {
         doStop = true;
-        while (!stopped) {
+        if (asyncEventsEnabled) {
+            while (!stopped) {
+            }
         }
         if (parent != null) {
             parent.removeChild(this);

@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.swing.emulator.session
 
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
-import eu.rekawek.coffeegb.Gameboy.BootstrapMode.SKIP
 import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.controller.Button
@@ -11,7 +10,6 @@ import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.memento.Memento
-import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
@@ -43,6 +41,7 @@ class StateHistory(
     states.add(
         State(
             frame, mainInput, mainMemento, secondaryMemento, mainLinkMemento, secondaryLinkMemento))
+    LOG.atDebug().log("Adding state on frame {}; state size {}", frame, states.size)
     while (states.size > 60 * 5) {
       states.removeFirst()
     }
@@ -54,6 +53,7 @@ class StateHistory(
       secondaryInput: Input,
   ) {
     patches.add(Patch(frame, secondaryInput))
+    LOG.atDebug().log("Adding patch on frame {}, patches size {}", frame, patches.size)
   }
 
   @Synchronized
@@ -81,8 +81,8 @@ class StateHistory(
     val secondaryLink = Peer2PeerSerialEndpoint()
     mainLink.init(secondaryLink)
 
-    val mainEventBus = EventBusImpl()
-    val secondaryEventBus = EventBusImpl()
+    val mainEventBus = EventBusImpl(null, null, false)
+    val secondaryEventBus = EventBusImpl(null, null, false)
     mainEventBus.register<Joypad.JoypadPressEvent> {
       debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, 0))
     }
@@ -126,6 +126,12 @@ class StateHistory(
         }
       }
     }
+
+    mainGameboy.close()
+    secondaryGameboy.close()
+    mainEventBus.close()
+    secondaryEventBus.close()
+
     LOG.atDebug().log("Rebase from $baseFrame to $toFrame completed.")
     return true
   }

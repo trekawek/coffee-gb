@@ -53,7 +53,7 @@ class LinkedSession(
   internal fun init(): Runnable {
     stateHistory = StateHistory(mainConfig, peerConfig)
 
-    val localMainEventBus = EventBusImpl()
+    val localMainEventBus = EventBusImpl(null, null, false)
     val mainEventBus = eventBus.fork("main")
     funnel(
         localMainEventBus,
@@ -67,7 +67,7 @@ class LinkedSession(
     val mainGameboy = mainConfig.build()
     mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
 
-    val localSecondaryEventBus = EventBusImpl()
+    val localSecondaryEventBus = EventBusImpl(null, null, false)
     val secondaryEventBus = eventBus.fork("secondary")
     funnel(
         localSecondaryEventBus,
@@ -200,8 +200,8 @@ class LinkedSession(
     console?.setGameboy(null)
     mainEventBus?.post(Session.EmulationStoppedEvent())
 
-    mainEventBus?.stop()
-    secondaryEventBus?.stop()
+    mainEventBus?.close()
+    secondaryEventBus?.close()
 
     mainGameboy = null
     secondaryGameboy = null
@@ -217,7 +217,7 @@ class LinkedSession(
 
   override fun shutDown() {
     stop()
-    eventBus.stop()
+    eventBus.close()
   }
 
   override fun pause() {

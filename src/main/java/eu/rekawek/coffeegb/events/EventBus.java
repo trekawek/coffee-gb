@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.events;
 
 import org.jetbrains.annotations.NotNull;
 
-public interface EventBus {
+public interface EventBus extends AutoCloseable {
     <E extends Event> void register(Subscriber<E> subscriber, Class<E> eventType, String callerFilter);
 
     <E extends Event> void register(Subscriber<E> subscriber, Class<E> eventType);
@@ -13,9 +13,13 @@ public interface EventBus {
 
     @NotNull EventBus fork(String callerId);
 
-    void stop();
+    void close();
 
     EventBus NULL_EVENT_BUS = new EventBus() {
+        @Override
+        public void close() {
+        }
+
         @Override
         public <E extends Event> void register(Subscriber<E> subscriber, Class<E> eventType, String callerFilter) {
         }
@@ -36,10 +40,6 @@ public interface EventBus {
         @Override
         public EventBus fork(String callerId) {
             return this;
-        }
-
-        @Override
-        public void stop() {
         }
     };
 }

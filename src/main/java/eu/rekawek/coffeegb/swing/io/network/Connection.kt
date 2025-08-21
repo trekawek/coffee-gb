@@ -176,7 +176,7 @@ class Connection(
   }
 
   override fun close() {
-    eventBus.stop()
+    eventBus.close()
     inputStream.close()
     outputStream.close()
   }
