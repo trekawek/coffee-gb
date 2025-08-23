@@ -16,10 +16,16 @@ import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     public enum Mode {
-        HBlank,
-        VBlank,
-        OamSearch,
-        PixelTransfer
+        HBlank(3),
+        VBlank(4),
+        OamSearch(5),
+        PixelTransfer(-1);
+
+        private final int statBit;
+
+        Mode(int statBit) {
+            this.statBit = statBit;
+        }
     }
 
     private final Ram videoRam0;
@@ -61,6 +67,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     private Mode mode;
 
     private GpuPhase phase;
+
+    private boolean previousStatRequested;
 
     public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, boolean gbc) {
         this.display = display;
@@ -181,7 +189,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 }
             }
         }
+
         if (!lcdEnabled) {
+            previousStatRequested = false;
             return null;
         }
 
@@ -192,7 +202,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             if (ticksInLine == 4 && mode == Mode.VBlank && r.get(LY) == 153) {
                 r.put(LY, 0);
                 pixelTransferPhase.resetWindowLineCounter();
-                requestLycEqualsLyInterrupt();
             }
         } else {
             switch (oldMode) {
@@ -204,7 +213,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 case PixelTransfer:
                     mode = Mode.HBlank;
                     phase = hBlankPhase.start(ticksInLine);
-                    requestLcdcInterrupt(3);
                     break;
 
                 case HBlank:
@@ -219,13 +227,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         mode = Mode.VBlank;
                         phase = vBlankPhase.start();
                         interruptManager.requestInterrupt(InterruptType.VBlank);
-                        requestLcdcInterrupt(4);
                     } else {
                         mode = Mode.OamSearch;
                         phase = oamSearchPhase.start();
                     }
-                    requestLcdcInterrupt(5);
-                    requestLycEqualsLyInterrupt();
                     break;
 
                 case VBlank:
@@ -235,14 +240,25 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         r.put(LY, 0);
                         pixelTransferPhase.resetWindowLineCounter();
                         phase = oamSearchPhase.start();
-                        requestLcdcInterrupt(5);
                     } else {
                         phase = vBlankPhase.start();
                     }
-                    requestLycEqualsLyInterrupt();
                     break;
             }
         }
+
+        boolean statRequested = false;
+        if (isStatInterruptTriggeringForMode(mode)) {
+            statRequested = true;
+        }
+        if (isStatInterruptTriggeringForLyc()) {
+            statRequested = true;
+        }
+        if (!previousStatRequested && statRequested) {
+            interruptManager.requestInterrupt(InterruptType.LCDC);
+        }
+        previousStatRequested = statRequested;
+
         if (oldMode == mode) {
             return null;
         } else {
@@ -254,16 +270,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return ticksInLine;
     }
 
-    private void requestLcdcInterrupt(int statBit) {
-        if ((r.get(STAT) & (1 << statBit)) != 0) {
-            interruptManager.requestInterrupt(InterruptType.LCDC);
-        }
+    private boolean isStatInterruptEnabled(int statBit) {
+        return (r.get(STAT) & (1 << statBit)) != 0;
     }
 
-    private void requestLycEqualsLyInterrupt() {
-        if (r.get(LYC) == r.get(LY)) {
-            requestLcdcInterrupt(6);
-        }
+    private boolean isStatInterruptTriggeringForMode(Mode mode) {
+        return mode.statBit != -1 && isStatInterruptEnabled(mode.statBit);
+    }
+
+    private boolean isStatInterruptTriggeringForLyc() {
+        return r.get(LYC) == r.get(LY) && isStatInterruptEnabled(6);
     }
 
     private int getStat() {
@@ -348,7 +364,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 lcdEnabled,
                 lcdEnabledDelay,
                 ticksInLine,
-                mode);
+                mode,
+                previousStatRequested);
     }
 
     @Override
@@ -378,6 +395,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.lcdEnabledDelay = mem.lcdEnabledDelay;
         this.ticksInLine = mem.ticksInLine;
         this.mode = mem.mode;
+        this.previousStatRequested = mem.previousStatRequested;
 
         switch (mode) {
             case OamSearch:
@@ -410,7 +428,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             boolean lcdEnabled,
             int lcdEnabledDelay,
             int ticksInLine,
-            Mode mode)
+            Mode mode,
+            boolean previousStatRequested)
             implements Memento<Gpu> {
     }
 }
