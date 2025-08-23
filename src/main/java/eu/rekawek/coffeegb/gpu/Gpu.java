@@ -195,6 +195,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return null;
         }
 
+        boolean statRequested = false;
         Mode oldMode = mode;
         ticksInLine++;
         if (phase.tick()) {
@@ -227,6 +228,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         mode = Mode.VBlank;
                         phase = vBlankPhase.start();
                         interruptManager.requestInterrupt(InterruptType.VBlank);
+                        // vblank_stat_intr-GS.s
+                        statRequested |= isStatInterruptTriggeringForMode(Mode.OamSearch);
                     } else {
                         mode = Mode.OamSearch;
                         phase = oamSearchPhase.start();
@@ -247,13 +250,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             }
         }
 
-        boolean statRequested = false;
-        if (isStatInterruptTriggeringForMode(mode)) {
-            statRequested = true;
-        }
-        if (isStatInterruptTriggeringForLyc()) {
-            statRequested = true;
-        }
+        statRequested |= isStatInterruptTriggeringForMode(mode);
+        statRequested |= isStatInterruptTriggeringForLyc();
         if (!previousStatRequested && statRequested) {
             interruptManager.requestInterrupt(InterruptType.LCDC);
         }
