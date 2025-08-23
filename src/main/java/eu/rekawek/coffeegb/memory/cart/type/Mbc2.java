@@ -15,6 +15,8 @@ public class Mbc2 implements MemoryController {
 
     private final Battery battery;
 
+    private final int romBanks;
+
     private int selectedRomBank = 1;
 
     private boolean ramWriteEnabled;
@@ -22,6 +24,7 @@ public class Mbc2 implements MemoryController {
     private boolean ramUpdated;
 
     public Mbc2(Rom rom, Battery battery) {
+        this.romBanks = rom.getRomBanks();
         this.cartridge = rom.getRom();
         this.ram = new int[0x0200];
         Arrays.fill(ram, 0xff);
@@ -36,13 +39,17 @@ public class Mbc2 implements MemoryController {
 
     @Override
     public void setByte(int address, int value) {
-        if (address >= 0x0000 && address < 0x2000) {
+        if (address >= 0x0000 && address < 0x4000) {
             if ((address & 0x0100) == 0) {
-                ramWriteEnabled = (value & 0b1010) != 0;
-            }
-        } else if (address >= 0x2000 && address < 0x4000) {
-            if ((address & 0x0100) != 0) {
+                ramWriteEnabled = (value & 0b1111) == 0b1010;
+            } else {
                 selectedRomBank = value & 0b00001111;
+                if (selectedRomBank == 0) {
+                    selectedRomBank = 1;
+                }
+                if (selectedRomBank >= romBanks) {
+                    selectedRomBank %= romBanks;
+                }
             }
         } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
             int ramAddress = getRamAddress(address);
@@ -59,10 +66,13 @@ public class Mbc2 implements MemoryController {
             return getRomByte(0, address);
         } else if (address >= 0x4000 && address < 0x8000) {
             return getRomByte(selectedRomBank, address - 0x4000);
-        } else if (address >= 0xa000 && address < 0xb000) {
+        } else if (address >= 0xa000 && address < 0xc000) {
+            if (!ramWriteEnabled) {
+                return 0xff;
+            }
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
-                return ram[ramAddress];
+                return ram[ramAddress] | 0xf0;
             } else {
                 return 0xff;
             }
@@ -89,7 +99,7 @@ public class Mbc2 implements MemoryController {
     }
 
     private int getRamAddress(int address) {
-        return address - 0xa000;
+        return (address - 0xa000) % ram.length;
     }
 
     @Override

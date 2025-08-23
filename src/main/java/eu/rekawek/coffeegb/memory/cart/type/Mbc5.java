@@ -9,6 +9,8 @@ import java.util.Arrays;
 
 public class Mbc5 implements MemoryController {
 
+    private final int romBanks;
+
     private final int ramBanks;
 
     private final int[] cartridge;
@@ -27,6 +29,7 @@ public class Mbc5 implements MemoryController {
 
     public Mbc5(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
+        this.romBanks = rom.getRomBanks();
         this.ramBanks = rom.getRamBanks();
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
         Arrays.fill(ram, 0xff);
@@ -66,7 +69,7 @@ public class Mbc5 implements MemoryController {
         if (address >= 0x0000 && address < 0x4000) {
             return getRomByte(0, address);
         } else if (address >= 0x4000 && address < 0x8000) {
-            return getRomByte(selectedRomBank, address - 0x4000);
+            return getRomByte(selectedRomBank % romBanks, address - 0x4000);
         } else if (address >= 0xa000 && address < 0xc000) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {

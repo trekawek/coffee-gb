@@ -139,6 +139,7 @@ public class Rom {
             case 5 -> 64;
             case 6 -> 128;
             case 7 -> 256;
+            case 8 -> 512;
             case 0x52 -> 72;
             case 0x53 -> 80;
             case 0x54 -> 96;
