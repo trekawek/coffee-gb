@@ -53,7 +53,7 @@ public class MooneyeTestRunner {
 
     public boolean runTest() throws IOException {
         int divider = 0;
-        while (!isByteSequenceAtPc(gb, 0x00, 0x18, 0xfd)) { // infinite loop
+        while (!isByteSequenceAtPc(gb, 0x40)) { // infinite loop
             gb.tick();
             if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 2 : 4)) {
                 displayProgress();
