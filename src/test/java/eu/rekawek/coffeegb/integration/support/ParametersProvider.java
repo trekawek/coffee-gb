@@ -16,7 +16,8 @@ public final class ParametersProvider {
             "-sgb.gb",
             "-sgb2.gb",
             "-S.gb",
-            "-A.gb"
+            "-A.gb",
+            "-dmg0.gb"
     );
 
     private ParametersProvider() {
