@@ -30,7 +30,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     }
 
     public void tick() {
-        updateDiv((div + 1) & 0xffff);
+        updateDiv((div + speedMode.getSpeedMode()) & 0x3fff);
         if (overflow) {
             ticksSinceOverflow++;
             if (ticksSinceOverflow == 4) {
@@ -59,7 +59,6 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     private void updateDiv(int newDiv) {
         this.div = newDiv;
         int bitPos = FREQ_TO_BIT[tac & 0b11];
-        bitPos <<= speedMode.getSpeedMode() - 1;
         boolean bit = (div & (1 << bitPos)) != 0;
         bit &= (tac & (1 << 2)) != 0;
         if (!bit && previousBit) {

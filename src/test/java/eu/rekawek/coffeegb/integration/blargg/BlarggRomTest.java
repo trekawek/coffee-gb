@@ -39,9 +39,8 @@ public class BlarggRomTest {
     }
 
     @Test
-    @Ignore
     public void testInterruptTime() throws IOException {
-        testRomWithMemory(getPath("interrupt_time.gb"), GameboyType.DMG);
+        testRomWithMemory(getPath("interrupt_time.gb"), GameboyType.CGB);
     }
 
     @Test
