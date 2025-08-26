@@ -16,7 +16,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private static final int[] FREQ_TO_BIT = {9, 3, 5, 7};
 
-    private int div, tac, tma, tima;
+    private int div = 0xb644, tac, tma, tima;
 
     private boolean previousBit;
 
@@ -30,7 +30,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     }
 
     public void tick() {
-        updateDiv((div + speedMode.getSpeedMode()) & 0x3fff);
+        updateDiv((div + speedMode.getSpeedMode()) & 0xffff);
         if (overflow) {
             ticksSinceOverflow++;
             if (ticksSinceOverflow == 4) {
