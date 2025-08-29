@@ -42,7 +42,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final Gpu gpu;
 
-    private final GpuInterruptHandler gpuInterruptHandler;
+    private final StatRegister statRegister;
 
     private final Mmu mmu;
 
@@ -114,7 +114,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(mmu, oamRam, speedMode);
         gpu = new Gpu(display, dma, oamRam, vRamTransfer, gbc);
-        gpuInterruptHandler = new GpuInterruptHandler(interruptManager, gpu);
+        statRegister = new StatRegister(interruptManager, gpu);
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
@@ -130,6 +130,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         mmu.addAddressSpace(biosShadow);
         mmu.addAddressSpace(gpu);
+        mmu.addAddressSpace(statRegister);
         mmu.addAddressSpace(joypad);
         mmu.addAddressSpace(interruptManager);
         mmu.addAddressSpace(serialPort);
@@ -251,7 +252,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         serialPort.tick();
         joypad.tick();
         Mode mode = gpu.tick();
-        gpuInterruptHandler.tick();
+        statRegister.tick();
         return mode;
     }
 

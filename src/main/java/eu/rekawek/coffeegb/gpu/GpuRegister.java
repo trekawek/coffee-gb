@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb.gpu;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.RegisterType.*;
 
 public enum GpuRegister {
-    STAT(0xff41, RW),
     SCY(0xff42, RW),
     SCX(0xff43, RW),
     LY(0xff44, R),

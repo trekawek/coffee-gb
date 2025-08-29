@@ -261,7 +261,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (!gpu.getLcdc().isLcdEnabled()) {
             return;
         }
-        int stat = addressSpace.getByte(GpuRegister.STAT.getAddress());
+        int stat = addressSpace.getByte(StatRegister.ADDRESS);
         if ((stat & 0b11) == Mode.OamSearch.ordinal() && gpu.getTicksInLine() < 79) {
             SpriteBug.corruptOam(addressSpace, type, gpu.getTicksInLine());
         }

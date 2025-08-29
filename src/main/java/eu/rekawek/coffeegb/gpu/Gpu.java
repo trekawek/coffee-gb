@@ -132,31 +132,23 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public void setByte(int address, int value) {
-        if (address == STAT.getAddress()) {
-            setStat(value);
-        } else {
-            AddressSpace space = getAddressSpace(address);
-            if (space == lcdc) {
-                setLcdc(value);
-            } else if (space != null) {
-                space.setByte(address, value);
-            }
+        AddressSpace space = getAddressSpace(address);
+        if (space == lcdc) {
+            setLcdc(value);
+        } else if (space != null) {
+            space.setByte(address, value);
         }
     }
 
     @Override
     public int getByte(int address) {
-        if (address == STAT.getAddress()) {
-            return getStat();
+        AddressSpace space = getAddressSpace(address);
+        if (space == null) {
+            return 0xff;
+        } else if (address == VBK.getAddress()) {
+            return gbc ? 0xfe : 0xff;
         } else {
-            AddressSpace space = getAddressSpace(address);
-            if (space == null) {
-                return 0xff;
-            } else if (address == VBK.getAddress()) {
-                return gbc ? 0xfe : 0xff;
-            } else {
-                return space.getByte(address);
-            }
+            return space.getByte(address);
         }
     }
 
@@ -234,14 +226,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     public int getTicksInLine() {
         return ticksInLine;
-    }
-
-    private int getStat() {
-        return r.get(STAT) | mode.ordinal() | (r.get(LYC) == r.get(LY) ? (1 << 2) : 0) | 0x80;
-    }
-
-    private void setStat(int value) {
-        r.put(STAT, value & 0b11111000); // last three bits are read-only
     }
 
     private void setLcdc(int value) {

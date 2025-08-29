@@ -1,27 +1,28 @@
 package eu.rekawek.coffeegb.gpu;
 
+import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 
-import java.util.EnumMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
-import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
+import static eu.rekawek.coffeegb.gpu.GpuRegister.LYC;
 import static eu.rekawek.coffeegb.gpu.Mode.*;
 
-public class GpuInterruptHandler {
+public class StatRegister implements AddressSpace {
+
+    public static final int ADDRESS = 0xff41;
 
     private static final long TICKS_PER_FRAME = 70224;
 
-    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(
-            HBlank, 0,
-            VBlank, 0,
-            OamSearch, 0,
-            PixelTransfer, 0);
+    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(HBlank, 0, VBlank, 0, OamSearch, 0, PixelTransfer, 0);
 
     private static final int LY_DELAY = 0;
+
+    private static final int DISABLE_LCD_DELAY = 0;
 
     private final InterruptManager interruptManager;
 
@@ -29,11 +30,13 @@ public class GpuInterruptHandler {
 
     private final LinkedList<State> states = new LinkedList<>();
 
+    private int stat = 0x80;
+
     private long tick;
 
     private boolean isLCDCTriggered;
 
-    public GpuInterruptHandler(InterruptManager interruptManager, Gpu gpu) {
+    public StatRegister(InterruptManager interruptManager, Gpu gpu) {
         this.interruptManager = interruptManager;
         this.gpu = gpu;
     }
@@ -49,14 +52,16 @@ public class GpuInterruptHandler {
 
         boolean requestVBlank = false;
         boolean requestLCDC = false;
+        Mode mode = n1State.mode;
+        long delay = tick - n1State.tick();
 
-        if (n2State.mode == HBlank && n1State.mode == VBlank && n1State.tick == tick) {
+        if (n2State.mode == HBlank && n1State.mode == VBlank && delay == 0) {
             requestVBlank = true;
         }
-        if (n1State.isTriggersStateMode() && MODE_STAT_DELAY.get(n1State.mode) <= tick - n1State.tick()) {
+        if (n1State.isTriggersStateMode() && MODE_STAT_DELAY.get(n1State.mode) <= delay) {
             requestLCDC = true;
         }
-        if (n1State.isTriggersLyLycEquals() && LY_DELAY <= tick - n1State.tick()) {
+        if (n1State.isTriggersLyLycEquals() && LY_DELAY <= delay) {
             requestLCDC = true;
         }
         // vblank_stat_intr-GS.s
@@ -65,6 +70,22 @@ public class GpuInterruptHandler {
         }
         if (n1State.mode == null) {
             requestLCDC = false;
+        }
+        if (n2State.mode != n1State.mode) {
+            int newPpuMode = -1;
+            if (mode == null && DISABLE_LCD_DELAY <= delay) {
+                newPpuMode = 0;
+            } else if (mode != null && MODE_STAT_DELAY.get(mode) <= delay) {
+                newPpuMode = mode.ordinal();
+            }
+            if (newPpuMode != -1) {
+                stat = (stat & 0b11111100) | newPpuMode;
+            }
+        }
+        if (n2State.isLyLycEquals() != n1State.isLyLycEquals()) {
+            if (LY_DELAY <= delay) {
+                stat = (stat & 0b11111011) | (n1State.isLyLycEquals() ? 0b100 : 0b000);
+            }
         }
 
         if (requestVBlank) {
@@ -101,7 +122,7 @@ public class GpuInterruptHandler {
     }
 
     private void addState() {
-        State newState = new State(tick, gpu.isLcdEnabled() ? gpu.getMode() : null, gpu.getByte(STAT.getAddress()), gpu.getByte(LY.getAddress()), gpu.getByte(LYC.getAddress()));
+        State newState = new State(tick, gpu.isLcdEnabled() ? gpu.getMode() : null, stat & 0b01111000, gpu.getByte(LY.getAddress()), gpu.getByte(LYC.getAddress()));
         State lastState = states.peekLast();
         if (newState.isSame(lastState)) {
             return;
@@ -110,6 +131,21 @@ public class GpuInterruptHandler {
             states.removeFirst();
         }
         states.add(newState);
+    }
+
+    @Override
+    public boolean accepts(int address) {
+        return address == ADDRESS;
+    }
+
+    @Override
+    public void setByte(int address, int value) {
+        stat = (stat & 0b00000111) | (value & 0b11111000);
+    }
+
+    @Override
+    public int getByte(int address) {
+        return stat;
     }
 
     private record State(long tick, Mode mode, int stat, int ly, int lyc) {
