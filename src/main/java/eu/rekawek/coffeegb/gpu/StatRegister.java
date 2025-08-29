@@ -18,7 +18,11 @@ public class StatRegister implements AddressSpace {
 
     private static final long TICKS_PER_FRAME = 70224;
 
-    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(HBlank, 0, VBlank, 0, OamSearch, 0, PixelTransfer, 0);
+    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(
+            HBlank, 12,
+            VBlank, 0,
+            OamSearch, 4,
+            PixelTransfer, 8);
 
     private static final int LY_DELAY = 0;
 
