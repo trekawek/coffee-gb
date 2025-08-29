@@ -3,7 +3,11 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
 
+import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -12,17 +16,13 @@ import static eu.rekawek.coffeegb.gpu.GpuRegister.LY;
 import static eu.rekawek.coffeegb.gpu.GpuRegister.LYC;
 import static eu.rekawek.coffeegb.gpu.Mode.*;
 
-public class StatRegister implements AddressSpace {
+public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     public static final int ADDRESS = 0xff41;
 
     private static final long TICKS_PER_FRAME = 70224;
 
-    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(
-            HBlank, 12,
-            VBlank, 0,
-            OamSearch, 4,
-            PixelTransfer, 8);
+    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(HBlank, 12, VBlank, 0, OamSearch, 4, PixelTransfer, 8);
 
     private static final int LY_DELAY = 0;
 
@@ -59,14 +59,17 @@ public class StatRegister implements AddressSpace {
         Mode mode = n1State.mode;
         long delay = tick - n1State.tick();
 
+        if (n1State.mode != null && MODE_STAT_DELAY.get(n1State.mode) > delay) {
+            requestLCDC = isLCDCTriggered;
+        }
+        if (n1State.isTriggersLyLycEquals() && LY_DELAY > delay) {
+            requestLCDC = isLCDCTriggered;
+        }
         if (n2State.mode == HBlank && n1State.mode == VBlank && delay == 0) {
             requestVBlank = true;
         }
         if (n1State.isTriggersStateMode() && MODE_STAT_DELAY.get(n1State.mode) <= delay) {
             requestLCDC = true;
-        }
-        if (n1State.mode != null && MODE_STAT_DELAY.get(n1State.mode) > delay) {
-            requestLCDC = isLCDCTriggered;
         }
         if (n1State.isTriggersLyLycEquals() && LY_DELAY <= delay) {
             requestLCDC = true;
@@ -134,10 +137,10 @@ public class StatRegister implements AddressSpace {
         if (newState.isSame(lastState)) {
             return;
         }
-        while (states.size() >= 10) {
+        states.add(newState);
+        while (states.size() > 2) {
             states.removeFirst();
         }
-        states.add(newState);
     }
 
     @Override
@@ -155,16 +158,36 @@ public class StatRegister implements AddressSpace {
         return stat;
     }
 
-    private record State(long tick, Mode mode, int stat, int ly, int lyc) {
+    @Override
+    public Memento<StatRegister> saveToMemento() {
+        return new StatRegisterMemento(new ArrayList<>(states), stat, tick, isLCDCTriggered);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<StatRegister> memento) {
+        if (!(memento instanceof StatRegisterMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        this.states.clear();
+        this.states.addAll(mem.states);
+        this.stat = mem.stat;
+        this.tick = mem.tick;
+        this.isLCDCTriggered = mem.isLCDCTriggered;
+        if (states.size() > 2) {
+            throw new IllegalStateException("Invalid memento length");
+        }
+    }
+
+    private record StatRegisterMemento(List<State> states, int stat, long tick,
+                                       boolean isLCDCTriggered) implements Memento<StatRegister> {
+    }
+
+    private record State(long tick, Mode mode, int stat, int ly, int lyc) implements Serializable {
         boolean isSame(State state) {
             if (state == null) {
                 return false;
             }
             return mode == state.mode && stat == state.stat && ly == state.ly && lyc == state.lyc;
-        }
-
-        boolean isTriggersStat() {
-            return isTriggersStateMode() || isTriggersLyLycEquals();
         }
 
         boolean isTriggersStateMode() {
@@ -185,10 +208,6 @@ public class StatRegister implements AddressSpace {
 
         boolean isLyLycEquals() {
             return ly == lyc;
-        }
-
-        boolean isLcdDisabled() {
-            return mode == null;
         }
     }
 }

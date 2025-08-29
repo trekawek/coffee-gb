@@ -313,7 +313,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
@@ -324,6 +324,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         biosShadow.restoreFromMemento(mem.biosShadowMemento());
         cartridge.restoreFromMemento(mem.cartridgeMemento());
         gpu.restoreFromMemento(mem.gpuMemento());
+        statRegister.restoreFromMemento(mem.statRegisterMemento());
         mmu.restoreFromMemento(mem.mmuMemento());
         oamRam.restoreFromMemento(mem.oamRamMemento());
         cpu.restoreFromMemento(mem.cpuMemento());
@@ -351,7 +352,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     private record GameboyMemento(Memento<BiosShadow> biosShadowMemento, Memento<Cartridge> cartridgeMemento,
-                                  Memento<Gpu> gpuMemento, Memento<Mmu> mmuMemento,
+                                  Memento<Gpu> gpuMemento, Memento<StatRegister> statRegisterMemento,
+                                  Memento<Mmu> mmuMemento,
                                   Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
                                   Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento,
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
