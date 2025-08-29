@@ -3,8 +3,10 @@ package eu.rekawek.coffeegb.gpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 
+import java.util.EnumMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 
 import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 import static eu.rekawek.coffeegb.gpu.Mode.*;
@@ -12,6 +14,14 @@ import static eu.rekawek.coffeegb.gpu.Mode.*;
 public class GpuInterruptHandler {
 
     private static final long TICKS_PER_FRAME = 70224;
+
+    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(
+            HBlank, 0,
+            VBlank, 0,
+            OamSearch, 0,
+            PixelTransfer, 0);
+
+    private static final int LY_DELAY = 0;
 
     private final InterruptManager interruptManager;
 
@@ -43,7 +53,10 @@ public class GpuInterruptHandler {
         if (n2State.mode == HBlank && n1State.mode == VBlank && n1State.tick == tick) {
             requestVBlank = true;
         }
-        if (n1State.isTriggersStat()) {
+        if (n1State.isTriggersStateMode() && MODE_STAT_DELAY.get(n1State.mode) <= tick - n1State.tick()) {
+            requestLCDC = true;
+        }
+        if (n1State.isTriggersLyLycEquals() && LY_DELAY <= tick - n1State.tick()) {
             requestLCDC = true;
         }
         // vblank_stat_intr-GS.s
