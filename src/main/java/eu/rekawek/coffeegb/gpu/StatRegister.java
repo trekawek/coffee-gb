@@ -65,6 +65,9 @@ public class StatRegister implements AddressSpace {
         if (n1State.isTriggersStateMode() && MODE_STAT_DELAY.get(n1State.mode) <= delay) {
             requestLCDC = true;
         }
+        if (n1State.mode != null && MODE_STAT_DELAY.get(n1State.mode) > delay) {
+            requestLCDC = isLCDCTriggered;
+        }
         if (n1State.isTriggersLyLycEquals() && LY_DELAY <= delay) {
             requestLCDC = true;
         }
