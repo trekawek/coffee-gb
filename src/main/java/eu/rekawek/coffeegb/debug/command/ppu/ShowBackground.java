@@ -108,7 +108,7 @@ public class ShowBackground implements Command {
 
         private final Gpu gpu;
 
-        private Gpu.Mode lastMode;
+        private Mode lastMode;
 
         public BackgroundTiles(Gpu gpu) {
             super();
@@ -264,8 +264,8 @@ public class ShowBackground implements Command {
         }
 
         public void tick() {
-            Gpu.Mode currentMode = gpu.getMode();
-            if (currentMode != lastMode && currentMode == Gpu.Mode.VBlank) {
+            Mode currentMode = gpu.getMode();
+            if (currentMode != lastMode && currentMode == Mode.VBlank) {
                 drawBackground();
                 doRefresh = true;
                 synchronized (this) {

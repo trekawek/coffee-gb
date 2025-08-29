@@ -3,10 +3,7 @@ package eu.rekawek.coffeegb.cpu;
 import eu.rekawek.coffeegb.AddressSpace;
 import eu.rekawek.coffeegb.cpu.op.Op;
 import eu.rekawek.coffeegb.cpu.opcode.Opcode;
-import eu.rekawek.coffeegb.gpu.Display;
-import eu.rekawek.coffeegb.gpu.Gpu;
-import eu.rekawek.coffeegb.gpu.GpuRegister;
-import eu.rekawek.coffeegb.gpu.SpriteBug;
+import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
 
@@ -265,7 +262,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
             return;
         }
         int stat = addressSpace.getByte(GpuRegister.STAT.getAddress());
-        if ((stat & 0b11) == Gpu.Mode.OamSearch.ordinal() && gpu.getTicksInLine() < 79) {
+        if ((stat & 0b11) == Mode.OamSearch.ordinal() && gpu.getTicksInLine() < 79) {
             SpriteBug.corruptOam(addressSpace, type, gpu.getTicksInLine());
         }
     }

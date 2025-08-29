@@ -1,8 +1,6 @@
 package eu.rekawek.coffeegb.gpu;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.cpu.InterruptManager;
-import eu.rekawek.coffeegb.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.gpu.phase.*;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
@@ -15,19 +13,6 @@ import static eu.rekawek.coffeegb.gpu.GpuRegister.*;
 
 public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
-    public enum Mode {
-        HBlank(3),
-        VBlank(4),
-        OamSearch(5),
-        PixelTransfer(-1);
-
-        private final int statBit;
-
-        Mode(int statBit) {
-            this.statBit = statBit;
-        }
-    }
-
     private final Ram videoRam0;
 
     private final Ram videoRam1;
@@ -35,8 +20,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     private final AddressSpace oamRam;
 
     private final Display display;
-
-    private final InterruptManager interruptManager;
 
     private final Dma dma;
 
@@ -68,13 +51,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private GpuPhase phase;
 
-    private boolean previousStatRequested;
-
-    public Gpu(Display display, InterruptManager interruptManager, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, boolean gbc) {
+    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, boolean gbc) {
         this.display = display;
         this.r = new GpuRegisterValues();
         this.lcdc = new Lcdc();
-        this.interruptManager = interruptManager;
         this.gbc = gbc;
         this.videoRam0 = new Ram(0x8000, 0x2000);
         if (gbc) {
@@ -191,11 +171,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
 
         if (!lcdEnabled) {
-            previousStatRequested = false;
             return null;
         }
 
-        boolean statRequested = false;
         Mode oldMode = mode;
         ticksInLine++;
         if (phase.tick()) {
@@ -227,9 +205,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                     if (r.preIncrement(LY) == 144) {
                         mode = Mode.VBlank;
                         phase = vBlankPhase.start();
-                        interruptManager.requestInterrupt(InterruptType.VBlank);
-                        // vblank_stat_intr-GS.s
-                        statRequested |= isStatInterruptTriggeringForMode(Mode.OamSearch);
                     } else {
                         mode = Mode.OamSearch;
                         phase = oamSearchPhase.start();
@@ -250,13 +225,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             }
         }
 
-        statRequested |= isStatInterruptTriggeringForMode(mode);
-        statRequested |= isStatInterruptTriggeringForLyc();
-        if (!previousStatRequested && statRequested) {
-            interruptManager.requestInterrupt(InterruptType.LCDC);
-        }
-        previousStatRequested = statRequested;
-
         if (oldMode == mode) {
             return null;
         } else {
@@ -266,18 +234,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     public int getTicksInLine() {
         return ticksInLine;
-    }
-
-    private boolean isStatInterruptEnabled(int statBit) {
-        return (r.get(STAT) & (1 << statBit)) != 0;
-    }
-
-    private boolean isStatInterruptTriggeringForMode(Mode mode) {
-        return mode.statBit != -1 && isStatInterruptEnabled(mode.statBit);
-    }
-
-    private boolean isStatInterruptTriggeringForLyc() {
-        return r.get(LYC) == r.get(LY) && isStatInterruptEnabled(6);
     }
 
     private int getStat() {
@@ -332,10 +288,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return bgPalette;
     }
 
-    public ColorPalette getOamPalette() {
-        return oamPalette;
-    }
-
     public Mode getMode() {
         return mode;
     }
@@ -343,9 +295,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     @Override
     public Memento<Gpu> saveToMemento() {
         Memento<Ram> videoRam0Memento =
-                videoRam0 instanceof Ram ? ((Ram) videoRam0).saveToMemento() : null;
+                videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento =
-                videoRam1 instanceof Ram ? ((Ram) videoRam1).saveToMemento() : null;
+                videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
         return new GpuMemento(
                 videoRam0Memento,
@@ -362,8 +314,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 lcdEnabled,
                 lcdEnabledDelay,
                 ticksInLine,
-                mode,
-                previousStatRequested);
+                mode);
     }
 
     @Override
@@ -393,7 +344,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.lcdEnabledDelay = mem.lcdEnabledDelay;
         this.ticksInLine = mem.ticksInLine;
         this.mode = mem.mode;
-        this.previousStatRequested = mem.previousStatRequested;
 
         switch (mode) {
             case OamSearch:
@@ -426,8 +376,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             boolean lcdEnabled,
             int lcdEnabledDelay,
             int ticksInLine,
-            Mode mode,
-            boolean previousStatRequested)
+            Mode mode)
             implements Memento<Gpu> {
     }
 }

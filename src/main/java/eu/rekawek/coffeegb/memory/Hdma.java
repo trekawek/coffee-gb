@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.memory;
 
 import eu.rekawek.coffeegb.AddressSpace;
-import eu.rekawek.coffeegb.gpu.Gpu;
+import eu.rekawek.coffeegb.gpu.Mode;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
 
@@ -23,7 +23,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     private final Ram hdma1234 = new Ram(HDMA1, 4);
 
-    private Gpu.Mode gpuMode;
+    private Mode gpuMode;
 
     private boolean transferInProgress;
 
@@ -92,7 +92,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         }
     }
 
-    public void onGpuUpdate(Gpu.Mode newGpuMode) {
+    public void onGpuUpdate(Mode newGpuMode) {
         this.gpuMode = newGpuMode;
     }
 
@@ -103,7 +103,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     public boolean isTransferInProgress() {
         if (!transferInProgress) {
             return false;
-        } else if (hblankTransfer && (gpuMode == Gpu.Mode.HBlank || !lcdEnabled)) {
+        } else if (hblankTransfer && (gpuMode == Mode.HBlank || !lcdEnabled)) {
             return true;
         } else return !hblankTransfer;
     }
@@ -145,7 +145,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         this.tick = mem.tick;
     }
 
-    public record HdmaMemento(Memento<Ram> hdma1234, Gpu.Mode gpuMode, boolean transferInProgress,
+    public record HdmaMemento(Memento<Ram> hdma1234, Mode gpuMode, boolean transferInProgress,
                               boolean hblankTransfer, boolean lcdEnabled, int length, int src, int dst, int tick
     ) implements Memento<Hdma> {
     }

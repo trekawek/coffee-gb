@@ -7,9 +7,7 @@ import eu.rekawek.coffeegb.cpu.SpeedMode;
 import eu.rekawek.coffeegb.debug.Console;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.events.EventBusImpl;
-import eu.rekawek.coffeegb.gpu.Display;
-import eu.rekawek.coffeegb.gpu.Gpu;
-import eu.rekawek.coffeegb.gpu.VRamTransfer;
+import eu.rekawek.coffeegb.gpu.*;
 import eu.rekawek.coffeegb.memento.Memento;
 import eu.rekawek.coffeegb.memento.Originator;
 import eu.rekawek.coffeegb.memory.*;
@@ -43,6 +41,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     private final BiosShadow biosShadow;
 
     private final Gpu gpu;
+
+    private final GpuInterruptHandler gpuInterruptHandler;
 
     private final Mmu mmu;
 
@@ -113,7 +113,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         background = new Background(sgbBus);
         oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(mmu, oamRam, speedMode);
-        gpu = new Gpu(display, interruptManager, dma, oamRam, vRamTransfer, gbc);
+        gpu = new Gpu(display, dma, oamRam, vRamTransfer, gbc);
+        gpuInterruptHandler = new GpuInterruptHandler(interruptManager, gpu);
         hdma = new Hdma(mmu);
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
@@ -211,7 +212,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     public void tick() {
-        Gpu.Mode newMode = tickSubsystems();
+        Mode newMode = tickSubsystems();
         if (newMode != null) {
             hdma.onGpuUpdate(newMode);
         }
@@ -220,7 +221,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             lcdDisabled = true;
             display.frameIsReady();
             hdma.onLcdSwitch(false);
-        } else if (newMode == Gpu.Mode.VBlank) {
+        } else if (newMode == Mode.VBlank) {
             requestedScreenRefresh = true;
             display.frameIsReady();
             vRamTransfer.frameIsReady();
@@ -229,7 +230,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (lcdDisabled && gpu.isLcdEnabled()) {
             lcdDisabled = false;
             hdma.onLcdSwitch(true);
-        } else if (requestedScreenRefresh && newMode == Gpu.Mode.OamSearch) {
+        } else if (requestedScreenRefresh && newMode == Mode.OamSearch) {
             requestedScreenRefresh = false;
         }
         if (console != null) {
@@ -238,7 +239,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         tickListeners.forEach(Runnable::run);
     }
 
-    private Gpu.Mode tickSubsystems() {
+    private Mode tickSubsystems() {
         timer.tick();
         if (hdma.isTransferInProgress()) {
             hdma.tick();
@@ -249,7 +250,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sound.tick();
         serialPort.tick();
         joypad.tick();
-        return gpu.tick();
+        Mode mode = gpu.tick();
+        gpuInterruptHandler.tick();
+        return mode;
     }
 
     public AddressSpace getAddressSpace() {
