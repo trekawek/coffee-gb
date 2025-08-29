@@ -85,9 +85,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             if (!window && lcdc.isWindowDisplay() && r.get(LY) >= r.get(WY) && x >= r.get(WX) - 7) {
                 window = true;
                 startFetchingWindow();
-                // ugly hack to avoid window stutter when WX=7
-                if (r.get(WX) == 7) {
-                    droppedPixels = 7;
+                // ugly hack to avoid window stutter when WX<8
+                if (r.get(WX) < 8) {
+                    droppedPixels = r.get(WX);
                 }
                 return true;
             }
