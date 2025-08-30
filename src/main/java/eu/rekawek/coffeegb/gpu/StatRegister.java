@@ -92,7 +92,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 stat = (stat & 0b11111100) | newPpuMode;
             }
         }
-        if (n2State.isLyLycEquals() != n1State.isLyLycEquals()) {
+        if (mode != null && n2State.isLyLycEquals() != n1State.isLyLycEquals()) {
             if (LY_DELAY <= delay) {
                 stat = (stat & 0b11111011) | (n1State.isLyLycEquals() ? 0b100 : 0b000);
             }
