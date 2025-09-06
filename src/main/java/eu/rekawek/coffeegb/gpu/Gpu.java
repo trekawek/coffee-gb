@@ -39,6 +39,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private final VBlankPhase vBlankPhase;
 
+    private final StatRegister statRegister;
+
     private boolean lcdEnabled = true;
 
     private int lcdEnabledDelay;
@@ -51,7 +53,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private GpuPhase phase;
 
-    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, boolean gbc) {
+    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, StatRegister statRegister, boolean gbc) {
+        this.statRegister = statRegister;
         this.display = display;
         this.r = new GpuRegisterValues();
         this.lcdc = new Lcdc();
@@ -91,10 +94,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     private AddressSpace getAddressSpace(int address) {
+        int mode = (statRegister.getByte(StatRegister.ADDRESS) & 0b11);
         if (videoRam0.accepts(address) /* && mode != Mode.PixelTransfer*/) {
             return getVideoRam();
         } else if (oamRam.accepts(address)
-                && !dma.isOamBlocked() /* && mode != Mode.OamSearch && mode != Mode.PixelTransfer*/) {
+                && !dma.isOamBlocked()
+                && (mode == 0 || mode == 1)) {
             return oamRam;
         } else if (lcdc.accepts(address)) {
             return lcdc;

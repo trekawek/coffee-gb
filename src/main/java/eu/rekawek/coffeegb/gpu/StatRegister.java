@@ -22,7 +22,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private static final long TICKS_PER_FRAME = 70224;
 
-    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of(HBlank, 12, VBlank, 0, OamSearch, 4, PixelTransfer, 8);
+    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of( //
+            HBlank, 12,      // mode 0
+            VBlank, 0,       // mode 1
+            OamSearch, 4,    // mode 2
+            PixelTransfer, 8     // mode 3
+    );
 
     private static final int LY_DELAY = 0;
 
@@ -30,7 +35,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private final InterruptManager interruptManager;
 
-    private final Gpu gpu;
+    private Gpu gpu;
 
     private final LinkedList<State> states = new LinkedList<>();
 
@@ -40,8 +45,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private boolean isLCDCTriggered;
 
-    public StatRegister(InterruptManager interruptManager, Gpu gpu) {
+    public StatRegister(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;
+    }
+
+    // TODO remove ciruclar dependency
+    public void init(Gpu gpu) {
         this.gpu = gpu;
     }
 
