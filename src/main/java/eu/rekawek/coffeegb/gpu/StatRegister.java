@@ -159,7 +159,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public void setByte(int address, int value) {
-        stat = (stat & 0b00000111) | (value & 0b11111000);
+        stat = (stat & 0b10000111) | (value & 0b01111000);
     }
 
     @Override
