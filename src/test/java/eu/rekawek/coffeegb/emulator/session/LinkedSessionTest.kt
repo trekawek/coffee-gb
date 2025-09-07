@@ -5,11 +5,11 @@ import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.Joypad
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.memory.cart.Rom
-import eu.rekawek.coffeegb.swing.emulator.session.Input
-import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
-import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
-import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.RemoteButtonStateEvent
-import eu.rekawek.coffeegb.swing.emulator.session.StateHistory.GameboyJoypadPressEvent
+import eu.rekawek.coffeegb.swing.session.Input
+import eu.rekawek.coffeegb.swing.session.LinkedSession
+import eu.rekawek.coffeegb.swing.session.LinkedSession.LocalButtonStateEvent
+import eu.rekawek.coffeegb.swing.session.LinkedSession.RemoteButtonStateEvent
+import eu.rekawek.coffeegb.swing.session.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.testing.RandomJoypad
 import java.nio.file.Paths

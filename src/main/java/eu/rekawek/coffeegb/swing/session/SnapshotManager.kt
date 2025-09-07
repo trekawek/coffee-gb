@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.emulator
+package eu.rekawek.coffeegb.swing.session
 
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.memento.Memento

@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.emulator.session
+package eu.rekawek.coffeegb.swing.session
 
 interface SnapshotSupport {
   fun saveSnapshot(slot: Int)

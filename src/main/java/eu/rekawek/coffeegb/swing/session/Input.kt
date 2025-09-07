@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.emulator.session
+package eu.rekawek.coffeegb.swing.session
 
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.controller.ButtonPressEvent

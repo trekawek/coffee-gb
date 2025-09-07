@@ -4,19 +4,6 @@ import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.sgb.SgbDisplay
 import eu.rekawek.coffeegb.sound.Sound
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.LoadRomEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.PauseEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResetEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.RestoreSnapshotEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.ResumeEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SaveSnapshotEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SessionPauseSupportEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.SessionSnapshotSupportEvent
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStartedEvent
-import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStoppedEvent
-import eu.rekawek.coffeegb.swing.emulator.session.SnapshotSupport
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties.Key.CgbGamesType
@@ -33,6 +20,19 @@ import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartClientEven
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartServerEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
+import eu.rekawek.coffeegb.swing.session.Session
+import eu.rekawek.coffeegb.swing.session.Session.EmulationStartedEvent
+import eu.rekawek.coffeegb.swing.session.Session.EmulationStoppedEvent
+import eu.rekawek.coffeegb.swing.session.Session.LoadRomEvent
+import eu.rekawek.coffeegb.swing.session.Session.PauseEmulationEvent
+import eu.rekawek.coffeegb.swing.session.Session.ResetEmulationEvent
+import eu.rekawek.coffeegb.swing.session.Session.RestoreSnapshotEvent
+import eu.rekawek.coffeegb.swing.session.Session.ResumeEmulationEvent
+import eu.rekawek.coffeegb.swing.session.Session.SaveSnapshotEvent
+import eu.rekawek.coffeegb.swing.session.Session.SessionPauseSupportEvent
+import eu.rekawek.coffeegb.swing.session.Session.SessionSnapshotSupportEvent
+import eu.rekawek.coffeegb.swing.session.Session.StopEmulationEvent
+import eu.rekawek.coffeegb.swing.session.SnapshotSupport
 import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.JCheckBoxMenuItem
@@ -201,7 +201,7 @@ class SwingMenu(
         item.addActionListener {
           properties.setProperty(gameType, systemType.name)
           uncheckAllBut(menu, item)
-          eventBus.post(SwingEmulator.UpdatedSystemMappingEvent())
+          eventBus.post(Session.UpdatedSystemMappingEvent())
         }
       }
     }

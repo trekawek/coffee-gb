@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.emulator.session
+package eu.rekawek.coffeegb.swing.session
 
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
@@ -14,23 +14,34 @@ import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent
 import eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent
+import eu.rekawek.coffeegb.memory.cart.Cartridge
+import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
-import eu.rekawek.coffeegb.swing.emulator.TimingTicker
 import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
-import java.lang.Thread.sleep
-import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
+import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
+import eu.rekawek.coffeegb.swing.io.network.Connection
+import eu.rekawek.coffeegb.swing.io.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.swing.session.Session.Companion.createGameboyConfig
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.lang.Thread.sleep
+import kotlin.io.path.readBytes
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class LinkedSession(
-    private val eventBus: EventBus,
-    private val mainConfig: GameboyConfiguration,
-    private val peerConfig: GameboyConfiguration,
+    parentEventBus: EventBus,
+    properties: EmulatorProperties,
     private val console: Console?,
 ) : Session {
+
+  private val eventBus = parentEventBus.fork("session")
+
+  private var mainConfig: GameboyConfiguration? = null
+
+  private var peerConfig: GameboyConfiguration? = null
 
   private var mainGameboy: Gameboy? = null
 
@@ -48,9 +59,60 @@ class LinkedSession(
 
   @Volatile private var doPause = false
 
+  init {
+    eventBus.register<Session.LoadRomEvent> {
+      stop()
+
+      val romBuffer = it.rom.toPath().readBytes()
+      val saveFile = Cartridge.getSaveName(it.rom)
+      val batteryBuffer =
+          if (saveFile.exists()) {
+            saveFile.toPath().readBytes()
+          } else {
+            null
+          }
+      val mainConfig = createGameboyConfig(properties, Rom(it.rom))
+      eventBus.post(
+          Session.WaitingForPeerEvent(
+              romBuffer, batteryBuffer, mainConfig.gameboyType, mainConfig.bootstrapMode))
+      start(mainConfig, null)
+    }
+
+    eventBus.register<PeerLoadedGameEvent> {
+      val peerConfig =
+          createGameboyConfig(properties, Rom(it.rom))
+              .setGameboyType(it.gameboyType)
+              .setBootstrapMode(it.bootstrapMode)
+              .setBatteryData(it.battery)
+      start(null, peerConfig)
+    }
+
+    eventBus.register<Session.StartEmulationEvent> { start(null, null) }
+    eventBus.register<Session.PauseEmulationEvent> {
+      pause()
+      eventBus.post(Connection.RequestPauseEvent())
+    }
+    eventBus.register<Session.ResumeEmulationEvent> {
+      resume()
+      eventBus.post(Connection.RequestResumeEvent())
+    }
+    eventBus.register<Session.ResetEmulationEvent> {
+      reset()
+      eventBus.post(Connection.RequestResetEvent())
+    }
+    eventBus.register<Session.StopEmulationEvent> {
+      stop()
+      eventBus.post(Connection.RequestStopEvent())
+    }
+    eventBus.register<Connection.ReceivedRemoteResetEvent> { reset() }
+    eventBus.register<Connection.ReceivedRemoteStopEvent> { stop() }
+    eventBus.register<Connection.ReceivedRemotePauseEvent> { pause() }
+    eventBus.register<Connection.ReceivedRemoteResumeEvent> { resume() }
+  }
+
   @Synchronized
   @VisibleForTesting
-  internal fun init(): Runnable {
+  internal fun init(mainConfig: GameboyConfiguration, peerConfig: GameboyConfiguration): Runnable {
     stateHistory = StateHistory(mainConfig, peerConfig)
 
     val localMainEventBus = EventBusImpl(null, null, false)
@@ -170,8 +232,18 @@ class LinkedSession(
   }
 
   @Synchronized
-  override fun start() {
-    val tick = init()
+  fun start(mainConfig: GameboyConfiguration?, peerConfig: GameboyConfiguration?) {
+    if (mainConfig != null) {
+      this.mainConfig = mainConfig
+    }
+    if (peerConfig != null) {
+      this.peerConfig = peerConfig
+    }
+    if (this.mainConfig == null || this.peerConfig == null) {
+      return
+    }
+
+    val tick = init(this.mainConfig!!, this.peerConfig!!)
     val timingTicker = TimingTicker()
     doStop = false
     isStopped = false
@@ -183,11 +255,13 @@ class LinkedSession(
           isStopped = true
         }
         .start()
-    mainEventBus?.post(Session.EmulationStartedEvent(mainConfig.rom.title))
+    mainEventBus?.post(Session.EmulationStartedEvent(this.mainConfig!!.rom.title))
+    mainEventBus?.post(Session.SessionPauseSupportEvent(true))
+    mainEventBus?.post(Session.SessionSnapshotSupportEvent(null))
   }
 
   @Synchronized
-  override fun stop() {
+  fun stop() {
     if (mainGameboy == null) {
       return
     }
@@ -210,22 +284,22 @@ class LinkedSession(
   }
 
   @Synchronized
-  override fun reset() {
+  fun reset() {
     stop()
-    start()
+    start(null, null)
   }
 
-  override fun shutDown() {
-    stop()
-    eventBus.close()
-  }
-
-  override fun pause() {
+  fun pause() {
     doPause = true
   }
 
-  override fun resume() {
+  fun resume() {
     doPause = false
+  }
+
+  override fun close() {
+    stop()
+    eventBus.close()
   }
 
   data class LocalButtonStateEvent(

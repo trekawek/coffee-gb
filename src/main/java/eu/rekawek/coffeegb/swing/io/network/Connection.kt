@@ -5,17 +5,17 @@ import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.controller.Button
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.WaitingForPeerEvent
-import eu.rekawek.coffeegb.swing.emulator.session.Input
-import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession
-import eu.rekawek.coffeegb.swing.emulator.session.LinkedSession.LocalButtonStateEvent
 import eu.rekawek.coffeegb.swing.events.register
+import eu.rekawek.coffeegb.swing.session.Input
+import eu.rekawek.coffeegb.swing.session.LinkedSession
+import eu.rekawek.coffeegb.swing.session.LinkedSession.LocalButtonStateEvent
+import eu.rekawek.coffeegb.swing.session.Session.WaitingForPeerEvent
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,

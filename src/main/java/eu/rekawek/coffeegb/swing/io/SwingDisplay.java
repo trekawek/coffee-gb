@@ -5,8 +5,8 @@ import eu.rekawek.coffeegb.events.Event;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.gpu.Display;
 import eu.rekawek.coffeegb.sgb.SgbDisplay;
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator;
 import eu.rekawek.coffeegb.swing.gui.properties.DisplayProperties;
+import eu.rekawek.coffeegb.swing.session.Session;
 
 import javax.swing.*;
 import java.awt.*;
@@ -52,14 +52,14 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
         eventBus.register(this::onSgbFrame, SgbDisplay.SgbFrameReadyEvent.class, callerId);
-        eventBus.register(this::onGameboyType, SwingEmulator.GameboyTypeEvent.class, callerId);
+        eventBus.register(this::onGameboyType, Session.GameboyTypeEvent.class, callerId);
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
         eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
         this.grayscale = properties.getGrayscale();
         setScale(properties.getScale());
     }
 
-    private synchronized void onGameboyType(SwingEmulator.GameboyTypeEvent e) {
+    private synchronized void onGameboyType(Session.GameboyTypeEvent e) {
         this.gameboyType = e.getGameboyType();
     }
 

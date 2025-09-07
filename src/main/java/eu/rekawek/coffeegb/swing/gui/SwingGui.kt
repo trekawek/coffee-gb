@@ -4,13 +4,14 @@ import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.swing.emulator.SwingEmulator
-import eu.rekawek.coffeegb.swing.emulator.SwingEmulator.StopEmulationEvent
-import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStartedEvent
-import eu.rekawek.coffeegb.swing.emulator.session.Session.EmulationStoppedEvent
+import eu.rekawek.coffeegb.swing.session.Session.EmulationStartedEvent
+import eu.rekawek.coffeegb.swing.session.Session.EmulationStoppedEvent
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
+import eu.rekawek.coffeegb.swing.session.Session
+import eu.rekawek.coffeegb.swing.session.Session.StopEmulationEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
@@ -60,7 +61,7 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
       Thread(console).start()
     }
     if (initialRom != null) {
-      eventBus.post(SwingEmulator.LoadRomEvent(initialRom))
+      eventBus.post(Session.LoadRomEvent(initialRom))
     }
   }
 
