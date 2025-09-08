@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.session
+package eu.rekawek.coffeegb.swing.controller
 
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
@@ -21,10 +21,10 @@ import eu.rekawek.coffeegb.sgb.SgbDisplay
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.network.Connection
 import eu.rekawek.coffeegb.swing.io.network.Connection.PeerLoadedGameEvent
-import eu.rekawek.coffeegb.swing.session.Session.Companion.createGameboyConfig
+import eu.rekawek.coffeegb.swing.controller.Controller.Companion.createGameboyConfig
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.lang.Thread.sleep
@@ -32,11 +32,11 @@ import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
-class LinkedSession(
+class LinkedController(
     parentEventBus: EventBus,
     properties: EmulatorProperties,
     private val console: Console?,
-) : Session {
+) : Controller {
 
   private val eventBus = parentEventBus.fork("session")
 
@@ -61,7 +61,7 @@ class LinkedSession(
   @Volatile private var doPause = false
 
   init {
-    eventBus.register<Session.LoadRomEvent> {
+    eventBus.register<Controller.LoadRomEvent> {
       stop()
 
       val romBuffer = it.rom.toPath().readBytes()
@@ -74,7 +74,7 @@ class LinkedSession(
           }
       val mainConfig = createGameboyConfig(properties, Rom(it.rom))
       eventBus.post(
-          Session.WaitingForPeerEvent(
+          Controller.WaitingForPeerEvent(
               romBuffer, batteryBuffer, mainConfig.gameboyType, mainConfig.bootstrapMode))
       start(mainConfig, null)
     }
@@ -88,20 +88,20 @@ class LinkedSession(
       start(null, peerConfig)
     }
 
-    eventBus.register<Session.StartEmulationEvent> { start(null, null) }
-    eventBus.register<Session.PauseEmulationEvent> {
+    eventBus.register<Controller.StartEmulationEvent> { start(null, null) }
+    eventBus.register<Controller.PauseEmulationEvent> {
       pause()
       eventBus.post(Connection.RequestPauseEvent())
     }
-    eventBus.register<Session.ResumeEmulationEvent> {
+    eventBus.register<Controller.ResumeEmulationEvent> {
       resume()
       eventBus.post(Connection.RequestResumeEvent())
     }
-    eventBus.register<Session.ResetEmulationEvent> {
+    eventBus.register<Controller.ResetEmulationEvent> {
       reset()
       eventBus.post(Connection.RequestResetEvent())
     }
-    eventBus.register<Session.StopEmulationEvent> {
+    eventBus.register<Controller.StopEmulationEvent> {
       stop()
       eventBus.post(Connection.RequestStopEvent())
     }
@@ -247,10 +247,10 @@ class LinkedSession(
 
     val tick = init(this.mainConfig!!, this.peerConfig!!)
 
-    mainEventBus?.post(Session.GameboyTypeEvent(this.mainConfig!!.gameboyType))
-    mainEventBus?.post(Session.SessionPauseSupportEvent(true))
-    mainEventBus?.post(Session.SessionSnapshotSupportEvent(null))
-    mainEventBus?.post(Session.EmulationStartedEvent(this.mainConfig!!.rom.title))
+    mainEventBus?.post(Controller.GameboyTypeEvent(this.mainConfig!!.gameboyType))
+    mainEventBus?.post(Controller.SessionPauseSupportEvent(true))
+    mainEventBus?.post(Controller.SessionSnapshotSupportEvent(null))
+    mainEventBus?.post(Controller.EmulationStartedEvent(this.mainConfig!!.rom.title))
 
     val timingTicker = TimingTicker()
     doStop = false
@@ -277,7 +277,7 @@ class LinkedSession(
     mainGameboy?.stop()
     secondaryGameboy?.stop()
     console?.setGameboy(null)
-    mainEventBus?.post(Session.EmulationStoppedEvent())
+    mainEventBus?.post(Controller.EmulationStoppedEvent())
 
     mainEventBus?.close()
     secondaryEventBus?.close()
@@ -318,6 +318,6 @@ class LinkedSession(
   ) : Event
 
   private companion object {
-    val LOG: Logger = LoggerFactory.getLogger(LinkedSession::class.java)
+    val LOG: Logger = LoggerFactory.getLogger(LinkedController::class.java)
   }
 }

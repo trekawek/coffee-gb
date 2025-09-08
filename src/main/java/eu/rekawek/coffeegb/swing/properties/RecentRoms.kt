@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.gui.properties
+package eu.rekawek.coffeegb.swing.properties
 
 import java.util.*
 import java.util.stream.Collectors

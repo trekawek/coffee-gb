@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.session
+package eu.rekawek.coffeegb.swing.controller
 
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy

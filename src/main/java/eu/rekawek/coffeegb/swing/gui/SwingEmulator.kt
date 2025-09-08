@@ -1,20 +1,16 @@
-package eu.rekawek.coffeegb.swing.emulator
+package eu.rekawek.coffeegb.swing.gui
 
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
-import eu.rekawek.coffeegb.swing.session.LinkedSession
-import eu.rekawek.coffeegb.swing.session.Session
-import eu.rekawek.coffeegb.swing.session.SimpleSession
+import eu.rekawek.coffeegb.swing.controller.BasicController
+import eu.rekawek.coffeegb.swing.controller.LinkedController
+import eu.rekawek.coffeegb.swing.controller.Controller
 import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnectedToServerEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientDisconnectedFromServerEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerLostConnectionEvent
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
 import java.awt.Dimension
 import javax.swing.BoxLayout
 import javax.swing.JFrame
@@ -33,14 +29,14 @@ class SwingEmulator(
 
   private val connectionController: ConnectionController
 
-  private var session: Session = SimpleSession(eventBus, properties, console)
+  private var session: Controller = BasicController(eventBus, properties, console)
 
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
 
     remoteDisplay =
         if (SHOW_REMOTE_SCREEN) {
-          SwingDisplay(properties.display, eventBus, "secondary")
+            SwingDisplay(properties.display, eventBus, "secondary")
         } else {
           null
         }
@@ -54,21 +50,21 @@ class SwingEmulator(
     }
     Thread(sound).start()
 
-    eventBus.register<ServerGotConnectionEvent> {
+    eventBus.register<ConnectionController.ServerGotConnectionEvent> {
       session.close()
-      session = LinkedSession(eventBus, properties, console)
+      session = LinkedController(eventBus, properties, console)
     }
-    eventBus.register<ClientConnectedToServerEvent> {
+    eventBus.register<ConnectionController.ClientConnectedToServerEvent> {
       session.close()
-      session = LinkedSession(eventBus, properties, console)
+      session = LinkedController(eventBus, properties, console)
     }
-    eventBus.register<ServerLostConnectionEvent> {
+    eventBus.register<ConnectionController.ServerLostConnectionEvent> {
       session.close()
-      session = SimpleSession(eventBus, properties, console)
+      session = BasicController(eventBus, properties, console)
     }
-    eventBus.register<ClientDisconnectedFromServerEvent> {
+    eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       session.close()
-      session = SimpleSession(eventBus, properties, console)
+      session = BasicController(eventBus, properties, console)
     }
   }
 
@@ -92,7 +88,7 @@ class SwingEmulator(
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
       val dimension =
           if (SHOW_REMOTE_SCREEN) {
-            Dimension(it.preferredSize.width * 2, it.preferredSize.height)
+              Dimension(it.preferredSize.width * 2, it.preferredSize.height)
           } else {
             it.preferredSize
           }

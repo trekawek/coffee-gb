@@ -6,10 +6,10 @@ import eu.rekawek.coffeegb.joypad.Button
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.session.Input
-import eu.rekawek.coffeegb.swing.session.LinkedSession
-import eu.rekawek.coffeegb.swing.session.LinkedSession.LocalButtonStateEvent
-import eu.rekawek.coffeegb.swing.session.Session.WaitingForPeerEvent
+import eu.rekawek.coffeegb.swing.controller.Input
+import eu.rekawek.coffeegb.swing.controller.LinkedController
+import eu.rekawek.coffeegb.swing.controller.LinkedController.LocalButtonStateEvent
+import eu.rekawek.coffeegb.swing.controller.Controller.WaitingForPeerEvent
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.InputStream
@@ -121,7 +121,7 @@ class Connection(
               val releasedCount = buf.get()
               val pressed = readButtons(pressedCount.toInt())
               val released = readButtons(releasedCount.toInt())
-              LinkedSession.RemoteButtonStateEvent(frame, Input(pressed, released))
+              LinkedController.RemoteButtonStateEvent(frame, Input(pressed, released))
             }
 
             // reset
@@ -154,7 +154,7 @@ class Connection(
           is PeerLoadedGameEvent ->
               LOG.atInfo()
                   .log("Received remote command $command, posting event: ${event.javaClass}")
-          is LinkedSession.RemoteButtonStateEvent ->
+          is LinkedController.RemoteButtonStateEvent ->
               LOG.atDebug().log("Received remote command $command, posting event: $event")
           else -> LOG.atInfo().log("Received remote command $command, posting event: $event")
         }

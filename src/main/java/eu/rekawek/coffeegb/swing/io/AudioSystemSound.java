@@ -3,7 +3,7 @@ package eu.rekawek.coffeegb.swing.io;
 import eu.rekawek.coffeegb.Gameboy;
 import eu.rekawek.coffeegb.events.EventBus;
 import eu.rekawek.coffeegb.sound.Sound;
-import eu.rekawek.coffeegb.swing.gui.properties.SoundProperties;
+import eu.rekawek.coffeegb.swing.properties.SoundProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

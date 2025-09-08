@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.gui.properties
+package eu.rekawek.coffeegb.swing.properties
 
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory

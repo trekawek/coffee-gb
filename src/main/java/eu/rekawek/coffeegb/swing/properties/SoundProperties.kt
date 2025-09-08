@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.gui.properties
+package eu.rekawek.coffeegb.swing.properties
 
 class SoundProperties(private val properties: EmulatorProperties) {
   val soundEnabled

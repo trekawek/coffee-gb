@@ -1,14 +1,14 @@
-package eu.rekawek.coffeegb.swing.session
+package eu.rekawek.coffeegb.swing.controller
 
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.memory.cart.Rom
-import eu.rekawek.coffeegb.swing.gui.properties.EmulatorProperties
-import eu.rekawek.coffeegb.swing.gui.properties.SystemProperties
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
+import eu.rekawek.coffeegb.swing.properties.SystemProperties
 import java.io.File
 
-interface Session : AutoCloseable {
+interface Controller : AutoCloseable {
 
   class EmulationStartedEvent(val romName: String) : Event
 
