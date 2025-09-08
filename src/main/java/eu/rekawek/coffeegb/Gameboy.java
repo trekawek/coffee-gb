@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb;
 
-import eu.rekawek.coffeegb.controller.Joypad;
+import eu.rekawek.coffeegb.joypad.Joypad;
 import eu.rekawek.coffeegb.cpu.Cpu;
 import eu.rekawek.coffeegb.cpu.InterruptManager;
 import eu.rekawek.coffeegb.cpu.SpeedMode;

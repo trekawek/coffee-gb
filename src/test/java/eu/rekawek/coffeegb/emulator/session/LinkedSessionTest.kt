@@ -1,8 +1,8 @@
 package eu.rekawek.coffeegb.emulator.session
 
 import eu.rekawek.coffeegb.Gameboy
-import eu.rekawek.coffeegb.controller.Button
-import eu.rekawek.coffeegb.controller.Joypad
+import eu.rekawek.coffeegb.joypad.Button
+import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.swing.session.Input

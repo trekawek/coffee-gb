@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.swing.gui.properties
 
-import eu.rekawek.coffeegb.controller.Button
+import eu.rekawek.coffeegb.joypad.Button
 import java.awt.event.KeyEvent
 import java.util.*
 

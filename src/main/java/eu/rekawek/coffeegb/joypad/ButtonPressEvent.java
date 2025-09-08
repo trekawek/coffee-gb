@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.controller;
+package eu.rekawek.coffeegb.joypad;
 
 import eu.rekawek.coffeegb.events.Event;
 

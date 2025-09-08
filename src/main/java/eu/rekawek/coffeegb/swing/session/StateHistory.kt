@@ -4,8 +4,8 @@ import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
-import eu.rekawek.coffeegb.controller.Button
-import eu.rekawek.coffeegb.controller.Joypad
+import eu.rekawek.coffeegb.joypad.Button
+import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl

@@ -1,9 +1,9 @@
 package eu.rekawek.coffeegb.testing
 
 import eu.rekawek.coffeegb.Gameboy
-import eu.rekawek.coffeegb.controller.Button
-import eu.rekawek.coffeegb.controller.ButtonPressEvent
-import eu.rekawek.coffeegb.controller.ButtonReleaseEvent
+import eu.rekawek.coffeegb.joypad.Button
+import eu.rekawek.coffeegb.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.events.EventBus
 import kotlin.random.Random
 

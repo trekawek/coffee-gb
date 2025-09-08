@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.swing.io.network
 
 import eu.rekawek.coffeegb.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.GameboyType
-import eu.rekawek.coffeegb.controller.Button
+import eu.rekawek.coffeegb.joypad.Button
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.swing.events.register

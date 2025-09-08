@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.controller;
+package eu.rekawek.coffeegb.joypad;
 
 public enum Button {
     RIGHT(0x01, 0x10),
