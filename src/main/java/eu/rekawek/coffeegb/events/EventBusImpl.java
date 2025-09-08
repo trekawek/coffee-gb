@@ -111,6 +111,9 @@ public class EventBusImpl implements EventBus {
 
     @Override
     public void close() {
+        for (EventBus c : children) {
+            c.close();
+        }
         doStop = true;
         if (asyncEventsEnabled) {
             while (!stopped) {
@@ -130,7 +133,9 @@ public class EventBusImpl implements EventBus {
             while (!doStop) {
                 try {
                     Event event = asyncEvents.poll(10, TimeUnit.MILLISECONDS);
-                    post(event);
+                    if (event != null) {
+                        post(event);
+                    }
                 } catch (Exception e) {
                     LOG.atError().setCause(e).log("Error processing event");
                 }

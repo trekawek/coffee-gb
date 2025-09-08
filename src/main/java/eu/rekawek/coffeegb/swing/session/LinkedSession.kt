@@ -4,19 +4,20 @@ import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
-import eu.rekawek.coffeegb.joypad.Button
-import eu.rekawek.coffeegb.joypad.ButtonPressEvent
-import eu.rekawek.coffeegb.joypad.ButtonReleaseEvent
-import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
 import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent
 import eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent
+import eu.rekawek.coffeegb.joypad.Button
+import eu.rekawek.coffeegb.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.joypad.ButtonReleaseEvent
+import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
+import eu.rekawek.coffeegb.sgb.SgbDisplay
 import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
 import eu.rekawek.coffeegb.swing.events.funnel
 import eu.rekawek.coffeegb.swing.events.register
@@ -123,6 +124,7 @@ class LinkedSession(
         setOf(
             DmgFrameReadyEvent::class,
             GbcFrameReadyEvent::class,
+            SgbDisplay.SgbFrameReadyEvent::class,
             SoundSampleEvent::class,
             Joypad.JoypadPressEvent::class))
     val mainSerialEndpoint = Peer2PeerSerialEndpoint()
@@ -244,6 +246,12 @@ class LinkedSession(
     }
 
     val tick = init(this.mainConfig!!, this.peerConfig!!)
+
+    mainEventBus?.post(Session.GameboyTypeEvent(this.mainConfig!!.gameboyType))
+    mainEventBus?.post(Session.SessionPauseSupportEvent(true))
+    mainEventBus?.post(Session.SessionSnapshotSupportEvent(null))
+    mainEventBus?.post(Session.EmulationStartedEvent(this.mainConfig!!.rom.title))
+
     val timingTicker = TimingTicker()
     doStop = false
     isStopped = false
@@ -255,9 +263,6 @@ class LinkedSession(
           isStopped = true
         }
         .start()
-    mainEventBus?.post(Session.EmulationStartedEvent(this.mainConfig!!.rom.title))
-    mainEventBus?.post(Session.SessionPauseSupportEvent(true))
-    mainEventBus?.post(Session.SessionSnapshotSupportEvent(null))
   }
 
   @Synchronized

@@ -70,9 +70,10 @@ class SimpleSession(
     gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
     gameboy?.registerTickListener(TimingTicker())
     Thread(gameboy).start()
-    localEventBus?.post(EmulationStartedEvent(config.rom.title))
+
     localEventBus?.post(Session.SessionPauseSupportEvent(true))
     localEventBus?.post(Session.SessionSnapshotSupportEvent(this))
+    localEventBus?.post(EmulationStartedEvent(config.rom.title))
   }
 
   @Synchronized
@@ -115,6 +116,7 @@ class SimpleSession(
 
   @Synchronized
   override fun loadSnapshot(slot: Int) {
+    start(config)
     gameboy?.let { snapshotManager?.loadSnapshot(slot, it) }
   }
 

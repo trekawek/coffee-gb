@@ -73,6 +73,7 @@ class SwingEmulator(
   }
 
   fun stop() {
+    session.close()
     sound.stopThread()
     display.stop()
   }
