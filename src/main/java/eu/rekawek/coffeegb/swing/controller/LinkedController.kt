@@ -1,30 +1,23 @@
 package eu.rekawek.coffeegb.swing.controller
 
 import com.google.common.annotations.VisibleForTesting
-import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
-import eu.rekawek.coffeegb.gpu.Display.DmgFrameReadyEvent
-import eu.rekawek.coffeegb.gpu.Display.GbcFrameReadyEvent
 import eu.rekawek.coffeegb.joypad.Button
 import eu.rekawek.coffeegb.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.joypad.ButtonReleaseEvent
-import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.memory.cart.Cartridge
 import eu.rekawek.coffeegb.memory.cart.Rom
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
-import eu.rekawek.coffeegb.sgb.SgbDisplay
-import eu.rekawek.coffeegb.sound.Sound.SoundSampleEvent
-import eu.rekawek.coffeegb.swing.events.funnel
+import eu.rekawek.coffeegb.swing.controller.Controller.Companion.createGameboyConfig
 import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.io.network.Connection
 import eu.rekawek.coffeegb.swing.io.network.Connection.PeerLoadedGameEvent
-import eu.rekawek.coffeegb.swing.controller.Controller.Companion.createGameboyConfig
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.lang.Thread.sleep
@@ -40,17 +33,13 @@ class LinkedController(
 
   private val eventBus = parentEventBus.fork("session")
 
+  private var mainSession: Session? = null
+
+  private var peerSession: Session? = null
+
   private var mainConfig: GameboyConfiguration? = null
 
   private var peerConfig: GameboyConfiguration? = null
-
-  private var mainGameboy: Gameboy? = null
-
-  private var secondaryGameboy: Gameboy? = null
-
-  private var mainEventBus: EventBus? = null
-
-  private var secondaryEventBus: EventBus? = null
 
   @VisibleForTesting internal var stateHistory: StateHistory? = null
 
@@ -116,58 +105,35 @@ class LinkedController(
   internal fun init(mainConfig: GameboyConfiguration, peerConfig: GameboyConfiguration): Runnable {
     stateHistory = StateHistory(mainConfig, peerConfig)
 
-    val localMainEventBus = EventBusImpl(null, null, false)
-    val mainEventBus = eventBus.fork("main")
-    funnel(
-        localMainEventBus,
-        mainEventBus,
-        setOf(
-            DmgFrameReadyEvent::class,
-            GbcFrameReadyEvent::class,
-            SgbDisplay.SgbFrameReadyEvent::class,
-            SoundSampleEvent::class,
-            Joypad.JoypadPressEvent::class))
     val mainSerialEndpoint = Peer2PeerSerialEndpoint()
-    val mainGameboy = mainConfig.build()
-    mainGameboy.init(localMainEventBus, mainSerialEndpoint, console)
+    val peerSerialEndpoint = Peer2PeerSerialEndpoint()
+    peerSerialEndpoint.init(mainSerialEndpoint)
 
-    val localSecondaryEventBus = EventBusImpl(null, null, false)
-    val secondaryEventBus = eventBus.fork("secondary")
-    funnel(
-        localSecondaryEventBus,
-        secondaryEventBus,
-        setOf(DmgFrameReadyEvent::class, GbcFrameReadyEvent::class))
-    val secondarySerialEndpoint = Peer2PeerSerialEndpoint()
-    val secondaryGameboy = peerConfig.build()
-    secondaryGameboy.init(localSecondaryEventBus, secondarySerialEndpoint, console)
-
-    secondarySerialEndpoint.init(mainSerialEndpoint)
+    val mainSession = Session(mainConfig, eventBus.fork("main"), console, mainSerialEndpoint)
+    val peerSession = Session(peerConfig, EventBusImpl(null, null, false), null, peerSerialEndpoint)
 
     val mainButtonMonitor = Object()
     val mainPressedButtons = mutableSetOf<Button>()
     val mainReleasedButtons = mutableSetOf<Button>()
     var lastInput = Input(emptyList(), emptyList())
-    mainEventBus.register<ButtonPressEvent> {
+    mainSession.eventBus.register<ButtonPressEvent> {
       synchronized(mainButtonMonitor) {
         mainPressedButtons.add(it.button)
         mainReleasedButtons.remove(it.button)
       }
     }
-    mainEventBus.register<ButtonReleaseEvent> {
+    mainSession.eventBus.register<ButtonReleaseEvent> {
       synchronized(mainButtonMonitor) {
         mainPressedButtons.remove(it.button)
         mainReleasedButtons.add(it.button)
       }
     }
-
-    secondaryEventBus.register<RemoteButtonStateEvent> {
+    mainSession.eventBus.register<RemoteButtonStateEvent> {
       stateHistory!!.addSecondaryInput(it.frame, it.input)
     }
 
-    this.mainGameboy = mainGameboy
-    this.mainEventBus = mainEventBus
-    this.secondaryGameboy = secondaryGameboy
-    this.secondaryEventBus = secondaryEventBus
+    this.mainSession = mainSession
+    this.peerSession = peerSession
 
     var tick = 0
     var frame: Long = 0
@@ -202,10 +168,10 @@ class LinkedController(
 
           if (stateHistory!!.merge()) {
             val head = stateHistory!!.getHead()
-            mainGameboy.restoreFromMemento(head.mainMemento)
-            secondaryGameboy.restoreFromMemento(head.secondaryMemento)
-            mainSerialEndpoint.restoreFromMemento(head.mainLinkMemento)
-            secondarySerialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
+            mainSession.gameboy.restoreFromMemento(head.mainMemento)
+            peerSession.gameboy.restoreFromMemento(head.secondaryMemento)
+            mainSession.serialEndpoint.restoreFromMemento(head.mainLinkMemento)
+            peerSession.serialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
             frame = head.frame
             LOG.atDebug().log("State merged to {}", frame)
           }
@@ -213,21 +179,21 @@ class LinkedController(
           stateHistory!!.addState(
               frame,
               effectiveInput,
-              mainGameboy.saveToMemento(),
-              secondaryGameboy.saveToMemento(),
-              mainSerialEndpoint.saveToMemento(),
-              secondarySerialEndpoint.saveToMemento())
+              mainSession.gameboy.saveToMemento(),
+              peerSession.gameboy.saveToMemento(),
+              mainSession.serialEndpoint.saveToMemento(),
+              peerSession.serialEndpoint.saveToMemento())
 
           val now = TimeSource.Monotonic.markNow()
           if (!effectiveInput.isEmpty() || now - lastSync > 5.seconds) {
             eventBus.postAsync(LocalButtonStateEvent(frame, effectiveInput))
-            effectiveInput.send(localMainEventBus)
+            effectiveInput.send(mainSession.eventBus)
             lastSync = now
           }
         }
 
-        mainGameboy.tick()
-        secondaryGameboy.tick()
+        mainSession.gameboy.tick()
+        peerSession.gameboy.tick()
         tick++
       }
     }
@@ -247,10 +213,10 @@ class LinkedController(
 
     val tick = init(this.mainConfig!!, this.peerConfig!!)
 
-    mainEventBus?.post(Controller.GameboyTypeEvent(this.mainConfig!!.gameboyType))
-    mainEventBus?.post(Controller.SessionPauseSupportEvent(true))
-    mainEventBus?.post(Controller.SessionSnapshotSupportEvent(null))
-    mainEventBus?.post(Controller.EmulationStartedEvent(this.mainConfig!!.rom.title))
+    mainSession?.eventBus?.post(Controller.GameboyTypeEvent(this.mainConfig!!.gameboyType))
+    mainSession?.eventBus?.post(Controller.SessionPauseSupportEvent(true))
+    mainSession?.eventBus?.post(Controller.SessionSnapshotSupportEvent(null))
+    mainSession?.eventBus?.post(Controller.EmulationStartedEvent(this.mainConfig!!.rom.title))
 
     val timingTicker = TimingTicker()
     doStop = false
@@ -267,25 +233,17 @@ class LinkedController(
 
   @Synchronized
   fun stop() {
-    if (mainGameboy == null) {
+    if (mainSession == null) {
       return
     }
     doStop = true
     while (!isStopped) {}
     doPause = false
 
-    mainGameboy?.stop()
-    secondaryGameboy?.stop()
-    console?.setGameboy(null)
-    mainEventBus?.post(Controller.EmulationStoppedEvent())
+    mainSession?.eventBus?.post(Controller.EmulationStoppedEvent())
 
-    mainEventBus?.close()
-    secondaryEventBus?.close()
-
-    mainGameboy = null
-    secondaryGameboy = null
-    mainEventBus = null
-    secondaryEventBus = null
+    mainSession?.close()
+    peerSession?.close()
   }
 
   @Synchronized

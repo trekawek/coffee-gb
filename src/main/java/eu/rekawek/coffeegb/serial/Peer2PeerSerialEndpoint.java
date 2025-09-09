@@ -7,7 +7,7 @@ import eu.rekawek.coffeegb.memento.Originator;
 import java.io.Serializable;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Originator<Peer2PeerSerialEndpoint> {
+public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Originator<SerialEndpoint> {
 
     private Peer2PeerSerialEndpoint peer;
 
@@ -57,12 +57,12 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Or
     }
 
     @Override
-    public Memento<Peer2PeerSerialEndpoint> saveToMemento() {
+    public Memento<SerialEndpoint> saveToMemento() {
         return new Peer2PeerSerialEndpointMemento(sb, bitsReceived.get(), bitIndex);
     }
 
     @Override
-    public void restoreFromMemento(Memento<Peer2PeerSerialEndpoint> memento) {
+    public void restoreFromMemento(Memento<SerialEndpoint> memento) {
         if (!(memento instanceof Peer2PeerSerialEndpointMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
@@ -72,6 +72,6 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Or
     }
 
     private record Peer2PeerSerialEndpointMemento(int sb, int bitsReceived,
-                                                  int bitIndex) implements Memento<Peer2PeerSerialEndpoint> {
+                                                  int bitIndex) implements Memento<SerialEndpoint> {
     }
 }

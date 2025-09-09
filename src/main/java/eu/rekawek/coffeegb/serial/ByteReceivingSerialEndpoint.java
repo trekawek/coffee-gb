@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.serial;
 
+import eu.rekawek.coffeegb.memento.Memento;
+
 public class ByteReceivingSerialEndpoint implements SerialEndpoint {
     private final ByteReceiver byteReceiver;
     private int sb;
@@ -43,4 +45,20 @@ public class ByteReceivingSerialEndpoint implements SerialEndpoint {
         byteReceiver.onNewByte(sb);
         return 0xFF;
     }
+
+    @Override
+    public Memento<SerialEndpoint> saveToMemento() {
+        return new ByteReceivingSerialEndpointMemento(sb, bits);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<SerialEndpoint> memento) {
+        if (!(memento instanceof ByteReceivingSerialEndpointMemento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        this.sb = mem.sb;
+        this.bits = mem.bits;
+    }
+
+    private record ByteReceivingSerialEndpointMemento(int sb, int bits) implements Memento<SerialEndpoint> {}
 }

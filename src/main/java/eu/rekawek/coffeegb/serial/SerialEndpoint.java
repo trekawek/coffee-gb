@@ -1,6 +1,9 @@
 package eu.rekawek.coffeegb.serial;
 
-public interface SerialEndpoint {
+import eu.rekawek.coffeegb.memento.Memento;
+import eu.rekawek.coffeegb.memento.Originator;
+
+public interface SerialEndpoint extends Originator<SerialEndpoint> {
     /**
      * Listener waiting for any updates of the SB byte, so it can be shared with the other side.
      */
@@ -37,6 +40,15 @@ public interface SerialEndpoint {
 
     SerialEndpoint NULL_ENDPOINT =
             new SerialEndpoint() {
+                @Override
+                public Memento<SerialEndpoint> saveToMemento() {
+                    return null;
+                }
+
+                @Override
+                public void restoreFromMemento(Memento<SerialEndpoint> memento) {
+                }
+
                 @Override
                 public void setSb(int sb) {
                 }

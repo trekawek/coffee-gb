@@ -3,15 +3,14 @@ package eu.rekawek.coffeegb.swing.gui
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.swing.controller.BasicController
-import eu.rekawek.coffeegb.swing.controller.LinkedController
 import eu.rekawek.coffeegb.swing.controller.Controller
+import eu.rekawek.coffeegb.swing.controller.LinkedController
 import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.network.ConnectionController
 import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
-import java.awt.Dimension
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -22,7 +21,6 @@ class SwingEmulator(
     private val properties: EmulatorProperties,
 ) {
   private val display: SwingDisplay
-  private val remoteDisplay: SwingDisplay?
 
   private val controller: SwingController
   private val sound: AudioSystemSound
@@ -33,21 +31,11 @@ class SwingEmulator(
 
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
-
-    remoteDisplay =
-        if (SHOW_REMOTE_SCREEN) {
-            SwingDisplay(properties.display, eventBus, "secondary")
-        } else {
-          null
-        }
     sound = AudioSystemSound(properties.sound, eventBus, "main")
     controller = SwingController(properties.controllerMapping, eventBus)
     connectionController = ConnectionController(eventBus)
 
     Thread(display).start()
-    if (SHOW_REMOTE_SCREEN) {
-      Thread(remoteDisplay).start()
-    }
     Thread(sound).start()
 
     eventBus.register<ConnectionController.ServerGotConnectionEvent> {
@@ -78,26 +66,13 @@ class SwingEmulator(
     val mainPanel = JPanel()
     mainPanel.setLayout(BoxLayout(mainPanel, BoxLayout.X_AXIS))
     mainPanel.add(display)
-    if (SHOW_REMOTE_SCREEN) {
-      mainPanel.add(remoteDisplay)
-    }
 
     jFrame.contentPane = mainPanel
     jFrame.addKeyListener(controller)
 
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
-      val dimension =
-          if (SHOW_REMOTE_SCREEN) {
-              Dimension(it.preferredSize.width * 2, it.preferredSize.height)
-          } else {
-            it.preferredSize
-          }
-      mainPanel.preferredSize = dimension
+      mainPanel.preferredSize = it.preferredSize
       jFrame.pack()
     }
-  }
-
-  companion object {
-    const val SHOW_REMOTE_SCREEN = false
   }
 }

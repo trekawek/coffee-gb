@@ -1,16 +1,14 @@
 package eu.rekawek.coffeegb.swing.controller
 
 import eu.rekawek.coffeegb.Gameboy
-import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.debug.Console
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.memory.cart.Rom
-import eu.rekawek.coffeegb.serial.SerialEndpoint
-import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
 import eu.rekawek.coffeegb.swing.controller.Controller.Companion.getGameboyType
 import eu.rekawek.coffeegb.swing.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.swing.controller.Controller.EmulationStoppedEvent
+import eu.rekawek.coffeegb.swing.events.register
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
 
 class BasicController(
     parentEventBus: EventBus,
@@ -20,11 +18,7 @@ class BasicController(
 
   private val eventBus: EventBus = parentEventBus.fork("session")
 
-  private var config: GameboyConfiguration? = null
-
-  private var gameboy: Gameboy? = null
-
-  private var localEventBus: EventBus? = null
+  private var session: Session? = null
 
   private var snapshotManager: SnapshotManager? = null
 
@@ -32,10 +26,11 @@ class BasicController(
     eventBus.register<Controller.LoadRomEvent> {
       stop()
       val config = Controller.createGameboyConfig(properties, Rom(it.rom))
-      start(config)
+      session = createSession(config)
+      start()
     }
 
-    eventBus.register<Controller.StartEmulationEvent> { start(config) }
+    eventBus.register<Controller.StartEmulationEvent> { start() }
     eventBus.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventBus.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventBus.register<Controller.PauseEmulationEvent> { pause() }
@@ -43,76 +38,68 @@ class BasicController(
     eventBus.register<Controller.ResetEmulationEvent> { reset() }
     eventBus.register<Controller.StopEmulationEvent> { stop() }
     eventBus.register<Controller.UpdatedSystemMappingEvent> {
-      if (config != null) {
-        val newType = getGameboyType(properties.system, config!!.rom)
-        if (newType != config!!.gameboyType) {
-          eventBus.post(Controller.LoadRomEvent(config!!.rom.file))
+      session?.config?.let { config ->
+        val newType = getGameboyType(properties.system, config.rom)
+        if (newType != config.gameboyType) {
+          eventBus.post(Controller.LoadRomEvent(config.rom.file))
         }
       }
     }
   }
 
+  private fun createSession(config: Gameboy.GameboyConfiguration) =
+      Session(config, eventBus.fork("main"), console)
+
   @Synchronized
-  fun start(config: GameboyConfiguration?) {
-    if (config == null) {
-      return
-    }
+  fun start() {
+    val session = session ?: return
 
-    this.config = config
-    snapshotManager = SnapshotManager(config.rom.file)
-    localEventBus = eventBus.fork("main")
-    localEventBus?.post(Controller.GameboyTypeEvent(config.gameboyType))
+    snapshotManager = SnapshotManager(session.config.rom.file)
 
-    gameboy = config.build()
-    gameboy?.init(localEventBus, SerialEndpoint.NULL_ENDPOINT, console)
-    gameboy?.registerTickListener(TimingTicker())
-    Thread(gameboy).start()
+    session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))
+    session.eventBus.post(Controller.SessionPauseSupportEvent(true))
+    session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
+    session.eventBus.post(EmulationStartedEvent(session.config.rom.title))
 
-    localEventBus?.post(Controller.SessionPauseSupportEvent(true))
-    localEventBus?.post(Controller.SessionSnapshotSupportEvent(this))
-    localEventBus?.post(EmulationStartedEvent(config.rom.title))
+    session.gameboy.registerTickListener(TimingTicker())
+    Thread(session.gameboy).start()
   }
 
   @Synchronized
   fun stop() {
-    if (gameboy == null) {
-      return
-    }
-    gameboy?.stop()
-    gameboy?.close()
-    console?.setGameboy(null)
-    localEventBus!!.post(EmulationStoppedEvent())
-    localEventBus!!.close()
-
-    localEventBus = null
-    gameboy = null
+    val session = session ?: return
+    session.eventBus.post(EmulationStoppedEvent())
+    session.close()
+    this.session = null
   }
 
   @Synchronized
   fun reset() {
+    val session = session ?: return
+    val config = session.config
     stop()
-    start(config)
+    this.session = createSession(config)
+    start()
   }
 
   @Synchronized
   fun pause() {
-    gameboy?.pause()
+    session?.gameboy?.pause()
   }
 
   @Synchronized
   fun resume() {
-    gameboy?.resume()
+    session?.gameboy?.resume()
   }
 
   @Synchronized
   override fun saveSnapshot(slot: Int) {
-    gameboy?.let { snapshotManager?.saveSnapshot(slot, it) }
+    session?.gameboy?.let { snapshotManager?.saveSnapshot(slot, it) }
   }
 
   @Synchronized
   override fun loadSnapshot(slot: Int) {
-    start(config)
-    gameboy?.let { snapshotManager?.loadSnapshot(slot, it) }
+    session?.gameboy?.let { snapshotManager?.loadSnapshot(slot, it) }
   }
 
   override fun snapshotAvailable(slot: Int): Boolean {

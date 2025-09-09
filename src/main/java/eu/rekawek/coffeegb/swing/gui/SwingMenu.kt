@@ -4,22 +4,6 @@ import eu.rekawek.coffeegb.GameboyType
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.sgb.SgbDisplay
 import eu.rekawek.coffeegb.sound.Sound
-import eu.rekawek.coffeegb.swing.events.register
-import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
-import eu.rekawek.coffeegb.swing.properties.EmulatorProperties.Key.CgbGamesType
-import eu.rekawek.coffeegb.swing.properties.EmulatorProperties.Key.DmgGamesType
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnectedToServerEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerLostConnectionEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerStartedEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerStoppedEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartClientEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartServerEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
-import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.swing.controller.Controller
 import eu.rekawek.coffeegb.swing.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.swing.controller.Controller.EmulationStoppedEvent
@@ -33,6 +17,22 @@ import eu.rekawek.coffeegb.swing.controller.Controller.SessionPauseSupportEvent
 import eu.rekawek.coffeegb.swing.controller.Controller.SessionSnapshotSupportEvent
 import eu.rekawek.coffeegb.swing.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.swing.controller.SnapshotSupport
+import eu.rekawek.coffeegb.swing.events.register
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ClientConnectedToServerEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerGotConnectionEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerLostConnectionEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerStartedEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.ServerStoppedEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartClientEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StartServerEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopClientEvent
+import eu.rekawek.coffeegb.swing.io.network.ConnectionController.StopServerEvent
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties.Key.CgbGamesType
+import eu.rekawek.coffeegb.swing.properties.EmulatorProperties.Key.DmgGamesType
 import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.JCheckBoxMenuItem
@@ -147,6 +147,7 @@ class SwingMenu(
     eventBus.register<EmulationStartedEvent> {
       loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(stateSlot) == true
     }
+    eventBus.register<EmulationStoppedEvent> { loadSnapshot.isEnabled = false }
 
     val slotMenu = JMenu("State slot")
     gameMenu.add(slotMenu)

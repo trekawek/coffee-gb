@@ -4,13 +4,14 @@ import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
-import eu.rekawek.coffeegb.joypad.Button
-import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.events.Event
 import eu.rekawek.coffeegb.events.EventBus
 import eu.rekawek.coffeegb.events.EventBusImpl
+import eu.rekawek.coffeegb.joypad.Button
+import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
+import eu.rekawek.coffeegb.serial.SerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -19,8 +20,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 class StateHistory(
-  private val mainConfig: GameboyConfiguration,
-  private val peerConfig: GameboyConfiguration,
+    private val mainConfig: GameboyConfiguration,
+    private val peerConfig: GameboyConfiguration,
 ) {
 
   private val states = LinkedList<State>()
@@ -35,8 +36,8 @@ class StateHistory(
       mainInput: Input,
       mainMemento: Memento<Gameboy>,
       secondaryMemento: Memento<Gameboy>,
-      mainLinkMemento: Memento<Peer2PeerSerialEndpoint>,
-      secondaryLinkMemento: Memento<Peer2PeerSerialEndpoint>,
+      mainLinkMemento: Memento<SerialEndpoint>,
+      secondaryLinkMemento: Memento<SerialEndpoint>,
   ) {
     states.add(
         State(
@@ -143,8 +144,8 @@ class StateHistory(
       val mainInput: Input,
       val mainMemento: Memento<Gameboy>,
       val secondaryMemento: Memento<Gameboy>,
-      val mainLinkMemento: Memento<Peer2PeerSerialEndpoint>,
-      val secondaryLinkMemento: Memento<Peer2PeerSerialEndpoint>,
+      val mainLinkMemento: Memento<SerialEndpoint>,
+      val secondaryLinkMemento: Memento<SerialEndpoint>,
   )
 
   private data class Patch(
