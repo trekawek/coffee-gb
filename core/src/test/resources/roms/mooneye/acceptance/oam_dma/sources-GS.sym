@@ -1,0 +1,154 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/acceptance/oam_dma/sources-GS.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:4997 clear_oam
+01:49a1 clear_vram
+01:49ab clear_wram
+01:4943 disable_ppu_safe
+01:49d1 is_ppu_broken
+01:49b5 is_serial_broken
+01:4972 memcmp
+01:49bf memcpy
+01:49c8 memset
+01:49d7 print_inline_string
+01:4980 print_load_font
+01:498c print_newline
+01:4953 print_string
+01:495b print_string@char
+01:495e print_string@newline
+01:4890 quit
+01:48a6 quit@callback
+01:48aa quit@cb_return
+01:48cb quit@report_result
+01:48d0 quit@success
+01:48de quit@failure
+01:48e6 quit@serial_dump
+01:48ec quit@normal
+01:4906 quit@fast
+01:4918 quit@halt
+01:4919 quit@halt_execution_0
+01:491b reset_screen
+01:492f serial_send_byte
+01:ff90 hram.serial_timeout
+01:4963 wait_ly_with_timeout
+01:4970 wait_ly_with_timeout@timeout
+01:40a0 font
+00:0150 main
+00:015f prepare_part1
+00:016b test_0000
+00:0180 test_0000@quit_inline_1
+00:0195 test_3f00
+00:01aa test_3f00@quit_inline_2
+00:01bf test_4000
+00:01d4 test_4000@quit_inline_3
+00:01e9 test_7f00
+00:01fe test_7f00@quit_inline_4
+00:0213 prepare_part2
+00:021f test_8000
+00:0234 test_8000@quit_inline_5
+00:0249 test_9f00
+00:025e test_9f00@quit_inline_6
+00:0273 prepare_part3
+00:0291 test_a000
+00:02a6 test_a000@quit_inline_7
+00:02bb test_bf00
+00:02d0 test_bf00@quit_inline_8
+00:02e5 prepare_part4
+00:02fb test_c000
+00:0310 test_c000@quit_inline_9
+00:0325 test_df00
+00:033a test_df00@quit_inline_10
+00:034f test_e000
+00:0364 test_e000@quit_inline_11
+00:0379 test_fe00
+00:0391 test_fe00@quit_inline_12
+00:03a6 test_ff00
+00:03bb test_ff00@quit_inline_13
+00:03d0 test_finish
+00:03d7 test_finish@quit_inline_14
+00:03e8 check_oam
+00:03f1 dma_proc
+00:03f9 copy_ram_pattern_1
+00:0402 ram_pattern_1
+00:04a2 copy_ram_pattern_2
+00:04ab ram_pattern_2
+01:ff80 hram.dma_proc
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff90 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_oam
+0000000a _sizeof_clear_vram
+0000000a _sizeof_clear_wram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+0000000e _sizeof_memcmp
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00000010 _sizeof_hram.dma_proc
+00000010 _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+0000000f _sizeof_main
+0000000c _sizeof_prepare_part1
+0000002a _sizeof_test_0000
+0000002a _sizeof_test_3f00
+0000002a _sizeof_test_4000
+0000002a _sizeof_test_7f00
+0000000c _sizeof_prepare_part2
+0000002a _sizeof_test_8000
+0000002a _sizeof_test_9f00
+0000001e _sizeof_prepare_part3
+0000002a _sizeof_test_a000
+0000002a _sizeof_test_bf00
+00000016 _sizeof_prepare_part4
+0000002a _sizeof_test_c000
+0000002a _sizeof_test_df00
+0000002a _sizeof_test_e000
+0000002d _sizeof_test_fe00
+0000002a _sizeof_test_ff00
+00000018 _sizeof_test_finish
+00000009 _sizeof_check_oam
+00000008 _sizeof_dma_proc
+00000009 _sizeof_copy_ram_pattern_1
+000000a0 _sizeof_ram_pattern_1
+00000009 _sizeof_copy_ram_pattern_2
+
+[sections]
+000040a0 01:00a0 40a0 000007f0 Font
+00004890 01:0890 4890 0000008b quit
+0000491b 01:091b 491b 00000014 reset_screen
+0000492f 01:092f 492f 00000014 serial_send_byte
+00004943 01:0943 4943 00000010 disable_ppu_safe
+00004953 01:0953 4953 00000010 print_string
+00004963 01:0963 4963 0000000f wait_ly_with_timeout
+00004972 01:0972 4972 0000000e memcmp
+00004980 01:0980 4980 0000000c print_load_font
+0000498c 01:098c 498c 0000000b print_newline
+00004997 01:0997 4997 0000000a clear_oam
+000049a1 01:09a1 49a1 0000000a clear_vram
+000049ab 01:09ab 49ab 0000000a clear_wram
+000049b5 01:09b5 49b5 0000000a is_serial_broken
+000049bf 01:09bf 49bf 00000009 memcpy
+000049c8 01:09c8 49c8 00000009 memset
+000049d1 01:09d1 49d1 00000006 is_ppu_broken
+000049d7 01:09d7 49d7 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+01:0000 ff80 00000010 Test-HRAM
+01:0010 ff90 00000001 Runtime-Serial

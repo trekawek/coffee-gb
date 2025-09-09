@@ -1,0 +1,144 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/emulator-only/mbc2/ram.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:48f7 clear_vram
+01:48a3 disable_ppu_safe
+01:491d is_ppu_broken
+01:4901 is_serial_broken
+01:48d2 memcmp
+01:490b memcpy
+01:4914 memset
+01:4923 print_inline_string
+01:48e0 print_load_font
+01:48ec print_newline
+01:48b3 print_string
+01:48bb print_string@char
+01:48be print_string@newline
+01:47f0 quit
+01:4806 quit@callback
+01:480a quit@cb_return
+01:482b quit@report_result
+01:4830 quit@success
+01:483e quit@failure
+01:4846 quit@serial_dump
+01:484c quit@normal
+01:4866 quit@fast
+01:4878 quit@halt
+01:4879 quit@halt_execution_0
+01:487b reset_screen
+01:488f serial_send_byte
+01:ff80 hram.serial_timeout
+01:48c3 wait_ly_with_timeout
+01:48d0 wait_ly_with_timeout@timeout
+01:4000 font
+00:0150 main
+00:015f test_round1
+00:017d test_round2
+00:018e test_round3
+00:0197 test_round4
+00:01a2 test_round5
+00:025c test_round6
+00:0292 test_finish
+00:029c test_finish@quit_inline_1
+00:02ad ramcmp
+00:02c2 all_ff
+00:04c2 test_pattern
+00:06c2 copy_test_pattern
+00:06ce check_test_pattern
+00:06da clear_ram
+00:06ee fail_round1
+00:06f8 fail_round1@quit_inline_2
+00:070f fail_round2
+00:0719 fail_round2@quit_inline_3
+00:0730 fail_round3
+00:073a fail_round3@quit_inline_4
+00:0751 fail_round4
+00:075b fail_round4@quit_inline_5
+00:0772 fail_round5
+00:077c fail_round5@quit_inline_6
+00:0793 fail_round6
+00:079d fail_round6@quit_inline_7
+00:c000 wram.test_pattern
+00:ff80 hram.ramcmp
+00:ffa0 hram.memcmp
+00:c000 RAM_USAGE_SLOT_2_BANK_0_START
+00:c1ff RAM_USAGE_SLOT_2_BANK_0_END
+00:ff80 RAM_USAGE_SLOT_4_BANK_0_START
+00:ffbf RAM_USAGE_SLOT_4_BANK_0_END
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+0000000e _sizeof_memcmp
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00000200 _sizeof_wram.test_pattern
+00000020 _sizeof_hram.ramcmp
+00000020 _sizeof_hram.memcmp
+000001ff _sizeof_RAM_USAGE_SLOT_2_BANK_0_START
+00003d81 _sizeof_RAM_USAGE_SLOT_2_BANK_0_END
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_1_END
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_0_START
+0000003f _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+0000000f _sizeof_main
+0000001e _sizeof_test_round1
+00000011 _sizeof_test_round2
+00000009 _sizeof_test_round3
+0000000b _sizeof_test_round4
+000000ba _sizeof_test_round5
+00000036 _sizeof_test_round6
+0000001b _sizeof_test_finish
+00000015 _sizeof_ramcmp
+00000200 _sizeof_all_ff
+00000200 _sizeof_test_pattern
+0000000c _sizeof_copy_test_pattern
+0000000c _sizeof_check_test_pattern
+00000014 _sizeof_clear_ram
+00000021 _sizeof_fail_round1
+00000021 _sizeof_fail_round2
+00000021 _sizeof_fail_round3
+00000021 _sizeof_fail_round4
+00000021 _sizeof_fail_round5
+
+[sections]
+00004000 01:0000 4000 000007f0 Font
+000047f0 01:07f0 47f0 0000008b quit
+0000487b 01:087b 487b 00000014 reset_screen
+0000488f 01:088f 488f 00000014 serial_send_byte
+000048a3 01:08a3 48a3 00000010 disable_ppu_safe
+000048b3 01:08b3 48b3 00000010 print_string
+000048c3 01:08c3 48c3 0000000f wait_ly_with_timeout
+000048d2 01:08d2 48d2 0000000e memcmp
+000048e0 01:08e0 48e0 0000000c print_load_font
+000048ec 01:08ec 48ec 0000000b print_newline
+000048f7 01:08f7 48f7 0000000a clear_vram
+00004901 01:0901 4901 0000000a is_serial_broken
+0000490b 01:090b 490b 00000009 memcpy
+00004914 01:0914 4914 00000009 memset
+0000491d 01:091d 491d 00000006 is_ppu_broken
+00004923 01:0923 4923 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+00:0000 c000 00000200 Test-WRAM
+00:0000 ff80 00000040 Test-HRAM
+01:0000 ff80 00000001 Runtime-Serial

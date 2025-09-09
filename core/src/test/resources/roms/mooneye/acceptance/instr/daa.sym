@@ -1,0 +1,114 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/acceptance/instr/daa.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:6928 clear_vram
+01:68d6 disable_ppu_safe
+01:6958 is_ppu_broken
+01:6932 is_serial_broken
+01:6946 memcpy
+01:694f memset
+01:687b print_bin4
+01:6905 print_hex4
+01:693c print_hex8
+01:695e print_inline_string
+01:6911 print_load_font
+01:691d print_newline
+01:68e6 print_string
+01:68ee print_string@char
+01:68f1 print_string@newline
+01:67f0 quit
+01:6806 quit@callback
+01:680a quit@cb_return
+01:682b quit@report_result
+01:6830 quit@success
+01:683e quit@failure
+01:6846 quit@serial_dump
+01:684c quit@normal
+01:6866 quit@fast
+01:6878 quit@halt
+01:6879 quit@halt_execution_0
+01:68ae reset_screen
+01:68c2 serial_send_byte
+01:ff86 hram.serial_timeout
+01:68f6 wait_ly_with_timeout
+01:6903 wait_ly_with_timeout@timeout
+01:6000 font
+00:0150 main
+00:0166 main@quit_inline_1
+00:0177 run_tests
+00:01ac fail
+00:01b3 fail@quit_inline_2
+00:0266 testcases1
+01:4000 testcases2
+01:ff80 hram.f
+01:ff81 hram.a
+01:ff82 hram.testcase_l
+01:ff83 hram.testcase_h
+01:ff84 hram.sp_save_l
+01:ff85 hram.sp_save_h
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff86 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+00000033 _sizeof_print_bin4
+0000000c _sizeof_print_hex4
+0000000a _sizeof_print_hex8
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00002000 _sizeof_testcases1
+00002000 _sizeof_testcases2
+00000001 _sizeof_hram.f
+00000001 _sizeof_hram.a
+00000001 _sizeof_hram.testcase_l
+00000001 _sizeof_hram.testcase_h
+00000001 _sizeof_hram.sp_save_l
+00000001 _sizeof_hram.sp_save_h
+00000006 _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+00000027 _sizeof_main
+00000035 _sizeof_run_tests
+
+[sections]
+00000266 00:0266 0266 00002000 testcases1
+00004000 01:0000 4000 00002000 testcases2
+00006000 01:2000 6000 000007f0 Font
+000067f0 01:27f0 67f0 0000008b quit
+0000687b 01:287b 687b 00000033 print_bin4
+000068ae 01:28ae 68ae 00000014 reset_screen
+000068c2 01:28c2 68c2 00000014 serial_send_byte
+000068d6 01:28d6 68d6 00000010 disable_ppu_safe
+000068e6 01:28e6 68e6 00000010 print_string
+000068f6 01:28f6 68f6 0000000f wait_ly_with_timeout
+00006905 01:2905 6905 0000000c print_hex4
+00006911 01:2911 6911 0000000c print_load_font
+0000691d 01:291d 691d 0000000b print_newline
+00006928 01:2928 6928 0000000a clear_vram
+00006932 01:2932 6932 0000000a is_serial_broken
+0000693c 01:293c 693c 0000000a print_hex8
+00006946 01:2946 6946 00000009 memcpy
+0000694f 01:294f 694f 00000009 memset
+00006958 01:2958 6958 00000006 is_ppu_broken
+0000695e 01:295e 695e 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+01:0000 ff80 00000006 Test-HRAM
+01:0006 ff86 00000001 Runtime-Serial

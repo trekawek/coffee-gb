@@ -1,0 +1,77 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/utils/bootrom_dumper.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:7d01 enable_cartridge_ram
+01:7d06 copy_to_cartridge_ram
+01:7d28 disable_cartridge_ram
+01:7d2c compare_data
+01:7d38 finish
+01:7d49 finish@choose_tilemap
+01:7d56 finish@setup_tilemap
+01:7d6e finish@setup_tile
+01:7d7e finish@setup_audio
+01:7d99 failure
+01:7d9f success
+01:7dbd end
+01:7dc1 end@halt_execution_0
+01:7dc3 copy_to_serial
+01:7de7 tilemap_happyface
+01:7eaf tilemap_sadface
+01:7f77 clear_vram
+01:7f81 disable_ppu_safe
+01:7f91 is_serial_broken
+01:7f9b memcpy
+01:7fa4 memset
+01:7fad reset_screen
+01:7fce serial_memcpy
+01:7fd9 serial_send_byte
+01:ff80 hram.serial_timeout
+01:7fee wait_ly_with_timeout
+01:7ffb wait_ly_with_timeout@timeout
+01:ff81 hram.is_success
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff81 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+0000000a _sizeof_is_serial_broken
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+00000021 _sizeof_reset_screen
+0000000b _sizeof_serial_memcpy
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+00000001 _sizeof_hram.is_success
+00000001 _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+00000005 _sizeof_enable_cartridge_ram
+00000022 _sizeof_copy_to_cartridge_ram
+00000004 _sizeof_disable_cartridge_ram
+0000000c _sizeof_compare_data
+00000061 _sizeof_finish
+00000006 _sizeof_failure
+0000001e _sizeof_success
+00000006 _sizeof_end
+00000024 _sizeof_copy_to_serial
+000000c8 _sizeof_tilemap_happyface
+
+[sections]
+00007fad 01:3fad 7fad 00000021 reset_screen
+00007fd9 01:3fd9 7fd9 00000014 serial_send_byte
+00007f81 01:3f81 7f81 00000010 disable_ppu_safe
+00007fee 01:3fee 7fee 0000000f wait_ly_with_timeout
+00007fce 01:3fce 7fce 0000000b serial_memcpy
+00007f77 01:3f77 7f77 0000000a clear_vram
+00007f91 01:3f91 7f91 0000000a is_serial_broken
+00007f9b 01:3f9b 7f9b 00000009 memcpy
+00007fa4 01:3fa4 7fa4 00000009 memset
+
+[ramsections]
+01:0000 ff80 00000001 Runtime-Serial
+01:0001 ff81 00000001 HRAM

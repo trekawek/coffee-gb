@@ -1,0 +1,128 @@
+package eu.rekawek.coffeegb.core.memory.cart.type;
+
+import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
+import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+
+import java.util.Arrays;
+
+public class Mbc2 implements MemoryController {
+
+    private final int[] cartridge;
+
+    private final int[] ram;
+
+    private final Battery battery;
+
+    private final int romBanks;
+
+    private int selectedRomBank = 1;
+
+    private boolean ramWriteEnabled;
+
+    private boolean ramUpdated;
+
+    public Mbc2(Rom rom, Battery battery) {
+        this.romBanks = rom.getRomBanks();
+        this.cartridge = rom.getRom();
+        this.ram = new int[0x0200];
+        Arrays.fill(ram, 0xff);
+        this.battery = battery;
+        battery.loadRam(ram);
+    }
+
+    @Override
+    public boolean accepts(int address) {
+        return (address >= 0x0000 && address < 0x8000) || (address >= 0xa000 && address < 0xc000);
+    }
+
+    @Override
+    public void setByte(int address, int value) {
+        if (address >= 0x0000 && address < 0x4000) {
+            if ((address & 0x0100) == 0) {
+                ramWriteEnabled = (value & 0b1111) == 0b1010;
+            } else {
+                selectedRomBank = value & 0b00001111;
+                if (selectedRomBank == 0) {
+                    selectedRomBank = 1;
+                }
+                if (selectedRomBank >= romBanks) {
+                    selectedRomBank %= romBanks;
+                }
+            }
+        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
+            int ramAddress = getRamAddress(address);
+            if (ramAddress < ram.length) {
+                ram[ramAddress] = value & 0x0f;
+                ramUpdated = true;
+            }
+        }
+    }
+
+    @Override
+    public int getByte(int address) {
+        if (address >= 0x0000 && address < 0x4000) {
+            return getRomByte(0, address);
+        } else if (address >= 0x4000 && address < 0x8000) {
+            return getRomByte(selectedRomBank, address - 0x4000);
+        } else if (address >= 0xa000 && address < 0xc000) {
+            if (!ramWriteEnabled) {
+                return 0xff;
+            }
+            int ramAddress = getRamAddress(address);
+            if (ramAddress < ram.length) {
+                return ram[ramAddress] | 0xf0;
+            } else {
+                return 0xff;
+            }
+        } else {
+            return 0xff;
+        }
+    }
+
+    @Override
+    public void flushRam() {
+        if (ramUpdated) {
+            battery.saveRam(ram);
+            battery.flush();
+        }
+    }
+
+    private int getRomByte(int bank, int address) {
+        int cartOffset = bank * 0x4000 + address;
+        if (cartOffset < cartridge.length) {
+            return cartridge[cartOffset];
+        } else {
+            return 0xff;
+        }
+    }
+
+    private int getRamAddress(int address) {
+        return (address - 0xa000) % ram.length;
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento() {
+        return new Mbc2Memento(battery.saveToMemento(), ram.clone(), selectedRomBank, ramWriteEnabled, ramUpdated);
+    }
+
+    @Override
+    public void restoreFromMemento(Memento<MemoryController> memento) {
+        if (!(memento instanceof Mbc2Memento mem)) {
+            throw new IllegalArgumentException("Invalid memento type");
+        }
+        if (this.ram.length != mem.ram.length) {
+            throw new IllegalArgumentException("Memento ram length doesn't match");
+        }
+        battery.restoreFromMemento(mem.batteryMemento);
+        System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
+        this.selectedRomBank = mem.selectedRomBank;
+        this.ramWriteEnabled = mem.ramWriteEnabled;
+        this.ramUpdated = mem.ramUpdated;
+    }
+
+    private record Mbc2Memento(Memento<Battery> batteryMemento, int[] ram, int selectedRomBank, boolean ramWriteEnabled,
+                               boolean ramUpdated) implements Memento<MemoryController> {
+    }
+}

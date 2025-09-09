@@ -1,0 +1,103 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/acceptance/ret_timing.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:48e9 clear_vram
+01:48a3 disable_ppu_safe
+01:490f is_ppu_broken
+01:48f3 is_serial_broken
+01:48fd memcpy
+01:4906 memset
+01:4915 print_inline_string
+01:48d2 print_load_font
+01:48de print_newline
+01:48b3 print_string
+01:48bb print_string@char
+01:48be print_string@newline
+01:47f0 quit
+01:4806 quit@callback
+01:480a quit@cb_return
+01:482b quit@report_result
+01:4830 quit@success
+01:483e quit@failure
+01:4846 quit@serial_dump
+01:484c quit@normal
+01:4866 quit@fast
+01:4878 quit@halt
+01:4879 quit@halt_execution_0
+01:487b reset_screen
+01:488f serial_send_byte
+01:ff80 hram.serial_timeout
+01:48c3 wait_ly_with_timeout
+01:48d0 wait_ly_with_timeout@timeout
+01:4000 font
+00:0150 main
+00:015c test_round1
+00:015c test_round1@wait_ly_0
+00:0162 test_round1@wait_ly_1
+00:017c test_round1@wait_ly_2
+00:0182 test_round1@wait_ly_3
+00:0193 finish_round1
+00:019d finish_round1@quit_inline_1
+00:01b4 test_round2
+00:01b4 test_round2@wait_ly_4
+00:01ba test_round2@wait_ly_5
+00:01ce test_round2@wait_ly_6
+00:01d4 test_round2@wait_ly_7
+00:01e6 finish_round2
+00:01f0 finish_round2@quit_inline_2
+00:0207 test_success
+00:020e test_success@quit_inline_3
+00:021f hiram_cb
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_1_END
+0000000c _sizeof_main
+00000037 _sizeof_test_round1
+00000021 _sizeof_finish_round1
+00000032 _sizeof_test_round2
+00000021 _sizeof_finish_round2
+00000018 _sizeof_test_success
+
+[sections]
+00004000 01:0000 4000 000007f0 Font
+000047f0 01:07f0 47f0 0000008b quit
+0000487b 01:087b 487b 00000014 reset_screen
+0000488f 01:088f 488f 00000014 serial_send_byte
+000048a3 01:08a3 48a3 00000010 disable_ppu_safe
+000048b3 01:08b3 48b3 00000010 print_string
+000048c3 01:08c3 48c3 0000000f wait_ly_with_timeout
+000048d2 01:08d2 48d2 0000000c print_load_font
+000048de 01:08de 48de 0000000b print_newline
+000048e9 01:08e9 48e9 0000000a clear_vram
+000048f3 01:08f3 48f3 0000000a is_serial_broken
+000048fd 01:08fd 48fd 00000009 memcpy
+00004906 01:0906 4906 00000009 memset
+0000490f 01:090f 490f 00000006 is_ppu_broken
+00004915 01:0915 4915 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+01:0000 ff80 00000001 Runtime-Serial

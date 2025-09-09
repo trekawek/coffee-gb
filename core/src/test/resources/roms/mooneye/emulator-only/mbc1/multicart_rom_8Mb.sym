@@ -1,0 +1,136 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/emulator-only/mbc1/multicart_rom_8Mb.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:494f clear_vram
+01:40b4 disable_ppu_safe
+01:4976 is_ppu_broken
+01:4959 is_serial_broken
+01:40fb memcpy
+01:496d memset
+01:40e3 print_hex4
+01:4963 print_hex8
+01:497c print_inline_string
+01:40ef print_load_font
+01:4944 print_newline
+01:40c4 print_string
+01:40cc print_string@char
+01:40cf print_string@newline
+01:4001 quit
+01:4017 quit@callback
+01:401b quit@cb_return
+01:403c quit@report_result
+01:4041 quit@success
+01:404f quit@failure
+01:4057 quit@serial_dump
+01:405d quit@normal
+01:4077 quit@fast
+01:4089 quit@halt
+01:408a quit@halt_execution_0
+01:408c reset_screen
+01:40a0 serial_send_byte
+01:ff80 hram.serial_timeout
+01:40d4 wait_ly_with_timeout
+01:40e1 wait_ly_with_timeout@timeout
+01:4154 font
+00:0150 main
+00:016e fail
+00:0175 fail@quit_inline_1
+00:020e wram_functions_start
+00:020e run_test_suite
+00:022b run_test_suite@quit_inline_2
+00:023c run_tests
+00:024a run_test_cases
+00:0258 test_case
+00:0275 restore_mbc1
+00:027e switch_bank
+00:028f fetch_expected_value
+00:02ae wram_functions_end
+00:c200 wram.expected_banks
+00:c000 wram._functions
+00:ff80 hram.bank_number
+00:ff81 hram.actual_value
+00:ff82 hram.expected_value
+00:ff83 hram.lower_upper
+00:ff84 hram.mode
+00:02ae expected_banks
+00:c000 RAM_USAGE_SLOT_2_BANK_0_START
+00:c37f RAM_USAGE_SLOT_2_BANK_0_END
+00:ff80 RAM_USAGE_SLOT_4_BANK_0_START
+00:ff84 RAM_USAGE_SLOT_4_BANK_0_END
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+0000000c _sizeof_print_hex4
+0000000a _sizeof_print_hex8
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00000180 _sizeof_wram.expected_banks
+00000200 _sizeof_wram._functions
+00000001 _sizeof_hram.bank_number
+00000001 _sizeof_hram.actual_value
+00000001 _sizeof_hram.expected_value
+00000001 _sizeof_hram.lower_upper
+00000001 _sizeof_hram.mode
+00000180 _sizeof_expected_banks
+0000037f _sizeof_RAM_USAGE_SLOT_2_BANK_0_START
+00003c01 _sizeof_RAM_USAGE_SLOT_2_BANK_0_END
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_1_END
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_0_START
+00000004 _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+0000001e _sizeof_main
+000000a0 _sizeof_fail
+00000000 _sizeof_wram_functions_start
+0000002e _sizeof_run_test_suite
+0000000e _sizeof_run_tests
+0000000e _sizeof_run_test_cases
+0000001d _sizeof_test_case
+00000009 _sizeof_restore_mbc1
+00000011 _sizeof_switch_bank
+0000001f _sizeof_fetch_expected_value
+
+[sections]
+00004154 01:0154 4154 000007f0 Font
+000002ae 00:02ae 02ae 00000180 expected banks
+00004001 01:0001 4001 0000008b quit
+0000408c 01:008c 408c 00000014 reset_screen
+000040a0 01:00a0 40a0 00000014 serial_send_byte
+000040b4 01:00b4 40b4 00000010 disable_ppu_safe
+000040c4 01:00c4 40c4 00000010 print_string
+000040d4 01:00d4 40d4 0000000f wait_ly_with_timeout
+000040e3 01:00e3 40e3 0000000c print_hex4
+000040ef 01:00ef 40ef 0000000c print_load_font
+00004944 01:0944 4944 0000000b print_newline
+0000494f 01:094f 494f 0000000a clear_vram
+00004959 01:0959 4959 0000000a is_serial_broken
+00004963 01:0963 4963 0000000a print_hex8
+000040fb 01:00fb 40fb 00000009 memcpy
+0000496d 01:096d 496d 00000009 memset
+00004976 01:0976 4976 00000006 is_ppu_broken
+0000497c 01:097c 497c 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+00:0000 c000 00000200 Harness-WRAM-functions
+00:0200 c200 00000180 Harness-WRAM
+00:0000 ff80 00000005 Harness-HRAM
+01:0000 ff80 00000001 Runtime-Serial

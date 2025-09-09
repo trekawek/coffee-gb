@@ -1,3 +1,3 @@
 #!/bin/bash
 
-java -jar target/coffee-gb-*-SNAPSHOT-complete.jar "$@"
+java -jar swing/target/coffee-gb-*-SNAPSHOT.jar "$@"

@@ -1,0 +1,132 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/emulator-only/mbc2/rom_2Mb.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:48f6 clear_vram
+01:48a4 disable_ppu_safe
+01:4926 is_ppu_broken
+01:4900 is_serial_broken
+01:4914 memcpy
+01:491d memset
+01:48d3 print_hex4
+01:490a print_hex8
+01:492c print_inline_string
+01:48df print_load_font
+01:48eb print_newline
+01:48b4 print_string
+01:48bc print_string@char
+01:48bf print_string@newline
+01:47f1 quit
+01:4807 quit@callback
+01:480b quit@cb_return
+01:482c quit@report_result
+01:4831 quit@success
+01:483f quit@failure
+01:4847 quit@serial_dump
+01:484d quit@normal
+01:4867 quit@fast
+01:4879 quit@halt
+01:487a quit@halt_execution_0
+01:487c reset_screen
+01:4890 serial_send_byte
+01:ff80 hram.serial_timeout
+01:48c4 wait_ly_with_timeout
+01:48d1 wait_ly_with_timeout@timeout
+01:4001 font
+00:0150 main
+00:016e fail
+00:0175 fail@quit_inline_1
+00:01fa wram_functions_start
+00:01fa run_test_suite
+00:0207 run_test_suite@quit_inline_2
+00:0218 run_tests
+00:0226 test_case
+00:0257 restore_mbc2
+00:025c switch_bank
+00:0262 fetch_expected_value
+00:026b wram_functions_end
+00:c200 wram.expected_banks
+00:c000 wram._functions
+00:ff80 hram.bank_number
+00:ff81 hram.actual_value
+00:ff82 hram.expected_value
+00:ff83 hram.lower_upper
+00:0001 expected_banks
+00:c000 RAM_USAGE_SLOT_2_BANK_0_START
+00:c20f RAM_USAGE_SLOT_2_BANK_0_END
+00:ff80 RAM_USAGE_SLOT_4_BANK_0_START
+00:ff83 RAM_USAGE_SLOT_4_BANK_0_END
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+0000000c _sizeof_print_hex4
+0000000a _sizeof_print_hex8
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00000010 _sizeof_wram.expected_banks
+00000200 _sizeof_wram._functions
+00000001 _sizeof_hram.bank_number
+00000001 _sizeof_hram.actual_value
+00000001 _sizeof_hram.expected_value
+00000001 _sizeof_hram.lower_upper
+00000010 _sizeof_expected_banks
+0000020f _sizeof_RAM_USAGE_SLOT_2_BANK_0_START
+00003d71 _sizeof_RAM_USAGE_SLOT_2_BANK_0_END
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_1_END
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_0_START
+00000003 _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+0000001e _sizeof_main
+0000008c _sizeof_fail
+00000000 _sizeof_wram_functions_start
+0000001e _sizeof_run_test_suite
+0000000e _sizeof_run_tests
+00000031 _sizeof_test_case
+00000005 _sizeof_restore_mbc2
+00000006 _sizeof_switch_bank
+00000009 _sizeof_fetch_expected_value
+
+[sections]
+00004001 01:0001 4001 000007f0 Font
+000047f1 01:07f1 47f1 0000008b quit
+0000487c 01:087c 487c 00000014 reset_screen
+00004890 01:0890 4890 00000014 serial_send_byte
+000048a4 01:08a4 48a4 00000010 disable_ppu_safe
+000048b4 01:08b4 48b4 00000010 print_string
+00000001 00:0001 0001 00000010 expected banks
+000048c4 01:08c4 48c4 0000000f wait_ly_with_timeout
+000048d3 01:08d3 48d3 0000000c print_hex4
+000048df 01:08df 48df 0000000c print_load_font
+000048eb 01:08eb 48eb 0000000b print_newline
+000048f6 01:08f6 48f6 0000000a clear_vram
+00004900 01:0900 4900 0000000a is_serial_broken
+0000490a 01:090a 490a 0000000a print_hex8
+00004914 01:0914 4914 00000009 memcpy
+0000491d 01:091d 491d 00000009 memset
+00004926 01:0926 4926 00000006 is_ppu_broken
+0000492c 01:092c 492c 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+00:0000 c000 00000200 Harness-WRAM-functions
+00:0200 c200 00000010 Harness-WRAM
+00:0000 ff80 00000004 Harness-HRAM
+01:0000 ff80 00000001 Runtime-Serial

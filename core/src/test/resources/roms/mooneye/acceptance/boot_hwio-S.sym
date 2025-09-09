@@ -1,0 +1,103 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/acceptance/boot_hwio-S.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:48f5 clear_vram
+01:48a3 disable_ppu_safe
+01:4925 is_ppu_broken
+01:48ff is_serial_broken
+01:4913 memcpy
+01:491c memset
+01:48d2 print_hex4
+01:4909 print_hex8
+01:492b print_inline_string
+01:48de print_load_font
+01:48ea print_newline
+01:48b3 print_string
+01:48bb print_string@char
+01:48be print_string@newline
+01:47f0 quit
+01:4806 quit@callback
+01:480a quit@cb_return
+01:482b quit@report_result
+01:4830 quit@success
+01:483e quit@failure
+01:4846 quit@serial_dump
+01:484c quit@normal
+01:4866 quit@fast
+01:4878 quit@halt
+01:4879 quit@halt_execution_0
+01:487b reset_screen
+01:488f serial_send_byte
+01:ff80 hram.serial_timeout
+01:48c3 wait_ly_with_timeout
+01:48d0 wait_ly_with_timeout@timeout
+01:4000 font
+00:0150 main
+00:01d9 main@quit_inline_1
+00:01ea mismatch
+00:0200 mismatch@quit_inline_2
+00:024f hwio_data
+00:ff80 mismatch_addr
+00:ff82 mismatch_data
+00:ff83 mismatch_mem
+00:ff80 RAM_USAGE_SLOT_4_BANK_0_START
+00:ff83 RAM_USAGE_SLOT_4_BANK_0_END
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+0000000c _sizeof_print_hex4
+0000000a _sizeof_print_hex8
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00000002 _sizeof_mismatch_addr
+00000001 _sizeof_mismatch_data
+00000001 _sizeof_mismatch_mem
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_1_END
+00000000 _sizeof_RAM_USAGE_SLOT_4_BANK_0_START
+00000003 _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+0000009a _sizeof_main
+00000065 _sizeof_mismatch
+
+[sections]
+00004000 01:0000 4000 000007f0 Font
+000047f0 01:07f0 47f0 0000008b quit
+0000487b 01:087b 487b 00000014 reset_screen
+0000488f 01:088f 488f 00000014 serial_send_byte
+000048a3 01:08a3 48a3 00000010 disable_ppu_safe
+000048b3 01:08b3 48b3 00000010 print_string
+000048c3 01:08c3 48c3 0000000f wait_ly_with_timeout
+000048d2 01:08d2 48d2 0000000c print_hex4
+000048de 01:08de 48de 0000000c print_load_font
+000048ea 01:08ea 48ea 0000000b print_newline
+000048f5 01:08f5 48f5 0000000a clear_vram
+000048ff 01:08ff 48ff 0000000a is_serial_broken
+00004909 01:0909 4909 0000000a print_hex8
+00004913 01:0913 4913 00000009 memcpy
+0000491c 01:091c 491c 00000009 memset
+00004925 01:0925 4925 00000006 is_ppu_broken
+0000492b 01:092b 492b 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+00:0000 ff80 00000004 Test-State
+01:0000 ff80 00000001 Runtime-Serial

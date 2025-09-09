@@ -1,0 +1,21 @@
+package eu.rekawek.coffeegb.core.integration.dmgacid2;
+
+import eu.rekawek.coffeegb.core.GameboyType;
+import org.junit.Test;
+
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.testRomWithImage;
+
+public class DmgAcid2RomTest {
+
+    @Test
+    public void testDmgAcid2() throws Exception {
+        testRomWithImage(getPath("dmg-acid2.gb"), GameboyType.DMG);
+    }
+
+    private static Path getPath(String name) {
+        return Paths.get("src/test/resources/roms/dmg-acid2", name);
+    }
+}

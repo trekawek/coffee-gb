@@ -1,0 +1,51 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/manual-only/sprite_priority.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:482f clear_oam
+01:4839 clear_vram
+01:4804 disable_ppu_safe
+01:4843 memcpy
+01:484c memset
+01:4823 print_load_font
+01:47f0 reset_screen
+01:4814 wait_ly_with_timeout
+01:4821 wait_ly_with_timeout@timeout
+01:4000 font
+00:0150 main
+00:017f main@wait_ly_0
+00:0185 main@wait_ly_1
+00:018b main@wait_ly_2
+00:0191 main@wait_ly_3
+00:0198 main@halt_execution_1
+00:019a data
+00:022e data_end
+
+[definitions]
+0000000a _sizeof_clear_oam
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+0000000c _sizeof_print_load_font
+00000014 _sizeof_reset_screen
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+0000004a _sizeof_main
+00000094 _sizeof_data
+
+[sections]
+00004000 01:0000 4000 000007f0 Font
+000047f0 01:07f0 47f0 00000014 reset_screen
+00004804 01:0804 4804 00000010 disable_ppu_safe
+00004814 01:0814 4814 0000000f wait_ly_with_timeout
+00004823 01:0823 4823 0000000c print_load_font
+0000482f 01:082f 482f 0000000a clear_oam
+00004839 01:0839 4839 0000000a clear_vram
+00004843 01:0843 4843 00000009 memcpy
+0000484c 01:084c 484c 00000009 memset
+00000100 00:0100 0100 00000004 Header

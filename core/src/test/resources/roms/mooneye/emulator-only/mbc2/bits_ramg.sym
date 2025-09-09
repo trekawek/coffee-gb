@@ -1,0 +1,130 @@
+; this file was created with wlalink by ville helin <ville.helin@iki.fi>.
+; wla symbolic information for "/home/runner/work/mooneye-test-suite/mooneye-test-suite/build/emulator-only/mbc2/bits_ramg.gb".
+
+[information]
+version 3
+wlasymbol true
+
+[labels]
+01:4a03 clear_vram
+01:47f0 disable_ppu_safe
+01:4a33 is_ppu_broken
+01:4a0d is_serial_broken
+01:49d2 memcmp
+01:4a21 memcpy
+01:4a2a memset
+01:49e0 print_hex4
+01:4a17 print_hex8
+01:4a39 print_inline_string
+01:49ec print_load_font
+01:49f8 print_newline
+01:49b3 print_string
+01:49bb print_string@char
+01:49be print_string@newline
+01:4900 quit
+01:4916 quit@callback
+01:491a quit@cb_return
+01:493b quit@report_result
+01:4940 quit@success
+01:494e quit@failure
+01:4956 quit@serial_dump
+01:495c quit@normal
+01:4976 quit@fast
+01:4988 quit@halt
+01:4989 quit@halt_execution_0
+01:498b reset_screen
+01:499f serial_send_byte
+01:ffa3 hram.serial_timeout
+01:49c3 wait_ly_with_timeout
+01:49d0 wait_ly_with_timeout@timeout
+01:4000 font
+00:0150 main
+00:0170 test_round1
+00:019d test_round2
+00:01bb test_round2@expect_enabled
+00:01c0 test_round2@expect_disabled
+00:01d7 test_round2@quit_inline_1
+00:01e8 test_pattern
+00:01f8 all_ff
+00:0208 compare_ram_data
+00:0211 fail_round1_disable
+00:0218 fail_round1_disable@quit_inline_2
+00:024e fail_round1_enable
+00:0255 fail_round1_enable@quit_inline_3
+00:028a fail_round1_print_test_address
+00:0295 fail_round2_disable
+00:029c fail_round2_disable@quit_inline_4
+00:02ba fail_round2_expect
+00:02c1 fail_round2_expect@quit_inline_5
+01:4800 ramg_expectations
+01:ff80 hram.test_address
+01:ff80 hram.test_address_l
+01:ff81 hram.test_address_h
+01:ff82 hram.ramg
+01:ff83 hram.memcmp
+01:ff80 RAM_USAGE_SLOT_4_BANK_1_START
+01:ffa3 RAM_USAGE_SLOT_4_BANK_1_END
+
+[definitions]
+0000000a _sizeof_clear_vram
+00000010 _sizeof_disable_ppu_safe
+00000006 _sizeof_is_ppu_broken
+0000000a _sizeof_is_serial_broken
+0000000e _sizeof_memcmp
+00000009 _sizeof_memcpy
+00000009 _sizeof_memset
+0000000c _sizeof_print_hex4
+0000000a _sizeof_print_hex8
+00000006 _sizeof_print_inline_string
+0000000c _sizeof_print_load_font
+0000000b _sizeof_print_newline
+00000010 _sizeof_print_string
+0000008b _sizeof_quit
+00000014 _sizeof_reset_screen
+00000014 _sizeof_serial_send_byte
+00000001 _sizeof_hram.serial_timeout
+0000000f _sizeof_wait_ly_with_timeout
+000007f0 _sizeof_font
+00000100 _sizeof_ramg_expectations
+00000002 _sizeof_hram.test_address
+00000001 _sizeof_hram.test_address_l
+00000001 _sizeof_hram.test_address_h
+00000001 _sizeof_hram.ramg
+00000020 _sizeof_hram.memcmp
+00000023 _sizeof_RAM_USAGE_SLOT_4_BANK_1_START
+00000020 _sizeof_main
+0000002d _sizeof_test_round1
+0000004b _sizeof_test_round2
+00000010 _sizeof_test_pattern
+00000010 _sizeof_all_ff
+00000009 _sizeof_compare_ram_data
+0000003d _sizeof_fail_round1_disable
+0000003c _sizeof_fail_round1_enable
+0000000b _sizeof_fail_round1_print_test_address
+00000025 _sizeof_fail_round2_disable
+
+[sections]
+00004000 01:0000 4000 000007f0 Font
+00004800 01:0800 4800 00000100 ramg_expectations
+00004900 01:0900 4900 0000008b quit
+0000498b 01:098b 498b 00000014 reset_screen
+0000499f 01:099f 499f 00000014 serial_send_byte
+000047f0 01:07f0 47f0 00000010 disable_ppu_safe
+000049b3 01:09b3 49b3 00000010 print_string
+000049c3 01:09c3 49c3 0000000f wait_ly_with_timeout
+000049d2 01:09d2 49d2 0000000e memcmp
+000049e0 01:09e0 49e0 0000000c print_hex4
+000049ec 01:09ec 49ec 0000000c print_load_font
+000049f8 01:09f8 49f8 0000000b print_newline
+00004a03 01:0a03 4a03 0000000a clear_vram
+00004a0d 01:0a0d 4a0d 0000000a is_serial_broken
+00004a17 01:0a17 4a17 0000000a print_hex8
+00004a21 01:0a21 4a21 00000009 memcpy
+00004a2a 01:0a2a 4a2a 00000009 memset
+00004a33 01:0a33 4a33 00000006 is_ppu_broken
+00004a39 01:0a39 4a39 00000006 print_inline_string
+00000100 00:0100 0100 00000004 Header
+
+[ramsections]
+01:0000 ff80 00000023 Test-HRAM
+01:0023 ffa3 00000001 Runtime-Serial
