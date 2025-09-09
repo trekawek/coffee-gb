@@ -18,12 +18,12 @@ import eu.rekawek.coffeegb.swing.events.register
 import eu.rekawek.coffeegb.swing.io.network.Connection
 import eu.rekawek.coffeegb.swing.io.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.swing.properties.EmulatorProperties
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.lang.Thread.sleep
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class LinkedController(
     parentEventBus: EventBus,
@@ -69,6 +69,8 @@ class LinkedController(
     }
 
     eventBus.register<PeerLoadedGameEvent> {
+      stop()
+
       val peerConfig =
           createGameboyConfig(properties, Rom(it.rom))
               .setGameboyType(it.gameboyType)
@@ -77,7 +79,6 @@ class LinkedController(
       start(null, peerConfig)
     }
 
-    eventBus.register<Controller.StartEmulationEvent> { start(null, null) }
     eventBus.register<Controller.PauseEmulationEvent> {
       pause()
       eventBus.post(Connection.RequestPauseEvent())
@@ -168,21 +169,14 @@ class LinkedController(
 
           if (stateHistory!!.merge()) {
             val head = stateHistory!!.getHead()
-            mainSession.gameboy.restoreFromMemento(head.mainMemento)
-            peerSession.gameboy.restoreFromMemento(head.secondaryMemento)
-            mainSession.serialEndpoint.restoreFromMemento(head.mainLinkMemento)
-            peerSession.serialEndpoint.restoreFromMemento(head.secondaryLinkMemento)
+            mainSession.restoreFromMemento(head.mainMemento)
+            peerSession.restoreFromMemento(head.peerMemento)
             frame = head.frame
             LOG.atDebug().log("State merged to {}", frame)
           }
 
           stateHistory!!.addState(
-              frame,
-              effectiveInput,
-              mainSession.gameboy.saveToMemento(),
-              peerSession.gameboy.saveToMemento(),
-              mainSession.serialEndpoint.saveToMemento(),
-              peerSession.serialEndpoint.saveToMemento())
+              frame, effectiveInput, mainSession.saveToMemento(), peerSession.saveToMemento())
 
           val now = TimeSource.Monotonic.markNow()
           if (!effectiveInput.isEmpty() || now - lastSync > 5.seconds) {
@@ -244,6 +238,9 @@ class LinkedController(
 
     mainSession?.close()
     peerSession?.close()
+
+    mainSession = null
+    peerSession = null
   }
 
   @Synchronized

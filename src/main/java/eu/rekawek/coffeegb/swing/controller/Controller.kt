@@ -16,8 +16,6 @@ interface Controller : AutoCloseable {
 
   data class LoadRomEvent(val rom: File) : Event
 
-  class StartEmulationEvent : Event
-
   class PauseEmulationEvent : Event
 
   class ResumeEmulationEvent : Event

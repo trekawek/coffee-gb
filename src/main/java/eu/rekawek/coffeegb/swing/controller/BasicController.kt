@@ -30,7 +30,6 @@ class BasicController(
       start()
     }
 
-    eventBus.register<Controller.StartEmulationEvent> { start() }
     eventBus.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventBus.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventBus.register<Controller.PauseEmulationEvent> { pause() }

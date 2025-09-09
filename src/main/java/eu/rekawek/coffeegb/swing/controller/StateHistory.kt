@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.swing.controller
 
 import com.google.common.annotations.VisibleForTesting
-import eu.rekawek.coffeegb.Gameboy
 import eu.rekawek.coffeegb.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.events.Event
@@ -11,7 +10,6 @@ import eu.rekawek.coffeegb.joypad.Button
 import eu.rekawek.coffeegb.joypad.Joypad
 import eu.rekawek.coffeegb.memento.Memento
 import eu.rekawek.coffeegb.serial.Peer2PeerSerialEndpoint
-import eu.rekawek.coffeegb.serial.SerialEndpoint
 import eu.rekawek.coffeegb.swing.events.register
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -34,14 +32,10 @@ class StateHistory(
   fun addState(
       frame: Long,
       mainInput: Input,
-      mainMemento: Memento<Gameboy>,
-      secondaryMemento: Memento<Gameboy>,
-      mainLinkMemento: Memento<SerialEndpoint>,
-      secondaryLinkMemento: Memento<SerialEndpoint>,
+      mainMemento: Memento<Session>,
+      peerMemento: Memento<Session>,
   ) {
-    states.add(
-        State(
-            frame, mainInput, mainMemento, secondaryMemento, mainLinkMemento, secondaryLinkMemento))
+    states.add(State(frame, mainInput, mainMemento, peerMemento))
     LOG.atDebug().log("Adding state on frame {}; state size {}", frame, states.size)
     while (states.size > 60 * 5) {
       states.removeFirst()
@@ -76,8 +70,6 @@ class StateHistory(
         states.firstOrNull { it.frame == baseFrame }
             ?: throw IllegalStateException("No frame $baseFrame")
 
-    val mainGameboy = mainConfig.build()
-    val secondaryGameboy = peerConfig.build()
     val mainLink = Peer2PeerSerialEndpoint()
     val secondaryLink = Peer2PeerSerialEndpoint()
     mainLink.init(secondaryLink)
@@ -91,27 +83,17 @@ class StateHistory(
       debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, 1))
     }
 
-    mainGameboy.init(mainEventBus, mainLink, null)
-    secondaryGameboy.init(secondaryEventBus, secondaryLink, null)
-
-    mainGameboy.restoreFromMemento(baseState.mainMemento)
-    secondaryGameboy.restoreFromMemento(baseState.secondaryMemento)
-    mainLink.restoreFromMemento(baseState.mainLinkMemento)
-    secondaryLink.restoreFromMemento(baseState.secondaryLinkMemento)
+    val mainSession = Session(mainConfig, mainEventBus, null, mainLink)
+    val peerSession = Session(peerConfig, secondaryEventBus, null, secondaryLink)
+    mainSession.restoreFromMemento(baseState.mainMemento)
+    peerSession.restoreFromMemento(baseState.peerMemento)
 
     states.clear()
     patches.clear()
 
     for (i in (baseFrame..toFrame + 1)) {
       val mainInput = mainInputs[i] ?: Input(emptyList(), emptyList())
-      states.add(
-          State(
-              i,
-              mainInput,
-              mainGameboy.saveToMemento(),
-              secondaryGameboy.saveToMemento(),
-              mainLink.saveToMemento(),
-              secondaryLink.saveToMemento()))
+      states.add(State(i, mainInput, mainSession.saveToMemento(), peerSession.saveToMemento()))
 
       if (i <= toFrame) {
         mainInput.send(mainEventBus)
@@ -122,16 +104,14 @@ class StateHistory(
         }
 
         repeat(TICKS_PER_FRAME) {
-          mainGameboy.tick()
-          secondaryGameboy.tick()
+          mainSession.gameboy.tick()
+          peerSession.gameboy.tick()
         }
       }
     }
 
-    mainGameboy.close()
-    secondaryGameboy.close()
-    mainEventBus.close()
-    secondaryEventBus.close()
+    mainSession.close()
+    peerSession.close()
 
     LOG.atDebug().log("Rebase from $baseFrame to $toFrame completed.")
     return true
@@ -142,10 +122,8 @@ class StateHistory(
   data class State(
       val frame: Long,
       val mainInput: Input,
-      val mainMemento: Memento<Gameboy>,
-      val secondaryMemento: Memento<Gameboy>,
-      val mainLinkMemento: Memento<SerialEndpoint>,
-      val secondaryLinkMemento: Memento<SerialEndpoint>,
+      val mainMemento: Memento<Session>,
+      val peerMemento: Memento<Session>,
   )
 
   private data class Patch(
