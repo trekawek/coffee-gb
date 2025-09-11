@@ -1,11 +1,12 @@
-package eu.rekawek.coffeegb.core.testing
+package eu.rekawek.coffeegb.controller.link
 
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
-import eu.rekawek.coffeegb.core.events.EventBus
 import kotlin.random.Random
+import kotlin.ranges.random
 
 class RandomJoypad(private val eventBus: EventBus, seed: Int? = null) {
 
