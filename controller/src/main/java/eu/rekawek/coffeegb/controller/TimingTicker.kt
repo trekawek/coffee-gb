@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.controller.controller
+package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.core.Gameboy
 

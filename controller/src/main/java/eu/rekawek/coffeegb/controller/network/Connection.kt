@@ -1,15 +1,14 @@
 package eu.rekawek.coffeegb.controller.network
 
+import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.controller.Input
-import eu.rekawek.coffeegb.controller.controller.LinkedController
-import eu.rekawek.coffeegb.controller.controller.LinkedController.LocalButtonStateEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.WaitingForPeerEvent
+import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.link.LinkedController
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.InputStream
@@ -28,7 +27,7 @@ class Connection(
   @Volatile private var doStop = false
 
   init {
-    eventBus.register<WaitingForPeerEvent> {
+    eventBus.register<Controller.WaitingForPeerEvent> {
       outputStream.write(0x01)
 
       val buf = ByteBuffer.allocate(10)
@@ -44,7 +43,7 @@ class Connection(
         outputStream.write(it.batteryFile)
       }
     }
-    eventBus.register<LocalButtonStateEvent> {
+    eventBus.register<LinkedController.LocalButtonStateEvent> {
       outputStream.write(0x03)
       val buf = ByteBuffer.allocate(10)
       buf.putLong(it.frame)

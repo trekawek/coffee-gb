@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.swing.io;
 
+import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.controller.properties.DisplayProperties;
-import eu.rekawek.coffeegb.controller.controller.Controller;
 
 import javax.swing.*;
 import java.awt.*;

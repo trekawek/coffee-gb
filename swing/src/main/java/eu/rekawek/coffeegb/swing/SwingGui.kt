@@ -1,16 +1,16 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
+import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
+import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
+import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
-import eu.rekawek.coffeegb.controller.controller.Controller.EmulationStartedEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.EmulationStoppedEvent
-import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
-import eu.rekawek.coffeegb.controller.controller.Controller
-import eu.rekawek.coffeegb.controller.controller.Controller.StopEmulationEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File

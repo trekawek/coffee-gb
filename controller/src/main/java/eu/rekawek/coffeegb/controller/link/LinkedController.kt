@@ -1,21 +1,31 @@
-package eu.rekawek.coffeegb.controller.controller
+package eu.rekawek.coffeegb.controller.link
 
 import com.google.common.annotations.VisibleForTesting
+import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.TimingTicker
+import eu.rekawek.coffeegb.controller.events.funnel
+import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.network.Connection
+import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
+import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
-import eu.rekawek.coffeegb.controller.controller.Controller.Companion.createGameboyConfig
-import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.network.Connection
-import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay
+import eu.rekawek.coffeegb.core.sound.Sound
 import java.lang.Thread.sleep
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
@@ -59,10 +69,15 @@ class LinkedController(
           } else {
             null
           }
-      val mainConfig = createGameboyConfig(properties, Rom(it.rom))
+      val mainConfig = Controller.createGameboyConfig(properties, Rom(it.rom))
       eventBus.post(
           Controller.WaitingForPeerEvent(
-              romBuffer, batteryBuffer, mainConfig.gameboyType, mainConfig.bootstrapMode))
+              romBuffer,
+              batteryBuffer,
+              mainConfig.gameboyType,
+              mainConfig.bootstrapMode,
+          )
+      )
       start(mainConfig, null)
     }
 
@@ -70,7 +85,7 @@ class LinkedController(
       stop()
 
       val peerConfig =
-          createGameboyConfig(properties, Rom(it.rom))
+          Controller.Companion.createGameboyConfig(properties, Rom(it.rom))
               .setGameboyType(it.gameboyType)
               .setBootstrapMode(it.bootstrapMode)
               .setBatteryData(it.battery)
@@ -108,20 +123,34 @@ class LinkedController(
     val peerSerialEndpoint = Peer2PeerSerialEndpoint()
     peerSerialEndpoint.init(mainSerialEndpoint)
 
-    val mainSession = Session(mainConfig, eventBus.fork("main"), console, mainSerialEndpoint)
-    val peerSession = Session(peerConfig, EventBusImpl(null, null, false), null, peerSerialEndpoint)
+    val mainEventBus = EventBusImpl(null, null, false)
+    funnel(
+        mainEventBus,
+        eventBus,
+        setOf(
+            Display.DmgFrameReadyEvent::class,
+            Display.GbcFrameReadyEvent::class,
+            SgbDisplay.SgbFrameReadyEvent::class,
+            Sound.SoundSampleEvent::class,
+            Joypad.JoypadPressEvent::class,
+        ),
+    )
+    val peerEventBus = EventBusImpl(null, null, false)
+
+    val mainSession = Session(mainConfig, mainEventBus, console, mainSerialEndpoint)
+    val peerSession = Session(peerConfig, peerEventBus, null, peerSerialEndpoint)
 
     val mainButtonMonitor = Object()
     val mainPressedButtons = mutableSetOf<Button>()
     val mainReleasedButtons = mutableSetOf<Button>()
     var lastInput = Input(emptyList(), emptyList())
-    mainSession.eventBus.register<eu.rekawek.coffeegb.core.joypad.ButtonPressEvent> {
+    mainSession.eventBus.register<ButtonPressEvent> {
       synchronized(mainButtonMonitor) {
         mainPressedButtons.add(it.button)
         mainReleasedButtons.remove(it.button)
       }
     }
-    mainSession.eventBus.register<eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent> {
+    mainSession.eventBus.register<ButtonReleaseEvent> {
       synchronized(mainButtonMonitor) {
         mainPressedButtons.remove(it.button)
         mainReleasedButtons.add(it.button)
@@ -149,7 +178,9 @@ class LinkedController(
               synchronized(mainButtonMonitor) {
                 val input =
                     Input(
-                        mainPressedButtons.toList().sorted(), mainReleasedButtons.toList().sorted())
+                        mainPressedButtons.toList().sorted(),
+                        mainReleasedButtons.toList().sorted(),
+                    )
                 mainPressedButtons.clear()
                 mainReleasedButtons.clear()
                 input
@@ -174,7 +205,11 @@ class LinkedController(
           }
 
           stateHistory!!.addState(
-              frame, effectiveInput, mainSession.saveToMemento(), peerSession.saveToMemento())
+              frame,
+              effectiveInput,
+              mainSession.saveToMemento(),
+              peerSession.saveToMemento(),
+          )
 
           val now = TimeSource.Monotonic.markNow()
           if (!effectiveInput.isEmpty() || now - lastSync > 5.seconds) {

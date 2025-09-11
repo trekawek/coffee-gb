@@ -1,25 +1,17 @@
 package eu.rekawek.coffeegb.swing
 
-import eu.rekawek.coffeegb.core.GameboyType
-import eu.rekawek.coffeegb.core.events.EventBus
-import eu.rekawek.coffeegb.core.sgb.SgbDisplay
-import eu.rekawek.coffeegb.core.sound.Sound
-import eu.rekawek.coffeegb.controller.controller.Controller
-import eu.rekawek.coffeegb.controller.controller.Controller.EmulationStartedEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.EmulationStoppedEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.LoadRomEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.PauseEmulationEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.ResetEmulationEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.RestoreSnapshotEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.ResumeEmulationEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.SaveSnapshotEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.SessionPauseSupportEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.SessionSnapshotSupportEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.StopEmulationEvent
-import eu.rekawek.coffeegb.controller.controller.SnapshotSupport
+import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
+import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
+import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
+import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
+import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
+import eu.rekawek.coffeegb.controller.Controller.SaveSnapshotEvent
+import eu.rekawek.coffeegb.controller.Controller.SessionSnapshotSupportEvent
+import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
+import eu.rekawek.coffeegb.controller.SnapshotSupport
 import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ClientConnectedToServerEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerGotConnectionEvent
@@ -33,6 +25,12 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEve
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.CgbGamesType
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGamesType
+import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay
+import eu.rekawek.coffeegb.core.sound.Sound
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.JCheckBoxMenuItem
@@ -58,7 +56,7 @@ class SwingMenu(
 
   init {
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
-    eventBus.register<SessionPauseSupportEvent> { pauseSupport = it.enabled }
+    eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
   }
 
   fun addMenu() {
@@ -141,7 +139,7 @@ class SwingMenu(
 
     loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
     gameMenu.add(loadSnapshot)
-    loadSnapshot.addActionListener { eventBus.post(RestoreSnapshotEvent(stateSlot)) }
+    loadSnapshot.addActionListener { eventBus.post(Controller.RestoreSnapshotEvent(stateSlot)) }
     loadSnapshot.isEnabled = false
 
     eventBus.register<EmulationStartedEvent> {
@@ -335,7 +333,11 @@ class SwingMenu(
     } catch (e: Exception) {
       e.printStackTrace()
       JOptionPane.showMessageDialog(
-          window, "Can't open ${rom.name}: ${e.message}", "Error", JOptionPane.ERROR_MESSAGE)
+          window,
+          "Can't open ${rom.name}: ${e.message}",
+          "Error",
+          JOptionPane.ERROR_MESSAGE,
+      )
     }
   }
 

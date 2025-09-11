@@ -1,12 +1,9 @@
-package eu.rekawek.coffeegb.controller.controller
+package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.memory.cart.Rom
-import eu.rekawek.coffeegb.controller.controller.Controller.Companion.getGameboyType
-import eu.rekawek.coffeegb.controller.controller.Controller.EmulationStartedEvent
-import eu.rekawek.coffeegb.controller.controller.Controller.EmulationStoppedEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 
@@ -38,7 +35,7 @@ class BasicController(
     eventBus.register<Controller.StopEmulationEvent> { stop() }
     eventBus.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
-        val newType = getGameboyType(properties.system, config.rom)
+        val newType = Controller.Companion.getGameboyType(properties.system, config.rom)
         if (newType != config.gameboyType) {
           eventBus.post(Controller.LoadRomEvent(config.rom.file))
         }
@@ -58,7 +55,7 @@ class BasicController(
     session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))
     session.eventBus.post(Controller.SessionPauseSupportEvent(true))
     session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
-    session.eventBus.post(EmulationStartedEvent(session.config.rom.title))
+    session.eventBus.post(Controller.EmulationStartedEvent(session.config.rom.title))
 
     session.gameboy.registerTickListener(TimingTicker())
     Thread(session.gameboy).start()
@@ -67,7 +64,7 @@ class BasicController(
   @Synchronized
   fun stop() {
     val session = session ?: return
-    session.eventBus.post(EmulationStoppedEvent())
+    session.eventBus.post(Controller.EmulationStoppedEvent())
     session.close()
     this.session = null
   }

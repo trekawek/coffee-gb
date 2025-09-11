@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.controller.BasicController
+import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
-import eu.rekawek.coffeegb.controller.controller.BasicController
-import eu.rekawek.coffeegb.controller.controller.Controller
-import eu.rekawek.coffeegb.controller.controller.LinkedController
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingController
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
