@@ -4,11 +4,11 @@
     <parent>
         <artifactId>coffee-gb</artifactId>
         <groupId>eu.rekawek.coffeegb</groupId>
-        <version>1.5.7-SNAPSHOT</version>
+        <version>1.5.7</version>
     </parent>
 
     <artifactId>controller</artifactId>
-    <version>1.5.7-SNAPSHOT</version>
+    <version>1.5.7</version>
 
     <name>controller</name>
 
@@ -25,7 +25,7 @@
         <dependency>
             <groupId>eu.rekawek.coffeegb</groupId>
             <artifactId>core</artifactId>
-            <version>1.5.7-SNAPSHOT</version>
+            <version>1.5.7</version>
         </dependency>
     </dependencies>
 </project>

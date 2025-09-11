@@ -4,11 +4,11 @@
     <parent>
         <artifactId>coffee-gb</artifactId>
         <groupId>eu.rekawek.coffeegb</groupId>
-        <version>1.5.7-SNAPSHOT</version>
+        <version>1.5.7</version>
     </parent>
 
     <artifactId>core</artifactId>
-    <version>1.5.7-SNAPSHOT</version>
+    <version>1.5.7</version>
 
     <name>core</name>
 
