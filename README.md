@@ -10,7 +10,7 @@ The emulator can be build with [Maven](https://maven.apache.org/):
 
     mvn clean package
 
-The coffee-gb-*-complete.jar executable file will be available in the `./target` directory.
+The coffee-gb-*.jar executable file will be available in the `./swing/target` directory.
 
 ## Usage
 
@@ -32,12 +32,20 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 * Support for zipped ROMs
 * ROM-based compatibility tests run from Maven
 
+## Modules
+
+Emulator is split into modules:
+
+* core - the core emulator. This module can be easily referenced from other projects.
+* swing - the desktop UI with executable.
+* controller - the middleware between the UI and the core. It also contains network support.
+
 ## Running Blargg's tests
 
 The [Blargg's test ROMs](http://gbdev.gg8.se/wiki/articles/Test_ROMs) are used for testing the compatibility. Tests can be launched from Maven using appropriate profile:
 
-    mvn clean test -Ptest-blargg
-    mvn clean test -Ptest-blargg-individual # for running "single" tests providing more diagnostic info
+    mvn clean test -f core/pom.xml -Ptest-blargg
+    mvn clean test -f core/pom.xml -Ptest-blargg-individual # for running "single" tests providing more diagnostic info
 
 They are also part of the [Travis-based CI](https://travis-ci.org/trekawek/coffee-gb).
 
@@ -66,7 +74,7 @@ Coffee GB passes all the tests:
 
 The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a great set of test ROMs. They can be used to test the Coffee GB as well. Use -Ptest-mooneye profile:
 
-    mvn clean test -Ptest-mooneye
+    mvn clean test -f core/pom.xml -Ptest-mooneye
 
 ## Screenshots
 
