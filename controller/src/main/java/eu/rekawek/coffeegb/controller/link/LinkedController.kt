@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.link
 
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Controller.Companion.createGameboyConfig
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.TimingTicker
@@ -69,7 +70,7 @@ class LinkedController(
           } else {
             null
           }
-      val mainConfig = Controller.createGameboyConfig(properties, Rom(it.rom))
+      val mainConfig = createGameboyConfig(properties, Rom(it.rom))
       eventBus.post(
           Controller.WaitingForPeerEvent(
               romBuffer,
@@ -85,7 +86,7 @@ class LinkedController(
       stop()
 
       val peerConfig =
-          Controller.Companion.createGameboyConfig(properties, Rom(it.rom))
+          createGameboyConfig(properties, Rom(it.rom))
               .setGameboyType(it.gameboyType)
               .setBootstrapMode(it.bootstrapMode)
               .setBatteryData(it.battery)
@@ -126,7 +127,7 @@ class LinkedController(
     val mainEventBus = EventBusImpl(null, null, false)
     funnel(
         mainEventBus,
-        eventBus,
+        eventBus.fork("main"),
         setOf(
             Display.DmgFrameReadyEvent::class,
             Display.GbcFrameReadyEvent::class,
@@ -144,19 +145,19 @@ class LinkedController(
     val mainPressedButtons = mutableSetOf<Button>()
     val mainReleasedButtons = mutableSetOf<Button>()
     var lastInput = Input(emptyList(), emptyList())
-    mainSession.eventBus.register<ButtonPressEvent> {
+    eventBus.register<ButtonPressEvent> {
       synchronized(mainButtonMonitor) {
         mainPressedButtons.add(it.button)
         mainReleasedButtons.remove(it.button)
       }
     }
-    mainSession.eventBus.register<ButtonReleaseEvent> {
+    eventBus.register<ButtonReleaseEvent> {
       synchronized(mainButtonMonitor) {
         mainPressedButtons.remove(it.button)
         mainReleasedButtons.add(it.button)
       }
     }
-    mainSession.eventBus.register<RemoteButtonStateEvent> {
+    eventBus.register<RemoteButtonStateEvent> {
       stateHistory!!.addSecondaryInput(it.frame, it.input)
     }
 
