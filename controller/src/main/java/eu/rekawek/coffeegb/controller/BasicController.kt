@@ -35,7 +35,7 @@ class BasicController(
     eventBus.register<Controller.StopEmulationEvent> { stop() }
     eventBus.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
-        val newType = Controller.Companion.getGameboyType(properties.system, config.rom)
+        val newType = Controller.getGameboyType(properties.system, config.rom)
         if (newType != config.gameboyType) {
           eventBus.post(Controller.LoadRomEvent(config.rom.file))
         }

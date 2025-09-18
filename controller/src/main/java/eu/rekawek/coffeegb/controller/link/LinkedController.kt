@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.Controller.Companion.createGameboyConfig
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
+import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.TimingTicker
@@ -108,6 +109,15 @@ class LinkedController(
       eventBus.post(Controller.EmulationStartedEvent(rom.title))
       events.add(LoadedMainConfigEvent(config))
     }
+
+    eventBus.register<UpdatedSystemMappingEvent> {
+      mainSession?.config?.let { config ->
+        val newType = Controller.getGameboyType(properties.system, config.rom)
+        if (newType != config.gameboyType) {
+          eventBus.post(LoadRomEvent(config.rom.file))
+        }
+      }
+    }
   }
 
   fun start() {
@@ -123,6 +133,7 @@ class LinkedController(
       LOG.atDebug().log("Processing event: {}", e.javaClass.simpleName)
       when (e) {
         is LoadedMainConfigEvent -> {
+          mainSession?.close()
           mainConfig = e.config
           initMainSession()
         }
