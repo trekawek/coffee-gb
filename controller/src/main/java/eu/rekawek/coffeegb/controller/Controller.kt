@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.properties.SystemProperties
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.memory.cart.Rom
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
-import eu.rekawek.coffeegb.controller.properties.SystemProperties
 import java.io.File
 
 interface Controller : AutoCloseable {
@@ -34,19 +34,12 @@ interface Controller : AutoCloseable {
 
   class UpdatedSystemMappingEvent : Event
 
-  data class WaitingForPeerEvent(
-      val romFile: ByteArray,
-      val batteryFile: ByteArray?,
-      val gameboyType: GameboyType,
-      val bootstrapMode: Gameboy.BootstrapMode
-  ) : Event
-
   data class GameboyTypeEvent(val gameboyType: GameboyType) : Event
 
   companion object {
     fun createGameboyConfig(
         properties: EmulatorProperties,
-        rom: Rom
+        rom: Rom,
     ): Gameboy.GameboyConfiguration {
       val config = Gameboy.GameboyConfiguration(rom)
       val gameboyType = getGameboyType(properties.system, rom)
@@ -66,8 +59,10 @@ interface Controller : AutoCloseable {
     }
 
     fun getGameboyType(properties: SystemProperties, rom: Rom): GameboyType {
-      if (rom.gameboyColorFlag == Rom.GameboyColorFlag.CGB ||
-          rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL) {
+      if (
+          rom.gameboyColorFlag == Rom.GameboyColorFlag.CGB ||
+              rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL
+      ) {
         if (properties.cgbGamesType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
           return GameboyType.CGB
         }

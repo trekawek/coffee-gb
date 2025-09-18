@@ -40,11 +40,11 @@ class SwingEmulator(
 
     eventBus.register<ConnectionController.ServerGotConnectionEvent> {
       session.close()
-      session = LinkedController(eventBus, properties, console)
+      session = LinkedController(eventBus, properties, console).also { it.start() }
     }
     eventBus.register<ConnectionController.ClientConnectedToServerEvent> {
       session.close()
-      session = LinkedController(eventBus, properties, console)
+      session = LinkedController(eventBus, properties, console).also { it.start() }
     }
     eventBus.register<ConnectionController.ServerLostConnectionEvent> {
       session.close()

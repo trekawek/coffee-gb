@@ -1,20 +1,19 @@
 package eu.rekawek.coffeegb.controller.network
 
-import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
-import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
-import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.Input
-import eu.rekawek.coffeegb.controller.link.LinkedController
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
+import eu.rekawek.coffeegb.core.joypad.Button
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,
@@ -27,10 +26,11 @@ class Connection(
   @Volatile private var doStop = false
 
   init {
-    eventBus.register<Controller.WaitingForPeerEvent> {
+    eventBus.register<LinkedController.LocalRomLoadedEvent> {
       outputStream.write(0x01)
 
-      val buf = ByteBuffer.allocate(10)
+      val buf = ByteBuffer.allocate(18)
+      buf.putLong(it.frame)
       buf.put(it.gameboyType.ordinal.toByte())
       buf.put(it.bootstrapMode.ordinal.toByte())
       buf.putInt(it.romFile.size)
@@ -62,21 +62,21 @@ class Connection(
     }
     eventBus.register<RequestResetEvent> {
       outputStream.write(0x06)
+
+      val buf = ByteBuffer.allocate(8)
+      buf.putLong(it.frame)
+      outputStream.write(buf.array())
+
       outputStream.flush()
       LOG.atInfo().log("Sent {}", it)
     }
     eventBus.register<RequestStopEvent> {
       outputStream.write(0x07)
-      outputStream.flush()
-      LOG.atInfo().log("Sent {}", it)
-    }
-    eventBus.register<RequestPauseEvent> {
-      outputStream.write(0x08)
-      outputStream.flush()
-      LOG.atInfo().log("Sent {}", it)
-    }
-    eventBus.register<RequestResumeEvent> {
-      outputStream.write(0x09)
+
+      val buf = ByteBuffer.allocate(8)
+      buf.putLong(it.frame)
+      outputStream.write(buf.array())
+
       outputStream.flush()
       LOG.atInfo().log("Sent {}", it)
     }
@@ -92,9 +92,10 @@ class Connection(
           when (command) {
             // peer loaded game
             0x01 -> {
-              val buf = ByteBuffer.allocate(10)
+              val buf = ByteBuffer.allocate(18)
               inputStream.read(buf.array())
 
+              val frame = buf.getLong()
               val gameboyType = GameboyType.entries[buf.get().toInt()]
               val bootstrapMode = BootstrapMode.entries[buf.get().toInt()]
               val romSize = buf.getInt()
@@ -108,7 +109,7 @@ class Connection(
                     null
                   }
 
-              PeerLoadedGameEvent(rom, battery, gameboyType, bootstrapMode)
+              PeerLoadedGameEvent(rom, battery, gameboyType, bootstrapMode, frame)
             }
             // sync
             0x03 -> {
@@ -125,22 +126,20 @@ class Connection(
 
             // reset
             0x06 -> {
-              ReceivedRemoteResetEvent()
+              val buf = ByteBuffer.allocate(8)
+              inputStream.read(buf.array())
+              val frame = buf.getLong()
+
+              ReceivedRemoteResetEvent(frame)
             }
 
             // stop
             0x07 -> {
-              ReceivedRemoteStopEvent()
-            }
+              val buf = ByteBuffer.allocate(8)
+              inputStream.read(buf.array())
+              val frame = buf.getLong()
 
-            // pause
-            0x08 -> {
-              ReceivedRemotePauseEvent()
-            }
-
-            // stop
-            0x09 -> {
-              ReceivedRemoteResumeEvent()
+              ReceivedRemoteStopEvent(frame)
             }
 
             else -> {
@@ -184,24 +183,17 @@ class Connection(
       val rom: ByteArray,
       val battery: ByteArray?,
       val gameboyType: GameboyType,
-      val bootstrapMode: BootstrapMode
+      val bootstrapMode: BootstrapMode,
+      val frame: Long,
   ) : Event
 
-  class RequestResetEvent : Event
+  data class RequestResetEvent(val frame: Long) : Event
 
-  class RequestStopEvent : Event
+  data class RequestStopEvent(val frame: Long) : Event
 
-  class RequestPauseEvent : Event
+  data class ReceivedRemoteResetEvent(val frame: Long) : Event
 
-  class RequestResumeEvent : Event
-
-  class ReceivedRemoteResetEvent : Event
-
-  class ReceivedRemoteStopEvent : Event
-
-  class ReceivedRemotePauseEvent : Event
-
-  class ReceivedRemoteResumeEvent : Event
+  data class ReceivedRemoteStopEvent(val frame: Long) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
