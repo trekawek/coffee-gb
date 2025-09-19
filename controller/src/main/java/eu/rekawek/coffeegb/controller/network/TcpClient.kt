@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.core.events.EventBus
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.net.Socket
 import java.net.SocketException
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class TcpClient(
     private val host: String,
@@ -18,9 +18,8 @@ class TcpClient(
       clientSocket = createSocket(host)
       LOG.info("Connected to {}", clientSocket!!.inetAddress)
       eventBus.post(ConnectionController.ClientConnectedToServerEvent())
-      Connection(clientSocket!!.getInputStream(), clientSocket!!.getOutputStream(), eventBus).use {
-        it.run()
-      }
+      Connection(clientSocket!!.getInputStream(), clientSocket!!.getOutputStream(), eventBus, false)
+          .use { it.run() }
       LOG.info("Disconnected from {}", clientSocket!!.inetAddress)
     } catch (e: SocketException) {
       if (e.message == "Socket closed") {

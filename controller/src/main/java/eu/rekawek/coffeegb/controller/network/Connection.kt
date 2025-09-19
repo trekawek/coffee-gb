@@ -8,17 +8,19 @@ import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.joypad.Button
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,
     private val outputStream: OutputStream,
     mainEventBus: EventBus,
+    private val server: Boolean,
 ) : Runnable, AutoCloseable {
 
   private val eventBus: EventBus = mainEventBus.fork("connection")
@@ -87,6 +89,7 @@ class Connection(
   }
 
   override fun run() {
+    handshake()
     while (!doStop) {
       val command = inputStream.read()
       if (command == -1) {
@@ -190,6 +193,36 @@ class Connection(
     outputStream.close()
   }
 
+  private fun handshake() {
+    val buf = ByteBuffer.allocate(PROTOCOL_NAME.length + 1)
+    if (server) {
+      buf.put(PROTOCOL_NAME.toByteArray())
+      buf.put(PROTOCOL_VERSION)
+      outputStream.write(buf.array())
+      LOG.atInfo().log("Sent protocol name {} and version {}", PROTOCOL_NAME, PROTOCOL_VERSION)
+    } else {
+      inputStream.read(buf.array())
+      val receivedProtocolName = String(buf.array().take(PROTOCOL_NAME.length).toByteArray())
+      if (receivedProtocolName != PROTOCOL_NAME) {
+        throw IOException(
+            "Protocol mismatch: expected $PROTOCOL_NAME, received $receivedProtocolName"
+        )
+      }
+      val receivedProtocolVersion = buf.array()[PROTOCOL_NAME.length]
+      if (receivedProtocolVersion != PROTOCOL_VERSION) {
+        throw IOException(
+            "Protocol mismatch: expected $PROTOCOL_VERSION, received $receivedProtocolVersion"
+        )
+      }
+      LOG.atInfo()
+          .log(
+              "Received protocol name {} and version {}",
+              receivedProtocolName,
+              receivedProtocolVersion,
+          )
+    }
+  }
+
   data class PeerLoadedGameEvent(
       val rom: ByteArray,
       val battery: ByteArray?,
@@ -209,5 +242,7 @@ class Connection(
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
+    private const val PROTOCOL_NAME: String = "CoffeeGB NETPLAY"
+    private const val PROTOCOL_VERSION: Byte = 0x01
   }
 }

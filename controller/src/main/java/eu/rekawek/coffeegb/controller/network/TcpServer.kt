@@ -1,14 +1,14 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.core.events.EventBus
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import kotlin.concurrent.Volatile
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class TcpServer(private val eventBus: EventBus) : Runnable {
   @Volatile private var doStop = false
@@ -28,7 +28,9 @@ class TcpServer(private val eventBus: EventBus) : Runnable {
           LOG.info("Got new connection: {}", socket.inetAddress)
           eventBus.post(ConnectionController.ServerGotConnectionEvent(socket.inetAddress.hostName))
           try {
-            Connection(socket.getInputStream(), socket.getOutputStream(), eventBus).use { it.run() }
+            Connection(socket.getInputStream(), socket.getOutputStream(), eventBus, true).use {
+              it.run()
+            }
           } finally {
             LOG.info("Client disconnected: {}", socket.inetAddress)
             eventBus.post(ConnectionController.ServerLostConnectionEvent())
