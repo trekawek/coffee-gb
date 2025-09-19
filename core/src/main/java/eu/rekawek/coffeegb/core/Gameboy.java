@@ -213,7 +213,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         notifyAll();
     }
 
-    public void tick() {
+    /**
+     * @return true if there was a new frame emitted in this tick
+     */
+    public boolean tick() {
+        boolean result = false;
+
         Mode newMode = tickSubsystems();
         if (newMode != null) {
             hdma.onGpuUpdate(newMode);
@@ -223,10 +228,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             lcdDisabled = true;
             display.frameIsReady();
             hdma.onLcdSwitch(false);
+            result = true;
         } else if (newMode == Mode.VBlank) {
             requestedScreenRefresh = true;
             display.frameIsReady();
             vRamTransfer.frameIsReady();
+            result = true;
         }
 
         if (lcdDisabled && gpu.isLcdEnabled()) {
@@ -239,6 +246,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             console.tick();
         }
         tickListeners.forEach(Runnable::run);
+
+        return result;
     }
 
     private Mode tickSubsystems() {

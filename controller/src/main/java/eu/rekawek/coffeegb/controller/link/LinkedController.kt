@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.TimingTicker
+import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
@@ -26,7 +27,6 @@ import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
-import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
@@ -35,13 +35,11 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
-import java.util.concurrent.BlockingDeque
-import java.util.concurrent.LinkedBlockingDeque
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class LinkedController(
     parentEventBus: EventBus,
@@ -50,6 +48,8 @@ class LinkedController(
 ) : Controller {
 
   private val eventBus = parentEventBus.fork("session")
+
+  private val eventQueue = EventQueue(eventBus)
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
 
@@ -65,13 +65,13 @@ class LinkedController(
 
   @Volatile private var doStop = false
 
-  private val events: BlockingDeque<Event> = LinkedBlockingDeque()
-
   private val mainSerialEndpoint = Peer2PeerSerialEndpoint()
 
   private val peerSerialEndpoint = Peer2PeerSerialEndpoint()
 
   private var frame = 0L
+
+  private var currentInput: Input? = null
 
   private var lastInput: Input? = null
 
@@ -86,18 +86,59 @@ class LinkedController(
   init {
     peerSerialEndpoint.init(mainSerialEndpoint)
 
-    for (c in
-        listOf(
-            StopEmulationEvent::class,
-            ResetEmulationEvent::class,
-            ButtonPressEvent::class,
-            ButtonReleaseEvent::class,
-            PeerLoadedGameEvent::class,
-            RemoteButtonStateEvent::class,
-            ReceivedRemoteResetEvent::class,
-            ReceivedRemoteStopEvent::class,
-        )) {
-      eventBus.register(events::add, c.java)
+    eventQueue.register<LoadedMainConfigEvent> { e ->
+      mainSession?.close()
+      mainConfig = e.config
+      initMainSession()
+    }
+
+    eventQueue.register<StopEmulationEvent> {
+      mainSession?.close()
+      mainSession = null
+    }
+
+    eventQueue.register<ResetEmulationEvent> {
+      mainSession?.close()
+      initMainSession()
+      eventBus.postAsync(RequestResetEvent(frame))
+    }
+
+    eventQueue.register<PeerLoadedGameEvent> { e ->
+      peerConfig =
+          createGameboyConfig(properties, Rom(e.rom))
+              .setGameboyType(e.gameboyType)
+              .setBootstrapMode(e.bootstrapMode)
+              .setBatteryData(e.battery)
+      initPeerSession(e.frame)
+    }
+
+    eventQueue.register<RemoteButtonStateEvent> { e ->
+      stateHistory.addSecondaryInput(e.frame, e.input)
+    }
+
+    eventQueue.register<ReceivedRemoteResetEvent> { e ->
+      peerSession?.close()
+      initPeerSession(e.frame)
+    }
+
+    eventQueue.register<ReceivedRemoteStopEvent> { peerSession?.close() }
+
+    eventQueue.register<ButtonPressEvent> { e ->
+      val currentInput = currentInput ?: Input(emptyList(), emptyList())
+      this.currentInput =
+          currentInput.copy(
+              pressedButtons = (currentInput.pressedButtons + e.button).sorted(),
+              releasedButtons = (currentInput.releasedButtons - e.button).sorted(),
+          )
+    }
+
+    eventQueue.register<ButtonReleaseEvent> { e ->
+      val currentInput = currentInput ?: Input(emptyList(), emptyList())
+      this.currentInput =
+          currentInput.copy(
+              pressedButtons = (currentInput.pressedButtons - e.button).sorted(),
+              releasedButtons = (currentInput.releasedButtons + e.button).sorted(),
+          )
     }
 
     eventBus.register<LoadRomEvent> {
@@ -107,7 +148,7 @@ class LinkedController(
       eventBus.post(Controller.SessionPauseSupportEvent(false))
       eventBus.post(Controller.SessionSnapshotSupportEvent(null))
       eventBus.post(Controller.EmulationStartedEvent(rom.title))
-      events.add(LoadedMainConfigEvent(config))
+      eventBus.post(LoadedMainConfigEvent(config))
     }
 
     eventBus.register<UpdatedSystemMappingEvent> {
@@ -120,61 +161,12 @@ class LinkedController(
     }
   }
 
-  fun start() {
+  override fun startController() {
     thread.start()
   }
 
   fun runFrame() {
-    val pressedButtons = mutableListOf<Button>()
-    val releasedButtons = mutableListOf<Button>()
-
-    while (events.isNotEmpty()) {
-      val e = events.take()
-      LOG.atDebug().log("Processing event: {}", e.javaClass.simpleName)
-      when (e) {
-        is LoadedMainConfigEvent -> {
-          mainSession?.close()
-          mainConfig = e.config
-          initMainSession()
-        }
-        is StopEmulationEvent -> {
-          mainSession?.close()
-          mainSession = null
-        }
-        is ResetEmulationEvent -> {
-          mainSession?.close()
-          initMainSession()
-          eventBus.postAsync(RequestResetEvent(frame))
-        }
-        is ButtonPressEvent -> {
-          pressedButtons.add(e.button)
-          releasedButtons.remove(e.button)
-        }
-        is ButtonReleaseEvent -> {
-          pressedButtons.remove(e.button)
-          releasedButtons.add(e.button)
-        }
-        is PeerLoadedGameEvent -> {
-          peerConfig =
-              createGameboyConfig(properties, Rom(e.rom))
-                  .setGameboyType(e.gameboyType)
-                  .setBootstrapMode(e.bootstrapMode)
-                  .setBatteryData(e.battery)
-          initPeerSession(e.frame)
-        }
-        is RemoteButtonStateEvent -> {
-          stateHistory.addSecondaryInput(e.frame, e.input)
-        }
-        is ReceivedRemoteResetEvent -> {
-          peerSession?.close()
-          initPeerSession(e.frame)
-        }
-        is ReceivedRemoteStopEvent -> {
-          peerSession?.close()
-        }
-        else -> throw IllegalStateException("Unexpected event: $e")
-      }
-    }
+    eventQueue.dispatch()
 
     val mainSession = mainSession
     val peerSession = peerSession
@@ -190,12 +182,13 @@ class LinkedController(
       LOG.atDebug().log("State merged to {}", frame)
     }
 
-    val input = Input(pressedButtons.sorted(), releasedButtons.sorted())
+    val input = currentInput ?: Input(emptyList(), emptyList())
     val effectiveInput = if (input != lastInput) input else Input(emptyList(), emptyList())
     lastInput = input
     if (mainSession != null) {
       effectiveInput.send(mainSession.eventBus)
     }
+    currentInput = null
 
     if (!effectiveInput.isEmpty() || lastSync.elapsedNow() > 5.seconds) {
       eventBus.postAsync(LocalButtonStateEvent(frame, effectiveInput))

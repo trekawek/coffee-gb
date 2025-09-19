@@ -10,6 +10,8 @@ import java.io.File
 
 interface Controller : AutoCloseable {
 
+  fun startController()
+
   class EmulationStartedEvent(val romName: String) : Event
 
   class EmulationStoppedEvent : Event

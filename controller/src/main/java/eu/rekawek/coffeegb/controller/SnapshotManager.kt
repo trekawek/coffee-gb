@@ -13,16 +13,9 @@ class SnapshotManager(private val rom: File) {
   fun snapshotAvailable(slot: Int) = getSnapshotFile(slot).exists()
 
   fun saveSnapshot(slot: Int, gameboy: Gameboy) {
-    val originalPauseState = gameboy.isPaused
-    if (!gameboy.isPaused) {
-      gameboy.pause()
-    }
     val snapshotFile = getSnapshotFile(slot)
     ObjectOutputStream(FileOutputStream(snapshotFile)).use {
       it.writeObject(gameboy.saveToMemento())
-    }
-    if (!originalPauseState) {
-      gameboy.resume()
     }
   }
 
@@ -32,16 +25,9 @@ class SnapshotManager(private val rom: File) {
       return
     }
 
-    val originalPauseState = gameboy.isPaused
-    if (!gameboy.isPaused) {
-      gameboy.pause()
-    }
     val memento =
         ObjectInputStream(FileInputStream(snapshotFile)).use { it.readObject() as Memento<Gameboy> }
     gameboy.restoreFromMemento(memento)
-    if (!originalPauseState) {
-      gameboy.resume()
-    }
   }
 
   private fun getSnapshotFile(slot: Int): File {

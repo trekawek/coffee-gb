@@ -7,7 +7,7 @@ import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
-import eu.rekawek.coffeegb.swing.io.SwingController
+import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
@@ -21,43 +21,52 @@ class SwingEmulator(
     private val properties: EmulatorProperties,
 ) {
   private val display: SwingDisplay
-
-  private val controller: SwingController
+  private val joypad: SwingJoypad
   private val sound: AudioSystemSound
 
   private val connectionController: ConnectionController
 
-  private var session: Controller = BasicController(eventBus, properties, console)
+  private lateinit var controller: Controller
 
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
     sound = AudioSystemSound(properties.sound, eventBus, "main")
-    controller = SwingController(properties.controllerMapping, eventBus)
+    joypad = SwingJoypad(properties.controllerMapping, eventBus)
     connectionController = ConnectionController(eventBus)
 
     Thread(display).start()
     Thread(sound).start()
 
+    startBasicController()
+
     eventBus.register<ConnectionController.ServerGotConnectionEvent> {
-      session.close()
-      session = LinkedController(eventBus, properties, console).also { it.start() }
+      controller.close()
+      startLinkedController()
     }
     eventBus.register<ConnectionController.ClientConnectedToServerEvent> {
-      session.close()
-      session = LinkedController(eventBus, properties, console).also { it.start() }
+      controller.close()
+      startLinkedController()
     }
     eventBus.register<ConnectionController.ServerLostConnectionEvent> {
-      session.close()
-      session = BasicController(eventBus, properties, console)
+      controller.close()
+      startBasicController()
     }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      session.close()
-      session = BasicController(eventBus, properties, console)
+      controller.close()
+      startBasicController()
     }
   }
 
+  private fun startBasicController() {
+    controller = BasicController(eventBus, properties, console).also { it.startController() }
+  }
+
+  private fun startLinkedController() {
+    controller = LinkedController(eventBus, properties, console).also { it.startController() }
+  }
+
   fun stop() {
-    session.close()
+    controller.close()
     sound.stopThread()
     display.stop()
   }
@@ -68,7 +77,7 @@ class SwingEmulator(
     mainPanel.add(display)
 
     jFrame.contentPane = mainPanel
-    jFrame.addKeyListener(controller)
+    jFrame.addKeyListener(joypad)
 
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
       mainPanel.preferredSize = it.preferredSize

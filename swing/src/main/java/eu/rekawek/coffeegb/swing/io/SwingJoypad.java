@@ -9,13 +9,13 @@ import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.util.Map;
 
-public class SwingController implements KeyListener {
+public class SwingJoypad implements KeyListener {
 
     private final Map<Integer, Button> mapping;
 
     private final EventBus eventBus;
 
-    public SwingController(Map<Integer, Button> mapping, EventBus eventBus) {
+    public SwingJoypad(Map<Integer, Button> mapping, EventBus eventBus) {
         this.mapping = mapping;
         this.eventBus = eventBus;
     }

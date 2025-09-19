@@ -1,11 +1,12 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.events.EventQueue
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.memory.cart.Rom
-import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 
 class BasicController(
     parentEventBus: EventBus,
@@ -13,27 +14,40 @@ class BasicController(
     private val console: Console?,
 ) : Controller, SnapshotSupport {
 
+  private val timingTicker = TimingTicker()
+
   private val eventBus: EventBus = parentEventBus.fork("session")
+
+  private val eventQueue = EventQueue(eventBus)
 
   private var session: Session? = null
 
   private var snapshotManager: SnapshotManager? = null
 
+  @Volatile private var doStop = false
+
+  private var isPaused = false
+
+  private val thread = Thread {
+    while (!doStop) {
+      runFrame()
+    }
+  }
+
   init {
-    eventBus.register<Controller.LoadRomEvent> {
+    eventQueue.register<Controller.LoadRomEvent> {
       stop()
       val config = Controller.createGameboyConfig(properties, Rom(it.rom))
       session = createSession(config)
       start()
     }
-
-    eventBus.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
-    eventBus.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
-    eventBus.register<Controller.PauseEmulationEvent> { pause() }
-    eventBus.register<Controller.ResumeEmulationEvent> { resume() }
-    eventBus.register<Controller.ResetEmulationEvent> { reset() }
-    eventBus.register<Controller.StopEmulationEvent> { stop() }
-    eventBus.register<Controller.UpdatedSystemMappingEvent> {
+    eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
+    eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
+    eventQueue.register<Controller.PauseEmulationEvent> { isPaused = true }
+    eventQueue.register<Controller.ResumeEmulationEvent> { isPaused = false }
+    eventQueue.register<Controller.ResetEmulationEvent> { reset() }
+    eventQueue.register<Controller.StopEmulationEvent> { stop() }
+    eventQueue.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
         val newType = Controller.getGameboyType(properties.system, config.rom)
         if (newType != config.gameboyType) {
@@ -43,34 +57,44 @@ class BasicController(
     }
   }
 
+  override fun startController() {
+    thread.start()
+  }
+
+  private fun runFrame() {
+    eventQueue.dispatch()
+
+    repeat(TICKS_PER_FRAME) {
+      if (!isPaused) {
+        session?.gameboy?.tick()
+      }
+      timingTicker.run()
+    }
+  }
+
   private fun createSession(config: Gameboy.GameboyConfiguration) =
       Session(config, eventBus.fork("main"), console)
 
-  @Synchronized
-  fun start() {
+  private fun start() {
     val session = session ?: return
 
+    isPaused = false
     snapshotManager = SnapshotManager(session.config.rom.file)
 
     session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))
     session.eventBus.post(Controller.SessionPauseSupportEvent(true))
     session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
     session.eventBus.post(Controller.EmulationStartedEvent(session.config.rom.title))
-
-    session.gameboy.registerTickListener(TimingTicker())
-    Thread(session.gameboy).start()
   }
 
-  @Synchronized
-  fun stop() {
+  private fun stop() {
     val session = session ?: return
     session.eventBus.post(Controller.EmulationStoppedEvent())
     session.close()
     this.session = null
   }
 
-  @Synchronized
-  fun reset() {
+  private fun reset() {
     val session = session ?: return
     val config = session.config
     stop()
@@ -78,23 +102,11 @@ class BasicController(
     start()
   }
 
-  @Synchronized
-  fun pause() {
-    session?.gameboy?.pause()
-  }
-
-  @Synchronized
-  fun resume() {
-    session?.gameboy?.resume()
-  }
-
-  @Synchronized
-  override fun saveSnapshot(slot: Int) {
+  private fun saveSnapshot(slot: Int) {
     session?.gameboy?.let { snapshotManager?.saveSnapshot(slot, it) }
   }
 
-  @Synchronized
-  override fun loadSnapshot(slot: Int) {
+  private fun loadSnapshot(slot: Int) {
     session?.gameboy?.let { snapshotManager?.loadSnapshot(slot, it) }
   }
 
@@ -103,6 +115,9 @@ class BasicController(
   }
 
   override fun close() {
+    doStop = true
+    thread.join()
+
     stop()
     eventBus.close()
   }
