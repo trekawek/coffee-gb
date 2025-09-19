@@ -2,15 +2,15 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.BasicController
 import eu.rekawek.coffeegb.controller.Controller
-import eu.rekawek.coffeegb.core.debug.Console
-import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkedController
-import eu.rekawek.coffeegb.swing.io.AudioSystemSound
-import eu.rekawek.coffeegb.swing.io.SwingJoypad
-import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.swing.io.AudioSystemSound
+import eu.rekawek.coffeegb.swing.io.SwingDisplay
+import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -37,32 +37,30 @@ class SwingEmulator(
     Thread(display).start()
     Thread(sound).start()
 
-    startBasicController()
+    controller = BasicController(eventBus, properties, console).also { it.startController() }
 
-    eventBus.register<ConnectionController.ServerGotConnectionEvent> {
-      controller.close()
-      startLinkedController()
-    }
-    eventBus.register<ConnectionController.ClientConnectedToServerEvent> {
-      controller.close()
-      startLinkedController()
-    }
-    eventBus.register<ConnectionController.ServerLostConnectionEvent> {
-      controller.close()
-      startBasicController()
-    }
+    eventBus.register<ConnectionController.ServerGotConnectionEvent> { startLinkedController() }
+    eventBus.register<ConnectionController.ClientConnectedToServerEvent> { startLinkedController() }
+    eventBus.register<ConnectionController.ServerLostConnectionEvent> { startBasicController() }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      controller.close()
       startBasicController()
     }
   }
 
   private fun startBasicController() {
+    val state = controller.closeWithState()
     controller = BasicController(eventBus, properties, console).also { it.startController() }
+    if (state != null) {
+      eventBus.post(Controller.RestoreState(state))
+    }
   }
 
   private fun startLinkedController() {
+    val state = controller.closeWithState()
     controller = LinkedController(eventBus, properties, console).also { it.startController() }
+    if (state != null) {
+      eventBus.post(Controller.RestoreState(state))
+    }
   }
 
   fun stop() {

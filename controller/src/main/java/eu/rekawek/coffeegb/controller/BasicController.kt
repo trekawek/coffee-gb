@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 
 class BasicController(
     parentEventBus: EventBus,
@@ -41,6 +42,13 @@ class BasicController(
       session = createSession(config)
       start()
     }
+    eventQueue.register<Controller.RestoreState> {
+      stop()
+      val config = Controller.createGameboyConfig(properties, it.state.rom)
+      session = createSession(config)
+      session?.gameboy?.restoreFromMemento(it.state.memento)
+      start()
+    }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventQueue.register<Controller.PauseEmulationEvent> { isPaused = true }
@@ -73,7 +81,7 @@ class BasicController(
   }
 
   private fun createSession(config: Gameboy.GameboyConfiguration) =
-      Session(config, eventBus.fork("main"), console)
+      Session(config, eventBus.fork("main"), console, Peer2PeerSerialEndpoint())
 
   private fun start() {
     val session = session ?: return
@@ -115,10 +123,19 @@ class BasicController(
   }
 
   override fun close() {
+    closeWithState()
+  }
+
+  override fun closeWithState(): Controller.ControllerState? {
     doStop = true
     thread.join()
 
+    val state =
+        session?.let { Controller.ControllerState(it.gameboy.saveToMemento(), it.config.rom) }
+
     stop()
     eventBus.close()
+
+    return state
   }
 }

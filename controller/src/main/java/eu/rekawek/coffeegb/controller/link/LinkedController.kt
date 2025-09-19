@@ -271,16 +271,21 @@ class LinkedController(
     this.peerSession = peerSession
   }
 
-  override fun close() {
+  override fun close() {}
+
+  override fun closeWithState(): Controller.ControllerState? {
     doStop = true
     thread.join()
 
-    mainSession?.eventBus?.post(Controller.EmulationStoppedEvent())
+    val state =
+        mainSession?.let { Controller.ControllerState(it.gameboy.saveToMemento(), it.config.rom) }
 
+    mainSession?.eventBus?.post(Controller.EmulationStoppedEvent())
     mainSession?.close()
     peerSession?.close()
-
     eventBus.close()
+
+    return state
   }
 
   data class LocalRomLoadedEvent(

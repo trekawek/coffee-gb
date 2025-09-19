@@ -29,6 +29,9 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Or
 
     @Override
     public int recvBit() {
+        if (peer == null) {
+            return -1;
+        }
         if (bitsReceived.get() == 0) {
             return -1;
         }
@@ -38,12 +41,18 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Or
 
     @Override
     public void startSending() {
+        if (peer == null) {
+            return;
+        }
         bitIndex = 7;
         peer.bitsReceived.set(0);
     }
 
     @Override
     public int sendBit() {
+        if (peer == null) {
+            return 0;
+        }
         peer.bitsReceived.incrementAndGet();
         return shift();
     }
