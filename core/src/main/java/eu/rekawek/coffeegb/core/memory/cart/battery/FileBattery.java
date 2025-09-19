@@ -140,7 +140,7 @@ public class FileBattery implements Battery {
         this.isDirty = mem.isDirty;
     }
 
-    private record FileBatteryMemento(byte[] clockBuffer, byte[] ramBuffer, boolean isClockPresent,
+    record FileBatteryMemento(byte[] clockBuffer, byte[] ramBuffer, boolean isClockPresent,
                                       boolean isDirty) implements Memento<Battery> {
     }
 }

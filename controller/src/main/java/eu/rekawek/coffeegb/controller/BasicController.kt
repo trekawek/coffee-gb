@@ -40,13 +40,9 @@ class BasicController(
       stop()
       val config = Controller.createGameboyConfig(properties, Rom(it.rom))
       session = createSession(config)
-      start()
-    }
-    eventQueue.register<Controller.RestoreState> {
-      stop()
-      val config = Controller.createGameboyConfig(properties, it.state.rom)
-      session = createSession(config)
-      session?.gameboy?.restoreFromMemento(it.state.memento)
+      if (it.memento != null) {
+        session?.gameboy?.restoreFromMemento(it.memento)
+      }
       start()
     }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }

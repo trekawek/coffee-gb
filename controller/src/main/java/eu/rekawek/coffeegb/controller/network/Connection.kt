@@ -8,12 +8,12 @@ import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.joypad.Button
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.Volatile
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 class Connection(
     private val inputStream: InputStream,
@@ -29,18 +29,22 @@ class Connection(
     eventBus.register<LinkedController.LocalRomLoadedEvent> {
       outputStream.write(0x01)
 
-      val buf = ByteBuffer.allocate(18)
+      val buf = ByteBuffer.allocate(22)
       buf.putLong(it.frame)
       buf.put(it.gameboyType.ordinal.toByte())
       buf.put(it.bootstrapMode.ordinal.toByte())
       buf.putInt(it.romFile.size)
       buf.putInt(it.batteryFile?.size ?: 0)
+      buf.putInt(it.snapshot?.size ?: 0)
       buf.rewind()
 
       outputStream.write(buf.array())
       outputStream.write(it.romFile)
       if (it.batteryFile != null) {
         outputStream.write(it.batteryFile)
+      }
+      if (it.snapshot != null) {
+        outputStream.write(it.snapshot)
       }
     }
     eventBus.register<LinkedController.LocalButtonStateEvent> {
@@ -92,7 +96,7 @@ class Connection(
           when (command) {
             // peer loaded game
             0x01 -> {
-              val buf = ByteBuffer.allocate(18)
+              val buf = ByteBuffer.allocate(22)
               inputStream.read(buf.array())
 
               val frame = buf.getLong()
@@ -100,6 +104,7 @@ class Connection(
               val bootstrapMode = BootstrapMode.entries[buf.get().toInt()]
               val romSize = buf.getInt()
               val batterySize = buf.getInt()
+              val snapshotSize = buf.getInt()
 
               val rom = inputStream.readNBytes(romSize)
               val battery =
@@ -108,8 +113,14 @@ class Connection(
                   } else {
                     null
                   }
+              val snapshot =
+                  if (snapshotSize > 0) {
+                    inputStream.readNBytes(snapshotSize)
+                  } else {
+                    null
+                  }
 
-              PeerLoadedGameEvent(rom, battery, gameboyType, bootstrapMode, frame)
+              PeerLoadedGameEvent(rom, battery, snapshot, gameboyType, bootstrapMode, frame)
             }
             // sync
             0x03 -> {
@@ -182,6 +193,7 @@ class Connection(
   data class PeerLoadedGameEvent(
       val rom: ByteArray,
       val battery: ByteArray?,
+      val snapshot: ByteArray?,
       val gameboyType: GameboyType,
       val bootstrapMode: BootstrapMode,
       val frame: Long,

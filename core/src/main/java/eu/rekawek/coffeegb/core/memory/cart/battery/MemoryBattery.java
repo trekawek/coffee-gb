@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory.cart.battery;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery.FileBatteryMemento;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -69,13 +70,19 @@ public class MemoryBattery implements Battery, Originator<Battery> {
 
     @Override
     public void restoreFromMemento(Memento<Battery> memento) {
-        if (!(memento instanceof MemoryBatteryMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type: " + memento);
+        if (memento instanceof MemoryBatteryMemento mem) {
+            if (this.buffer.length != mem.buffer.length) {
+                throw new IllegalArgumentException("Memento buffer length doesn't match");
+            }
+            System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
+        } else if (memento instanceof FileBatteryMemento mem) {
+            System.arraycopy(mem.ramBuffer(), 0, this.buffer, 0, mem.ramBuffer().length);
+            if (mem.isClockPresent()) {
+                System.arraycopy(mem.clockBuffer(), 0, this.buffer, mem.ramBuffer().length, mem.clockBuffer().length);
+            }
+        } else {
+            throw new IllegalArgumentException("Invalid memento type");
         }
-        if (this.buffer.length != mem.buffer.length) {
-            throw new IllegalArgumentException("Memento buffer length doesn't match");
-        }
-        System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
     }
 
     private record MemoryBatteryMemento(byte[] buffer) implements Memento<Battery> {

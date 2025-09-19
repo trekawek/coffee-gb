@@ -19,7 +19,7 @@ interface Controller : AutoCloseable {
 
   class EmulationStoppedEvent : Event
 
-  data class LoadRomEvent(val rom: File) : Event
+  data class LoadRomEvent(val rom: File, val memento: Memento<Gameboy>? = null) : Event
 
   class PauseEmulationEvent : Event
 
@@ -40,8 +40,6 @@ interface Controller : AutoCloseable {
   class UpdatedSystemMappingEvent : Event
 
   data class GameboyTypeEvent(val gameboyType: GameboyType) : Event
-
-  data class RestoreState(val state: ControllerState) : Event
 
   data class ControllerState(val memento: Memento<Gameboy>, val rom: Rom)
 

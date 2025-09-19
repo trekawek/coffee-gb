@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.TimingTicker
+import eu.rekawek.coffeegb.controller.deserializeToGameboyMemento
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
@@ -18,6 +19,7 @@ import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteResetEven
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestResetEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.serialize
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
@@ -30,16 +32,17 @@ import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
+import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class LinkedController(
     parentEventBus: EventBus,
@@ -89,7 +92,7 @@ class LinkedController(
     eventQueue.register<LoadedMainConfigEvent> { e ->
       mainSession?.close()
       mainConfig = e.config
-      initMainSession()
+      initMainSession(e.snapshot)
     }
 
     eventQueue.register<StopEmulationEvent> {
@@ -99,7 +102,7 @@ class LinkedController(
 
     eventQueue.register<ResetEmulationEvent> {
       mainSession?.close()
-      initMainSession()
+      initMainSession(null)
       eventBus.postAsync(RequestResetEvent(frame))
     }
 
@@ -109,7 +112,7 @@ class LinkedController(
               .setGameboyType(e.gameboyType)
               .setBootstrapMode(e.bootstrapMode)
               .setBatteryData(e.battery)
-      initPeerSession(e.frame)
+      initPeerSession(e.frame, e.snapshot?.deserializeToGameboyMemento())
     }
 
     eventQueue.register<RemoteButtonStateEvent> { e ->
@@ -118,7 +121,7 @@ class LinkedController(
 
     eventQueue.register<ReceivedRemoteResetEvent> { e ->
       peerSession?.close()
-      initPeerSession(e.frame)
+      initPeerSession(e.frame, null)
     }
 
     eventQueue.register<ReceivedRemoteStopEvent> { peerSession?.close() }
@@ -148,7 +151,7 @@ class LinkedController(
       eventBus.post(Controller.SessionPauseSupportEvent(false))
       eventBus.post(Controller.SessionSnapshotSupportEvent(null))
       eventBus.post(Controller.EmulationStartedEvent(rom.title))
-      eventBus.post(LoadedMainConfigEvent(config))
+      eventBus.post(LoadedMainConfigEvent(config, it.memento?.serialize()))
     }
 
     eventBus.register<UpdatedSystemMappingEvent> {
@@ -211,7 +214,7 @@ class LinkedController(
     frame++
   }
 
-  private fun initMainSession() {
+  private fun initMainSession(snapshot: ByteArray?) {
     val mainConfig = mainConfig ?: return
 
     val mainEventBus = EventBusImpl(null, null, false)
@@ -227,6 +230,9 @@ class LinkedController(
         ),
     )
     mainSession = Session(mainConfig, mainEventBus, console, mainSerialEndpoint)
+    if (snapshot != null) {
+      mainSession?.gameboy?.restoreFromMemento(snapshot.deserializeToGameboyMemento())
+    }
 
     val romBuffer = mainConfig.rom.file.toPath().readBytes()
     val saveFile = Cartridge.getSaveName(mainConfig.rom.file)
@@ -239,8 +245,9 @@ class LinkedController(
 
     eventBus.post(
         LocalRomLoadedEvent(
-            romBuffer,
-            batteryBuffer,
+            romFile = romBuffer,
+            batteryFile = batteryBuffer,
+            snapshot = snapshot,
             mainConfig.gameboyType,
             mainConfig.bootstrapMode,
             frame,
@@ -248,10 +255,13 @@ class LinkedController(
     )
   }
 
-  private fun initPeerSession(frame: Long) {
+  private fun initPeerSession(frame: Long, state: Memento<Gameboy>?) {
     val peerConfig = peerConfig ?: return
     val peerEventBus = EventBusImpl(null, null, false)
     val peerSession = Session(peerConfig, peerEventBus, null, peerSerialEndpoint)
+    if (state != null) {
+      peerSession.gameboy.restoreFromMemento(state)
+    }
 
     val mainSession = mainSession
     while (this.frame < frame) {
@@ -291,6 +301,7 @@ class LinkedController(
   data class LocalRomLoadedEvent(
       val romFile: ByteArray,
       val batteryFile: ByteArray?,
+      val snapshot: ByteArray?,
       val gameboyType: GameboyType,
       val bootstrapMode: Gameboy.BootstrapMode,
       val frame: Long,
@@ -306,7 +317,8 @@ class LinkedController(
       val input: Input,
   ) : Event
 
-  data class LoadedMainConfigEvent(val config: GameboyConfiguration) : Event
+  data class LoadedMainConfigEvent(val config: GameboyConfiguration, val snapshot: ByteArray?) :
+      Event
 
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(LinkedController::class.java)
