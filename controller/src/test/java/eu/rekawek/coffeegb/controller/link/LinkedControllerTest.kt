@@ -27,7 +27,7 @@ class LinkedControllerTest {
     val randomJoypad = RandomJoypad(eventBus)
     eventBus.post(LoadRomEvent(ROM))
     eventBus.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
     )
     repeat(100) {
       sut.runFrame()
@@ -68,7 +68,7 @@ class LinkedControllerTest {
     val randomJoypad = RandomJoypad(eventBus1)
     eventBus1.post(LoadRomEvent(ROM))
     eventBus1.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
     )
 
     val eventBus2 = EventBusImpl()
@@ -77,7 +77,7 @@ class LinkedControllerTest {
     sut2.timingTicker.disabled = true
     eventBus2.post(LoadRomEvent(ROM))
     eventBus2.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
     )
     sut2.stateHistory.debugEventBus =
         EventBusImpl().also { eb ->
@@ -117,7 +117,7 @@ class LinkedControllerTest {
     val randomJoypad1 = RandomJoypad(eventBus1)
     eventBus1.post(LoadRomEvent(ROM))
     eventBus1.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
     )
 
     val eventBus2 = EventBusImpl()
@@ -127,7 +127,7 @@ class LinkedControllerTest {
     val randomJoypad2 = RandomJoypad(eventBus2)
     eventBus2.post(LoadRomEvent(ROM))
     eventBus2.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
     )
     sut2.stateHistory.debugEventBus =
         EventBusImpl().also { eb ->
