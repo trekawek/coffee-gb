@@ -40,7 +40,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private final int[][] palettes = new int[4][4];
 
-    private final int[][] systemPalettes = new int[512][];
+    private final int[][] systemPalettes = new int[512][4];
 
     private final int[] paletteMap = new int[DMG_TILES_WIDTH * DMG_TILES_HEIGHT];
 
