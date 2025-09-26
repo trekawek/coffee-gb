@@ -54,10 +54,11 @@ public final class PatchFactory {
 
     private static GameSharkPatch parseGameSharkCode(String code) {
         var c = code.toLowerCase().toCharArray();
-        var bank = parse(c, 0, 1);
+        var mode = parse(c, 0);
+        var bank = parse(c, 1);
         var newData = parse(c, 2, 3);
         var address = parse(c, 6, 7, 4, 5);
-        return new GameSharkPatch(bank, address, newData);
+        return new GameSharkPatch(mode, bank, address, newData);
     }
 
     private static int parse(char[] code, int... offsets) {

@@ -18,6 +18,8 @@ public class Genie implements AddressSpace, Originator<Genie> {
 
     private final boolean gbc;
 
+    private int ramBank;
+
     public Genie(AddressSpace delegate, boolean gbc) {
         this.delegate = delegate;
         this.gbc = gbc;
@@ -38,6 +40,9 @@ public class Genie implements AddressSpace, Originator<Genie> {
 
     @Override
     public void setByte(int address, int value) {
+        if (address >= 0x4000 && address <= 0x5fff) {
+            ramBank = value & 0xf;
+        }
         delegate.setByte(address, value);
     }
 
@@ -46,7 +51,7 @@ public class Genie implements AddressSpace, Originator<Genie> {
         var value = delegate.getByte(address);
         if (patches.containsKey(address)) {
             for (Patch p : patches.get(address)) {
-                if (p.accepts(delegate, gbc)) {
+                if (p.accepts(delegate, ramBank, gbc)) {
                     return p.getValue();
                 }
             }

@@ -9,7 +9,7 @@ public record GameGeniePatch(int newData, int address, int oldData) implements P
     }
 
     @Override
-    public boolean accepts(AddressSpace addressSpace, boolean gbc) {
+    public boolean accepts(AddressSpace addressSpace, int ramBank, boolean gbc) {
         if (oldData == -1) {
             return true;
         }

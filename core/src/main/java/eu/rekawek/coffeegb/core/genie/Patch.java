@@ -8,7 +8,7 @@ public interface Patch extends Serializable {
 
     int getAddress();
 
-    boolean accepts(AddressSpace addressSpace, boolean gbc);
+    boolean accepts(AddressSpace addressSpace, int ramBank, boolean gbc);
 
     int getValue();
 }
