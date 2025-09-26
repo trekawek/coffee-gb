@@ -24,6 +24,6 @@ public class PatchFactoryTest {
         assertTrue(patch instanceof GameSharkPatch);
         assertEquals(0x01, ((GameSharkPatch) patch).bank());
         assertEquals(0x02, ((GameSharkPatch) patch).data());
-        assertEquals(0xD120, ((GameSharkPatch) patch).address());
+        assertEquals(0xCD38, ((GameSharkPatch) patch).address());
     }
 }
