@@ -6,6 +6,8 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.genie.AddPatches
+import eu.rekawek.coffeegb.core.genie.Patch
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 
@@ -29,6 +31,8 @@ class BasicController(
 
   private var isPaused = false
 
+  private val patches = mutableListOf<Patch>()
+
   private val thread = Thread {
     while (!doStop) {
       runFrame()
@@ -36,8 +40,10 @@ class BasicController(
   }
 
   init {
+    eventQueue.register<AddPatches> { patches.addAll(it.patches) }
     eventQueue.register<Controller.LoadRomEvent> {
       stop()
+      patches.clear()
       val config = Controller.createGameboyConfig(properties, Rom(it.rom))
       session = createSession(config)
       if (it.memento != null) {
@@ -85,6 +91,7 @@ class BasicController(
     isPaused = false
     snapshotManager = SnapshotManager(session.config.rom.file)
 
+    session.eventBus.post(AddPatches(patches))
     session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))
     session.eventBus.post(Controller.SessionPauseSupportEvent(true))
     session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))

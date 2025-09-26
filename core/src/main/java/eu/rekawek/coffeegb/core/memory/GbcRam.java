@@ -8,18 +8,20 @@ import java.io.Serializable;
 
 public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
 
+    public static final int SVBK = 0xff70;
+
     private final int[] ram = new int[7 * 0x1000];
 
     private int svbk;
 
     @Override
     public boolean accepts(int address) {
-        return address == 0xff70 || (address >= 0xd000 && address < 0xe000);
+        return address == SVBK || (address >= 0xd000 && address < 0xe000);
     }
 
     @Override
     public void setByte(int address, int value) {
-        if (address == 0xff70) {
+        if (address == SVBK) {
             this.svbk = value;
         } else {
             ram[translate(address)] = value;
@@ -28,7 +30,7 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
 
     @Override
     public int getByte(int address) {
-        if (address == 0xff70) {
+        if (address == SVBK) {
             return svbk;
         } else {
             return ram[translate(address)];

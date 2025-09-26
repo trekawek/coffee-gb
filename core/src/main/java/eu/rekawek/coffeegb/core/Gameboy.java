@@ -1,16 +1,17 @@
 package eu.rekawek.coffeegb.core;
 
-import eu.rekawek.coffeegb.core.gpu.*;
-import eu.rekawek.coffeegb.core.memory.*;
-import eu.rekawek.coffeegb.core.joypad.Joypad;
 import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.debug.Console;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.genie.Genie;
+import eu.rekawek.coffeegb.core.gpu.*;
+import eu.rekawek.coffeegb.core.joypad.Joypad;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
@@ -26,8 +27,6 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Closeable {
 
@@ -78,11 +77,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final SgbDisplay sgbDisplay;
 
+    private final Genie gameGenie;
+
     private transient Console console;
 
     private transient volatile boolean doStop;
-
-    private final List<Runnable> tickListeners = new ArrayList<>();
 
     private boolean requestedScreenRefresh;
 
@@ -105,6 +104,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         timer = new Timer(interruptManager, speedMode);
         mmu = new Mmu(gbc);
         display = new Display(gbc);
+        gameGenie = new Genie(mmu, gbc);
 
         sgbBus = new EventBusImpl(null, null, false);
         sgbDisplay = new SgbDisplay(configuration.rom, sgbBus, sgb, configuration.displaySgbBorder);
@@ -112,11 +112,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         superGameboy = new SuperGameboy(sgbBus);
         background = new Background(sgbBus);
         oamRam = new Ram(0xfe00, 0x00a0);
-        dma = new Dma(mmu, oamRam, speedMode);
+        dma = new Dma(getAddressSpace(), oamRam, speedMode);
         statRegister = new StatRegister(interruptManager);
         gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc);
         statRegister.init(gpu);
-        hdma = new Hdma(mmu);
+        hdma = new Hdma(getAddressSpace());
         sound = new Sound(gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
@@ -145,7 +145,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
         mmu.indexSpaces();
 
-        cpu = new Cpu(mmu, interruptManager, gpu, speedMode, display);
+        cpu = new Cpu(getAddressSpace(), interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
         if (configuration.bootstrapMode == BootstrapMode.FAST_FORWARD) {
@@ -183,6 +183,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         serialPort.init(serialEndpoint);
         background.init(eventBus);
         sgbDisplay.init(eventBus);
+        gameGenie.init(eventBus);
     }
 
     public void run() {
@@ -245,8 +246,6 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (console != null) {
             console.tick();
         }
-        tickListeners.forEach(Runnable::run);
-
         return result;
     }
 
@@ -267,7 +266,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     public AddressSpace getAddressSpace() {
-        return mmu;
+        return gameGenie;
     }
 
     public Cpu getCpu() {
@@ -280,14 +279,6 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     public Gpu getGpu() {
         return gpu;
-    }
-
-    public void registerTickListener(Runnable tickListener) {
-        tickListeners.add(tickListener);
-    }
-
-    public void unregisterTickListener(Runnable tickListener) {
-        tickListeners.remove(tickListener);
     }
 
     public Sound getSound() {
@@ -323,7 +314,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
@@ -351,6 +342,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         background.restoreFromMemento(mem.backgroundMemento());
         vRamTransfer.restoreFromMemento(mem.vRamTransferMemento());
         sgbDisplay.restoreFromMemento(mem.sgbDisplayMemento());
+        gameGenie.restoreFromMemento(mem.genieMemento());
         requestedScreenRefresh = mem.requestScreenRefresh();
         lcdDisabled = mem.lcdDisabled();
     }
@@ -363,15 +355,15 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private record GameboyMemento(Memento<BiosShadow> biosShadowMemento, Memento<Cartridge> cartridgeMemento,
                                   Memento<Gpu> gpuMemento, Memento<StatRegister> statRegisterMemento,
-                                  Memento<Mmu> mmuMemento,
-                                  Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
+                                  Memento<Mmu> mmuMemento, Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
                                   Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento,
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
                                   Memento<SuperGameboy> superGameboyMemento, Memento<Background> backgroundMemento,
                                   Memento<VRamTransfer> vRamTransferMemento, Memento<SgbDisplay> sgbDisplayMemento,
-                                  boolean requestScreenRefresh, boolean lcdDisabled) implements Memento<Gameboy> {
+                                  Memento<Genie> genieMemento, boolean requestScreenRefresh,
+                                  boolean lcdDisabled) implements Memento<Gameboy> {
     }
 
     public enum BootstrapMode {

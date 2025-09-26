@@ -7,6 +7,12 @@ public final class BitUtils {
     private BitUtils() {
     }
 
+    public static int rotateByteRight(int byteValue, int count) {
+        checkByteArgument("byteValue", byteValue);
+        checkArgument(count >= 0 && count <= 7, "Count should be in range 0..7");
+        return (byteValue >>> count) | (0xff & (byteValue << (8 - count)));
+    }
+
     public static int getMSB(int word) {
         checkWordArgument("word", word);
         return word >> 8;

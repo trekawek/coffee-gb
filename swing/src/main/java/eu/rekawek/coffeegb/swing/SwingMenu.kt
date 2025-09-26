@@ -27,6 +27,8 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.CgbGames
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGamesType
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.genie.AddPatches
+import eu.rekawek.coffeegb.core.genie.PatchFactory
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
@@ -176,6 +178,27 @@ class SwingMenu(
     gameMenu.add(stop)
     stop.addActionListener { eventBus.post(StopEmulationEvent()) }
     enableWhenEmulationActive(stop)
+
+    val gameGenie = JMenuItem("Cheat code")
+    gameGenie.isEnabled = false
+    gameMenu.add(gameGenie)
+    gameGenie.addActionListener {
+      val code: String? = JOptionPane.showInputDialog(window, "Please GameGenie / GameShark code")
+      if (code != null) {
+        try {
+          val patches = PatchFactory.createPatches(code)
+          eventBus.post(AddPatches(patches))
+        } catch (e: Exception) {
+          JOptionPane.showMessageDialog(
+              window,
+              "${e.message}",
+              "Error",
+              JOptionPane.ERROR_MESSAGE,
+          )
+        }
+      }
+    }
+    enableWhenEmulationActive(gameGenie)
 
     return gameMenu
   }
