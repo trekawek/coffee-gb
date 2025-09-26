@@ -10,6 +10,9 @@ public record GameGeniePatch(int newData, int address, int oldData) implements P
 
     @Override
     public boolean accepts(AddressSpace addressSpace, boolean gbc) {
+        if (oldData == -1) {
+            return true;
+        }
         return addressSpace.getByte(address) == oldData;
     }
 

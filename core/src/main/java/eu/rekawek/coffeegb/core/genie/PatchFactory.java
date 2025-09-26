@@ -10,6 +10,8 @@ public final class PatchFactory {
 
     private static final Pattern GAME_GENIE_CODE = Pattern.compile("^([0-9A-Fa-f]{3})[+-]([0-9A-Fa-f]{3})[+-]([0-9A-Fa-f]{3})$");
 
+    private static final Pattern GAME_GENIE_SHORT_CODE = Pattern.compile("^([0-9A-Fa-f]{3})[+-]([0-9A-Fa-f]{3})$");
+
     private static final Pattern GAME_SHARK_CODE = Pattern.compile("^([0-9A-Fa-f]{8})$");
 
     private PatchFactory() {
@@ -26,6 +28,8 @@ public final class PatchFactory {
     static Patch createPatch(String code) {
         if (GAME_GENIE_CODE.matcher(code).matches()) {
             return parseGameGenieCode(code);
+        } else if (GAME_GENIE_SHORT_CODE.matcher(code).matches()) {
+            return parseGameGenieShortCode(code);
         } else if (GAME_SHARK_CODE.matcher(code).matches()) {
             return parseGameSharkCode(code);
         } else {
@@ -39,6 +43,13 @@ public final class PatchFactory {
         var address = parse(c, 5, 2, 3, 4) ^ 0xf000;
         var oldData = rotateByteRight(parse(c, 6, 8), 2) ^ 0xba;
         return new GameGeniePatch(newData, address, oldData);
+    }
+
+    private static GameGeniePatch parseGameGenieShortCode(String code) {
+        var c = code.toLowerCase().replace("-", "").toCharArray();
+        var newData = parse(c, 0, 1);
+        var address = parse(c, 5, 2, 3, 4) ^ 0xf000;
+        return new GameGeniePatch(newData, address, -1);
     }
 
     private static GameSharkPatch parseGameSharkCode(String code) {
