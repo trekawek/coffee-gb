@@ -1,55 +1,145 @@
-# Coffee GB
+# Coffee GB ☕ 🎮
 
-Coffee GB is a Gameboy Color emulator written in Java 16 (core) and Kotlin (UI). It's meant to be a development exercise. More info can be found in the blog post [Why did I spend 1.5 months creating a Gameboy emulator?](http://blog.rekawek.eu/2017/02/09/coffee-gb/)
+Coffee GB is a **fast and accurate Game Boy Color emulator** written in Java 16. It's designed not only for smooth
+gameplay but also for advanced features like **rollback-based netplay**, ensuring a stable multiplayer
+experience even on slower connections.
+
+Beyond a standalone emulator, Coffee GB's **core module can be easily integrated** into any Java project, allowing you
+to add Game Boy Color emulation capabilities to your own applications.
 
 ![Coffee GB running game](doc/tetris.gif)
 
-## Building
+---
 
-The emulator can be build with [Maven](https://maven.apache.org/):
+## ✨ Features
 
-    mvn clean package
+Coffee GB offers a robust set of features for an authentic and enhanced Game Boy experience:
 
-The coffee-gb-*.jar executable file will be available in the `./swing/target` directory.
+* **Full GB & GBC Emulation**: Enjoy a wide range of Game Boy and Game Boy Color titles.
+* **Partial Super Game Boy Emulation**: Experience games with SGB borders and custom palettes.
+* **Cycle-Exact CPU Emulation**: CPU emulation simulates each micro-operation within a CPU cycle,
+  ensuring high accuracy.
+* **High Compatibility**: Passes all Blargg's tests, demonstrating strong compatibility (with continuous improvements
+  for remaining games).
+* **Rollback-Based Netplay**: Play with friends over the network without desynchronization, even with high latency. Read
+  more about the technology [here](https://blog.rekawek.eu/2025/07/26/rollback-netplay-gb/).
+* **Memory Bank Controller (MBC) Support**: Includes support for MBC1, MBC2, MBC3, MBC4, and MBC5.
+* **Battery Saves**: Your progress is automatically saved and loaded.
+* **Zipped ROM Support**: Conveniently load games directly from `.zip` files.
+* **ROM-Based Compatibility Tests**: Automated compatibility tests are run via Maven to ensure consistent performance.
 
-## Usage
+---
 
-1. Download the [most recent release](https://github.com/trekawek/coffee-gb/releases).
-2. Double-click the JAR or launch it with `java -jar coffee-gb-*.jar` command.
-3. Load a game.
+## 🚀 Getting Started
 
-Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd>.
+### Requirements
 
-## Features
+* **Java 16 or newer**: Ensure you have a [recent Java version](https://www.oracle.com/java/technologies/downloads)
+  installed.
 
-* Full support for GB & GBC emulation.
-* Partial Super Gameboy emulation (borders and palette).
-* Cycle-exact CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
-* Quite compatible (all the Blargg's tests are passed, although some game still doesn't work)
-* [Rollback-based netplay](https://blog.rekawek.eu/2025/07/26/rollback-netplay-gb/) 
-* MBC1-5 support
-* Battery saves
-* Support for zipped ROMs
-* ROM-based compatibility tests run from Maven
+### Usage
 
-## Modules
+1. **Download**: Get the [most recent release](https://github.com/trekawek/coffee-gb/releases) from the GitHub releases
+   page.
+2. **Launch**:
+    * **Graphical Interface**: Double-click the downloaded `.jar` file.
+    * **Command Line**: Open your terminal and run: `java -jar coffee-gb-*.jar`
+3. **Load a Game**: Once launched, load your desired Game Boy or Game Boy Color ROM.
 
-Emulator is split into modules:
+### Controls
 
-* core - the core emulator. This module can be easily referenced from other projects.
-* swing - the desktop UI with executable.
-* controller - the middleware between the UI and the core. It also contains network support.
+Navigate and play with these default keyboard controls:
 
-## Running Blargg's tests
+* **Directional Pad**: <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>
+* **A Button**: <kbd>Z</kbd>
+* **B Button**: <kbd>X</kbd>
+* **Start**: <kbd>Enter</kbd>
+* **Select**: <kbd>Backspace</kbd>
 
-The [Blargg's test ROMs](http://gbdev.gg8.se/wiki/articles/Test_ROMs) are used for testing the compatibility. Tests can be launched from Maven using appropriate profile:
+---
 
-    mvn clean test -f core/pom.xml -Ptest-blargg
-    mvn clean test -f core/pom.xml -Ptest-blargg-individual # for running "single" tests providing more diagnostic info
+## 🧑‍💻 Development
 
-They are also part of the [Travis-based CI](https://travis-ci.org/trekawek/coffee-gb).
+### Building from source
 
-The tests output (normally displayed on the Gameboy screen) is redirected to the stdout:
+To build Coffee GB from its source code using Maven:
+
+```sh
+mvn clean install
+java -jar swing/target/coffee-gb-*.jar
+```
+
+### Including the Coffee GB core in your Project
+
+The core emulation module is available on Maven Central, making it easy to add to your Java projects.
+
+Maven Dependency:
+
+```xml
+
+<dependency>
+    <groupId>eu.rekawek.coffeegb</groupId>
+    <artifactId>core</artifactId>
+    <version>1.6.0</version>
+</dependency>
+```
+
+### Example usage
+
+Here's a basic example demonstrating how to initialize and run the emulator core, process frames, and simulate button
+presses:
+
+```java
+        var eventBus = new EventBusImpl();
+        
+        // Register listeners for frame and sound events
+        eventBus.register(e -> {
+            // Process the new frame (e.g., render it to a display)
+        }, DmgFrameReadyEvent.class);
+        eventBus.register(e -> {
+            // Process the new audio sample (e.g., play it)
+        }, SoundSampleEvent.class);
+        
+        // Configure and build the Game Boy instance
+        var config = new GameboyConfiguration(new File("path/to/rom.gb"));
+        var gameboy = config.build();
+        
+        // Initialize the Game Boy with event bus, serial endpoint, and joypad
+        gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+
+        // Start the emulation in a new thread
+        var thread = new Thread(gameboy);
+        thread.start();
+        
+        // Example: Let the emulator run for a second
+        Thread.sleep(1000);
+        
+        // Example: Simulate pressing the START button
+        eventBus.post(new ButtonPressEvent(Button.START));
+```
+
+## 🧪 Tests
+
+Coffee GB employs comprehensive ROM-based tests to ensure high accuracy and compatibility.
+
+### Blargg's Test ROMs
+
+We utilize the renowned Blargg's test ROMs for compatibility verification. These tests can be executed via Maven
+profiles:
+
+Run all Blargg's tests:
+
+```bash
+mvn clean test -f core/pom.xml -Ptest-blargg
+```
+
+Run individual Blargg's tests (with more diagnostic info):
+
+```bash
+mvn clean test -f core/pom.xml -Ptest-blargg-individual
+```
+
+The test output, which normally appears on a Game Boy screen, is redirected to stdout. An example of a successful run:
 
 ```
 cpu_instrs
@@ -59,7 +149,7 @@ cpu_instrs
 Passed all tests
 ```
 
-Coffee GB passes all the tests:
+Coffee GB successfully passes all tests in the following suites:
 
 * cgb_sound
 * cpu_instrs
@@ -70,13 +160,21 @@ Coffee GB passes all the tests:
 * mem_timing-2
 * oam_bug-2
 
-## Mooneye tests
+These tests are also integrated into our Github Actions for continuous validation.
 
-The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a great set of test ROMs. They can be used to test the Coffee GB as well. Use -Ptest-mooneye profile:
+### Mooneye Test ROMs
 
-    mvn clean test -f core/pom.xml -Ptest-mooneye
+The Mooneye GB emulator provides an excellent suite of acceptance test ROMs. You can run these tests against Coffee GB
+using the `-Ptest-mooneye profile`:
 
-## Screenshots
+
+```bash
+mvn clean test -f core/pom.xml -Ptest-mooneye
+```
+
+## 🖼️ Screenshots
+
+See Coffee GB in action!
 
 ![Coffee GB running game](doc/screenshot1.png)
 ![Coffee GB running game](doc/screenshot2.png)
@@ -89,23 +187,6 @@ The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a gre
 ![Coffee GB running game](doc/screenshot9.png)
 ![Coffee GB running game](doc/screenshot10.png)
 
-## Key bindings
-
-The default key bindings can be changed with the `~/.coffeegb.properties` file. The file has following format:
-
-```
-btn_up=VK_UP
-btn_down=VK_DOWN
-btn_left=VK_LEFT
-btn_right=VK_RIGHT
-btn_a=VK_Z
-btn_b=VK_X
-btn_start=VK_ENTER
-btn_select=VK_BACK_SPACE
-```
-
-The key list can be found in the [KeyEvent JavaDoc](https://docs.oracle.com/javase/10/docs/api/java/awt/event/KeyEvent.html#field.summary).
-
 ## Resources
 
 * [GameBoy CPU manual](http://marc.rawer.de/Gameboy/Docs/GBCPUman.pdf)
@@ -113,7 +194,7 @@ The key list can be found in the [KeyEvent JavaDoc](https://docs.oracle.com/java
 * [Gameboy opcodes](http://pastraiser.com/cpu/gameboy/gameboy_opcodes.html)
 * [Nitty Gritty Gameboy cycle timing](http://blog.kevtris.org/blogfiles/Nitty%20Gritty%20Gameboy%20VRAM%20Timing.txt)
 * [Video Timing](https://github.com/jdeblese/gbcpu/wiki/Video-Timing)
-* [BGB emulator](http://bgb.bircd.org/) --- good for testing / debugging, works fine with Wine
+* [BGB emulator](http://bgb.bircd.org/) - good for testing / debugging, works fine with Wine
 * [The Cycle-Accurate Game Boy Docs](https://github.com/AntonioND/giibiiadvance/tree/master/docs)
 * [Test ROMs](http://slack.net/~ant/old/gb-tests/) - included in the [src/test/resources/roms](src/test/resources/roms)
 * [Pandocs](http://bgb.bircd.org/pandocs.htm)
