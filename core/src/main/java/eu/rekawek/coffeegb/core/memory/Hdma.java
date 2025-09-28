@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.gpu.Mode;
+import eu.rekawek.coffeegb.core.gpu.StatRegister;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -23,13 +23,9 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     private final Ram hdma1234 = new Ram(HDMA1, 4);
 
-    private Mode gpuMode;
-
     private boolean transferInProgress;
 
     private boolean hblankTransfer;
-
-    private boolean lcdEnabled;
 
     private int length;
 
@@ -38,6 +34,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     private int dst;
 
     private int tick;
+
+    private boolean hBlankChunkCompleted;
 
     public Hdma(AddressSpace addressSpace) {
         this.addressSpace = addressSpace;
@@ -64,7 +62,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
             transferInProgress = false;
             length = 0x7f;
         } else if (hblankTransfer) {
-            gpuMode = null; // wait until next HBlank
+            hBlankChunkCompleted = true;
         }
     }
 
@@ -92,23 +90,25 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         }
     }
 
-    public void onGpuUpdate(Mode newGpuMode) {
-        this.gpuMode = newGpuMode;
-    }
-
-    public void onLcdSwitch(boolean lcdEnabled) {
-        this.lcdEnabled = lcdEnabled;
-    }
-
     public boolean isTransferInProgress() {
-        if (!transferInProgress) {
-            return false;
-        } else if (hblankTransfer && (gpuMode == Mode.HBlank || !lcdEnabled)) {
-            return true;
-        } else return !hblankTransfer;
+        if (transferInProgress) {
+            if (hblankTransfer) {
+                var mode = (addressSpace.getByte(StatRegister.ADDRESS) & 0b11);
+                if (mode == 0) {
+                    return !hBlankChunkCompleted;
+                } else {
+                    hBlankChunkCompleted = false;
+                    return false;
+                }
+            } else {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void startTransfer(int reg) {
+        hBlankChunkCompleted = false;
         hblankTransfer = (reg & (1 << 7)) != 0;
         length = reg & 0x7f;
 
@@ -126,7 +126,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     @Override
     public Memento<Hdma> saveToMemento() {
-        return new HdmaMemento(hdma1234.saveToMemento(), gpuMode, transferInProgress, hblankTransfer, lcdEnabled, length, src, dst, tick);
+        return new HdmaMemento(hdma1234.saveToMemento(), transferInProgress, hblankTransfer, length, src, dst, tick);
     }
 
     @Override
@@ -135,18 +135,16 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
             throw new IllegalArgumentException("Invalid memento type");
         }
         hdma1234.restoreFromMemento(mem.hdma1234);
-        this.gpuMode = mem.gpuMode;
         this.transferInProgress = mem.transferInProgress;
         this.hblankTransfer = mem.hblankTransfer;
-        this.lcdEnabled = mem.lcdEnabled;
         this.length = mem.length;
         this.src = mem.src;
         this.dst = mem.dst;
         this.tick = mem.tick;
     }
 
-    public record HdmaMemento(Memento<Ram> hdma1234, Mode gpuMode, boolean transferInProgress,
-                              boolean hblankTransfer, boolean lcdEnabled, int length, int src, int dst, int tick
+    public record HdmaMemento(Memento<Ram> hdma1234, boolean transferInProgress,
+                              boolean hblankTransfer, int length, int src, int dst, int tick
     ) implements Memento<Hdma> {
     }
 

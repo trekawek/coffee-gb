@@ -221,14 +221,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         boolean result = false;
 
         Mode newMode = tickSubsystems();
-        if (newMode != null) {
-            hdma.onGpuUpdate(newMode);
-        }
-
         if (!lcdDisabled && !gpu.isLcdEnabled()) {
             lcdDisabled = true;
             display.frameIsReady();
-            hdma.onLcdSwitch(false);
             result = true;
         } else if (newMode == Mode.VBlank) {
             requestedScreenRefresh = true;
@@ -239,7 +234,6 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         if (lcdDisabled && gpu.isLcdEnabled()) {
             lcdDisabled = false;
-            hdma.onLcdSwitch(true);
         } else if (requestedScreenRefresh && newMode == Mode.OamSearch) {
             requestedScreenRefresh = false;
         }
