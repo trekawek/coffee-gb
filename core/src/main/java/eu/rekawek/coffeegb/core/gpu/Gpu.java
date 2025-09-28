@@ -73,19 +73,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         oamPalette.fillWithFF();
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
-        this.pixelTransferPhase =
-                new PixelTransfer(
-                        display,
-                        videoRam0,
-                        videoRam1,
-                        oamRam,
-                        lcdc,
-                        r,
-                        gbc,
-                        bgPalette,
-                        oamPalette,
-                        oamSearchPhase.getSprites(),
-                        vRamTransfer);
+        this.pixelTransferPhase = new PixelTransfer(display, videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer);
         this.hBlankPhase = new HBlankPhase();
         this.vBlankPhase = new VBlankPhase();
 
@@ -97,9 +85,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         int mode = (statRegister.getByte(StatRegister.ADDRESS) & 0b11);
         if (videoRam0.accepts(address) /* && mode != Mode.PixelTransfer*/) {
             return getVideoRam();
-        } else if (oamRam.accepts(address)
-                && !dma.isOamBlocked()
-                && (mode == 0 || mode == 1)) {
+        } else if (oamRam.accepts(address) && !dma.isOamBlocked() && (mode == 0 || mode == 1)) {
             return oamRam;
         } else if (lcdc.accepts(address)) {
             return lcdc;
@@ -151,7 +137,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (space == null) {
             return 0xff;
         } else if (address == VBK.getAddress()) {
-            return gbc ? 0xfe : 0xff;
+            return gbc ? (0xfe | (space.getByte(address) & 1)) : 0xff;
         } else {
             return space.getByte(address);
         }
@@ -193,10 +179,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
                 case HBlank:
                     ticksInLine = 0;
-                    if (r.get(WX) < 166
-                            && r.get(WY) < 143
-                            && r.get(LY) >= r.get(WY)
-                            && lcdc.isWindowDisplay()) {
+                    if (r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) >= r.get(WY) && lcdc.isWindowDisplay()) {
                         pixelTransferPhase.incrementWindowLineCounter();
                     }
                     if (r.preIncrement(LY) == 144) {
@@ -283,27 +266,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public Memento<Gpu> saveToMemento() {
-        Memento<Ram> videoRam0Memento =
-                videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
-        Memento<Ram> videoRam1Memento =
-                videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
+        Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
+        Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(
-                videoRam0Memento,
-                videoRam1Memento,
-                display.saveToMemento(),
-                lcdc.saveToMemento(),
-                bgPalette.saveToMemento(),
-                oamPalette.saveToMemento(),
-                hBlankPhase.saveToMemento(),
-                oamSearchPhase.saveToMemento(),
-                pixelTransferPhase.saveToMemento(),
-                vBlankPhase.saveToMemento(),
-                r.saveToMemento(),
-                lcdEnabled,
-                lcdEnabledDelay,
-                ticksInLine,
-                mode);
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), hBlankPhase.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), vBlankPhase.saveToMemento(), r.saveToMemento(), lcdEnabled, lcdEnabledDelay, ticksInLine, mode);
     }
 
     @Override
@@ -350,22 +316,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
     }
 
-    private record GpuMemento(
-            Memento<Ram> videoRam0Memento,
-            Memento<Ram> videoRam1Memento,
-            Memento<Display> displayMemento,
-            Memento<Lcdc> lcdcMemento,
-            Memento<ColorPalette> bgPaletteMemento,
-            Memento<ColorPalette> oamPaletteMemento,
-            Memento<HBlankPhase> hBlankPhaseMemento,
-            Memento<OamSearch> oamSearchPhaseMemento,
-            Memento<PixelTransfer> pixelTransferPhaseMemento,
-            Memento<VBlankPhase> vBlankPhaseMemento,
-            Memento<GpuRegisterValues> rMemento,
-            boolean lcdEnabled,
-            int lcdEnabledDelay,
-            int ticksInLine,
-            Mode mode)
-            implements Memento<Gpu> {
+    private record GpuMemento(Memento<Ram> videoRam0Memento, Memento<Ram> videoRam1Memento,
+                              Memento<Display> displayMemento, Memento<Lcdc> lcdcMemento,
+                              Memento<ColorPalette> bgPaletteMemento, Memento<ColorPalette> oamPaletteMemento,
+                              Memento<HBlankPhase> hBlankPhaseMemento, Memento<OamSearch> oamSearchPhaseMemento,
+                              Memento<PixelTransfer> pixelTransferPhaseMemento, Memento<VBlankPhase> vBlankPhaseMemento,
+                              Memento<GpuRegisterValues> rMemento, boolean lcdEnabled, int lcdEnabledDelay,
+                              int ticksInLine, Mode mode) implements Memento<Gpu> {
     }
 }
