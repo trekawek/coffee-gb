@@ -35,8 +35,8 @@ public class SoundMode3 extends AbstractSoundMode {
 
     public SoundMode3(boolean gbc) {
         super(0xff1a, 256, gbc);
-        for (int v : gbc ? CGB_WAVE : DMG_WAVE) {
-            waveRam.setByte(0xff30, v);
+        for (int i = 0; i < 16; i++) {
+            waveRam.setByte(0xff30 + i, gbc ? CGB_WAVE[i] : DMG_WAVE[i]);
         }
     }
 
