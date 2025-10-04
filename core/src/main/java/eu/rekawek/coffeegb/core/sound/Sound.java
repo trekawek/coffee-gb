@@ -12,6 +12,8 @@ import java.io.Serializable;
 
 public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
+    private static final boolean[] ENABLED = {true, true, true, true};
+
     private static final int[] MASKS =
             new int[]{
                     0x80, 0x3f, 0x00, 0xff, 0xbf, 0xff, 0x3f, 0x00, 0xff, 0xbf, 0x7f, 0xff, 0x9f, 0xff, 0xbf,
@@ -62,8 +64,9 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         int selection = r.getByte(0xff25);
         int left = 0;
         int right = 0;
+        int channelsCount = 0;
         for (int i = 0; i < 4; i++) {
-            if (!overriddenEnabled[i]) {
+            if (!overriddenEnabled[i] || !ENABLED[i]) {
                 continue;
             }
             if ((selection & (1 << i + 4)) != 0) {
@@ -72,9 +75,10 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             if ((selection & (1 << i)) != 0) {
                 right += channels[i];
             }
+            channelsCount++;
         }
-        left /= 4;
-        right /= 4;
+        left /= channelsCount;
+        right /= channelsCount;
 
         int volumes = r.getByte(0xff24);
         left *= ((volumes >> 4) & 0b111);
@@ -112,7 +116,6 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     @Override
     public void setByte(int address, int value) {
-        //LOG.atInfo().log("setByte({}, {})", Integer.toHexString(address), Integer.toHexString(value));
         if (address == 0xff26) {
             if ((value & (1 << 7)) == 0) {
                 if (enabled) {
