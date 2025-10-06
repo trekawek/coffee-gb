@@ -75,6 +75,9 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     protected void setNr0(int value) {
         super.setNr0(value);
+        if (!dacEnabled && (value & (1 << 7)) != 0) {
+            start();
+        }
         dacEnabled = (value & (1 << 7)) != 0;
         channelEnabled &= dacEnabled;
     }
@@ -111,7 +114,6 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void start() {
         i = 0;
-        buffer = 0;
         if (gbc) {
             length.reset();
         }
@@ -120,8 +122,7 @@ public class SoundMode3 extends AbstractSoundMode {
 
     @Override
     public void trigger() {
-        i = 0;
-        freqDivider = 6;
+        resetFreqDivider();
         triggered = !gbc;
         if (gbc) {
             getWaveEntry();
@@ -144,13 +145,13 @@ public class SoundMode3 extends AbstractSoundMode {
 
         if (--freqDivider == 0) {
             resetFreqDivider();
+            i = (i + 1) % 32;
             if (triggered) {
                 lastOutput = (buffer >> 4) & 0x0f;
                 triggered = false;
             } else {
                 lastOutput = getWaveEntry();
             }
-            i = (i + 1) % 32;
         }
         return lastOutput;
     }
