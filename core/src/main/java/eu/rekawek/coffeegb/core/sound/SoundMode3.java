@@ -122,6 +122,7 @@ public class SoundMode3 extends AbstractSoundMode {
 
     @Override
     public void trigger() {
+        i = 0;
         resetFreqDivider();
         triggered = !gbc;
         if (gbc) {
@@ -132,14 +133,10 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public int tick() {
         ticksSinceRead++;
+        if (!channelEnabled) {
+            return lastOutput;
+        }
         if (!updateLength()) {
-            return 0;
-        }
-        if (!dacEnabled) {
-            return 0;
-        }
-
-        if ((getNr0() & (1 << 7)) == 0) {
             return 0;
         }
 
