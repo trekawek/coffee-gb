@@ -111,6 +111,9 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     @Override
     public boolean accepts(int address) {
+        if (address == 0xff76 || address == 0xff77) {
+            return true;
+        }
         return getAddressSpace(address) != null;
     }
 
@@ -133,7 +136,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
         AddressSpace s = getAddressSpace(address);
         if (s == null) {
-            throw new IllegalArgumentException();
+            return;
         }
         s.setByte(address, value);
     }
@@ -147,6 +150,10 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
                 result |= allModes[i].isEnabled() ? (1 << i) : 0;
             }
             result |= enabled ? (1 << 7) : 0;
+        } else if (address == 0xff76) {
+            return channels[0] | (channels[1] << 4);
+        } else if (address == 0xff77) {
+            return channels[1] | (channels[2] << 4);
         } else {
             result = getUnmaskedByte(address);
         }
