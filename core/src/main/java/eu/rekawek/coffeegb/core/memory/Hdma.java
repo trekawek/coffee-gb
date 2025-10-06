@@ -21,8 +21,6 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     private final AddressSpace addressSpace;
 
-    private final Ram hdma1234 = new Ram(HDMA1, 4);
-
     private Mode gpuMode;
 
     private boolean transferInProgress;
@@ -58,8 +56,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         for (int j = 0; j < 0x10; j++) {
             addressSpace.setByte(dst + j, addressSpace.getByte(src + j));
         }
-        src += 0x10;
-        dst += 0x10;
+        src = (src + 0x10) & 0xffff;
+        dst = (dst + 0x10) & 0xffff;
         if (length-- == 0) {
             transferInProgress = false;
             length = 0x7f;
@@ -70,26 +68,35 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     @Override
     public void setByte(int address, int value) {
-        if (hdma1234.accepts(address)) {
-            hdma1234.setByte(address, value);
-        } else if (address == HDMA5) {
-            if (transferInProgress && (value & (1 << 7)) == 0) {
-                stopTransfer();
-            } else {
-                startTransfer(value);
-            }
+        switch (address) {
+            case HDMA1:
+                src = (value << 8) | (src & 0xff);
+                break;
+            case HDMA2:
+                src = (src & 0xff00) | (value & 0xf0);
+                break;
+            case HDMA3:
+                dst = 0x8000 | ((value & 0x1f) << 8) | (dst & 0xff);
+                break;
+            case HDMA4:
+                dst = (dst & 0xff00) | (value & 0xf0);
+                break;
+            case HDMA5:
+                if (transferInProgress && (value & (1 << 7)) == 0) {
+                    stopTransfer();
+                } else {
+                    startTransfer(value);
+                }
+                break;
         }
     }
 
     @Override
     public int getByte(int address) {
-        if (hdma1234.accepts(address)) {
-            return 0xff;
-        } else if (address == HDMA5) {
+        if (address == HDMA5) {
             return (transferInProgress ? 0 : (1 << 7)) | length;
-        } else {
-            throw new IllegalArgumentException();
         }
+        return 0xff;
     }
 
     public void onGpuUpdate(Mode newGpuMode) {
@@ -111,12 +118,6 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     private void startTransfer(int reg) {
         hblankTransfer = (reg & (1 << 7)) != 0;
         length = reg & 0x7f;
-
-        src = (hdma1234.getByte(HDMA1) << 8) | (hdma1234.getByte(HDMA2) & 0xf0);
-        dst = ((hdma1234.getByte(HDMA3) & 0x1f) << 8) | (hdma1234.getByte(HDMA4) & 0xf0);
-        src = src & 0xfff0;
-        dst = (dst & 0x1fff) | 0x8000;
-
         transferInProgress = true;
     }
 
@@ -126,7 +127,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     @Override
     public Memento<Hdma> saveToMemento() {
-        return new HdmaMemento(hdma1234.saveToMemento(), gpuMode, transferInProgress, hblankTransfer, lcdEnabled, length, src, dst, tick);
+        return new HdmaMemento(gpuMode, transferInProgress, hblankTransfer, lcdEnabled, length, src, dst, tick);
     }
 
     @Override
@@ -134,7 +135,6 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         if (!(memento instanceof HdmaMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
-        hdma1234.restoreFromMemento(mem.hdma1234);
         this.gpuMode = mem.gpuMode;
         this.transferInProgress = mem.transferInProgress;
         this.hblankTransfer = mem.hblankTransfer;
@@ -145,9 +145,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         this.tick = mem.tick;
     }
 
-    public record HdmaMemento(Memento<Ram> hdma1234, Mode gpuMode, boolean transferInProgress,
-                              boolean hblankTransfer, boolean lcdEnabled, int length, int src, int dst, int tick
-    ) implements Memento<Hdma> {
+    public record HdmaMemento(Mode gpuMode, boolean transferInProgress, boolean hblankTransfer, boolean lcdEnabled,
+                              int length, int src, int dst, int tick) implements Memento<Hdma> {
     }
 
 }
