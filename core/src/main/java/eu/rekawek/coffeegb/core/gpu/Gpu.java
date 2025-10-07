@@ -179,7 +179,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
                 case HBlank:
                     ticksInLine = 0;
-                    if (r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) >= r.get(WY) && lcdc.isWindowDisplay()) {
+                    if (r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) >= r.get(WY)) {
                         pixelTransferPhase.incrementWindowLineCounter();
                     }
                     if (r.preIncrement(LY) == 144) {
