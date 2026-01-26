@@ -32,8 +32,8 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
         values[reg.ordinal()] = value;
     }
 
-    public int preIncrement(GpuRegister reg) {
-        return ++values[reg.ordinal()];
+    public void inc(GpuRegister reg) {
+        ++values[reg.ordinal()];
     }
 
     @Override

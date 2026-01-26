@@ -74,8 +74,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(display, videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer);
-        this.hBlankPhase = new HBlankPhase();
-        this.vBlankPhase = new VBlankPhase();
+        this.hBlankPhase = new HBlankPhase(r);
+        this.vBlankPhase = new VBlankPhase(r);
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
@@ -179,10 +179,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
                 case HBlank:
                     ticksInLine = 0;
-                    if (r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) >= r.get(WY)) {
+                    if (r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) > r.get(WY)) {
                         pixelTransferPhase.incrementWindowLineCounter();
                     }
-                    if (r.preIncrement(LY) == 144) {
+                    if (r.get(LY) == 144) {
                         mode = Mode.VBlank;
                         phase = vBlankPhase.start();
                     } else {
@@ -193,7 +193,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
                 case VBlank:
                     ticksInLine = 0;
-                    if (r.preIncrement(LY) == 1) {
+                    if (r.get(LY) == 1) {
                         mode = Mode.OamSearch;
                         r.put(LY, 0);
                         pixelTransferPhase.resetWindowLineCounter();
