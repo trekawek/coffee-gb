@@ -184,6 +184,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         background.init(eventBus);
         sgbDisplay.init(eventBus);
         gameGenie.init(eventBus);
+        cartridge.init(eventBus);
     }
 
     public void run() {

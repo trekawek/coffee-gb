@@ -24,7 +24,8 @@ public enum CartridgeType {
     ROM_MBC5_RAM_BATTERY(0x01b),
     ROM_MBC5_RUMBLE(0x1c),
     ROM_MBC5_RUMBLE_SRAM(0x1d),
-    ROM_MBC5_RUMBLE_SRAM_BATTERY(0x1e);
+    ROM_MBC5_RUMBLE_SRAM_BATTERY(0x1e),
+    ROM_MBC7_SENSOR_RUMBLE_RAM_BATTERY(0x22);
 
     private final int id;
 
@@ -46,6 +47,10 @@ public enum CartridgeType {
 
     public boolean isMbc5() {
         return nameContainsSegment("MBC5");
+    }
+
+    public boolean isMbc7() {
+        return nameContainsSegment("MBC7");
     }
 
     public boolean isMmm01() {

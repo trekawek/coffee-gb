@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
+import eu.rekawek.coffeegb.swing.io.SwingAccelerometer
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import javax.swing.BoxLayout
@@ -23,6 +24,7 @@ class SwingEmulator(
   private val display: SwingDisplay
   private val joypad: SwingJoypad
   private val sound: AudioSystemSound
+  private val accelerometer: SwingAccelerometer
 
   private val connectionController: ConnectionController
 
@@ -32,6 +34,7 @@ class SwingEmulator(
     display = SwingDisplay(properties.display, eventBus, "main")
     sound = AudioSystemSound(properties.sound, eventBus, "main")
     joypad = SwingJoypad(properties.controllerMapping, eventBus)
+    accelerometer = SwingAccelerometer(eventBus, display.preferredSize)
     connectionController = ConnectionController(eventBus)
 
     Thread(display).start()
@@ -73,9 +76,11 @@ class SwingEmulator(
     val mainPanel = JPanel()
     mainPanel.setLayout(BoxLayout(mainPanel, BoxLayout.X_AXIS))
     mainPanel.add(display)
+    display.addMouseMotionListener(accelerometer)
 
     jFrame.contentPane = mainPanel
     jFrame.addKeyListener(joypad)
+    jFrame.addMouseMotionListener(accelerometer)
 
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
       mainPanel.preferredSize = it.preferredSize

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -33,9 +34,15 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mbc3(rom, battery);
         } else if (type.isMbc5()) {
             addressSpace = new Mbc5(rom, battery);
+        } else if (type.isMbc7()) {
+            addressSpace = new Mbc7(rom, battery);
         } else {
             addressSpace = new BasicRom(rom);
         }
+    }
+
+    public void init(EventBus eventBus) {
+        addressSpace.init(eventBus);
     }
 
     @Override
