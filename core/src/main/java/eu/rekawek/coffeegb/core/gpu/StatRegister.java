@@ -160,6 +160,16 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     @Override
     public void setByte(int address, int value) {
         stat = (stat & 0b10000111) | (value & 0b01111000);
+
+        // Stats interrupt bug
+        // see https://gbdev.io/pandocs/STAT.html#spurious-stat-interrupts
+        if (!states.isEmpty() && !gpu.isGbc()) {
+            var state = states.getLast();
+            var mode = state.mode();
+            if (mode == VBlank) {
+                interruptManager.requestInterrupt(InterruptType.LCDC);
+            }
+        }
     }
 
     @Override
