@@ -34,6 +34,8 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mbc3(rom, battery);
         } else if (type.isMbc5()) {
             addressSpace = new Mbc5(rom, battery);
+        } else if (type.isMbc6()) {
+            addressSpace = new Mbc6(rom, battery);
         } else if (type.isMbc7()) {
             addressSpace = new Mbc7(rom, battery);
         } else {
@@ -66,11 +68,14 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
 
     private static Battery createBattery(Rom rom) {
         if (rom.getType().isBattery()) {
-            int ramBanks = rom.getRamBanks();
-            if (ramBanks == 0 && rom.getType().isRam()) {
-                ramBanks = 1;
+            int ramSize = 0x2000 * rom.getRamBanks();
+            if (ramSize == 0 && rom.getType().isRam()) {
+                ramSize = 0x2000;
             }
-            return new FileBattery(getSaveName(rom.getFile()), 0x2000 * ramBanks);
+            if (rom.getType().isMbc6()) {
+                ramSize = 0x8000 + 0x100000; // 32KB RAM + 1MB Flash
+            }
+            return new FileBattery(getSaveName(rom.getFile()), ramSize);
         } else {
             return Battery.NULL_BATTERY;
         }
