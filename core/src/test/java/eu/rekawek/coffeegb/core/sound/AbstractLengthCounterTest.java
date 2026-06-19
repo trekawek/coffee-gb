@@ -1,11 +1,12 @@
 package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.Gameboy;
-import eu.rekawek.coffeegb.core.sound.LengthCounter;
 
 public abstract class AbstractLengthCounterTest {
 
     protected final int maxlen;
+
+    protected final FrameSequencer frameSequencer;
 
     protected final LengthCounter lengthCounter;
 
@@ -15,7 +16,8 @@ public abstract class AbstractLengthCounterTest {
 
     public AbstractLengthCounterTest(int maxlen) {
         this.maxlen = maxlen;
-        this.lengthCounter = new LengthCounter(maxlen);
+        this.frameSequencer = new FrameSequencer();
+        this.lengthCounter = new LengthCounter(maxlen, frameSequencer);
     }
 
     protected void wchn(int register, int value) {
@@ -30,7 +32,10 @@ public abstract class AbstractLengthCounterTest {
 
     protected void delayClocks(int clocks) {
         for (int i = 0; i < clocks; i++) {
-            lengthCounter.tick();
+            int firedStep = frameSequencer.tick();
+            if (firedStep >= 0 && (firedStep & 1) == 0) {
+                lengthCounter.clockTick();
+            }
         }
     }
 
@@ -39,6 +44,7 @@ public abstract class AbstractLengthCounterTest {
     }
 
     protected void syncApu() {
+        frameSequencer.reset();
         lengthCounter.reset();
     }
 }

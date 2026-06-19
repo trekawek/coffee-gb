@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.core.sound;
 
-import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -8,23 +7,17 @@ import java.io.Serializable;
 
 public class FrequencySweep implements Serializable, Originator<FrequencySweep> {
 
-    private static final int DIVIDER = Gameboy.TICKS_PER_SEC / 128;
-
-    // sweep parameters
     private int period;
 
     private boolean negate;
 
     private int shift;
 
-    // current process variables
     private int timer;
 
     private int shadowFreq;
 
     private int nr13, nr14;
-
-    private int i;
 
     private boolean overflow;
 
@@ -34,7 +27,6 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
 
     public void start() {
         counterEnabled = false;
-        i = 8192;
     }
 
     public void trigger() {
@@ -78,22 +70,19 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         return nr14;
     }
 
-    public void tick() {
-        if (++i == DIVIDER) {
-            i = 0;
-            if (!counterEnabled) {
-                return;
-            }
-            if (--timer == 0) {
-                timer = period == 0 ? 8 : period;
-                if (period != 0) {
-                    int newFreq = calculate();
-                    if (!overflow && shift != 0) {
-                        shadowFreq = newFreq;
-                        nr13 = shadowFreq & 0xff;
-                        nr14 = (shadowFreq & 0x700) >> 8;
-                        calculate();
-                    }
+    public void clockTick() {
+        if (!counterEnabled) {
+            return;
+        }
+        if (--timer == 0) {
+            timer = period == 0 ? 8 : period;
+            if (period != 0) {
+                int newFreq = calculate();
+                if (!overflow && shift != 0) {
+                    shadowFreq = newFreq;
+                    nr13 = shadowFreq & 0xff;
+                    nr14 = (shadowFreq & 0x700) >> 8;
+                    calculate();
                 }
             }
         }
@@ -119,7 +108,7 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
 
     @Override
     public Memento<FrequencySweep> saveToMemento() {
-        return new FrequencySweepMemento(period, negate, shift, timer, shadowFreq, nr13, nr14, i, overflow, counterEnabled, negging);
+        return new FrequencySweepMemento(period, negate, shift, timer, shadowFreq, nr13, nr14, overflow, counterEnabled, negging);
     }
 
     @Override
@@ -134,14 +123,13 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         this.shadowFreq = mem.shadowFreq;
         this.nr13 = mem.nr13;
         this.nr14 = mem.nr14;
-        this.i = mem.i;
         this.overflow = mem.overflow;
         this.counterEnabled = mem.counterEnabled;
         this.negging = mem.negging;
     }
 
     private record FrequencySweepMemento(int period, boolean negate, int shift, int timer, int shadowFreq, int nr13,
-                                         int nr14, int i, boolean overflow, boolean counterEnabled,
+                                         int nr14, boolean overflow, boolean counterEnabled,
                                          boolean negging) implements Memento<FrequencySweep> {
     }
 }

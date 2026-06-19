@@ -14,8 +14,8 @@ public class SoundMode1 extends AbstractSoundMode {
 
     private final VolumeEnvelope volumeEnvelope;
 
-    public SoundMode1(boolean gbc) {
-        super(0xff10, 64, gbc);
+    public SoundMode1(FrameSequencer frameSequencer, boolean gbc) {
+        super(0xff10, 64, frameSequencer, gbc);
         this.frequencySweep = new FrequencySweep();
         this.volumeEnvelope = new VolumeEnvelope();
     }
@@ -39,9 +39,17 @@ public class SoundMode1 extends AbstractSoundMode {
     }
 
     @Override
-    public int tick() {
-        volumeEnvelope.tick();
+    public void tickEnvelope() {
+        volumeEnvelope.clockTick();
+    }
 
+    @Override
+    public void tickSweep() {
+        frequencySweep.clockTick();
+    }
+
+    @Override
+    public int tick() {
         boolean e;
         e = updateLength();
         e = updateSweep() && e;
@@ -120,7 +128,6 @@ public class SoundMode1 extends AbstractSoundMode {
     }
 
     protected boolean updateSweep() {
-        frequencySweep.tick();
         if (channelEnabled && !frequencySweep.isEnabled()) {
             channelEnabled = false;
         }

@@ -5,34 +5,24 @@ import eu.rekawek.coffeegb.core.memento.Originator;
 
 import java.io.Serializable;
 
-import static eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_SEC;
-
 public class LengthCounter implements Serializable, Originator<LengthCounter> {
-
-    private final int DIVIDER = TICKS_PER_SEC / 256;
 
     private final int fullLength;
 
-    private int length;
+    private final FrameSequencer frameSequencer;
 
-    private long i;
+    private int length;
 
     private boolean enabled;
 
-    public LengthCounter(int fullLength) {
+    public LengthCounter(int fullLength, FrameSequencer frameSequencer) {
         this.fullLength = fullLength;
+        this.frameSequencer = frameSequencer;
     }
 
-    public void start() {
-        i = 8192;
-    }
-
-    public void tick() {
-        if (++i == DIVIDER) {
-            i = 0;
-            if (enabled && length > 0) {
-                length--;
-            }
+    public void clockTick() {
+        if (enabled && length > 0) {
+            length--;
         }
     }
 
@@ -48,19 +38,21 @@ public class LengthCounter implements Serializable, Originator<LengthCounter> {
         boolean enable = (value & (1 << 6)) != 0;
         boolean trigger = (value & (1 << 7)) != 0;
 
+        boolean firstHalf = frameSequencer.isFirstHalfOfLengthPeriod();
+
         if (enabled) {
             if (length == 0 && trigger) {
-                if (enable && i < DIVIDER / 2) {
+                if (enable && firstHalf) {
                     setLength(fullLength - 1);
                 } else {
                     setLength(fullLength);
                 }
             }
         } else if (enable) {
-            if (length > 0 && i < DIVIDER / 2) {
+            if (length > 0 && firstHalf) {
                 length--;
             }
-            if (length == 0 && trigger && i < DIVIDER / 2) {
+            if (length == 0 && trigger && firstHalf) {
                 setLength(fullLength - 1);
             }
         } else {
@@ -82,19 +74,21 @@ public class LengthCounter implements Serializable, Originator<LengthCounter> {
     @Override
     public String toString() {
         return String.format(
-                "LengthCounter[l=%d,f=%d,c=%d,%s]",
-                length, fullLength, i, enabled ? "enabled" : "disabled");
+                "LengthCounter[l=%d,f=%d,%s]",
+                length, fullLength, enabled ? "enabled" : "disabled");
     }
 
     void reset() {
         this.enabled = true;
-        this.i = 0;
         this.length = 0;
+    }
+
+    void start() {
     }
 
     @Override
     public Memento<LengthCounter> saveToMemento() {
-        return new LengthCounterMemento(length, i, enabled);
+        return new LengthCounterMemento(length, enabled);
     }
 
     @Override
@@ -103,10 +97,9 @@ public class LengthCounter implements Serializable, Originator<LengthCounter> {
             throw new IllegalArgumentException("Invalid memento type");
         }
         this.length = mem.length;
-        this.i = mem.i;
         this.enabled = mem.enabled;
     }
 
-    private record LengthCounterMemento(int length, long i, boolean enabled) implements Memento<LengthCounter> {
+    private record LengthCounterMemento(int length, boolean enabled) implements Memento<LengthCounter> {
     }
 }

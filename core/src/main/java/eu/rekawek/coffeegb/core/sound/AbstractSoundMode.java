@@ -20,15 +20,25 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
 
     protected LengthCounter length;
 
-    public AbstractSoundMode(int offset, int length, boolean gbc) {
+    public AbstractSoundMode(int offset, int length, FrameSequencer frameSequencer, boolean gbc) {
         this.offset = offset;
-        this.length = new LengthCounter(length);
+        this.length = new LengthCounter(length, frameSequencer);
         this.gbc = gbc;
     }
 
     public abstract int tick();
 
     protected abstract void trigger();
+
+    public void tickLength() {
+        length.clockTick();
+    }
+
+    public void tickEnvelope() {
+    }
+
+    public void tickSweep() {
+    }
 
     public boolean isEnabled() {
         return channelEnabled && dacEnabled;
@@ -144,7 +154,6 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
     }
 
     protected boolean updateLength() {
-        length.tick();
         if (!length.isEnabled()) {
             return channelEnabled;
         }

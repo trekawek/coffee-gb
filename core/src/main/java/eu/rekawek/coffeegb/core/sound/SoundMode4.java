@@ -12,8 +12,8 @@ public class SoundMode4 extends AbstractSoundMode {
 
     private final Lfsr lfsr = new Lfsr();
 
-    public SoundMode4(boolean gbc) {
-        super(0xff1f, 64, gbc);
+    public SoundMode4(FrameSequencer frameSequencer, boolean gbc) {
+        super(0xff1f, 64, frameSequencer, gbc);
         this.volumeEnvelope = new VolumeEnvelope();
         this.polynomialCounter = new PolynomialCounter();
     }
@@ -35,9 +35,12 @@ public class SoundMode4 extends AbstractSoundMode {
     }
 
     @Override
-    public int tick() {
-        volumeEnvelope.tick();
+    public void tickEnvelope() {
+        volumeEnvelope.clockTick();
+    }
 
+    @Override
+    public int tick() {
         if (!updateLength()) {
             return 0;
         }

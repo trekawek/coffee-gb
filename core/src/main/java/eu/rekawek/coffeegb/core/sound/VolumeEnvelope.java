@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.core.sound;
 
-import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -16,7 +15,7 @@ public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> 
 
     private int volume;
 
-    private int i;
+    private int timer;
 
     private boolean finished;
 
@@ -32,16 +31,15 @@ public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> 
 
     public void start() {
         finished = true;
-        i = 8192;
     }
 
     public void trigger() {
         volume = initialVolume;
-        i = 0;
+        timer = sweep == 0 ? 8 : sweep;
         finished = false;
     }
 
-    public void tick() {
+    public void clockTick() {
         if (finished) {
             return;
         }
@@ -49,8 +47,11 @@ public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> 
             finished = true;
             return;
         }
-        if (++i == sweep * Gameboy.TICKS_PER_SEC / 64) {
-            i = 0;
+        if (sweep == 0) {
+            return;
+        }
+        if (--timer <= 0) {
+            timer = sweep;
             volume += envelopeDirection;
         }
     }
@@ -65,7 +66,7 @@ public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> 
 
     @Override
     public Memento<VolumeEnvelope> saveToMemento() {
-        return new VolumeEnvelopeMemento(initialVolume, envelopeDirection, sweep, volume, i, finished);
+        return new VolumeEnvelopeMemento(initialVolume, envelopeDirection, sweep, volume, timer, finished);
     }
 
     @Override
@@ -77,11 +78,11 @@ public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> 
         this.envelopeDirection = mem.envelopeDirection;
         this.sweep = mem.sweep;
         this.volume = mem.volume;
-        this.i = mem.i;
+        this.timer = mem.timer;
         this.finished = mem.finished;
     }
 
-    private record VolumeEnvelopeMemento(int initialVolume, int envelopeDirection, int sweep, int volume, int i,
+    private record VolumeEnvelopeMemento(int initialVolume, int envelopeDirection, int sweep, int volume, int timer,
                                          boolean finished) implements Memento<VolumeEnvelope> {
     }
 

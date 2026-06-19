@@ -12,8 +12,8 @@ public class SoundMode2 extends AbstractSoundMode {
 
     private final VolumeEnvelope volumeEnvelope;
 
-    public SoundMode2(boolean gbc) {
-        super(0xff15, 64, gbc);
+    public SoundMode2(FrameSequencer frameSequencer, boolean gbc) {
+        super(0xff15, 64, frameSequencer, gbc);
         this.volumeEnvelope = new VolumeEnvelope();
     }
 
@@ -35,9 +35,12 @@ public class SoundMode2 extends AbstractSoundMode {
     }
 
     @Override
-    public int tick() {
-        volumeEnvelope.tick();
+    public void tickEnvelope() {
+        volumeEnvelope.clockTick();
+    }
 
+    @Override
+    public int tick() {
         boolean e;
         e = updateLength();
         e = dacEnabled && e;

@@ -22,6 +22,8 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
                     0x00, 0x00, 0x00
             };
 
+    private final FrameSequencer frameSequencer = new FrameSequencer();
+
     private final AbstractSoundMode[] allModes = new AbstractSoundMode[4];
 
     private final Ram r = new Ram(0xff24, 0x03);
@@ -39,10 +41,10 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
     public Sound(boolean gbc) {
-        allModes[0] = new SoundMode1(gbc);
-        allModes[1] = new SoundMode2(gbc);
-        allModes[2] = new SoundMode3(gbc);
-        allModes[3] = new SoundMode4(gbc);
+        allModes[0] = new SoundMode1(frameSequencer, gbc);
+        allModes[1] = new SoundMode2(frameSequencer, gbc);
+        allModes[2] = new SoundMode3(frameSequencer, gbc);
+        allModes[3] = new SoundMode4(frameSequencer, gbc);
         // Initial volume
         r.setByte(0xFF24, 0x77);
     }
@@ -56,6 +58,19 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             play(0, 0);
         }
 
+        int firedStep = frameSequencer.tick();
+        if (firedStep >= 0) {
+            if ((firedStep & 1) == 0) {
+                for (AbstractSoundMode m : allModes) m.tickLength();
+            }
+            if (firedStep == 2 || firedStep == 6) {
+                for (AbstractSoundMode m : allModes) m.tickSweep();
+            }
+            if (firedStep == 7) {
+                for (AbstractSoundMode m : allModes) m.tickEnvelope();
+            }
+        }
+
         channels[0] = allModes[0].tick();
         channels[1] = allModes[1].tick();
         channels[2] = allModes[2].tick();
@@ -64,7 +79,6 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         int selection = r.getByte(0xff25);
         int left = 0;
         int right = 0;
-        int channelsCount = 0;
         for (int i = 0; i < 4; i++) {
             if (!overriddenEnabled[i] || !ENABLED[i]) {
                 continue;
@@ -75,10 +89,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             if ((selection & (1 << i)) != 0) {
                 right += channels[i];
             }
-            channelsCount++;
         }
-        left /= channelsCount;
-        right /= channelsCount;
 
         int volumes = r.getByte(0xff24);
         left *= ((volumes >> 4) & 0b111);
@@ -182,6 +193,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         for (AbstractSoundMode m : allModes) {
             m.start();
         }
+        frameSequencer.reset();
     }
 
     private void stop() {
@@ -200,7 +212,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         for (int i = 0; i < allModes.length; i++) {
             allModeMementos[i] = allModes[i].saveToMemento();
         }
-        return new SoundMemento(allModeMementos, r.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone(), buffer.clone(), i);
+        return new SoundMemento(allModeMementos, r.saveToMemento(), frameSequencer.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone(), buffer.clone(), i);
     }
 
     @Override
@@ -224,6 +236,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             this.allModes[i].restoreFromMemento(mem.allModeMementos[i]);
         }
         this.r.restoreFromMemento(mem.ramMemento());
+        this.frameSequencer.restoreFromMemento(mem.frameSequencerMemento());
         System.arraycopy(mem.channels, 0, this.channels, 0, this.channels.length);
         this.enabled = mem.enabled();
         System.arraycopy(mem.overriddenEnabled, 0, this.overriddenEnabled, 0, this.overriddenEnabled.length);
@@ -238,7 +251,8 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     public record SoundEnabledEvent(boolean enabled) implements Event {
     }
 
-    private record SoundMemento(Memento<AbstractSoundMode>[] allModeMementos, Memento<Ram> ramMemento, int[] channels,
+    private record SoundMemento(Memento<AbstractSoundMode>[] allModeMementos, Memento<Ram> ramMemento,
+                                Memento<FrameSequencer> frameSequencerMemento, int[] channels,
                                 boolean enabled, boolean[] overriddenEnabled, int[] buffer,
                                 int i) implements Memento<Sound> {
     }

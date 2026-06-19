@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.core.sound;
 
-import eu.rekawek.coffeegb.core.sound.FrequencySweep;
 import org.junit.Test;
 
 import static eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_SEC;
@@ -8,6 +7,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class SweepTest {
+
+    private final FrameSequencer frameSequencer = new FrameSequencer();
 
     private final FrequencySweep sweep = new FrequencySweep();
 
@@ -316,7 +317,10 @@ public class SweepTest {
         wregNR(13, 0xff);
         wregNR(14, 0x83);
         while (sweep.isEnabled()) {
-            sweep.tick();
+            int firedStep = frameSequencer.tick();
+            if (firedStep == 2 || firedStep == 6) {
+                sweep.clockTick();
+            }
         }
     }
 
@@ -341,7 +345,10 @@ public class SweepTest {
 
     private void delayApu(int apuCycles) {
         for (int i = 0; i < TICKS_PER_SEC / 256 * apuCycles; i++) {
-            sweep.tick();
+            int firedStep = frameSequencer.tick();
+            if (firedStep == 2 || firedStep == 6) {
+                sweep.clockTick();
+            }
         }
     }
 }
