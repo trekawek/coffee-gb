@@ -29,7 +29,7 @@
     </scm>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <kotlin.version>1.9.22</kotlin.version>
+        <kotlin.version>2.4.0</kotlin.version>
     </properties>
     <build>
         <pluginManagement>
