@@ -94,7 +94,7 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     }
 
     public boolean isInterruptRequested() {
-        return (interruptFlag & interruptEnabled) != 0;
+        return (interruptFlag & interruptEnabled & 0x1f) != 0;
     }
 
     public boolean isHaltBug() {

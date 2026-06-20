@@ -13,7 +13,7 @@ import java.util.List;
 public class Cpu implements Serializable, Originator<Cpu> {
 
     public enum State {
-        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_READ_IF, IRQ_READ_IE, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED
+        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_WAIT_1, IRQ_WAIT_2, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED
     }
 
     private final Registers registers;
@@ -75,11 +75,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 if (state == State.STOPPED) {
                     display.enableLcd();
                 }
-                state = State.IRQ_READ_IF;
+                state = State.IRQ_WAIT_1;
             }
         }
 
-        if (state == State.IRQ_READ_IF || state == State.IRQ_READ_IE || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2 || state == State.IRQ_JUMP) {
+        if (state == State.IRQ_WAIT_1 || state == State.IRQ_WAIT_2 || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2 || state == State.IRQ_JUMP) {
             handleInterrupt();
             return;
         }
@@ -214,27 +214,13 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private void handleInterrupt() {
         switch (state) {
-            case IRQ_READ_IF:
-                interruptFlag = addressSpace.getByte(0xff0f);
-                state = State.IRQ_READ_IE;
+            case IRQ_WAIT_1:
+                interruptManager.disableInterrupts(false);
+                state = State.IRQ_WAIT_2;
                 break;
 
-            case IRQ_READ_IE:
-                interruptEnabled = addressSpace.getByte(0xffff);
-                requestedIrq = null;
-                for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.VALUES) {
-                    if ((interruptFlag & interruptEnabled & (1 << irq.ordinal())) != 0) {
-                        requestedIrq = irq;
-                        break;
-                    }
-                }
-                if (requestedIrq == null) {
-                    state = State.OPCODE;
-                } else {
-                    state = State.IRQ_PUSH_1;
-                    interruptManager.clearInterrupt(requestedIrq);
-                    interruptManager.disableInterrupts(false);
-                }
+            case IRQ_WAIT_2:
+                state = State.IRQ_PUSH_1;
                 break;
 
             case IRQ_PUSH_1:
@@ -244,13 +230,29 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 break;
 
             case IRQ_PUSH_2:
+                interruptFlag = addressSpace.getByte(0xff0f);
+                interruptEnabled = addressSpace.getByte(0xffff);
+                requestedIrq = null;
+                for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.VALUES) {
+                    if ((interruptFlag & interruptEnabled & (1 << irq.ordinal()) & 0x1f) != 0) {
+                        requestedIrq = irq;
+                        break;
+                    }
+                }
                 registers.decrementSP();
                 addressSpace.setByte(registers.getSP(), registers.getPC() & 0x00ff);
+                if (requestedIrq != null) {
+                    interruptManager.clearInterrupt(requestedIrq);
+                }
                 state = State.IRQ_JUMP;
                 break;
 
             case IRQ_JUMP:
-                registers.setPC(requestedIrq.getHandler());
+                if (requestedIrq != null) {
+                    registers.setPC(requestedIrq.getHandler());
+                } else {
+                    registers.setPC(0x0000);
+                }
                 requestedIrq = null;
                 state = State.OPCODE;
                 break;
