@@ -64,7 +64,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // visible mode 0 and is quantized to 4-tick steps (hblank_ly_scx_timing-GS)
     private int hblankIntFrom = Integer.MAX_VALUE;
 
-    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, StatRegister statRegister, boolean gbc) {
+    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, StatRegister statRegister, boolean gbc, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
         this.statRegister = statRegister;
         this.display = display;
         this.r = new GpuRegisterValues();
@@ -84,7 +84,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         oamPalette.fillWithFF();
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(display, videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer);
+        this.pixelTransferPhase = new PixelTransfer(display, videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode);
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();

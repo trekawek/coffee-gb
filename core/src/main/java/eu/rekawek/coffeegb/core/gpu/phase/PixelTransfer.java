@@ -79,12 +79,13 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             ColorPalette bgPalette,
             ColorPalette oamPalette,
             SpritePosition[] sprites,
-            VRamTransfer vRamTransfer) {
+            VRamTransfer vRamTransfer,
+            eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
         if (gbc) {
-            this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette);
+            this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette, r, speedMode);
         } else {
             this.fifo = new DmgPixelFifo(display, lcdc, r, vRamTransfer);
         }

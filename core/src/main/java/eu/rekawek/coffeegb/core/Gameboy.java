@@ -114,7 +114,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(getAddressSpace(), oamRam, speedMode);
         statRegister = new StatRegister(interruptManager);
-        gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc);
+        gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace());
         sound = new Sound(timer, speedMode, gbc);
