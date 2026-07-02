@@ -63,15 +63,18 @@ public class Mbc6 implements MemoryController {
     @Override
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x0400) {
-            ramEnabled = value == 0x0a;
+            ramEnabled = (value & 0x0f) == 0x0a;
         } else if (address >= 0x0400 && address < 0x0800) {
             ramBankA = value;
         } else if (address >= 0x0800 && address < 0x0c00) {
             ramBankB = value;
         } else if (address >= 0x0c00 && address < 0x1000) {
-            flashEnabled = value != 0;
+            // changing the flash enable bit requires the flash write enable
+            if (flashWriteEnable) {
+                flashEnabled = (value & 1) != 0;
+            }
         } else if (address >= 0x1000 && address < 0x2000) {
-            flashWriteEnable = value != 0;
+            flashWriteEnable = (value & 1) != 0;
         } else if (address >= 0x2000 && address < 0x2800) {
             romBankA = value;
         } else if (address >= 0x2800 && address < 0x3000) {

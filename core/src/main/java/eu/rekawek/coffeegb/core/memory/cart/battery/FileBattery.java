@@ -45,7 +45,10 @@ public class FileBattery implements Battery {
             return;
         }
         long saveLength = saveFile.length();
-        saveLength = saveLength - (saveLength % 0x2000);
+        if (saveLength >= 0x2000) {
+            // strip a possible RTC data suffix; small EEPROM saves are used as-is
+            saveLength = saveLength - (saveLength % 0x2000);
+        }
         try (InputStream is = Files.newInputStream(saveFile.toPath())) {
             loadRam(ram, is, saveLength);
             if (clockData != null) {

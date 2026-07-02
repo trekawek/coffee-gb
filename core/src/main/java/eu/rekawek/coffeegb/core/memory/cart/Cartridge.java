@@ -111,6 +111,9 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             if (rom.getType().isTama5()) {
                 ramSize = 0x20;
             }
+            if (rom.getType().isMbc7()) {
+                ramSize = 0x100; // 93LC56 EEPROM
+            }
             return new FileBattery(getSaveName(rom.getFile()), ramSize);
         } else {
             return Battery.NULL_BATTERY;

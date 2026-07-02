@@ -56,10 +56,8 @@ public class Mbc7 implements MemoryController {
     @Override
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x2000) {
-            if (value == 0x0a) {
-                ramWriteEnabled1 = true;
-            } else if (value == 0x00) {
-                ramWriteEnabled1 = false;
+            ramWriteEnabled1 = (value & 0x0f) == 0x0a;
+            if (!ramWriteEnabled1) {
                 ramWriteEnabled2 = false;
             }
         } else if (address >= 0x2000 && address < 0x3000) {
@@ -79,7 +77,7 @@ public class Mbc7 implements MemoryController {
                     latchY = 0x8000;
                 }
             } else if (a == 1) {
-                if (value == 0xaa) {
+                if (value == 0xaa && latchState == 1) {
                     synchronized (this) {
                         latchX = 0x81d0 + (int) (x * 0x70);
                         latchY = 0x81d0 + (int) (y * 0x70);

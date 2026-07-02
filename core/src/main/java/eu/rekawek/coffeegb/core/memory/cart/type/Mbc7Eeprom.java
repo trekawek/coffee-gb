@@ -91,13 +91,13 @@ public class Mbc7Eeprom implements Serializable {
                                     bitsRead = 0;
                                     address = -1;
                                     writeValue = 0;
-                                    dirty = true;
                                 }
                                 case 2 -> { // ERAL
                                     if (writeEnabled) {
                                         for (int i = 0; i < 256; i++) {
                                             eeprom[i] = 0xff;
                                         }
+                                        dirty = true;
                                     }
                                     state = State.IDLE;
                                 }
@@ -124,6 +124,7 @@ public class Mbc7Eeprom implements Serializable {
                                 int a = (addr & 0x7f) * 2;
                                 eeprom[a] = 0xff;
                                 eeprom[a + 1] = 0xff;
+                                dirty = true;
                             }
                             state = State.IDLE;
                         }
@@ -158,6 +159,7 @@ public class Mbc7Eeprom implements Serializable {
                             eeprom[address * 2] = (writeValue >> 8) & 0xff;
                             eeprom[address * 2 + 1] = writeValue & 0xff;
                         }
+                        dirty = true;
                     }
                     state = State.IDLE;
                     doBit = 1;
