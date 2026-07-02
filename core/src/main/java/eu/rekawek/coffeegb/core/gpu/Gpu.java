@@ -243,7 +243,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * Applies the DMG OAM corruption bug if the PPU is currently scanning the OAM.
      */
     public void corruptOam(SpriteBug.CorruptionType type) {
-        if (gbc || !lcdEnabled || firstLine) {
+        if (gbc || !lcdEnabled) {
             return;
         }
         // The OAM scan accesses rows 1..19, starting 4 ticks before the end of the

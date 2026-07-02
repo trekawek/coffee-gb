@@ -133,7 +133,7 @@ public final class Opcodes {
         for (Entry<Integer, String> c : indexedList(0xc4, 0x08, "NZ", "Z", "NC", "C")) {
             regCmd(opcodes, c, "CALL {},a16")
                     .proceedIf(c.getValue())
-                    .extraCycle()
+                    .extraPushCycle()
                     .load("PC")
                     .push()
                     .load("a16")
@@ -141,7 +141,7 @@ public final class Opcodes {
         }
 
         for (Entry<Integer, String> t : indexedList(0xc5, 0x10, "BC", "DE", "HL", "AF")) {
-            regCmd(opcodes, t, "PUSH {}").extraCycle().load(t.getValue()).push();
+            regCmd(opcodes, t, "PUSH {}").extraPushCycle().load(t.getValue()).push();
         }
 
         for (Entry<Integer, String> o :
@@ -152,7 +152,7 @@ public final class Opcodes {
         for (int i = 0xc7, j = 0x00; i <= 0xf7; i += 0x10, j += 0x10) {
             regCmd(opcodes, i, String.format("RST %02XH", j))
                     .load("PC")
-                    .extraCycle()
+                    .extraPushCycle()
                     .push()
                     .loadWord(j)
                     .store("PC");
@@ -160,12 +160,12 @@ public final class Opcodes {
 
         regCmd(opcodes, 0xc9, "RET").pop().forceFinish().store("PC");
 
-        regCmd(opcodes, 0xcd, "CALL a16").load("PC").extraCycle().push().load("a16").store("PC");
+        regCmd(opcodes, 0xcd, "CALL a16").load("PC").extraPushCycle().push().load("a16").store("PC");
 
         for (int i = 0xcf, j = 0x08; i <= 0xff; i += 0x10, j += 0x10) {
             regCmd(opcodes, i, String.format("RST %02XH", j))
                     .load("PC")
-                    .extraCycle()
+                    .extraPushCycle()
                     .push()
                     .loadWord(j)
                     .store("PC");

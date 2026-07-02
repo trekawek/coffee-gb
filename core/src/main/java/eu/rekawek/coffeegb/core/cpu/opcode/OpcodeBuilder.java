@@ -519,6 +519,31 @@ public class OpcodeBuilder implements Serializable {
         return this;
     }
 
+    /**
+     * The internal cycle preceding a push puts SP on the internal bus, which triggers the
+     * OAM corruption bug.
+     */
+    public OpcodeBuilder extraPushCycle() {
+        ops.add(
+                new Op() {
+                    @Override
+                    public boolean readsMemory() {
+                        return true;
+                    }
+
+                    @Override
+                    public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
+                        return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.PUSH_INTERNAL : null;
+                    }
+
+                    @Override
+                    public String toString() {
+                        return "push wait cycle";
+                    }
+                });
+        return this;
+    }
+
     public OpcodeBuilder forceFinish() {
         ops.add(
                 new Op() {

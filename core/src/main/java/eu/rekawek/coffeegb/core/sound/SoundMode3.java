@@ -166,12 +166,12 @@ public class SoundMode3 extends AbstractSoundMode {
         if ((timer.getDivCounter() & 1) == 0 && --freqDivider == 0) {
             resetFreqDivider();
             i = (i + 1) % 32;
-            if (triggered) {
-                lastOutput = (buffer >> 4) & 0x0f;
-                triggered = false;
-            } else {
-                lastOutput = getWaveEntry();
-            }
+            int stale = (buffer >> 4) & 0x0f;
+            int out = getWaveEntry();
+            // the first advance after the trigger fetches the sample (opening the CPU
+            // access window), but the stale buffer value is what gets played
+            lastOutput = triggered ? stale : out;
+            triggered = false;
         }
         return lastOutput;
     }

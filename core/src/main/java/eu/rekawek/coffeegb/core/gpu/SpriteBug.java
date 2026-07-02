@@ -6,6 +6,11 @@ import eu.rekawek.coffeegb.core.AddressSpace;
  * The DMG OAM corruption bug: putting a 16-bit value in the 0xFE00-0xFEFF range on the
  * internal bus (16-bit increment/decrement, push/pop, read/write) while the PPU is scanning
  * OAM corrupts the 8-byte row currently being accessed by the PPU.
+ *
+ * <p>The corruption patterns follow SameBoy's hardware-verified model: writes (and plain
+ * increments/decrements) glitch the first word of the accessed row and copy the rest from
+ * the preceding row; reads combined with an increment (pop, ldi/ldd) additionally corrupt
+ * the preceding rows with row-dependent patterns.
  */
 public final class SpriteBug {
 
@@ -13,6 +18,7 @@ public final class SpriteBug {
         INC_DEC,
         POP_1,
         POP_2,
+        PUSH_INTERNAL,
         PUSH_1,
         PUSH_2,
         LD_HL
@@ -24,6 +30,7 @@ public final class SpriteBug {
     public static void corruptOam(AddressSpace oamRam, CorruptionType type, int row) {
         switch (type) {
             case INC_DEC:
+            case PUSH_INTERNAL:
             case PUSH_1:
             case PUSH_2:
                 writeCorruption(oamRam, row);
@@ -32,7 +39,7 @@ public final class SpriteBug {
             case POP_1:
             case POP_2:
             case LD_HL:
-                bothCorruption(oamRam, row);
+                readCorruption(oamRam, row);
                 break;
         }
     }
@@ -52,35 +59,71 @@ public final class SpriteBug {
         copyWords(oam, row - 1, row);
     }
 
+    /**
+     * A read combined with an increment/decrement in the same machine cycle (pop, ldi/ldd)
+     * corrupts the preceding row (and more) with row-dependent glitch patterns.
+     */
     private static void readCorruption(AddressSpace oam, int row) {
         if (row < 1 || row > 19) {
             return;
         }
-        int a = word(oam, row, 0);
-        int b = word(oam, row - 1, 0);
-        int c = word(oam, row - 1, 2);
-        setWord(oam, row, 0, b | (a & c));
-        copyWords(oam, row - 1, row);
+        if (row % 4 == 2) {
+            if (row < 19) {
+                int a = word(oam, row - 2, 0);
+                int b = word(oam, row - 1, 0);
+                int c = word(oam, row, 0);
+                int d = word(oam, row - 1, 2);
+                setWord(oam, row - 1, 0, (b & (a | c | d)) | (a & c & d));
+                copyRow(oam, row - 1, row - 2);
+            }
+        } else if (row % 4 == 0) {
+            if (row < 19) {
+                if (row == 8) {
+                    int b = word(oam, row, 0);
+                    int c = word(oam, row - 1, 2);
+                    int d = word(oam, row - 1, 1);
+                    int e = word(oam, row - 1, 0);
+                    int f = word(oam, row - 2, 1);
+                    int g = word(oam, row - 2, 0);
+                    int h = word(oam, row - 4, 0);
+                    setWord(oam, row - 1, 0, (e & (h | g | (~d & 0xffff & f) | c | b)) | (c & g & h));
+                } else {
+                    int a = word(oam, row, 0);
+                    int b = word(oam, row - 1, 2);
+                    int c = word(oam, row - 1, 0);
+                    int d = word(oam, row - 2, 0);
+                    int e = word(oam, row - 4, 0);
+                    int v;
+                    if (row == 4) {
+                        v = (c & (a | b | d | e)) | (a & b & d & e);
+                    } else if (row == 12) {
+                        v = (c & (a | b | d | e)) | (b & d & e);
+                    } else {
+                        v = c | (a & b & d & e);
+                    }
+                    setWord(oam, row - 1, 0, v);
+                }
+                copyRow(oam, row - 1, row - 2);
+                copyRow(oam, row - 1, row - 4);
+            }
+        } else {
+            int a = word(oam, row, 0);
+            int b = word(oam, row - 1, 0);
+            int c = word(oam, row - 1, 2);
+            int v = b | (a & c);
+            setWord(oam, row - 1, 0, v);
+            setWord(oam, row, 0, v);
+        }
+        copyRow(oam, row - 1, row);
+        if (row == 16) {
+            copyRow(oam, 16, 0);
+        }
     }
 
-    /**
-     * A read combined with an increment/decrement in the same machine cycle (pop, ldi/ldd)
-     * triggers an extra corruption of the preceding row first.
-     */
-    private static void bothCorruption(AddressSpace oam, int row) {
-        if (row >= 4 && row < 19) {
-            int a = word(oam, row - 2, 0);
-            int b = word(oam, row - 1, 0);
-            int c = word(oam, row, 0);
-            int d = word(oam, row - 1, 2);
-            setWord(oam, row - 1, 0, (b & (a | c | d)) | (a & c & d));
-            for (int i = 0; i < 8; i++) {
-                int v = oam.getByte(0xfe00 + (row - 1) * 8 + i);
-                oam.setByte(0xfe00 + (row - 2) * 8 + i, v);
-                oam.setByte(0xfe00 + row * 8 + i, v);
-            }
+    private static void copyRow(AddressSpace oam, int fromRow, int toRow) {
+        for (int i = 0; i < 8; i++) {
+            oam.setByte(0xfe00 + toRow * 8 + i, oam.getByte(0xfe00 + fromRow * 8 + i));
         }
-        readCorruption(oam, row);
     }
 
     // copies words 1..3
