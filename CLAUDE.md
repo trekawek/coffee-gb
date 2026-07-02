@@ -218,6 +218,27 @@ rising edge) — see `StatRegister`.
 - blargg cgb_sound/dmg_sound "same" subtests are different builds (the CGB one
   defines `CGB_02` and adds tests); don't assume binary equality.
 
+## Game-level debugging (issue work)
+
+- **Headless screenshots**: `ShotMain <rom> <outdir> <frames> <shot1,shot2,..> [f:BUTTON[:dur],..]`
+  (core test scope) — runs a ROM with scripted input and writes PNGs. SGB variant and a
+  FAST_FORWARD variant live in the scratchpad pattern; SameBoy equivalents (`sb_shot`,
+  `sb_shot_cgb`, `sb_sgb`, `sb_audio`) compile from the SameBoy clone for side-by-side
+  reference frames/audio. Note: our FAST_FORWARD boot doesn't emit boot frames, SameBoy
+  does — offset scripts by ~335 (DMG) / ~186 (CGB) frames when comparing.
+- **Audio comparison**: dump our samples (1/tick stereo bytes via SoundSampleEvent),
+  downsample to 48 kHz, FFT per 0.25 s window, compare dominant-note sequences with
+  SameBoy's `GB_apu_set_sample_callback` output.
+- **State diffing**: when a game diverges, diff WRAM/HRAM against SameBoy at the same
+  game-frame — the culprit variable pops out (few diffs).
+- Games found relying on subtle behaviors: Altered Space (single LYC=0 STAT int per
+  frame across the 153->0 transition), mezase/GB-Video (timer phase-locked to the line
+  grid -> needs FAST_FORWARD boot), Super Snakey (PCT_TRN before CHR_TRN -> border
+  re-render), ZAS (30 Hz flicker -> LCD ghosting display option), Kirby (MBC7 EEPROM
+  dirty flag + 256-byte save).
+- Mappers now implemented: MBC1(+M), MBC2, MBC3(+RTC), MBC5, MBC6(+flash), MBC7(+EEPROM,
+  accelerometer), MMM01, HuC1, HuC3(+RTC), TAMA5(+TAMA6 RTC).
+
 ## Possible future work
 
 - CGB PPU rendering in DMG-compat mode (palettes via KEY0 path) — IO regs are
