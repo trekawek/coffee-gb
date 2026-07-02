@@ -239,6 +239,49 @@ rising edge) — see `StatRegister`.
 - Mappers now implemented: MBC1(+M), MBC2, MBC3(+RTC), MBC5, MBC6(+flash), MBC7(+EEPROM,
   accelerometer), MMM01, HuC1, HuC3(+RTC), TAMA5(+TAMA6 RTC).
 
+## Mealybug Tearoom status (mid-mode-3 register writes, DMG)
+
+`mvn -pl core test -Ptest-mealybug` — 24 DMG tests in
+`core/src/test/resources/roms/mealybug/` (expected images = DMG-CPU B photos,
+DMG-blob where no CPU B image exists; the `*2` ROM variants are CGB-only).
+Compare via `ImageTestRunner` (stops at `LD B,B`). Not in CI yet — most still fail.
+
+**Verified-to-the-dot model (implemented):**
+- The DMG resolves pixels at the LCD interface, `OUTPUT_DELAY = 7` T after the
+  FIFO pop (`DmgPixelFifo` delay line): palettes (BGP/OBP0/OBP1), LCDC bg/obj
+  enable bits and the obj/bg mux are all read at *output* time. During the single
+  T-cycle in which a CPU write commits, the output stage reads `old|new` for
+  palettes and `old|(new&1)` for LCDC (SameBoy PALETTE_DMG / DMG_LCDC conflicts).
+  This makes m3_bgp_change / m3_lcdc_bg_en_change / m3_window_timing pixel-exact
+  except line 0.
+- The fetcher samples the SCX/SCY-derived map offset at GET_TILE_T1, but resolves
+  the LCDC map-select bit at the VRAM read, which happens at GET_TILE_DATA_LOW_T1
+  (one T later than the state name suggests — the hardware fetch cycle ends with a
+  two-dot push, placing its reads one dot later than our back-to-back restart).
+
+**Measured but NOT yet implemented (next steps):**
+- All remaining line-0 diffs: our line-0 mode-2 STAT interrupt fires ~4 T earlier
+  than hardware (the test source compensates line 0 by 4 cycles; our rows 0 render
+  shifted). Suspect the line-0 OAM int is delayed 4 T on hardware.
+- Tile DATA reads (tile_sel): probing m3_lcdc_tile_sel_change shows hardware's
+  data reads land ~5 T after our GET_TILE_DATA_HIGH_T1/T2, i.e. *inside the
+  tile's own pop window* in our frame — the hardware dot machine (fetch+pop) runs
+  ~4 T later than ours with the LCD delay being ~3 (our pop+7 == hw pop+3). A full
+  machine retiming (mode 3 starting 4 T later, E moving 248→252) would need the
+  CPU-visible mode-0/lock events to fire *before* the machine finishes (they are
+  calibrated at E+1/E+4 with E=248) — blocked on early-completion bookkeeping
+  because sprite stalls can still lengthen the line after the crossing.
+- m3_scx_low_3_bits: mid-line SCX%8 changes must affect the pop alignment
+  (hardware artifact at x=154..157); our alignment is line-start-only.
+- Sprite-related conflicts (m3_bgp_change_sprites 992, m3_obp0_change 432 diffs
+  at x=0..1, obj_en/size 146-390): SameBoy's DMG_LCDC obj_en special cases
+  (position_in_line==0, during_object_fetch) not implemented.
+- Window tests (m2_win_en_toggle, m3_lcdc_win_en_change_multiple*, wx_*): not
+  yet analysed; disable_window_pixel_insertion_glitch in SameBoy is the model.
+- SameBoy's conflict maps live in Core/sm83_cpu.c (dmg_conflict_map + the
+  GB_CONFLICT_* cases); their per-register apply offsets are relative to a
+  baseline 4 T before our CPU write commit tick.
+
 ## Possible future work
 
 - CGB PPU rendering in DMG-compat mode (palettes via KEY0 path) — IO regs are

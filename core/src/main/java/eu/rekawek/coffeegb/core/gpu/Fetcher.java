@@ -49,6 +49,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     private int tileMapAddress;
 
+    private int tileMapOffset;
+
     private int tileId;
 
     private TileAttributes tileAttributes = TileAttributes.EMPTY;
@@ -104,7 +106,12 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     public void advance(int position, boolean window, int windowY, boolean duringObjectFetch) {
         switch (state) {
             case GET_TILE_T1: {
-                int map = window ? lcdc.getWindowTileMapDisplay() : lcdc.getBgTileMapDisplay();
+                // the map offset (SCX/SCY, window position) is sampled at the start of
+                // the fetch; the map-select and tile-data-select LCDC bits are resolved
+                // at the respective VRAM reads, one T-cycle later than the state names
+                // suggest - the hardware fetch cycle ends with a two-dot push, placing
+                // its reads one dot later than a back-to-back restart would (mealybug
+                // m3_lcdc_bg_map_change pins the map read to the T-cycle)
                 int y;
                 int x;
                 if (window) {
@@ -119,17 +126,18 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                     }
                 }
                 fetcherY = y;
-                tileMapAddress = map + (y / 8) * 0x20 + x;
+                tileMapOffset = (y / 8) * 0x20 + x;
                 state++;
                 break;
             }
 
-            case GET_TILE_DATA_LOW_T1:
-            case GET_TILE_DATA_HIGH_T1:
+            case GET_TILE_T2:
                 state++;
                 break;
 
-            case GET_TILE_T2:
+            case GET_TILE_DATA_LOW_T1: {
+                int map = window ? lcdc.getWindowTileMapDisplay() : lcdc.getBgTileMapDisplay();
+                tileMapAddress = map + tileMapOffset;
                 tileId = videoRam0.getByte(tileMapAddress);
                 if (gbc) {
                     tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
@@ -138,8 +146,13 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 }
                 state++;
                 break;
+            }
 
             case GET_TILE_DATA_LOW_T2:
+                state++;
+                break;
+
+            case GET_TILE_DATA_HIGH_T1:
                 tileData1 = getTileData(tileId, effectiveY(window, windowY) & 7, 0,
                         lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
                 state++;
