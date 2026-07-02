@@ -54,7 +54,9 @@ interface Controller : AutoCloseable {
       if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB && gameboyType == GameboyType.CGB) {
         config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
       } else {
-        config.setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+        // run the boot ROM invisibly: the post-boot timer/PPU phase relationships are
+        // hardware-exact, which cycle-synced programs rely on (issue #37)
+        config.setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
       }
       if (config.gameboyType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
         config.setDisplaySgbBorder(false)

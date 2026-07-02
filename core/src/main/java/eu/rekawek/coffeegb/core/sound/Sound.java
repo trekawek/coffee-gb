@@ -198,7 +198,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         } else if (address == 0xff76) {
             return channels[0] | (channels[1] << 4);
         } else if (address == 0xff77) {
-            return channels[1] | (channels[2] << 4);
+            return channels[2] | (channels[3] << 4);
         } else {
             result = getUnmaskedByte(address);
         }
