@@ -260,9 +260,14 @@ Compare via `ImageTestRunner` (stops at `LD B,B`). Not in CI yet — most still 
   two-dot push, placing its reads one dot later than our back-to-back restart).
 
 **Measured but NOT yet implemented (next steps):**
-- All remaining line-0 diffs: our line-0 mode-2 STAT interrupt fires ~4 T earlier
-  than hardware (the test source compensates line 0 by 4 cycles; our rows 0 render
-  shifted). Suspect the line-0 OAM int is delayed 4 T on hardware.
+- All remaining line-0 diffs: the mealybug rows 0 render as if the line-0 handler
+  entry were ~4 T later on hardware (the test sources compensate line 0 by one
+  machine cycle). ATTEMPTED AND REVERTED: delaying the line-0 mode-2 STAT int by
+  4 T makes m3_bgp_change pixel-perfect (0 diffs) and bg_en_change drop to 4, but
+  breaks mooneye intr_1_2_timing-GS, which pins the vblank-int -> line-0-OAM-int
+  distance. Both are hardware truth, so the real mechanism differs (check the
+  intr_1_2_timing-GS source for which edge it measures; maybe STAT blocking from
+  the mode-1 term, or the handler-entry path differs on line 0).
 - Tile DATA reads (tile_sel): probing m3_lcdc_tile_sel_change shows hardware's
   data reads land ~5 T after our GET_TILE_DATA_HIGH_T1/T2, i.e. *inside the
   tile's own pop window* in our frame — the hardware dot machine (fetch+pop) runs
