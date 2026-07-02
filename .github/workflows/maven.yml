@@ -37,6 +37,8 @@ jobs:
       run: mvn -B -pl core test -Ptest-blargg-individual
     - name: dmg-acid2
       run: mvn -B -pl core test -Ptest-dmgacid2
+    - name: Mealybug Tearoom (baseline-guarded)
+      run: mvn -B -pl core test -Ptest-mealybug
 
     # Optional: Uploads the full dependency graph to GitHub to improve the quality of Dependabot alerts this repository can receive
     - name: Update dependency graph
