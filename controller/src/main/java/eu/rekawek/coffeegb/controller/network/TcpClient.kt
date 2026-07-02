@@ -45,11 +45,24 @@ class TcpClient(
     private val LOG: Logger = LoggerFactory.getLogger(TcpClient::class.java)
 
     private fun createSocket(host: String): Socket {
-      return if (host.contains(":")) {
-        Socket(host.substringBefore(":"), host.substringAfter(":").toInt())
-      } else {
-        Socket(host, TcpServer.PORT)
-      }
+      val socket =
+          if (host.contains(":")) {
+            Socket(host.substringBefore(":"), host.substringAfter(":").toInt())
+          } else {
+            Socket(host, TcpServer.PORT)
+          }
+      configure(socket)
+      return socket
+    }
+
+    /**
+     * The link exchanges tiny input packets whose delivery time directly affects the
+     * emulation sync: disable Nagle's algorithm so they are not held back waiting for
+     * ACKs, and enable keepalive so a vanished peer eventually fails the blocking read.
+     */
+    fun configure(socket: Socket) {
+      socket.tcpNoDelay = true
+      socket.keepAlive = true
     }
   }
 }

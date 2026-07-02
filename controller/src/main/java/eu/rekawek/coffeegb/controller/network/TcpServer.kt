@@ -10,23 +10,30 @@ import kotlin.concurrent.Volatile
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
-class TcpServer(private val eventBus: EventBus) : Runnable {
+class TcpServer(
+    private val eventBus: EventBus,
+    private val port: Int = PORT,
+) : Runnable {
   @Volatile private var doStop = false
 
   @Volatile private var socket: Socket? = null
 
   override fun run() {
     doStop = false
-    ServerSocket(PORT).use { serverSocket ->
+    ServerSocket(port).use { serverSocket ->
       serverSocket.soTimeout = 100
 
       eventBus.post(ConnectionController.ServerStartedEvent())
       while (!doStop) {
         try {
           val socket = serverSocket.accept()
+          TcpClient.configure(socket)
           this.socket = socket
           LOG.info("Got new connection: {}", socket.inetAddress)
-          eventBus.post(ConnectionController.ServerGotConnectionEvent(socket.inetAddress.hostName))
+          // hostAddress, not hostName: the reverse DNS lookup blocks the accept path
+          // (and thereby the protocol handshake) for seconds on hosts without a resolver
+          eventBus.post(
+              ConnectionController.ServerGotConnectionEvent(socket.inetAddress.hostAddress))
           try {
             Connection(socket.getInputStream(), socket.getOutputStream(), eventBus, true).use {
               it.run()

@@ -77,6 +77,47 @@ packed RGB ints); `validate()` dropped; explicit `NEAREST_NEIGHBOR` +
 
 Measured frame upload: 160×144 158 µs → 1 µs; 256×224 (SGB) 450 µs → 5 µs.
 
+## 4. Networking (netplay link)
+
+The TCP link exchanging inputs between linked emulators had latency,
+correctness and bandwidth problems:
+
+1. **Nagle's algorithm was on** (no `TCP_NODELAY`). The link sends tiny input
+   packets whose delivery time directly affects the emulation sync; Nagle plus
+   delayed ACKs can hold them back for tens of milliseconds. Both socket ends
+   now set `tcpNoDelay` (and `keepAlive`, so a vanished peer eventually fails
+   the blocking read instead of hanging forever).
+2. **Byte-wise unbuffered I/O.** Each message was written as a series of small
+   `write()` calls on the raw socket stream (the command byte alone, then the
+   header, then one call per button) - a syscall and potentially a TCP segment
+   each. Messages are now assembled in memory and leave in a single
+   write+flush. Reads go through a buffered stream.
+3. **Short-read protocol desync.** Header reads used `InputStream.read(buf)`
+   without checking the returned count; on a fragmented connection (any real
+   WAN) a partial read permanently desynchronized the protocol. All reads now
+   use `readFully`.
+4. **Unsynchronized writers.** Different event-bus threads could interleave
+   two messages mid-stream. Message sending is now synchronized and atomic.
+5. **Raw payloads.** The ROM (up to 8 MB), battery save and the Java-serialized
+   snapshot went uncompressed; they are now deflated (a 256 KB test image
+   compresses ~8x, sparse memento-like data 4-20x), protocol version bumped
+   to 2.
+6. **Handshake ordering hazard** (pre-existing): send handlers were registered
+   at construction but the handshake was written only when `run()` started, so
+   an event arriving in between put its bytes in front of the handshake and
+   desynchronized the peer. The handshake now completes inside the
+   constructor, before any handler can write.
+7. **Reverse DNS on the accept path**: the server posted
+   `inetAddress.hostName`, a blocking reverse lookup that delayed the
+   handshake by ~10 s on hosts without a resolver. It posts the numeric
+   address now.
+
+Coverage: `ConnectionTest` (framing under 1-byte-fragmented delivery,
+compression round-trip, concurrent senders, handshake rejection, truncated
+payloads) and `TcpConnectionTest` (end-to-end exchange over real loopback
+sockets through TcpServer/TcpClient). Items 3, 6 and 7 were found by these
+tests.
+
 ## Not changed (considered and rejected)
 
 - **Core `Sound` buffer shape** (per-tick samples posted once per frame): part
