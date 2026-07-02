@@ -142,6 +142,10 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     @Override
     public void setByte(int address, int value) {
+        if (Boolean.getBoolean("apu.trace")) {
+            System.err.printf("W %04x=%02x%n", address, value);
+        }
+        
 
         if (address == 0xff26) {
             if ((value & (1 << 7)) == 0) {
@@ -195,6 +199,14 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
                 result |= allModes[i].isEnabled() ? (1 << i) : 0;
             }
             result |= enabled ? (1 << 7) : 0;
+        } else if (address == 0xff26 && Boolean.getBoolean("apu.trace")) {
+            int v = 0;
+            for (int i = 0; i < allModes.length; i++) {
+                v |= allModes[i].isEnabled() ? (1 << i) : 0;
+            }
+            v |= enabled ? (1 << 7) : 0;
+            System.err.printf("R ff26 -> %02x%n", v | MASKS[address - 0xff10]);
+            return v | MASKS[address - 0xff10];
         } else if (address == 0xff76) {
             return channels[0] | (channels[1] << 4);
         } else if (address == 0xff77) {

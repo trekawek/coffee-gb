@@ -58,10 +58,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 registeredLy = gpu.getVisibleLy();
             }
             coincidence = registeredLy == gpu.getRegisters().get(LYC);
-            if (ticksInLine >= (gpu.isFirstLine() ? 451 : 452)
+            if ((ticksInLine >= (gpu.isFirstLine() ? 451 : 452) && gpu.getLine() != 153)
                     || (gpu.getLine() == 153 && ticksInLine >= 4 && ticksInLine < 8)) {
                 // when LY changes, the comparison result reads 0 until the new value
-                // is registered at the beginning of the next line (lcdon_timing-GS)
+                // is registered at the beginning of the next line (lcdon_timing-GS);
+                // at the end of line 153 the comparison stays valid: LY already flipped
+                // to 0 at tick 8 and keeps that value into line 0, so an LYC=0
+                // interrupt fires only once per frame there
                 coincidence = false;
             }
 
