@@ -49,7 +49,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private boolean windowBeingFetched;
 
-    private int windowLineCounter;
+    private int windowLineCounter = -1;
 
     private final int[] spriteOrder = new int[10];
 
@@ -135,11 +135,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     public void resetWindowLineCounter() {
-        windowLineCounter = 0;
-    }
-
-    public void incrementWindowLineCounter() {
-        windowLineCounter++;
+        // pre-incremented at window activation: the first activated line renders row 0
+        windowLineCounter = -1;
     }
 
     @Override
@@ -149,17 +146,34 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             return true;
         }
 
-        // window activation check
+        // window activation check (SameBoy model): the comparison wraps in 8 bits, so
+        // WX values 0..6 can trigger during the discard phase; WX=0 has its own window,
+        // and the CGB also accepts WX=166. The window line counter increments at the
+        // activation itself, once per line (mealybug m3_wx_*_change)
         if (!window
                 && lcdc.isWindowDisplay()
                 && (gbc || lcdc.isBgAndWindowDisplay())
-                && r.get(LY) >= r.get(WY)
-                && r.get(WX) < 166
-                && position == r.get(WX) - 7) {
-            window = true;
-            windowBeingFetched = true;
-            fifo.clear();
-            fetcher.startWindow();
+                && r.get(LY) >= r.get(WY)) {
+            int wx = r.get(WX);
+            boolean activate;
+            if (wx == 0) {
+                activate = (position >= -15 && position <= -7)
+                        || (position == -16 && (r.get(SCX) & 7) != 0);
+            } else if (wx < (gbc ? 167 : 166)) {
+                activate = wx == ((position + 7) & 0xff);
+            } else {
+                activate = false;
+            }
+            if (activate) {
+                window = true;
+                windowBeingFetched = true;
+                windowLineCounter++;
+                fifo.clear();
+                fetcher.startWindow();
+            } else if (!gbc && wx == 166 && wx == ((position + 7) & 0xff)) {
+                // DMG: WX=166 increments the counter without activating the window
+                windowLineCounter++;
+            }
         }
 
         // object fetch in progress occupies the whole T-cycle

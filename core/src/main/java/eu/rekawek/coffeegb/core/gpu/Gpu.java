@@ -189,9 +189,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // tick later (lcdon_timing-GS vs the steady-state line phase)
         if (ticksInLine == (firstLine ? 455 : 456)) {
             ticksInLine = 0;
-            if (line < 144 && r.get(WX) < 166 && r.get(WY) < 143 && line + 1 > r.get(WY)) {
-                pixelTransferPhase.incrementWindowLineCounter();
-            }
             firstLine = false;
             pixelTransferDone = false;
             hblankIntFrom = Integer.MAX_VALUE;
