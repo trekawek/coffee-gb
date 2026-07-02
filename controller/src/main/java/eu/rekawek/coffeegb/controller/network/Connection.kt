@@ -274,7 +274,7 @@ class Connection(
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
     private const val PROTOCOL_NAME: String = "CoffeeGB NETPLAY"
-    private const val PROTOCOL_VERSION: Byte = 0x02
+    private const val PROTOCOL_VERSION: Byte = 0x03
 
     fun deflate(data: ByteArray): ByteArray {
       val deflater = Deflater(Deflater.BEST_SPEED)
