@@ -486,7 +486,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         oamPalette.restoreFromMemento(mem.oamPaletteMemento);
         oamSearchPhase.restoreFromMemento(mem.oamSearchPhaseMemento);
         pixelTransferPhase.restoreFromMemento(mem.pixelTransferPhaseMemento);
-        pixelMachine.restoreFromMemento(mem.pixelMachineMemento);
+        // snapshots from older versions carry only one dot machine; the pixel machine
+        // then restarts from the skeleton's state (one partially wrong line at most)
+        pixelMachine.restoreFromMemento(
+                mem.pixelMachineMemento != null ? mem.pixelMachineMemento : mem.pixelTransferPhaseMemento);
         r.restoreFromMemento(mem.rMemento);
 
         this.lcdEnabled = mem.lcdEnabled;

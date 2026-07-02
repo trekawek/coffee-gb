@@ -38,6 +38,16 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     private AddressSpace[] addressToSpace;
 
     public Mmu(boolean gbc) {
+        // WRAM powers up with garbage, and neither boot ROM clears it. Games with
+        // lazily-seeded random generators rely on that: Minesweeper for 'Windows'
+        // spins forever placing mines when its LFSR seed area reads all zeros
+        // (issue #48). A fixed seed keeps runs reproducible and netplay peers
+        // identical.
+        java.util.Random garbage = new java.util.Random(0xC0FFEE);
+        fillWithGarbage(ramC000, 0xc000, 0x1000, garbage);
+        fillWithGarbage(ramD000, 0xd000, 0x1000, garbage);
+        gbcRam.fillWithGarbage(garbage);
+
         addAddressSpace(ramC000);
         if (gbc) {
             addAddressSpace(gbcRam);
@@ -47,6 +57,12 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         }
         addAddressSpace(ramFF80);
         addAddressSpace(new ShadowAddressSpace(this, 0xe000, 0xc000, 0x1e00));
+    }
+
+    private static void fillWithGarbage(Ram ram, int offset, int length, java.util.Random garbage) {
+        for (int i = 0; i < length; i++) {
+            ram.setByte(offset + i, garbage.nextInt(0x100));
+        }
     }
 
     public void addAddressSpace(AddressSpace space) {

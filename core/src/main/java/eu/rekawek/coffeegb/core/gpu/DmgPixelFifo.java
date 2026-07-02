@@ -159,11 +159,17 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         }
         pixels.restoreFromMemento(mem.pixels);
         spriteFifo.restoreFromMemento(mem.spriteFifo);
-        System.arraycopy(mem.delayEntry, 0, delayEntry, 0, delayEntry.length);
-        System.arraycopy(mem.delayStamp, 0, delayStamp, 0, delayStamp.length);
-        delayHead = mem.delayHead;
-        delaySize = mem.delaySize;
-        outputTicks = mem.outputTicks;
+        // mementos serialized by older versions lack the delay-line fields
+        if (mem.delayEntry != null && mem.delayStamp != null) {
+            System.arraycopy(mem.delayEntry, 0, delayEntry, 0, delayEntry.length);
+            System.arraycopy(mem.delayStamp, 0, delayStamp, 0, delayStamp.length);
+            delayHead = mem.delayHead;
+            delaySize = mem.delaySize;
+            outputTicks = mem.outputTicks;
+        } else {
+            delayHead = 0;
+            delaySize = 0;
+        }
     }
 
     private record DmgPixelFifoMemento(Memento<IntQueue> pixels, Memento<SpriteFifo> spriteFifo,

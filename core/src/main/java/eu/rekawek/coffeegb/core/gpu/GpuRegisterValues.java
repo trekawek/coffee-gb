@@ -111,8 +111,13 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
             throw new IllegalArgumentException("Memento array length doesn't match");
         }
         System.arraycopy(mem.values, 0, this.values, 0, this.values.length);
-        System.arraycopy(mem.mixValues, 0, this.mixValues, 0, this.mixValues.length);
-        System.arraycopy(mem.pendingMixValues, 0, this.pendingMixValues, 0, this.pendingMixValues.length);
+        if (mem.mixValues != null && mem.pendingMixValues != null) {
+            System.arraycopy(mem.mixValues, 0, this.mixValues, 0, this.mixValues.length);
+            System.arraycopy(mem.pendingMixValues, 0, this.pendingMixValues, 0, this.pendingMixValues.length);
+        } else {
+            java.util.Arrays.fill(this.mixValues, -1);
+            java.util.Arrays.fill(this.pendingMixValues, -1);
+        }
     }
 
     private record GpuRegisterValuesMemento(int[] values, int[] mixValues, int[] pendingMixValues)

@@ -24,6 +24,13 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
         return speedMode != null && speedMode.isDmgCompat();
     }
 
+    /** Power-on garbage for the banked WRAM (see Mmu). */
+    public void fillWithGarbage(java.util.Random garbage) {
+        for (int i = 0; i < ram.length; i++) {
+            ram[i] = garbage.nextInt(0x100);
+        }
+    }
+
     @Override
     public boolean accepts(int address) {
         return address == SVBK || (address >= 0xd000 && address < 0xe000);
