@@ -31,41 +31,85 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         return pixels.size();
     }
 
+    // The DMG applies the palettes, the LCDC enable bits and the object/background
+    // muxing at the LCD interface, OUTPUT_DELAY dots after the pixel leaves the FIFO.
+    // Popped pixels travel through this delay line as raw color indices and are
+    // resolved against the *current* register values when they reach the screen
+    // (mealybug m3_bgp_change and friends pin this to the dot).
+    static final int OUTPUT_DELAY = 7;
+
+    private final int[] delayEntry = new int[8];
+
+    private final long[] delayStamp = new long[8];
+
+    private int delayHead, delaySize;
+
+    private long outputTicks;
+
     @Override
     public void putPixelToScreen() {
-        int pixel = dequeuePixel();
-        display.putDmgPixel(pixel);
+        int entry = popEntry();
+        int tail = (delayHead + delaySize) & 7;
+        delayEntry[tail] = entry;
+        delayStamp[tail] = outputTicks;
+        delaySize++;
+    }
+
+    // pack bg raw (2b), sprite raw (2b), sprite palette (1b), sprite priority (1b)
+    private int popEntry() {
+        int bgRaw = pixels.dequeue();
+        spriteFifo.pop();
+        return bgRaw
+                | (spriteFifo.poppedPixel << 2)
+                | (spriteFifo.poppedPalette << 4)
+                | (spriteFifo.poppedBgPriority ? 1 << 5 : 0);
+    }
+
+    // test helper: pop and resolve in one step (production defers by OUTPUT_DELAY)
+    int dequeuePixel() {
+        return resolvePixel(popEntry());
+    }
+
+    @Override
+    public void outputTick() {
+        outputTicks++;
+        while (delaySize > 0 && delayStamp[delayHead] + OUTPUT_DELAY <= outputTicks) {
+            int entry = delayEntry[delayHead];
+            delayHead = (delayHead + 1) & 7;
+            delaySize--;
+            display.putDmgPixel(resolvePixel(entry));
+        }
+    }
+
+    private int resolvePixel(int entry) {
+        int bgRaw = entry & 0b11;
+        if (!lcdc.isBgAndWindowDisplayEffective()) {
+            bgRaw = 0;
+        }
+        int spritePixel = (entry >> 2) & 0b11;
+        boolean spriteBgPriority = (entry & (1 << 5)) != 0;
+
+        int raw;
+        int palette;
+        if (spritePixel != 0
+                && lcdc.isObjDisplayEffective()
+                && !(spriteBgPriority && bgRaw != 0)) {
+            raw = spritePixel;
+            palette = registers.getEffective(((entry >> 4) & 1) == 0 ? GpuRegister.OBP0 : GpuRegister.OBP1);
+        } else {
+            raw = bgRaw;
+            palette = registers.getEffective(GpuRegister.BGP);
+        }
+        if (vRamTransfer != null) {
+            vRamTransfer.putPixel(raw);
+        }
+        return getColor(palette, raw);
     }
 
     @Override
     public void dropPixel() {
         pixels.dequeue();
         spriteFifo.pop();
-    }
-
-    int dequeuePixel() {
-        int bgRaw = pixels.dequeue();
-        // the background/window enable bit is applied when the pixel leaves the FIFO
-        if (!lcdc.isBgAndWindowDisplay()) {
-            bgRaw = 0;
-        }
-        spriteFifo.pop();
-
-        int raw;
-        int palette;
-        if (spriteFifo.poppedPixel != 0
-                && lcdc.isObjDisplay()
-                && !(spriteFifo.poppedBgPriority && bgRaw != 0)) {
-            raw = spriteFifo.poppedPixel;
-            palette = registers.get(spriteFifo.poppedPalette == 0 ? GpuRegister.OBP0 : GpuRegister.OBP1);
-        } else {
-            raw = bgRaw;
-            palette = registers.get(GpuRegister.BGP);
-        }
-        if (vRamTransfer != null) {
-            vRamTransfer.putPixel(raw);
-        }
-        return getColor(palette, raw);
     }
 
     @Override
@@ -98,8 +142,14 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     }
 
     @Override
+    public void clearOutput() {
+        delaySize = 0;
+    }
+
+    @Override
     public Memento<DmgPixelFifo> saveToMemento() {
-        return new DmgPixelFifoMemento(pixels.saveToMemento(), spriteFifo.saveToMemento());
+        return new DmgPixelFifoMemento(pixels.saveToMemento(), spriteFifo.saveToMemento(),
+                delayEntry.clone(), delayStamp.clone(), delayHead, delaySize, outputTicks);
     }
 
     @Override
@@ -109,9 +159,16 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         }
         pixels.restoreFromMemento(mem.pixels);
         spriteFifo.restoreFromMemento(mem.spriteFifo);
+        System.arraycopy(mem.delayEntry, 0, delayEntry, 0, delayEntry.length);
+        System.arraycopy(mem.delayStamp, 0, delayStamp, 0, delayStamp.length);
+        delayHead = mem.delayHead;
+        delaySize = mem.delaySize;
+        outputTicks = mem.outputTicks;
     }
 
-    private record DmgPixelFifoMemento(Memento<IntQueue> pixels, Memento<SpriteFifo> spriteFifo)
+    private record DmgPixelFifoMemento(Memento<IntQueue> pixels, Memento<SpriteFifo> spriteFifo,
+                                       int[] delayEntry, long[] delayStamp, int delayHead,
+                                       int delaySize, long outputTicks)
             implements Memento<DmgPixelFifo> {
     }
 }

@@ -123,6 +123,16 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return this;
     }
 
+    /** Advances the LCD output stage; called by the GPU every tick regardless of mode. */
+    public void outputTick() {
+        fifo.outputTick();
+    }
+
+    /** Drops pixels still in the output delay line (LCD disable). */
+    public void clearOutput() {
+        fifo.clearOutput();
+    }
+
     public void resetWindowLineCounter() {
         windowLineCounter = 0;
     }

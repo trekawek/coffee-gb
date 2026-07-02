@@ -6,6 +6,17 @@ public interface PixelFifo {
 
     void putPixelToScreen();
 
+    /**
+     * Advances the LCD output stage by one T-cycle. Called every GPU tick regardless of
+     * the mode, since the last pixels of a line leave the output delay line during HBlank.
+     */
+    default void outputTick() {
+    }
+
+    /** Drops any pixels still in the output delay line (LCD disable). */
+    default void clearOutput() {
+    }
+
     void dropPixel();
 
     void enqueue8Pixels(int[] pixels, TileAttributes tileAttributes);

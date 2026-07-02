@@ -12,12 +12,35 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     private int value = 0x91;
 
+    // DMG write conflict (mealybug m3_lcdc_*_change): during the T-cycle in which a CPU
+    // write lands, the LCD output stage sees the old value with the new BG_EN bit OR-ed
+    // in; the full new value settles one T-cycle later. -1 = no write this tick.
+    private int mixValue = -1;
+
+    private int pendingMixValue = -1;
+
     public boolean isBgAndWindowDisplay() {
         return (value & 0x01) != 0;
     }
 
     public boolean isObjDisplay() {
         return (value & 0x02) != 0;
+    }
+
+    /** BG/window enable as seen by the LCD output stage (with the write-conflict mix). */
+    public boolean isBgAndWindowDisplayEffective() {
+        return ((mixValue >= 0 ? mixValue : value) & 0x01) != 0;
+    }
+
+    /** Object enable as seen by the LCD output stage (with the write-conflict mix). */
+    public boolean isObjDisplayEffective() {
+        return ((mixValue >= 0 ? mixValue : value) & 0x02) != 0;
+    }
+
+    /** Called once per GPU tick: the mix value lives for the single tick after the write. */
+    void tickConflicts() {
+        mixValue = pendingMixValue;
+        pendingMixValue = -1;
     }
 
     public int getSpriteHeight() {
@@ -56,7 +79,7 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     @Override
     public void setByte(int address, int value) {
         checkArgument(address == 0xff40);
-        this.value = value;
+        set(value);
     }
 
     @Override
@@ -66,6 +89,7 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     }
 
     public void set(int value) {
+        pendingMixValue = this.value | (value & 0x01);
         this.value = value;
     }
 
@@ -75,7 +99,7 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     @Override
     public Memento<Lcdc> saveToMemento() {
-        return new LcdcMemento(value);
+        return new LcdcMemento(value, mixValue, pendingMixValue);
     }
 
     @Override
@@ -84,8 +108,10 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
             throw new IllegalArgumentException("Invalid memento type");
         }
         this.value = mem.value;
+        this.mixValue = mem.mixValue;
+        this.pendingMixValue = mem.pendingMixValue;
     }
 
-    private record LcdcMemento(int value) implements Memento<Lcdc> {
+    private record LcdcMemento(int value, int mixValue, int pendingMixValue) implements Memento<Lcdc> {
     }
 }

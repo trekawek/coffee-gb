@@ -176,6 +176,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return null;
         }
 
+        // write-conflict mixes settle and the LCD output stage advances every tick,
+        // in all modes (the last pixels of a line leave the delay line during HBlank)
+        r.tickConflicts();
+        lcdc.tickConflicts();
+        pixelTransferPhase.outputTick();
+
         Mode oldMode = mode;
         ticksInLine++;
         // the line started by enabling the LCD is one tick shorter: its grid starts at
@@ -391,6 +397,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.mode = Mode.HBlank;
         this.lcdEnabled = false;
         this.displayEnabledDelay = 0;
+        pixelTransferPhase.clearOutput();
         display.disableLcd();
     }
 
