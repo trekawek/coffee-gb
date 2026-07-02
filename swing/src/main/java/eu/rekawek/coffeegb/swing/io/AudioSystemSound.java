@@ -11,86 +11,136 @@ import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
-import java.util.Arrays;
-import java.util.concurrent.BlockingDeque;
-import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Plays the emulator audio through javax.sound. The per-tick sample buffer posted by the
+ * core once per frame is decimated to the output rate directly in the event handler (the
+ * event bus dispatches synchronously on the emulator thread, so the shared buffer can be
+ * read without copying it). A fractional resampling step keeps the produced rate exactly
+ * at the line's sample rate - an integer divider would run 0.1% fast and slowly fill any
+ * queue, ending in a rising latency followed by periodic overflow glitches.
+ */
 public class AudioSystemSound implements Runnable {
     private static final Logger LOG = LoggerFactory.getLogger(AudioSystemSound.class);
-    private static final int SAMPLE_RATE = 44100;
-    private static final int BUFFER_SIZE = 4096;
-    private static final AudioFormat FORMAT = new AudioFormat(AudioFormat.Encoding.PCM_UNSIGNED, SAMPLE_RATE, 8, 2, 2, SAMPLE_RATE, false);
 
-    private static final int DIVIDER = (int) (Gameboy.TICKS_PER_SEC / FORMAT.getSampleRate());
+    private static final int SAMPLE_RATE = 44100;
+
+    private static final AudioFormat FORMAT =
+            new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, SAMPLE_RATE, 16, 2, 4, SAMPLE_RATE, false);
+
+    /**
+     * The mixer outputs at most 4 channels * 15 * volume 7 = 420 per side; scale to leave
+     * a little 16-bit headroom.
+     */
+    private static final int VOLUME_SCALE = 76;
+
+    private static final double TICKS_PER_SAMPLE = (double) Gameboy.TICKS_PER_SEC / SAMPLE_RATE;
+
+    /**
+     * Samples produced by one frame's worth of ticks, rounded up.
+     */
+    private static final int MAX_FRAME_SAMPLES = Gameboy.TICKS_PER_FRAME / 95 + 2;
+
+    /**
+     * Line buffer of about 45 ms; the frame queue adds at most three frames (50 ms).
+     */
+    private static final int LINE_BUFFER_BYTES = 8192;
+
     private volatile boolean doStop;
     private volatile boolean isStopped;
     private volatile boolean enabled;
 
-    private BlockingDeque<int[]> bufferDequeue = new LinkedBlockingDeque<>(10);
+    private final BlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(3);
+
+    private double resamplePos;
 
     public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
         enabled = properties.getSoundEnabled();
         eventBus.register(this::play, Sound.SoundSampleEvent.class, callerId);
-        eventBus.register(e -> {
-            this.enabled = e.enabled();
-        }, Sound.SoundEnabledEvent.class);
+        eventBus.register(e -> this.enabled = e.enabled(), Sound.SoundEnabledEvent.class);
     }
 
     @Override
     public void run() {
         doStop = false;
-
-        while (bufferDequeue.isEmpty() && !doStop) {
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-            }
-        }
-
-        byte[] finalBuffer = new byte[Gameboy.TICKS_PER_FRAME * 2 / DIVIDER + 1];
-
         isStopped = false;
+
         SourceDataLine line;
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
-            line.open(FORMAT, BUFFER_SIZE / 2);
+            line.open(FORMAT, LINE_BUFFER_BYTES);
         } catch (LineUnavailableException e) {
-            throw new RuntimeException(e);
+            LOG.error("Cannot open the audio line", e);
+            isStopped = true;
+            return;
         }
         line.start();
+        byte[] silence = new byte[MAX_FRAME_SAMPLES * 4];
         while (!doStop) {
-            int[] buffer;
+            byte[] buffer;
             try {
-                buffer = bufferDequeue.pollFirst(1, TimeUnit.MILLISECONDS);
+                buffer = queue.poll(20, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 break;
             }
-            if (buffer != null && enabled) {
-                for (int i = 0, j = 0; i < buffer.length; i++) {
-                    if (i % DIVIDER == 0) {
-                        finalBuffer[j++] = (byte) buffer[i];
-                    }
-                }
-            } else {
-                Arrays.fill(finalBuffer, (byte) 0);
+            if (buffer != null) {
+                line.write(buffer, 0, buffer.length);
+            } else if (line.available() >= line.getBufferSize() - 4) {
+                // nothing is playing and the line has drained: keep it warm with silence
+                // instead of letting it underrun (a transiently late producer does not
+                // cause a silence gap this way)
+                line.write(silence, 0, silence.length);
             }
-            line.write(finalBuffer, 0, finalBuffer.length);
         }
-        line.drain();
         line.stop();
+        line.flush();
         isStopped = true;
+        synchronized (this) {
+            notifyAll();
+        }
     }
 
     public void stopThread() {
         doStop = true;
-        while (!isStopped) {
+        synchronized (this) {
+            while (!isStopped) {
+                try {
+                    wait(10);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
         }
     }
 
     private void play(Sound.SoundSampleEvent event) {
-        if (!bufferDequeue.offerLast(event.buffer().clone())) {
-            LOG.atInfo().log("Buffer overflow");
+        int[] source = event.buffer();
+        int ticks = source.length / 2;
+
+        byte[] out = new byte[MAX_FRAME_SAMPLES * 4];
+        int j = 0;
+        double pos = resamplePos;
+        while (pos < ticks) {
+            int i = (int) pos * 2;
+            int left = enabled ? (source[i] - 210) * VOLUME_SCALE : 0;
+            int right = enabled ? (source[i + 1] - 210) * VOLUME_SCALE : 0;
+            out[j++] = (byte) left;
+            out[j++] = (byte) (left >> 8);
+            out[j++] = (byte) right;
+            out[j++] = (byte) (right >> 8);
+            pos += TICKS_PER_SAMPLE;
+        }
+        resamplePos = pos - ticks;
+
+        byte[] trimmed = new byte[j];
+        System.arraycopy(out, 0, trimmed, 0, j);
+        if (!queue.offer(trimmed)) {
+            // the writer is behind; drop the oldest frame to keep the latency bounded
+            queue.poll();
+            queue.offer(trimmed);
         }
     }
 }

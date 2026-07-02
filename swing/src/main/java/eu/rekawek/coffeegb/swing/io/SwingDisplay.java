@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.controller.properties.DisplayProperties;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
 
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_WIDTH;
@@ -19,14 +20,11 @@ import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
 
 public class SwingDisplay extends JPanel implements Runnable {
 
-    private static final GraphicsConfiguration GFX_CONFIG =
-            GraphicsEnvironment.getLocalGraphicsEnvironment()
-                    .getDefaultScreenDevice()
-                    .getDefaultConfiguration();
-
     private final EventBus eventBus;
 
     private BufferedImage img;
+
+    private int[] imgPixels;
 
     private final int[] waitingFrame;
 
@@ -51,7 +49,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
         super();
         this.eventBus = eventBus;
-        img = GFX_CONFIG.createCompatibleImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        createFrameImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
         waitingFrame = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
@@ -102,9 +100,18 @@ public class SwingDisplay extends JPanel implements Runnable {
     private void setBorder(boolean isSgbBorder) {
         if (isSgbBorder != this.isSgbBorder) {
             this.isSgbBorder = isSgbBorder;
-            img = GFX_CONFIG.createCompatibleImage(getDisplayWidth(), getDisplayHeight());
+            createFrameImage(getDisplayWidth(), getDisplayHeight());
             setScale(scale);
         }
+    }
+
+    /**
+     * The image raster is written directly (setRGB would convert every pixel through the
+     * color model); TYPE_INT_RGB matches the int-packed RGB produced by the emulator.
+     */
+    private void createFrameImage(int width, int height) {
+        img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        imgPixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
     }
 
     private synchronized void setScale(int scale) {
@@ -119,6 +126,8 @@ public class SwingDisplay extends JPanel implements Runnable {
 
         int localScale = scale;
         Graphics2D g2d = (Graphics2D) g.create();
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
         g2d.drawImage(img, 0, 0, getDisplayWidth() * localScale, getDisplayHeight() * localScale, null);
         g2d.dispose();
     }
@@ -143,8 +152,7 @@ public class SwingDisplay extends JPanel implements Runnable {
                     if (blending) {
                         blendWithPreviousFrame();
                     }
-                    img.setRGB(0, 0, getDisplayWidth(), getDisplayHeight(), waitingFrame, 0, getDisplayWidth());
-                    validate();
+                    System.arraycopy(waitingFrame, 0, imgPixels, 0, getDisplayWidth() * getDisplayHeight());
                     repaint();
                     frameIsWaiting = false;
                 } else {
