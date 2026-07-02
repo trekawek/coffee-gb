@@ -27,5 +27,6 @@ public class BootProbe {
         }
         System.out.printf("ticks=%d (0x%x) div=%02x pc=%04x%n", t, t,
                 gb.getAddressSpace().getByte(0xff04), gb.getCpu().getRegisters().getPC());
+        System.exit(0);
     }
 }

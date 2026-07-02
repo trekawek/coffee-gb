@@ -31,5 +31,6 @@ public class OamProbe {
             }
         }
         out.close();
+        System.exit(0);
     }
 }

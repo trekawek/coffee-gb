@@ -52,5 +52,6 @@ public class TraceMain {
             }
         }
         out.close();
+        System.exit(0);
     }
 }

@@ -46,5 +46,6 @@ public class PpuProbe {
             }
         }
         out.close();
+        System.exit(0);
     }
 }

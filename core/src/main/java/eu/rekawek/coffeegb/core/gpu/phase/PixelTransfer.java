@@ -91,6 +91,31 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 }
                 return true;
             }
+        }
+
+        if (lcdc.isObjDisplay()) {
+            if (fetcher.spriteInProgress()) {
+                return true;
+            }
+            for (int i = 0; i < sprites.length; i++) {
+                SpritePosition s = sprites[i];
+                if (!s.isEnabled()) {
+                    continue;
+                }
+                if ((x == 0 && s.getX() < 8) || s.getX() - 8 == x) {
+                    // the sprite fetch has to wait for the background fetcher to fetch
+                    // its tile data (intr_2_mode0_timing_sprites)
+                    if (!fetcher.readyForSpriteFetch()) {
+                        return true;
+                    }
+                    fetcher.addSprite(s, x == 0 && s.getX() < 8 ? 8 - s.getX() : 0, i);
+                    sprites[i].disable();
+                    return true;
+                }
+            }
+        }
+
+        if (lcdc.isBgAndWindowDisplay() || gbc) {
             if (fifo.getLength() <= 8) {
                 return true;
             }
@@ -98,31 +123,6 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 fifo.dropPixel();
                 droppedPixels++;
                 return true;
-            }
-        }
-
-        if (lcdc.isObjDisplay()) {
-            if (fetcher.spriteInProgress()) {
-                return true;
-            }
-            boolean spriteAdded = false;
-            for (int i = 0; i < sprites.length; i++) {
-                SpritePosition s = sprites[i];
-                if (!s.isEnabled()) {
-                    continue;
-                }
-                if (x == 0 && s.getX() < 8) {
-                    fetcher.addSprite(s, 8 - s.getX(), i);
-                    sprites[i].disable();
-                    spriteAdded = true;
-                } else if (s.getX() - 8 == x) {
-                    fetcher.addSprite(s, 0, i);
-                    sprites[i].disable();
-                    spriteAdded = true;
-                }
-                if (spriteAdded) {
-                    return true;
-                }
             }
         }
 

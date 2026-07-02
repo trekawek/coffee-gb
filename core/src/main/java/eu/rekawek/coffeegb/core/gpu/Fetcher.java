@@ -16,10 +16,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         READ_TILE_ID,
         READ_DATA_1,
         READ_DATA_2,
-        PUSH,
-        READ_SPRITE_TILE_ID,
-        READ_SPRITE_DATA_1,
-        READ_SPRITE_DATA_2
+        PUSH
     }
 
     private static final int[] EMPTY_PIXEL_LINE = new int[8];
@@ -72,6 +69,12 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     private int spriteOamIndex;
 
+    private int spriteStep = -1;
+
+    private boolean justPushed;
+
+    private int spriteData1;
+
     private int divider = 2;
 
     public Fetcher(
@@ -98,6 +101,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         tileData2 = 0;
         divider = 2;
         fetchingDisabled = false;
+        spriteStep = -1;
     }
 
     public void startFetching(
@@ -122,10 +126,19 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     public void addSprite(SpritePosition sprite, int offset, int oamIndex) {
         this.sprite = sprite;
-        this.state = State.READ_SPRITE_TILE_ID;
+        this.spriteStep = 0;
         this.spriteTileLine = r.get(LY) + 16 - sprite.getY();
         this.spriteOffset = offset;
         this.spriteOamIndex = oamIndex;
+    }
+
+    /**
+     * A sprite fetch can only start when the background fetcher has fetched its tile data
+     * and the FIFO is not empty; the background fetch state is preserved and resumes after
+     * the sprite fetch.
+     */
+    public boolean readyForSpriteFetch() {
+        return (state == State.PUSH || justPushed) && fifo.getLength() > 0;
     }
 
     public void tick() {
@@ -142,8 +155,44 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             return;
         }
 
+        if (spriteStep >= 0) {
+            switch (spriteStep) {
+                case 0:
+                    tileId = oemRam.getByte(sprite.getAddress() + 2);
+                    spriteAttributes = TileAttributes.valueOf(oemRam.getByte(sprite.getAddress() + 3));
+                    spriteStep = 1;
+                    break;
+
+                case 1:
+                    if (lcdc.getSpriteHeight() == 16) {
+                        tileId &= 0xfe;
+                    }
+                    spriteData1 = getTileData(
+                            tileId, spriteTileLine, 0, 0x8000, false, spriteAttributes, lcdc.getSpriteHeight());
+                    spriteStep = 2;
+                    break;
+
+                case 2:
+                    int spriteData2 = getTileData(
+                            tileId, spriteTileLine, 1, 0x8000, false, spriteAttributes, lcdc.getSpriteHeight());
+                    fifo.setOverlay(
+                            zip(spriteData1, spriteData2, spriteAttributes.isXflip()),
+                            spriteOffset,
+                            spriteAttributes,
+                            spriteOamIndex);
+                    spriteStep = -1;
+                    break;
+            }
+            return;
+        }
+
+        bgStep();
+    }
+
+    private void bgStep() {
         switch (state) {
             case READ_TILE_ID:
+                justPushed = false;
                 tileId = videoRam0.getByte(mapAddress + xOffset);
                 if (gbc) {
                     tileAttributes = TileAttributes.valueOf(videoRam1.getByte(mapAddress + xOffset));
@@ -169,36 +218,10 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                     fifo.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()), tileAttributes);
                     xOffset = (xOffset + 1) % 0x20;
                     state = State.READ_TILE_ID;
+                    justPushed = true;
                 }
                 break;
 
-            case READ_SPRITE_TILE_ID:
-                tileId = oemRam.getByte(sprite.getAddress() + 2);
-                spriteAttributes = TileAttributes.valueOf(oemRam.getByte(sprite.getAddress() + 3));
-                state = State.READ_SPRITE_DATA_1;
-                break;
-
-            case READ_SPRITE_DATA_1:
-                if (lcdc.getSpriteHeight() == 16) {
-                    tileId &= 0xfe;
-                }
-                tileData1 =
-                        getTileData(
-                                tileId, spriteTileLine, 0, 0x8000, false, spriteAttributes, lcdc.getSpriteHeight());
-                state = State.READ_SPRITE_DATA_2;
-                break;
-
-            case READ_SPRITE_DATA_2:
-                tileData2 =
-                        getTileData(
-                                tileId, spriteTileLine, 1, 0x8000, false, spriteAttributes, lcdc.getSpriteHeight());
-                fifo.setOverlay(
-                        zip(tileData1, tileData2, spriteAttributes.isXflip()),
-                        spriteOffset,
-                        spriteAttributes,
-                        spriteOamIndex);
-                state = State.READ_TILE_ID;
-                break;
         }
     }
 
@@ -228,9 +251,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     }
 
     public boolean spriteInProgress() {
-        return state == State.READ_SPRITE_TILE_ID
-                || state == State.READ_SPRITE_DATA_1
-                || state == State.READ_SPRITE_DATA_2;
+        return spriteStep >= 0;
     }
 
     public int[] zip(int data1, int data2, boolean reverse) {
@@ -278,6 +299,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 spriteAttributes == null ? -1 : spriteAttributes.getValue(),
                 spriteOffset,
                 spriteOamIndex,
+                spriteStep,
+                spriteData1,
                 divider);
     }
 
@@ -309,6 +332,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         }
         this.spriteOffset = mem.spriteOffset;
         this.spriteOamIndex = mem.spriteOamIndex;
+        this.spriteStep = mem.spriteStep;
+        this.spriteData1 = mem.spriteData1;
         this.divider = mem.divider;
     }
 
@@ -329,6 +354,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             int spriteAttributesValue,
             int spriteOffset,
             int spriteOamIndex,
+            int spriteStep,
+            int spriteData1,
             int divider)
             implements Memento<Fetcher> {
     }
