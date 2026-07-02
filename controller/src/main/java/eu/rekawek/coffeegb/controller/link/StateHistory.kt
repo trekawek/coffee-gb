@@ -81,8 +81,16 @@ class StateHistory() {
       debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, 1))
     }
 
-    val mainSession = mainConfig?.let { Session(it, mainEventBus, null, mainLink) }
-    val peerSession = peerConfig?.let { Session(it, peerEventBus, null, peerLink) }
+    // the sessions are rebuilt only to be restored from mementos right away: skip the
+    // boot sequence, which FAST_FORWARD would otherwise emulate on every rebase
+    val mainSession =
+        mainConfig?.let {
+          Session(if (baseState.mainMemento != null) it.forRestore() else it, mainEventBus, null, mainLink)
+        }
+    val peerSession =
+        peerConfig?.let {
+          Session(if (baseState.peerMemento != null) it.forRestore() else it, peerEventBus, null, peerLink)
+        }
     if (mainSession != null && baseState.mainMemento != null) {
       mainSession.restoreFromMemento(baseState.mainMemento)
     }

@@ -457,6 +457,24 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             return this;
         }
 
+        /**
+         * A copy of this configuration that skips the boot sequence, for building a
+         * Gameboy whose state is immediately overwritten by a memento restore. With
+         * {@link BootstrapMode#FAST_FORWARD} the constructor would emulate the whole
+         * boot ROM (tens of milliseconds) only to have every bit of that state
+         * discarded by the restore.
+         */
+        public GameboyConfiguration forRestore() {
+            GameboyConfiguration copy = new GameboyConfiguration(rom);
+            copy.gameboyType = gameboyType;
+            copy.bootstrapMode = BootstrapMode.SKIP;
+            copy.batteryData = batteryData;
+            copy.supportBatterySave = supportBatterySave;
+            copy.displaySgbBorder = displaySgbBorder;
+            copy.cgb0Revision = cgb0Revision;
+            return copy;
+        }
+
         public Gameboy build() {
             return new Gameboy(this);
         }

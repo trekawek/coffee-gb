@@ -132,15 +132,50 @@ public class EventBusImpl implements EventBus {
         public void run() {
             while (!doStop) {
                 try {
-                    Event event = asyncEvents.poll(10, TimeUnit.MILLISECONDS);
-                    if (event != null) {
-                        post(event);
+                    // peek first and remove only after dispatching, so the queue reads
+                    // as non-empty for the whole duration of the dispatch (drainAsyncEvents
+                    // relies on it)
+                    Event event = asyncEvents.peekFirst();
+                    if (event == null) {
+                        Thread.sleep(1);
+                        continue;
                     }
+                    post(event);
+                    asyncEvents.removeFirst();
                 } catch (Exception e) {
                     LOG.atError().setCause(e).log("Error processing event");
+                    asyncEvents.pollFirst();
                 }
             }
             stopped = true;
         }
+    }
+
+    /**
+     * Blocks until all asynchronous events queued on this bus and its descendants have
+     * been dispatched. Useful in tests that need a deterministic point after which every
+     * in-flight event has been observed.
+     */
+    public void drainAsyncEvents() {
+        while (hasPendingAsyncEvents()) {
+            try {
+                Thread.sleep(1);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private boolean hasPendingAsyncEvents() {
+        if (!asyncEvents.isEmpty()) {
+            return true;
+        }
+        for (EventBusImpl c : children) {
+            if (c.hasPendingAsyncEvents()) {
+                return true;
+            }
+        }
+        return false;
     }
 }

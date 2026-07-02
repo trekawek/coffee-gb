@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
@@ -27,7 +28,7 @@ class LinkedControllerTest {
     val randomJoypad = RandomJoypad(eventBus)
     eventBus.post(LoadRomEvent(ROM))
     eventBus.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GAMEBOY_TYPE, BOOTSTRAP_MODE, 0)
     )
     repeat(100) {
       sut.runFrame()
@@ -50,7 +51,10 @@ class LinkedControllerTest {
         }
 
     eventBus.post(LinkedController.RemoteButtonStateEvent(1, Input(listOf(Button.UP), emptyList())))
-    repeat(5) { sut.runFrame() }
+    repeat(5) {
+      eventBus.drainAsyncEvents()
+      sut.runFrame()
+    }
     eventBus.close()
 
     val actualButtons = buttons.toList()
@@ -68,7 +72,7 @@ class LinkedControllerTest {
     val randomJoypad = RandomJoypad(eventBus1)
     eventBus1.post(LoadRomEvent(ROM))
     eventBus1.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GAMEBOY_TYPE, BOOTSTRAP_MODE, 0)
     )
 
     val eventBus2 = EventBusImpl()
@@ -77,7 +81,7 @@ class LinkedControllerTest {
     sut2.timingTicker.disabled = true
     eventBus2.post(LoadRomEvent(ROM))
     eventBus2.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GAMEBOY_TYPE, BOOTSTRAP_MODE, 0)
     )
     sut2.stateHistory.debugEventBus =
         EventBusImpl().also { eb ->
@@ -100,6 +104,8 @@ class LinkedControllerTest {
       }
     }
     repeat(5) {
+      eventBus1.drainAsyncEvents()
+      eventBus2.drainAsyncEvents()
       sut1.runFrame()
       sut2.runFrame()
     }
@@ -117,7 +123,7 @@ class LinkedControllerTest {
     val randomJoypad1 = RandomJoypad(eventBus1)
     eventBus1.post(LoadRomEvent(ROM))
     eventBus1.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GAMEBOY_TYPE, BOOTSTRAP_MODE, 0)
     )
 
     val eventBus2 = EventBusImpl()
@@ -127,7 +133,7 @@ class LinkedControllerTest {
     val randomJoypad2 = RandomJoypad(eventBus2)
     eventBus2.post(LoadRomEvent(ROM))
     eventBus2.post(
-        PeerLoadedGameEvent(ROM_BYTES, null, null, GameboyType.DMG, Gameboy.BootstrapMode.SKIP, 0)
+        PeerLoadedGameEvent(ROM_BYTES, null, null, GAMEBOY_TYPE, BOOTSTRAP_MODE, 0)
     )
     sut2.stateHistory.debugEventBus =
         EventBusImpl().also { eb ->
@@ -151,7 +157,12 @@ class LinkedControllerTest {
       randomJoypad1.tick()
       randomJoypad2.tick()
     }
+    // input patches travel between the controllers through the async event threads;
+    // make sure every in-flight patch is delivered before the flushing frames run, so
+    // the final inputs are rebased (and their joypad events observed) on both sides
     repeat(5) {
+      eventBus1.drainAsyncEvents()
+      eventBus2.drainAsyncEvents()
       sut1.runFrame()
       sut2.runFrame()
     }
@@ -164,10 +175,22 @@ class LinkedControllerTest {
 
     val ROM_BYTES = ROM.readBytes()
 
+    // the peer session must be built exactly like the remote main session; the
+    // production flow forwards the main config's type and bootstrap mode in
+    // LocalRomLoadedEvent (the previous hardcoded DMG+SKIP diverged from the CGB
+    // main session built for this universal rom)
+    val MAIN_CONFIG =
+        Controller.createGameboyConfig(EmulatorProperties(), eu.rekawek.coffeegb.core.memory.cart.Rom(ROM))
+
+    val GAMEBOY_TYPE: GameboyType = MAIN_CONFIG.getGameboyType()
+
+    val BOOTSTRAP_MODE: Gameboy.BootstrapMode = MAIN_CONFIG.getBootstrapMode()
+
     fun assertJoypadEventsEqual(
         expectedButtons: List<Joypad.JoypadPressEvent>,
         actualButtons: List<Joypad.JoypadPressEvent>,
     ) {
+
       val ticks =
           (expectedButtons.map { it.tick }.toSet() + actualButtons.map { it.tick() }.toSet())
               .toList()

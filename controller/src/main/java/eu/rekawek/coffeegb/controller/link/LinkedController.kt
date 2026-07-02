@@ -229,7 +229,13 @@ class LinkedController(
             Joypad.JoypadPressEvent::class,
         ),
     )
-    mainSession = Session(mainConfig, mainEventBus, console, mainSerialEndpoint)
+    mainSession =
+        Session(
+            if (snapshot != null) mainConfig.forRestore() else mainConfig,
+            mainEventBus,
+            console,
+            mainSerialEndpoint,
+        )
     if (snapshot != null) {
       mainSession?.gameboy?.restoreFromMemento(snapshot.deserializeToGameboyMemento())
     }
@@ -258,7 +264,13 @@ class LinkedController(
   private fun initPeerSession(frame: Long, state: Memento<Gameboy>?) {
     val peerConfig = peerConfig ?: return
     val peerEventBus = EventBusImpl(null, null, false)
-    val peerSession = Session(peerConfig, peerEventBus, null, peerSerialEndpoint)
+    val peerSession =
+        Session(
+            if (state != null) peerConfig.forRestore() else peerConfig,
+            peerEventBus,
+            null,
+            peerSerialEndpoint,
+        )
     if (state != null) {
       peerSession.gameboy.restoreFromMemento(state)
     }
