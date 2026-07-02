@@ -11,8 +11,8 @@ import org.junit.After
 import org.junit.Test
 import java.io.IOException
 import java.io.InputStream
-import java.io.PipedInputStream
-import java.io.PipedOutputStream
+import java.io.InterruptedIOException
+import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -33,6 +33,66 @@ class ConnectionTest {
         delegate.read(b, off, if (len > 0) 1 else 0)
   }
 
+  /**
+   * Thread-agnostic in-memory pipe. PipedInputStream/PipedOutputStream track the last
+   * writer/reader thread and throw "write end dead" once it terminates - but Connection
+   * writes from short-lived event-bus dispatch threads, which killed the pipe mid-test
+   * on slow machines.
+   */
+  private class Pipe {
+    private val lock = Object()
+    private val data = ArrayDeque<Byte>()
+    private var closed = false
+
+    val sink: OutputStream = object : OutputStream() {
+      override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+      override fun write(b: ByteArray, off: Int, len: Int) {
+        synchronized(lock) {
+          if (closed) throw IOException("Pipe closed")
+          for (i in off until off + len) data.addLast(b[i])
+          lock.notifyAll()
+        }
+      }
+
+      override fun close() {
+        synchronized(lock) {
+          closed = true
+          lock.notifyAll()
+        }
+      }
+    }
+
+    val source: InputStream = object : InputStream() {
+      override fun read(): Int {
+        val b = ByteArray(1)
+        return if (read(b, 0, 1) == -1) -1 else b[0].toInt() and 0xff
+      }
+
+      override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (len == 0) return 0
+        synchronized(lock) {
+          while (data.isEmpty() && !closed) {
+            try {
+              lock.wait()
+            } catch (e: InterruptedException) {
+              throw InterruptedIOException()
+            }
+          }
+          if (data.isEmpty()) return -1
+          var n = 0
+          while (n < len && data.isNotEmpty()) {
+            b[off + n] = data.removeFirst()
+            n++
+          }
+          return n
+        }
+      }
+
+      override fun close() = sink.close()
+    }
+  }
+
   private val senderBus = EventBusImpl()
 
   private val receiverBus = EventBusImpl()
@@ -44,13 +104,12 @@ class ConnectionTest {
   private val threads = mutableListOf<Thread>()
 
   private fun connect() {
-    val toReceiver = PipedOutputStream()
-    val fromSender = PipedInputStream(toReceiver, 1 shl 20)
-    val toSender = PipedOutputStream()
-    val fromReceiver = PipedInputStream(toSender, 1 shl 20)
+    val senderToReceiver = Pipe()
+    val receiverToSender = Pipe()
 
-    val sender = Connection(fromReceiver, toReceiver, senderBus, true)
-    val receiver = Connection(TrickleInputStream(fromSender), toSender, receiverBus, false)
+    val sender = Connection(receiverToSender.source, senderToReceiver.sink, senderBus, true)
+    val receiver =
+        Connection(TrickleInputStream(senderToReceiver.source), receiverToSender.sink, receiverBus, false)
     this.sender = sender
     this.receiver = receiver
     // run() performs the handshake and then reads; both sides need it running
@@ -166,27 +225,25 @@ class ConnectionTest {
 
   @Test
   fun handshakeRejectsWrongProtocol() {
-    val toReceiver = PipedOutputStream()
-    val fromSender = PipedInputStream(toReceiver, 1 shl 16)
-    val toSender = PipedOutputStream()
-    PipedInputStream(toSender, 1 shl 16)
+    val toReceiver = Pipe()
+    val toSender = Pipe()
 
     // the client-side handshake happens during construction
-    toReceiver.write("CoffeeGB WRONG!!".toByteArray() + byteArrayOf(0x02))
-    toReceiver.flush()
-    assertFailsWith<IOException> { Connection(fromSender, toSender, receiverBus, false) }
+    toReceiver.sink.write("CoffeeGB WRONG!!".toByteArray() + byteArrayOf(0x02))
+    assertFailsWith<IOException> {
+      Connection(toReceiver.source, toSender.sink, receiverBus, false)
+    }
   }
 
   @Test
   fun handshakeRejectsWrongVersion() {
-    val toReceiver = PipedOutputStream()
-    val fromSender = PipedInputStream(toReceiver, 1 shl 16)
-    val toSender = PipedOutputStream()
-    PipedInputStream(toSender, 1 shl 16)
+    val toReceiver = Pipe()
+    val toSender = Pipe()
 
-    toReceiver.write("CoffeeGB NETPLAY".toByteArray() + byteArrayOf(0x7f))
-    toReceiver.flush()
-    assertFailsWith<IOException> { Connection(fromSender, toSender, receiverBus, false) }
+    toReceiver.sink.write("CoffeeGB NETPLAY".toByteArray() + byteArrayOf(0x7f))
+    assertFailsWith<IOException> {
+      Connection(toReceiver.source, toSender.sink, receiverBus, false)
+    }
   }
 
   @Test
