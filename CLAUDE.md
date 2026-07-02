@@ -281,8 +281,19 @@ Compare via `ImageTestRunner` (stops at `LD B,B`). Not in CI yet — most still 
 - Sprite-related conflicts (m3_bgp_change_sprites 992, m3_obp0_change 432 diffs
   at x=0..1, obj_en/size 146-390): SameBoy's DMG_LCDC obj_en special cases
   (position_in_line==0, during_object_fetch) not implemented.
-- Window tests (m2_win_en_toggle, m3_lcdc_win_en_change_multiple*, wx_*): not
-  yet analysed; disable_window_pixel_insertion_glitch in SameBoy is the model.
+- Window: SameBoy's activation model is ported (uint8-wrapped WX==position+7,
+  WX=0 specials, CGB accepts 166, line counter increments AT activation from -1);
+  m2_win_en_toggle is pixel-perfect on DMG and CGB. Still open: the CGB fails
+  m3_wx_4/5/6_change wholesale - the CGB's WX conflict class is WRITE_CPU (one
+  T-cycle later than DMG's WX_DMG), unmodeled; also SameBoy's insert_bg_pixel /
+  cgb_wx_glitch fetch corruptions are not implemented.
+- CGB: ColorPixelFifo resolves at the output stage (OUTPUT_DELAY=6, no mixes) and
+  applies BGP/OBPx remapping in DMG-compat mode. CGB baselines vs "CPU CGB D"
+  photos need FAST_FORWARD boot (SKIP lacks the compat palettes); compare at
+  5 bits - photos expand (c<<3)|(c>>2), we use c*8. The 7 CGB-native *2 variants
+  (only "CPU CGB C" photos) are unanalysed. Demotronic (#45) renders 2 of 4 probe
+  frames pixel-exact vs SameBoy (boot offset is 196 frames, not 186); the rest
+  differ only at the per-scanline wave edges (m3_scx/scy family).
 - SameBoy's conflict maps live in Core/sm83_cpu.c (dmg_conflict_map + the
   GB_CONFLICT_* cases); their per-register apply offsets are relative to a
   baseline 4 T before our CPU write commit tick.
