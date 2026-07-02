@@ -27,6 +27,12 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
 
     private final int[] pendingMixValues = new int[GpuRegister.values().length];
 
+    private boolean gbc;
+
+    public void setGbc(boolean gbc) {
+        this.gbc = gbc;
+    }
+
     public GpuRegisterValues() {
         values = new int[GpuRegister.values().length];
         java.util.Arrays.fill(mixValues, -1);
@@ -71,7 +77,8 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
     public void setByte(int address, int value) {
         GpuRegister reg = fromAddress(address);
         if (reg != null && reg.getType().isAllowsWrite()) {
-            if (reg == GpuRegister.BGP || reg == GpuRegister.OBP0 || reg == GpuRegister.OBP1) {
+            // the DMG palette-write conflict mix does not exist on the CGB
+            if (!gbc && (reg == GpuRegister.BGP || reg == GpuRegister.OBP0 || reg == GpuRegister.OBP1)) {
                 pendingMixValues[reg.ordinal()] = values[reg.ordinal()] | value;
             }
             values[reg.ordinal()] = value;

@@ -10,6 +10,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
+    private boolean gbc;
+
     private int value = 0x91;
 
     // DMG write conflict (mealybug m3_lcdc_*_change): during the T-cycle in which a CPU
@@ -98,12 +100,21 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
      *     in the conflict-mix T-cycle instead of one T-cycle later
      */
     public void set(int value, boolean dropObjEnInMix) {
+        if (gbc) {
+            // the CGB applies LCDC writes cleanly, without the DMG's conflict mix
+            this.value = value;
+            return;
+        }
         int mix = this.value | (value & 0x01);
         if (dropObjEnInMix) {
             mix &= ~0x02;
         }
         pendingMixValue = mix;
         this.value = value;
+    }
+
+    public void setGbc(boolean gbc) {
+        this.gbc = gbc;
     }
 
     public int get() {
