@@ -117,7 +117,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace());
-        sound = new Sound(timer, gbc);
+        sound = new Sound(timer, speedMode, gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
         serialPort = new SerialPort(interruptManager, timer, gbc, speedMode);
 
@@ -128,6 +128,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
         Bios bios = new Bios(configuration.gameboyType);
         biosShadow = new BiosShadow(bios, cartridge);
+        speedMode.setBiosShadow(biosShadow);
+        mmu.setSpeedMode(speedMode);
 
         mmu.addAddressSpace(biosShadow);
         mmu.addAddressSpace(gpu);
@@ -150,7 +152,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         interruptManager.disableInterrupts(false);
         if (configuration.bootstrapMode != BootstrapMode.SKIP) {
             // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
-            // line grid to that write
+            // line grid to that write; the divider has counted a few cycles more on
+            // the CGB by the time the CPU starts (boot_div-cgbABCDE)
+            timer.presetDiv(gbc ? 12 : 4);
             gpu.setByte(0xff40, 0x00);
         }
         if (configuration.bootstrapMode == BootstrapMode.FAST_FORWARD) {
@@ -158,6 +162,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 tick();
             }
         } else if (configuration.bootstrapMode == BootstrapMode.SKIP) {
+            if (gbc && configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB) {
+                speedMode.setDmgCompat(true);
+            }
             biosShadow.setByte(0xff50, 0);
             // DIV counter value at PC=0x0100 after the boot ROM (mooneye boot_div tests)
             timer.presetDiv(gbc ? 0xb644 : 0xabcc);

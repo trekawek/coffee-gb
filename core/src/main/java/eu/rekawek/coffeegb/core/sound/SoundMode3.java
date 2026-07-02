@@ -82,7 +82,9 @@ public class SoundMode3 extends AbstractSoundMode {
     protected void setNr0(int value) {
         super.setNr0(value);
         if (!dacEnabled && (value & (1 << 7)) != 0) {
-            start();
+            // re-enabling the DAC rewinds the wave position but must leave the length
+            // counter alone (cgb_sound 03-trigger #11)
+            i = 0;
         }
         dacEnabled = (value & (1 << 7)) != 0;
         channelEnabled &= dacEnabled;

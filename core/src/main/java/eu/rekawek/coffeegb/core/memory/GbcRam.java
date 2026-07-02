@@ -14,6 +14,16 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
 
     private int svbk;
 
+    private eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode;
+
+    public void setSpeedMode(eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
+        this.speedMode = speedMode;
+    }
+
+    private boolean isDmgCompat() {
+        return speedMode != null && speedMode.isDmgCompat();
+    }
+
     @Override
     public boolean accepts(int address) {
         return address == SVBK || (address >= 0xd000 && address < 0xe000);
@@ -22,7 +32,9 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     @Override
     public void setByte(int address, int value) {
         if (address == SVBK) {
-            this.svbk = value;
+            if (!isDmgCompat()) {
+                this.svbk = value;
+            }
         } else {
             ram[translate(address)] = value;
         }
@@ -31,7 +43,8 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     @Override
     public int getByte(int address) {
         if (address == SVBK) {
-            return svbk;
+            // reads FF on a CGB in DMG compatibility mode (boot_hwio-C)
+            return isDmgCompat() ? 0xff : svbk;
         } else {
             return ram[translate(address)];
         }

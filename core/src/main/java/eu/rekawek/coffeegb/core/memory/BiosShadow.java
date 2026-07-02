@@ -18,6 +18,10 @@ public class BiosShadow implements AddressSpace, Originator<BiosShadow> {
         this.cartridge = cartridge;
     }
 
+    public boolean isBootFinished() {
+        return !isEnabled;
+    }
+
     @Override
     public boolean accepts(int address) {
         if (address == 0xff50) {

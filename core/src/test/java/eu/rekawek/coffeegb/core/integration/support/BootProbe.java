@@ -10,8 +10,9 @@ import java.io.File;
 
 public class BootProbe {
     public static void main(String[] args) throws Exception {
+        GameboyType type = args.length > 1 && args[1].equals("cgb") ? GameboyType.CGB : GameboyType.DMG;
         Gameboy gb = new GameboyConfiguration(new File(args[0]))
-                .setSupportBatterySave(false).setGameboyType(GameboyType.DMG)
+                .setSupportBatterySave(false).setGameboyType(type)
                 .setBootstrapMode(Gameboy.BootstrapMode.NORMAL).build();
         gb.init(new EventBusImpl(), SerialEndpoint.NULL_ENDPOINT, null);
         long t = 0;

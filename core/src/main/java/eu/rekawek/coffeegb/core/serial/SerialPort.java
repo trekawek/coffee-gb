@@ -28,7 +28,8 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private int sb;
 
-    private int sc;
+    // the CGB clock-speed bit (bit 1) reads 1 at power-on (mooneye boot_hwio-C)
+    private int sc = 0x02;
 
     private boolean prevClockBit;
 

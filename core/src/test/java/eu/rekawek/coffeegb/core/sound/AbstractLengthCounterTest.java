@@ -34,7 +34,7 @@ public abstract class AbstractLengthCounterTest {
 
     protected void delayClocks(int clocks) {
         for (int i = 0; i < clocks; i++) {
-            int firedStep = frameSequencer.tick(divCounter = (divCounter + 1) & 0xffff, true);
+            int firedStep = frameSequencer.tick(divCounter = (divCounter + 1) & 0xffff, true, false);
             if (firedStep >= 0 && (firedStep & 1) == 0) {
                 lengthCounter.clockTick();
             }
@@ -50,7 +50,7 @@ public abstract class AbstractLengthCounterTest {
         lengthCounter.reset();
         // blargg's sync_apu returns just after a length clock, i.e. the next frame
         // sequencer step is one that does not clock length
-        while (frameSequencer.tick(divCounter = (divCounter + 1) & 0xffff, true) != 0) {
+        while (frameSequencer.tick(divCounter = (divCounter + 1) & 0xffff, true, false) != 0) {
             // advance until step 0 fires
         }
     }

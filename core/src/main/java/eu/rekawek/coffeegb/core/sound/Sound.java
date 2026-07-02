@@ -45,8 +45,11 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
-    public Sound(Timer timer, boolean gbc) {
+    private final eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode;
+
+    public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc) {
         this.timer = timer;
+        this.speedMode = speedMode;
         this.gbc = gbc;
         allModes[0] = new SoundMode1(frameSequencer, gbc);
         allModes[1] = new SoundMode2(frameSequencer, gbc);
@@ -61,7 +64,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     }
 
     public void tick() {
-        int firedStep = frameSequencer.tick(timer.getDivCounter(), enabled);
+        int firedStep = frameSequencer.tick(timer.getDivCounter(), enabled, speedMode.getSpeedMode() == 2);
         if (!enabled) {
             play(0, 0);
             return;
@@ -139,6 +142,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     @Override
     public void setByte(int address, int value) {
+
         if (address == 0xff26) {
             if ((value & (1 << 7)) == 0) {
                 if (enabled) {
@@ -183,6 +187,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     @Override
     public int getByte(int address) {
+
         int result;
         if (address == 0xff26) {
             result = 0;
