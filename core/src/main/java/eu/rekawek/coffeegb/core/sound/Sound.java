@@ -50,7 +50,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         this.gbc = gbc;
         allModes[0] = new SoundMode1(frameSequencer, gbc);
         allModes[1] = new SoundMode2(frameSequencer, gbc);
-        allModes[2] = new SoundMode3(frameSequencer, gbc);
+        allModes[2] = new SoundMode3(frameSequencer, timer, gbc);
         allModes[3] = new SoundMode4(frameSequencer, gbc);
         // Initial volume
         r.setByte(0xFF24, 0x77);

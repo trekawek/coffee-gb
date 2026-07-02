@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.Ram;
+import eu.rekawek.coffeegb.core.timer.Timer;
 
 public class SoundMode3 extends AbstractSoundMode {
 
@@ -19,6 +20,10 @@ public class SoundMode3 extends AbstractSoundMode {
 
     private final Ram waveRam = new Ram(0xff30, 0x10);
 
+    private final Timer timer;
+
+    // counts 2 MHz APU cycles: the CH3 frequency counter is clocked by the 2 MHz APU
+    // clock, so the sample fetches are quantized to that lattice
     private int freqDivider;
 
     private int lastOutput;
@@ -33,8 +38,9 @@ public class SoundMode3 extends AbstractSoundMode {
 
     private boolean triggered;
 
-    public SoundMode3(FrameSequencer frameSequencer, boolean gbc) {
+    public SoundMode3(FrameSequencer frameSequencer, Timer timer, boolean gbc) {
         super(0xff1a, 256, frameSequencer, gbc);
+        this.timer = timer;
         for (int i = 0; i < 16; i++) {
             waveRam.setByte(0xff30 + i, gbc ? CGB_WAVE[i] : DMG_WAVE[i]);
         }
@@ -98,7 +104,7 @@ public class SoundMode3 extends AbstractSoundMode {
         if (!gbc && (value & (1 << 7)) != 0) {
             // retriggering the channel while it is about to fetch a sample corrupts the
             // first bytes of the wave RAM
-            if (isEnabled() && freqDivider <= 2) {
+            if (isEnabled() && freqDivider <= 1) {
                 int pos = ((i + 1) % 32) / 2;
                 if (pos < 4) {
                     waveRam.setByte(0xff30, waveRam.getByte(0xff30 + pos));
@@ -138,9 +144,9 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void trigger() {
         i = 0;
-        // the first wave position advance is delayed by 6 extra ticks and does not fetch
-        // a sample; the stale buffer keeps playing until the second advance
-        freqDivider = getFrequency() * 2 + 6;
+        // the first wave position advance is delayed by 3 extra APU cycles and does not
+        // fetch a sample; the stale buffer keeps playing until the second advance
+        freqDivider = getFrequency() + 3;
         triggered = !gbc;
         if (gbc) {
             getWaveEntry();
@@ -157,7 +163,7 @@ public class SoundMode3 extends AbstractSoundMode {
             return 0;
         }
 
-        if (--freqDivider == 0) {
+        if ((timer.getDivCounter() & 1) == 0 && --freqDivider == 0) {
             resetFreqDivider();
             i = (i + 1) % 32;
             if (triggered) {
@@ -199,7 +205,7 @@ public class SoundMode3 extends AbstractSoundMode {
     }
 
     private void resetFreqDivider() {
-        freqDivider = getFrequency() * 2;
+        freqDivider = getFrequency();
     }
 
     @Override
