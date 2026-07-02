@@ -64,9 +64,22 @@ public class ImageTestRunner {
     private int[] getExpectedRGB() throws Exception {
         BufferedImage expectedImg = ImageIO.read(imageFile);
         int[] rgb = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        boolean grayscale = expectedImg.getColorModel().getNumComponents() == 1;
+        int maxSample = grayscale
+                ? (1 << expectedImg.getSampleModel().getSampleSize(0)) - 1
+                : 0;
         for (int y = 0; y < Display.DISPLAY_HEIGHT; y++) {
             for (int x = 0; x < Display.DISPLAY_WIDTH; x++) {
-                rgb[y * Display.DISPLAY_WIDTH + x] = expectedImg.getRGB(x, y) & 0xffffff;
+                int value;
+                if (grayscale) {
+                    // read the raw sample: getRGB routes grayscale PNGs through an ICC
+                    // gray-to-sRGB conversion that shifts the levels (170 becomes 213)
+                    int gray = expectedImg.getRaster().getSample(x, y, 0) * 255 / maxSample;
+                    value = gray * 0x010101;
+                } else {
+                    value = expectedImg.getRGB(x, y) & 0xffffff;
+                }
+                rgb[y * Display.DISPLAY_WIDTH + x] = value;
             }
         }
         return rgb;
