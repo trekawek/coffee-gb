@@ -125,7 +125,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 int y;
                 int x;
                 if (window) {
-                    y = windowY;
+                    y = windowY & 0xff;
                     x = windowTileX;
                 } else {
                     y = (r.get(GpuRegister.LY) + r.get(GpuRegister.SCY)) & 0xff;

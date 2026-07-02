@@ -185,6 +185,17 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             return true;
         }
 
+        // the fetcher drops back to the background at its next tile fetch when the
+        // window gets disabled mid-line (SameBoy clears wx_triggered at GET_TILE_T1);
+        // a later WX match with the window re-enabled can activate it again
+        if (window
+                && !lcdc.isWindowDisplay()
+                && objStep < 0
+                && fetcher.getState() == Fetcher.GET_TILE_T1) {
+            window = false;
+            windowBeingFetched = false;
+        }
+
         // window activation check (SameBoy model): the comparison wraps in 8 bits, so
         // WX values 0..6 can trigger during the discard phase; WX=0 has its own window,
         // and the CGB also accepts WX=166. The window line counter increments at the
