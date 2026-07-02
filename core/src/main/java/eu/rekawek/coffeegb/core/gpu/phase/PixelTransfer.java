@@ -68,6 +68,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private int windowUndoWx;
 
+    private int scyLatch;
+
     private final int[] spriteOrder = new int[10];
 
     private int spriteCount;
@@ -113,6 +115,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     public PixelTransfer start() {
+        return start(r.get(SCY));
+    }
+
+    public PixelTransfer start(int scyLatch) {
+        this.scyLatch = scyLatch;
         entryTicks = entryDelay;
         machineActive = true;
         position = -16;
@@ -138,7 +145,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         spriteHead = 0;
 
-        fetcher.startLine();
+        fetcher.startLine(scyLatch);
         fifo.clear();
         fifo.enqueue8Pixels(JUNK_PIXEL_LINE, TileAttributes.EMPTY);
         return this;

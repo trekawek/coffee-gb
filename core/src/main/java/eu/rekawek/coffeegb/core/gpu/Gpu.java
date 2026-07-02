@@ -220,8 +220,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 case OamSearch:
                     if (!phase.tick()) {
                         mode = Mode.PixelTransfer;
-                        phase = pixelTransferPhase.start();
-                        pixelMachine.start();
+                        int scyLatch = r.get(SCY);
+                        phase = pixelTransferPhase.start(scyLatch);
+                        pixelMachine.start(scyLatch);
                     }
                     break;
 
