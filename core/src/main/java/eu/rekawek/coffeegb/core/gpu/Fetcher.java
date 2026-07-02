@@ -43,15 +43,11 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     private int state;
 
-    private int mapAddress;
+    private int windowTileX;
 
-    private int xOffset;
+    private int fetcherY;
 
-    private int tileDataAddress;
-
-    private boolean tileIdSigned;
-
-    private int tileLine;
+    private int tileMapAddress;
 
     private int tileId;
 
@@ -78,14 +74,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         this.lcdc = lcdc;
     }
 
-    public void startFetching(
-            int mapAddress, int tileDataAddress, int xOffset, boolean tileIdSigned, int tileLine) {
-        this.mapAddress = mapAddress;
-        this.tileDataAddress = tileDataAddress;
-        this.xOffset = xOffset;
-        this.tileIdSigned = tileIdSigned;
-        this.tileLine = tileLine;
-
+    public void startLine() {
         state = GET_TILE_T1;
         tileId = 0;
         tileAttributes = TileAttributes.EMPTY;
@@ -93,25 +82,57 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         tileData2 = 0;
     }
 
+    public void startWindow() {
+        state = GET_TILE_T1;
+        windowTileX = 0;
+    }
+
     public int getState() {
         return state;
     }
 
     /**
-     * Advances the fetcher by one T-cycle.
+     * Advances the fetcher by one T-cycle. The tile map, the scroll registers and the tile
+     * data area are read live at the respective fetch states (like on hardware), so
+     * mid-line writes to SCX/SCY/LCDC affect the remaining fetches of the line.
+     *
+     * @param position          the pixel pipeline position (see PixelTransfer)
+     * @param window            whether the window is being fetched
+     * @param windowY           the window line counter
+     * @param duringObjectFetch whether the advance happens as part of an object fetch
      */
-    public void advance() {
+    public void advance(int position, boolean window, int windowY, boolean duringObjectFetch) {
         switch (state) {
-            case GET_TILE_T1:
+            case GET_TILE_T1: {
+                int map = window ? lcdc.getWindowTileMapDisplay() : lcdc.getBgTileMapDisplay();
+                int y;
+                int x;
+                if (window) {
+                    y = windowY;
+                    x = windowTileX;
+                } else {
+                    y = (r.get(GpuRegister.LY) + r.get(GpuRegister.SCY)) & 0xff;
+                    if (position + 16 < 8) {
+                        x = r.get(GpuRegister.SCX) >> 3;
+                    } else {
+                        x = ((r.get(GpuRegister.SCX) + position + 8 - ((gbc && !duringObjectFetch) ? 1 : 0)) / 8) & 0x1f;
+                    }
+                }
+                fetcherY = y;
+                tileMapAddress = map + (y / 8) * 0x20 + x;
+                state++;
+                break;
+            }
+
             case GET_TILE_DATA_LOW_T1:
             case GET_TILE_DATA_HIGH_T1:
                 state++;
                 break;
 
             case GET_TILE_T2:
-                tileId = videoRam0.getByte(mapAddress + xOffset);
+                tileId = videoRam0.getByte(tileMapAddress);
                 if (gbc) {
-                    tileAttributes = TileAttributes.valueOf(videoRam1.getByte(mapAddress + xOffset));
+                    tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
                 } else {
                     tileAttributes = TileAttributes.EMPTY;
                 }
@@ -119,25 +140,38 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 break;
 
             case GET_TILE_DATA_LOW_T2:
-                tileData1 =
-                        getTileData(tileId, tileLine, 0, tileDataAddress, tileIdSigned, tileAttributes, 8);
+                tileData1 = getTileData(tileId, effectiveY(window, windowY) & 7, 0,
+                        lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
                 state++;
                 break;
 
             case GET_TILE_DATA_HIGH_T2:
-                tileData2 =
-                        getTileData(tileId, tileLine, 1, tileDataAddress, tileIdSigned, tileAttributes, 8);
+                tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
+                        lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+                if (window) {
+                    windowTileX = (windowTileX + 1) & 0x1f;
+                }
                 state = PUSH;
                 // falls through: the push happens in the same T-cycle when the FIFO is free
 
             case PUSH:
                 if (fifo.getLength() == 0) {
                     fifo.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()), tileAttributes);
-                    xOffset = (xOffset + 1) % 0x20;
                     state = GET_TILE_T1;
                 }
                 break;
         }
+    }
+
+    /**
+     * The DMG recomputes the fetch line from LY+SCY at the data reads; the CGB (rev D and
+     * later) uses the value cached at the tile index fetch.
+     */
+    private int effectiveY(boolean window, int windowY) {
+        if (gbc) {
+            return fetcherY;
+        }
+        return window ? windowY : (r.get(GpuRegister.LY) + r.get(GpuRegister.SCY)) & 0xff;
     }
 
     public int readSpriteTileId(SpritePosition sprite) {
@@ -203,11 +237,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         return new FetcherMemento(
                 pixelLine.clone(),
                 state,
-                mapAddress,
-                xOffset,
-                tileDataAddress,
-                tileIdSigned,
-                tileLine,
+                windowTileX,
+                fetcherY,
+                tileMapAddress,
                 tileId,
                 tileAttributes == null ? -1 : tileAttributes.getValue(),
                 tileData1,
@@ -222,11 +254,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
         System.arraycopy(mem.pixelLine, 0, this.pixelLine, 0, this.pixelLine.length);
         this.state = mem.state;
-        this.mapAddress = mem.mapAddress;
-        this.xOffset = mem.xOffset;
-        this.tileDataAddress = mem.tileDataAddress;
-        this.tileIdSigned = mem.tileIdSigned;
-        this.tileLine = mem.tileLine;
+        this.windowTileX = mem.windowTileX;
+        this.fetcherY = mem.fetcherY;
+        this.tileMapAddress = mem.tileMapAddress;
         this.tileId = mem.tileId;
         if (mem.tileAttributesValue != -1) {
             this.tileAttributes = TileAttributes.valueOf(mem.tileAttributesValue);
@@ -240,11 +270,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     private record FetcherMemento(
             int[] pixelLine,
             int state,
-            int mapAddress,
-            int xOffset,
-            int tileDataAddress,
-            boolean tileIdSigned,
-            int tileLine,
+            int windowTileX,
+            int fetcherY,
+            int tileMapAddress,
             int tileId,
             int tileAttributesValue,
             int tileData1,

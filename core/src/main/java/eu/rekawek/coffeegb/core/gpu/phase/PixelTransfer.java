@@ -117,7 +117,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         spriteHead = 0;
 
-        startFetchingBackground();
+        fetcher.startLine();
         fifo.clear();
         fifo.enqueue8Pixels(JUNK_PIXEL_LINE, TileAttributes.EMPTY);
         return this;
@@ -148,7 +148,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             window = true;
             windowBeingFetched = true;
             fifo.clear();
-            startFetchingWindow();
+            fetcher.startWindow();
         }
 
         // object fetch in progress occupies the whole T-cycle
@@ -169,7 +169,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 && (lcdc.isObjDisplay() || gbc)) {
             if (fetcher.getState() < Fetcher.GET_TILE_DATA_HIGH_T2 || fifo.getLength() == 0) {
                 // the object fetch waits for the background fetcher's tile data
-                fetcher.advance();
+                fetcher.advance(position, window, windowLineCounter, true);
                 return true;
             }
             objStep = 0;
@@ -178,18 +178,18 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
 
         renderPixelIfPossible();
-        fetcher.advance();
+        fetcher.advance(position, window, windowLineCounter, false);
         return position != 160;
     }
 
     private void objTick() {
         switch (objStep) {
             case 0:
-                fetcher.advance();
+                fetcher.advance(position, window, windowLineCounter, true);
                 break;
 
             case 1: {
-                fetcher.advance();
+                fetcher.advance(position, window, windowLineCounter, true);
                 SpritePosition sprite = sprites[spriteOrder[spriteHead]];
                 objTileId = fetcher.readSpriteTileId(sprite);
                 objAttributes = fetcher.readSpriteAttributes(sprite);
@@ -250,29 +250,6 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         fifo.putPixelToScreen();
         position++;
-    }
-
-    private void startFetchingBackground() {
-        int bgX = r.get(SCX) / 0x08;
-        int bgY = (r.get(SCY) + r.get(LY)) % 0x100;
-
-        fetcher.startFetching(
-                lcdc.getBgTileMapDisplay() + (bgY / 0x08) * 0x20,
-                lcdc.getBgWindowTileData(),
-                bgX,
-                lcdc.isBgWindowTileDataSigned(),
-                bgY % 0x08);
-    }
-
-    private void startFetchingWindow() {
-        int winY = windowLineCounter;
-
-        fetcher.startFetching(
-                lcdc.getWindowTileMapDisplay() + (winY / 0x08) * 0x20,
-                lcdc.getBgWindowTileData(),
-                0,
-                lcdc.isBgWindowTileDataSigned(),
-                winY % 0x08);
     }
 
     @Override

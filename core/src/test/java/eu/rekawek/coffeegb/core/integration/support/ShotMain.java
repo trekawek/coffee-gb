@@ -39,8 +39,9 @@ public class ShotMain {
                 String[] parts = s.split(":");
                 int frame = Integer.parseInt(parts[0]);
                 Button b = Button.valueOf(parts[1].toUpperCase());
+                int duration = parts.length > 2 ? Integer.parseInt(parts[2]) : 20;
                 presses.put(frame, b);
-                releases.put(frame + 20, b);
+                releases.put(frame + duration, b);
             }
         }
 
