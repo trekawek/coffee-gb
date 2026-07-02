@@ -60,6 +60,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private int windowLineCounter = -1;
 
+    // a fresh window activation can still be cancelled for this many ticks: the WX
+    // comparator on hardware sees register writes one machine cycle before our CPU
+    // commits them, so a WX write landing within the skew means the window never
+    // actually triggered (mealybug m3_wx_6_change)
+    private int windowUndoTicks;
+
+    private int windowUndoWx;
+
     private final int[] spriteOrder = new int[10];
 
     private int spriteCount;
@@ -185,6 +193,18 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             return true;
         }
 
+        // undo a window activation whose WX match was broken by a write within the
+        // comparator skew (see windowUndoTicks)
+        if (windowUndoTicks > 0) {
+            windowUndoTicks--;
+            if (window && r.get(WX) != windowUndoWx) {
+                window = false;
+                windowBeingFetched = false;
+                windowLineCounter--;
+                windowUndoTicks = 0;
+            }
+        }
+
         // the fetcher drops back to the background at its next tile fetch when the
         // window gets disabled mid-line (SameBoy clears wx_triggered at GET_TILE_T1);
         // a later WX match with the window re-enabled can activate it again
@@ -218,6 +238,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 window = true;
                 windowBeingFetched = true;
                 windowLineCounter++;
+                windowUndoTicks = 1;
+                windowUndoWx = wx;
                 fifo.clear();
                 fetcher.startWindow();
             } else if (!gbc && wx == 166 && wx == ((position + 7) & 0xff)) {
@@ -357,7 +379,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 objAttributes == null ? -1 : objAttributes.getValue(),
                 objData0,
                 objTileLine,
-                machineActive);
+                machineActive,
+                windowUndoTicks,
+                windowUndoWx);
     }
 
     @Override
@@ -392,6 +416,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         this.objData0 = mem.objData0;
         this.objTileLine = mem.objTileLine;
         this.machineActive = mem.machineActive;
+        this.windowUndoTicks = mem.windowUndoTicks;
+        this.windowUndoWx = mem.windowUndoWx;
     }
 
     private record PixelTransferMemento(
@@ -410,7 +436,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             int objAttributesValue,
             int objData0,
             int objTileLine,
-            boolean machineActive)
+            boolean machineActive,
+            int windowUndoTicks,
+            int windowUndoWx)
             implements Memento<PixelTransfer> {
     }
 }

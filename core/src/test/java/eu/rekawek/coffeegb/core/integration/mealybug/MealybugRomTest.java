@@ -53,7 +53,7 @@ public class MealybugRomTest {
             Map.entry("m3_wx_4_change.gb", 229),
             Map.entry("m3_wx_4_change_sprites.gb", 10),
             Map.entry("m3_wx_5_change.gb", 638),
-            Map.entry("m3_wx_6_change.gb", 13799));
+            Map.entry("m3_wx_6_change.gb", 3465));
 
     private final File rom;
 
