@@ -11,6 +11,8 @@ public class Background implements Originator<Background> {
 
     private EventBus eventBus;
 
+    private Commands.PctTrnCmd lastPicture;
+
     public Background(EventBus sgbBus) {
         sgbBus.register(this::onPictureTransfer, Commands.PctTrnCmd.class);
         sgbBus.register(this::onCharTransfer, Commands.ChrTrnCmd.class);
@@ -21,13 +23,22 @@ public class Background implements Originator<Background> {
     }
 
     private void onCharTransfer(Commands.ChrTrnCmd e) {
-        if (e.getTileType() == 'B') {
-            System.arraycopy(e.dataTransfer, 0, tiles, e.getTileOffset() * 32, 0x1000);
-            System.out.println("Char transfer: " + e.getTileOffset());
+        // the tile type bit does not affect where the data is stored
+        System.arraycopy(e.dataTransfer, 0, tiles, e.getTileOffset() * 32, 0x1000);
+        // the SNES side renders continuously: a border picture sent before its tile
+        // data becomes visible once the tiles arrive (Super Snakey sends PCT_TRN
+        // before CHR_TRN)
+        if (lastPicture != null) {
+            render(lastPicture);
         }
     }
 
     private void onPictureTransfer(Commands.PctTrnCmd picture) {
+        lastPicture = picture;
+        render(picture);
+    }
+
+    private void render(Commands.PctTrnCmd picture) {
         int[] buffer = new int[SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
         int[] mask = new int[SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
         for (int i = 0; i < buffer.length; i++) {
