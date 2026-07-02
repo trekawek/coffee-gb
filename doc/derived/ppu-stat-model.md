@@ -19,7 +19,8 @@ so several events lead the boundary by 4 ticks.
 | 0 | STAT mode bits read 2; LY=LYC comparison re-latched for the new LY |
 | 76 | VRAM read-lock engages |
 | 80 | STAT mode bits read 3 (internal pixel transfer starts) |
-| E+1 | STAT mode bits read 0; OAM+VRAM unlock (`E` = emergent pixel-pipeline end, 251 for SCX=0, no sprites, no window) |
+| E+1 | STAT mode bits read 0; OAM+VRAM unlock (`E` = emergent pixel-pipeline end, 248 for SCX=0, no sprites, no window) |
+| E+4 | mode-0 STAT interrupt line rises (3 T after the visible mode 0) |
 | 452 | next line's LY / OAM lock |
 
 - The **LY=LYC coincidence bit** (STAT bit 2) compares LYC against an LY value registered at
@@ -31,10 +32,24 @@ so several events lead the boundary by 4 ticks.
   scan/transfer: OAM writes pass during `tl=452..455` and during `tl=76..79` (between the end
   of the OAM scan and the pixel transfer); VRAM writes are blocked only while the mode is 3.
 
-## Mode-3 length
+## Mode-3 length and the pixel pipeline
 
-`E = 251 + (SCX % 8) + sprite stalls (+ window stalls)`. Each fetched sprite stalls the
-pipeline 6 T (3 fetcher steps at 2 MHz).
+The pixel transfer is a T-exact dot pipeline (modelled after SameBoy's renderer): each
+T-cycle pops at most one pixel from the FIFO and advances the tile fetcher by one state
+(`GET_TILE_T1/T2`, `DATA_LOW_T1/T2`, `DATA_HIGH_T1/T2`, `PUSH`; the push completes in the
+same T-cycle as `DATA_HIGH_T2` when the FIFO is empty). The line starts at
+`position = -16` with 8 junk pixels in the FIFO; popping aligns to `SCX % 8` during
+positions -16..-9, positions -8..-1 discard the fractional-scroll pixels, and positions
+0..159 reach the screen. The last pixel pops at `E = 248 + (SCX % 8) + stalls`.
+
+An object fetch suspends popping when a sprite's OAM X equals `position + 8` (clamped
+to 0): it first waits until the background fetcher reaches `DATA_HIGH_T2` with a
+non-empty FIFO (`max(0, 5 - fetcher_state)` T), then takes a fixed 6 T for the object's
+OAM and tile-data reads. This yields the hardware stalls verified by
+`intr_2_mode0_timing_sprites`: 11 T for a sprite on a tile boundary, down to 6 T at
+tile offsets 5-7, chains of same-X sprites adding 6 T each. Sprite pixels are merged
+into a separate 8-pixel object FIFO that pops in lockstep with the background FIFO, so
+sprites hanging off the left edge are clipped by the discarded pops.
 
 ## STAT interrupt line
 
@@ -52,33 +67,31 @@ line = (LYC enabled  AND coincidence)
   annotation: *"INT_STAT = 1 when LY = LYC (whole line), VBLANK (MODE1), HBLANK (MODE0), and
   only for a few cycles at the start of OAM parsing when VCLK is high."* It also fires at the
   start of line 144 (`vblank_stat_intr-GS`).
-- The **mode-0 term** rises with the visible mode 0, but the SCX delay and sprite stalls are
-  quantized to a 4-tick grid (`hblank_ly_scx_timing-GS`, `intr_2_mode0_timing_sprites`):
-  `hblankIntFrom = 252 + quant(SCX%8) + quantSprite(stall)` where `quant(0)=0`,
-  `quant(1..4)=4`, `quant(5..7)=8`, and `quantSprite` rounds the stall up to ≡2 (mod 4).
+- The **mode-0 term** rises 3 T after the visible mode 0, i.e. at `E+4`
+  (`hblank_ly_scx_timing-GS`, `intr_2_0_timing`); the pixel pipeline is T-exact, so no
+  quantization is applied.
 - VBLANK IF (bit 0) is requested at `tl=0` of line 144.
 - **DMG STAT write glitch**: during a STAT write all four enable bits act as 1 for a moment
   ("all interrupts are enabled before data settles" — `ff41_stat` annotation), which can
   produce a spurious rising edge.
 
-## LCD enable
+## LCD enable and the line grid phase
 
-Enabling the LCD starts a special first line (`Gpu.firstLine`):
+The line grid is locked to the machine-cycle phase: all LCDC writes happen on the CPU's
+machine-cycle grid, and enabling the LCD starts a special first line whose counter begins
+at the write itself and which is **one tick shorter** (455 T), so that the second and all
+further lines share the same machine-cycle phase as the power-on grid. This phase equality
+is what makes the mode2-interrupt-to-STAT-poll distances identical between tests that
+re-enable the LCD and tests that run on the boot grid (`intr_2_mode0_timing` vs
+`intr_2_mode0_timing_sprites`).
 
-- no OAM scan and no mode-2 STAT/interrupt; the mode bits read 0 until the pixel transfer,
-- OAM and VRAM stay accessible until `tl=80`,
-- mode 3 shows at `tl=80` and mode 0 at `tl=252` (no register lag on this line),
-- the LY=LYC comparison runs from the moment of enabling (`registeredLy=0`), and drops to 0 at
-  the end of the line (452) like a normal LY change.
+The first line (`Gpu.firstLine`) additionally:
+
+- has no OAM scan and no mode-2 STAT/interrupt; the mode bits read 0 until the pixel
+  transfer (`tl=79`),
+- keeps OAM and VRAM accessible until the pixel transfer,
+- runs the LY=LYC comparison from the moment of enabling (`registeredLy=0`), dropping to 0
+  at the end of the line (451) like a normal LY change.
 
 Disabling the LCD freezes the coincidence bit, resets LY to 0, forces the mode bits to 0 and
 opens both locks. The comparison does not run while the LCD is off (`stat_lyc_onoff`).
-
-## Known remaining deviation
-
-`intr_2_mode0_timing_sprites` requires the exact interleaving of sprite fetches with the BG
-fetcher. The sprite fetch is modelled after SameBoy's object fetch (a 6-tick micro-sequence
-that waits for the BG fetcher's tile data and preserves its state), which passes the first
-testcase; the remaining per-x-phase stalls (measured against SameBoy: ~12 T at x%8=0, ~8 T at
-1-4, ~4 T at 5-7, chained sprites alternating +4/+8) need a T-exact dual-FIFO pixel pipeline
-in which pixel output continues during parts of the object fetch.

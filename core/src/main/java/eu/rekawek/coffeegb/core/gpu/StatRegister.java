@@ -58,7 +58,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 registeredLy = gpu.getVisibleLy();
             }
             coincidence = registeredLy == gpu.getRegisters().get(LYC);
-            if (ticksInLine >= 452 || (gpu.getLine() == 153 && ticksInLine >= 4 && ticksInLine < 8)) {
+            if (ticksInLine >= (gpu.isFirstLine() ? 451 : 452)
+                    || (gpu.getLine() == 153 && ticksInLine >= 4 && ticksInLine < 8)) {
                 // when LY changes, the comparison result reads 0 until the new value
                 // is registered at the beginning of the next line (lcdon_timing-GS)
                 coincidence = false;

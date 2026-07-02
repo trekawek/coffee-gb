@@ -45,7 +45,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private int line;
 
-    private int ticksInLine;
+    // starts at 1 so the power-on line grid has the same machine-cycle phase as a
+    // line grid started by an LCDC write (which is followed by a 455-tick first line)
+    private int ticksInLine = 1;
 
     // the line started by enabling the LCD is special: no OAM scan, mode reads 0
     // until the pixel transfer starts, and OAM/VRAM stay accessible until then
@@ -176,7 +178,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
         Mode oldMode = mode;
         ticksInLine++;
-        if (ticksInLine == 456) {
+        // the line started by enabling the LCD is one tick shorter: its grid starts at
+        // the LCDC write itself, while the machine-cycle-locked line grid starts one
+        // tick later (lcdon_timing-GS vs the steady-state line phase)
+        if (ticksInLine == (firstLine ? 455 : 456)) {
             ticksInLine = 0;
             if (line < 144 && r.get(WX) < 166 && r.get(WY) < 143 && line + 1 > r.get(WY)) {
                 pixelTransferPhase.incrementWindowLineCounter();
@@ -211,15 +216,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         mode = Mode.HBlank;
                     } else if (!phase.tick()) {
                         // the visible mode/locks change one tick after the last pixel
+                        // (intr_2_mode0_timing_sprites); the interrupt line lags the
+                        // visible mode by 3 ticks (hblank_ly_scx_timing-GS,
+                        // intr_2_0_timing)
                         pixelTransferDone = true;
-                        // the SCX delay and the sprite stalls are separately quantized
-                        // to a 4-tick grid on the interrupt line (hblank_ly_scx_timing-GS,
-                        // intr_2_mode0_timing_sprites)
-                        int scx = r.get(SCX) % 8;
-                        int quantizedScx = scx == 0 ? 0 : scx <= 4 ? 4 : 8;
-                        int stall = Math.max(0, ticksInLine - 251 - scx);
-                        int quantizedStall = stall == 0 ? 0 : stall + (((2 - stall % 4) % 4) + 4) % 4;
-                        hblankIntFrom = 252 + quantizedScx + quantizedStall;
+                        hblankIntFrom = ticksInLine + 4;
                     }
                     break;
 
@@ -252,7 +253,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // before the actual bus event, while the pop/push/ldi/ldd checks run on their
         // memory cycle, so their tick is shifted back accordingly (8-instr_effect).
         int t = type == SpriteBug.CorruptionType.INC_DEC ? ticksInLine : ticksInLine - 4;
-        if (t >= 452 && (line < 143 || line == 153)) {
+        if (t >= (firstLine ? 451 : 452) && (line < 143 || line == 153)) {
             SpriteBug.corruptOam(oamRam, type, 1);
         } else if (mode == Mode.OamSearch && t >= -4 && t < 72) {
             SpriteBug.corruptOam(oamRam, type, t < 0 ? 1 : t / 4 + 2);
@@ -278,7 +279,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (line == 153) {
             return ticksInLine < 4 ? 153 : 0;
         }
-        if (ticksInLine >= 452) {
+        if (ticksInLine >= (firstLine ? 451 : 452)) {
             return line + 1;
         }
         return line;
@@ -291,7 +292,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return 0;
         }
-        if (firstLine && ticksInLine < 80) {
+        if (firstLine && ticksInLine < 79) {
             return 0;
         }
         return mode.ordinal();
@@ -326,7 +327,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return true;
         }
-        if (firstLine && ticksInLine < 80) {
+        if (firstLine && ticksInLine < 79) {
             return true;
         }
         if (mode == Mode.OamSearch) {
@@ -339,7 +340,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         // reads are blocked from 4 ticks before the end of the preceding line, but
         // writes still pass (lcdon_write_timing-GS)
-        if (!write && ticksInLine >= 452 && (line < 143 || line == 153)) {
+        if (!write && ticksInLine >= (firstLine ? 451 : 452) && (line < 143 || line == 153)) {
             return false;
         }
         return true;
@@ -398,7 +399,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return;
         }
         this.line = 0;
-        this.ticksInLine = 0;
+        // the line grid is locked to the machine-cycle phase: enabling the LCD starts
+        // the line one tick after the LCDC write, matching the power-on grid
+        this.ticksInLine = -1;
         this.firstLine = true;
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;

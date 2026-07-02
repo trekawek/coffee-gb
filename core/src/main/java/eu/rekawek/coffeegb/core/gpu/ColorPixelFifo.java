@@ -11,7 +11,9 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
 
     private final IntQueue palettes = new IntQueue(16);
 
-    private final IntQueue priorities = new IntQueue(16);
+    private final IntQueue priorities = new IntQueue(16); // bg attribute priority flag
+
+    private final SpriteFifo spriteFifo = new SpriteFifo();
 
     private final Lcdc lcdc;
 
@@ -40,12 +42,37 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
     }
 
     private int dequeuePixel() {
-        return getColor(priorities.dequeue(), palettes.dequeue(), pixels.dequeue());
+        int bgPixel = pixels.dequeue();
+        int bgPaletteIndex = palettes.dequeue();
+        boolean bgAttrPriority = priorities.dequeue() != 0;
+        spriteFifo.pop();
+
+        boolean drawSprite = false;
+        if (spriteFifo.poppedPixel != 0 && lcdc.isObjDisplay()) {
+            if (!lcdc.isBgAndWindowDisplay()) {
+                // "master priority": sprites always on top
+                drawSprite = true;
+            } else if (bgAttrPriority) {
+                drawSprite = bgPixel == 0;
+            } else if (spriteFifo.poppedBgPriority) {
+                drawSprite = bgPixel == 0;
+            } else {
+                drawSprite = true;
+            }
+        }
+        if (drawSprite) {
+            return oamPalette.getPalette(spriteFifo.poppedPalette)[spriteFifo.poppedPixel];
+        } else {
+            return bgPalette.getPalette(bgPaletteIndex)[bgPixel];
+        }
     }
 
     @Override
     public void dropPixel() {
-        dequeuePixel();
+        pixels.dequeue();
+        palettes.dequeue();
+        priorities.dequeue();
+        spriteFifo.pop();
     }
 
     @Override
@@ -53,57 +80,18 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         for (int p : pixelLine) {
             pixels.enqueue(p);
             palettes.enqueue(tileAttributes.getColorPaletteIndex());
-            priorities.enqueue(tileAttributes.isPriority() ? 100 : -1);
+            priorities.enqueue(tileAttributes.isPriority() ? 1 : 0);
         }
     }
 
-    /*
-    lcdc.0
-
-    when 0 => sprites are always displayed on top of the bg
-
-    bg tile attribute.7
-
-    when 0 => use oam priority bit
-    when 1 => bg priority
-
-    sprite attribute.7
-
-    when 0 => sprite above bg
-    when 1 => sprite above bg color 0
-     */
     @Override
     public void setOverlay(int[] pixelLine, int offset, TileAttributes spriteAttr, int oamIndex) {
-        for (int j = offset; j < pixelLine.length; j++) {
-            int p = pixelLine[j];
-            int i = j - offset;
-            if (p == 0) {
-                continue; // color 0 is always transparent
-            }
-            int oldPriority = priorities.get(i);
-
-            boolean put = false;
-            if ((oldPriority == -1 || oldPriority == 100)
-                    && !lcdc.isBgAndWindowDisplay()) { // this one takes precedence
-                put = true;
-            } else if (oldPriority == 100) { // bg with priority
-                put = pixels.get(i) == 0;
-            } else if (oldPriority == -1 && !spriteAttr.isPriority()) { // bg without priority
-                put = true;
-            } else if (oldPriority == -1
-                    && spriteAttr.isPriority()
-                    && pixels.get(i) == 0) { // bg without priority
-                put = true;
-            } else if (oldPriority >= 0 && oldPriority < 10) { // other sprite
-                put = oldPriority > oamIndex;
-            }
-
-            if (put) {
-                pixels.set(i, p);
-                palettes.set(i, spriteAttr.getColorPaletteIndex());
-                priorities.set(i, oamIndex);
-            }
-        }
+        spriteFifo.overlay(
+                pixelLine,
+                offset,
+                spriteAttr.getColorPaletteIndex(),
+                spriteAttr.isPriority(),
+                oamIndex);
     }
 
     @Override
@@ -111,20 +99,16 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         pixels.clear();
         palettes.clear();
         priorities.clear();
-    }
-
-    private int getColor(int priority, int palette, int color) {
-        if (priority >= 0 && priority < 10) {
-            return oamPalette.getPalette(palette)[color];
-        } else {
-            return bgPalette.getPalette(palette)[color];
-        }
+        spriteFifo.clear();
     }
 
     @Override
     public Memento<ColorPixelFifo> saveToMemento() {
         return new ColorPixelFifoMemento(
-                pixels.saveToMemento(), palettes.saveToMemento(), priorities.saveToMemento());
+                pixels.saveToMemento(),
+                palettes.saveToMemento(),
+                priorities.saveToMemento(),
+                spriteFifo.saveToMemento());
     }
 
     @Override
@@ -135,10 +119,14 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         pixels.restoreFromMemento(mem.pixels);
         palettes.restoreFromMemento(mem.palettes);
         priorities.restoreFromMemento(mem.priorities);
+        spriteFifo.restoreFromMemento(mem.spriteFifo);
     }
 
     private record ColorPixelFifoMemento(
-            Memento<IntQueue> pixels, Memento<IntQueue> palettes, Memento<IntQueue> priorities)
+            Memento<IntQueue> pixels,
+            Memento<IntQueue> palettes,
+            Memento<IntQueue> priorities,
+            Memento<SpriteFifo> spriteFifo)
             implements Memento<ColorPixelFifo> {
     }
 }

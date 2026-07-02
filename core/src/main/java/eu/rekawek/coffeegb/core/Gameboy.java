@@ -153,8 +153,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (configuration.bootstrapMode != BootstrapMode.SKIP) {
             // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
             // line grid to that write; the divider has counted a few cycles more on
-            // the CGB by the time the CPU starts (boot_div-cgbABCDE)
-            timer.presetDiv(gbc ? 12 : 4);
+            // the CGB by the time the CPU starts, and the revision 0 CGB adds
+            // another 512 T (boot_div-cgbABCDE, boot_div-cgb0)
+            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 536 : 12) : 4);
             gpu.setByte(0xff40, 0x00);
         }
         if (configuration.bootstrapMode == BootstrapMode.FAST_FORWARD) {
@@ -399,6 +400,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         private boolean displaySgbBorder = true;
 
+        private boolean cgb0Revision;
+
         public GameboyConfiguration(File romFile) throws IOException {
             this(new Rom(romFile));
         }
@@ -414,6 +417,15 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public GameboyConfiguration setGameboyType(GameboyType gameboyType) {
             this.gameboyType = gameboyType;
+            return this;
+        }
+
+        /**
+         * Emulates the CGB revision 0 boot timing instead of revisions A-E
+         * (mooneye boot_div-cgb0).
+         */
+        public GameboyConfiguration setCgb0Revision(boolean cgb0Revision) {
+            this.cgb0Revision = cgb0Revision;
             return this;
         }
 

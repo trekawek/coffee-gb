@@ -19,7 +19,7 @@ public class PixelFifoTest {
     public void createFifo() {
         GpuRegisterValues r = new GpuRegisterValues();
         r.put(GpuRegister.BGP, 0b11100100);
-        fifo = new DmgPixelFifo(new Display(false), r, null);
+        fifo = new DmgPixelFifo(new Display(false), new Lcdc(), r, null);
     }
 
     @Test

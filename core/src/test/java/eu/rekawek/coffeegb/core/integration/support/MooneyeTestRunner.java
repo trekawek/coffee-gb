@@ -35,6 +35,7 @@ public class MooneyeTestRunner {
         GameboyConfiguration config = new GameboyConfiguration(romFile).setSupportBatterySave(false);
         if (romFile.toString().endsWith("-C.gb") || romFile.toString().contains("-cgb")) {
             config.setGameboyType(GameboyType.CGB);
+            config.setCgb0Revision(romFile.getName().contains("-cgb0"));
         } else {
             config.setGameboyType(GameboyType.DMG);
         }
