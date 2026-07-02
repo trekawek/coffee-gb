@@ -41,6 +41,9 @@ interface Controller : AutoCloseable {
 
   data class GameboyTypeEvent(val gameboyType: GameboyType) : Event
 
+  /** Posted while the rewind key is held; the emulation plays backwards while active. */
+  data class RewindEvent(val active: Boolean) : Event
+
   data class ControllerState(val memento: Memento<Gameboy>, val rom: Rom)
 
   companion object {

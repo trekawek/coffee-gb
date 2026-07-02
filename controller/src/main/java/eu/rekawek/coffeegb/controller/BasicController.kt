@@ -31,6 +31,10 @@ class BasicController(
 
   private var isPaused = false
 
+  private var isRewinding = false
+
+  private val rewindManager = RewindManager()
+
   private val patches = mutableListOf<Patch>()
 
   private val thread = Thread {
@@ -44,6 +48,7 @@ class BasicController(
     eventQueue.register<Controller.LoadRomEvent> {
       stop()
       patches.clear()
+      rewindManager.clear()
       val config = Controller.createGameboyConfig(properties, Rom(it.rom))
       session = createSession(config)
       if (it.memento != null) {
@@ -55,6 +60,7 @@ class BasicController(
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventQueue.register<Controller.PauseEmulationEvent> { isPaused = true }
     eventQueue.register<Controller.ResumeEmulationEvent> { isPaused = false }
+    eventQueue.register<Controller.RewindEvent> { isRewinding = it.active }
     eventQueue.register<Controller.ResetEmulationEvent> { reset() }
     eventQueue.register<Controller.StopEmulationEvent> { stop() }
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
@@ -74,11 +80,20 @@ class BasicController(
   private fun runFrame() {
     eventQueue.dispatch()
 
+    // rewinding restores one recorded state and then emulates a single frame from it,
+    // so the display and audio play backwards at RewindManager.RECORD_INTERVAL speed
+    val rewound = isRewinding && session?.gameboy?.let { rewindManager.rewindOneStep(it) } == true
+
+    var emulated = false
     repeat(TICKS_PER_FRAME) {
-      if (!isPaused) {
+      if (rewound || (!isPaused && !isRewinding)) {
         session?.gameboy?.tick()
+        emulated = true
       }
       timingTicker.run()
+    }
+    if (emulated && !rewound) {
+      session?.gameboy?.let { rewindManager.record(it) }
     }
   }
 
@@ -109,6 +124,7 @@ class BasicController(
     val session = session ?: return
     val config = session.config
     stop()
+    rewindManager.clear()
     this.session = createSession(config)
     start()
   }
@@ -119,6 +135,7 @@ class BasicController(
 
   private fun loadSnapshot(slot: Int) {
     session?.gameboy?.let { snapshotManager?.loadSnapshot(slot, it) }
+    rewindManager.clear()
   }
 
   override fun snapshotAvailable(slot: Int): Boolean {
