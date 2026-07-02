@@ -77,5 +77,8 @@ opens both locks. The comparison does not run while the LCD is off (`stat_lyc_on
 ## Known remaining deviation
 
 `intr_2_mode0_timing_sprites` requires the exact interleaving of sprite fetches with the BG
-fetcher (isolated sprites cost more than same-X groups; per-X phase effects). The current
-flat 6 T/sprite model passes the 1-sprite case only.
+fetcher. The sprite fetch is modelled after SameBoy's object fetch (a 6-tick micro-sequence
+that waits for the BG fetcher's tile data and preserves its state), which passes the first
+testcase; the remaining per-x-phase stalls (measured against SameBoy: ~12 T at x%8=0, ~8 T at
+1-4, ~4 T at 5-7, chained sprites alternating +4/+8) need a T-exact dual-FIFO pixel pipeline
+in which pixel output continues during parts of the object fetch.
