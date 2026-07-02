@@ -16,9 +16,11 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private static final int[] FREQ_TO_BIT = {9, 3, 5, 7};
 
-    // the internal counter starts at 0 on power-on; when the bootstrap is skipped,
-    // Gameboy presets the counter to the post-boot-ROM value
-    private int div = 0, tac, tma, tima;
+    // the divider has already counted a few cycles when the CPU fetches its first opcode
+    // (reset release), which makes the internal counter reach exactly 0xABCC when the DMG
+    // boot ROM hands over at 0x0100 (boot_div-dmgABCmgb); when the bootstrap is skipped,
+    // Gameboy presets the counter to that post-boot-ROM value directly
+    private int div = 4, tac, tma, tima;
 
     private boolean previousBit;
 

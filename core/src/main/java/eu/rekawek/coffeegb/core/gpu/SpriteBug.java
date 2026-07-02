@@ -21,8 +21,7 @@ public final class SpriteBug {
     private SpriteBug() {
     }
 
-    public static void corruptOam(AddressSpace oamRam, CorruptionType type, int ticksInLine) {
-        int row = ticksInLine / 4;
+    public static void corruptOam(AddressSpace oamRam, CorruptionType type, int row) {
         switch (type) {
             case INC_DEC:
             case PUSH_1:

@@ -148,6 +148,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         cpu = new Cpu(getAddressSpace(), interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
+        if (configuration.bootstrapMode != BootstrapMode.SKIP) {
+            // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
+            // line grid to that write
+            gpu.setByte(0xff40, 0x00);
+        }
         if (configuration.bootstrapMode == BootstrapMode.FAST_FORWARD) {
             while (cpu.getRegisters().getPC() != 0x100) {
                 tick();

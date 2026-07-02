@@ -41,10 +41,13 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     private final Timer timer;
 
+    private final boolean gbc;
+
     private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
     public Sound(Timer timer, boolean gbc) {
         this.timer = timer;
+        this.gbc = gbc;
         allModes[0] = new SoundMode1(frameSequencer, gbc);
         allModes[1] = new SoundMode2(frameSequencer, gbc);
         allModes[2] = new SoundMode3(frameSequencer, gbc);
@@ -128,7 +131,8 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     @Override
     public boolean accepts(int address) {
         if (address == 0xff76 || address == 0xff77) {
-            return true;
+            // the PCM12/PCM34 registers only exist on the CGB
+            return gbc;
         }
         return getAddressSpace(address) != null;
     }

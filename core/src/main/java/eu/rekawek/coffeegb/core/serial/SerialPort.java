@@ -53,8 +53,9 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
             incomingBit = serialEndpoint.recvBit();
         } else {
             // the serial clock is derived from the DIV counter, so the first bit of
-            // a transfer is aligned to the free-running divider (boot_sclk_align)
-            boolean clockBit = (timer.getDivCounter() & (1 << getClockBitPos())) != 0;
+            // a transfer is aligned to the free-running divider; the tap leads the
+            // counter by 4 cycles (boot_sclk_align)
+            boolean clockBit = ((timer.getDivCounter() + 4) & (1 << getClockBitPos())) != 0;
             if (transferInProgress && prevClockBit && !clockBit) {
                 incomingBit = serialEndpoint.sendBit();
             }

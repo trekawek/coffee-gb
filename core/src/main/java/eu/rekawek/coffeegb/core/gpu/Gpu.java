@@ -246,8 +246,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (gbc || !lcdEnabled || firstLine) {
             return;
         }
-        if (mode == Mode.OamSearch && ticksInLine < 80) {
-            SpriteBug.corruptOam(oamRam, type, ticksInLine);
+        // The OAM scan accesses rows 1..19, starting 4 ticks before the end of the
+        // preceding line and finishing at tick 72 (blargg oam_bug 4-scanline_timing,
+        // 5-timing_bug, 6-timing_no_bug). The INC/DEC bug check runs one machine cycle
+        // before the actual bus event, while the pop/push/ldi/ldd checks run on their
+        // memory cycle, so their tick is shifted back accordingly (8-instr_effect).
+        int t = type == SpriteBug.CorruptionType.INC_DEC ? ticksInLine : ticksInLine - 4;
+        if (t >= 452 && (line < 143 || line == 153)) {
+            SpriteBug.corruptOam(oamRam, type, 1);
+        } else if (mode == Mode.OamSearch && t >= -4 && t < 72) {
+            SpriteBug.corruptOam(oamRam, type, t < 0 ? 1 : t / 4 + 2);
         }
     }
 
