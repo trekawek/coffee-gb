@@ -153,22 +153,25 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 break;
 
             case GET_TILE_DATA_HIGH_T1:
-                tileData1 = getTileData(tileId, effectiveY(window, windowY) & 7, 0,
-                        lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
                 state++;
                 break;
 
             case GET_TILE_DATA_HIGH_T2:
-                tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
+                // like the map read, the data reads sit one T-cycle later than the state
+                // names suggest: the low byte here, the high byte at the tick of the push
+                // itself (mealybug m3_scy_change / m3_lcdc_tile_sel_change)
+                tileData1 = getTileData(tileId, effectiveY(window, windowY) & 7, 0,
                         lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
-                if (window) {
-                    windowTileX = (windowTileX + 1) & 0x1f;
-                }
                 state = PUSH;
                 // falls through: the push happens in the same T-cycle when the FIFO is free
 
             case PUSH:
                 if (fifo.getLength() == 0) {
+                    tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
+                            lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+                    if (window) {
+                        windowTileX = (windowTileX + 1) & 0x1f;
+                    }
                     fifo.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()), tileAttributes);
                     state = GET_TILE_T1;
                 }
