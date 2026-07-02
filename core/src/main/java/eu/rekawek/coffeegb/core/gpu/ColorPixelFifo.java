@@ -101,9 +101,17 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         int spritePalette = (entry >> 8) & 0b111;
         boolean spriteBgPriority = (entry & (1 << 11)) != 0;
 
+        // in DMG compatibility mode LCDC.0 blanks the background like on the DMG;
+        // in CGB mode it only drops the background's priority
+        boolean compatMode = speedMode != null && speedMode.isDmgCompat();
+        if (compatMode && !lcdc.isBgAndWindowDisplay()) {
+            bgPixel = 0;
+            bgAttrPriority = false;
+        }
+
         boolean drawSprite = false;
         if (spritePixel != 0 && lcdc.isObjDisplay()) {
-            if (!lcdc.isBgAndWindowDisplay()) {
+            if (!lcdc.isBgAndWindowDisplay() && !compatMode) {
                 // "master priority": sprites always on top
                 drawSprite = true;
             } else if (bgAttrPriority) {
@@ -116,17 +124,16 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         }
         // in DMG compatibility mode the BGP/OBPx registers remap the color index before
         // the palette RAM lookup (the boot ROM loads the compatibility colors there)
-        boolean compat = speedMode != null && speedMode.isDmgCompat();
         if (drawSprite) {
             int pixel = spritePixel;
-            if (compat) {
+            if (compatMode) {
                 int obp = r.get(spritePalette == 0 ? GpuRegister.OBP0 : GpuRegister.OBP1);
                 pixel = (obp >> (pixel * 2)) & 0b11;
             }
             return oamPalette.getPalette(spritePalette)[pixel];
         } else {
             int pixel = bgPixel;
-            if (compat) {
+            if (compatMode) {
                 pixel = (r.get(GpuRegister.BGP) >> (pixel * 2)) & 0b11;
             }
             return bgPalette.getPalette(bgPaletteIndex)[pixel];
