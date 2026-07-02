@@ -31,6 +31,7 @@ import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.PatchFactory
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetBlendingEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.event.KeyEvent
@@ -252,6 +253,13 @@ class SwingMenu(
     grayscale.addActionListener {
       eventBus.post(SetGrayscaleEvent(grayscale.state))
       properties.setProperty(EmulatorProperties.Key.DisplayGrayscale, grayscale.state.toString())
+    }
+
+    val blending = JCheckBoxMenuItem("LCD ghosting (frame blend)", properties.display.blending)
+    screenMenu.add(blending)
+    blending.addActionListener {
+      eventBus.post(SetBlendingEvent(blending.state))
+      properties.setProperty(EmulatorProperties.Key.DisplayBlending, blending.state.toString())
     }
 
     val showSgbBorder = JCheckBoxMenuItem("Show SGB border", properties.display.showSgbBorder)

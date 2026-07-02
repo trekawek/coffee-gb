@@ -9,4 +9,7 @@ class DisplayProperties(private val properties: EmulatorProperties) {
 
   val showSgbBorder
     get() = properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, "false").toBoolean()
+
+  val blending
+    get() = properties.getProperty(EmulatorProperties.Key.DisplayBlending, "false").toBoolean()
 }

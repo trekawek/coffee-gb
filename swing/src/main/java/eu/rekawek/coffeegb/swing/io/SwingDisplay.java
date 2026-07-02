@@ -42,6 +42,10 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private boolean grayscale;
 
+    private boolean blending;
+
+    private int[] previousFrame;
+
     private GameboyType gameboyType;
 
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
@@ -55,7 +59,9 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(this::onGameboyType, Controller.GameboyTypeEvent.class, callerId);
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
         eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
+        eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
         this.grayscale = properties.getGrayscale();
+        setBlending(properties.getBlending());
         setScale(properties.getScale());
     }
 
@@ -134,6 +140,9 @@ public class SwingDisplay extends JPanel implements Runnable {
         while (!doStop) {
             synchronized (this) {
                 if (frameIsWaiting) {
+                    if (blending) {
+                        blendWithPreviousFrame();
+                    }
                     img.setRGB(0, 0, getDisplayWidth(), getDisplayHeight(), waitingFrame, 0, getDisplayWidth());
                     validate();
                     repaint();
@@ -166,10 +175,37 @@ public class SwingDisplay extends JPanel implements Runnable {
         }
     }
 
+    private synchronized void setBlending(boolean blending) {
+        this.blending = blending;
+        previousFrame = null;
+    }
+
+    /**
+     * Approximates the ghosting of the original LCD by averaging with the previous frame;
+     * games flickering sprites at 30 Hz (like Chikyuu Kaihou Gun ZAS) rely on it.
+     */
+    private void blendWithPreviousFrame() {
+        int size = getDisplayWidth() * getDisplayHeight();
+        if (previousFrame == null || previousFrame.length != size) {
+            previousFrame = new int[size];
+            System.arraycopy(waitingFrame, 0, previousFrame, 0, size);
+            return;
+        }
+        for (int i = 0; i < size; i++) {
+            int a = waitingFrame[i];
+            int b = previousFrame[i];
+            previousFrame[i] = a;
+            waitingFrame[i] = (((a ^ b) & 0xfefefe) >> 1) + (a & b);
+        }
+    }
+
     public record SetScaleEvent(int scale) implements Event {
     }
 
     public record SetGrayscaleEvent(boolean grayscale) implements Event {
+    }
+
+    public record SetBlendingEvent(boolean blending) implements Event {
     }
 
     public record DisplaySizeUpdatedEvent(Dimension preferredSize) implements Event {

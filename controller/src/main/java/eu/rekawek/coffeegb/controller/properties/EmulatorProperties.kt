@@ -43,6 +43,7 @@ class EmulatorProperties() {
     CgbGamesType("system.cgbGames"),
     DisplayScale("display.scale"),
     DisplayGrayscale("display.grayscale"),
+    DisplayBlending("display.blending"),
     ShowSgbBorder("display.showSgbBorder"),
     SoundEnabled("sound.enabled"),
     RomDirectory("rom.directory"),
