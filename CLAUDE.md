@@ -268,14 +268,27 @@ Compare via `ImageTestRunner` (stops at `LD B,B`). Not in CI yet — most still 
   distance. Both are hardware truth, so the real mechanism differs (check the
   intr_1_2_timing-GS source for which edge it measures; maybe STAT blocking from
   the mode-1 term, or the handler-entry path differs on line 0).
-- Tile DATA reads (tile_sel): probing m3_lcdc_tile_sel_change shows hardware's
-  data reads land ~5 T after our GET_TILE_DATA_HIGH_T1/T2, i.e. *inside the
-  tile's own pop window* in our frame — the hardware dot machine (fetch+pop) runs
-  ~4 T later than ours with the LCD delay being ~3 (our pop+7 == hw pop+3). A full
-  machine retiming (mode 3 starting 4 T later, E moving 248→252) would need the
-  CPU-visible mode-0/lock events to fire *before* the machine finishes (they are
-  calibrated at E+1/E+4 with E=248) — blocked on early-completion bookkeeping
-  because sprite stalls can still lengthen the line after the crossing.
+- THE MACHINE RETIMING (unlocks m3_scy_change 10674, tile_sel ~1500, and
+  residuals of the map/wx tests): hardware's dot machine runs 4 T later than
+  ours with reads one dot later in-cycle (= reads at ours+5; verified by both
+  the tile_sel probe — hardware data1/data2 land at our HIGH_T1+5/HIGH_T2+5 —
+  and consistent with the map read needing +1 after the machine's +4 cancels
+  int-anchored). Design worked out 2026-07-02:
+  1. PixelTransfer.start(): entryTicks = 4 (machine shifts +4; pops at 93+x,
+     done at 252+stalls). OUTPUT_DELAY drops 7→3 so the LCD output stays at
+     96+x in absolute terms (verify against m3_bgp_change before proceeding).
+  2. The CPU-visible mode-0/locks/hblankIntFrom must STAY at 249/252 (E+1/E+4
+     with E=248): fire them from the shifted machine via a 3-tick-early
+     completion signal — when position reaches 157 AND objStep==-1 AND no
+     pending sprite matches at positions 157..159 (OAM x 165..167), completion
+     is deterministic 3 pops ahead. Sprite stalls are pre-known ≥7 ticks ahead
+     (a stall takes ≥6 T), so the lookahead is sound; the only hole is a
+     WX=164/165 write landing in the final 3 ticks (no test covers it).
+  3. In-cycle read offsets stay as now (map at LOW_T1, data at HIGH_T1/T2) —
+     the +4 machine shift makes them land at hardware's absolute read dots.
+  4. Re-verify: full battery (esp. intr_2_mode0_timing_sprites,
+     hblank_ly_scx_timing-GS, lcdon_*), then both mealybug suites (expect
+     m3_scy_change and the tile_sel/map families to collapse).
 - m3_scx_low_3_bits: mid-line SCX%8 changes must affect the pop alignment
   (hardware artifact at x=154..157); our alignment is line-start-only.
 - Sprite-related conflicts (m3_bgp_change_sprites 992, m3_obp0_change 432 diffs
