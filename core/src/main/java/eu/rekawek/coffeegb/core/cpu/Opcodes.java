@@ -152,8 +152,8 @@ public final class Opcodes {
         for (int i = 0xc7, j = 0x00; i <= 0xf7; i += 0x10, j += 0x10) {
             regCmd(opcodes, i, String.format("RST %02XH", j))
                     .load("PC")
+                    .extraCycle()
                     .push()
-                    .forceFinish()
                     .loadWord(j)
                     .store("PC");
         }
@@ -165,8 +165,8 @@ public final class Opcodes {
         for (int i = 0xcf, j = 0x08; i <= 0xff; i += 0x10, j += 0x10) {
             regCmd(opcodes, i, String.format("RST %02XH", j))
                     .load("PC")
+                    .extraCycle()
                     .push()
-                    .forceFinish()
                     .loadWord(j)
                     .store("PC");
         }

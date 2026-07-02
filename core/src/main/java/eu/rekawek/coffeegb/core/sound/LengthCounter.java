@@ -20,10 +20,15 @@ public class LengthCounter implements Serializable, Originator<LengthCounter> {
         this.frameSequencer = frameSequencer;
     }
 
-    public void clockTick() {
+    /**
+     * @return true when the counter just reached 0 (the channel gets disabled)
+     */
+    public boolean clockTick() {
         if (enabled && length > 0) {
             length--;
+            return length == 0;
         }
+        return false;
     }
 
     public void setLength(int length) {
@@ -34,33 +39,31 @@ public class LengthCounter implements Serializable, Originator<LengthCounter> {
         }
     }
 
-    public void setNr4(int value) {
+    /**
+     * Handles the length-related part of an NRx4 write, including the extra length clock
+     * that happens when the enable bit rises while the frame sequencer's next step is one
+     * that does not clock length.
+     *
+     * @return true when the write disabled the channel (extra clock made the counter reach
+     * 0 and the trigger bit was not set)
+     */
+    public boolean setNr4(int value) {
         boolean enable = (value & (1 << 6)) != 0;
         boolean trigger = (value & (1 << 7)) != 0;
-
         boolean firstHalf = frameSequencer.isFirstHalfOfLengthPeriod();
 
-        if (enabled) {
-            if (length == 0 && trigger) {
-                if (enable && firstHalf) {
-                    setLength(fullLength - 1);
-                } else {
-                    setLength(fullLength);
-                }
-            }
-        } else if (enable) {
-            if (length > 0 && firstHalf) {
-                length--;
-            }
-            if (length == 0 && trigger && firstHalf) {
-                setLength(fullLength - 1);
-            }
-        } else {
-            if (length == 0 && trigger) {
-                setLength(fullLength);
-            }
+        boolean zeroed = false;
+        if (firstHalf && !enabled && enable && length > 0) {
+            length--;
+            zeroed = length == 0;
         }
         this.enabled = enable;
+
+        if (trigger && length == 0) {
+            length = (firstHalf && enable) ? fullLength - 1 : fullLength;
+            zeroed = false;
+        }
+        return zeroed && !trigger;
     }
 
     public int getValue() {
@@ -79,11 +82,8 @@ public class LengthCounter implements Serializable, Originator<LengthCounter> {
     }
 
     void reset() {
-        this.enabled = true;
+        this.enabled = false;
         this.length = 0;
-    }
-
-    void start() {
     }
 
     @Override

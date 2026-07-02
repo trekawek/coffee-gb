@@ -31,27 +31,36 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private final ColorPalette oamPalette;
 
-    private final HBlankPhase hBlankPhase;
-
     private final OamSearch oamSearchPhase;
 
     private final PixelTransfer pixelTransferPhase;
-
-    private final VBlankPhase vBlankPhase;
 
     private final StatRegister statRegister;
 
     private boolean lcdEnabled = true;
 
-    private int lcdEnabledDelay;
+    private int displayEnabledDelay;
 
     private final GpuRegisterValues r;
 
+    private int line;
+
     private int ticksInLine;
+
+    // the line started by enabling the LCD is special: no OAM scan, mode reads 0
+    // until the pixel transfer starts, and OAM/VRAM stay accessible until then
+    private boolean firstLine;
 
     private Mode mode;
 
     private GpuPhase phase;
+
+    // tick at which the pixel transfer finished; the visible mode/locks change one tick later
+    private boolean pixelTransferDone;
+
+    // tick at which the hblank term of the STAT interrupt line rises; it precedes the
+    // visible mode 0 and is quantized to 4-tick steps (hblank_ly_scx_timing-GS)
+    private int hblankIntFrom = Integer.MAX_VALUE;
 
     public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, StatRegister statRegister, boolean gbc) {
         this.statRegister = statRegister;
@@ -74,19 +83,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(display, videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer);
-        this.hBlankPhase = new HBlankPhase(r);
-        this.vBlankPhase = new VBlankPhase(r);
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
     }
 
     private AddressSpace getAddressSpace(int address) {
-        int mode = (statRegister.getByte(StatRegister.ADDRESS) & 0b11);
-        if (videoRam0.accepts(address) /* && mode != Mode.PixelTransfer*/) {
-            return getVideoRam();
-        } else if (oamRam.accepts(address) && !dma.isOamBlocked() && (mode == 0 || mode == 1)) {
-            return oamRam;
+        if (videoRam0.accepts(address)) {
+            return isVramAvailableForCpu() ? getVideoRam() : null;
+        } else if (oamRam.accepts(address)) {
+            return !dma.isOamBlocked() && isOamAvailableForCpu() ? oamRam : null;
         } else if (lcdc.accepts(address)) {
             return lcdc;
         } else if (r.accepts(address)) {
@@ -118,11 +124,24 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public boolean accepts(int address) {
-        return getAddressSpace(address) != null;
+        return videoRam0.accepts(address) || oamRam.accepts(address) || lcdc.accepts(address)
+                || r.accepts(address) || (gbc && (bgPalette.accepts(address) || oamPalette.accepts(address)));
     }
 
     @Override
     public void setByte(int address, int value) {
+        if (oamRam.accepts(address)) {
+            if (!dma.isOamBlocked() && isOamAvailableForCpu(true)) {
+                oamRam.setByte(address, value);
+            }
+            return;
+        }
+        if (videoRam0.accepts(address)) {
+            if (isVramAvailableForCpu(true)) {
+                getVideoRam().setByte(address, value);
+            }
+            return;
+        }
         AddressSpace space = getAddressSpace(address);
         if (space == lcdc) {
             setLcdc(value);
@@ -133,6 +152,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public int getByte(int address) {
+        if (address == LY.getAddress()) {
+            return getVisibleLy();
+        }
         AddressSpace space = getAddressSpace(address);
         if (space == null) {
             return 0xff;
@@ -144,13 +166,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     public Mode tick() {
-        if (!lcdEnabled) {
-            if (lcdEnabledDelay != -1) {
-                if (--lcdEnabledDelay == 0) {
-                    display.enableLcd();
-                    lcdEnabled = true;
-                }
-            }
+        if (displayEnabledDelay > 0 && --displayEnabledDelay == 0) {
+            display.enableLcd();
         }
 
         if (!lcdEnabled) {
@@ -159,48 +176,54 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
         Mode oldMode = mode;
         ticksInLine++;
-        if (phase.tick()) {
-            // switch line 153 to 0
-            if (ticksInLine == 4 && mode == Mode.VBlank && r.get(LY) == 153) {
-                r.put(LY, 0);
+        if (ticksInLine == 456) {
+            ticksInLine = 0;
+            if (line < 144 && r.get(WX) < 166 && r.get(WY) < 143 && line + 1 > r.get(WY)) {
+                pixelTransferPhase.incrementWindowLineCounter();
+            }
+            firstLine = false;
+            pixelTransferDone = false;
+            hblankIntFrom = Integer.MAX_VALUE;
+            line++;
+            if (line == 154) {
+                line = 0;
                 pixelTransferPhase.resetWindowLineCounter();
             }
+            r.put(LY, line);
+            if (line == 144) {
+                mode = Mode.VBlank;
+            } else if (line < 144) {
+                mode = Mode.OamSearch;
+                phase = oamSearchPhase.start();
+            }
         } else {
-            switch (oldMode) {
+            switch (mode) {
                 case OamSearch:
-                    mode = Mode.PixelTransfer;
-                    phase = pixelTransferPhase.start();
+                    if (!phase.tick()) {
+                        mode = Mode.PixelTransfer;
+                        phase = pixelTransferPhase.start();
+                    }
                     break;
 
                 case PixelTransfer:
-                    mode = Mode.HBlank;
-                    phase = hBlankPhase.start(ticksInLine);
+                    if (pixelTransferDone) {
+                        pixelTransferDone = false;
+                        mode = Mode.HBlank;
+                    } else if (!phase.tick()) {
+                        // the visible mode/locks change one tick after the last pixel
+                        pixelTransferDone = true;
+                        // the SCX delay and the sprite stalls are separately quantized
+                        // to a 4-tick grid on the interrupt line (hblank_ly_scx_timing-GS,
+                        // intr_2_mode0_timing_sprites)
+                        int scx = r.get(SCX) % 8;
+                        int quantizedScx = scx == 0 ? 0 : scx <= 4 ? 4 : 8;
+                        int stall = Math.max(0, ticksInLine - 251 - scx);
+                        int quantizedStall = stall == 0 ? 0 : stall + (((2 - stall % 4) % 4) + 4) % 4;
+                        hblankIntFrom = 252 + quantizedScx + quantizedStall;
+                    }
                     break;
 
-                case HBlank:
-                    ticksInLine = 0;
-                    if (r.get(WX) < 166 && r.get(WY) < 143 && r.get(LY) > r.get(WY)) {
-                        pixelTransferPhase.incrementWindowLineCounter();
-                    }
-                    if (r.get(LY) == 144) {
-                        mode = Mode.VBlank;
-                        phase = vBlankPhase.start();
-                    } else {
-                        mode = Mode.OamSearch;
-                        phase = oamSearchPhase.start();
-                    }
-                    break;
-
-                case VBlank:
-                    ticksInLine = 0;
-                    if (r.get(LY) == 1) {
-                        mode = Mode.OamSearch;
-                        r.put(LY, 0);
-                        pixelTransferPhase.resetWindowLineCounter();
-                        phase = oamSearchPhase.start();
-                    } else {
-                        phase = vBlankPhase.start();
-                    }
+                default:
                     break;
             }
         }
@@ -216,6 +239,126 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return ticksInLine;
     }
 
+    /**
+     * Applies the DMG OAM corruption bug if the PPU is currently scanning the OAM.
+     */
+    public void corruptOam(SpriteBug.CorruptionType type) {
+        if (gbc || !lcdEnabled || firstLine) {
+            return;
+        }
+        if (mode == Mode.OamSearch && ticksInLine < 80) {
+            SpriteBug.corruptOam(oamRam, type, ticksInLine);
+        }
+    }
+
+    public int getLine() {
+        return line;
+    }
+
+    public boolean isFirstLine() {
+        return firstLine;
+    }
+
+    /**
+     * LY value as visible to the CPU: it increments 4 ticks before the end of the line, and
+     * on line 153 it reads 153 only for the first 4 ticks, then 0.
+     */
+    public int getVisibleLy() {
+        if (!lcdEnabled) {
+            return 0;
+        }
+        if (line == 153) {
+            return ticksInLine < 4 ? 153 : 0;
+        }
+        if (ticksInLine >= 452) {
+            return line + 1;
+        }
+        return line;
+    }
+
+    /**
+     * PPU mode bits as visible in the STAT register.
+     */
+    public int getVisibleStatMode() {
+        if (!lcdEnabled) {
+            return 0;
+        }
+        if (firstLine && ticksInLine < 80) {
+            return 0;
+        }
+        return mode.ordinal();
+    }
+
+    /**
+     * The "mode 2" STAT interrupt condition is a short pulse at the beginning of each visible
+     * line (and also at the beginning of line 144).
+     */
+    public boolean isMode2IntWindow() {
+        return lcdEnabled && !firstLine && line <= 144 && ticksInLine < 4;
+    }
+
+    /**
+     * The "mode 0" STAT interrupt condition rises with the visible mode 0, quantized to
+     * 4-tick steps of the SCX scroll delay, and stays active until the end of the line.
+     */
+    public boolean isMode0IntWindow() {
+        return lcdEnabled && line < 144 && ticksInLine >= hblankIntFrom;
+    }
+
+    /**
+     * OAM is locked from 4 ticks before the end of the preceding line until the end of the
+     * pixel transfer. On the first line after enabling the LCD, it is locked when the pixel
+     * transfer starts.
+     */
+    private boolean isOamAvailableForCpu() {
+        return isOamAvailableForCpu(false);
+    }
+
+    private boolean isOamAvailableForCpu(boolean write) {
+        if (!lcdEnabled) {
+            return true;
+        }
+        if (firstLine && ticksInLine < 80) {
+            return true;
+        }
+        if (mode == Mode.OamSearch) {
+            // the OAM write bus is released between the end of the OAM scan and the
+            // start of the pixel transfer (lcdon_write_timing-GS)
+            return write && ticksInLine >= 76;
+        }
+        if (mode == Mode.PixelTransfer) {
+            return false;
+        }
+        // reads are blocked from 4 ticks before the end of the preceding line, but
+        // writes still pass (lcdon_write_timing-GS)
+        if (!write && ticksInLine >= 452 && (line < 143 || line == 153)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * VRAM reads are locked from 4 ticks before the pixel transfer starts until it ends;
+     * writes are only blocked during the pixel transfer itself. On the first line after
+     * enabling the LCD, it is locked when the pixel transfer starts.
+     */
+    private boolean isVramAvailableForCpu() {
+        return isVramAvailableForCpu(false);
+    }
+
+    private boolean isVramAvailableForCpu(boolean write) {
+        if (!lcdEnabled) {
+            return true;
+        }
+        if (mode == Mode.PixelTransfer) {
+            return false;
+        }
+        if (!write && !firstLine && mode == Mode.OamSearch && ticksInLine >= 76) {
+            return false;
+        }
+        return true;
+    }
+
     private void setLcdc(int value) {
         lcdc.set(value);
         if ((value & (1 << 7)) == 0) {
@@ -226,18 +369,39 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     private void disableLcd() {
+        if (!lcdEnabled) {
+            return;
+        }
         r.put(LY, 0);
         pixelTransferPhase.resetWindowLineCounter();
+        this.line = 0;
         this.ticksInLine = 0;
-        this.phase = hBlankPhase.start(250);
+        this.firstLine = false;
+        this.pixelTransferDone = false;
+        this.hblankIntFrom = Integer.MAX_VALUE;
         this.mode = Mode.HBlank;
         this.lcdEnabled = false;
-        this.lcdEnabledDelay = -1;
+        this.displayEnabledDelay = 0;
         display.disableLcd();
     }
 
     private void enableLcd() {
-        lcdEnabledDelay = 244;
+        if (lcdEnabled) {
+            return;
+        }
+        this.line = 0;
+        this.ticksInLine = 0;
+        this.firstLine = true;
+        this.pixelTransferDone = false;
+        this.hblankIntFrom = Integer.MAX_VALUE;
+        r.put(LY, 0);
+        // there is no OAM scan on the first line, but running it is harmless as the CPU
+        // can still write to OAM at this point
+        this.mode = Mode.OamSearch;
+        this.phase = oamSearchPhase.start();
+        this.lcdEnabled = true;
+        this.displayEnabledDelay = 244;
+        statRegister.onLcdEnabled();
     }
 
     public boolean isLcdEnabled() {
@@ -269,7 +433,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), hBlankPhase.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), vBlankPhase.saveToMemento(), r.saveToMemento(), lcdEnabled, lcdEnabledDelay, ticksInLine, mode);
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, pixelTransferDone, hblankIntFrom, mode);
     }
 
     @Override
@@ -289,39 +453,33 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         lcdc.restoreFromMemento(mem.lcdcMemento);
         bgPalette.restoreFromMemento(mem.bgPaletteMemento);
         oamPalette.restoreFromMemento(mem.oamPaletteMemento);
-        hBlankPhase.restoreFromMemento(mem.hBlankPhaseMemento);
         oamSearchPhase.restoreFromMemento(mem.oamSearchPhaseMemento);
         pixelTransferPhase.restoreFromMemento(mem.pixelTransferPhaseMemento);
-        vBlankPhase.restoreFromMemento(mem.vBlankPhaseMemento);
         r.restoreFromMemento(mem.rMemento);
 
         this.lcdEnabled = mem.lcdEnabled;
-        this.lcdEnabledDelay = mem.lcdEnabledDelay;
+        this.displayEnabledDelay = mem.displayEnabledDelay;
+        this.line = mem.line;
         this.ticksInLine = mem.ticksInLine;
+        this.firstLine = mem.firstLine;
+        this.pixelTransferDone = mem.pixelTransferDone;
+        this.hblankIntFrom = mem.hblankIntFrom;
         this.mode = mem.mode;
 
-        switch (mode) {
-            case OamSearch:
-                phase = oamSearchPhase;
-                break;
-            case PixelTransfer:
-                phase = pixelTransferPhase;
-                break;
-            case HBlank:
-                phase = hBlankPhase;
-                break;
-            case VBlank:
-                phase = vBlankPhase;
-                break;
+        if (mode == Mode.PixelTransfer) {
+            phase = pixelTransferPhase;
+        } else {
+            phase = oamSearchPhase;
         }
     }
 
     private record GpuMemento(Memento<Ram> videoRam0Memento, Memento<Ram> videoRam1Memento,
                               Memento<Display> displayMemento, Memento<Lcdc> lcdcMemento,
                               Memento<ColorPalette> bgPaletteMemento, Memento<ColorPalette> oamPaletteMemento,
-                              Memento<HBlankPhase> hBlankPhaseMemento, Memento<OamSearch> oamSearchPhaseMemento,
-                              Memento<PixelTransfer> pixelTransferPhaseMemento, Memento<VBlankPhase> vBlankPhaseMemento,
-                              Memento<GpuRegisterValues> rMemento, boolean lcdEnabled, int lcdEnabledDelay,
-                              int ticksInLine, Mode mode) implements Memento<Gpu> {
+                              Memento<OamSearch> oamSearchPhaseMemento,
+                              Memento<PixelTransfer> pixelTransferPhaseMemento,
+                              Memento<GpuRegisterValues> rMemento, boolean lcdEnabled, int displayEnabledDelay,
+                              int line, int ticksInLine, boolean firstLine, boolean pixelTransferDone,
+                              int hblankIntFrom, Mode mode) implements Memento<Gpu> {
     }
 }

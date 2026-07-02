@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.timer.Timer;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import org.slf4j.Logger;
@@ -23,16 +24,19 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private final SpeedMode speedMode;
 
+    private final Timer timer;
+
     private int sb;
 
     private int sc;
 
-    private int divider;
+    private boolean prevClockBit;
 
     private int receivedBits;
 
-    public SerialPort(InterruptManager interruptManager, boolean gbc, SpeedMode speedMode) {
+    public SerialPort(InterruptManager interruptManager, Timer timer, boolean gbc, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
+        this.timer = timer;
         this.gbc = gbc;
         this.speedMode = speedMode;
     }
@@ -47,11 +51,14 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         // We're receiving bits even without the transfer in progress.
         if (ClockType.getFromSc(sc) == ClockType.EXTERNAL) {
             incomingBit = serialEndpoint.recvBit();
-        } else if (transferInProgress) {
-            if (divider++ == Gameboy.TICKS_PER_SEC / getSpeed()) {
-                divider = 0;
+        } else {
+            // the serial clock is derived from the DIV counter, so the first bit of
+            // a transfer is aligned to the free-running divider (boot_sclk_align)
+            boolean clockBit = (timer.getDivCounter() & (1 << getClockBitPos())) != 0;
+            if (transferInProgress && prevClockBit && !clockBit) {
                 incomingBit = serialEndpoint.sendBit();
             }
+            prevClockBit = clockBit;
         }
 
         if (incomingBit != -1) {
@@ -65,15 +72,9 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         }
     }
 
-    private int getSpeed() {
-        int speed;
-        if (gbc && (sc & (1 << 1)) != 0) {
-            speed = 262144;
-        } else {
-            speed = 8192;
-        }
-        speed *= speedMode.getSpeedMode();
-        return speed;
+    private int getClockBitPos() {
+        // 8192 Hz = falling edge of bit 8; CGB fast mode 262144 Hz = bit 3
+        return (gbc && (sc & (1 << 1)) != 0) ? 3 : 8;
     }
 
     @Override
@@ -89,7 +90,6 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
             LOG.atDebug().log("[{}] Set SB = {}", this.hashCode(), Integer.toBinaryString(sb));
         } else if (address == 0xff02) {
             if ((sc & (1 << 7)) == 0 && (value & (1 << 7)) != 0) {
-                divider = 0;
                 receivedBits = 0;
                 serialEndpoint.startSending();
                 LOG.atDebug().log("[{}] Start transfer", this.hashCode());
@@ -115,7 +115,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     @Override
     public Memento<SerialPort> saveToMemento() {
-        return new SerialPortMemento(sb, sc, divider, receivedBits);
+        return new SerialPortMemento(sb, sc, prevClockBit, receivedBits);
     }
 
     @Override
@@ -126,10 +126,10 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         }
         this.sb = mem.sb;
         this.sc = mem.sc;
-        this.divider = mem.divider;
+        this.prevClockBit = mem.prevClockBit;
         this.receivedBits = mem.receivedBits;
     }
 
-    private record SerialPortMemento(int sb, int sc, int divider, int receivedBits) implements Memento<SerialPort> {
+    private record SerialPortMemento(int sb, int sc, boolean prevClockBit, int receivedBits) implements Memento<SerialPort> {
     }
 }

@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.Ram;
+import eu.rekawek.coffeegb.core.timer.Timer;
 
 import java.io.Serializable;
 
@@ -38,9 +39,12 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     private int i = 0;
 
+    private final Timer timer;
+
     private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
-    public Sound(boolean gbc) {
+    public Sound(Timer timer, boolean gbc) {
+        this.timer = timer;
         allModes[0] = new SoundMode1(frameSequencer, gbc);
         allModes[1] = new SoundMode2(frameSequencer, gbc);
         allModes[2] = new SoundMode3(frameSequencer, gbc);
@@ -54,11 +58,12 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     }
 
     public void tick() {
+        int firedStep = frameSequencer.tick(timer.getDivCounter(), enabled);
         if (!enabled) {
             play(0, 0);
+            return;
         }
 
-        int firedStep = frameSequencer.tick();
         if (firedStep >= 0) {
             if ((firedStep & 1) == 0) {
                 for (AbstractSoundMode m : allModes) m.tickLength();
@@ -145,6 +150,26 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             return;
         }
 
+        if (!enabled && address < 0xff30) {
+            // while the APU is off, the only writable register bits are the DMG length
+            // counters (and NR52 handled above); everything else is ignored
+            switch (address) {
+                case 0xff11:
+                    allModes[0].writeLengthWhileOff(value);
+                    break;
+                case 0xff16:
+                    allModes[1].writeLengthWhileOff(value);
+                    break;
+                case 0xff1b:
+                    allModes[2].writeLengthWhileOff(value);
+                    break;
+                case 0xff20:
+                    allModes[3].writeLengthWhileOff(value);
+                    break;
+            }
+            return;
+        }
+
         AddressSpace s = getAddressSpace(address);
         if (s == null) {
             return;
@@ -180,16 +205,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     }
 
     private void start() {
-        for (int i = 0xff10; i <= 0xff25; i++) {
-            int v = 0;
-            // lengths should be preserved
-            if (i == 0xff11 || i == 0xff16 || i == 0xff20) { // channel 1, 2, 4 lengths
-                v = getUnmaskedByte(i) & 0b00111111;
-            } else if (i == 0xff1b) { // channel 3 length
-                v = getUnmaskedByte(i);
-            }
-            setByte(i, v);
-        }
+        // the registers were zeroed at power-off and the length counters keep their values
         for (AbstractSoundMode m : allModes) {
             m.start();
         }
@@ -200,6 +216,8 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         for (AbstractSoundMode s : allModes) {
             s.stop();
         }
+        r.setByte(0xff24, 0);
+        r.setByte(0xff25, 0);
     }
 
     public void enableChannel(int i, boolean enabled) {

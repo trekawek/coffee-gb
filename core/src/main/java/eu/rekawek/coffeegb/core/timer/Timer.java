@@ -16,7 +16,9 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private static final int[] FREQ_TO_BIT = {9, 3, 5, 7};
 
-    private int div = 0xb644, tac, tma, tima;
+    // the internal counter starts at 0 on power-on; when the bootstrap is skipped,
+    // Gameboy presets the counter to the post-boot-ROM value
+    private int div = 0, tac, tma, tima;
 
     private boolean previousBit;
 
@@ -27,6 +29,14 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.speedMode = speedMode;
         this.interruptManager = interruptManager;
+    }
+
+    public void presetDiv(int value) {
+        this.div = value & 0xffff;
+    }
+
+    public int getDivCounter() {
+        return div;
     }
 
     public void tick() {

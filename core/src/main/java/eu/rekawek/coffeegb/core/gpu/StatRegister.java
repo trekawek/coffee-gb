@@ -6,150 +6,91 @@ import eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-
-import static eu.rekawek.coffeegb.core.gpu.GpuRegister.LY;
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.LYC;
-import static eu.rekawek.coffeegb.core.gpu.Mode.*;
 
+/**
+ * Implements the FF41 STAT register and the PPU interrupt generation, modelled after the
+ * DMG-CPU B schematics (ff41_stat sheet):
+ *
+ * <ul>
+ * <li>The LY=LYC comparison uses an LY value registered at the beginning of the line, and its
+ * result is a register that is frozen while the PPU is disabled.</li>
+ * <li>The STAT interrupt is a single level line: (LY=LYC and enabled) or (mode 0 and enabled)
+ * or (mode 1 and enabled) or (enabled short pulse at the beginning of OAM scan). The IF flag
+ * is only set on the rising edge of this line, which naturally produces the "STAT interrupt
+ * blocking" behaviour.</li>
+ * <li>Writing STAT on the DMG briefly enables all interrupt sources ("all interrupts are
+ * enabled before data settles"), which can produce spurious interrupts.</li>
+ * </ul>
+ */
 public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     public static final int ADDRESS = 0xff41;
-
-    private static final long TICKS_PER_FRAME = 70224;
-
-    private static final Map<Mode, Integer> MODE_STAT_DELAY = Map.of( //
-            HBlank, 12,      // mode 0
-            VBlank, 0,       // mode 1
-            OamSearch, 4,    // mode 2
-            PixelTransfer, 8     // mode 3
-    );
-
-    private static final int LY_DELAY = 0;
-
-    private static final int DISABLE_LCD_DELAY = 0;
 
     private final InterruptManager interruptManager;
 
     private Gpu gpu;
 
-    private final LinkedList<State> states = new LinkedList<>();
+    // bits 3-6: interrupt enable flags
+    private int enableBits;
 
-    private int stat = 0x80;
+    private int registeredLy;
 
-    private long tick;
+    private boolean coincidence;
 
-    private boolean isLCDCTriggered;
+    private boolean intLine;
 
     public StatRegister(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;
     }
 
-    // TODO remove ciruclar dependency
+    // TODO remove circular dependency
     public void init(Gpu gpu) {
         this.gpu = gpu;
     }
 
     public void tick() {
-        addState();
-        if (states.size() == 1) {
-            return;
-        }
-
-        State n1State = states.getLast();
-        State n2State = states.get(states.size() - 2);
-
-        boolean requestVBlank = false;
-        boolean requestLCDC = false;
-        Mode mode = n1State.mode;
-        long delay = tick - n1State.tick();
-
-        if (n1State.mode != null && MODE_STAT_DELAY.get(n1State.mode) > delay) {
-            requestLCDC = isLCDCTriggered;
-        }
-        if (n1State.isTriggersLyLycEquals() && LY_DELAY > delay) {
-            requestLCDC = isLCDCTriggered;
-        }
-        if (n2State.mode == HBlank && n1State.mode == VBlank && delay == 0) {
-            requestVBlank = true;
-        }
-        if (n1State.isTriggersStateMode() && MODE_STAT_DELAY.get(n1State.mode) <= delay) {
-            requestLCDC = true;
-        }
-        if (n1State.isTriggersLyLycEquals() && LY_DELAY <= delay) {
-            requestLCDC = true;
-        }
-        // vblank_stat_intr-GS.s
-        if (n2State.mode == HBlank && n1State.mode == VBlank && n1State.isStatEnabledForMode(OamSearch)) {
-            requestLCDC = true;
-        }
-        if (n1State.mode == null) {
-            requestLCDC = false;
-        }
-        if (n2State.mode != n1State.mode) {
-            int newPpuMode = -1;
-            if (mode == null && DISABLE_LCD_DELAY <= delay) {
-                newPpuMode = 0;
-            } else if (mode != null && MODE_STAT_DELAY.get(mode) <= delay) {
-                newPpuMode = mode.ordinal();
+        if (gpu.isLcdEnabled()) {
+            int ticksInLine = gpu.getTicksInLine();
+            // the comparison uses the LY value registered at the line start; the extra
+            // latch point at tick 8 handles the LY=153 -> 0 transition during line 153
+            if (ticksInLine == 0 || ticksInLine == 8) {
+                registeredLy = gpu.getVisibleLy();
             }
-            if (newPpuMode != -1) {
-                stat = (stat & 0b11111100) | newPpuMode;
+            coincidence = registeredLy == gpu.getRegisters().get(LYC);
+            if (ticksInLine >= 452 || (gpu.getLine() == 153 && ticksInLine >= 4 && ticksInLine < 8)) {
+                // when LY changes, the comparison result reads 0 until the new value
+                // is registered at the beginning of the next line (lcdon_timing-GS)
+                coincidence = false;
             }
-        }
-        if (mode != null && n2State.isLyLycEquals() != n1State.isLyLycEquals()) {
-            if (LY_DELAY <= delay) {
-                stat = (stat & 0b11111011) | (n1State.isLyLycEquals() ? 0b100 : 0b000);
+
+            if (gpu.getLine() == 144 && ticksInLine == 0) {
+                interruptManager.requestInterrupt(InterruptType.VBlank);
             }
         }
 
-        if (requestVBlank) {
-            interruptManager.requestInterrupt(InterruptType.VBlank);
+        updateIntLine(computeIntLine(enableBits));
+    }
+
+    public void onLcdEnabled() {
+        registeredLy = 0;
+    }
+
+    private boolean computeIntLine(int enable) {
+        boolean line = (enable & 0b01000000) != 0 && coincidence;
+        if (gpu.isLcdEnabled()) {
+            line |= (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
+            line |= (enable & 0b00010000) != 0 && gpu.getVisibleStatMode() == 1;
+            line |= (enable & 0b00100000) != 0 && gpu.isMode2IntWindow();
         }
-        if (requestLCDC && !isLCDCTriggered) {
+        return line;
+    }
+
+    private void updateIntLine(boolean newLine) {
+        if (newLine && !intLine) {
             interruptManager.requestInterrupt(InterruptType.LCDC);
         }
-        isLCDCTriggered = requestLCDC;
-
-        tick++;
-        if (tick % TICKS_PER_FRAME == 0) {
-            rewindStates();
-        }
-    }
-
-    private void rewindStates() {
-        long offset = TICKS_PER_FRAME * (states.getFirst().tick / TICKS_PER_FRAME);
-        if (offset == 0) {
-            return;
-        }
-
-        List<State> rewound = new LinkedList<>();
-        for (State state : states) {
-            if (state.tick < offset) {
-                throw new IllegalStateException("Rewinding states too far");
-            }
-            rewound.add(new State(state.tick - offset, state.mode, state.stat, state.ly, state.lyc));
-        }
-        states.clear();
-        states.addAll(rewound);
-
-        tick -= offset;
-    }
-
-    private void addState() {
-        State newState = new State(tick, gpu.isLcdEnabled() ? gpu.getMode() : null, stat & 0b01111000, gpu.getByte(LY.getAddress()), gpu.getByte(LYC.getAddress()));
-        State lastState = states.peekLast();
-        if (newState.isSame(lastState)) {
-            return;
-        }
-        states.add(newState);
-        while (states.size() > 2) {
-            states.removeFirst();
-        }
+        intLine = newLine;
     }
 
     @Override
@@ -159,27 +100,22 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public void setByte(int address, int value) {
-        stat = (stat & 0b10000111) | (value & 0b01111000);
-
-        // Stats interrupt bug
-        // see https://gbdev.io/pandocs/STAT.html#spurious-stat-interrupts
-        if (!states.isEmpty() && !gpu.isGbc()) {
-            var state = states.getLast();
-            var mode = state.mode();
-            if (mode == VBlank) {
-                interruptManager.requestInterrupt(InterruptType.LCDC);
-            }
+        if (!gpu.isGbc()) {
+            // DMG STAT write glitch: all interrupt sources are enabled for a moment
+            // before the written data settles
+            updateIntLine(computeIntLine(0b01111000));
         }
+        enableBits = value & 0b01111000;
     }
 
     @Override
     public int getByte(int address) {
-        return stat;
+        return 0b10000000 | enableBits | (coincidence ? 0b100 : 0) | gpu.getVisibleStatMode();
     }
 
     @Override
     public Memento<StatRegister> saveToMemento() {
-        return new StatRegisterMemento(new ArrayList<>(states), stat, tick, isLCDCTriggered);
+        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intLine);
     }
 
     @Override
@@ -187,46 +123,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         if (!(memento instanceof StatRegisterMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
-        this.states.clear();
-        this.states.addAll(mem.states);
-        this.stat = mem.stat;
-        this.tick = mem.tick;
-        this.isLCDCTriggered = mem.isLCDCTriggered;
-        if (states.size() > 2) {
-            throw new IllegalStateException("Invalid memento length");
-        }
+        this.enableBits = mem.enableBits;
+        this.registeredLy = mem.registeredLy;
+        this.coincidence = mem.coincidence;
+        this.intLine = mem.intLine;
     }
 
-    private record StatRegisterMemento(List<State> states, int stat, long tick,
-                                       boolean isLCDCTriggered) implements Memento<StatRegister> {
-    }
-
-    private record State(long tick, Mode mode, int stat, int ly, int lyc) implements Serializable {
-        boolean isSame(State state) {
-            if (state == null) {
-                return false;
-            }
-            return mode == state.mode && stat == state.stat && ly == state.ly && lyc == state.lyc;
-        }
-
-        boolean isTriggersStateMode() {
-            return isStatEnabledForMode(mode);
-        }
-
-        boolean isTriggersLyLycEquals() {
-            return isLyLycEquals() && isStatEnabledForLyLycEquals();
-        }
-
-        boolean isStatEnabledForMode(Mode mode) {
-            return mode != null && mode.statBit != -1 && (stat & (1 << mode.statBit)) != 0;
-        }
-
-        boolean isStatEnabledForLyLycEquals() {
-            return (stat & 0b01000000) != 0;
-        }
-
-        boolean isLyLycEquals() {
-            return ly == lyc;
-        }
+    private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,
+                                       boolean intLine) implements Memento<StatRegister> {
     }
 }

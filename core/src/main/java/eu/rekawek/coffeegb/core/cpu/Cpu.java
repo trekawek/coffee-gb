@@ -70,7 +70,15 @@ public class Cpu implements Serializable, Originator<Cpu> {
             return;
         }
 
-        if (state == State.OPCODE || state == State.HALTED || state == State.STOPPED) {
+        if (state == State.HALTED && interruptManager.isInterruptRequested()) {
+            // a halted CPU behaves exactly like it was executing NOPs, so the wake-up
+            // has the same timing as the running state: the interrupt dispatch starts
+            // (IME=1) or the next instruction is fetched (IME=0) at the cycle following
+            // the interrupt request (halt_ime1_timing2-GS, halt_ime0_nointr_timing)
+            state = State.OPCODE;
+        }
+
+        if (state == State.OPCODE || state == State.STOPPED) {
             if (interruptManager.isIme() && interruptManager.isInterruptRequested()) {
                 if (state == State.STOPPED) {
                     display.enableLcd();
@@ -82,10 +90,6 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (state == State.IRQ_WAIT_1 || state == State.IRQ_WAIT_2 || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2 || state == State.IRQ_JUMP) {
             handleInterrupt();
             return;
-        }
-
-        if (state == State.HALTED && interruptManager.isInterruptRequested()) {
-            state = State.OPCODE;
         }
 
         if (state == State.HALTED || state == State.STOPPED) {
@@ -158,6 +162,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
                         }
                         return;
                     } else if (opcode1 == 0x76) {
+                        // committing a pending EI happens even when entering halt, so
+                        // "ei; halt" halts with IME=1 (no halt bug, wake dispatches)
+                        interruptManager.onInstructionFinished();
                         if (interruptManager.isHaltBug()) {
                             state = State.OPCODE;
                             haltBugMode = true;
@@ -260,13 +267,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     private void handleSpriteBug(SpriteBug.CorruptionType type) {
-        if (!gpu.getLcdc().isLcdEnabled()) {
-            return;
-        }
-        int stat = addressSpace.getByte(StatRegister.ADDRESS);
-        if ((stat & 0b11) == Mode.OamSearch.ordinal() && gpu.getTicksInLine() < 79) {
-            SpriteBug.corruptOam(addressSpace, type, gpu.getTicksInLine());
-        }
+        gpu.corruptOam(type);
     }
 
     public Registers getRegisters() {

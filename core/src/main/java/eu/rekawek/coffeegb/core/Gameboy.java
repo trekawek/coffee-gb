@@ -117,9 +117,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace());
-        sound = new Sound(gbc);
+        sound = new Sound(timer, gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
-        serialPort = new SerialPort(interruptManager, gbc, speedMode);
+        serialPort = new SerialPort(interruptManager, timer, gbc, speedMode);
 
         if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData));
@@ -154,6 +154,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             }
         } else if (configuration.bootstrapMode == BootstrapMode.SKIP) {
             biosShadow.setByte(0xff50, 0);
+            // DIV counter value at PC=0x0100 after the boot ROM (mooneye boot_div tests)
+            timer.presetDiv(gbc ? 0xb644 : 0xabcc);
             var r = cpu.getRegisters();
             if (gbc) {
                 r.setAF(0x1180);

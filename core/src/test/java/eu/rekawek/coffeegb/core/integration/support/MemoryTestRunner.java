@@ -32,9 +32,17 @@ public class MemoryTestRunner {
     }
 
     public TestResult runTest() throws IOException {
+        return runTest(Long.MAX_VALUE);
+    }
+
+    public TestResult runTest(long maxTicks) throws IOException {
         int status = 0x80;
         int divider = 0;
+        long ticks = 0;
         while (status == 0x80 && !SerialTestRunner.isInfiniteLoop(gb)) {
+            if (++ticks > maxTicks) {
+                return new TestResult(-1, text.toString());
+            }
             gb.tick();
             if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 1 : 4)) {
                 status = getTestResult(gb);

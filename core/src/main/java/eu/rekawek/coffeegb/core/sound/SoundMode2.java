@@ -23,14 +23,21 @@ public class SoundMode2 extends AbstractSoundMode {
         if (gbc) {
             length.reset();
         }
-        length.start();
         volumeEnvelope.start();
     }
 
     @Override
+    public void stop() {
+        super.stop();
+        i = 0;
+        lastOutput = 0;
+        volumeEnvelope.setNr2(0);
+    }
+
+    @Override
     public void trigger() {
-        this.i = 0;
-        freqDivider = 1;
+        // the duty position is not changed by the trigger, only the timer is reloaded
+        resetFreqDivider();
         volumeEnvelope.trigger();
     }
 

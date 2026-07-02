@@ -85,7 +85,7 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     protected void setNr1(int value) {
         super.setNr1(value);
-        length.setLength(256 - value);
+        length.setLength(256 - (value & 0xff));
     }
 
     @Override
@@ -96,8 +96,10 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void setNr4(int value) {
         if (!gbc && (value & (1 << 7)) != 0) {
-            if (isEnabled() && freqDivider == 2) {
-                int pos = i / 2;
+            // retriggering the channel while it is about to fetch a sample corrupts the
+            // first bytes of the wave RAM
+            if (isEnabled() && freqDivider <= 2) {
+                int pos = ((i + 1) % 32) / 2;
                 if (pos < 4) {
                     waveRam.setByte(0xff30, waveRam.getByte(0xff30 + pos));
                 } else {
@@ -117,13 +119,28 @@ public class SoundMode3 extends AbstractSoundMode {
         if (gbc) {
             length.reset();
         }
-        length.start();
+    }
+
+    @Override
+    public void stop() {
+        super.stop();
+        i = 0;
+        lastOutput = 0;
+        buffer = 0;
+        triggered = false;
+    }
+
+    @Override
+    protected int getFullLength() {
+        return 256;
     }
 
     @Override
     public void trigger() {
         i = 0;
-        resetFreqDivider();
+        // the first wave position advance is delayed by 6 extra ticks and does not fetch
+        // a sample; the stale buffer keeps playing until the second advance
+        freqDivider = getFrequency() * 2 + 6;
         triggered = !gbc;
         if (gbc) {
             getWaveEntry();

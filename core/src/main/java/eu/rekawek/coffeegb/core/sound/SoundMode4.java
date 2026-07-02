@@ -23,9 +23,16 @@ public class SoundMode4 extends AbstractSoundMode {
         if (gbc) {
             length.reset();
         }
-        length.start();
         lfsr.start();
         volumeEnvelope.start();
+    }
+
+    @Override
+    public void stop() {
+        super.stop();
+        lastResult = 0;
+        volumeEnvelope.setNr2(0);
+        polynomialCounter.setNr43(0);
     }
 
     @Override

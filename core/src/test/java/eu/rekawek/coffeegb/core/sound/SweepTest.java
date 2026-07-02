@@ -12,6 +12,8 @@ public class SweepTest {
 
     private final FrequencySweep sweep = new FrequencySweep();
 
+    private int divCounter;
+
     /*
      set_test 2,"If shift>0, calculates on trigger"
      call begin
@@ -317,7 +319,7 @@ public class SweepTest {
         wregNR(13, 0xff);
         wregNR(14, 0x83);
         while (sweep.isEnabled()) {
-            int firedStep = frameSequencer.tick();
+            int firedStep = frameSequencer.tick(divCounter = (divCounter + 1) & 0xffff, true);
             if (firedStep == 2 || firedStep == 6) {
                 sweep.clockTick();
             }
@@ -345,7 +347,7 @@ public class SweepTest {
 
     private void delayApu(int apuCycles) {
         for (int i = 0; i < TICKS_PER_SEC / 256 * apuCycles; i++) {
-            int firedStep = frameSequencer.tick();
+            int firedStep = frameSequencer.tick(divCounter = (divCounter + 1) & 0xffff, true);
             if (firedStep == 2 || firedStep == 6) {
                 sweep.clockTick();
             }

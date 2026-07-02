@@ -18,10 +18,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         READ_DATA_2,
         PUSH,
         READ_SPRITE_TILE_ID,
-        READ_SPRITE_FLAGS,
         READ_SPRITE_DATA_1,
-        READ_SPRITE_DATA_2,
-        PUSH_SPRITE
+        READ_SPRITE_DATA_2
     }
 
     private static final int[] EMPTY_PIXEL_LINE = new int[8];
@@ -176,10 +174,6 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
             case READ_SPRITE_TILE_ID:
                 tileId = oemRam.getByte(sprite.getAddress() + 2);
-                state = State.READ_SPRITE_FLAGS;
-                break;
-
-            case READ_SPRITE_FLAGS:
                 spriteAttributes = TileAttributes.valueOf(oemRam.getByte(sprite.getAddress() + 3));
                 state = State.READ_SPRITE_DATA_1;
                 break;
@@ -198,10 +192,6 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 tileData2 =
                         getTileData(
                                 tileId, spriteTileLine, 1, 0x8000, false, spriteAttributes, lcdc.getSpriteHeight());
-                state = State.PUSH_SPRITE;
-                break;
-
-            case PUSH_SPRITE:
                 fifo.setOverlay(
                         zip(tileData1, tileData2, spriteAttributes.isXflip()),
                         spriteOffset,
@@ -239,10 +229,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     public boolean spriteInProgress() {
         return state == State.READ_SPRITE_TILE_ID
-                || state == State.READ_SPRITE_FLAGS
                 || state == State.READ_SPRITE_DATA_1
-                || state == State.READ_SPRITE_DATA_2
-                || state == State.PUSH_SPRITE;
+                || state == State.READ_SPRITE_DATA_2;
     }
 
     public int[] zip(int data1, int data2, boolean reverse) {

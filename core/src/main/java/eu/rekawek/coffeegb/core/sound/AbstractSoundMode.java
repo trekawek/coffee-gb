@@ -31,7 +31,21 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
     protected abstract void trigger();
 
     public void tickLength() {
-        length.clockTick();
+        if (length.clockTick()) {
+            channelEnabled = false;
+        }
+    }
+
+    /**
+     * On the DMG the length counters can be loaded even when the APU is powered off (the
+     * other register bits are lost).
+     */
+    public void writeLengthWhileOff(int value) {
+        length.setLength(getFullLength() - (value & (getFullLength() - 1)));
+    }
+
+    protected int getFullLength() {
+        return 64;
     }
 
     public void tickEnvelope() {
@@ -116,10 +130,12 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
 
     protected void setNr4(int value) {
         nr4 = value;
-        length.setNr4(value);
+        boolean extraClockDisabled = length.setNr4(value);
         if ((value & (1 << 7)) != 0) {
             channelEnabled = dacEnabled;
             trigger();
+        } else if (extraClockDisabled) {
+            channelEnabled = false;
         }
     }
 
@@ -149,17 +165,22 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
 
     public abstract void start();
 
+    /**
+     * Powering the APU off zeroes all the registers; on the DMG the length counters keep
+     * their values.
+     */
     public void stop() {
         channelEnabled = false;
+        dacEnabled = false;
+        nr0 = 0;
+        nr1 = 0;
+        nr2 = 0;
+        nr3 = 0;
+        nr4 = 0;
+        length.setNr4(0);
     }
 
     protected boolean updateLength() {
-        if (!length.isEnabled()) {
-            return channelEnabled;
-        }
-        if (channelEnabled && length.getValue() == 0) {
-            channelEnabled = false;
-        }
         return channelEnabled;
     }
 

@@ -52,8 +52,19 @@ public class MooneyeTestRunner {
     }
 
     public boolean runTest() throws IOException {
+        return runTest(Long.MAX_VALUE);
+    }
+
+    /**
+     * @return true/false for test result, null when the tick limit was reached
+     */
+    public Boolean runTest(long maxTicks) throws IOException {
         int divider = 0;
+        long ticks = 0;
         while (!isByteSequenceAtPc(gb, 0x40)) { // infinite loop
+            if (++ticks > maxTicks) {
+                return null;
+            }
             gb.tick();
             if (++divider >= (gb.getSpeedMode().getSpeedMode() == 2 ? 2 : 4)) {
                 displayProgress();
@@ -61,6 +72,11 @@ public class MooneyeTestRunner {
             }
         }
         return regs.getA() == 0 && regs.getB() == 3 && regs.getC() == 5 && regs.getD() == 8 && regs.getE() == 13 && regs.getH() == 21 && regs.getL() == 34;
+    }
+
+    public String dumpRegs() {
+        return String.format("A=%02x B=%02x C=%02x D=%02x E=%02x H=%02x L=%02x",
+                regs.getA(), regs.getB(), regs.getC(), regs.getD(), regs.getE(), regs.getH(), regs.getL());
     }
 
     private void displayProgress() throws IOException {

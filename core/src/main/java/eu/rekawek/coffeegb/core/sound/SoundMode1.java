@@ -26,15 +26,25 @@ public class SoundMode1 extends AbstractSoundMode {
         if (gbc) {
             length.reset();
         }
-        length.start();
         frequencySweep.start();
         volumeEnvelope.start();
     }
 
     @Override
-    public void trigger() {
+    public void stop() {
+        super.stop();
         i = 0;
-        freqDivider = 1;
+        lastOutput = 0;
+        frequencySweep.setNr10(0);
+        frequencySweep.setNr13(0);
+        frequencySweep.setNr14(0);
+        volumeEnvelope.setNr2(0);
+    }
+
+    @Override
+    public void trigger() {
+        // the duty position is not changed by the trigger, only the timer is reloaded
+        resetFreqDivider();
         volumeEnvelope.trigger();
     }
 
