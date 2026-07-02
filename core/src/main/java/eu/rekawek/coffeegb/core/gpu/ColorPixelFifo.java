@@ -12,7 +12,7 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
     // FIFO pop. The CGB palette writes settle one T-cycle earlier than the DMG ones and
     // don't produce the old|new mix (SameBoy's PALETTE_CGB vs PALETTE_DMG conflicts), which
     // in this model corresponds to a one-dot shorter delay line with live register reads.
-    static final int OUTPUT_DELAY = 6;
+    static final int OUTPUT_DELAY = 2;
 
     private final IntQueue pixels = new IntQueue(16);
 

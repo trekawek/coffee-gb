@@ -43,6 +43,15 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // ticks before the first dot of the line (mode-3 entry padding)
     private int entryTicks;
 
+    // 0 for the timing-skeleton instance; 4 for the pixel-generating instance, whose
+    // dot machine runs one machine cycle behind the mode/STAT skeleton so that its
+    // register and VRAM reads land on the hardware dots (mealybug m3 tests)
+    private final int entryDelay;
+
+    // whether the dot machine is running (start() .. position 160); the pixel-machine
+    // instance is ticked from the GPU every T-cycle since it outlives the skeleton's mode 3
+    private boolean machineActive;
+
     private int position;
 
     private boolean window;
@@ -80,7 +89,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             ColorPalette oamPalette,
             SpritePosition[] sprites,
             VRamTransfer vRamTransfer,
-            eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
+            eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
+            int entryDelay) {
+        this.entryDelay = entryDelay;
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
@@ -94,7 +105,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     public PixelTransfer start() {
-        entryTicks = 0;
+        entryTicks = entryDelay;
+        machineActive = true;
         position = -16;
         window = false;
         windowBeingFetched = false;
@@ -127,6 +139,17 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     /** Advances the LCD output stage; called by the GPU every tick regardless of mode. */
     public void outputTick() {
         fifo.outputTick();
+    }
+
+    /** Ticks the pixel-machine instance; called by the GPU every T-cycle. */
+    public void machineTick() {
+        if (machineActive && !tick()) {
+            machineActive = false;
+        }
+    }
+
+    public void stop() {
+        machineActive = false;
     }
 
     public int getPosition() {
@@ -314,7 +337,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 objTileId,
                 objAttributes == null ? -1 : objAttributes.getValue(),
                 objData0,
-                objTileLine);
+                objTileLine,
+                machineActive);
     }
 
     @Override
@@ -348,6 +372,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         this.objData0 = mem.objData0;
         this.objTileLine = mem.objTileLine;
+        this.machineActive = mem.machineActive;
     }
 
     private record PixelTransferMemento(
@@ -365,7 +390,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             int objTileId,
             int objAttributesValue,
             int objData0,
-            int objTileLine)
+            int objTileLine,
+            boolean machineActive)
             implements Memento<PixelTransfer> {
     }
 }

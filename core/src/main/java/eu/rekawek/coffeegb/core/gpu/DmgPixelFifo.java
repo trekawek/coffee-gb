@@ -36,7 +36,7 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     // Popped pixels travel through this delay line as raw color indices and are
     // resolved against the *current* register values when they reach the screen
     // (mealybug m3_bgp_change and friends pin this to the dot).
-    static final int OUTPUT_DELAY = 7;
+    static final int OUTPUT_DELAY = 3;
 
     private final int[] delayEntry = new int[8];
 
