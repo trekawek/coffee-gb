@@ -160,6 +160,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return objStep >= 0;
     }
 
+    public boolean isWindowBeingFetched() {
+        return windowBeingFetched;
+    }
+
+    public void disableWindowInsertionGlitch() {
+        fetcher.disableInsertionGlitch();
+    }
+
     /** Drops pixels still in the output delay line (LCD disable). */
     public void clearOutput() {
         fifo.clearOutput();

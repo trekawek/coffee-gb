@@ -113,6 +113,11 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     }
 
     @Override
+    public void enqueuePixel(int pixel) {
+        pixels.enqueue(pixel);
+    }
+
+    @Override
     public void enqueue8Pixels(int[] pixelLine, TileAttributes tileAttributes) {
         for (int p : pixelLine) {
             pixels.enqueue(p);

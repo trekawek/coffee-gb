@@ -21,6 +21,10 @@ public interface PixelFifo {
 
     void enqueue8Pixels(int[] pixels, TileAttributes tileAttributes);
 
+    /** DMG window-insertion glitch: a single background pixel enters the FIFO. */
+    default void enqueuePixel(int pixel) {
+    }
+
     void setOverlay(int[] pixelLine, int offset, TileAttributes flags, int oamIndex);
 
     void clear();

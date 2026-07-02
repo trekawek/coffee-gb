@@ -59,6 +59,11 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     private int tileData2;
 
+    // DMG: a disabled window whose WX matches during a push inserts one blank pixel
+    // instead of the tile row (SameBoy issue #278); an LCDC write that disables the
+    // window mid-window-fetch suppresses the glitch for the rest of the line
+    private boolean insertionGlitchDisabled;
+
     public Fetcher(
             PixelFifo fifo,
             AddressSpace videoRam0,
@@ -77,6 +82,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     }
 
     public void startLine() {
+        insertionGlitchDisabled = false;
         state = GET_TILE_T1;
         tileId = 0;
         tileAttributes = TileAttributes.EMPTY;
@@ -91,6 +97,10 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     public int getState() {
         return state;
+    }
+
+    public void disableInsertionGlitch() {
+        insertionGlitchDisabled = true;
     }
 
     /**
@@ -167,6 +177,19 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
             case PUSH:
                 if (fifo.getLength() == 0) {
+                    if (!gbc
+                            && !insertionGlitchDisabled
+                            && !lcdc.isWindowDisplay()
+                            && r.get(GpuRegister.LY) >= r.get(GpuRegister.WY)) {
+                        int logicalPosition = (position + 7) & 0xff;
+                        if (logicalPosition > 167) {
+                            logicalPosition = 0;
+                        }
+                        if (r.get(GpuRegister.WX) == logicalPosition) {
+                            fifo.enqueuePixel(0);
+                            break;
+                        }
+                    }
                     tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
                             lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
                     if (window) {
@@ -259,7 +282,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 tileId,
                 tileAttributes == null ? -1 : tileAttributes.getValue(),
                 tileData1,
-                tileData2);
+                tileData2,
+                insertionGlitchDisabled);
     }
 
     @Override
@@ -281,6 +305,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         }
         this.tileData1 = mem.tileData1;
         this.tileData2 = mem.tileData2;
+        this.insertionGlitchDisabled = mem.insertionGlitchDisabled;
     }
 
     private record FetcherMemento(
@@ -292,7 +317,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             int tileId,
             int tileAttributesValue,
             int tileData1,
-            int tileData2)
+            int tileData2,
+            boolean insertionGlitchDisabled)
             implements Memento<Fetcher> {
     }
 }

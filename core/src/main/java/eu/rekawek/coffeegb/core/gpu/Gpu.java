@@ -387,6 +387,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && (lcdc.get() & 0x02) != 0
                 && mode == Mode.PixelTransfer
                 && (pixelMachine.isObjectFetchInProgress() || pixelMachine.getPosition() == 0);
+        // disabling the window while it is being fetched suppresses the DMG
+        // window-insertion glitch for the rest of the line (SameBoy DMG_LCDC)
+        if (!gbc && (lcdc.get() & 0x20) != 0 && (value & 0x20) == 0) {
+            if (pixelTransferPhase.isWindowBeingFetched()) {
+                pixelTransferPhase.disableWindowInsertionGlitch();
+            }
+            if (pixelMachine.isWindowBeingFetched()) {
+                pixelMachine.disableWindowInsertionGlitch();
+            }
+        }
         lcdc.set(value, dropObjEnInMix);
         if ((value & (1 << 7)) == 0) {
             disableLcd();
