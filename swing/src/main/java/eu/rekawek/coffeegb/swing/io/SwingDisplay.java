@@ -42,6 +42,8 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private boolean blending;
 
+    private boolean colorCorrection;
+
     private int[] previousFrame;
 
     private GameboyType gameboyType;
@@ -58,8 +60,10 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
         eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
         eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
+        eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
         this.grayscale = properties.getGrayscale();
         setBlending(properties.getBlending());
+        setColorCorrection(properties.getColorCorrection());
         setScale(properties.getScale());
     }
 
@@ -72,7 +76,7 @@ public class SwingDisplay extends JPanel implements Runnable {
             return;
         }
         frameIsWaiting = true;
-        e.toRgb(waitingFrame);
+        e.toRgb(waitingFrame, colorCorrection);
         setBorder(false);
         notify();
     }
@@ -183,6 +187,10 @@ public class SwingDisplay extends JPanel implements Runnable {
         }
     }
 
+    private synchronized void setColorCorrection(boolean colorCorrection) {
+        this.colorCorrection = colorCorrection;
+    }
+
     private synchronized void setBlending(boolean blending) {
         this.blending = blending;
         previousFrame = null;
@@ -211,6 +219,9 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     public record SetGrayscaleEvent(boolean grayscale) implements Event {
+    }
+
+    public record SetColorCorrectionEvent(boolean colorCorrection) implements Event {
     }
 
     public record SetBlendingEvent(boolean blending) implements Event {

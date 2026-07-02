@@ -89,6 +89,32 @@ public class Display implements Serializable, Originator<Display> {
 
     public record GbcFrameReadyEvent(int[] pixels) implements Event {
 
+        // CGB LCD response (SameBoy's modern-balanced correction): per-channel
+        // brightness curve plus the green-blue gamma mix of the panel
+        private static final int[] CURVE = {0, 6, 12, 20, 28, 36, 45, 56, 66, 76, 88, 100, 113, 125,
+                137, 149, 161, 172, 182, 192, 202, 210, 218, 225, 232, 238, 243, 247, 250, 252, 254, 255};
+
+        private static volatile int[] correctedLut;
+
+        private static int[] correctedLut() {
+            int[] lut = correctedLut;
+            if (lut == null) {
+                lut = new int[0x8000];
+                for (int color = 0; color < 0x8000; color++) {
+                    int r = CURVE[color & 0x1f];
+                    int g = CURVE[(color >> 5) & 0x1f];
+                    int b = CURVE[(color >> 10) & 0x1f];
+                    if (g != b) {
+                        g = (int) Math.round(Math.pow(
+                                (Math.pow(g / 255.0, 2.2) * 3 + Math.pow(b / 255.0, 2.2)) / 4, 1 / 2.2) * 255);
+                    }
+                    lut[color] = (r << 16) | (g << 8) | b;
+                }
+                correctedLut = lut;
+            }
+            return lut;
+        }
+
         public static int translateGbcRgb(int gbcRgb) {
             int r = (gbcRgb >> 0) & 0x1f;
             int g = (gbcRgb >> 5) & 0x1f;
@@ -100,8 +126,19 @@ public class Display implements Serializable, Originator<Display> {
         }
 
         public void toRgb(int[] dest) {
-            for (int i = 0; i < pixels.length; i++) {
-                dest[i] = translateGbcRgb(pixels[i]);
+            toRgb(dest, false);
+        }
+
+        public void toRgb(int[] dest, boolean colorCorrection) {
+            if (colorCorrection) {
+                int[] lut = correctedLut();
+                for (int i = 0; i < pixels.length; i++) {
+                    dest[i] = lut[pixels[i] & 0x7fff];
+                }
+            } else {
+                for (int i = 0; i < pixels.length; i++) {
+                    dest[i] = translateGbcRgb(pixels[i]);
+                }
             }
         }
     }

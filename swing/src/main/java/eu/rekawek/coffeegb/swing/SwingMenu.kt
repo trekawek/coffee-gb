@@ -32,6 +32,7 @@ import eu.rekawek.coffeegb.core.genie.PatchFactory
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetBlendingEvent
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetColorCorrectionEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.event.KeyEvent
@@ -253,6 +254,15 @@ class SwingMenu(
     grayscale.addActionListener {
       eventBus.post(SetGrayscaleEvent(grayscale.state))
       properties.setProperty(EmulatorProperties.Key.DisplayGrayscale, grayscale.state.toString())
+    }
+
+    val colorCorrection =
+        JCheckBoxMenuItem("CGB color correction", properties.display.colorCorrection)
+    screenMenu.add(colorCorrection)
+    colorCorrection.addActionListener {
+      eventBus.post(SetColorCorrectionEvent(colorCorrection.state))
+      properties.setProperty(
+          EmulatorProperties.Key.DisplayColorCorrection, colorCorrection.state.toString())
     }
 
     val blending = JCheckBoxMenuItem("LCD ghosting (frame blend)", properties.display.blending)
