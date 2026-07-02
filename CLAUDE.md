@@ -304,7 +304,12 @@ Compare via `ImageTestRunner` (stops at `LD B,B`). Not in CI yet — most still 
   applies BGP/OBPx remapping in DMG-compat mode. CGB baselines vs "CPU CGB D"
   photos need FAST_FORWARD boot (SKIP lacks the compat palettes); compare at
   5 bits - photos expand (c<<3)|(c>>2), we use c*8. The 7 CGB-native *2 variants
-  (only "CPU CGB C" photos) are unanalysed. Demotronic (#45) renders 2 of 4 probe
+  (only "CPU CGB C" photos): the wx_4/5/6 + win_en_change_multiple_wx expected
+  images are PLACEHOLDERS on both CGB revisions (no ground truth - 4 identical
+  md5s per dir; exclude them). The other *2 photos are real but use LCD-response
+  colors: compare via an empirical per-color majority mapping (97-98% of raw-RGB
+  diffs are color-space, true PPU residuals are 400-700 px per test). The Swing
+  display gained a "CGB color correction" option from this finding. Demotronic (#45) renders 2 of 4 probe
   frames pixel-exact vs SameBoy (boot offset is 196 frames, not 186); the rest
   differ only at the per-scanline wave edges (m3_scx/scy family).
 - SameBoy's conflict maps live in Core/sm83_cpu.c (dmg_conflict_map + the
