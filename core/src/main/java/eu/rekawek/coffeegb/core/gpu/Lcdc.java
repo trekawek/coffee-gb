@@ -89,7 +89,20 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     }
 
     public void set(int value) {
-        pendingMixValue = this.value | (value & 0x01);
+        set(value, false);
+    }
+
+    /**
+     * @param dropObjEnInMix DMG special case: when objects are being disabled while an
+     *     object fetch is in progress or at position 0, the OBJ_EN bit turns off already
+     *     in the conflict-mix T-cycle instead of one T-cycle later
+     */
+    public void set(int value, boolean dropObjEnInMix) {
+        int mix = this.value | (value & 0x01);
+        if (dropObjEnInMix) {
+            mix &= ~0x02;
+        }
+        pendingMixValue = mix;
         this.value = value;
     }
 

@@ -372,7 +372,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     private void setLcdc(int value) {
-        lcdc.set(value);
+        boolean dropObjEnInMix = !gbc
+                && (value & 0x02) == 0
+                && (lcdc.get() & 0x02) != 0
+                && mode == Mode.PixelTransfer
+                && (pixelTransferPhase.isObjectFetchInProgress() || pixelTransferPhase.getPosition() == 0);
+        lcdc.set(value, dropObjEnInMix);
         if ((value & (1 << 7)) == 0) {
             disableLcd();
         } else {

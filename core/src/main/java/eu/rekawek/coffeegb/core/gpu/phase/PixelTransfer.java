@@ -129,6 +129,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         fifo.outputTick();
     }
 
+    public int getPosition() {
+        return position;
+    }
+
+    public boolean isObjectFetchInProgress() {
+        return objStep >= 0;
+    }
+
     /** Drops pixels still in the output delay line (LCD disable). */
     public void clearOutput() {
         fifo.clearOutput();
@@ -176,10 +184,15 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             }
         }
 
-        // object fetch in progress occupies the whole T-cycle
+        // object fetch in progress occupies the whole T-cycle; on the DMG, clearing
+        // LCDC.1 mid-fetch aborts it and the object is skipped (m3_lcdc_obj_en_change)
         if (objStep >= 0) {
-            objTick();
-            return true;
+            if (!gbc && !lcdc.isObjDisplayEffective()) {
+                objStep = -1;
+            } else {
+                objTick();
+                return true;
+            }
         }
 
         int match = position + 8;
@@ -191,7 +204,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         if (spriteHead < spriteCount
                 && sprites[spriteOrder[spriteHead]].getX() == match
-                && (lcdc.isObjDisplay() || gbc)) {
+                && (lcdc.isObjDisplayEffective() || gbc)) {
             if (fetcher.getState() < Fetcher.GET_TILE_DATA_HIGH_T2 || fifo.getLength() == 0) {
                 // the object fetch waits for the background fetcher's tile data
                 fetcher.advance(position, window, windowLineCounter, true);

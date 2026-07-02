@@ -30,8 +30,12 @@ public final class RomTestUtils {
     }
 
     public static void testRomWithImage(Path romPath, GameboyType gameboyType) throws Exception {
+        testRomWithImage(romPath, gameboyType, Gameboy.BootstrapMode.SKIP);
+    }
+
+    public static void testRomWithImage(Path romPath, GameboyType gameboyType, Gameboy.BootstrapMode bootstrapMode) throws Exception {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
-        ImageTestRunner runner = new ImageTestRunner(romPath.toFile(), gameboyType);
+        ImageTestRunner runner = new ImageTestRunner(romPath.toFile(), gameboyType, bootstrapMode);
         ImageTestRunner.TestResult result = runner.runTest();
 
         File resultFile = File.createTempFile(romPath.getFileName().toString(), "-result.png");

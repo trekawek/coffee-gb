@@ -20,7 +20,7 @@ public class ImageTestRunner {
 
     private static final int[] COLORS = new int[]{0xFFFFFF, 0xAAAAAA, 0x555555, 0x000000};
 
-    private static final int MAX_TICKS = 2_000_000;
+    private static final int MAX_TICKS = 40_000_000;
 
     private final Gameboy gb;
 
@@ -29,8 +29,12 @@ public class ImageTestRunner {
     private final int[] resultRGB = new int[Display.DISPLAY_HEIGHT * Display.DISPLAY_WIDTH];
 
     public ImageTestRunner(File romFile, GameboyType gameboyType) throws IOException {
+        this(romFile, gameboyType, SKIP);
+    }
+
+    public ImageTestRunner(File romFile, GameboyType gameboyType, Gameboy.BootstrapMode bootstrapMode) throws IOException {
         EventBus eventBus = new EventBusImpl();
-        gb = new GameboyConfiguration(romFile).setBootstrapMode(SKIP).setGameboyType(gameboyType).setSupportBatterySave(false).build();
+        gb = new GameboyConfiguration(romFile).setBootstrapMode(bootstrapMode).setGameboyType(gameboyType).setSupportBatterySave(false).build();
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class);

@@ -47,6 +47,7 @@ public class MealybugRomTest {
 
     @Test
     public void test() throws Exception {
-        testRomWithImage(rom, GameboyType.DMG);
+        // FAST_FORWARD: the tests reuse the boot ROM's VRAM leftovers (the (r) logo tile)
+        testRomWithImage(rom, GameboyType.DMG, eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.FAST_FORWARD);
     }
 }
