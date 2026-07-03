@@ -55,6 +55,11 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mbc7(rom, battery);
         } else if (type.isPocketCamera()) {
             addressSpace = new PocketCamera(rom, battery);
+        } else if (rom.getRom().length > 0x8000 && !hasValidLogo(rom)) {
+            // Datel Action Replay / GameShark carts: "ROM only" type with a deliberately
+            // bad Nintendo logo (the ASIC swaps it after the boot check on hardware) and
+            // banking registers at 0x7FE0/0x7FE1 (issue #66)
+            addressSpace = new Datel(rom, battery);
         } else if (rom.getRom().length > 0x8000) {
             // "ROM only" carts larger than 32 KB are Wisdom Tree style unlicensed
             // mappers with a single switchable 32 KB window (issue #61)
@@ -115,6 +120,16 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             }
         }
         return false;
+    }
+
+    private static boolean hasValidLogo(Rom rom) {
+        int[] data = rom.getRom();
+        for (int i = 0; i < NINTENDO_LOGO.length; i++) {
+            if (data[0x104 + i] != NINTENDO_LOGO[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isHiddenMmm01(Rom rom) {
