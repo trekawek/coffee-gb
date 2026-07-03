@@ -158,11 +158,19 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             timer.presetDiv(gbc ? (configuration.cgb0Revision ? 536 : 12) : 4);
             gpu.setByte(0xff40, 0x00);
         }
+        boolean bootTimedOut = false;
         if (configuration.bootstrapMode == BootstrapMode.FAST_FORWARD) {
-            while (cpu.getRegisters().getPC() != 0x100) {
+            // ~30 frames covers the DMG boot (~23.5M ticks) and the CGB boot (~13.1M)
+            // with a wide margin; carts with a bad logo (unlicensed hardware that
+            // tricks the boot ROM, corrupt dumps) lock the boot ROM up forever, and
+            // then we fall back to the SKIP presets like a flashcart menu would
+            long limit = 40_000_000L;
+            while (cpu.getRegisters().getPC() != 0x100 && limit-- > 0) {
                 tick();
             }
-        } else if (configuration.bootstrapMode == BootstrapMode.SKIP) {
+            bootTimedOut = cpu.getRegisters().getPC() != 0x100;
+        }
+        if (bootTimedOut || configuration.bootstrapMode == BootstrapMode.SKIP) {
             if (gbc && configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB) {
                 speedMode.setDmgCompat(true);
             }
