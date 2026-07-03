@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
@@ -142,7 +141,13 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
 
     @Override
     public Memento<Joypad> saveToMemento() {
-        return new JoypadMemento(new HashSet<>(buttons), p1, tick, players, currentPlayer, transferInProgress, currentByte, currentPacket, currentByteIndex, currentPacketIndex);
+        // the pressed-buttons set is live physical input, not machine state - it is
+        // deliberately left out of the memento so that restoring a state (rewind, save
+        // slot) keeps whatever the player is physically holding right now. Otherwise a
+        // button held in a rewound-past frame would be re-applied and, with no matching
+        // release event ever arriving, stick when forward emulation resumes (issue: rewind
+        // replays past button presses).
+        return new JoypadMemento(p1, tick, players, currentPlayer, transferInProgress, currentByte, currentPacket, currentByteIndex, currentPacketIndex);
     }
 
     @Override
@@ -150,8 +155,6 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         if (!(memento instanceof JoypadMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
-        this.buttons.clear();
-        this.buttons.addAll(mem.buttons);
         this.p1 = mem.p1;
         this.tick = mem.tick;
         this.players = mem.players;
@@ -167,7 +170,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
 
     }
 
-    private record JoypadMemento(Set<Button> buttons, int p1, long tick, int players, int currentPlayer, boolean transferInProgress, int currentByte, int[] currentPacket, int currentByteIndex, int currentPacketIndex) implements Memento<Joypad> {
+    private record JoypadMemento(int p1, long tick, int players, int currentPlayer, boolean transferInProgress, int currentByte, int[] currentPacket, int currentByteIndex, int currentPacketIndex) implements Memento<Joypad> {
     }
 
     public record JoypadPressEvent(Button button, long tick) implements Event {
