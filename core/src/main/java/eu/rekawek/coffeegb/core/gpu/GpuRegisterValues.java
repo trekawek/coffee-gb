@@ -37,6 +37,10 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
         values = new int[GpuRegister.values().length];
         java.util.Arrays.fill(mixValues, -1);
         java.util.Arrays.fill(pendingMixValues, -1);
+        // the object palettes are uninitialized at power on and read 0xff; neither
+        // boot ROM writes them (gbtests INITREGS)
+        values[GpuRegister.OBP0.ordinal()] = 0xff;
+        values[GpuRegister.OBP1.ordinal()] = 0xff;
     }
 
     public int get(GpuRegister reg) {

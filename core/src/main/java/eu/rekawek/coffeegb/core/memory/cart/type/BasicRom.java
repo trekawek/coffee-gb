@@ -24,9 +24,10 @@ public class BasicRom implements MemoryController {
     @Override
     public int getByte(int address) {
         if (address >= 0x0000 && address < 0x8000) {
-            return rom[address];
+            return address < rom.length ? rom[address] : 0xff;
         } else {
-            return 0;
+            // no cartridge RAM: reads float to 0xff (gbtests INITREGS)
+            return 0xff;
         }
     }
 
