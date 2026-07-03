@@ -52,7 +52,7 @@ public class Rom {
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
         gameboyColorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
         superGameboyFlag = rom[0x0146] == 0x03;
-        romBanks = getRomBanks(rom[0x0148]);
+        romBanks = getRomBanks(rom[0x0148], rom.length);
         int ramBanks = getRamBanks(rom[0x0149]);
         if (ramBanks == 0 && cartridgeType.isRam()) {
             LOG.warn("RAM bank is defined to 0. Overriding to 1.");
@@ -129,7 +129,7 @@ public class Rom {
         }
     }
 
-    private static int getRomBanks(int id) {
+    private static int getRomBanks(int id, int romLength) {
         return switch (id) {
             case 0 -> 2;
             case 1 -> 4;
@@ -143,7 +143,10 @@ public class Rom {
             case 0x52 -> 72;
             case 0x53 -> 80;
             case 0x54 -> 96;
-            default -> throw new IllegalArgumentException("Unsupported ROM size: " + Integer.toHexString(id));
+            // unlicensed carts (Sachen multicarts, some homebrew) store a non-standard
+            // size byte; derive the bank count from the actual file size (16 KB per
+            // bank) instead of refusing to load (issue #58)
+            default -> Math.max(2, (romLength + 0x3fff) / 0x4000);
         };
     }
 
