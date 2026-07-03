@@ -57,6 +57,10 @@ public class AudioSystemSound implements Runnable {
 
     private double resamplePos;
 
+    private long sumL, sumR, prevSumL, prevSumR;
+
+    private int cnt, prevCnt;
+
     public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
         enabled = properties.getSoundEnabled();
         eventBus.register(this::play, Sound.SoundSampleEvent.class, callerId);
@@ -122,18 +126,31 @@ public class AudioSystemSound implements Runnable {
 
         byte[] out = new byte[MAX_FRAME_SAMPLES * 4];
         int j = 0;
-        double pos = resamplePos;
-        while (pos < ticks) {
-            int i = (int) pos * 2;
-            int left = enabled ? (source[i] - 210) * VOLUME_SCALE : 0;
-            int right = enabled ? (source[i + 1] - 210) * VOLUME_SCALE : 0;
-            out[j++] = (byte) left;
-            out[j++] = (byte) (left >> 8);
-            out[j++] = (byte) right;
-            out[j++] = (byte) (right >> 8);
-            pos += TICKS_PER_SAMPLE;
+        // moving average over two output periods (a width-2 box filter): near-Nyquist
+        // content is attenuated ~38 dB, so games parking a channel on an ultrasonic
+        // frequency stay inaudible like on hardware instead of aliasing into a buzz
+        // (Pit-Fighter, issue #59), at the cost of ~3 dB roll-off at 10 kHz
+        for (int t = 0; t < ticks; t++) {
+            sumL += source[t * 2];
+            sumR += source[t * 2 + 1];
+            cnt++;
+            if (++resamplePos >= TICKS_PER_SAMPLE) {
+                resamplePos -= TICKS_PER_SAMPLE;
+                int total = prevCnt + cnt;
+                int left = enabled ? (int) (((prevSumL + sumL) / total - 210) * VOLUME_SCALE) : 0;
+                int right = enabled ? (int) (((prevSumR + sumR) / total - 210) * VOLUME_SCALE) : 0;
+                out[j++] = (byte) left;
+                out[j++] = (byte) (left >> 8);
+                out[j++] = (byte) right;
+                out[j++] = (byte) (right >> 8);
+                prevSumL = sumL;
+                prevSumR = sumR;
+                prevCnt = cnt;
+                sumL = 0;
+                sumR = 0;
+                cnt = 0;
+            }
         }
-        resamplePos = pos - ticks;
 
         byte[] trimmed = new byte[j];
         System.arraycopy(out, 0, trimmed, 0, j);
