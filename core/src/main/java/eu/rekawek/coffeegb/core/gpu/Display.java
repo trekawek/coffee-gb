@@ -76,6 +76,13 @@ public class Display implements Serializable, Originator<Display> {
         eventBus.post(gbc ? new GbcFrameReadyEvent(buffer) : new DmgFrameReadyEvent(buffer));
     }
 
+    /** Steps the write pointer back one pixel (DMG window-activation LCD desync). */
+    void rewindPixel() {
+        if (i > 0) {
+            i--;
+        }
+    }
+
     public void enableLcd() {
         i = 0;
         enabled = true;

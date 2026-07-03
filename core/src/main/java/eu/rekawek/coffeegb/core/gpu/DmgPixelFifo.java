@@ -48,6 +48,7 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
 
     @Override
     public void putPixelToScreen() {
+        linePixels++;
         int entry = popEntry();
         int tail = (delayHead + delaySize) & 7;
         delayEntry[tail] = entry;
@@ -104,6 +105,30 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
             vRamTransfer.putPixel(raw);
         }
         return getColor(palette, raw);
+    }
+
+    // pixels of the current line popped towards the LCD (SameBoy's lcd_x); the
+    // window-activation desync only steps back when the line has output something
+    private int linePixels;
+
+    @Override
+    public void startLine() {
+        linePixels = 0;
+    }
+
+    @Override
+    public void rewindOnePixel() {
+        if (linePixels == 0) {
+            return;
+        }
+        linePixels--;
+        if (delaySize > 0) {
+            // the previous pixel is still in the output delay line: remove it, so the
+            // next pixel takes its output slot
+            delaySize--;
+        } else {
+            display.rewindPixel();
+        }
     }
 
     @Override

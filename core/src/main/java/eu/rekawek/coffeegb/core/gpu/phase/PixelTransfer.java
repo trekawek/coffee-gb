@@ -60,13 +60,23 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private int windowLineCounter = -1;
 
-    // a fresh window activation can still be cancelled for this many ticks: the WX
-    // comparator on hardware sees register writes one machine cycle before our CPU
-    // commits them, so a WX write landing within the skew means the window never
-    // actually triggered (mealybug m3_wx_6_change)
-    private int windowUndoTicks;
+    // a WX comparator match holds the activation pending for one tick: the comparator
+    // on hardware sees register writes one machine cycle before our CPU commits them,
+    // so a WX write landing within the skew means the window never triggered. The
+    // side effects (FIFO clear, fetcher restart) only happen when the match survives
+    // the skew - a cancelled match must leave no trace on the pixel stream
+    // (mealybug m3_wx_6_change: the WX=6/WX=LY/WX=80 rewrites race their own matches)
+    private int windowPendingTicks;
 
-    private int windowUndoWx;
+    private int windowPendingWx;
+
+    // position at the comparator match; a pixel popped during the pending tick is
+    // rolled back at commit so the activation behaves as if it happened at the match
+    private int windowPendingPos;
+
+    // WX value seen on the previous tick: the DMG's secondary WX==position+6 activation
+    // is suppressed for the single tick right after a WX write (SameBoy wx_just_changed)
+
 
     private int scyLatch;
 
@@ -123,6 +133,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         entryTicks = entryDelay;
         machineActive = true;
         position = -16;
+        fifo.startLine();
         window = false;
         windowBeingFetched = false;
         objStep = -1;
@@ -200,15 +211,26 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             return true;
         }
 
-        // undo a window activation whose WX match was broken by a write within the
-        // comparator skew (see windowUndoTicks)
-        if (windowUndoTicks > 0) {
-            windowUndoTicks--;
-            if (window && r.get(WX) != windowUndoWx) {
-                window = false;
-                windowBeingFetched = false;
-                windowLineCounter--;
-                windowUndoTicks = 0;
+        // commit or drop a pending window activation (see windowPendingTicks)
+        if (windowPendingTicks > 0) {
+            windowPendingTicks--;
+            if (r.get(WX) == windowPendingWx) {
+                if (position != windowPendingPos) {
+                    // roll back the pixel that popped during the pending tick: on
+                    // hardware the FIFO was already cleared at the match dot
+                    if (windowPendingPos >= 0) {
+                        fifo.rewindOnePixel();
+                    }
+                    position = windowPendingPos;
+                }
+                window = true;
+                windowBeingFetched = true;
+                windowLineCounter++;
+                fifo.clear();
+                fetcher.startWindow();
+                // the fetch restarted at the match dot on hardware: advance one state
+                // so its reads land on the original dots despite the pending tick
+                fetcher.advance(position, true, windowLineCounter, false);
             }
         }
 
@@ -241,14 +263,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             } else {
                 activate = false;
             }
-            if (activate) {
-                window = true;
-                windowBeingFetched = true;
-                windowLineCounter++;
-                windowUndoTicks = 1;
-                windowUndoWx = wx;
-                fifo.clear();
-                fetcher.startWindow();
+            if (activate && windowPendingTicks == 0) {
+                windowPendingTicks = 1;
+                windowPendingWx = wx;
+                windowPendingPos = position;
             } else if (!gbc && wx == 166 && wx == ((position + 7) & 0xff)) {
                 // DMG: WX=166 increments the counter without activating the window
                 windowLineCounter++;
@@ -290,6 +308,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         fetcher.advance(position, window, windowLineCounter, false);
         return position != 160;
     }
+
 
     private void objTick() {
         switch (objStep) {
@@ -387,8 +406,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 objData0,
                 objTileLine,
                 machineActive,
-                windowUndoTicks,
-                windowUndoWx);
+                windowPendingTicks,
+                windowPendingWx,
+                windowPendingPos);
     }
 
     @Override
@@ -423,8 +443,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         this.objData0 = mem.objData0;
         this.objTileLine = mem.objTileLine;
         this.machineActive = mem.machineActive;
-        this.windowUndoTicks = mem.windowUndoTicks;
-        this.windowUndoWx = mem.windowUndoWx;
+        this.windowPendingTicks = mem.windowPendingTicks;
+        this.windowPendingWx = mem.windowPendingWx;
+        this.windowPendingPos = mem.windowPendingPos;
     }
 
     private record PixelTransferMemento(
@@ -444,8 +465,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             int objData0,
             int objTileLine,
             boolean machineActive,
-            int windowUndoTicks,
-            int windowUndoWx)
+            int windowPendingTicks,
+            int windowPendingWx,
+            int windowPendingPos)
             implements Memento<PixelTransfer> {
     }
 }
