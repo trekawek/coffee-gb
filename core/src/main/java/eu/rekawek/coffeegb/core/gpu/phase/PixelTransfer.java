@@ -139,8 +139,12 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     public PixelTransfer start(int scyLatch) {
+        return start(scyLatch, 0);
+    }
+
+    public PixelTransfer start(int scyLatch, int extraEntryDelay) {
         this.scyLatch = scyLatch;
-        entryTicks = entryDelay;
+        entryTicks = entryDelay + extraEntryDelay;
         machineActive = true;
         position = -16;
         windowActivatedThisLine = false;
