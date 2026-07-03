@@ -155,19 +155,33 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 break;
 
             case GET_TILE_DATA_LOW_T1: {
-                int map = window ? lcdc.getWindowTileMapDisplay() : lcdc.getBgTileMapDisplay();
-                tileMapAddress = map + tileMapOffset;
-                tileId = videoRam0.getByte(tileMapAddress);
-                if (gbc) {
-                    tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
-                } else {
-                    tileAttributes = TileAttributes.EMPTY;
+                if (!window) {
+                    int map = lcdc.getBgTileMapDisplay();
+                    tileMapAddress = map + tileMapOffset;
+                    tileId = videoRam0.getByte(tileMapAddress);
+                    if (gbc) {
+                        tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
+                    } else {
+                        tileAttributes = TileAttributes.EMPTY;
+                    }
                 }
                 state++;
                 break;
             }
 
             case GET_TILE_DATA_LOW_T2:
+                if (window) {
+                    // the window fetch's map read sits one T-cycle later than the
+                    // background fetch's (m3_lcdc_win_map_change)
+                    int map = lcdc.getWindowTileMapDisplay();
+                    tileMapAddress = map + tileMapOffset;
+                    tileId = videoRam0.getByte(tileMapAddress);
+                    if (gbc) {
+                        tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
+                    } else {
+                        tileAttributes = TileAttributes.EMPTY;
+                    }
+                }
                 state++;
                 break;
 
