@@ -28,6 +28,21 @@ public class ColorPalette implements AddressSpace, Serializable, Originator<Colo
         return address == indexAddr || address == dataAddr;
     }
 
+    public boolean isDataAddress(int address) {
+        return address == dataAddr;
+    }
+
+    /**
+     * A palette-data (BGPD/OCPD) write while the CGB PPU is in mode 3 is dropped by the
+     * hardware, but the auto-increment of the index still happens (SameBoy's
+     * cgb_palettes_blocked). The index register (BGPI/OCPI) itself is never blocked.
+     */
+    public void blockedDataWrite() {
+        if (autoIncrement) {
+            index = (index + 1) & 0x3f;
+        }
+    }
+
     @Override
     public void setByte(int address, int value) {
         if (address == indexAddr) {

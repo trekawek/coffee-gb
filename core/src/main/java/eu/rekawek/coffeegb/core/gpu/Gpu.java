@@ -156,6 +156,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         AddressSpace space = getAddressSpace(address);
         if (space == lcdc) {
             setLcdc(value);
+        } else if ((space == bgPalette || space == oamPalette)
+                && ((ColorPalette) space).isDataAddress(address)
+                && !isPaletteAccessibleForCpu()) {
+            // CGB palette RAM is locked during mode 3: the data write is dropped but the
+            // index still auto-increments. A game streaming a per-scanline palette (Ken
+            // Griffey's Slugfest) writes past the mode-3 boundary and relies on those
+            // writes being ignored; applying them scrambles the colours.
+            ((ColorPalette) space).blockedDataWrite();
         } else if (space != null) {
             space.setByte(address, value);
         }
@@ -171,9 +179,18 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return 0xff;
         } else if (address == VBK.getAddress()) {
             return gbc ? (0xfe | (space.getByte(address) & 1)) : 0xff;
+        } else if ((space == bgPalette || space == oamPalette)
+                && ((ColorPalette) space).isDataAddress(address)
+                && !isPaletteAccessibleForCpu()) {
+            // palette RAM reads back 0xff while locked during mode 3
+            return 0xff;
         } else {
             return space.getByte(address);
         }
+    }
+
+    private boolean isPaletteAccessibleForCpu() {
+        return !(lcdEnabled && mode == Mode.PixelTransfer);
     }
 
     public Mode tick() {
