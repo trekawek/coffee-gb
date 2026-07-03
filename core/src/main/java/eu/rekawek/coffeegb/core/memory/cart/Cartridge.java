@@ -51,6 +51,12 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mbc6(rom, battery);
         } else if (type.isMbc7()) {
             addressSpace = new Mbc7(rom, battery);
+        } else if (type.isPocketCamera()) {
+            addressSpace = new PocketCamera(rom, battery);
+        } else if (rom.getRom().length > 0x8000) {
+            // "ROM only" carts larger than 32 KB are Wisdom Tree style unlicensed
+            // mappers with a single switchable 32 KB window (issue #61)
+            addressSpace = new WisdomTree(rom);
         } else {
             addressSpace = new BasicRom(rom);
         }

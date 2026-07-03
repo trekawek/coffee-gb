@@ -27,6 +27,7 @@ public enum CartridgeType {
     ROM_MBC5_RUMBLE_SRAM_BATTERY(0x1e),
     ROM_MBC6(0x20),
     ROM_MBC7_SENSOR_RUMBLE_RAM_BATTERY(0x22),
+    ROM_POCKET_CAMERA(0xfc),
     ROM_TAMA5_RAM_BATTERY(0xfd),
     ROM_HUC3_RAM_BATTERY(0xfe),
     ROM_HUC1_RAM_BATTERY(0xff);
@@ -35,6 +36,10 @@ public enum CartridgeType {
 
     CartridgeType(int id) {
         this.id = id;
+    }
+
+    public boolean isPocketCamera() {
+        return nameContainsSegment("POCKET") ;
     }
 
     public boolean isMbc1() {
