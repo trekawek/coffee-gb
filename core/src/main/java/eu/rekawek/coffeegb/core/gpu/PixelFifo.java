@@ -24,6 +24,13 @@ public interface PixelFifo {
     default void startLine() {
     }
 
+    /**
+     * Emits one synthetic blank (colour 0) pixel without dequeuing the FIFO - the
+     * window insertion glitch (a WX re-match while the window is active).
+     */
+    default void putInsertedPixel() {
+    }
+
     /** Drops any pixels still in the output delay line (LCD disable). */
     default void clearOutput() {
     }

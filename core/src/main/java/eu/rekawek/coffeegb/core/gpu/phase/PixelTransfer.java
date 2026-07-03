@@ -74,6 +74,16 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // rolled back at commit so the activation behaves as if it happened at the match
     private int windowPendingPos;
 
+    // whether the window already activated on this line: a RE-activation (after a
+    // mid-line window drop, e.g. an LCDC.5 toggle) restarts its fetch one T-cycle
+    // later than the line's first activation (m3_lcdc_win_en_change_multiple)
+    private boolean windowActivatedThisLine;
+
+    // a WX re-match while the window is already active and its fetch has settled
+    // inserts one synthetic blank pixel at the FIFO's read end (SameBoy's
+    // insert_bg_pixel; mealybug m3_wx_5_change rows where WX=LY re-matches)
+    private boolean insertBgPixel;
+
     // WX value seen on the previous tick: the DMG's secondary WX==position+6 activation
     // is suppressed for the single tick right after a WX write (SameBoy wx_just_changed)
 
@@ -133,6 +143,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         entryTicks = entryDelay;
         machineActive = true;
         position = -16;
+        windowActivatedThisLine = false;
         fifo.startLine();
         window = false;
         windowBeingFetched = false;
@@ -228,9 +239,13 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowLineCounter++;
                 fifo.clear();
                 fetcher.startWindow();
-                // the fetch restarted at the match dot on hardware: advance one state
-                // so its reads land on the original dots despite the pending tick
-                fetcher.advance(position, true, windowLineCounter, false);
+                if (!windowActivatedThisLine) {
+                    // the fetch restarted at the match dot on hardware: advance one
+                    // state so its reads land on the original dots despite the
+                    // pending tick; a re-activation's fetch starts one T-cycle later
+                    fetcher.advance(position, true, windowLineCounter, false);
+                }
+                windowActivatedThisLine = true;
             }
         }
 
@@ -240,7 +255,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (window
                 && !lcdc.isWindowDisplay()
                 && objStep < 0
-                && fetcher.getState() == Fetcher.GET_TILE_T1) {
+                && fetcher.getState() <= Fetcher.GET_TILE_T2) {
+            // the write disabling the window can commit one dot after our fetch's T1
+            // and still catch the fetch on hardware (the map is only read later):
+            // dropping at T2 restarts the fetch so the map offset recomputes as
+            // background (m3_lcdc_win_en_change_multiple)
+            if (fetcher.getState() == Fetcher.GET_TILE_T2) {
+                fetcher.restartTile();
+            }
             window = false;
             windowBeingFetched = false;
         }
@@ -271,6 +293,16 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 // DMG: WX=166 increments the counter without activating the window
                 windowLineCounter++;
             }
+        }
+
+        if (window
+                && !windowBeingFetched
+                && (!gbc || r.get(WX) == 0)
+                && lcdc.isWindowDisplay()
+                && fetcher.getState() == Fetcher.GET_TILE_T1
+                && fifo.getLength() == 8
+                && r.get(WX) == ((position + 7) & 0xff)) {
+            insertBgPixel = true;
         }
 
         // object fetch in progress occupies the whole T-cycle; on the DMG, clearing
@@ -372,11 +404,21 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         windowBeingFetched = false;
 
         if (position < 0 || position >= 160) {
-            fifo.dropPixel();
+            if (insertBgPixel) {
+                insertBgPixel = false;
+            } else {
+                fifo.dropPixel();
+            }
             position++;
             return;
         }
-        fifo.putPixelToScreen();
+        if (insertBgPixel) {
+            // the synthetic blank pixel replaces this pop; the FIFO keeps its content
+            insertBgPixel = false;
+            fifo.putInsertedPixel();
+        } else {
+            fifo.putPixelToScreen();
+        }
         position++;
     }
 
@@ -408,7 +450,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 machineActive,
                 windowPendingTicks,
                 windowPendingWx,
-                windowPendingPos);
+                windowPendingPos,
+                windowActivatedThisLine,
+                insertBgPixel);
     }
 
     @Override
@@ -446,6 +490,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         this.windowPendingTicks = mem.windowPendingTicks;
         this.windowPendingWx = mem.windowPendingWx;
         this.windowPendingPos = mem.windowPendingPos;
+        this.windowActivatedThisLine = mem.windowActivatedThisLine;
+        this.insertBgPixel = mem.insertBgPixel;
     }
 
     private record PixelTransferMemento(
@@ -467,7 +513,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             boolean machineActive,
             int windowPendingTicks,
             int windowPendingWx,
-            int windowPendingPos)
+            int windowPendingPos,
+            boolean windowActivatedThisLine,
+            boolean insertBgPixel)
             implements Memento<PixelTransfer> {
     }
 }

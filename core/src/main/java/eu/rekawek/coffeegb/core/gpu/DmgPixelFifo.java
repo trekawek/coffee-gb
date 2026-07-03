@@ -47,6 +47,15 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     private long outputTicks;
 
     @Override
+    public void putInsertedPixel() {
+        linePixels++;
+        int tail = (delayHead + delaySize) & 7;
+        delayEntry[tail] = 0;
+        delayStamp[tail] = outputTicks;
+        delaySize++;
+    }
+
+    @Override
     public void putPixelToScreen() {
         linePixels++;
         int entry = popEntry();

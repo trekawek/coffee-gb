@@ -41,8 +41,8 @@ public class MealybugRomTest {
             Map.entry("m3_lcdc_obj_size_change_scx.gb", 230),
             Map.entry("m3_lcdc_tile_sel_change.gb", 550),
             Map.entry("m3_lcdc_tile_sel_win_change.gb", 486),
-            Map.entry("m3_lcdc_win_en_change_multiple.gb", 485),
-            Map.entry("m3_lcdc_win_en_change_multiple_wx.gb", 561),
+            Map.entry("m3_lcdc_win_en_change_multiple.gb", 0),
+            Map.entry("m3_lcdc_win_en_change_multiple_wx.gb", 529),
             Map.entry("m3_lcdc_win_map_change.gb", 92),
             Map.entry("m3_obp0_change.gb", 0),
             Map.entry("m3_scx_high_5_bits.gb", 84),
@@ -50,9 +50,9 @@ public class MealybugRomTest {
             Map.entry("m3_scy_change.gb", 516),
             Map.entry("m3_window_timing.gb", 3),
             Map.entry("m3_window_timing_wx_0.gb", 130),
-            Map.entry("m3_wx_4_change.gb", 229),
-            Map.entry("m3_wx_4_change_sprites.gb", 10),
-            Map.entry("m3_wx_5_change.gb", 638),
+            Map.entry("m3_wx_4_change.gb", 0),
+            Map.entry("m3_wx_4_change_sprites.gb", 2),
+            Map.entry("m3_wx_5_change.gb", 0),
             Map.entry("m3_wx_6_change.gb", 0));
 
     private final File rom;
