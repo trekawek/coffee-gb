@@ -18,11 +18,23 @@ public class Display implements Serializable, Originator<Display> {
 
     private final int[] buffer = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
+    // the last complete frame that was shown, re-emitted for the one-frame repeat after a
+    // CGB LCD-on (see repeatFrame); a display-only cache, not part of the machine state
+    private final transient int[] lastFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
     private final boolean gbc;
 
     private int i;
 
     private boolean enabled = true;
+
+    // On the CGB the first frame after the LCD is switched back on is not shown: real
+    // hardware puts out a garbage/incomplete frame while the PPU re-locks to the line grid,
+    // so the previous frame is repeated for one frame instead (SameBoy's frame_skip_state /
+    // GB_VBLANK_TYPE_REPEAT). Games that swap BG buffers behind a brief mid-frame LCD-off
+    // (e.g. A Bug's Life every 7 frames) would otherwise flash the transient enable-frame
+    // render, flickering once per swap.
+    private transient boolean repeatFrame;
 
     public Display(boolean gbc) {
         this.gbc = gbc;
@@ -33,7 +45,7 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     void putDmgPixel(int color) {
-        if (!enabled) {
+        if (!enabled || repeatFrame) {
             return;
         }
         if (i >= buffer.length) {
@@ -43,7 +55,7 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     void putColorPixel(int gbcRgb) {
-        if (!enabled) {
+        if (!enabled || repeatFrame) {
             return;
         }
         if (i >= buffer.length) {
@@ -53,25 +65,40 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     public void frameIsReady() {
-        eventBus.post(gbc ? new GbcFrameReadyEvent(buffer) : new DmgFrameReadyEvent(buffer));
         i = 0;
+        if (repeatFrame) {
+            // discard the just-rendered enable frame; re-show the previous complete frame
+            repeatFrame = false;
+            eventBus.post(gbc ? new GbcFrameReadyEvent(lastFrame) : new DmgFrameReadyEvent(lastFrame));
+            return;
+        }
+        System.arraycopy(buffer, 0, lastFrame, 0, buffer.length);
+        eventBus.post(gbc ? new GbcFrameReadyEvent(buffer) : new DmgFrameReadyEvent(buffer));
     }
 
     public void enableLcd() {
         i = 0;
         enabled = true;
+        if (gbc) {
+            repeatFrame = true;
+        }
     }
 
     public void disableLcd() {
-        // clear the framebuffer but do not emit a frame here: the emulator decides when
-        // (and whether) a blank frame is shown, so a sub-frame LCD toggle doesn't flicker
+        // Only stop writing pixels - do NOT clear the framebuffer or reset the write index.
+        // A game that blanks the LCD for a fraction of a frame (e.g. A Bug's Life swaps its
+        // BG map every 7 frames behind a ~1100-tick LCD-off) must keep showing the last
+        // complete frame. If we cleared here, the swap frame's re-render would not repaint
+        // every pixel before VBlank and the gaps would show through as black, flickering
+        // once per swap. enableLcd() resets the write index so the next frame repaints from
+        // the top; a sustained LCD-off is blanked deliberately by blankFrame().
         enabled = false;
-        Arrays.fill(buffer, 0);
-        i = 0;
     }
 
     /** Emits a blank frame while the LCD stays off (a sustained off blanks the screen). */
     public void blankFrame() {
+        // a deliberate blank overrides any pending enable-frame repeat
+        repeatFrame = false;
         Arrays.fill(buffer, 0);
         i = 0;
         frameIsReady();
