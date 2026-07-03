@@ -38,6 +38,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private boolean coincidence;
 
+    // the coincidence term feeding the interrupt line; unlike the readable flag it stays
+    // low for the first 4 ticks of a line while the comparator output settles
+    private boolean intCoincidence;
+
     private boolean intLine;
 
     public StatRegister(InterruptManager interruptManager) {
@@ -67,6 +71,21 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 // interrupt fires only once per frame there
                 coincidence = false;
             }
+            intCoincidence = coincidence;
+            if (ticksInLine < 4 && gpu.getLine() != 0 && gpu.getLine() != 153) {
+                // the coincidence term feeding the interrupt line settles one machine
+                // cycle after the line-start latch (the readable flag is already valid
+                // at tick 0, lcdon_timing-GS). This guarantees the STAT interrupt line
+                // dips between the previous line's mode-0 term (high until the line
+                // ends) and the new line's LY=LYC term, so an enabled mode-0 interrupt
+                // cannot swallow the LYC interrupt of the following line (Ken Griffey's
+                // Slugfest chains LYC and HBlank interrupts for its per-band palette
+                // engine, issue #68). Lines 0 and 153 keep the existing model: LY=0 is
+                // registered at tick 8 of line 153 and stays valid into line 0 (single
+                // LYC=0 interrupt per frame, Altered Space), and LYC=153 has only the
+                // tl=0..3 window.
+                intCoincidence = false;
+            }
 
             if (gpu.getLine() == 144 && ticksInLine == 0) {
                 interruptManager.requestInterrupt(InterruptType.VBlank);
@@ -81,7 +100,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     private boolean computeIntLine(int enable) {
-        boolean line = (enable & 0b01000000) != 0 && coincidence;
+        boolean line = (enable & 0b01000000) != 0 && intCoincidence;
         if (gpu.isLcdEnabled()) {
             line |= (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
             line |= (enable & 0b00010000) != 0 && gpu.getVisibleStatMode() == 1;
@@ -119,7 +138,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public Memento<StatRegister> saveToMemento() {
-        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intLine);
+        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intCoincidence, intLine);
     }
 
     @Override
@@ -130,10 +149,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.enableBits = mem.enableBits;
         this.registeredLy = mem.registeredLy;
         this.coincidence = mem.coincidence;
+        this.intCoincidence = mem.intCoincidence;
         this.intLine = mem.intLine;
     }
 
     private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,
-                                       boolean intLine) implements Memento<StatRegister> {
+                                       boolean intCoincidence, boolean intLine) implements Memento<StatRegister> {
     }
 }
