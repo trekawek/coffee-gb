@@ -253,11 +253,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     }
 
     public int readSpriteTileId(SpritePosition sprite) {
-        int tileId = oemRam.getByte(sprite.getAddress() + 2);
-        if (lcdc.getSpriteHeight() == 16) {
-            tileId &= 0xfe;
-        }
-        return tileId;
+        // the raw tile index; the height-16 masking happens at each data read with
+        // the LCDC.2 value of that dot (m3_lcdc_obj_size_change)
+        return oemRam.getByte(sprite.getAddress() + 2);
     }
 
     public TileAttributes readSpriteAttributes(SpritePosition sprite) {
@@ -265,7 +263,18 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     }
 
     public int readSpriteData(int tileId, int spriteTileLine, int byteNumber, TileAttributes attributes) {
-        return getTileData(tileId, spriteTileLine, byteNumber, 0x8000, false, attributes, lcdc.getSpriteHeight());
+        // the object line address is recomputed at each data-byte read: the height
+        // bit (LCDC.2) masks both the line within the object and the tile index with
+        // its value at this dot, so a mid-fetch change affects the two bytes
+        // independently (m3_lcdc_obj_size_change)
+        int mask = lcdc.getSpriteHeight() == 16 ? 0xf : 0x7;
+        int line = spriteTileLine & mask;
+        if (attributes.isYflip()) {
+            line ^= mask;
+        }
+        int id = lcdc.getSpriteHeight() == 16 ? (tileId & 0xfe) : tileId;
+        AddressSpace videoRam = (attributes.getBank() == 0 || !gbc) ? videoRam0 : videoRam1;
+        return videoRam.getByte(0x8000 + id * 0x10 + line * 2 + byteNumber);
     }
 
     private int getTileData(
