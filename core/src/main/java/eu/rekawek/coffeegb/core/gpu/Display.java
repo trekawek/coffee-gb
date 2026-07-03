@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
 import java.io.Serializable;
+import java.util.Arrays;
 
 public class Display implements Serializable, Originator<Display> {
 
@@ -62,10 +63,17 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     public void disableLcd() {
+        // clear the framebuffer but do not emit a frame here: the emulator decides when
+        // (and whether) a blank frame is shown, so a sub-frame LCD toggle doesn't flicker
         enabled = false;
-        for (i = 0; i < buffer.length; i++) {
-            buffer[i] = 0;
-        }
+        Arrays.fill(buffer, 0);
+        i = 0;
+    }
+
+    /** Emits a blank frame while the LCD stays off (a sustained off blanks the screen). */
+    public void blankFrame() {
+        Arrays.fill(buffer, 0);
+        i = 0;
         frameIsReady();
     }
 

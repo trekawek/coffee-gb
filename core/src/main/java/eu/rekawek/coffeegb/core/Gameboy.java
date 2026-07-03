@@ -87,6 +87,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private boolean lcdDisabled;
 
+    private int lcdOffTicks;
+
     private transient volatile boolean doPause;
 
     private transient volatile boolean paused;
@@ -249,23 +251,34 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             hdma.onGpuUpdate(newMode);
         }
 
-        if (!lcdDisabled && !gpu.isLcdEnabled()) {
-            lcdDisabled = true;
-            display.frameIsReady();
-            hdma.onLcdSwitch(false);
-            result = true;
-        } else if (newMode == Mode.VBlank) {
-            requestedScreenRefresh = true;
-            display.frameIsReady();
-            vRamTransfer.frameIsReady();
-            result = true;
-        }
-
-        if (lcdDisabled && gpu.isLcdEnabled()) {
-            lcdDisabled = false;
-            hdma.onLcdSwitch(true);
-        } else if (requestedScreenRefresh && newMode == Mode.OamSearch) {
-            requestedScreenRefresh = false;
+        if (!gpu.isLcdEnabled()) {
+            if (!lcdDisabled) {
+                lcdDisabled = true;
+                hdma.onLcdSwitch(false);
+                lcdOffTicks = 0;
+            }
+            // a game that only blanks the LCD for a fraction of a frame (a common way to
+            // squeeze a big VRAM rewrite in, e.g. the A Bug's Life intro) must not flash a
+            // blank frame - the display keeps the last picture. Only a sustained LCD-off
+            // blanks the screen, at the normal refresh cadence.
+            if (++lcdOffTicks >= TICKS_PER_FRAME) {
+                lcdOffTicks = 0;
+                display.blankFrame();
+                result = true;
+            }
+        } else {
+            if (lcdDisabled) {
+                lcdDisabled = false;
+                hdma.onLcdSwitch(true);
+            }
+            if (newMode == Mode.VBlank) {
+                requestedScreenRefresh = true;
+                display.frameIsReady();
+                vRamTransfer.frameIsReady();
+                result = true;
+            } else if (requestedScreenRefresh && newMode == Mode.OamSearch) {
+                requestedScreenRefresh = false;
+            }
         }
         if (console != null) {
             console.tick();
