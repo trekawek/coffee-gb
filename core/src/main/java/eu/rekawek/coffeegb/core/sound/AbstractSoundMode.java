@@ -58,6 +58,10 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
         return channelEnabled && dacEnabled;
     }
 
+    public boolean isDacEnabled() {
+        return dacEnabled;
+    }
+
     @Override
     public boolean accepts(int address) {
         return address >= offset && address < offset + 5;

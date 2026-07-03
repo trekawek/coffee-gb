@@ -94,17 +94,24 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             if (!overriddenEnabled[i] || !ENABLED[i]) {
                 continue;
             }
+            // the DAC maps the digital 0-15 to analog +15..-15 (0 = the highest level);
+            // a DAC that is enabled while its channel is inactive therefore outputs a
+            // constant positive offset. Games play PCM speech by parking such a DC and
+            // modulating the master volume (Perfect Dark's intro voice, issue #56); a
+            // disabled DAC outputs true analog zero.
+            int analog = allModes[i].isDacEnabled() ? 15 - 2 * channels[i] : 0;
             if ((selection & (1 << i + 4)) != 0) {
-                left += channels[i];
+                left += analog;
             }
             if ((selection & (1 << i)) != 0) {
-                right += channels[i];
+                right += analog;
             }
         }
 
+        // NR50 volume 0 means "very quiet", not silence: the scale factor is volume+1
         int volumes = r.getByte(0xff24);
-        left *= ((volumes >> 4) & 0b111);
-        right *= (volumes & 0b111);
+        left *= ((volumes >> 4) & 0b111) + 1;
+        right *= (volumes & 0b111) + 1;
 
         play(left, right);
     }

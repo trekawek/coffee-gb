@@ -32,10 +32,17 @@ public class AudioSystemSound implements Runnable {
             new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, SAMPLE_RATE, 16, 2, 4, SAMPLE_RATE, false);
 
     /**
-     * The mixer outputs at most 4 channels * 15 * volume 7 = 420 per side; scale to leave
-     * a little 16-bit headroom.
+     * The mixer outputs signed DAC-modelled samples of at most 4 channels * ±15 * volume 8
+     * = ±480 per side; scale to leave a little 16-bit headroom.
      */
-    private static final int VOLUME_SCALE = 76;
+    private static final int VOLUME_SCALE = 62;
+
+    /**
+     * One-pole DC-blocking high-pass (~7 Hz at 44.1 kHz), mirroring the console's analog
+     * output path: an idle-but-enabled DAC parks a constant offset on the line which the
+     * speaker never sees, but its master-volume modulation (PCM speech) passes through.
+     */
+    private static final double HIGHPASS = 0.999;
 
     private static final double TICKS_PER_SAMPLE = (double) Gameboy.TICKS_PER_SEC / SAMPLE_RATE;
 
@@ -60,6 +67,8 @@ public class AudioSystemSound implements Runnable {
     private long sumL, sumR, prevSumL, prevSumR;
 
     private int cnt, prevCnt;
+
+    private double hpInL, hpInR, hpOutL, hpOutR;
 
     public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
         enabled = properties.getSoundEnabled();
@@ -137,8 +146,14 @@ public class AudioSystemSound implements Runnable {
             if (++resamplePos >= TICKS_PER_SAMPLE) {
                 resamplePos -= TICKS_PER_SAMPLE;
                 int total = prevCnt + cnt;
-                int left = enabled ? (int) (((prevSumL + sumL) / total - 210) * VOLUME_SCALE) : 0;
-                int right = enabled ? (int) (((prevSumR + sumR) / total - 210) * VOLUME_SCALE) : 0;
+                double rawL = (double) (prevSumL + sumL) / total;
+                double rawR = (double) (prevSumR + sumR) / total;
+                hpOutL = rawL - hpInL + HIGHPASS * hpOutL;
+                hpOutR = rawR - hpInR + HIGHPASS * hpOutR;
+                hpInL = rawL;
+                hpInR = rawR;
+                int left = enabled ? (int) (hpOutL * VOLUME_SCALE) : 0;
+                int right = enabled ? (int) (hpOutR * VOLUME_SCALE) : 0;
                 out[j++] = (byte) left;
                 out[j++] = (byte) (left >> 8);
                 out[j++] = (byte) right;
