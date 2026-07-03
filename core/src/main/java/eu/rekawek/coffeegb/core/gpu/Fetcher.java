@@ -17,8 +17,6 @@ import static eu.rekawek.coffeegb.core.cpu.BitUtils.toSigned;
  */
 public class Fetcher implements Serializable, Originator<Fetcher> {
 
-    public static boolean DBG_PUSH;
-
     public static final int GET_TILE_T1 = 0;
     public static final int GET_TILE_T2 = 1;
     public static final int GET_TILE_DATA_LOW_T1 = 2;
@@ -224,10 +222,6 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                             lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
                     if (window) {
                         windowTileX = (windowTileX + 1) & 0x1f;
-                    }
-                    if (DBG_PUSH && r.get(GpuRegister.LY) == 5) {
-                        System.err.printf("PUSH line=%d pos=%d tile=%02x data=%02x%02x win=%d%n",
-                                r.get(GpuRegister.LY), position, tileId, tileData1, tileData2, window ? 1 : 0);
                     }
                     fifo.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()), tileAttributes);
                     firstFetch = false;

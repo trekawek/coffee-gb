@@ -122,6 +122,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
             int entryDelay) {
         this.entryDelay = entryDelay;
+
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
