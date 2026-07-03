@@ -33,6 +33,8 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mmm01(rom, battery, true);
         } else if (isHiddenMmm01(rom)) {
             addressSpace = new Mmm01(rom, battery, false);
+        } else if (isDuzMulticart(rom)) {
+            addressSpace = new DuzMulticart(rom, battery);
         } else if (type.isHuc1()) {
             addressSpace = new Huc1(rom, battery);
         } else if (type.isHuc3()) {
@@ -90,6 +92,31 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
      * while the menu program (with the real header) sits in the last 32 KB. Detect them by
      * the duplicated logo and the menu header's type (like SameBoy does).
      */
+    /**
+     * The Duz multicart (Pokemon Red-Blue 2-in-1 and similar) is an MBC3-typed cart whose
+     * individual games each carry their own Nintendo logo at a 16 KB boundary past bank 0.
+     * A normal single-game cart has exactly one logo.
+     */
+    private static boolean isDuzMulticart(Rom rom) {
+        int[] data = rom.getRom();
+        if (!rom.getType().isMbc3() || data.length < 0x10000) {
+            return false;
+        }
+        for (int bank = 2; bank * 0x4000 + 0x134 < data.length; bank += 2) {
+            boolean logo = true;
+            for (int i = 0; i < NINTENDO_LOGO.length; i++) {
+                if (data[bank * 0x4000 + 0x104 + i] != NINTENDO_LOGO[i]) {
+                    logo = false;
+                    break;
+                }
+            }
+            if (logo) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean isHiddenMmm01(Rom rom) {
         int[] data = rom.getRom();
         int menuBase = data.length - 0x8000;
