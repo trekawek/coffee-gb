@@ -18,7 +18,7 @@ The coffee-gb-*.jar executable file will be available in the `./swing/target` di
 2. Double-click the JAR or launch it with `java -jar coffee-gb-*.jar` command.
 3. Load a game.
 
-Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd>.
+Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Shift</kbd>. Hold <kbd>Backspace</kbd> to rewind.
 
 ## Features
 
@@ -101,7 +101,7 @@ btn_right=VK_RIGHT
 btn_a=VK_Z
 btn_b=VK_X
 btn_start=VK_ENTER
-btn_select=VK_BACK_SPACE
+btn_select=VK_SHIFT
 ```
 
 The key list can be found in the [KeyEvent JavaDoc](https://docs.oracle.com/javase/10/docs/api/java/awt/event/KeyEvent.html#field.summary).

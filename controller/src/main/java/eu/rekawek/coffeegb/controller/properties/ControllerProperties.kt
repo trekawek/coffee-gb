@@ -15,7 +15,7 @@ object ControllerProperties {
     buttonToKey[Button.A] = KeyEvent.VK_Z
     buttonToKey[Button.B] = KeyEvent.VK_X
     buttonToKey[Button.START] = KeyEvent.VK_ENTER
-    buttonToKey[Button.SELECT] = KeyEvent.VK_BACK_SPACE
+    buttonToKey[Button.SELECT] = KeyEvent.VK_SHIFT
 
     for (k in properties.stringPropertyNames()) {
       val v = properties.getProperty(k)
