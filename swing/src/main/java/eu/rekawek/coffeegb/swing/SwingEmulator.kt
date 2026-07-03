@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.SwingAccelerometer
+import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import javax.swing.BoxLayout
@@ -26,6 +27,8 @@ class SwingEmulator(
   private val sound: AudioSystemSound
   private val accelerometer: SwingAccelerometer
 
+  private val tiltKeys: SwingTiltKeys
+
   private val connectionController: ConnectionController
 
   private lateinit var controller: Controller
@@ -35,6 +38,7 @@ class SwingEmulator(
     sound = AudioSystemSound(properties.sound, eventBus, "main")
     joypad = SwingJoypad(properties.controllerMapping, eventBus)
     accelerometer = SwingAccelerometer(eventBus, display.preferredSize)
+    tiltKeys = SwingTiltKeys(eventBus)
     connectionController = ConnectionController(eventBus)
 
     Thread(display).start()
@@ -80,6 +84,7 @@ class SwingEmulator(
 
     jFrame.contentPane = mainPanel
     jFrame.addKeyListener(joypad)
+    jFrame.addKeyListener(tiltKeys)
     jFrame.addMouseMotionListener(accelerometer)
 
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
