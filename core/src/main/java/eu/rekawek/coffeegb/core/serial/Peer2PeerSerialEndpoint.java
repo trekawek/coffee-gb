@@ -51,7 +51,11 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Or
     @Override
     public int sendBit() {
         if (peer == null) {
-            return 0;
+            // an unconnected link cable reads high, so an internal-clock transfer with no
+            // peer receives all ones (SB becomes 0xFF), like the null endpoint. Returning
+            // 0 here made link-aware games see a phantom partner and hang waiting for it
+            // (Alleyway freezes with the paddle stuck, issue #63).
+            return 1;
         }
         peer.bitsReceived.incrementAndGet();
         return shift();
