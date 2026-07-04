@@ -84,6 +84,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // insert_bg_pixel; mealybug m3_wx_5_change rows where WX=LY re-matches)
     private boolean insertBgPixel;
 
+    // the WX=0 window activation costs one extra dot (SameBoy sleeps 1 cycle there)
+    private int machineStall;
+
     // WX value seen on the previous tick: the DMG's secondary WX==position+6 activation
     // is suppressed for the single tick right after a WX write (SameBoy wx_just_changed)
 
@@ -149,6 +152,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         machineActive = true;
         position = -16;
         windowActivatedThisLine = false;
+        machineStall = 0;
         fifo.startLine();
         window = false;
         windowBeingFetched = false;
@@ -222,6 +226,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     @Override
     public boolean tick() {
+        if (machineStall > 0) {
+            machineStall--;
+            return true;
+        }
         if (entryTicks > 0) {
             entryTicks--;
             return true;
@@ -244,6 +252,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowLineCounter++;
                 fifo.clear();
                 fetcher.startWindow();
+                if (windowPendingWx == 0) {
+                    machineStall = 1;
+                }
                 if (!windowActivatedThisLine) {
                     // the fetch restarted at the match dot on hardware: advance one
                     // state so its reads land on the original dots despite the
@@ -457,7 +468,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowPendingWx,
                 windowPendingPos,
                 windowActivatedThisLine,
-                insertBgPixel);
+                insertBgPixel,
+                machineStall);
     }
 
     @Override
@@ -497,6 +509,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         this.windowPendingPos = mem.windowPendingPos;
         this.windowActivatedThisLine = mem.windowActivatedThisLine;
         this.insertBgPixel = mem.insertBgPixel;
+        this.machineStall = mem.machineStall;
     }
 
     private record PixelTransferMemento(
@@ -520,7 +533,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             int windowPendingWx,
             int windowPendingPos,
             boolean windowActivatedThisLine,
-            boolean insertBgPixel)
+            boolean insertBgPixel,
+            int machineStall)
             implements Memento<PixelTransfer> {
     }
 }
