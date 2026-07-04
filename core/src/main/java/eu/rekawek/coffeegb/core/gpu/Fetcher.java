@@ -126,7 +126,20 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
      * @param windowY           the window line counter
      * @param duringObjectFetch whether the advance happens as part of an object fetch
      */
+    private boolean data2Pending;
+
+    private int data2Delay;
+
+    private void readData2(boolean window, int windowY) {
+        tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
+                lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+        data2Pending = false;
+    }
+
     public void advance(int position, boolean window, int windowY, boolean duringObjectFetch) {
+        if (data2Pending && state == PUSH && --data2Delay <= 0) {
+            readData2(window, windowY);
+        }
         switch (state) {
             case GET_TILE_T1: {
                 // the map offset (SCX/SCY, window position) is sampled at the start of
@@ -200,6 +213,13 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 // itself (mealybug m3_scy_change / m3_lcdc_tile_sel_change)
                 tileData1 = getTileData(tileId, effectiveY(window, windowY) & 7, 0,
                         lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+                data2Pending = true;
+                // when the push must wait, the hardware fetch still reads the high byte
+                // on its own schedule two dots later - even while an object fetch pauses
+                // the pipeline; register writes during the wait must not affect it
+                // (m3_lcdc_tile_sel_change around a sprite fetch). With a free FIFO the
+                // push (and with it the read) happens in this same T-cycle.
+                data2Delay = fifo.getLength() != 0 ? 2 : 0;
                 state = PUSH;
                 // falls through: the push happens in the same T-cycle when the FIFO is free
 
@@ -218,8 +238,10 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                             break;
                         }
                     }
-                    tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
-                            lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+                    if (data2Pending) {
+                        // the push arrived before the scheduled high-byte read
+                        readData2(window, windowY);
+                    }
                     if (window) {
                         windowTileX = (windowTileX + 1) & 0x1f;
                     }
@@ -327,7 +349,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 tileData2,
                 insertionGlitchDisabled,
                 scyAtLineStart,
-                firstFetch);
+                firstFetch,
+                data2Pending,
+                data2Delay);
     }
 
     @Override
@@ -352,6 +376,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         this.insertionGlitchDisabled = mem.insertionGlitchDisabled;
         this.scyAtLineStart = mem.scyAtLineStart;
         this.firstFetch = mem.firstFetch;
+        this.data2Pending = mem.data2Pending;
+        this.data2Delay = mem.data2Delay;
     }
 
     private record FetcherMemento(
@@ -366,7 +392,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             int tileData2,
             boolean insertionGlitchDisabled,
             int scyAtLineStart,
-            boolean firstFetch)
+            boolean firstFetch,
+                                  boolean data2Pending,
+                                  int data2Delay)
             implements Memento<Fetcher> {
     }
 }
