@@ -18,6 +18,42 @@ import static eu.rekawek.coffeegb.core.cpu.BitUtils.toSigned;
 public class Fetcher implements Serializable, Originator<Fetcher> {
 
     public static final int GET_TILE_T1 = 0;
+
+    // the horizontal part of the map offset: the position is frozen at the fetch
+    // start, but SCX is read two dots later - the DMG commits SCX writes two cycles
+    // into the write, earlier than other registers (SameBoy
+    // GB_CONFLICT_SCX_DMG_AND_CGB_DOUBLE; m3_scx_high_5_bits)
+    private int tileMapX;
+
+    private int xBasePosition;
+
+    private boolean xBaseObjectFetch;
+
+    private void sampleXBase(int position, boolean duringObjectFetch) {
+        xBasePosition = position;
+        xBaseObjectFetch = duringObjectFetch;
+    }
+
+    private void sampleX(boolean window) {
+        if (window) {
+            tileMapX = windowTileX;
+        } else if (xBasePosition + 16 < 8) {
+            tileMapX = r.get(GpuRegister.SCX) >> 3;
+        } else {
+            tileMapX = ((r.get(GpuRegister.SCX) + xBasePosition + 8 - ((gbc && !xBaseObjectFetch) ? 1 : 0)) / 8) & 0x1f;
+        }
+    }
+
+    private void sampleY(boolean window, int windowY) {
+        if (window) {
+            fetcherY = windowY & 0xff;
+        } else {
+            int scy = firstFetch ? scyAtLineStart : r.get(GpuRegister.SCY);
+            fetcherY = (r.get(GpuRegister.LY) + scy) & 0xff;
+        }
+        tileMapOffset = (fetcherY / 8) * 0x20 + tileMapX;
+    }
+
     public static final int GET_TILE_T2 = 1;
     public static final int GET_TILE_DATA_LOW_T1 = 2;
     public static final int GET_TILE_DATA_LOW_T2 = 3;
@@ -141,32 +177,12 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             readData2(window, windowY);
         }
         switch (state) {
-            case GET_TILE_T1: {
-                // the map offset (SCX/SCY, window position) is sampled at the start of
-                // the fetch; the map-select and tile-data-select LCDC bits are resolved
-                // at the respective VRAM reads, one T-cycle later than the state names
-                // suggest - the hardware fetch cycle ends with a two-dot push, placing
-                // its reads one dot later than a back-to-back restart would (mealybug
-                // m3_lcdc_bg_map_change pins the map read to the T-cycle)
-                int y;
-                int x;
-                if (window) {
-                    y = windowY & 0xff;
-                    x = windowTileX;
-                } else {
-                    int scy = firstFetch ? scyAtLineStart : r.get(GpuRegister.SCY);
-                    y = (r.get(GpuRegister.LY) + scy) & 0xff;
-                    if (position + 16 < 8) {
-                        x = r.get(GpuRegister.SCX) >> 3;
-                    } else {
-                        x = ((r.get(GpuRegister.SCX) + position + 8 - ((gbc && !duringObjectFetch) ? 1 : 0)) / 8) & 0x1f;
-                    }
-                }
-                fetcherY = y;
-                tileMapOffset = (y / 8) * 0x20 + x;
+            case GET_TILE_T1:
+                // the pipeline position for the horizontal map coordinate is frozen
+                // at the fetch start ...
+                sampleXBase(position, duringObjectFetch);
                 state++;
                 break;
-            }
 
             case GET_TILE_T2:
                 state++;
@@ -177,6 +193,10 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 break;
 
             case GET_TILE_DATA_LOW_T2: {
+                // ... SCX itself and the vertical coordinate (SCY) resolve with the
+                // map read here (m3_scx_high_5_bits, m3_scy_change)
+                sampleX(window);
+                sampleY(window, windowY);
                 // the map read (and the map-select LCDC bit with it) resolves here,
                 // two T-cycles after the offset was sampled (m3_lcdc_bg_map_change,
                 // m3_lcdc_win_map_change)
