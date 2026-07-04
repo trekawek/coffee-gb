@@ -172,36 +172,25 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 state++;
                 break;
 
-            case GET_TILE_DATA_LOW_T1: {
-                if (!window) {
-                    int map = lcdc.getBgTileMapDisplay();
-                    tileMapAddress = map + tileMapOffset;
-                    tileId = videoRam0.getByte(tileMapAddress);
-                    if (gbc) {
-                        tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
-                    } else {
-                        tileAttributes = TileAttributes.EMPTY;
-                    }
+            case GET_TILE_DATA_LOW_T1:
+                state++;
+                break;
+
+            case GET_TILE_DATA_LOW_T2: {
+                // the map read (and the map-select LCDC bit with it) resolves here,
+                // two T-cycles after the offset was sampled (m3_lcdc_bg_map_change,
+                // m3_lcdc_win_map_change)
+                int map = window ? lcdc.getWindowTileMapDisplay() : lcdc.getBgTileMapDisplay();
+                tileMapAddress = map + tileMapOffset;
+                tileId = videoRam0.getByte(tileMapAddress);
+                if (gbc) {
+                    tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
+                } else {
+                    tileAttributes = TileAttributes.EMPTY;
                 }
                 state++;
                 break;
             }
-
-            case GET_TILE_DATA_LOW_T2:
-                if (window) {
-                    // the window fetch's map read sits one T-cycle later than the
-                    // background fetch's (m3_lcdc_win_map_change)
-                    int map = lcdc.getWindowTileMapDisplay();
-                    tileMapAddress = map + tileMapOffset;
-                    tileId = videoRam0.getByte(tileMapAddress);
-                    if (gbc) {
-                        tileAttributes = TileAttributes.valueOf(videoRam1.getByte(tileMapAddress));
-                    } else {
-                        tileAttributes = TileAttributes.EMPTY;
-                    }
-                }
-                state++;
-                break;
 
             case GET_TILE_DATA_HIGH_T1:
                 state++;
