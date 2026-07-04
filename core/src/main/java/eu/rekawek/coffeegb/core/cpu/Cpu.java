@@ -13,7 +13,9 @@ import java.util.List;
 public class Cpu implements Serializable, Originator<Cpu> {
 
     public enum State {
-        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_WAIT_1, IRQ_WAIT_2, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED
+        OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_WAIT_1, IRQ_WAIT_2, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED,
+        // an illegal opcode was executed: the CPU is frozen for good (hardware hangs)
+        LOCKED
     }
 
     private final Registers registers;
@@ -70,6 +72,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
             return;
         }
 
+        if (state == State.LOCKED) {
+            return;
+        }
+
         if (state == State.HALTED && interruptManager.isInterruptRequested()) {
             // a halted CPU behaves exactly like it was executing NOPs, so the wake-up
             // has the same timing as the running state: the interrupt dispatch starts
@@ -113,7 +119,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
                         state = State.OPERAND;
                         currentOpcode = Opcodes.COMMANDS.get(opcode1);
                         if (currentOpcode == null) {
-                            throw new IllegalStateException(String.format("No command for 0x%02x", opcode1));
+                            // an illegal opcode freezes the CPU on hardware; do the
+                            // same instead of crashing the emulation thread
+                            state = State.LOCKED;
+                            return;
                         }
                     }
                     if (!haltBugMode) {
@@ -133,7 +142,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
                         currentOpcode = Opcodes.EXT_COMMANDS.get(opcode2);
                     }
                     if (currentOpcode == null) {
-                        throw new IllegalStateException(String.format("No command for 0xcb 0x%02x", opcode2));
+                        state = State.LOCKED;
+                        return;
                     }
                     state = State.OPERAND;
                     registers.incrementPC();
