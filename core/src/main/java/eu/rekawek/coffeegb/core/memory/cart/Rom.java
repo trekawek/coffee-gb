@@ -47,7 +47,17 @@ public class Rom {
             rom[i] = romByteArray[i] & 0xFF;
         }
 
-        cartridgeType = CartridgeType.getById(rom[0x0147]);
+        CartridgeType type;
+        try {
+            type = CartridgeType.getById(rom[0x0147]);
+        } catch (IllegalArgumentException e) {
+            // unknown/custom mapper byte (unlicensed carts like Pocket Voice, Sachen):
+            // fall back to MBC5 banking instead of refusing to load (issue #71)
+            LOG.warn("Unsupported cartridge type {}, falling back to MBC5",
+                    Integer.toHexString(rom[0x0147]));
+            type = CartridgeType.getById(0x19);
+        }
+        cartridgeType = type;
         title = getTitle(rom);
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
         gameboyColorFlag = GameboyColorFlag.getFlag(rom[0x0143]);

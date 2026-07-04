@@ -35,6 +35,8 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mmm01(rom, battery, false);
         } else if (isDuzMulticart(rom)) {
             addressSpace = new DuzMulticart(rom, battery);
+        } else if (sachenBase(rom) >= 0) {
+            addressSpace = new SachenMmc(rom, sachenBase(rom));
         } else if (type.isHuc1()) {
             addressSpace = new Huc1(rom, battery);
         } else if (type.isHuc3()) {
@@ -60,9 +62,10 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             // bad Nintendo logo (the ASIC swaps it after the boot check on hardware) and
             // banking registers at 0x7FE0/0x7FE1 (issue #66)
             addressSpace = new Datel(rom, battery);
-        } else if (rom.getRom().length > 0x8000) {
-            // "ROM only" carts larger than 32 KB are Wisdom Tree style unlicensed
-            // mappers with a single switchable 32 KB window (issue #61)
+        } else if (rom.getRom().length >= 0x20000) {
+            // "ROM only" carts of 128 KB and more are Wisdom Tree style unlicensed
+            // mappers with a single switchable 32 KB window (issue #61); smaller
+            // oversized type-0 dumps are treated as plain 32 KB ROMs like on hardware
             addressSpace = new WisdomTree(rom);
         } else {
             addressSpace = new BasicRom(rom);
@@ -120,6 +123,38 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             }
         }
         return false;
+    }
+
+    /**
+     * Detects the Sachen MMC1/MMC2 multicarts (issues #73/#74/#75) and returns the
+     * power-on base bank, or -1 for regular carts. The 4B collections have a header
+     * logo that starts with the first logo byte but is otherwise scrambled (the real
+     * mapper unscrambles it for the boot ROM); the MMC2 carts hide a valid (CGB,
+     * half-checked) logo at the header of a later bank, which is also their boot base.
+     */
+    private static int sachenBase(Rom rom) {
+        int[] data = rom.getRom();
+        if (hasValidLogo(rom) || data.length < 0x10000) {
+            return -1;
+        }
+        // MMC2: a bank >0 carries the real (half) logo
+        for (int bank = 1; bank * 0x4000 + 0x134 <= data.length; bank++) {
+            boolean match = true;
+            for (int i = 0; i < NINTENDO_LOGO.length / 2; i++) {
+                if (data[bank * 0x4000 + 0x104 + i] != NINTENDO_LOGO[i]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return bank;
+            }
+        }
+        // MMC1 (4B-xxx): scrambled logo that keeps the first byte
+        if (data[0x104] == 0xce && data[0x105] != 0xed) {
+            return 0;
+        }
+        return -1;
     }
 
     private static boolean hasValidLogo(Rom rom) {
