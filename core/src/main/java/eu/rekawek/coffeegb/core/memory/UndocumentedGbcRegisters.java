@@ -8,7 +8,8 @@ import java.io.Serializable;
 
 public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Originator<UndocumentedGbcRegisters> {
 
-    private final Ram ram = new Ram(0xff72, 6);
+    // FF76/FF77 are the PCM12/PCM34 sound registers, handled by the APU
+    private final Ram ram = new Ram(0xff72, 4);
 
     private int xff6c;
 
