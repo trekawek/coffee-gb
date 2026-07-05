@@ -26,6 +26,10 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
 
     private int size;
 
+    // pops taken while the FIFO was empty; a rewind cancels these first so it only
+    // restores pixels that were really popped (window-activation rollback alignment)
+    private int underflow;
+
     /** Popped pixel color index, 0 = transparent. */
     public int poppedPixel;
 
@@ -37,6 +41,7 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
     public void clear() {
         size = 0;
         head = 0;
+        underflow = 0;
     }
 
     public void pop() {
@@ -44,6 +49,7 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
             poppedPixel = 0;
             poppedPalette = 0;
             poppedBgPriority = false;
+            underflow++;
             return;
         }
         poppedPixel = pixel[head];
@@ -55,6 +61,10 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
 
     /** Steps back one pop, restoring the last popped pixel (window-activation rollback). */
     public void rewind() {
+        if (underflow > 0) {
+            underflow--;
+            return;
+        }
         if (size < 8) {
             head = (head - 1) & 7;
             size++;
@@ -62,6 +72,8 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
     }
 
     public void overlay(int[] pixelLine, int offset, int paletteIndex, boolean objBgPriority, int objPriority) {
+        // a fresh object fetch re-establishes the alignment; drop any pending underflow
+        underflow = 0;
         while (size < 8) {
             int slot = (head + size) & 7;
             pixel[slot] = 0;
@@ -85,7 +97,7 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
     @Override
     public Memento<SpriteFifo> saveToMemento() {
         return new SpriteFifoMemento(
-                pixel.clone(), palette.clone(), priority.clone(), bgPriority.clone(), head, size);
+                pixel.clone(), palette.clone(), priority.clone(), bgPriority.clone(), head, size, underflow);
     }
 
     @Override
@@ -99,10 +111,11 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
         System.arraycopy(mem.bgPriority, 0, bgPriority, 0, 8);
         this.head = mem.head;
         this.size = mem.size;
+        this.underflow = mem.underflow;
     }
 
     private record SpriteFifoMemento(
-            int[] pixel, int[] palette, int[] priority, boolean[] bgPriority, int head, int size)
+            int[] pixel, int[] palette, int[] priority, boolean[] bgPriority, int head, int size, int underflow)
             implements Memento<SpriteFifo> {
     }
 }
