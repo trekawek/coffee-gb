@@ -202,6 +202,40 @@ class SwingMenu(
     }
     enableWhenEmulationActive(gameGenie)
 
+    val barcodeBoy = JCheckBoxMenuItem("Connect Barcode Boy", false)
+    gameMenu.add(barcodeBoy)
+    barcodeBoy.addActionListener { eventBus.post(Controller.SetBarcodeBoyEvent(barcodeBoy.state)) }
+
+    val scanBarcode = JMenuItem("Scan barcode…")
+    gameMenu.add(scanBarcode)
+    scanBarcode.addActionListener {
+      if (!barcodeBoy.state) {
+        JOptionPane.showMessageDialog(
+            window,
+            "Enable \"Connect Barcode Boy\" first.",
+            "Barcode Boy",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
+        return@addActionListener
+      }
+      val code: String? =
+          JOptionPane.showInputDialog(window, "Enter the 13-digit barcode number (JAN-13):")
+      if (code != null) {
+        val trimmed = code.trim()
+        if (trimmed.length != 13 || !trimmed.all { it.isDigit() }) {
+          JOptionPane.showMessageDialog(
+              window,
+              "The barcode must be exactly 13 digits.",
+              "Barcode Boy",
+              JOptionPane.ERROR_MESSAGE,
+          )
+        } else {
+          eventBus.post(Controller.ScanBarcodeEvent(trimmed))
+        }
+      }
+    }
+    enableWhenEmulationActive(scanBarcode)
+
     return gameMenu
   }
 

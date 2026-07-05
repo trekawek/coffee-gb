@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.Patch
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 
 class BasicController(
@@ -37,6 +38,12 @@ class BasicController(
 
   private val patches = mutableListOf<Patch>()
 
+  // when the Barcode Boy is connected the session uses a BarcodeBoySerialEndpoint instead
+  // of the netplay peer endpoint; scans are routed to it
+  private var barcodeBoyEnabled = false
+
+  private var barcodeBoy: BarcodeBoySerialEndpoint? = null
+
   private val thread = Thread {
     while (!doStop) {
       runFrame()
@@ -63,6 +70,15 @@ class BasicController(
     eventQueue.register<Controller.RewindEvent> { isRewinding = it.active }
     eventQueue.register<Controller.ResetEmulationEvent> { reset() }
     eventQueue.register<Controller.StopEmulationEvent> { stop() }
+    eventQueue.register<Controller.SetBarcodeBoyEvent> {
+      if (barcodeBoyEnabled != it.enabled) {
+        barcodeBoyEnabled = it.enabled
+        if (session != null) {
+          reset()
+        }
+      }
+    }
+    eventQueue.register<Controller.ScanBarcodeEvent> { barcodeBoy?.scan(it.barcode) }
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
         val newType = Controller.getGameboyType(properties.system, config.rom)
@@ -97,8 +113,16 @@ class BasicController(
     }
   }
 
-  private fun createSession(config: Gameboy.GameboyConfiguration) =
-      Session(config, eventBus.fork("main"), console, Peer2PeerSerialEndpoint())
+  private fun createSession(config: Gameboy.GameboyConfiguration): Session {
+    val endpoint =
+        if (barcodeBoyEnabled) {
+          BarcodeBoySerialEndpoint().also { barcodeBoy = it }
+        } else {
+          barcodeBoy = null
+          Peer2PeerSerialEndpoint()
+        }
+    return Session(config, eventBus.fork("main"), console, endpoint)
+  }
 
   private fun start() {
     val session = session ?: return

@@ -51,6 +51,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         int incomingBit = -1;
         // We're receiving bits even without the transfer in progress.
         if (ClockType.getFromSc(sc) == ClockType.EXTERNAL) {
+            serialEndpoint.setExternalTransfer(transferInProgress);
             incomingBit = serialEndpoint.recvBit();
         } else {
             // the serial clock is derived from the DIV counter, so the first bit of

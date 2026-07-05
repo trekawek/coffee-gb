@@ -15,6 +15,15 @@ public interface SerialEndpoint extends Originator<SerialEndpoint> {
     int recvBit();
 
     /**
+     * Notifies the endpoint whether the Game Boy currently has an external-clock transfer
+     * armed (SC bit 7). An external device that drives its own byte framing (the Barcode
+     * Boy) uses this to align its bytes to the Game Boy's transfers; most endpoints ignore
+     * it.
+     */
+    default void setExternalTransfer(boolean inProgress) {
+    }
+
+    /**
      * Returns the received byte.
      */
     default int recvByte() {

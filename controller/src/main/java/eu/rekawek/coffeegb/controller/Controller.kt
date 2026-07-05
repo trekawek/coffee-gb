@@ -44,6 +44,12 @@ interface Controller : AutoCloseable {
   /** Posted while the rewind key is held; the emulation plays backwards while active. */
   data class RewindEvent(val active: Boolean) : Event
 
+  /** Connects or disconnects the Barcode Boy scanner on the link port (resets the game). */
+  data class SetBarcodeBoyEvent(val enabled: Boolean) : Event
+
+  /** Simulates swiping a card with the given 13-digit JAN-13 barcode on the Barcode Boy. */
+  data class ScanBarcodeEvent(val barcode: String) : Event
+
   data class ControllerState(val memento: Memento<Gameboy>, val rom: Rom)
 
   companion object {
