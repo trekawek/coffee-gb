@@ -33,6 +33,8 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mmm01(rom, battery, true);
         } else if (isHiddenMmm01(rom)) {
             addressSpace = new Mmm01(rom, battery, false);
+        } else if (isMani32kMulticart(rom)) {
+            addressSpace = new Mani32kMulticart(rom);
         } else if (isDuzMulticart(rom)) {
             addressSpace = new DuzMulticart(rom, battery);
         } else if (sachenBase(rom) >= 0) {
@@ -105,6 +107,39 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
      * individual games each carry their own Nintendo logo at a 16 KB boundary past bank 0.
      * A normal single-game cart has exactly one logo.
      */
+    /**
+     * The Mani "TETRIS SET" style multicart (issue #74): a menu in the first 32 KB block
+     * followed by plain 32 KB games, each with a valid logo and a plain-ROM (0x00) type
+     * byte in its own header. The Duz multicarts also duplicate logos at 32 KB blocks,
+     * but their sub-games are banked (non-zero type bytes).
+     */
+    private static boolean isMani32kMulticart(Rom rom) {
+        int[] data = rom.getRom();
+        if (rom.getType() == CartridgeType.ROM || data.length < 0x10000) {
+            return false;
+        }
+        int subGames = 0;
+        for (int block = 1; block * 0x8000 + 0x150 <= data.length; block++) {
+            int base = block * 0x8000;
+            boolean logo = true;
+            for (int i = 0; i < NINTENDO_LOGO.length; i++) {
+                if (data[base + 0x104 + i] != NINTENDO_LOGO[i]) {
+                    logo = false;
+                    break;
+                }
+            }
+            if (!logo) {
+                // trailing blocks may be pad filler; games are contiguous from block 1
+                break;
+            }
+            if (data[base + 0x147] != 0x00) {
+                return false;
+            }
+            subGames++;
+        }
+        return subGames >= 2;
+    }
+
     private static boolean isDuzMulticart(Rom rom) {
         int[] data = rom.getRom();
         if (!rom.getType().isMbc3() || data.length < 0x10000) {
