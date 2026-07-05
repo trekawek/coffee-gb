@@ -41,6 +41,15 @@ public class Mbc1 implements MemoryController {
 
     private boolean ramUpdated;
 
+    // GBTK flash carts carry an MBC1 header but wire a wide bank register: their
+    // firmware streams banks 0x20, 0x21, ... straight into 0x2000-0x3FFF and never
+    // touches the upper-bits register (issue #69, Armageddon video). A real MBC1 would
+    // mask those writes to 5 bits and wrap. Detected at run time: a >512 KB ROM writing
+    // bank bits 5-6 to the low register before ever using the upper register or mode 1.
+    private boolean wideBank;
+
+    private boolean upperRegisterUsed;
+
     public Mbc1(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
         this.multicart = rom.getRomBanks() == 64 && isMulticart(this.cartridge);
@@ -63,19 +72,32 @@ public class Mbc1 implements MemoryController {
             ramWriteEnabled = (value & 0b1111) == 0b1010;
             LOG.trace("RAM write: {}", ramWriteEnabled);
         } else if (address >= 0x2000 && address < 0x4000) {
-            LOG.trace("Low 5 bits of ROM bank: {}", (value & 0b00011111));
-            int bank = selectedRomBank & 0b01100000;
-            bank = bank | (value & 0b00011111);
-            selectRomBank(bank);
+            if (!wideBank && !multicart && !upperRegisterUsed && memoryModel == 0
+                    && romBanks > 32 && (value & 0b01100000) != 0) {
+                wideBank = true;
+                LOG.info("GBTK-style wide bank register detected");
+            }
+            if (wideBank) {
+                selectRomBank(value & 0x7f);
+            } else {
+                LOG.trace("Low 5 bits of ROM bank: {}", (value & 0b00011111));
+                int bank = selectedRomBank & 0b01100000;
+                bank = bank | (value & 0b00011111);
+                selectRomBank(bank);
+            }
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 0) {
             LOG.trace("High 2 bits of ROM bank: {}", ((value & 0b11) << 5));
+            upperRegisterUsed = true;
+            wideBank = false;
             int bank = selectedRomBank & 0b00011111;
             bank = bank | ((value & 0b11) << 5);
             selectRomBank(bank);
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 1) {
             LOG.trace("RAM bank: {}", (value & 0b11));
+            upperRegisterUsed = true;
+            wideBank = false;
             selectedRamBank = value & 0b11;
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x6000 && address < 0x8000) {
@@ -145,6 +167,10 @@ public class Mbc1 implements MemoryController {
     private int getRomBankFor0x4000() {
         if (cachedRomBankFor0x4000 == -1) {
             int bank = selectedRomBank;
+            if (wideBank) {
+                cachedRomBankFor0x4000 = Math.max(1, bank) % romBanks;
+                return cachedRomBankFor0x4000;
+            }
             if (bank % 0x20 == 0) {
                 bank++;
             }
@@ -197,7 +223,7 @@ public class Mbc1 implements MemoryController {
 
     @Override
     public Memento<MemoryController> saveToMemento() {
-        return new Mbc1Memento(battery.saveToMemento(), ram.clone(), selectedRamBank, selectedRomBank, memoryModel, ramWriteEnabled, cachedRomBankFor0x0000, cachedRomBankFor0x4000, ramUpdated);
+        return new Mbc1Memento(battery.saveToMemento(), ram.clone(), selectedRamBank, selectedRomBank, memoryModel, ramWriteEnabled, cachedRomBankFor0x0000, cachedRomBankFor0x4000, ramUpdated, wideBank, upperRegisterUsed);
     }
 
     @Override
@@ -217,10 +243,13 @@ public class Mbc1 implements MemoryController {
         this.cachedRomBankFor0x0000 = mem.cachedRomBankFor0x0000;
         this.cachedRomBankFor0x4000 = mem.cachedRomBankFor0x4000;
         this.ramUpdated = mem.ramUpdated;
+        this.wideBank = mem.wideBank;
+        this.upperRegisterUsed = mem.upperRegisterUsed;
     }
 
     private record Mbc1Memento(Memento<Battery> batteryMemento, int[] ram, int selectedRamBank, int selectedRomBank,
                                int memoryModel, boolean ramWriteEnabled, int cachedRomBankFor0x0000,
-                               int cachedRomBankFor0x4000, boolean ramUpdated) implements Memento<MemoryController> {
+                               int cachedRomBankFor0x4000, boolean ramUpdated, boolean wideBank,
+                               boolean upperRegisterUsed) implements Memento<MemoryController> {
     }
 }
