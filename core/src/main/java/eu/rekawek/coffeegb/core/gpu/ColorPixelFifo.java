@@ -180,6 +180,13 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
     }
 
     @Override
+    public void clearBg() {
+        pixels.clear();
+        palettes.clear();
+        priorities.clear();
+    }
+
+    @Override
     public void clearOutput() {
         delaySize = 0;
     }

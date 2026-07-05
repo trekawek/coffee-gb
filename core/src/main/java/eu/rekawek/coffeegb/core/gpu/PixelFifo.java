@@ -46,4 +46,7 @@ public interface PixelFifo {
     void setOverlay(int[] pixelLine, int offset, TileAttributes flags, int oamIndex);
 
     void clear();
+
+    /** Clears the background FIFO only, preserving the object FIFO (window activation). */
+    void clearBg();
 }

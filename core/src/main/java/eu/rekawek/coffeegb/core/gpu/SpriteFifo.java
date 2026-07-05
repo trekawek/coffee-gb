@@ -53,6 +53,14 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
         size--;
     }
 
+    /** Steps back one pop, restoring the last popped pixel (window-activation rollback). */
+    public void rewind() {
+        if (size < 8) {
+            head = (head - 1) & 7;
+            size++;
+        }
+    }
+
     public void overlay(int[] pixelLine, int offset, int paletteIndex, boolean objBgPriority, int objPriority) {
         while (size < 8) {
             int slot = (head + size) & 7;

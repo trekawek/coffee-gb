@@ -131,6 +131,9 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
             return;
         }
         linePixels--;
+        // the rolled-back pixel popped the object FIFO too; un-pop it so an object merged
+        // before a window activation stays aligned (mealybug left-clipped ® sprites)
+        spriteFifo.rewind();
         if (delaySize > 0) {
             // the previous pixel is still in the output delay line: remove it, so the
             // next pixel takes its output slot
@@ -178,6 +181,15 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     public void clear() {
         pixels.clear();
         spriteFifo.clear();
+    }
+
+    @Override
+    public void clearBg() {
+        // the window activation clears the background FIFO but keeps the object FIFO, so
+        // objects already merged before the window triggered still show (SameBoy only
+        // calls fifo_clear on bg_fifo; mealybug's ® sprite staircase clipped at the left
+        // edge in m3_lcdc_win_map/tile_sel_win/obj_en_change_variant)
+        pixels.clear();
     }
 
     @Override

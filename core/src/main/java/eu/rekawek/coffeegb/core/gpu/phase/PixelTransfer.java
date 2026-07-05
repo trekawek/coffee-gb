@@ -277,7 +277,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 window = true;
                 windowBeingFetched = true;
                 windowLineCounter++;
-                fifo.clear();
+                fifo.clearBg();
                 fetcher.startWindow();
                 if (windowPendingWx == 0) {
                     machineStall = 1;
@@ -360,7 +360,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 }
                 position = windowCatchUpPos;
                 windowCatchUpPos = -1;
-                fifo.clear();
+                fifo.clearBg();
                 fetcher.startWindow();
                 fetcher.advance(position, true, windowLineCounter, false);
                 windowActivatedThisLine = true;
