@@ -298,12 +298,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (window
                 && !lcdc.isWindowDisplay()
                 && objStep < 0
-                && fetcher.getState() <= Fetcher.GET_TILE_T2) {
-            // the write disabling the window can commit one dot after our fetch's T1
-            // and still catch the fetch on hardware (the map is only read later):
-            // dropping at T2 restarts the fetch so the map offset recomputes as
-            // background (m3_lcdc_win_en_change_multiple)
-            if (fetcher.getState() == Fetcher.GET_TILE_T2) {
+                && fetcher.getState() <= Fetcher.GET_TILE_DATA_LOW_T2) {
+            // the write disabling the window catches the fetch through GET_TILE_DATA_LOW_T2
+            // (the map read): our LCDC-pulse commit lands a couple of dots later on the
+            // fetcher timeline than hardware, so a window that flickers on and straight
+            // back off produces no window pixels only if we still abort the fetch here.
+            // Restarting from T2 onwards recomputes the map offset as background
+            // (m3_lcdc_win_en_change_multiple, and the stray 8-px window tiles in wewx).
+            if (fetcher.getState() >= Fetcher.GET_TILE_T2) {
                 fetcher.restartTile();
             }
             window = false;
