@@ -110,6 +110,12 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private int objTileLine;
 
+    private boolean objData1Pending;
+
+    // an object match is waiting for the background fetcher (counts as an object fetch
+    // for the DMG LCDC.1 write conflict)
+    private boolean objWaiting;
+
     public PixelTransfer(
             Display display,
             AddressSpace videoRam0,
@@ -157,6 +163,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         window = false;
         windowBeingFetched = false;
         objStep = -1;
+        objData1Pending = false;
+        objWaiting = false;
 
         spriteCount = 0;
         for (int i = 0; i < sprites.length; i++) {
@@ -203,7 +211,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     public boolean isObjectFetchInProgress() {
-        return objStep >= 0;
+        return objStep >= 0 || objWaiting;
     }
 
     public boolean isWindowBeingFetched() {
@@ -233,6 +241,20 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (entryTicks > 0) {
             entryTicks--;
             return true;
+        }
+
+        if (objData1Pending) {
+            objData1Pending = false;
+            // hardware reads the object's high tile byte one dot after the fetch's last
+            // cycle, so a mid-mode-3 LCDC.2 (sprite height) or tile write during that dot
+            // affects the high byte only (mealybug m3_lcdc_obj_size_change[_scx])
+            int objData1 = fetcher.readSpriteData(objTileId, objTileLine, 1, objAttributes);
+            fifo.setOverlay(
+                    fetcher.zip(objData0, objData1, objAttributes.isXflip()),
+                    0,
+                    objAttributes,
+                    spriteOrder[spriteHead]);
+            spriteHead++;
         }
 
         // commit or drop a pending window activation (see windowPendingTicks)
@@ -343,14 +365,18 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 && sprites[spriteOrder[spriteHead]].getX() == match
                 && (lcdc.isObjDisplayEffective() || gbc)) {
             if (fetcher.getState() < Fetcher.GET_TILE_DATA_HIGH_T2 || fifo.getLength() == 0) {
-                // the object fetch waits for the background fetcher's tile data
+                // the object fetch waits for the background fetcher's tile data; the wait
+                // already counts as "during object fetch" for the LCDC.1 conflict special
+                objWaiting = true;
                 fetcher.advance(position, window, windowLineCounter, true);
                 return true;
             }
+            objWaiting = false;
             objStep = 0;
             objTick();
             return true;
         }
+        objWaiting = false;
 
         renderPixelIfPossible();
         fetcher.advance(position, window, windowLineCounter, false);
@@ -359,38 +385,22 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
 
     private void objTick() {
-        switch (objStep) {
-            case 0:
-                fetcher.advance(position, window, windowLineCounter, true);
-                break;
-
-            case 1: {
-                fetcher.advance(position, window, windowLineCounter, true);
-                SpritePosition sprite = sprites[spriteOrder[spriteHead]];
-                objTileId = fetcher.readSpriteTileId(sprite);
-                objAttributes = fetcher.readSpriteAttributes(sprite);
-                objTileLine = r.get(LY) + 16 - sprite.getY();
-                break;
-            }
-
-            case 3:
-                objData0 = fetcher.readSpriteData(objTileId, objTileLine, 0, objAttributes);
-                break;
-
-            case 5: {
-                int objData1 = fetcher.readSpriteData(objTileId, objTileLine, 1, objAttributes);
-                fifo.setOverlay(
-                        fetcher.zip(objData0, objData1, objAttributes.isXflip()),
-                        0,
-                        objAttributes,
-                        spriteOrder[spriteHead]);
-                spriteHead++;
-                objStep = -1;
-                return;
-            }
-
-            default:
-                break;
+        if (objStep <= 1) {
+            fetcher.advance(position, window, windowLineCounter, true);
+        }
+        if (objStep == 1) {
+            SpritePosition sprite = sprites[spriteOrder[spriteHead]];
+            objTileId = fetcher.readSpriteTileId(sprite);
+            objAttributes = fetcher.readSpriteAttributes(sprite);
+            objTileLine = r.get(LY) + 16 - sprite.getY();
+        }
+        if (objStep == 5) {
+            // low tile byte on the fetch's last cycle; the high byte is read one dot
+            // later (objData1Pending, handled at the top of the next tick)
+            objData0 = fetcher.readSpriteData(objTileId, objTileLine, 0, objAttributes);
+            objData1Pending = true;
+            objStep = -1;
+            return;
         }
         objStep++;
     }
