@@ -37,6 +37,14 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
 
     private AddressSpace[] addressToSpace;
 
+    // the Sachen MMC2 cart watches the external bus for reads at 0xC000 and above to tell
+    // a CGB boot from a DMG one; null for every other cartridge (see SachenMmc)
+    private transient eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc busListener;
+
+    public void setBusListener(eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc listener) {
+        this.busListener = listener;
+    }
+
     public Mmu(boolean gbc) {
         // WRAM powers up with garbage, and neither boot ROM clears it. Games with
         // lazily-seeded random generators rely on that: Minesweeper for 'Windows'
@@ -97,6 +105,9 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     @Override
     public int getByte(int address) {
         checkWordArgument("address", address);
+        if (busListener != null && address >= 0xc000) {
+            busListener.onHighBusRead();
+        }
         return getSpace(address).getByte(address);
     }
 

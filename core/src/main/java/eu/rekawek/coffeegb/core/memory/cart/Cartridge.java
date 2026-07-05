@@ -37,8 +37,10 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mani32kMulticart(rom);
         } else if (isDuzMulticart(rom)) {
             addressSpace = new DuzMulticart(rom, battery);
-        } else if (sachenBase(rom) >= 0) {
-            addressSpace = new SachenMmc(rom, sachenBase(rom));
+        } else if (sachenType(rom) >= 0) {
+            addressSpace = new SachenMmc(rom, sachenType(rom) == 2);
+        } else if (cookedSachenMmc2Base(rom) > 0) {
+            addressSpace = new SachenMmc(rom, cookedSachenMmc2Base(rom));
         } else if (type.isHuc1()) {
             addressSpace = new Huc1(rom, battery);
         } else if (type.isHuc3()) {
@@ -113,9 +115,16 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
      * byte in its own header. The Duz multicarts also duplicate logos at 32 KB blocks,
      * but their sub-games are banked (non-zero type bytes).
      */
+    /** The Sachen MMC2 needs to observe reads on the upper half of the bus (see Mmu). */
+    public SachenMmc getSachenMmc() {
+        return addressSpace instanceof SachenMmc s ? s : null;
+    }
+
     private static boolean isMani32kMulticart(Rom rom) {
         int[] data = rom.getRom();
-        if (rom.getType() == CartridgeType.ROM || data.length < 0x10000) {
+        // MBC1-typed carts with per-game logos are MBC1M multicarts (handled by Mbc1);
+        // the Mani TETRIS SET declares a bogus MBC3-family type
+        if (rom.getType() == CartridgeType.ROM || rom.getType().isMbc1() || data.length < 0x10000) {
             return false;
         }
         int subGames = 0;
@@ -161,18 +170,22 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     }
 
     /**
-     * Detects the Sachen MMC1/MMC2 multicarts (issues #73/#74/#75) and returns the
-     * power-on base bank, or -1 for regular carts. The 4B collections have a header
-     * logo that starts with the first logo byte but is otherwise scrambled (the real
-     * mapper unscrambles it for the boot ROM); the MMC2 carts hide a valid (CGB,
-     * half-checked) logo at the header of a later bank, which is also their boot base.
+     * Detects the Sachen MMC1/MMC2 multicarts (issues #73/#75) by their scrambled header:
+     * the 0x0100-0x01FF page is wired with A0/A6 and A1/A4 swapped, so the logo bytes sit
+     * at the scrambled offsets (0xED at 0x144, 0x66 at 0x114); the MMC2 stores the logo
+     * served during boot in the 0x0180-0x01FF half of the page (mGBA's detection).
+     * Returns 1 for MMC1, 2 for MMC2, -1 for regular carts.
      */
-    private static int sachenBase(Rom rom) {
+    /**
+     * Post-unlock ("cooked") dumps of the Sachen MMC2 Rocket Games carts: the header at
+     * 0x104 is invalid, but a valid (CGB, half-checked) logo sits at the header of a
+     * later bank - the menu bank the cart boots from. Returns that bank, or -1.
+     */
+    private static int cookedSachenMmc2Base(Rom rom) {
         int[] data = rom.getRom();
         if (hasValidLogo(rom) || data.length < 0x10000) {
             return -1;
         }
-        // MMC2: a bank >0 carries the real (half) logo
         for (int bank = 1; bank * 0x4000 + 0x134 <= data.length; bank++) {
             boolean match = true;
             for (int i = 0; i < NINTENDO_LOGO.length / 2; i++) {
@@ -185,9 +198,19 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
                 return bank;
             }
         }
-        // MMC1 (4B-xxx): scrambled logo that keeps the first byte
-        if (data[0x104] == 0xce && data[0x105] != 0xed) {
-            return 0;
+        return -1;
+    }
+
+    private static int sachenType(Rom rom) {
+        int[] data = rom.getRom();
+        if (data.length < 0x10000) {
+            return -1;
+        }
+        if (data[0x104] == 0xce && data[0x144] == 0xed && data[0x114] == 0x66) {
+            return 1;
+        }
+        if (data[0x184] == 0xce && data[0x1c4] == 0xed && data[0x194] == 0x66) {
+            return 2;
         }
         return -1;
     }
