@@ -27,6 +27,13 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
 
     private final int[] pendingMixValues = new int[GpuRegister.values().length];
 
+    // ticks remaining in which WX counts as "just written": the DMG's WX==position+6
+    // window desync is suppressed for one machine cycle after a WX write (SameBoy
+    // wx_just_changed)
+    private int wxJustChangedTicks;
+
+    private static final int WX_CHANGE_TICKS = 2;
+
     private boolean gbc;
 
     public void setGbc(boolean gbc) {
@@ -59,6 +66,13 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
             mixValues[reg.ordinal()] = pendingMixValues[reg.ordinal()];
             pendingMixValues[reg.ordinal()] = -1;
         }
+        if (wxJustChangedTicks > 0) {
+            wxJustChangedTicks--;
+        }
+    }
+
+    public boolean isWxJustChanged() {
+        return wxJustChangedTicks > 0;
     }
 
     private static final GpuRegister[] PALETTE_REGISTERS =
@@ -85,6 +99,9 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
             if (!gbc && (reg == GpuRegister.BGP || reg == GpuRegister.OBP0 || reg == GpuRegister.OBP1)) {
                 pendingMixValues[reg.ordinal()] = values[reg.ordinal()] | value;
             }
+            if (reg == GpuRegister.WX) {
+                wxJustChangedTicks = WX_CHANGE_TICKS;
+            }
             values[reg.ordinal()] = value;
         }
     }
@@ -110,7 +127,7 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
 
     @Override
     public Memento<GpuRegisterValues> saveToMemento() {
-        return new GpuRegisterValuesMemento(values.clone(), mixValues.clone(), pendingMixValues.clone());
+        return new GpuRegisterValuesMemento(values.clone(), mixValues.clone(), pendingMixValues.clone(), wxJustChangedTicks);
     }
 
     @Override
@@ -129,9 +146,11 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
             java.util.Arrays.fill(this.mixValues, -1);
             java.util.Arrays.fill(this.pendingMixValues, -1);
         }
+        this.wxJustChangedTicks = mem.wxJustChangedTicks;
     }
 
-    private record GpuRegisterValuesMemento(int[] values, int[] mixValues, int[] pendingMixValues)
+    private record GpuRegisterValuesMemento(int[] values, int[] mixValues, int[] pendingMixValues,
+                                            int wxJustChangedTicks)
             implements Memento<GpuRegisterValues> {
     }
 }

@@ -74,6 +74,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // rolled back at commit so the activation behaves as if it happened at the match
     private int windowPendingPos;
 
+    // position of a WX==position+7 match that landed while the window was disabled by a
+    // mid-line pulse, awaiting the window re-enable to activate (DMG desync); -1 = none
+    private int windowCatchUpPos = -1;
+
     // whether the window already activated on this line: a RE-activation (after a
     // mid-line window drop, e.g. an LCDC.5 toggle) restarts its fetch one T-cycle
     // later than the line's first activation (m3_lcdc_win_en_change_multiple)
@@ -158,6 +162,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         machineActive = true;
         position = -16;
         windowActivatedThisLine = false;
+        windowCatchUpPos = -1;
         machineStall = 0;
         fifo.startLine();
         window = false;
@@ -305,6 +310,19 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             windowBeingFetched = false;
         }
 
+        // record a WX==position+7 match that lands while the window is disabled by a
+        // mid-line pulse: the window will "catch up" when it is re-enabled (see the
+        // desync branch below). Only for regular WX>=7 positions so the discard-phase
+        // WX=0..6 activation is untouched.
+        if (!gbc && !window && !lcdc.isWindowDisplay() && !windowActivatedThisLine
+                && r.get(LY) >= r.get(WY)) {
+            int wxNow = r.get(WX);
+            if (wxNow >= 7 && wxNow < 166 && !r.isWxJustChanged()
+                    && wxNow == ((position + 7) & 0xff)) {
+                windowCatchUpPos = position;
+            }
+        }
+
         // window activation check (SameBoy model): the comparison wraps in 8 bits, so
         // WX values 0..6 can trigger during the discard phase; WX=0 has its own window,
         // and the CGB also accepts WX=166. The window line counter increments at the
@@ -323,7 +341,28 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             } else {
                 activate = false;
             }
-            if (activate && windowPendingTicks == 0) {
+            if (!gbc && windowCatchUpPos >= 0 && windowPendingTicks == 0
+                    && !windowActivatedThisLine
+                    && position - windowCatchUpPos <= DESYNC_MAX_GAP) {
+                // DMG LCD-PPU horizontal desync: the WX==position+7 match dot passed while
+                // the window was disabled (a mid-line LCDC.5-off pulse); the window catches
+                // up on re-enable, rendered as if it had triggered at the match dot. This is
+                // SameBoy's WX==position+6 + lcd_x-- generalised to our pulse/position phase
+                // (mealybug m3_lcdc_win_en_change_multiple_wx). DESYNC_MAX_GAP encodes the
+                // phase between our LCDC-pulse commit and the pixel position axis.
+                window = true;
+                windowBeingFetched = true;
+                windowLineCounter++;
+                for (int p = windowCatchUpPos; p < position; p++) {
+                    fifo.rewindOnePixel();
+                }
+                position = windowCatchUpPos;
+                windowCatchUpPos = -1;
+                fifo.clear();
+                fetcher.startWindow();
+                fetcher.advance(position, true, windowLineCounter, false);
+                windowActivatedThisLine = true;
+            } else if (activate && windowPendingTicks == 0) {
                 windowPendingTicks = 1;
                 windowPendingWx = wx;
                 windowPendingPos = position;
@@ -383,6 +422,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return position != 160;
     }
 
+
+    // gap (in dots) between our LCDC-pulse re-enable commit and the pixel position axis:
+    // a window whose WX match was masked by a pulse catches up on re-enable only if the
+    // match is within this many dots of the re-enable position (mealybug wewx)
+    private static final int DESYNC_MAX_GAP = 3;
 
     private void objTick() {
         if (objStep <= 1) {

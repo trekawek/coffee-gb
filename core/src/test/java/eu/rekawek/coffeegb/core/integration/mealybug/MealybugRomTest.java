@@ -42,7 +42,7 @@ public class MealybugRomTest {
             Map.entry("m3_lcdc_tile_sel_change.gb", 0),
             Map.entry("m3_lcdc_tile_sel_win_change.gb", 192),
             Map.entry("m3_lcdc_win_en_change_multiple.gb", 0),
-            Map.entry("m3_lcdc_win_en_change_multiple_wx.gb", 521),
+            Map.entry("m3_lcdc_win_en_change_multiple_wx.gb", 83),
             Map.entry("m3_lcdc_win_map_change.gb", 92),
             Map.entry("m3_obp0_change.gb", 0),
             Map.entry("m3_scx_high_5_bits.gb", 0),
