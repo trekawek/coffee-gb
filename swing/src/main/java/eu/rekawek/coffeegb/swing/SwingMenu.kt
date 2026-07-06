@@ -28,6 +28,8 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGames
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
+import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
+import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
 import eu.rekawek.coffeegb.core.genie.PatchFactory
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
@@ -57,6 +59,8 @@ class SwingMenu(
   private var snapshotSupport: SnapshotSupport? = null
 
   private var pauseSupport: Boolean = false
+
+  private var webcamSource: WebcamCameraSource? = null
 
   init {
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
@@ -235,6 +239,30 @@ class SwingMenu(
       }
     }
     enableWhenEmulationActive(scanBarcode)
+
+    val webcam = JCheckBoxMenuItem("Use webcam as camera", false)
+    gameMenu.add(webcam)
+    webcam.addActionListener {
+      if (webcam.state) {
+        val source = WebcamCameraSource.open()
+        if (source == null) {
+          webcam.state = false
+          JOptionPane.showMessageDialog(
+              window,
+              "No webcam could be opened.",
+              "Game Boy Camera",
+              JOptionPane.ERROR_MESSAGE,
+          )
+        } else {
+          webcamSource = source
+          PocketCamera.setCameraSource(source)
+        }
+      } else {
+        PocketCamera.setCameraSource(null)
+        webcamSource?.close()
+        webcamSource = null
+      }
+    }
 
     return gameMenu
   }

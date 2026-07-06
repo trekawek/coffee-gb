@@ -13,11 +13,12 @@ import java.io.File;
 /**
  * The Pocket Camera cartridge (type 0xFC): MBC5-like ROM banking, 128 KB of banked RAM,
  * and the camera's register file mapped in place of RAM when RAM-bank bit 4 is set.
- * A capture completes instantly (the busy bit always reads 0). The sensor image comes
- * from the file named by the {@code coffeegb.camera.image} system property, re-read on
- * every capture, so pointing it at a file periodically refreshed from a webcam (e.g.
- * {@code ffmpeg -f v4l2 -i /dev/video0 -update 1 cam.jpg}) gives a live camera; without
- * the property a synthetic test pattern is photographed. The image is scaled to the
+ * A capture completes instantly (the busy bit always reads 0). The sensor image comes,
+ * in priority order, from a live {@link CameraSource} registered by the front end (the
+ * Swing UI wires a real webcam through it), then the file named by the
+ * {@code coffeegb.camera.image} system property (re-read on every capture, e.g. one kept
+ * fresh by {@code ffmpeg -f v4l2 -i /dev/video0 -update 1 cam.jpg}), and finally a
+ * synthetic test pattern. The image is scaled to the
  * sensor's 128x112, converted to luminance and dithered through the game-supplied
  * threshold matrix (registers 0x06-0x35), and the result is written as 2bpp tiles to the
  * capture buffer at RAM offset 0x100 like the real ASIC does.
@@ -53,6 +54,16 @@ public class PocketCamera implements MemoryController {
     private transient long sourceTimestamp;
 
     private transient int[] sourceLuma;
+
+    // a live capture source (e.g. a webcam) registered by the front end; when present it
+    // takes priority over the image file. Static because the cartridge is created deep in
+    // the emulator and there is only ever one camera.
+    private static volatile CameraSource cameraSource;
+
+    /** Registers (or clears, with {@code null}) the live sensor source. */
+    public static void setCameraSource(CameraSource source) {
+        cameraSource = source;
+    }
 
     public PocketCamera(Rom rom, Battery battery) {
         this.rom = rom.getRom();
@@ -148,6 +159,18 @@ public class PocketCamera implements MemoryController {
     }
 
     private int[] sensorImage() {
+        // a registered live source (webcam) wins over the file; it is re-read every capture
+        CameraSource source = cameraSource;
+        if (source != null) {
+            try {
+                BufferedImage frame = source.getFrame();
+                if (frame != null) {
+                    return toLuma(frame);
+                }
+            } catch (Exception e) {
+                // fall through to the file / test pattern
+            }
+        }
         String path = System.getProperty("coffeegb.camera.image");
         if (path != null) {
             File f = new File(path);
@@ -156,18 +179,7 @@ public class PocketCamera implements MemoryController {
                     if (sourceLuma == null || f.lastModified() != sourceTimestamp) {
                         BufferedImage src = ImageIO.read(f);
                         if (src != null) {
-                            BufferedImage scaled = new BufferedImage(128, 112, BufferedImage.TYPE_INT_RGB);
-                            Graphics2D g = scaled.createGraphics();
-                            g.drawImage(src, 0, 0, 128, 112, null);
-                            g.dispose();
-                            int[] luma = new int[128 * 112];
-                            for (int y = 0; y < 112; y++) {
-                                for (int x = 0; x < 128; x++) {
-                                    int rgb = scaled.getRGB(x, y);
-                                    luma[y * 128 + x] = ((rgb >> 16 & 0xff) * 77 + (rgb >> 8 & 0xff) * 151 + (rgb & 0xff) * 28) >> 8;
-                                }
-                            }
-                            sourceLuma = luma;
+                            sourceLuma = toLuma(src);
                             sourceTimestamp = f.lastModified();
                         }
                     }
@@ -186,6 +198,22 @@ public class PocketCamera implements MemoryController {
                 int dx = x - 64, dy = y - 56;
                 int r = (int) Math.sqrt(dx * dx + dy * dy);
                 luma[y * 128 + x] = ((x + y) & 0xff) ^ ((r & 8) != 0 ? 0x60 : 0);
+            }
+        }
+        return luma;
+    }
+
+    /** Scales a frame to the sensor's 128x112 and converts it to per-pixel luminance. */
+    private static int[] toLuma(BufferedImage src) {
+        BufferedImage scaled = new BufferedImage(128, 112, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = scaled.createGraphics();
+        g.drawImage(src, 0, 0, 128, 112, null);
+        g.dispose();
+        int[] luma = new int[128 * 112];
+        for (int y = 0; y < 112; y++) {
+            for (int x = 0; x < 128; x++) {
+                int rgb = scaled.getRGB(x, y);
+                luma[y * 128 + x] = ((rgb >> 16 & 0xff) * 77 + (rgb >> 8 & 0xff) * 151 + (rgb & 0xff) * 28) >> 8;
             }
         }
         return luma;
