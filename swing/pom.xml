@@ -58,10 +58,13 @@
             <artifactId>core</artifactId>
             <version>1.7.2-SNAPSHOT</version>
         </dependency>
+        <!-- OpenCV with bundled natives for the webcam camera source; unlike the old
+             sarxos/bridj stack this ships Apple-Silicon (osx arm64) natives, and Linux /
+             Windows / x86_64, so a self-built jar captures on the machine that built it. -->
         <dependency>
-            <groupId>com.github.sarxos</groupId>
-            <artifactId>webcam-capture</artifactId>
-            <version>0.3.12</version>
+            <groupId>org.openpnp</groupId>
+            <artifactId>opencv</artifactId>
+            <version>4.9.0-0</version>
         </dependency>
     </dependencies>
 </project>

@@ -1,75 +1,127 @@
 package eu.rekawek.coffeegb.swing.io;
 
-import com.github.sarxos.webcam.Webcam;
 import eu.rekawek.coffeegb.core.memory.cart.type.CameraSource;
+import nu.pattern.OpenCV;
+import org.opencv.core.Mat;
+import org.opencv.videoio.VideoCapture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.awt.Dimension;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferByte;
 
 /**
  * A live {@link CameraSource} for the Game Boy (Pocket) Camera, backed by a real webcam
- * through the sarxos webcam-capture library. The webcam runs in async mode: a background
- * thread keeps the latest frame buffered, so {@link #getFrame()} is a cheap non-blocking
- * read the emulator can call on every in-game capture.
+ * through OpenCV's {@code VideoCapture} (openpnp's OpenCV build, which bundles native
+ * libraries for Linux, Windows and macOS including Apple Silicon - unlike the old
+ * sarxos/BridJ stack that only had x86_64 natives).
+ *
+ * <p>A daemon thread grabs frames continuously so {@link #getFrame()} is a cheap
+ * non-blocking read of the latest frame - the emulator calls it on every in-game capture
+ * and must never stall on the camera. Any failure to load the native library, open the
+ * device or read a frame degrades to {@code null} (the camera then falls back to the image
+ * file / test pattern) rather than crashing the emulator.
  */
 public class WebcamCameraSource implements CameraSource, AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(WebcamCameraSource.class);
 
-    private final Webcam webcam;
+    private static boolean nativeLoaded;
 
-    private WebcamCameraSource(Webcam webcam) {
-        this.webcam = webcam;
+    private final VideoCapture capture;
+
+    private final Thread grabThread;
+
+    private volatile boolean running = true;
+
+    private volatile BufferedImage latest;
+
+    private WebcamCameraSource(VideoCapture capture) {
+        this.capture = capture;
+        this.grabThread = new Thread(this::grabLoop, "webcam-grab");
+        this.grabThread.setDaemon(true);
+        this.grabThread.start();
     }
 
     /**
-     * Opens the default webcam.
+     * Loads the native library and opens the default camera (device 0).
      *
-     * @return the source, or {@code null} if no webcam is available or it cannot be opened
+     * @return the source, or {@code null} if the native library is unavailable (e.g. an
+     * unsupported architecture) or no camera can be opened
      */
-    public static WebcamCameraSource open() {
+    public static synchronized WebcamCameraSource open() {
         try {
-            Webcam webcam = Webcam.getDefault();
-            if (webcam == null) {
-                LOG.warn("No webcam detected");
+            if (!nativeLoaded) {
+                OpenCV.loadLocally();
+                nativeLoaded = true;
+            }
+            VideoCapture capture = new VideoCapture(0);
+            if (!capture.isOpened()) {
+                LOG.warn("No webcam could be opened (device 0)");
+                capture.release();
                 return null;
             }
-            // the frame is downscaled to the 128x112 sensor anyway, so prefer the smallest
-            // supported resolution that still covers it (lower latency and CPU)
-            Dimension best = null;
-            for (Dimension d : webcam.getViewSizes()) {
-                if (d.width < 128 || d.height < 112) {
-                    continue;
-                }
-                if (best == null || (long) d.width * d.height < (long) best.width * best.height) {
-                    best = d;
-                }
-            }
-            if (best != null) {
-                webcam.setViewSize(best);
-            }
-            webcam.open(true);
-            LOG.info("Opened webcam {} at {}", webcam.getName(), webcam.getViewSize());
-            return new WebcamCameraSource(webcam);
+            LOG.info("Opened webcam device 0 via OpenCV");
+            return new WebcamCameraSource(capture);
         } catch (Throwable t) {
             LOG.warn("Failed to open the webcam", t);
             return null;
         }
     }
 
+    private void grabLoop() {
+        Mat mat = new Mat();
+        while (running) {
+            try {
+                if (capture.read(mat) && !mat.empty()) {
+                    latest = matToBufferedImage(mat);
+                } else {
+                    Thread.sleep(50);
+                }
+            } catch (InterruptedException e) {
+                return;
+            } catch (Throwable t) {
+                LOG.warn("Webcam grab failed", t);
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }
+    }
+
     @Override
     public BufferedImage getFrame() {
-        return webcam.isOpen() ? webcam.getImage() : null;
+        return latest;
+    }
+
+    private static BufferedImage matToBufferedImage(Mat mat) {
+        int width = mat.cols();
+        int height = mat.rows();
+        int channels = mat.channels();
+        byte[] data = new byte[width * height * channels];
+        mat.get(0, 0, data);
+        int type = channels == 1 ? BufferedImage.TYPE_BYTE_GRAY : BufferedImage.TYPE_3BYTE_BGR;
+        BufferedImage image = new BufferedImage(width, height, type);
+        byte[] target = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+        System.arraycopy(data, 0, target, 0, Math.min(data.length, target.length));
+        return image;
     }
 
     @Override
     public void close() {
+        running = false;
+        grabThread.interrupt();
         try {
-            webcam.close();
+            grabThread.join(500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        try {
+            capture.release();
         } catch (Throwable t) {
-            LOG.warn("Failed to close the webcam", t);
+            LOG.warn("Failed to release the webcam", t);
         }
     }
 }
