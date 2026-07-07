@@ -36,6 +36,7 @@ import eu.rekawek.coffeegb.core.sound.Sound
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetBlendingEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetColorCorrectionEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
+import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetRotationEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.event.KeyEvent
 import java.io.File
@@ -309,6 +310,20 @@ class SwingMenu(
         properties.setProperty(EmulatorProperties.Key.DisplayScale, s.toString())
       }
       scale.add(item)
+    }
+
+    val rotate = JMenu("Rotate")
+    screenMenu.add(rotate)
+
+    for (deg in mutableListOf(0, 90, 180, 270)) {
+      val label = if (deg == 0) "None" else "$deg°"
+      val item = JCheckBoxMenuItem(label, deg == properties.display.rotation)
+      item.addActionListener {
+        eventBus.post(SetRotationEvent(deg))
+        uncheckAllBut(rotate, item)
+        properties.setProperty(EmulatorProperties.Key.DisplayRotation, deg.toString())
+      }
+      rotate.add(item)
     }
 
     val grayscale = JCheckBoxMenuItem("DMG grayscale", properties.display.grayscale)
