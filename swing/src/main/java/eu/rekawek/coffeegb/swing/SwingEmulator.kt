@@ -89,6 +89,12 @@ class SwingEmulator(
 
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
       mainPanel.preferredSize = it.preferredSize
+      // Setting preferredSize doesn't invalidate, and a pack() that leaves the frame the
+      // same size (e.g. re-selecting the current scale, or a rotation that preserves the
+      // dimensions) never triggers the reshape that refreshes the window's cached preferred
+      // size - after which every later pack() reads the stale size and stops resizing.
+      // Invalidating up from the panel clears the cache at each level so pack() recomputes.
+      mainPanel.invalidate()
       jFrame.pack()
     }
   }
