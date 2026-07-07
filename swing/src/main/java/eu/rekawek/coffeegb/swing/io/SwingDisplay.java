@@ -44,6 +44,8 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private boolean colorCorrection;
 
+    private int rotation;
+
     private int[] previousFrame;
 
     private GameboyType gameboyType;
@@ -61,7 +63,9 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
         eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
         eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
+        eventBus.register(e -> setRotation(e.rotation), SetRotationEvent.class);
         this.grayscale = properties.getGrayscale();
+        this.rotation = normalizeRotation(properties.getRotation());
         setBlending(properties.getBlending());
         setColorCorrection(properties.getColorCorrection());
         setScale(properties.getScale());
@@ -120,8 +124,27 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private synchronized void setScale(int scale) {
         this.scale = scale;
-        setPreferredSize(new Dimension(getDisplayWidth() * scale, getDisplayHeight() * scale));
+        setPreferredSize(rotatedPreferredSize());
         eventBus.post(new DisplaySizeUpdatedEvent(getPreferredSize()));
+    }
+
+    private synchronized void setRotation(int degrees) {
+        this.rotation = normalizeRotation(degrees);
+        setPreferredSize(rotatedPreferredSize());
+        eventBus.post(new DisplaySizeUpdatedEvent(getPreferredSize()));
+        repaint();
+    }
+
+    private static int normalizeRotation(int degrees) {
+        int r = ((degrees % 360) + 360) % 360;
+        // snap to the four quarter turns the display supports
+        return (r / 90) * 90;
+    }
+
+    private Dimension rotatedPreferredSize() {
+        int w = getDisplayWidth() * scale;
+        int h = getDisplayHeight() * scale;
+        return (rotation == 90 || rotation == 270) ? new Dimension(h, w) : new Dimension(w, h);
     }
 
     @Override
@@ -129,10 +152,28 @@ public class SwingDisplay extends JPanel implements Runnable {
         super.paintComponent(g);
 
         int localScale = scale;
+        int w = getDisplayWidth() * localScale;
+        int h = getDisplayHeight() * localScale;
         Graphics2D g2d = (Graphics2D) g.create();
         g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
-        g2d.drawImage(img, 0, 0, getDisplayWidth() * localScale, getDisplayHeight() * localScale, null);
+        switch (rotation) {
+            case 90 -> {
+                g2d.translate(h, 0);
+                g2d.rotate(Math.PI / 2);
+            }
+            case 180 -> {
+                g2d.translate(w, h);
+                g2d.rotate(Math.PI);
+            }
+            case 270 -> {
+                g2d.translate(0, w);
+                g2d.rotate(3 * Math.PI / 2);
+            }
+            default -> {
+            }
+        }
+        g2d.drawImage(img, 0, 0, w, h, null);
         g2d.dispose();
     }
 
@@ -222,6 +263,9 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     public record SetColorCorrectionEvent(boolean colorCorrection) implements Event {
+    }
+
+    public record SetRotationEvent(int rotation) implements Event {
     }
 
     public record SetBlendingEvent(boolean blending) implements Event {
