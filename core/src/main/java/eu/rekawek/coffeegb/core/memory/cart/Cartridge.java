@@ -39,8 +39,10 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new DuzMulticart(rom, battery);
         } else if (sachenType(rom) >= 0) {
             addressSpace = new SachenMmc(rom, sachenType(rom) == 2);
-        } else if (cookedSachenMmc2Base(rom) > 0) {
-            addressSpace = new SachenMmc(rom, cookedSachenMmc2Base(rom));
+        } else if (isCookedSachen(rom)) {
+            // post-unlock ("cooked") Sachen dumps: no lockout, boot at base 0 like the
+            // power-on cart (issues #73/#75)
+            addressSpace = new SachenMmc(rom, 0);
         } else if (type.isHuc1()) {
             addressSpace = new Huc1(rom, battery);
         } else if (type.isHuc3()) {
@@ -182,28 +184,32 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
      * Returns 1 for MMC1, 2 for MMC2, -1 for regular carts.
      */
     /**
-     * Post-unlock ("cooked") dumps of the Sachen MMC2 Rocket Games carts: the header at
-     * 0x104 is invalid, but a valid (CGB, half-checked) logo sits at the header of a
-     * later bank - the menu bank the cart boots from. Returns that bank, or -1.
+     * The fixed, cart-independent header the Sachen mapper descrambles for the boot ROM. The
+     * raw carts store it scrambled in the 0x0100-0x01FF page (and serve it through the
+     * lockout); "cooked" (post-unlock) dumps store it linearised at 0x0104, in place of the
+     * Nintendo logo. It is identical across every Sachen title, so it is a reliable marker.
      */
-    private static int cookedSachenMmc2Base(Rom rom) {
+    private static final int[] SACHEN_COOKED_HEADER = {0x11, 0x23, 0xf1, 0x1e, 0x01, 0x22, 0xf0,
+            0x00, 0x08, 0x99, 0x78, 0x00, 0x08, 0x11, 0x9a, 0x48};
+
+    /**
+     * Post-unlock ("cooked") dumps of the Sachen carts (issues #73/#75). They carry no valid
+     * Nintendo logo (the boot ROM's logo check is bypassed for them, as on a flashcart) and
+     * hold the Sachen descrambled boot header at 0x0104. They power on at base bank 0 - the
+     * menu/game code and their per-game bank switching all run from there; the earlier
+     * detection booted them at the logo bank, which left the menu mapped to the wrong bank.
+     */
+    private static boolean isCookedSachen(Rom rom) {
         int[] data = rom.getRom();
-        if (hasValidLogo(rom) || data.length < 0x10000) {
-            return -1;
+        if (data.length < 0x8000 || hasValidLogo(rom)) {
+            return false;
         }
-        for (int bank = 1; bank * 0x4000 + 0x134 <= data.length; bank++) {
-            boolean match = true;
-            for (int i = 0; i < NINTENDO_LOGO.length / 2; i++) {
-                if (data[bank * 0x4000 + 0x104 + i] != NINTENDO_LOGO[i]) {
-                    match = false;
-                    break;
-                }
-            }
-            if (match) {
-                return bank;
+        for (int i = 0; i < SACHEN_COOKED_HEADER.length; i++) {
+            if (data[0x104 + i] != SACHEN_COOKED_HEADER[i]) {
+                return false;
             }
         }
-        return -1;
+        return true;
     }
 
     private static int sachenType(Rom rom) {
