@@ -47,6 +47,23 @@ public class Rom {
             rom[i] = romByteArray[i] & 0xFF;
         }
 
+        // Correct an invalid header checksum (0x14D) so the authentic boot ROM does not lock
+        // up. The real DMG/CGB boot ROM verifies the checksum over 0x134-0x14C and hangs on
+        // the logo screen if it is wrong; some homebrew/PD dumps ship a bad one (e.g.
+        // Dimensionless Sample, #76 - it renders past a SKIP boot but hangs the boot ROM).
+        // BGB, SameBoy and real flashcarts silently fix it; only touches already-invalid ROMs.
+        if (rom.length > 0x014D) {
+            int headerChecksum = 0;
+            for (int a = 0x0134; a <= 0x014C; a++) {
+                headerChecksum = (headerChecksum - rom[a] - 1) & 0xFF;
+            }
+            if (rom[0x014D] != headerChecksum) {
+                LOG.warn("Correcting invalid header checksum {} -> {}",
+                        Integer.toHexString(rom[0x014D]), Integer.toHexString(headerChecksum));
+                rom[0x014D] = headerChecksum;
+            }
+        }
+
         CartridgeType type;
         try {
             type = CartridgeType.getById(rom[0x0147]);
