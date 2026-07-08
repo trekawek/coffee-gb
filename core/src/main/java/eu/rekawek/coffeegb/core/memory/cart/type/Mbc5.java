@@ -27,6 +27,13 @@ public class Mbc5 implements MemoryController {
 
     private boolean ramUpdated;
 
+    // Non-battery cart RAM is volatile scratch with no save to protect, so the RAM-enable
+    // handshake serves no purpose there. Some homebrew built for flash carts (Bung/EMS, whose
+    // SRAM is always accessible) use it - e.g. as a stack - without ever enabling it, and would
+    // otherwise crash (Green Beret PD, #65). Battery carts keep the gate so a defensive write
+    // to disabled RAM can't corrupt the save.
+    private final boolean gateRamWrites;
+
     public Mbc5(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
         this.romBanks = rom.getRomBanks();
@@ -34,6 +41,7 @@ public class Mbc5 implements MemoryController {
         this.ram = new int[0x2000 * Math.max(this.ramBanks, 1)];
         Arrays.fill(ram, 0xff);
         this.battery = battery;
+        this.gateRamWrites = rom.getType().isBattery();
         battery.loadRam(ram);
     }
 
@@ -55,7 +63,7 @@ public class Mbc5 implements MemoryController {
             if (bank < ramBanks) {
                 selectedRamBank = bank;
             }
-        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
+        } else if (address >= 0xa000 && address < 0xc000 && (ramWriteEnabled || !gateRamWrites)) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
                 ram[ramAddress] = value;
