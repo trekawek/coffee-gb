@@ -350,6 +350,18 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         return paused;
     }
 
+    /**
+     * Held-button state, snapshotted separately from the memento by rollback netplay so a held
+     * button survives a rebase (the joypad deliberately keeps it out of the memento).
+     */
+    public java.util.Set<eu.rekawek.coffeegb.core.joypad.Button> getPressedButtons() {
+        return joypad.getPressedButtons();
+    }
+
+    public void setPressedButtons(java.util.Collection<eu.rekawek.coffeegb.core.joypad.Button> pressed) {
+        joypad.setPressedButtons(pressed);
+    }
+
     @Override
     public Memento<Gameboy> saveToMemento() {
         return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled);

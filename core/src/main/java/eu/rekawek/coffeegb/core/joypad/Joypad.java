@@ -69,6 +69,20 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         buttons.remove(button);
     }
 
+    /**
+     * The set of currently-held buttons. Intentionally not part of the memento (see
+     * {@link #saveToMemento()}); rollback netplay snapshots and restores it separately so a
+     * held button survives a rebase whose base frame is past the original press.
+     */
+    public Set<Button> getPressedButtons() {
+        return new java.util.HashSet<>(buttons);
+    }
+
+    public void setPressedButtons(java.util.Collection<Button> pressed) {
+        buttons.clear();
+        buttons.addAll(pressed);
+    }
+
     public void tick() {
         tick++;
     }

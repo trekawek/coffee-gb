@@ -32,8 +32,10 @@ class StateHistory() {
       mainInput: Input,
       mainMemento: Memento<Session>?,
       peerMemento: Memento<Session>?,
+      mainButtons: Set<Button>,
+      peerButtons: Set<Button>,
   ) {
-    states.add(State(frame, mainInput, mainMemento, peerMemento))
+    states.add(State(frame, mainInput, mainMemento, peerMemento, mainButtons, peerButtons))
     LOG.atDebug().log("Adding state on frame {}; state size {}", frame, states.size)
     while (states.size > 60 * 5) {
       states.removeFirst()
@@ -93,9 +95,13 @@ class StateHistory() {
         }
     if (mainSession != null && baseState.mainMemento != null) {
       mainSession.restoreFromMemento(baseState.mainMemento)
+      // the joypad's held-button set is not in the memento; restore it explicitly or a button
+      // held before the base frame would be lost for the whole rebase (issue #79 desync)
+      mainSession.heldButtons = baseState.mainButtons
     }
     if (peerSession != null && baseState.peerMemento != null) {
       peerSession.restoreFromMemento(baseState.peerMemento)
+      peerSession.heldButtons = baseState.peerButtons
     }
 
     states.clear()
@@ -103,7 +109,15 @@ class StateHistory() {
 
     for (i in (baseFrame..toFrame + 1)) {
       val mainInput = mainInputs[i] ?: Input(emptyList(), emptyList())
-      states.add(State(i, mainInput, mainSession?.saveToMemento(), peerSession?.saveToMemento()))
+      states.add(
+          State(
+              i,
+              mainInput,
+              mainSession?.saveToMemento(),
+              peerSession?.saveToMemento(),
+              mainSession?.heldButtons ?: emptySet(),
+              peerSession?.heldButtons ?: emptySet(),
+          ))
 
       if (i <= toFrame) {
         mainInput.send(mainEventBus)
@@ -129,12 +143,12 @@ class StateHistory() {
 
   fun getHead() = states.last()
 
-  fun setPeerState(peerFrame: Long, peerState: Memento<Session>) {
+  fun setPeerState(peerFrame: Long, peerState: Memento<Session>, peerButtons: Set<Button>) {
     val index = states.indexOfFirst { it.frame == peerFrame }
     if (index == -1) {
       return
     }
-    states[index] = states[index].copy(peerMemento = peerState)
+    states[index] = states[index].copy(peerMemento = peerState, peerButtons = peerButtons)
   }
 
   data class State(
@@ -142,6 +156,8 @@ class StateHistory() {
       val mainInput: Input,
       val mainMemento: Memento<Session>?,
       val peerMemento: Memento<Session>?,
+      val mainButtons: Set<Button> = emptySet(),
+      val peerButtons: Set<Button> = emptySet(),
   )
 
   private data class Patch(

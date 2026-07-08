@@ -66,6 +66,8 @@ class LinkedController(
 
   @VisibleForTesting internal val stateHistory: StateHistory = StateHistory()
 
+  @VisibleForTesting internal fun mainHeldButtons() = mainSession?.heldButtons ?: emptySet()
+
   @Volatile private var doStop = false
 
   private val mainSerialEndpoint = Peer2PeerSerialEndpoint()
@@ -177,9 +179,11 @@ class LinkedController(
       val head = stateHistory.getHead()
       if (mainSession != null && head.mainMemento != null) {
         mainSession.restoreFromMemento(head.mainMemento)
+        mainSession.heldButtons = head.mainButtons
       }
       if (peerSession != null && head.peerMemento != null) {
         peerSession.restoreFromMemento(head.peerMemento)
+        peerSession.heldButtons = head.peerButtons
       }
       frame = head.frame
       LOG.atDebug().log("State merged to {}", frame)
@@ -188,22 +192,29 @@ class LinkedController(
     val input = currentInput ?: Input(emptyList(), emptyList())
     val effectiveInput = if (input != lastInput) input else Input(emptyList(), emptyList())
     lastInput = input
-    if (mainSession != null) {
-      effectiveInput.send(mainSession.eventBus)
-    }
     currentInput = null
 
-    if (!effectiveInput.isEmpty() || lastSync.elapsedNow() > 5.seconds) {
-      eventBus.postAsync(LocalButtonStateEvent(frame, effectiveInput))
-      lastSync = TimeSource.Monotonic.markNow()
-    }
-
+    // Snapshot BEFORE applying this frame's input, exactly like StateHistory.merge does, so a
+    // later rebase that restores this state and replays effectiveInput reproduces the frame
+    // bit-for-bit. The held-button sets are captured too because the joypad keeps them out of
+    // the memento - without them a button held before the rebase base frame is lost (#79).
     stateHistory.addState(
         frame,
         effectiveInput,
         mainSession?.saveToMemento(),
         peerSession?.saveToMemento(),
+        mainSession?.heldButtons ?: emptySet(),
+        peerSession?.heldButtons ?: emptySet(),
     )
+
+    if (mainSession != null) {
+      effectiveInput.send(mainSession.eventBus)
+    }
+
+    if (!effectiveInput.isEmpty() || lastSync.elapsedNow() > 5.seconds) {
+      eventBus.postAsync(LocalButtonStateEvent(frame, effectiveInput))
+      lastSync = TimeSource.Monotonic.markNow()
+    }
 
     repeat(TICKS_PER_FRAME) {
       mainSession?.gameboy?.tick()
@@ -285,7 +296,7 @@ class LinkedController(
 
     var peerFrame = frame
     while (this.frame > peerFrame) {
-      stateHistory.setPeerState(peerFrame, peerSession.saveToMemento())
+      stateHistory.setPeerState(peerFrame, peerSession.saveToMemento(), peerSession.heldButtons)
       repeat(TICKS_PER_FRAME) { peerSession.gameboy.tick() }
       peerFrame++
     }
