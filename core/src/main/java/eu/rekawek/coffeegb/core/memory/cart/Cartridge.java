@@ -68,9 +68,14 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Datel(rom, battery);
         } else if (rom.getRom().length >= 0x20000) {
             // "ROM only" carts of 128 KB and more are Wisdom Tree style unlicensed
-            // mappers with a single switchable 32 KB window (issue #61); smaller
-            // oversized type-0 dumps are treated as plain 32 KB ROMs like on hardware
+            // mappers with a single switchable 32 KB window (issue #61)
             addressSpace = new WisdomTree(rom);
+        } else if (rom.getRom().length > 0x8000) {
+            // a "ROM only" header on a cart bigger than the 32 KB a no-MBC cart can address
+            // is wrong (common in homebrew, e.g. Dimensionless Sample, #76): bank it as MBC1
+            // like BGB does. MBC1's power-on mapping is identical to a plain 32 KB ROM, so
+            // this never breaks a genuinely 32 KB-addressable dump.
+            addressSpace = new Mbc1(rom, battery);
         } else {
             addressSpace = new BasicRom(rom);
         }
