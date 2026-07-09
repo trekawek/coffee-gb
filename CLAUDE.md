@@ -241,80 +241,37 @@ rising edge) — see `StatRegister`.
 
 ## Mealybug Tearoom status (mid-mode-3 register writes, DMG)
 
-`mvn -pl core test -Ptest-mealybug` — 24 DMG tests in
-`core/src/test/resources/roms/mealybug/` (expected images = DMG-CPU B photos,
-DMG-blob where no CPU B image exists; the `*2` ROM variants are CGB-only).
-Compare via `ImageTestRunner` (stops at `LD B,B`). Not in CI yet — most still fail.
+`mvn -pl core test -Ptest-mealybug` — 24 DMG tests, baselines GUARD CI.
+**Status (machine-retiming branch, 2026-07-10): 23/24 pixel-perfect, 1 diff
+pixel total** (m3_lcdc_win_en_change_multiple_wx row 39 — an LCD-PPU desync
+boundary case SameBoy documents as present on "most but not all" DMG units).
 
-**Verified-to-the-dot model (implemented):**
-- The DMG resolves pixels at the LCD interface, `OUTPUT_DELAY = 7` T after the
-  FIFO pop (`DmgPixelFifo` delay line): palettes (BGP/OBP0/OBP1), LCDC bg/obj
-  enable bits and the obj/bg mux are all read at *output* time. During the single
-  T-cycle in which a CPU write commits, the output stage reads `old|new` for
-  palettes and `old|(new&1)` for LCDC (SameBoy PALETTE_DMG / DMG_LCDC conflicts).
-  This makes m3_bgp_change / m3_lcdc_bg_en_change / m3_window_timing pixel-exact
-  except line 0.
-- The fetcher samples the SCX/SCY-derived map offset at GET_TILE_T1, but resolves
-  the LCDC map-select bit at the VRAM read, which happens at GET_TILE_DATA_LOW_T1
-  (one T later than the state name suggests — the hardware fetch cycle ends with a
-  two-dot push, placing its reads one dot later than our back-to-back restart).
-
-**Measured but NOT yet implemented (next steps):**
-- All remaining line-0 diffs: the mealybug rows 0 render as if the line-0 handler
-  entry were ~4 T later on hardware (the test sources compensate line 0 by one
-  machine cycle). ATTEMPTED AND REVERTED: delaying the line-0 mode-2 STAT int by
-  4 T makes m3_bgp_change pixel-perfect (0 diffs) and bg_en_change drop to 4, but
-  breaks mooneye intr_1_2_timing-GS, which pins the vblank-int -> line-0-OAM-int
-  distance. Both are hardware truth, so the real mechanism differs (check the
-  intr_1_2_timing-GS source for which edge it measures; maybe STAT blocking from
-  the mode-1 term, or the handler-entry path differs on line 0).
-- THE MACHINE RETIMING (unlocks m3_scy_change 10674, tile_sel ~1500, and
-  residuals of the map/wx tests): hardware's dot machine runs 4 T later than
-  ours with reads one dot later in-cycle (= reads at ours+5; verified by both
-  the tile_sel probe — hardware data1/data2 land at our HIGH_T1+5/HIGH_T2+5 —
-  and consistent with the map read needing +1 after the machine's +4 cancels
-  int-anchored). Design worked out 2026-07-02:
-  1. PixelTransfer.start(): entryTicks = 4 (machine shifts +4; pops at 93+x,
-     done at 252+stalls). OUTPUT_DELAY drops 7→3 so the LCD output stays at
-     96+x in absolute terms (verify against m3_bgp_change before proceeding).
-  2. The CPU-visible mode-0/locks/hblankIntFrom must STAY at 249/252 (E+1/E+4
-     with E=248): fire them from the shifted machine via a 3-tick-early
-     completion signal — when position reaches 157 AND objStep==-1 AND no
-     pending sprite matches at positions 157..159 (OAM x 165..167), completion
-     is deterministic 3 pops ahead. Sprite stalls are pre-known ≥7 ticks ahead
-     (a stall takes ≥6 T), so the lookahead is sound; the only hole is a
-     WX=164/165 write landing in the final 3 ticks (no test covers it).
-  3. In-cycle read offsets stay as now (map at LOW_T1, data at HIGH_T1/T2) —
-     the +4 machine shift makes them land at hardware's absolute read dots.
-  4. Re-verify: full battery (esp. intr_2_mode0_timing_sprites,
-     hblank_ly_scx_timing-GS, lcdon_*), then both mealybug suites (expect
-     m3_scy_change and the tile_sel/map families to collapse).
-- m3_scx_low_3_bits: mid-line SCX%8 changes must affect the pop alignment
-  (hardware artifact at x=154..157); our alignment is line-start-only.
-- Sprite-related conflicts (m3_bgp_change_sprites 992, m3_obp0_change 432 diffs
-  at x=0..1, obj_en/size 146-390): SameBoy's DMG_LCDC obj_en special cases
-  (position_in_line==0, during_object_fetch) not implemented.
-- Window: SameBoy's activation model is ported (uint8-wrapped WX==position+7,
-  WX=0 specials, CGB accepts 166, line counter increments AT activation from -1);
-  m2_win_en_toggle is pixel-perfect on DMG and CGB. Still open: the CGB fails
-  m3_wx_4/5/6_change wholesale - the CGB's WX conflict class is WRITE_CPU (one
-  T-cycle later than DMG's WX_DMG), unmodeled; also SameBoy's insert_bg_pixel /
-  cgb_wx_glitch fetch corruptions are not implemented.
-- CGB: ColorPixelFifo resolves at the output stage (OUTPUT_DELAY=6, no mixes) and
-  applies BGP/OBPx remapping in DMG-compat mode. CGB baselines vs "CPU CGB D"
-  photos need FAST_FORWARD boot (SKIP lacks the compat palettes); compare at
-  5 bits - photos expand (c<<3)|(c>>2), we use c*8. The 7 CGB-native *2 variants
-  (only "CPU CGB C" photos): the wx_4/5/6 + win_en_change_multiple_wx expected
-  images are PLACEHOLDERS on both CGB revisions (no ground truth - 4 identical
-  md5s per dir; exclude them). The other *2 photos are real but use LCD-response
-  colors: compare via an empirical per-color majority mapping (97-98% of raw-RGB
-  diffs are color-space, true PPU residuals are 400-700 px per test). The Swing
-  display gained a "CGB color correction" option from this finding. Demotronic (#45) renders 2 of 4 probe
-  frames pixel-exact vs SameBoy (boot offset is 196 frames, not 186); the rest
-  differ only at the per-scanline wave edges (m3_scx/scy family).
-- SameBoy's conflict maps live in Core/sm83_cpu.c (dmg_conflict_map + the
-  GB_CONFLICT_* cases); their per-register apply offsets are relative to a
-  baseline 4 T before our CPU write commit tick.
+**The architecture** — dual machine + the +3 write skew:
+- The GPU runs TWO PixelTransfer instances: an unshifted skeleton driving
+  modes/locks/STAT (mooneye-exact) and a +4-shifted pixel machine rendering
+  pixels (entryDelay=4; line 0 runs at 0). DMG OUTPUT_DELAY=3 (CGB 2): pixels
+  pop as raw indices and resolve palettes/LCDC-mux at the LCD interface.
+- **CPU-write events reach the hardware machine ~3 dots earlier in machine
+  progress than our shifted machine observes them.** Every mid-fetch conflict
+  fix is an instance of this constant:
+  - an LCDC.1 write aborting an object fetch catches the machine up 3 dots;
+  - the object's HIGH data byte re-reads 2 dots after the overlay
+    (SpriteFifo.refresh; popped pixels keep their data — photos confirm);
+  - SameBoy's position_in_line==0 OBJ_EN-drop special fires at machine
+    position 3;
+  - the FIRST window tile's high byte re-reads 3 dots after the compressed
+    push, patching both FIFO-resident pixels and popped ones still in the
+    output delay line (refreshBgPixels).
+- The read-schedule restructure (moving map/D0/D1 to SameBoy's states) remains
+  a DEAD END — the refresh-and-patch pattern reaches hardware behavior without
+  moving any calibrated read dot.
+- Other landed semantics: live SCY everywhere (no line-start latch); the WX=0
+  activation stall only with SCX&7!=0; the insertion-glitch blank still pops
+  the object FIFO; the line's first pixel resolves its LCDC mux one dot later
+  than its palettes (two-phase resolution); a pending window activation
+  cancels if LCDC.5 went off during the pending tick.
+- CGB legs (compat palettes, WRITE_CPU WX class, *2 variants) unchanged — see
+  the memory notes; the CGB board is separate territory.
 
 ## Possible future work
 
