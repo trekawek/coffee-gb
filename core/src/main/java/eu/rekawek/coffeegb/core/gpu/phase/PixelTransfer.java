@@ -136,6 +136,19 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private final int[] objRefreshNewZip = new int[8];
 
+    // window first-tile D1 refresh (see Fetcher.takeWindowRefresh)
+    private int wdwRefreshAge = -1;
+
+    private int wdwRefreshPops;
+
+    private final int[] wdwRefreshZip = new int[8];
+
+    private final int[] wdwRefreshNewZip = new int[8];
+
+    // the first window tile's high byte re-read lands 3 dots after the push (the
+    // compressed empty-FIFO push reads it that many dots before hardware does)
+    private static final int WDW_D1_AGE = 3;
+
     // an object match is waiting for the background fetcher (counts as an object fetch
     // for the DMG LCDC.1 write conflict)
     private boolean objWaiting;
@@ -186,6 +199,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         objData1Pending = false;
         objWaiting = false;
         objRefreshAge = -1;
+        wdwRefreshAge = -1;
 
         spriteCount = 0;
         for (int i = 0; i < sprites.length; i++) {
@@ -298,6 +312,26 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                     fifo.refreshOverlay(objRefreshZip, objRefreshNewZip, objRefreshPops, objRefreshAttrs);
                 }
                 objRefreshAge = -1;
+            }
+        }
+
+        if (wdwRefreshAge >= 0) {
+            wdwRefreshAge++;
+            if (wdwRefreshAge == WDW_D1_AGE) {
+                int d1 = fetcher.readWindowRefreshData1();
+                Fetcher.zip(fetcher.getWindowRefreshD0(), d1,
+                        fetcher.getWindowRefreshAttrs().isXflip(), wdwRefreshNewZip);
+                boolean changed = false;
+                for (int i = 0; i < 8; i++) {
+                    if (wdwRefreshNewZip[i] != wdwRefreshZip[i]) {
+                        changed = true;
+                        break;
+                    }
+                }
+                if (changed) {
+                    fifo.refreshBgPixels(wdwRefreshZip, wdwRefreshNewZip, wdwRefreshPops);
+                }
+                wdwRefreshAge = -1;
             }
         }
 
@@ -472,6 +506,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
         renderPixelIfPossible();
         fetcher.advance(position, window, windowLineCounter, false);
+        if (fetcher.takeWindowRefresh()) {
+            wdwRefreshAge = 0;
+            wdwRefreshPops = 0;
+            System.arraycopy(fetcher.getWindowRefreshZip(), 0, wdwRefreshZip, 0, 8);
+        }
         return position != 160;
     }
 
@@ -523,6 +562,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 if (objRefreshAge >= 0) {
                     objRefreshPops++;
                 }
+                if (wdwRefreshAge >= 0) {
+                    wdwRefreshPops++;
+                }
                 position = -16;
                 return;
             }
@@ -537,6 +579,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 if (objRefreshAge >= 0) {
                     objRefreshPops++;
                 }
+                if (wdwRefreshAge >= 0) {
+                    wdwRefreshPops++;
+                }
             }
             position++;
             return;
@@ -549,6 +594,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             fifo.putPixelToScreen();
             if (objRefreshAge >= 0) {
                 objRefreshPops++;
+            }
+            if (wdwRefreshAge >= 0) {
+                wdwRefreshPops++;
             }
         }
         position++;

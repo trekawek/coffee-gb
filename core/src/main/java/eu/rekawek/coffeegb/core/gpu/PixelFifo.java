@@ -52,6 +52,13 @@ public interface PixelFifo {
     default void refreshOverlay(int[] oldLine, int[] newLine, int fromIndex, TileAttributes flags) {
     }
 
+    /**
+     * Re-resolves the most recent 8-pixel background push with fresh tile data, patching
+     * FIFO-resident pixels and not-yet-displayed popped ones (DMG window D1 refresh).
+     */
+    default void refreshBgPixels(int[] oldLine, int[] newLine, int popped) {
+    }
+
 
     void clear();
 

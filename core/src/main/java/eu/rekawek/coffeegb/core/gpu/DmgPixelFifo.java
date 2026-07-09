@@ -230,6 +230,36 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         spriteFifo.overlay(pixelLine, offset, paletteSelector, flags.isPriority(), 0);
     }
 
+    /**
+     * Re-resolves the pixels of the most recent 8-pixel push with fresh tile data: entries
+     * still in the FIFO are rewritten in place, and entries already popped (at
+     * {@code fromIndex-1-k} pops ago) are patched in the output delay line if they have
+     * not reached the LCD (the window D1 refresh, m3_lcdc_tile_sel_win_change).
+     */
+    @Override
+    public void refreshBgPixels(int[] oldLine, int[] newLine, int popped) {
+        for (int i = popped; i < 8; i++) {
+            int idx = i - popped;
+            if (idx >= pixels.size()) {
+                break;
+            }
+            if (pixels.get(idx) == oldLine[i]) {
+                pixels.set(idx, newLine[i]);
+            }
+        }
+        for (int i = 0; i < popped; i++) {
+            int agesBack = popped - 1 - i;
+            if (agesBack >= delaySize) {
+                continue;
+            }
+            int idx = (delayHead + delaySize - 1 - agesBack) & 7;
+            int entry = delayEntry[idx];
+            if ((entry & 0b11) == oldLine[i]) {
+                delayEntry[idx] = (entry & ~0b11) | newLine[i];
+            }
+        }
+    }
+
     @Override
     public void refreshOverlay(int[] oldLine, int[] newLine, int fromIndex, TileAttributes flags) {
         int paletteSelector = flags.getDmgPalette() == GpuRegister.OBP1 ? 1 : 0;

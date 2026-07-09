@@ -94,6 +94,44 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     private int tileData2;
 
+    // the most recent push was the first tile of a window fetch (see PixelTransfer's
+    // window D1 refresh); consumed by takeWindowRefresh
+    private boolean windowRefreshPending;
+
+    private int windowRefreshTileId;
+
+    private int windowRefreshY;
+
+    private TileAttributes windowRefreshAttrs = TileAttributes.EMPTY;
+
+    private int windowRefreshD0;
+
+    private final int[] windowRefreshZip = new int[8];
+
+    public boolean takeWindowRefresh() {
+        boolean p = windowRefreshPending;
+        windowRefreshPending = false;
+        return p;
+    }
+
+    public int getWindowRefreshD0() {
+        return windowRefreshD0;
+    }
+
+    public int[] getWindowRefreshZip() {
+        return windowRefreshZip;
+    }
+
+    public TileAttributes getWindowRefreshAttrs() {
+        return windowRefreshAttrs;
+    }
+
+    /** Re-reads the recorded first-window-tile high byte with the current registers. */
+    public int readWindowRefreshData1() {
+        return getTileData(windowRefreshTileId, windowRefreshY, 1,
+                lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), windowRefreshAttrs, 8);
+    }
+
     // DMG: a disabled window whose WX matches during a push inserts one blank pixel
     // instead of the tile row (SameBoy issue #278); an LCDC write that disables the
     // window mid-window-fetch suppresses the glitch for the rest of the line
@@ -241,6 +279,19 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                     if (data2Pending) {
                         // the push arrived before the scheduled high-byte read
                         readData2(window, windowY);
+                    }
+                    if (window && !gbc && windowTileX == 0) {
+                        // the FIRST window tile's high data byte is read two dots later
+                        // on hardware than our compressed empty-FIFO push; record the
+                        // push so PixelTransfer can re-read it with the registers of
+                        // that dot and patch the pixels (m3_lcdc_tile_sel_win_change)
+                        windowRefreshPending = true;
+                        windowRefreshTileId = tileId;
+                        windowRefreshY = effectiveY(true, windowY) & 7;
+                        windowRefreshAttrs = tileAttributes;
+                        windowRefreshD0 = tileData1;
+                        System.arraycopy(zip(tileData1, tileData2, tileAttributes.isXflip()), 0,
+                                windowRefreshZip, 0, 8);
                     }
                     if (window) {
                         windowTileX = (windowTileX + 1) & 0x1f;
