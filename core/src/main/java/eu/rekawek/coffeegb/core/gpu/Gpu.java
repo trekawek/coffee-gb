@@ -210,6 +210,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         pixelMachine.machineTick();
 
         Mode oldMode = mode;
+        WALL_TL = ticksInLine;
+        WALL_LINE = line;
         ticksInLine++;
         // the line started by enabling the LCD is one tick shorter: its grid starts at
         // the LCDC write itself, while the machine-cycle-locked line grid starts one
@@ -405,7 +407,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return true;
     }
 
+    public static boolean DBG = false;
+    public static int DBG_ROW = -1;
+    public static int WALL_TL, WALL_LINE;
+
     private void setLcdc(int value) {
+        if (DBG && line == DBG_ROW) {
+            System.err.printf("LCDCW tl=%d bg_en=%d%n", ticksInLine, value & 1);
+        }
         // SameBoy's DMG_LCDC position_in_line == 0 special: hardware's position at the
         // write sits 3 dots behind our +4-shifted machine's, so the gate is position 3
         boolean dropObjEnInMix = !gbc

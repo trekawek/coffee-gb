@@ -80,16 +80,68 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         return resolvePixel(popEntry());
     }
 
+    // The line's FIRST pixel resolves its LCDC muxing one dot later than the mid-line
+    // pixels OUTPUT_DELAY is calibrated to, while its palettes resolve at the normal dot
+    // (m3_lcdc_bg_en_change / m3_lcdc_obj_en_change at x=0; hardware photos).
+    private int outCount;
+
+    private int firstEntry = -1;
+
+    private int firstBgp, firstObp0, firstObp1;
+
     @Override
     public void outputTick() {
         outputTicks++;
+        if (firstEntry >= 0) {
+            // second phase of the first pixel: mux with the current LCDC, palettes from
+            // the previous tick
+            display.putDmgPixel(resolveSplit(firstEntry, firstBgp, firstObp0, firstObp1));
+            firstEntry = -1;
+        }
         while (delaySize > 0 && delayStamp[delayHead] + OUTPUT_DELAY <= outputTicks) {
             int entry = delayEntry[delayHead];
             delayHead = (delayHead + 1) & 7;
             delaySize--;
+            if (outCount == 0) {
+                outCount++;
+                firstEntry = entry;
+                firstBgp = registers.getEffective(GpuRegister.BGP);
+                firstObp0 = registers.getEffective(GpuRegister.OBP0);
+                firstObp1 = registers.getEffective(GpuRegister.OBP1);
+                // hold emission for one tick; anything else due this tick waits behind it
+                break;
+            }
+            outCount++;
             display.putDmgPixel(resolvePixel(entry));
         }
     }
+
+    private int resolveSplit(int entry, int bgp, int obp0, int obp1) {
+        int bgRaw = entry & 0b11;
+        if (!lcdc.isBgAndWindowDisplayEffective()) {
+            bgRaw = 0;
+        }
+        int spritePixel = (entry >> 2) & 0b11;
+        boolean spriteBgPriority = (entry & (1 << 5)) != 0;
+
+        int raw;
+        int palette;
+        if (spritePixel != 0
+                && lcdc.isObjDisplayEffective()
+                && !(spriteBgPriority && bgRaw != 0)) {
+            raw = spritePixel;
+            palette = ((entry >> 4) & 1) == 0 ? obp0 : obp1;
+        } else {
+            raw = bgRaw;
+            palette = bgp;
+        }
+        if (vRamTransfer != null) {
+            vRamTransfer.putPixel(raw);
+        }
+        return getColor(palette, raw);
+    }
+
+
 
     private int resolvePixel(int entry) {
         int bgRaw = entry & 0b11;
@@ -123,6 +175,8 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     @Override
     public void startLine() {
         linePixels = 0;
+        outCount = 0;
+        firstEntry = -1;
     }
 
     @Override
