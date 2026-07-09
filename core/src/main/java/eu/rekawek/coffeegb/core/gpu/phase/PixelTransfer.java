@@ -318,7 +318,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowLineCounter++;
                 fifo.clearBg();
                 fetcher.startWindow();
-                if (windowPendingWx == 0) {
+                if (windowPendingWx == 0 && (r.get(SCX) & 7) != 0) {
+                    // the WX=0 activation costs the extra dot only with fractional
+                    // scrolling (SameBoy sleeps 1 there gated on SCX&7; wt_wx0's
+                    // SCX%8==0 rows)
                     machineStall = 1;
                 }
                 if (!windowActivatedThisLine) {
