@@ -169,6 +169,12 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         spriteFifo.overlay(pixelLine, offset, paletteSelector, flags.isPriority(), 0);
     }
 
+    @Override
+    public void refreshOverlay(int[] oldLine, int[] newLine, int fromIndex, TileAttributes flags) {
+        int paletteSelector = flags.getDmgPalette() == GpuRegister.OBP1 ? 1 : 0;
+        spriteFifo.refresh(fromIndex, oldLine, newLine, paletteSelector, flags.isPriority());
+    }
+
     IntQueue getPixels() {
         return pixels;
     }

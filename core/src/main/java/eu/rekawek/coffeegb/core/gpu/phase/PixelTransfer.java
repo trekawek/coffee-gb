@@ -114,6 +114,27 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private boolean objData1Pending;
 
+    // hardware samples the object's high data byte two dots later than our +4-shifted
+    // machine's read dot: the byte is re-read 2 dots after the overlay with the live
+    // registers (a mid-fetch LCDC.2 write changes the tile row it comes from), and the
+    // FIFO-resident pixels re-resolve; pixels already popped keep the data they were
+    // popped with, exactly as the photos show (m3_lcdc_obj_size_change[_scx])
+    private int objRefreshAge = -1;
+
+    private int objRefreshPops;
+
+    private int objRefreshD0;
+
+    private int objRefreshTileId;
+
+    private int objRefreshLine;
+
+    private TileAttributes objRefreshAttrs = TileAttributes.EMPTY;
+
+    private final int[] objRefreshZip = new int[8];
+
+    private final int[] objRefreshNewZip = new int[8];
+
     // an object match is waiting for the background fetcher (counts as an object fetch
     // for the DMG LCDC.1 write conflict)
     private boolean objWaiting;
@@ -163,6 +184,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         objStep = -1;
         objData1Pending = false;
         objWaiting = false;
+        objRefreshAge = -1;
 
         spriteCount = 0;
         for (int i = 0; i < sprites.length; i++) {
@@ -247,12 +269,35 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             // cycle, so a mid-mode-3 LCDC.2 (sprite height) or tile write during that dot
             // affects the high byte only (mealybug m3_lcdc_obj_size_change[_scx])
             int objData1 = fetcher.readSpriteData(objTileId, objTileLine, 1, objAttributes);
-            fifo.setOverlay(
-                    fetcher.zip(objData0, objData1, objAttributes.isXflip()),
-                    0,
-                    objAttributes,
-                    spriteOrder[spriteHead]);
+            int[] line = fetcher.zip(objData0, objData1, objAttributes.isXflip());
+            fifo.setOverlay(line, 0, objAttributes, spriteOrder[spriteHead]);
             spriteHead++;
+            if (!gbc) {
+                System.arraycopy(line, 0, objRefreshZip, 0, 8);
+                objRefreshAge = 0;
+                objRefreshPops = 0;
+                objRefreshD0 = objData0;
+                objRefreshTileId = objTileId;
+                objRefreshLine = objTileLine;
+                objRefreshAttrs = objAttributes;
+            }
+        } else if (objRefreshAge >= 0) {
+            objRefreshAge++;
+            if (objRefreshAge == 2) {
+                int d1 = fetcher.readSpriteData(objRefreshTileId, objRefreshLine, 1, objRefreshAttrs);
+                Fetcher.zip(objRefreshD0, d1, objRefreshAttrs.isXflip(), objRefreshNewZip);
+                boolean changed = false;
+                for (int i = 0; i < 8; i++) {
+                    if (objRefreshNewZip[i] != objRefreshZip[i]) {
+                        changed = true;
+                        break;
+                    }
+                }
+                if (changed) {
+                    fifo.refreshOverlay(objRefreshZip, objRefreshNewZip, objRefreshPops, objRefreshAttrs);
+                }
+                objRefreshAge = -1;
+            }
         }
 
         // commit or drop a pending window activation (see windowPendingTicks)
@@ -471,6 +516,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 position = -8;
             } else if (position == -9) {
                 fifo.dropPixel();
+                if (objRefreshAge >= 0) {
+                    objRefreshPops++;
+                }
                 position = -16;
                 return;
             }
@@ -482,6 +530,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 insertBgPixel = false;
             } else {
                 fifo.dropPixel();
+                if (objRefreshAge >= 0) {
+                    objRefreshPops++;
+                }
             }
             position++;
             return;
@@ -492,6 +543,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             fifo.putInsertedPixel();
         } else {
             fifo.putPixelToScreen();
+            if (objRefreshAge >= 0) {
+                objRefreshPops++;
+            }
         }
         position++;
     }
@@ -535,6 +589,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (!(memento instanceof PixelTransferMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
+
+        // transient intra-fetch state (like objData1Pending, not part of the memento):
+        // never let a pre-restore refresh window leak into the restored timeline
+        objRefreshAge = -1;
 
         fetcher.restoreFromMemento(mem.fetcherMemento);
 

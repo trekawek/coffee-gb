@@ -94,6 +94,34 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
         }
     }
 
+    /**
+     * Re-resolves an earlier overlay with freshly read tile data (the object data reads
+     * sample the registers a few dots after our machine's fetch dots; see PixelTransfer's
+     * object refresh). Only pixels still in the FIFO change - popped ones keep the data
+     * they were popped with, like on hardware. {@code from} is the index of the first
+     * object-row pixel still in the FIFO.
+     */
+    public void refresh(int from, int[] oldLine, int[] newLine, int paletteIndex, boolean objBgPriority) {
+        for (int k = from; k < 8; k++) {
+            int idx = k - from;
+            if (idx >= size) {
+                break;
+            }
+            int slot = (head + idx) & 7;
+            if (oldLine[k] != 0 && pixel[slot] == oldLine[k] && palette[slot] == paletteIndex) {
+                // this slot's pixel came from the refreshed object; withdraw it
+                pixel[slot] = 0;
+                priority[slot] = EMPTY_PRIORITY;
+            }
+            if (newLine[k] != 0 && (pixel[slot] == 0 || priority[slot] > 0)) {
+                pixel[slot] = newLine[k];
+                palette[slot] = paletteIndex;
+                priority[slot] = 0;
+                bgPriority[slot] = objBgPriority;
+            }
+        }
+    }
+
     @Override
     public Memento<SpriteFifo> saveToMemento() {
         return new SpriteFifoMemento(

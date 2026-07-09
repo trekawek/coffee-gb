@@ -45,6 +45,13 @@ public interface PixelFifo {
 
     void setOverlay(int[] pixelLine, int offset, TileAttributes flags, int oamIndex);
 
+    /**
+     * Re-resolves the most recent object overlay with freshly read tile data; only pixels
+     * still in the FIFO change (DMG object-read sampling; no-op on the CGB).
+     */
+    default void refreshOverlay(int[] oldLine, int[] newLine, int fromIndex, TileAttributes flags) {
+    }
+
     void clear();
 
     /** Clears the background FIFO only, preserving the object FIFO (window activation). */
