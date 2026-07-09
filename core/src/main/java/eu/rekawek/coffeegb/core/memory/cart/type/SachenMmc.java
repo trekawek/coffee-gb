@@ -54,6 +54,22 @@ public class SachenMmc implements MemoryController {
     // false for post-unlock ("cooked") dumps stored with a linear 0x0100-0x01FF page
     private final boolean scrambled;
 
+    // while true, reads of the 0x0104-0x0133 logo window return the Nintendo logo instead of
+    // the linear ROM data. Cooked dumps have no logo stored (the raw carts serve it through
+    // the scrambling/lockout); this reproduces that so the authentic boot ROM's logo check
+    // passes. It is cleared on the first cartridge write - the boot ROM never writes the
+    // cart, so the first write means the game has taken over and wants the real bytes.
+    private boolean serveBootLogo;
+
+    /**
+     * The Nintendo logo the boot ROM verifies (0x0104-0x0133). The real Sachen mapper
+     * descrambles this for the boot ROM; a cooked dump stores game code here instead.
+     */
+    private static final int[] NINTENDO_LOGO = {0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B,
+            0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89,
+            0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63,
+            0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E};
+
     public SachenMmc(Rom rom, boolean mmc2) {
         this.rom = rom.getRom();
         this.romBanks = Math.max(2, this.rom.length / 0x4000);
@@ -63,7 +79,7 @@ public class SachenMmc implements MemoryController {
         this.lockState = mmc2 ? LOCKED_DMG : LOCKED_CGB;
     }
 
-    /** Cooked MMC2 dump: no scrambling/lockout; boots with the menu bank as base. */
+    /** Cooked (post-unlock) dump: no scrambling/lockout; boots at the given base bank. */
     public SachenMmc(Rom rom, int initialBase) {
         this.rom = rom.getRom();
         this.romBanks = Math.max(2, this.rom.length / 0x4000);
@@ -71,6 +87,7 @@ public class SachenMmc implements MemoryController {
         this.scrambled = false;
         this.lockState = UNLOCKED;
         this.base = initialBase;
+        this.serveBootLogo = true;
     }
 
     @Override
@@ -88,6 +105,9 @@ public class SachenMmc implements MemoryController {
 
     @Override
     public void setByte(int address, int value) {
+        // the boot ROM never writes the cart; the first write is the game taking over, so the
+        // cooked logo shim steps aside and the real ROM bytes become visible
+        serveBootLogo = false;
         switch (address >> 13) {
             case 0:
                 if ((unmaskedBank & 0x30) == 0x30) {
@@ -95,7 +115,18 @@ public class SachenMmc implements MemoryController {
                 }
                 break;
             case 1:
-                unmaskedBank = (value & 0xff) == 0 ? 1 : (value & 0xff);
+                if ((address & 0x40) != 0) {
+                    // 0x2000-0x3FFF with A6 set is the multicart outer/game-select register.
+                    // The 2-in-1 carts (issues #73/#75) point the 0x0000-0x3FFF window at the
+                    // chosen 256 KB game (base bank = game * 16) and force that offset into the
+                    // switchable window too, so the game's own bank writes (0-15) resolve inside
+                    // its half. The HRAM launcher does this single write, then jumps to the
+                    // game's 0x0150 entry. The normal bank register lives at A6 clear (0x3F00).
+                    base = (value << 4) & 0xff;
+                    mask = 0xf0;
+                } else {
+                    unmaskedBank = (value & 0xff) == 0 ? 1 : (value & 0xff);
+                }
                 break;
             case 2:
                 if ((unmaskedBank & 0x30) == 0x30) {
@@ -119,6 +150,9 @@ public class SachenMmc implements MemoryController {
 
     @Override
     public int getByte(int address) {
+        if (serveBootLogo && address >= 0x0104 && address < 0x0134) {
+            return NINTENDO_LOGO[address - 0x0104];
+        }
         if (scrambled) {
             address = lockAndUnscramble(address);
         }
@@ -157,7 +191,7 @@ public class SachenMmc implements MemoryController {
 
     @Override
     public Memento<MemoryController> saveToMemento() {
-        return new SachenMemento(unmaskedBank, mask, base, lockState, transition);
+        return new SachenMemento(unmaskedBank, mask, base, lockState, transition, serveBootLogo);
     }
 
     @Override
@@ -170,9 +204,10 @@ public class SachenMmc implements MemoryController {
         this.base = mem.base;
         this.lockState = mem.lockState;
         this.transition = mem.transition;
+        this.serveBootLogo = mem.serveBootLogo;
     }
 
     private record SachenMemento(int unmaskedBank, int mask, int base, int lockState,
-                                 int transition) implements Memento<MemoryController> {
+                                 int transition, boolean serveBootLogo) implements Memento<MemoryController> {
     }
 }

@@ -11,10 +11,12 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import org.junit.Test
 import java.nio.file.Paths
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class LinkedControllerTest {
 
@@ -60,6 +62,34 @@ class LinkedControllerTest {
     val actualButtons = buttons.toList()
 
     assertJoypadEventsEqual(expectedButtons, actualButtons)
+  }
+
+  @Test
+  fun heldButtonSurvivesRebasePastThePress() {
+    // Issue #79: a button held from before a rebase's base frame must not be dropped. The
+    // joypad keeps its held-button set out of the memento (so single-player rewind preserves
+    // physical input), and the recorded per-frame Input only carries changes - so unless the
+    // rebase restores the held-button set explicitly, a held button vanishes for the whole
+    // re-simulation, desyncing the two linked machines.
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(PeerLoadedGameEvent(ROM_BYTES, null, null, GAMEBOY_TYPE, BOOTSTRAP_MODE, 0))
+
+    // establish the sessions, then press and HOLD A (never released)
+    repeat(5) { sut.runFrame() }
+    eventBus.post(ButtonPressEvent(Button.A))
+    repeat(11) { sut.runFrame() } // frame ~5 processes the press; A is held through frame ~15
+    assertTrue(sut.mainHeldButtons().contains(Button.A), "A should be held before the rebase")
+
+    // a remote patch for a frame well past the press forces a rebase whose base frame is after
+    // the press was recorded
+    eventBus.post(LinkedController.RemoteButtonStateEvent(10, Input(emptyList(), emptyList())))
+    sut.runFrame()
+
+    assertTrue(
+        sut.mainHeldButtons().contains(Button.A), "held button A was lost across the rebase")
   }
 
   @Test

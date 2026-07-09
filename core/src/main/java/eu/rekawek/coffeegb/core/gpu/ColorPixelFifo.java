@@ -42,6 +42,10 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
 
     private long outputTicks;
 
+    // pixels of the current line popped towards the LCD, for the window-activation rewind
+    // bookkeeping (mirrors DmgPixelFifo); reset at startLine
+    private int linePixels;
+
     public ColorPixelFifo(
             Display display, Lcdc lcdc, ColorPalette bgPalette, ColorPalette oamPalette,
             GpuRegisterValues r, SpeedMode speedMode) {
@@ -60,11 +64,34 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
 
     @Override
     public void putPixelToScreen() {
+        linePixels++;
         int entry = popEntry();
         int tail = (delayHead + delaySize) & 7;
         delayEntry[tail] = entry;
         delayStamp[tail] = outputTicks;
         delaySize++;
+    }
+
+    @Override
+    public void startLine() {
+        linePixels = 0;
+    }
+
+    @Override
+    public void rewindOnePixel() {
+        // the CGB window-activation rollback (a pending WX match whose position advanced)
+        // steps the LCD x back one pixel: without this the popped pixel stays in the output
+        // and every window line drifts right by one, shearing a full-screen window into a
+        // diagonal (issue #80). Mirrors DmgPixelFifo.
+        if (linePixels == 0) {
+            return;
+        }
+        linePixels--;
+        if (delaySize > 0) {
+            delaySize--;
+        } else {
+            display.rewindPixel();
+        }
     }
 
     // pack bg pixel (2b), bg palette (3b), bg priority (1b), sprite pixel (2b),
@@ -202,7 +229,8 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
                 delayStamp.clone(),
                 delayHead,
                 delaySize,
-                outputTicks);
+                outputTicks,
+                linePixels);
     }
 
     @Override
@@ -221,6 +249,7 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
             delayHead = mem.delayHead;
             delaySize = mem.delaySize;
             outputTicks = mem.outputTicks;
+            linePixels = mem.linePixels;
         } else {
             delayHead = 0;
             delaySize = 0;
@@ -236,7 +265,8 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
             long[] delayStamp,
             int delayHead,
             int delaySize,
-            long outputTicks)
+            long outputTicks,
+            int linePixels)
             implements Memento<ColorPixelFifo> {
     }
 }

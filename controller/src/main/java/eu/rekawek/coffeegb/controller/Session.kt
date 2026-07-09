@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memento.Originator
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
@@ -26,6 +27,14 @@ class Session(
     console?.setGameboy(null)
     eventBus.close()
   }
+
+  // held buttons live outside the memento (the joypad keeps physical input across a
+  // single-player rewind); netplay snapshots them separately so a held button survives a rebase
+  var heldButtons: Set<Button>
+    get() = gameboy.pressedButtons
+    set(value) {
+      gameboy.setPressedButtons(value)
+    }
 
   override fun saveToMemento(): Memento<Session> {
     return SessionMemento(gameboy.saveToMemento(), serialEndpoint.saveToMemento())

@@ -45,6 +45,7 @@ class EmulatorProperties() {
     DisplayGrayscale("display.grayscale"),
     DisplayBlending("display.blending"),
     DisplayColorCorrection("display.colorCorrection"),
+    DisplayRotation("display.rotation"),
     ShowSgbBorder("display.showSgbBorder"),
     SoundEnabled("sound.enabled"),
     RomDirectory("rom.directory"),
