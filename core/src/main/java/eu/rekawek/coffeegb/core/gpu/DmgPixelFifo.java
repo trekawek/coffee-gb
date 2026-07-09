@@ -49,8 +49,15 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     @Override
     public void putInsertedPixel() {
         linePixels++;
+        // the synthetic blank replaces only the BACKGROUND pixel; the object FIFO still
+        // pops, so a sprite covering the inserted dot draws over it (SameBoy's
+        // insert_bg_pixel path; m3_wx_4_change_sprites)
+        spriteFifo.pop();
+        int entry = (spriteFifo.poppedPixel << 2)
+                | (spriteFifo.poppedPalette << 4)
+                | (spriteFifo.poppedBgPriority ? 1 << 5 : 0);
         int tail = (delayHead + delaySize) & 7;
-        delayEntry[tail] = 0;
+        delayEntry[tail] = entry;
         delayStamp[tail] = outputTicks;
         delaySize++;
     }

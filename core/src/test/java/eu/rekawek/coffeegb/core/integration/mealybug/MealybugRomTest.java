@@ -51,7 +51,7 @@ public class MealybugRomTest {
             Map.entry("m3_window_timing.gb", 0),
             Map.entry("m3_window_timing_wx_0.gb", 0),
             Map.entry("m3_wx_4_change.gb", 0),
-            Map.entry("m3_wx_4_change_sprites.gb", 2),
+            Map.entry("m3_wx_4_change_sprites.gb", 0),
             Map.entry("m3_wx_5_change.gb", 0),
             Map.entry("m3_wx_6_change.gb", 0));
 
