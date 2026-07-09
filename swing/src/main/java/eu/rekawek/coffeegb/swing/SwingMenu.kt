@@ -63,6 +63,16 @@ class SwingMenu(
 
   private var webcamSource: WebcamCameraSource? = null
 
+  // the link port carries one device at a time: the netplay cable, the Barcode Boy or the
+  // printer. These are the menu toggles for each; enabling one disconnects the rest.
+  private lateinit var barcodeBoyItem: JCheckBoxMenuItem
+
+  private lateinit var printerItem: JCheckBoxMenuItem
+
+  private lateinit var startServerItem: JCheckBoxMenuItem
+
+  private lateinit var connectToServerItem: JCheckBoxMenuItem
+
   init {
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
     eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
@@ -76,6 +86,7 @@ class SwingMenu(
     menuBar.add(createSystemMenu())
     menuBar.add(createScreenMenu())
     menuBar.add(createAudioMenu())
+    menuBar.add(createPeripheralsMenu())
     menuBar.add(createLinkMenu())
     window.jMenuBar = menuBar
   }
@@ -207,33 +218,68 @@ class SwingMenu(
     }
     enableWhenEmulationActive(gameGenie)
 
-    val barcodeBoy = JCheckBoxMenuItem("Connect Barcode Boy", false)
-    val printer = JCheckBoxMenuItem("Connect Game Boy Printer", false)
+    return gameMenu
+  }
 
-    gameMenu.add(barcodeBoy)
-    barcodeBoy.addActionListener {
-      eventBus.post(Controller.SetBarcodeBoyEvent(barcodeBoy.state))
-      // the Barcode Boy and the printer share the link port, so only one can be connected
-      if (barcodeBoy.state) {
-        printer.state = false
+  private fun createPeripheralsMenu(): JMenu {
+    val peripheralsMenu = JMenu("Peripherals")
+
+    // the Game Boy Camera's webcam source is a cartridge sensor, not a link-port device, so
+    // it is independent of the netplay/Barcode Boy/printer group below
+    val camera = JCheckBoxMenuItem("Enable Game Boy Camera", false)
+    peripheralsMenu.add(camera)
+    camera.addActionListener {
+      if (camera.state) {
+        val source = WebcamCameraSource.open()
+        if (source == null) {
+          camera.state = false
+          JOptionPane.showMessageDialog(
+              window,
+              "No webcam could be opened.",
+              "Game Boy Camera",
+              JOptionPane.ERROR_MESSAGE,
+          )
+        } else {
+          webcamSource = source
+          PocketCamera.setCameraSource(source)
+        }
+      } else {
+        PocketCamera.setCameraSource(null)
+        webcamSource?.close()
+        webcamSource = null
       }
     }
 
-    gameMenu.add(printer)
+    val printer = JCheckBoxMenuItem("Enable Game Boy Printer", false)
+    printerItem = printer
+    peripheralsMenu.add(printer)
     printer.addActionListener {
       eventBus.post(Controller.SetPrinterEvent(printer.state))
       if (printer.state) {
-        barcodeBoy.state = false
+        disconnectOtherLinkPeripherals(printer)
       }
     }
 
-    val scanBarcode = JMenuItem("Scan barcode…")
-    gameMenu.add(scanBarcode)
+    val barcodeMenu = JMenu("Barcode Boy")
+    peripheralsMenu.add(barcodeMenu)
+
+    val barcodeBoy = JCheckBoxMenuItem("Enable Barcode Boy", false)
+    barcodeBoyItem = barcodeBoy
+    barcodeMenu.add(barcodeBoy)
+    barcodeBoy.addActionListener {
+      eventBus.post(Controller.SetBarcodeBoyEvent(barcodeBoy.state))
+      if (barcodeBoy.state) {
+        disconnectOtherLinkPeripherals(barcodeBoy)
+      }
+    }
+
+    val scanBarcode = JMenuItem("Scan Barcode…")
+    barcodeMenu.add(scanBarcode)
     scanBarcode.addActionListener {
       if (!barcodeBoy.state) {
         JOptionPane.showMessageDialog(
             window,
-            "Enable \"Connect Barcode Boy\" first.",
+            "Enable \"Enable Barcode Boy\" first.",
             "Barcode Boy",
             JOptionPane.INFORMATION_MESSAGE,
         )
@@ -257,31 +303,30 @@ class SwingMenu(
     }
     enableWhenEmulationActive(scanBarcode)
 
-    val webcam = JCheckBoxMenuItem("Use webcam as camera", false)
-    gameMenu.add(webcam)
-    webcam.addActionListener {
-      if (webcam.state) {
-        val source = WebcamCameraSource.open()
-        if (source == null) {
-          webcam.state = false
-          JOptionPane.showMessageDialog(
-              window,
-              "No webcam could be opened.",
-              "Game Boy Camera",
-              JOptionPane.ERROR_MESSAGE,
-          )
-        } else {
-          webcamSource = source
-          PocketCamera.setCameraSource(source)
-        }
-      } else {
-        PocketCamera.setCameraSource(null)
-        webcamSource?.close()
-        webcamSource = null
-      }
-    }
+    return peripheralsMenu
+  }
 
-    return gameMenu
+  /**
+   * Only one device can sit on the link port at a time, so turning one on unplugs the others:
+   * the netplay cable (server/client), the Barcode Boy and the printer.
+   */
+  private fun disconnectOtherLinkPeripherals(keep: JCheckBoxMenuItem) {
+    if (barcodeBoyItem !== keep && barcodeBoyItem.state) {
+      barcodeBoyItem.state = false
+      eventBus.post(Controller.SetBarcodeBoyEvent(false))
+    }
+    if (printerItem !== keep && printerItem.state) {
+      printerItem.state = false
+      eventBus.post(Controller.SetPrinterEvent(false))
+    }
+    if (startServerItem !== keep && startServerItem.state) {
+      startServerItem.state = false
+      eventBus.post(StopServerEvent())
+    }
+    if (connectToServerItem !== keep && connectToServerItem.state) {
+      connectToServerItem.state = false
+      eventBus.post(StopClientEvent())
+    }
   }
 
   private fun createSystemMenu(): JMenu {
@@ -393,9 +438,11 @@ class SwingMenu(
     val linkMenu = JMenu("Link")
 
     val startServer = JCheckBoxMenuItem("Start server")
+    startServerItem = startServer
     linkMenu.add(startServer)
     startServer.addActionListener {
       if (startServer.state) {
+        disconnectOtherLinkPeripherals(startServer)
         eventBus.post(StartServerEvent())
       } else {
         eventBus.post(StopServerEvent())
@@ -403,13 +450,17 @@ class SwingMenu(
     }
 
     val connectToServer = JCheckBoxMenuItem("Connect to server")
+    connectToServerItem = connectToServer
     linkMenu.add(connectToServer)
     connectToServer.addActionListener {
       if (connectToServer.state) {
         val host: String? =
             JOptionPane.showInputDialog(window, "Please enter server IP address", "127.0.0.1")
         if (host != null) {
+          disconnectOtherLinkPeripherals(connectToServer)
           eventBus.post(StartClientEvent(host))
+        } else {
+          connectToServer.state = false
         }
       } else {
         eventBus.post(StopClientEvent())
