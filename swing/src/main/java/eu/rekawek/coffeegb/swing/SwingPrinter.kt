@@ -34,7 +34,7 @@ class SwingPrinter(eventBus: EventBus) {
   // pixels of paper feed per margin unit (cosmetic; keeps successive sheets apart)
   private val marginPixels = 3
 
-  private var paper: BufferedImage = BufferedImage(WIDTH, 1, BufferedImage.TYPE_INT_RGB)
+  private var paper: BufferedImage = BufferedImage(PAPER_WIDTH, 1, BufferedImage.TYPE_INT_RGB)
   private var contentHeight = 0
 
   private var frame: JFrame? = null
@@ -60,17 +60,17 @@ class SwingPrinter(eventBus: EventBus) {
                 RenderingHints.KEY_INTERPOLATION,
                 RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
             g.drawImage(
-                paper, 0, 0, WIDTH * scale, contentHeight * scale, 0, 0, WIDTH, contentHeight, null)
+                paper, 0, 0, PAPER_WIDTH * scale, contentHeight * scale, 0, 0, PAPER_WIDTH, contentHeight, null)
           }
 
           override fun getPreferredSize(): Dimension =
-              Dimension(WIDTH * scale, maxOf(1, contentHeight) * scale)
+              Dimension(PAPER_WIDTH * scale, maxOf(1, contentHeight) * scale)
         }
     canvas.background = Color.LIGHT_GRAY
     this.canvas = canvas
 
     val scrollPane = JScrollPane(canvas)
-    scrollPane.preferredSize = Dimension(WIDTH * scale + 30, 320)
+    scrollPane.preferredSize = Dimension(PAPER_WIDTH * scale + 30, 320)
     this.scrollPane = scrollPane
 
     val save = JButton("Save as PNG…")
@@ -101,7 +101,7 @@ class SwingPrinter(eventBus: EventBus) {
     fillWhite(y, top)
     y += top
     for (row in 0 until event.height) {
-      for (x in 0 until WIDTH) {
+      for (x in 0 until PAPER_WIDTH) {
         paper.setRGB(x, y + row, event.argb[row * event.width + x] and 0xFFFFFF)
       }
     }
@@ -126,7 +126,7 @@ class SwingPrinter(eventBus: EventBus) {
 
   private fun fillWhite(y: Int, height: Int) {
     for (i in 0 until height) {
-      for (x in 0 until WIDTH) {
+      for (x in 0 until PAPER_WIDTH) {
         paper.setRGB(x, y + i, 0xFFFFFF)
       }
     }
@@ -136,17 +136,17 @@ class SwingPrinter(eventBus: EventBus) {
     if (paper.height >= minHeight) {
       return
     }
-    val taller = BufferedImage(WIDTH, minHeight, BufferedImage.TYPE_INT_RGB)
+    val taller = BufferedImage(PAPER_WIDTH, minHeight, BufferedImage.TYPE_INT_RGB)
     val g = taller.createGraphics()
     g.color = Color.WHITE
-    g.fillRect(0, 0, WIDTH, minHeight)
+    g.fillRect(0, 0, PAPER_WIDTH, minHeight)
     g.drawImage(paper, 0, 0, null)
     g.dispose()
     paper = taller
   }
 
   private fun clear() {
-    paper = BufferedImage(WIDTH, 1, BufferedImage.TYPE_INT_RGB)
+    paper = BufferedImage(PAPER_WIDTH, 1, BufferedImage.TYPE_INT_RGB)
     contentHeight = 0
     canvas?.revalidate()
     canvas?.repaint()
@@ -173,7 +173,7 @@ class SwingPrinter(eventBus: EventBus) {
       file = File(file.parentFile, file.name + ".png")
     }
     try {
-      ImageIO.write(paper.getSubimage(0, 0, WIDTH, contentHeight), "png", file)
+      ImageIO.write(paper.getSubimage(0, 0, PAPER_WIDTH, contentHeight), "png", file)
     } catch (e: Exception) {
       JOptionPane.showMessageDialog(
           frame,
@@ -184,6 +184,6 @@ class SwingPrinter(eventBus: EventBus) {
   }
 
   companion object {
-    private const val WIDTH = 160
+    private const val PAPER_WIDTH = 160
   }
 }
