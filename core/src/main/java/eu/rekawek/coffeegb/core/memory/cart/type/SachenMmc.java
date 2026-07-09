@@ -115,7 +115,18 @@ public class SachenMmc implements MemoryController {
                 }
                 break;
             case 1:
-                unmaskedBank = (value & 0xff) == 0 ? 1 : (value & 0xff);
+                if ((address & 0x40) != 0) {
+                    // 0x2000-0x3FFF with A6 set is the multicart outer/game-select register.
+                    // The 2-in-1 carts (issues #73/#75) point the 0x0000-0x3FFF window at the
+                    // chosen 256 KB game (base bank = game * 16) and force that offset into the
+                    // switchable window too, so the game's own bank writes (0-15) resolve inside
+                    // its half. The HRAM launcher does this single write, then jumps to the
+                    // game's 0x0150 entry. The normal bank register lives at A6 clear (0x3F00).
+                    base = (value << 4) & 0xff;
+                    mask = 0xf0;
+                } else {
+                    unmaskedBank = (value & 0xff) == 0 ? 1 : (value & 0xff);
+                }
                 break;
             case 2:
                 if ((unmaskedBank & 0x30) == 0x30) {
