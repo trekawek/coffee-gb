@@ -382,6 +382,15 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (objStep >= 0) {
             if (!gbc && !lcdc.isObjDisplayEffective()) {
                 objStep = -1;
+                // the write that aborts the fetch is a CPU-timeline event: the hardware
+                // machine (which runs 4 dots ahead of our +4-shifted pixel machine) had
+                // already aborted 3 dots of pipeline progress ago, so the machine catches
+                // up those dots at once (m3_lcdc_obj_en_change_variant, the BGP band edge
+                // on the rows whose object fetch the pulse truncates)
+                for (int i = 0; i < 3 && position != 160; i++) {
+                    renderPixelIfPossible();
+                    fetcher.advance(position, window, windowLineCounter, false);
+                }
             } else {
                 objTick();
                 return true;

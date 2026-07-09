@@ -36,7 +36,7 @@ public class MealybugRomTest {
             Map.entry("m3_lcdc_bg_en_change.gb", 4),
             Map.entry("m3_lcdc_bg_map_change.gb", 0),
             Map.entry("m3_lcdc_obj_en_change.gb", 2),
-            Map.entry("m3_lcdc_obj_en_change_variant.gb", 50),
+            Map.entry("m3_lcdc_obj_en_change_variant.gb", 2),
             Map.entry("m3_lcdc_obj_size_change.gb", 30),
             Map.entry("m3_lcdc_obj_size_change_scx.gb", 30),
             Map.entry("m3_lcdc_tile_sel_change.gb", 0),
