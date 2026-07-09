@@ -113,6 +113,7 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         this.value = value;
     }
 
+
     public void setGbc(boolean gbc) {
         this.gbc = gbc;
     }

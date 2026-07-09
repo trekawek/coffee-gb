@@ -338,7 +338,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // commit or drop a pending window activation (see windowPendingTicks)
         if (windowPendingTicks > 0) {
             windowPendingTicks--;
-            if (r.get(WX) == windowPendingWx) {
+            // a disable committing during the pending tick cancels the activation: the
+            // hardware comparator saw the window still enabled at the match dot, but the
+            // fetch never starts, so no side effects remain (wewx rows whose activation
+            // dot collides with the LCDC.5-off pulse)
+            if (r.get(WX) == windowPendingWx && (gbc || lcdc.isWindowDisplay())) {
                 if (position != windowPendingPos) {
                     // roll back the pixel that popped during the pending tick: on
                     // hardware the FIFO was already cleared at the match dot
@@ -519,6 +523,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // a window whose WX match was masked by a pulse catches up on re-enable only if the
     // match is within this many dots of the re-enable position (mealybug wewx)
     private static final int DESYNC_MAX_GAP = 3;
+
+
+
+
 
     private void objTick() {
         if (objStep <= 1) {

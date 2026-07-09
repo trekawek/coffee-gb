@@ -17,6 +17,8 @@ import static eu.rekawek.coffeegb.core.cpu.BitUtils.toSigned;
  */
 public class Fetcher implements Serializable, Originator<Fetcher> {
 
+
+
     public static final int GET_TILE_T1 = 0;
 
     // the horizontal part of the map offset: the position is frozen at the fetch
