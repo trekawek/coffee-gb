@@ -406,11 +406,13 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     private void setLcdc(int value) {
+        // SameBoy's DMG_LCDC position_in_line == 0 special: hardware's position at the
+        // write sits 3 dots behind our +4-shifted machine's, so the gate is position 3
         boolean dropObjEnInMix = !gbc
                 && (value & 0x02) == 0
                 && (lcdc.get() & 0x02) != 0
                 && mode == Mode.PixelTransfer
-                && (pixelMachine.isObjectFetchInProgress() || pixelMachine.getPosition() == 0);
+                && (pixelMachine.isObjectFetchInProgress() || pixelMachine.getPosition() == 3);
         // disabling the window while it is being fetched suppresses the DMG
         // window-insertion glitch for the rest of the line (SameBoy DMG_LCDC)
         if (!gbc && (lcdc.get() & 0x20) != 0 && (value & 0x20) == 0) {

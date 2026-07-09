@@ -123,6 +123,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private int objRefreshPops;
 
+
     private int objRefreshD0;
 
     private int objRefreshTileId;

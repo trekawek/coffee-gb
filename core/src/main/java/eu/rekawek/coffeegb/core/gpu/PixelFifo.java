@@ -52,6 +52,7 @@ public interface PixelFifo {
     default void refreshOverlay(int[] oldLine, int[] newLine, int fromIndex, TileAttributes flags) {
     }
 
+
     void clear();
 
     /** Clears the background FIFO only, preserving the object FIFO (window activation). */
