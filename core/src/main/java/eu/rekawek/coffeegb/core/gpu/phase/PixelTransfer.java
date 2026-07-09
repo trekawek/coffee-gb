@@ -95,8 +95,6 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // is suppressed for the single tick right after a WX write (SameBoy wx_just_changed)
 
 
-    private int scyLatch;
-
     private final int[] spriteOrder = new int[10];
 
     private int spriteCount;
@@ -149,15 +147,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     public PixelTransfer start() {
-        return start(r.get(SCY));
+        return start(0);
     }
 
-    public PixelTransfer start(int scyLatch) {
-        return start(scyLatch, 0);
-    }
-
-    public PixelTransfer start(int scyLatch, int extraEntryDelay) {
-        this.scyLatch = scyLatch;
+    public PixelTransfer start(int extraEntryDelay) {
         entryTicks = entryDelay + extraEntryDelay;
         machineActive = true;
         position = -16;
@@ -189,7 +182,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         spriteHead = 0;
 
-        fetcher.startLine(scyLatch);
+        fetcher.startLine();
         fifo.clear();
         fifo.enqueue8Pixels(JUNK_PIXEL_LINE, TileAttributes.EMPTY);
         return this;

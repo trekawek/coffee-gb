@@ -48,8 +48,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         if (window) {
             fetcherY = windowY & 0xff;
         } else {
-            int scy = firstFetch ? scyAtLineStart : r.get(GpuRegister.SCY);
-            fetcherY = (r.get(GpuRegister.LY) + scy) & 0xff;
+            fetcherY = (r.get(GpuRegister.LY) + r.get(GpuRegister.SCY)) & 0xff;
         }
         tileMapOffset = (fetcherY / 8) * 0x20 + tileMapX;
     }
@@ -117,15 +116,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         this.lcdc = lcdc;
     }
 
-    // SCY as latched at mode-3 entry: the first tile fetch of a line uses it for the
-    // row selection instead of the live value (mealybug m3_scy_change, tile column 0)
-    private int scyAtLineStart;
-
-    private boolean firstFetch;
-
-    public void startLine(int scyAtLineStart) {
-        this.scyAtLineStart = scyAtLineStart;
-        this.firstFetch = true;
+    public void startLine() {
         insertionGlitchDisabled = false;
         state = GET_TILE_T1;
         tileId = 0;
@@ -255,7 +246,6 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                         windowTileX = (windowTileX + 1) & 0x1f;
                     }
                     fifo.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()), tileAttributes);
-                    firstFetch = false;
                     state = GET_TILE_T1;
                 }
                 break;
@@ -273,8 +263,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         if (window) {
             return windowY;
         }
-        int scy = firstFetch ? scyAtLineStart : r.get(GpuRegister.SCY);
-        return (r.get(GpuRegister.LY) + scy) & 0xff;
+        return (r.get(GpuRegister.LY) + r.get(GpuRegister.SCY)) & 0xff;
     }
 
     public int readSpriteTileId(SpritePosition sprite) {
@@ -357,8 +346,6 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 tileData1,
                 tileData2,
                 insertionGlitchDisabled,
-                scyAtLineStart,
-                firstFetch,
                 data2Pending,
                 data2Delay);
     }
@@ -383,8 +370,6 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         this.tileData1 = mem.tileData1;
         this.tileData2 = mem.tileData2;
         this.insertionGlitchDisabled = mem.insertionGlitchDisabled;
-        this.scyAtLineStart = mem.scyAtLineStart;
-        this.firstFetch = mem.firstFetch;
         this.data2Pending = mem.data2Pending;
         this.data2Delay = mem.data2Delay;
     }
@@ -400,10 +385,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             int tileData1,
             int tileData2,
             boolean insertionGlitchDisabled,
-            int scyAtLineStart,
-            boolean firstFetch,
-                                  boolean data2Pending,
-                                  int data2Delay)
+            boolean data2Pending,
+            int data2Delay)
             implements Memento<Fetcher> {
     }
 }

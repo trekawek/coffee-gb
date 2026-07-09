@@ -47,7 +47,7 @@ public class MealybugRomTest {
             Map.entry("m3_obp0_change.gb", 0),
             Map.entry("m3_scx_high_5_bits.gb", 0),
             Map.entry("m3_scx_low_3_bits.gb", 0),
-            Map.entry("m3_scy_change.gb", 33),
+            Map.entry("m3_scy_change.gb", 0),
             Map.entry("m3_window_timing.gb", 1),
             Map.entry("m3_window_timing_wx_0.gb", 18),
             Map.entry("m3_wx_4_change.gb", 0),

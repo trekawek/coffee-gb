@@ -237,14 +237,13 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 case OamSearch:
                     if (!phase.tick()) {
                         mode = Mode.PixelTransfer;
-                        int scyLatch = r.get(SCY);
-                        phase = pixelTransferPhase.start(scyLatch);
+                        phase = pixelTransferPhase.start();
                         // the pixel pipeline of line 0 runs one machine cycle later
                         // relative to the CPU-visible timings than on other lines
                         // (mealybug row-0: the tests' per-line writes land one
                         // machine cycle earlier in the line-0 picture; the STAT
                         // interrupt itself is NOT shifted - intr_1_2_timing-GS)
-                        pixelMachine.start(scyLatch, line == 0 ? -4 : 0);
+                        pixelMachine.start(line == 0 ? -4 : 0);
                     }
                     break;
 
