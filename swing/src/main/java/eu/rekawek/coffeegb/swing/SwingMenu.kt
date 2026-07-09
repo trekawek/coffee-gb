@@ -208,8 +208,24 @@ class SwingMenu(
     enableWhenEmulationActive(gameGenie)
 
     val barcodeBoy = JCheckBoxMenuItem("Connect Barcode Boy", false)
+    val printer = JCheckBoxMenuItem("Connect Game Boy Printer", false)
+
     gameMenu.add(barcodeBoy)
-    barcodeBoy.addActionListener { eventBus.post(Controller.SetBarcodeBoyEvent(barcodeBoy.state)) }
+    barcodeBoy.addActionListener {
+      eventBus.post(Controller.SetBarcodeBoyEvent(barcodeBoy.state))
+      // the Barcode Boy and the printer share the link port, so only one can be connected
+      if (barcodeBoy.state) {
+        printer.state = false
+      }
+    }
+
+    gameMenu.add(printer)
+    printer.addActionListener {
+      eventBus.post(Controller.SetPrinterEvent(printer.state))
+      if (printer.state) {
+        barcodeBoy.state = false
+      }
+    }
 
     val scanBarcode = JMenuItem("Scan barcode…")
     gameMenu.add(scanBarcode)
