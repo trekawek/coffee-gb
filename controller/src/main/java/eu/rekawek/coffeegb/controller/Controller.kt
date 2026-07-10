@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.io.File
 
@@ -76,9 +77,21 @@ interface Controller : AutoCloseable {
         rom: Rom,
     ): Gameboy.GameboyConfiguration {
       val config = Gameboy.GameboyConfiguration(rom)
+      if (Cartridge.isDatel(rom)) {
+        properties.getProperty(EmulatorProperties.Key.DatelSlotRom, null)?.let { path ->
+          val file = File(path)
+          if (file.isFile) {
+            config.setSlotRom(Rom(file))
+          }
+        }
+      }
       val gameboyType = getGameboyType(properties.system, rom)
       config.setGameboyType(gameboyType)
-      if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB && gameboyType == GameboyType.CGB) {
+      if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB &&
+          gameboyType == GameboyType.CGB &&
+          !Cartridge.isDatel(rom)) {
+        // (Datel carts ship a deliberately bad logo; the visible boot ROM would hang on
+        // it forever - FAST_FORWARD times out and falls back to the post-boot presets)
         config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
       } else {
         // run the boot ROM invisibly: the post-boot timer/PPU phase relationships are
@@ -97,7 +110,10 @@ interface Controller : AutoCloseable {
     fun getGameboyType(properties: SystemProperties, rom: Rom): GameboyType {
       if (
           rom.gameboyColorFlag == Rom.GameboyColorFlag.CGB ||
-              rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL
+              rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL ||
+              // the Action Replay dumps carry a garbage CGB flag; the real cart's ASIC
+              // presents a colour header to the console
+              Cartridge.isDatel(rom)
       ) {
         if (properties.cgbGamesType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
           return GameboyType.CGB

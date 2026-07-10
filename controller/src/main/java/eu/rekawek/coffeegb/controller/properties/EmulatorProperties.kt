@@ -49,6 +49,7 @@ class EmulatorProperties() {
     ShowSgbBorder("display.showSgbBorder"),
     SoundEnabled("sound.enabled"),
     RomDirectory("rom.directory"),
+    DatelSlotRom("datel.slot.rom"),
   }
 
   private companion object {

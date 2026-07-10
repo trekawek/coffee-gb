@@ -37,6 +37,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final Cartridge cartridge;
 
+    private final Cartridge slotCartridge;
+
     private final BiosShadow biosShadow;
 
     private final Gpu gpu;
@@ -97,8 +99,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         this(new GameboyConfiguration(rom));
     }
 
+    private final boolean gbc;
+
     public Gameboy(GameboyConfiguration configuration) {
-        boolean gbc = configuration.gameboyType == GameboyType.CGB;
+        this.gbc = configuration.gameboyType == GameboyType.CGB;
+        boolean gbc = this.gbc;
         boolean sgb = configuration.gameboyType == GameboyType.SGB;
 
         speedMode = new SpeedMode(gbc);
@@ -127,6 +132,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData));
         } else {
             cartridge = new Cartridge(configuration.rom, configuration.supportBatterySave);
+        }
+        if (configuration.slotRom != null && cartridge.getDatel() != null) {
+            // the game cartridge in the Action Replay's pass-through slot
+            slotCartridge = new Cartridge(configuration.slotRom, configuration.supportBatterySave);
+            cartridge.getDatel().setSlotCartridge(slotCartridge.getMemoryController(),
+                    configuration.slotRom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB);
+        } else {
+            slotCartridge = null;
         }
         Bios bios = new Bios(configuration.gameboyType);
         biosShadow = new BiosShadow(bios, cartridge);
@@ -174,27 +187,64 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             bootTimedOut = cpu.getRegisters().getPC() != 0x100;
         }
         if (bootTimedOut || configuration.bootstrapMode == BootstrapMode.SKIP) {
-            if (gbc && configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB) {
-                speedMode.setDmgCompat(true);
-            }
-            biosShadow.setByte(0xff50, 0);
-            // DIV counter value at PC=0x0100 after the boot ROM (mooneye boot_div tests)
-            timer.presetDiv(gbc ? 0xb644 : 0xabcc);
-            var r = cpu.getRegisters();
-            if (gbc) {
-                r.setAF(0x1180);
-                r.setBC(0x0000);
-                r.setDE(0xff56);
-                r.setHL(0x000d);
-            } else {
-                r.setAF(0x01b0);
-                r.setBC(0x0013);
-                r.setDE(0x00d8);
-                r.setHL(0x014d);
-            }
-            r.setSP(0xfffe);
-            r.setPC(0x0100);
+            // the Datel Action Replay's ASIC presents a valid CGB header to the console,
+            // so the machine boots native-colour despite the dump's garbage flag byte
+            applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
+                    && !Cartridge.isDatel(configuration.rom));
         }
+    }
+
+    /**
+     * Puts the machine into the state the boot ROM hands over: post-boot register presets,
+     * boot ROM unmapped, LCD enabled. Used by the SKIP/timed-out boot and by cartridge
+     * hardware that pulses the console's reset line (the Datel Action Replay game launch).
+     */
+    private void applyPostBootState(boolean nonCgbCart) {
+        speedMode.setDmgCompat(gbc && nonCgbCart);
+        biosShadow.setByte(0xff50, 0);
+        // DIV counter value at PC=0x0100 after the boot ROM (mooneye boot_div tests)
+        timer.presetDiv(gbc ? 0xb644 : 0xabcc);
+        var r = cpu.getRegisters();
+        if (gbc) {
+            r.setAF(0x1180);
+            r.setBC(0x0000);
+            r.setDE(0xff56);
+            r.setHL(0x000d);
+        } else {
+            r.setAF(0x01b0);
+            r.setBC(0x0013);
+            r.setDE(0x00d8);
+            r.setHL(0x014d);
+        }
+        r.setSP(0xfffe);
+        r.setPC(0x0100);
+    }
+
+    // a cartridge-requested console reset (the Datel launch pulls the cart bus's /RES pin);
+    // applied at the top of the next tick
+    private transient volatile boolean warmResetNonCgbCart;
+
+    private transient volatile boolean warmResetRequested;
+
+    /** Cartridge hardware pulsing the console reset line (Datel Action Replay launch). */
+    public void requestWarmReset(boolean nonCgbCart) {
+        warmResetNonCgbCart = nonCgbCart;
+        warmResetRequested = true;
+    }
+
+    private void applyWarmReset() {
+        // the boot ROM leaves the LCD running with the DMG-compatible defaults
+        interruptManager.disableInterrupts(false);
+        mmu.setByte(0xffff, 0x00);
+        mmu.setByte(0xff0f, 0xe1);
+        gpu.setByte(0xff40, 0x91);
+        gpu.setByte(0xff42, 0x00);
+        gpu.setByte(0xff43, 0x00);
+        gpu.setByte(0xff45, 0x00);
+        gpu.setByte(0xff47, 0xfc);
+        mmu.setByte(0xff4a, 0x00);
+        mmu.setByte(0xff4b, 0x00);
+        applyPostBootState(warmResetNonCgbCart);
     }
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
@@ -211,6 +261,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sgbDisplay.init(eventBus);
         gameGenie.init(eventBus);
         cartridge.init(eventBus);
+        eventBus.register(
+                e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent) e).nonCgbGame),
+                eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);
     }
 
     /**
@@ -253,6 +306,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
      * @return true if there was a new frame emitted in this tick
      */
     public boolean tick() {
+        if (warmResetRequested) {
+            warmResetRequested = false;
+            applyWarmReset();
+        }
         boolean result = false;
 
         Mode newMode = tickSubsystems();
@@ -408,6 +465,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     @Override
     public void close() {
         cartridge.flushBattery();
+        if (slotCartridge != null) {
+            slotCartridge.flushBattery();
+        }
         sgbBus.close();
     }
 
@@ -435,6 +495,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         private GameboyType gameboyType;
 
         private BootstrapMode bootstrapMode = BootstrapMode.SKIP;
+
+        private Rom slotRom;
 
         private byte[] batteryData;
 
@@ -482,6 +544,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public GameboyConfiguration setBootstrapMode(BootstrapMode bootstrapMode) {
             this.bootstrapMode = bootstrapMode;
+            return this;
+        }
+
+        /** The game cartridge inserted in an Action Replay's pass-through slot. */
+        public GameboyConfiguration setSlotRom(Rom slotRom) {
+            this.slotRom = slotRom;
             return this;
         }
 
