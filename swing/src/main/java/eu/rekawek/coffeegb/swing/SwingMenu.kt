@@ -201,7 +201,11 @@ class SwingMenu(
     gameGenie.isEnabled = false
     gameMenu.add(gameGenie)
     gameGenie.addActionListener {
-      val code: String? = JOptionPane.showInputDialog(window, "Please GameGenie / GameShark code")
+      val code: String? =
+          JOptionPane.showInputDialog(
+              window,
+              "Enter a Game Genie or GameShark code (applies to the game in an Action Replay slot too):",
+          )
       if (code != null) {
         try {
           val patches = PatchFactory.createPatches(code)

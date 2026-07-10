@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory.cart;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.cart.type.Datel;
 
 import org.junit.Test;
 
@@ -38,6 +39,7 @@ public class DatelTest {
         }
         rom[0x134] = 'G';
         rom[0x147] = 0x00;
+        rom[0x7fe1] = (byte) 0x5a; // a marker where the AR keeps its bank register
         return rom;
     }
 
@@ -99,26 +101,30 @@ public class DatelTest {
     }
 
     @Test
-    public void busLatchRoutesTheGame() throws IOException {
+    public void launchHandsOffTheBusForGood() throws IOException {
         Cartridge cart = build();
         Cartridge game = new Cartridge(new Rom(gameRom()), Battery.NULL_BATTERY);
         cart.getDatel().setSlotCartridge(game.getMemoryController(), true);
+        eu.rekawek.coffeegb.core.events.EventBusImpl bus =
+                new eu.rekawek.coffeegb.core.events.EventBusImpl(null, null, false);
+        cart.init(bus);
+        java.util.concurrent.atomic.AtomicInteger launches = new java.util.concurrent.atomic.AtomicInteger();
+        bus.register(e -> launches.incrementAndGet(), eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);
 
-        // the post-registration launch stub routes the bus with 0x7FE6 = 0x07
-        cart.setByte(0x7fe6, 0x07);
+        // before the launch the AR is on the bus: its fake logo, register file visible
+        assertEquals(0x44, cart.getByte(0x0104));
+        assertEquals(0x02, cart.getByte(0x7fe1));
+
+        // the flash-init restart stub: 0x7FE4 bit 0 arms, the 0x7FF4 write hands off
+        cart.setByte(0x7fe4, 0x11);
+        cart.setByte(0x7ff4, 0x10);
+        assertEquals(1, launches.get());
+
+        // now the game owns the whole bus, register-file addresses included (they are
+        // ordinary ROM to the game); the AR is electrically gone
         assertEquals(0xCE, cart.getByte(0x0104));
         assertEquals('G', cart.getByte(0x0134));
-        cart.setByte(0x7fe6, 0x00);
-        assertEquals(0x44, cart.getByte(0x0104));
-        // the flash-init restart stub latches with 0x7FE4 bit 0
-        cart.setByte(0x7fe4, 0x11);
-        assertEquals(0xCE, cart.getByte(0x0104));
-        cart.setByte(0x7fe4, 0x10);
-        assertEquals(0x44, cart.getByte(0x0104));
-        // 0x7FE2 (the hook config; also written during peeks) does NOT latch
-        cart.setByte(0x7fe2, 0x03);
-        assertEquals(0x44, cart.getByte(0x0104));
-        cart.setByte(0x7fe2, 0x00);
+        assertEquals(0x5a, cart.getByte(0x7fe1)); // the game's ROM there, not the AR reg (0x02)
     }
 
     @Test

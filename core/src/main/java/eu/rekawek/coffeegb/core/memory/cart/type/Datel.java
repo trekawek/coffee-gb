@@ -57,6 +57,12 @@ public class Datel implements MemoryController {
 
     private final int[] regsB = new int[8];
 
+    // once the software hands off to the game, the ASIC leaves the bus entirely: every
+    // access - including the register-file addresses, which are ordinary ROM to the game -
+    // reaches the slot cartridge. The peek window (0x7FE5) is the only pre-launch state
+    // where the ASIC keeps its registers visible while reading the slot's header.
+    private boolean launched;
+
     // JEDEC command state: 0 = idle, 1 = got 5555=AA, 2 = got 2AAA=55, 3 = program next
     private int flashCycle;
 
@@ -109,17 +115,6 @@ public class Datel implements MemoryController {
         this.eventBus = eventBus;
     }
 
-    private boolean slotLatched() {
-        // Two launch paths exist in the software. The post-registration launch stub
-        // routes the bus with 0x7FE6=0x07 (0x7FE2 carries the vblank-hook config,
-        // 0x03/0x13 - it is not the latch: the header peek also writes it). That flow
-        // is gated behind the unemulated online-registration dongle. The reachable
-        // flow is the first-boot flash-initialization restart, whose HRAM stub sets
-        // 0x7FE4 bit 0 before its 0x7FF4-terminated flash-guard sequence; we latch on
-        // either and treat the restart as the game launch.
-        return regs[6] == 0x07 || (regs[4] & 0x01) != 0;
-    }
-
     private boolean slotPeek() {
         return (regs[5] & 0x10) != 0;
     }
@@ -142,20 +137,27 @@ public class Datel implements MemoryController {
     @Override
     public void setByte(int address, int value) {
         value &= 0xff;
+        if (launched) {
+            slot.setByte(address, value);
+            return;
+        }
         if (address >= 0x7fe0 && address <= 0x7fe7) {
             regs[address - 0x7fe0] = value;
             return;
         }
         if (address >= 0x7ff0 && address <= 0x7ff7) {
             regsB[address - 0x7ff0] = value;
-            if (address == 0x7ff4 && (regs[4] & 0x01) != 0 && eventBus != null) {
-                // the restart stub's final write: emulate it as the console-reset the
-                // real software's launch performs, with the slot latched
-                eventBus.post(new LaunchEvent(slotNonCgb));
+            if (address == 0x7ff4 && (regs[4] & 0x01) != 0 && slot != null) {
+                // the restart stub's final write hands the bus to the game: emulate the
+                // console reset the software performs here, and leave the bus for good
+                launched = true;
+                if (eventBus != null) {
+                    eventBus.post(new LaunchEvent(slotNonCgb));
+                }
             }
             return;
         }
-        if (slotLatched() || slotPeek()) {
+        if (slotPeek()) {
             if (slot != null) {
                 slot.setByte(address, value);
             }
@@ -237,7 +239,10 @@ public class Datel implements MemoryController {
 
     @Override
     public int getByte(int address) {
-        if (slotLatched() || slotPeek()) {
+        if (launched) {
+            return slot.getByte(address);
+        }
+        if (slotPeek()) {
             if (address >= 0x7fe0 && address <= 0x7fe7) {
                 // the register file stays visible: the peek stub switches back with a
                 // 0x7FE5 write while the slot occupies the bus
@@ -287,7 +292,7 @@ public class Datel implements MemoryController {
     @Override
     public Memento<MemoryController> saveToMemento() {
         return new DatelMemento(ram.clone(), regs.clone(), ramWritten.clone(), regsB.clone(),
-                flash.clone(), flashCycle, flashErasePending, flashIdMode,
+                flash.clone(), flashCycle, flashErasePending, flashIdMode, launched,
                 slot == null ? null : slot.saveToMemento());
     }
 
@@ -304,6 +309,7 @@ public class Datel implements MemoryController {
         this.flashCycle = mem.flashCycle;
         this.flashErasePending = mem.flashErasePending;
         this.flashIdMode = mem.flashIdMode;
+        this.launched = mem.launched;
         if (slot != null && mem.slotMemento != null) {
             slot.restoreFromMemento(mem.slotMemento);
         }
@@ -311,7 +317,8 @@ public class Datel implements MemoryController {
 
     private record DatelMemento(int[] ram, int[] regs, boolean[] ramWritten, int[] regsB,
                                 int[] flash, int flashCycle, boolean flashErasePending,
-                                boolean flashIdMode, Memento<MemoryController> slotMemento)
+                                boolean flashIdMode, boolean launched,
+                                Memento<MemoryController> slotMemento)
             implements Memento<MemoryController> {
     }
 }
