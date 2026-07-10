@@ -43,6 +43,22 @@ public class DatelTest {
         return rom;
     }
 
+    /** An MBC5 slot game with a distinct marker byte in each 16 KB bank. */
+    private static byte[] mbcGameRom() {
+        byte[] rom = new byte[0x40000]; // 256 KB, 16 banks
+        int[] logo = {0xCE, 0xED, 0x66, 0x66};
+        for (int i = 0; i < logo.length; i++) {
+            rom[0x104 + i] = (byte) logo[i];
+        }
+        rom[0x134] = 'G';
+        rom[0x147] = 0x19; // MBC5
+        rom[0x148] = 0x04; // 256 KB
+        for (int bank = 0; bank < 16; bank++) {
+            rom[bank * 0x4000 + 0x0100] = (byte) (0xB0 + bank);
+        }
+        return rom;
+    }
+
     private static Cartridge build() throws IOException {
         return new Cartridge(new Rom(datelRom()), Battery.NULL_BATTERY);
     }
@@ -125,6 +141,56 @@ public class DatelTest {
         assertEquals(0xCE, cart.getByte(0x0104));
         assertEquals('G', cart.getByte(0x0134));
         assertEquals(0x5a, cart.getByte(0x7fe1)); // the game's ROM there, not the AR reg (0x02)
+    }
+
+    @Test
+    public void runLaunchHandsOffTheBusForGood() throws IOException {
+        // the Action Replay Online "run launch" path: the 0xFF80 stub routes the bus with
+        // 0x7FE7=02 then 0x7FE6=07 and jumps into the game without a console reset. (The
+        // Xtreme's cart uses the 0x7FF4 reset path instead; both must hand off.)
+        Cartridge cart = build();
+        Cartridge game = new Cartridge(new Rom(gameRom()), Battery.NULL_BATTERY);
+        cart.getDatel().setSlotCartridge(game.getMemoryController(), false);
+        eu.rekawek.coffeegb.core.events.EventBusImpl bus =
+                new eu.rekawek.coffeegb.core.events.EventBusImpl(null, null, false);
+        cart.init(bus);
+        java.util.concurrent.atomic.AtomicInteger launches = new java.util.concurrent.atomic.AtomicInteger();
+        bus.register(e -> launches.incrementAndGet(), eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);
+
+        assertEquals(0x44, cart.getByte(0x0104)); // the AR's fake logo, pre-launch
+
+        // 0x7FE6=07 only routes the bus once 0x7FE7 already holds 02
+        cart.setByte(0x7fe6, 0x07);
+        assertEquals(0, launches.get());
+        cart.setByte(0x7fe7, 0x02);
+        cart.setByte(0x7fe6, 0x07);
+        assertEquals(1, launches.get());
+
+        // the game now owns the whole bus
+        assertEquals(0xCE, cart.getByte(0x0104));
+        assertEquals('G', cart.getByte(0x0134));
+        assertEquals(0x5a, cart.getByte(0x7fe1));
+    }
+
+    @Test
+    public void slotBankRegisterWriteThrough() throws IOException {
+        // 0x7FE5 bit 0 is a write-through: the boot pre-sets the slot game's MBC bank
+        // register through it without exposing the slot for reads
+        Cartridge cart = build();
+        Cartridge game = new Cartridge(new Rom(mbcGameRom()), Battery.NULL_BATTERY);
+        cart.getDatel().setSlotCartridge(game.getMemoryController(), false);
+
+        cart.setByte(0x7fe5, 0x01);      // enable write-through
+        cart.setByte(0x2000, 0x03);      // MBC5 low-bank register -> the game's bank 3
+        cart.setByte(0x7fe5, 0x00);      // back to normal
+        // reads still serve the AR (its fake logo), not the slot
+        assertEquals(0x44, cart.getByte(0x0104));
+
+        // peek the slot: the write reached the game's mapper, so its 0x4000 window maps
+        // bank 3 (open the peek window, then close it)
+        cart.setByte(0x7fe5, 0x10);
+        assertEquals(0xB3, cart.getByte(0x4100)); // bank-3 marker
+        cart.setByte(0x7fe5, 0x00);
     }
 
     @Test

@@ -119,6 +119,15 @@ public class Datel implements MemoryController {
         return (regs[5] & 0x10) != 0;
     }
 
+    // hand the bus to the slot game for good and warm-reset the console to a clean
+    // post-boot state (the machine state both launch stubs reconstruct by hand)
+    private void launch() {
+        launched = true;
+        if (eventBus != null) {
+            eventBus.post(new LaunchEvent(slotNonCgb));
+        }
+    }
+
     private int bank(int reg) {
         return regs[reg] % romBanks8k;
     }
@@ -143,21 +152,30 @@ public class Datel implements MemoryController {
         }
         if (address >= 0x7fe0 && address <= 0x7fe7) {
             regs[address - 0x7fe0] = value;
+            if (address == 0x7fe6 && value == 0x07 && regs[7] == 0x02 && slot != null) {
+                // the "run launch" stub (Action Replay Online's path, copied to 0xFF80):
+                // it routes the bus to the slot with 0x7FE7=02 + 0x7FE6=07, restores the
+                // boot IO itself and jumps straight into the game (no console reset). We
+                // model the handoff as a warm reset to a clean post-boot state - the same
+                // machine state the stub reconstructs by hand - and hand the bus over.
+                launch();
+            }
             return;
         }
         if (address >= 0x7ff0 && address <= 0x7ff7) {
             regsB[address - 0x7ff0] = value;
             if (address == 0x7ff4 && (regs[4] & 0x01) != 0 && slot != null) {
-                // the restart stub's final write hands the bus to the game: emulate the
-                // console reset the software performs here, and leave the bus for good
-                launched = true;
-                if (eventBus != null) {
-                    eventBus.post(new LaunchEvent(slotNonCgb));
-                }
+                // the "reset launch" stub (the Xtreme's path): 0x7FE4 bit 0 latches the
+                // slot and the final 0x7FF4 write pulses the console reset line - the boot
+                // ROM re-runs against the game cartridge (the logo-swap trick).
+                launch();
             }
             return;
         }
-        if (slotPeek()) {
+        if (slotPeek() || (regs[5] & 0x01) != 0) {
+            // 0x7FE5 bit 0 is a write-through mode: before the genuine launch the boot
+            // pre-sets the slot game's MBC bank register through it (0x7FE5=01,
+            // LD (2000),A, 0x7FE5=00) without exposing the slot for reads
             if (slot != null) {
                 slot.setByte(address, value);
             }
