@@ -64,18 +64,32 @@ public class Rom {
             }
         }
 
+        title = getTitle(rom);
         CartridgeType type;
         try {
             type = CartridgeType.getById(rom[0x0147]);
         } catch (IllegalArgumentException e) {
-            // unknown/custom mapper byte (unlicensed carts like Pocket Voice, Sachen):
-            // fall back to MBC5 banking instead of refusing to load (issue #71)
-            LOG.warn("Unsupported cartridge type {}, falling back to MBC5",
-                    Integer.toHexString(rom[0x0147]));
+            // Unknown/custom mapper byte. Some are known unlicensed carts we handle
+            // deliberately as MBC5; the rest fall back to MBC5 banking rather than
+            // refusing to load (issues #58, #71).
+            if (isPocketVoice(rom, title)) {
+                // The Pocket Voice V2.0 voice recorder (type 0xBE) is MBC5-compatible for
+                // everything the Game Boy can observe: it banks 32x16 KB normally and its
+                // full UI (record screen, built-in sample library) is reachable. The voice
+                // chip is controlled by write-only commands (0x6000 = command, 0x7000 =
+                // strobe); reads of that range return ordinary ROM-window bytes, so nothing
+                // ever polls the chip and the cart never stalls. The audio itself lives
+                // inside an external analog voice IC (own mic in, own speaker out) and never
+                // crosses the cartridge bus, so recording/playback cannot be reproduced from
+                // a ROM dump - see issue #71.
+                LOG.info("Pocket Voice cartridge detected; handling as MBC5 (external voice chip not emulated)");
+            } else {
+                LOG.warn("Unsupported cartridge type {}, falling back to MBC5",
+                        Integer.toHexString(rom[0x0147]));
+            }
             type = CartridgeType.getById(0x19);
         }
         cartridgeType = type;
-        title = getTitle(rom);
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
         gameboyColorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
         superGameboyFlag = rom[0x0146] == 0x03;
@@ -120,6 +134,13 @@ public class Rom {
 
     public boolean isSuperGameboyFlag() {
         return superGameboyFlag;
+    }
+
+    // The Pocket Voice V2.0 voice recorder uses cartridge-type byte 0xBE and stamps its name
+    // in the header title ("Pocket Voice2.0"); match both so an unrelated cart that happens to
+    // reuse 0xBE is not mislabelled.
+    private static boolean isPocketVoice(int[] rom, String title) {
+        return rom[0x0147] == 0xBE && title.startsWith("Pocket Voice");
     }
 
     private static String getTitle(int[] rom) {
