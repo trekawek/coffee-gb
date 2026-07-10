@@ -1,14 +1,11 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
-import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
-import eu.rekawek.coffeegb.core.memory.cart.type.Datel;
 
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -72,6 +69,10 @@ public class DatelTest {
     @Test
     public void asicRamAndRegisterFile() throws IOException {
         Cartridge cart = build();
+        // writes to 0x7000-0x77FF are captured (the vblank hook seed) but reads keep
+        // serving the flash window; the top 2 KB reads back what was written
+        cart.setByte(0x7000, 0xd9);
+        assertEquals(0xA1, cart.getByte(0x7000)); // still the 0x6000-window flash bank
         cart.setByte(0x7900, 0x42);
         assertEquals(0x42, cart.getByte(0x7900));
         cart.setByte(0x7fe2, 0x37);
@@ -98,24 +99,58 @@ public class DatelTest {
     }
 
     @Test
-    public void launchLatchFiresTheResetEvent() throws IOException {
+    public void busLatchRoutesTheGame() throws IOException {
         Cartridge cart = build();
         Cartridge game = new Cartridge(new Rom(gameRom()), Battery.NULL_BATTERY);
         cart.getDatel().setSlotCartridge(game.getMemoryController(), true);
-        EventBusImpl bus = new EventBusImpl(null, null, false);
-        cart.init(bus);
-        AtomicInteger launches = new AtomicInteger();
-        bus.register(e -> launches.incrementAndGet(), Datel.LaunchEvent.class);
 
-        // the game-launch stub's sequence: latch the slot, then the final 0x7FF4 write
-        cart.setByte(0x7fe4, 0x11);
-        cart.setByte(0x7ff5, 0x10);
-        cart.setByte(0x7ff2, 0x01);
-        cart.setByte(0x7ff2, 0x00);
-        cart.setByte(0x7ff4, 0x10);
-        assertEquals(1, launches.get());
-        // the slot stays latched: the game occupies the whole bus
+        // the post-registration launch stub routes the bus with 0x7FE6 = 0x07
+        cart.setByte(0x7fe6, 0x07);
         assertEquals(0xCE, cart.getByte(0x0104));
+        assertEquals('G', cart.getByte(0x0134));
+        cart.setByte(0x7fe6, 0x00);
+        assertEquals(0x44, cart.getByte(0x0104));
+        // the flash-init restart stub latches with 0x7FE4 bit 0
+        cart.setByte(0x7fe4, 0x11);
+        assertEquals(0xCE, cart.getByte(0x0104));
+        cart.setByte(0x7fe4, 0x10);
+        assertEquals(0x44, cart.getByte(0x0104));
+        // 0x7FE2 (the hook config; also written during peeks) does NOT latch
+        cart.setByte(0x7fe2, 0x03);
+        assertEquals(0x44, cart.getByte(0x0104));
+        cart.setByte(0x7fe2, 0x00);
+    }
+
+    @Test
+    public void flashIdProgramAndErase() throws IOException {
+        Cartridge cart = build();
+        // JEDEC software-ID mode (the boot code identifies its flash chip)
+        cart.setByte(0x5555, 0xaa); // via the 0x4000 window, bank 2: flash 0x5555
+        cart.setByte(0x2aaa, 0x55);
+        cart.setByte(0x5555, 0x90);
+        assertEquals(0xbf, cart.getByte(0x0000)); // SST manufacturer
+        assertEquals(0xb5, cart.getByte(0x0001)); // device
+        cart.setByte(0x5555, 0xaa);
+        cart.setByte(0x2aaa, 0x55);
+        cart.setByte(0x5555, 0xf0); // reset
+        assertEquals(0xA0, cart.getByte(0x1000)); // normal reads again
+
+        // sector erase of flash sector 0x3000 (programming can only clear bits)
+        cart.setByte(0x5555, 0xaa);
+        cart.setByte(0x2aaa, 0x55);
+        cart.setByte(0x5555, 0x80);
+        cart.setByte(0x5555, 0xaa);
+        cart.setByte(0x2aaa, 0x55);
+        cart.setByte(0x3000, 0x30);
+        assertEquals(0xff, cart.getByte(0x3000));
+        assertEquals(0xff, cart.getByte(0x3001));
+
+        // byte program into the erased sector
+        cart.setByte(0x5555, 0xaa);
+        cart.setByte(0x2aaa, 0x55);
+        cart.setByte(0x5555, 0xa0);
+        cart.setByte(0x3000, 0x12);
+        assertEquals(0x12, cart.getByte(0x3000));
     }
 
     @Test

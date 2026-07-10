@@ -187,7 +187,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             bootTimedOut = cpu.getRegisters().getPC() != 0x100;
         }
         if (bootTimedOut || configuration.bootstrapMode == BootstrapMode.SKIP) {
-            applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB);
+            // the Datel Action Replay's ASIC presents a valid CGB header to the console,
+            // so the machine boots native-colour despite the dump's garbage flag byte
+            applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
+                    && !Cartridge.isDatel(configuration.rom));
         }
     }
 
@@ -258,7 +261,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sgbDisplay.init(eventBus);
         gameGenie.init(eventBus);
         cartridge.init(eventBus);
-        eventBus.register(e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent) e).nonCgbGame),
+        eventBus.register(
+                e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent) e).nonCgbGame),
                 eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);
     }
 
