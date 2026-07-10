@@ -213,6 +213,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         cartridge.init(eventBus);
     }
 
+    /**
+     * Swaps the link-port device on a running emulation - e.g. plugging in the Game Boy
+     * Printer without a reset. Safe to call between ticks (same thread as {@link #tick()}).
+     */
+    public void setSerialEndpoint(SerialEndpoint serialEndpoint) {
+        serialPort.init(serialEndpoint);
+    }
+
     public void run() {
         doStop = false;
         while (!doStop) {

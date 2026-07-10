@@ -10,7 +10,9 @@ import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.Patch
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
+import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 
 class BasicController(
     parentEventBus: EventBus,
@@ -44,6 +46,10 @@ class BasicController(
 
   private var barcodeBoy: BarcodeBoySerialEndpoint? = null
 
+  // the Game Boy Printer is likewise wired in place of the netplay peer endpoint; its
+  // finished bands are forwarded to the UI as PrinterPrintEvents
+  private var printerEnabled = false
+
   private val thread = Thread {
     while (!doStop) {
       runFrame()
@@ -73,12 +79,23 @@ class BasicController(
     eventQueue.register<Controller.SetBarcodeBoyEvent> {
       if (barcodeBoyEnabled != it.enabled) {
         barcodeBoyEnabled = it.enabled
-        if (session != null) {
-          reset()
+        // the Barcode Boy and the printer share the link port, so only one at a time
+        if (barcodeBoyEnabled) {
+          printerEnabled = false
         }
+        reconnectLinkDevice()
       }
     }
     eventQueue.register<Controller.ScanBarcodeEvent> { barcodeBoy?.scan(it.barcode) }
+    eventQueue.register<Controller.SetPrinterEvent> {
+      if (printerEnabled != it.enabled) {
+        printerEnabled = it.enabled
+        if (printerEnabled) {
+          barcodeBoyEnabled = false
+        }
+        reconnectLinkDevice()
+      }
+    }
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
         val newType = Controller.getGameboyType(properties.system, config.rom)
@@ -114,14 +131,30 @@ class BasicController(
   }
 
   private fun createSession(config: Gameboy.GameboyConfiguration): Session {
-    val endpoint =
-        if (barcodeBoyEnabled) {
-          BarcodeBoySerialEndpoint().also { barcodeBoy = it }
-        } else {
-          barcodeBoy = null
-          Peer2PeerSerialEndpoint()
+    val sessionBus = eventBus.fork("main")
+    return Session(config, sessionBus, console, createLinkDevice(sessionBus))
+  }
+
+  private fun createLinkDevice(sessionBus: EventBus): SerialEndpoint =
+      if (printerEnabled) {
+        barcodeBoy = null
+        GameboyPrinterSerialEndpoint { argb, width, height, top, bottom, exposure ->
+          sessionBus.post(Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
         }
-    return Session(config, eventBus.fork("main"), console, endpoint)
+      } else if (barcodeBoyEnabled) {
+        BarcodeBoySerialEndpoint().also { barcodeBoy = it }
+      } else {
+        barcodeBoy = null
+        Peer2PeerSerialEndpoint()
+      }
+
+  /**
+   * Plug the currently selected link-port device into the running session without a reset, so
+   * connecting the printer or Barcode Boy doesn't restart the game.
+   */
+  private fun reconnectLinkDevice() {
+    val session = session ?: return
+    session.setSerialEndpoint(createLinkDevice(session.eventBus))
   }
 
   private fun start() {

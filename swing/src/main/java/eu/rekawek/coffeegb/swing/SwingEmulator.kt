@@ -29,6 +29,8 @@ class SwingEmulator(
 
   private val tiltKeys: SwingTiltKeys
 
+  private val printer: SwingPrinter
+
   private val connectionController: ConnectionController
 
   private lateinit var controller: Controller
@@ -39,6 +41,7 @@ class SwingEmulator(
     joypad = SwingJoypad(properties.controllerMapping, eventBus)
     accelerometer = SwingAccelerometer(eventBus, display.preferredSize)
     tiltKeys = SwingTiltKeys(eventBus)
+    printer = SwingPrinter(eventBus)
     connectionController = ConnectionController(eventBus)
 
     Thread(display).start()

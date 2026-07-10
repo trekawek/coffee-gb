@@ -50,6 +50,24 @@ interface Controller : AutoCloseable {
   /** Simulates swiping a card with the given 13-digit JAN-13 barcode on the Barcode Boy. */
   data class ScanBarcodeEvent(val barcode: String) : Event
 
+  /** Connects or disconnects the Game Boy Printer on the link port (resets the game). */
+  data class SetPrinterEvent(val enabled: Boolean) : Event
+
+  /**
+   * Emitted each time the game prints a band on the Game Boy Printer. [argb] holds
+   * [width]×[height] ARGB pixels (top row first, [width] is always 160). [topMargin] and
+   * [bottomMargin] are the paper feed before/after the band in 1/16-tile units; a non-zero
+   * [bottomMargin] ends the sheet.
+   */
+  class PrinterPrintEvent(
+      val argb: IntArray,
+      val width: Int,
+      val height: Int,
+      val topMargin: Int,
+      val bottomMargin: Int,
+      val exposure: Int,
+  ) : Event
+
   data class ControllerState(val memento: Memento<Gameboy>, val rom: Rom)
 
   companion object {

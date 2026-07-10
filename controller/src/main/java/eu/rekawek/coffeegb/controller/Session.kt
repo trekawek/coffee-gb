@@ -12,13 +12,22 @@ class Session(
     val config: Gameboy.GameboyConfiguration,
     val eventBus: EventBus,
     private val console: Console?,
-    internal val serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
+    serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
 ) : AutoCloseable, Originator<Session> {
 
   internal val gameboy: Gameboy = config.build()
 
+  internal var serialEndpoint: SerialEndpoint = serialEndpoint
+    private set
+
   init {
     gameboy.init(eventBus, serialEndpoint, console)
+  }
+
+  /** Hot-swaps the link-port device (e.g. connecting the printer) without a reset. */
+  fun setSerialEndpoint(endpoint: SerialEndpoint) {
+    serialEndpoint = endpoint
+    gameboy.setSerialEndpoint(endpoint)
   }
 
   override fun close() {
