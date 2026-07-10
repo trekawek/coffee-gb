@@ -127,6 +127,27 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         return addressSpace instanceof SachenMmc s ? s : null;
     }
 
+    /** The Datel Action Replay mapper, for wiring its pass-through game slot. */
+    public Datel getDatel() {
+        return addressSpace instanceof Datel d ? d : null;
+    }
+
+    /** The mapper itself, for mounting this cartridge in another cartridge's slot. */
+    public MemoryController getMemoryController() {
+        return addressSpace;
+    }
+
+    /**
+     * Whether this ROM is a Datel Action Replay / GameShark cart (deliberately bad logo on
+     * an oversized "ROM only" image). These carts run on the Game Boy Color - the ASIC
+     * presents a valid CGB header to the console - so the type mapping treats them as
+     * colour carts despite the garbage CGB flag byte in the dump.
+     */
+    public static boolean isDatel(Rom rom) {
+        return rom.getRom().length > 0x8000 && !hasValidLogo(rom)
+                && rom.getType() == CartridgeType.ROM;
+    }
+
     private static boolean isMani32kMulticart(Rom rom) {
         int[] data = rom.getRom();
         // MBC1-typed carts with per-game logos are MBC1M multicarts (handled by Mbc1);

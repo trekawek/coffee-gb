@@ -260,6 +260,37 @@ class SwingMenu(
       }
     }
 
+    val arMenu = JMenu("Action Replay")
+    peripheralsMenu.add(arMenu)
+
+    val arGame = JMenuItem(arGameLabel())
+    arMenu.add(arGame)
+    arGame.addActionListener {
+      val fc = JFileChooser()
+      fc.dialogTitle = "Select the game cartridge for the Action Replay's slot"
+      properties.getProperty(EmulatorProperties.Key.RomDirectory, null)?.let {
+        fc.currentDirectory = File(it)
+      }
+      if (fc.showOpenDialog(window) == JFileChooser.APPROVE_OPTION) {
+        properties.setProperty(EmulatorProperties.Key.DatelSlotRom, fc.selectedFile.absolutePath)
+        arGame.text = arGameLabel()
+        JOptionPane.showMessageDialog(
+            window,
+            "The game will be inserted in the Action Replay's slot the next time an\n" +
+                "Action Replay cartridge is loaded (File > Load ROM).",
+            "Action Replay",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
+      }
+    }
+
+    val arClear = JMenuItem("Remove slot game")
+    arMenu.add(arClear)
+    arClear.addActionListener {
+      properties.setProperty(EmulatorProperties.Key.DatelSlotRom, "")
+      arGame.text = arGameLabel()
+    }
+
     val barcodeMenu = JMenu("Barcode Boy")
     peripheralsMenu.add(barcodeMenu)
 
@@ -493,6 +524,12 @@ class SwingMenu(
     eventBus.register<ServerGotConnectionEvent> { setConnected(true) }
     eventBus.register<ServerLostConnectionEvent> { setConnected(false) }
     return linkMenu
+  }
+
+  private fun arGameLabel(): String {
+    val path = properties.getProperty(EmulatorProperties.Key.DatelSlotRom, null)
+    val name = if (path.isNullOrEmpty()) "(none)" else File(path).name
+    return "Slot game: $name…"
   }
 
   private fun enableWhenEmulationActive(item: JMenuItem) {
