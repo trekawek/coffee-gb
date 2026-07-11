@@ -50,6 +50,7 @@ class EmulatorProperties() {
     SoundEnabled("sound.enabled"),
     RomDirectory("rom.directory"),
     DatelSlotRom("datel.slot.rom"),
+    FullChangerCharacter("fullchanger.character"),
   }
 
   private companion object {

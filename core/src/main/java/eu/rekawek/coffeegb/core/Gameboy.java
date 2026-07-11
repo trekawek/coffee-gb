@@ -65,6 +65,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final SerialPort serialPort;
 
+    private final eu.rekawek.coffeegb.core.ir.InfraredPort infraredPort;
+
     private final Joypad joypad;
 
     private final SpeedMode speedMode;
@@ -127,6 +129,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sound = new Sound(timer, speedMode, gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
         serialPort = new SerialPort(interruptManager, timer, gbc, speedMode);
+        infraredPort = new eu.rekawek.coffeegb.core.ir.InfraredPort(gbc, speedMode);
 
         if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData));
@@ -159,6 +162,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (gbc) {
             mmu.addAddressSpace(speedMode);
             mmu.addAddressSpace(hdma);
+            mmu.addAddressSpace(infraredPort);
         }
         mmu.indexSpaces();
         mmu.setBusListener(cartridge.getSachenMmc());
@@ -257,6 +261,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display.init(eventBus);
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
+        infraredPort.init(eventBus);
         background.init(eventBus);
         sgbDisplay.init(eventBus);
         gameGenie.init(eventBus);
@@ -362,6 +367,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         dma.tick();
         sound.tick();
         serialPort.tick();
+        infraredPort.tick();
         joypad.tick();
         Mode mode = gpu.tick();
         statRegister.tick();
@@ -429,7 +435,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled);
     }
 
     @Override
@@ -451,6 +457,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display.restoreFromMemento(mem.displayMemento());
         sound.restoreFromMemento(mem.soundMemento());
         serialPort.restoreFromMemento(mem.serialPortMemento());
+        infraredPort.restoreFromMemento(mem.infraredPortMemento());
         joypad.restoreFromMemento(mem.joypadMemento());
         speedMode.restoreFromMemento(mem.speedModeMemento());
         superGameboy.restoreFromMemento(mem.superGameboyMemento());
@@ -477,6 +484,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento,
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
+                                  Memento<eu.rekawek.coffeegb.core.ir.InfraredPort> infraredPortMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
                                   Memento<SuperGameboy> superGameboyMemento, Memento<Background> backgroundMemento,
                                   Memento<VRamTransfer> vRamTransferMemento, Memento<SgbDisplay> sgbDisplayMemento,
