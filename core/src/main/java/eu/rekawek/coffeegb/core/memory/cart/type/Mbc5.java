@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.events.Event;
+import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -8,6 +10,10 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import java.util.Arrays;
 
 public class Mbc5 implements MemoryController {
+
+    /** The rumble carts' motor turning on or off (issue #93). */
+    public record RumbleEvent(boolean on) implements Event {
+    }
 
     private final int romBanks;
 
@@ -27,6 +33,14 @@ public class Mbc5 implements MemoryController {
 
     private boolean ramUpdated;
 
+    // rumble carts (types 0x1C-0x1E) wire bit 3 of the RAM-bank register to the motor,
+    // leaving bits 0-2 for the bank select
+    private final boolean rumble;
+
+    private boolean motorOn;
+
+    private transient EventBus eventBus;
+
     // Non-battery cart RAM is volatile scratch with no save to protect, so the RAM-enable
     // handshake serves no purpose there. Some homebrew built for flash carts (Bung/EMS, whose
     // SRAM is always accessible) use it - e.g. as a stack - without ever enabling it, and would
@@ -42,7 +56,13 @@ public class Mbc5 implements MemoryController {
         Arrays.fill(ram, 0xff);
         this.battery = battery;
         this.gateRamWrites = rom.getType().isBattery();
+        this.rumble = rom.getType().isRumble();
         battery.loadRam(ram);
+    }
+
+    @Override
+    public void init(EventBus eventBus) {
+        this.eventBus = eventBus;
     }
 
     @Override
@@ -59,7 +79,16 @@ public class Mbc5 implements MemoryController {
         } else if (address >= 0x3000 && address < 0x4000) {
             selectedRomBank = (selectedRomBank & 0x0ff) | ((value & 1) << 8);
         } else if (address >= 0x4000 && address < 0x6000) {
-            int bank = value & 0x0f;
+            if (rumble) {
+                boolean on = (value & 0x08) != 0;
+                if (on != motorOn) {
+                    motorOn = on;
+                    if (eventBus != null) {
+                        eventBus.post(new RumbleEvent(on));
+                    }
+                }
+            }
+            int bank = value & (rumble ? 0x07 : 0x0f);
             if (bank < ramBanks) {
                 selectedRamBank = bank;
             }
@@ -114,7 +143,7 @@ public class Mbc5 implements MemoryController {
 
     @Override
     public Memento<MemoryController> saveToMemento() {
-        return new Mbc5Memento(battery.saveToMemento(), ram.clone(), selectedRamBank, selectedRomBank, ramWriteEnabled, ramUpdated);
+        return new Mbc5Memento(battery.saveToMemento(), ram.clone(), selectedRamBank, selectedRomBank, ramWriteEnabled, ramUpdated, motorOn);
     }
 
     @Override
@@ -131,9 +160,11 @@ public class Mbc5 implements MemoryController {
         this.selectedRomBank = mem.selectedRomBank;
         this.ramWriteEnabled = mem.ramWriteEnabled;
         this.ramUpdated = mem.ramUpdated;
+        this.motorOn = mem.motorOn;
     }
 
     private record Mbc5Memento(Memento<Battery> batteryMemento, int[] ram, int selectedRamBank, int selectedRomBank,
-                               boolean ramWriteEnabled, boolean ramUpdated) implements Memento<MemoryController> {
+                               boolean ramWriteEnabled, boolean ramUpdated,
+                               boolean motorOn) implements Memento<MemoryController> {
     }
 }
