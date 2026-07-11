@@ -50,6 +50,12 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private GameboyType gameboyType;
 
+    // the rumble carts' motor (issue #93): while it runs, the picture is jiggled by a
+    // pixel each frame - a dependency-free stand-in for a vibrating console
+    private volatile boolean rumbling;
+
+    private int rumblePhase;
+
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
         super();
         this.eventBus = eventBus;
@@ -64,6 +70,7 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
         eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
         eventBus.register(e -> setRotation(e.rotation), SetRotationEvent.class);
+        eventBus.register(e -> this.rumbling = e.on(), eu.rekawek.coffeegb.core.memory.cart.type.Mbc5.RumbleEvent.class, callerId);
         this.grayscale = properties.getGrayscale();
         this.rotation = normalizeRotation(properties.getRotation());
         setBlending(properties.getBlending());
@@ -157,6 +164,10 @@ public class SwingDisplay extends JPanel implements Runnable {
         Graphics2D g2d = (Graphics2D) g.create();
         g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+        if (rumbling) {
+            rumblePhase++;
+            g2d.translate((rumblePhase & 2) == 0 ? 1 : -1, (rumblePhase & 1) == 0 ? 1 : -1);
+        }
         switch (rotation) {
             case 90 -> {
                 g2d.translate(h, 0);
