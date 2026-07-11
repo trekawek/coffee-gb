@@ -66,5 +66,13 @@
             <artifactId>opencv</artifactId>
             <version>4.9.0-0</version>
         </dependency>
+        <!-- SDL2 via JNA with bundled natives (Linux / Windows / macOS incl. arm64) for
+             game-controller input: SDL's mapping database covers PS3/PS4/PS5, Xbox,
+             Switch Pro and most generic pads, plus force feedback for the rumble carts. -->
+        <dependency>
+            <groupId>io.github.libsdl4j</groupId>
+            <artifactId>libsdl4j</artifactId>
+            <version>2.28.4-1.6</version>
+        </dependency>
     </dependencies>
 </project>

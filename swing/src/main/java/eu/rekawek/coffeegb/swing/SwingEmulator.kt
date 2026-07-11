@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.swing.io.SwingAccelerometer
 import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
+import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -24,6 +25,7 @@ class SwingEmulator(
 ) {
   private val display: SwingDisplay
   private val joypad: SwingJoypad
+  private val gamepad: SwingGamepad
   private val sound: AudioSystemSound
   private val accelerometer: SwingAccelerometer
 
@@ -39,6 +41,7 @@ class SwingEmulator(
     display = SwingDisplay(properties.display, eventBus, "main")
     sound = AudioSystemSound(properties.sound, eventBus, "main")
     joypad = SwingJoypad(properties.controllerMapping, eventBus)
+    gamepad = SwingGamepad(eventBus)
     accelerometer = SwingAccelerometer(eventBus, display.preferredSize)
     tiltKeys = SwingTiltKeys(eventBus)
     printer = SwingPrinter(eventBus)
@@ -46,6 +49,7 @@ class SwingEmulator(
 
     Thread(display).start()
     Thread(sound).start()
+    Thread(gamepad, "gamepad").apply { isDaemon = true }.start()
 
     controller = BasicController(eventBus, properties, console).also { it.startController() }
 
