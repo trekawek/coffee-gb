@@ -4,12 +4,15 @@ import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent;
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent;
+import com.sun.jna.NativeLibrary;
 import eu.rekawek.coffeegb.core.memory.cart.type.Mbc5;
 import io.github.libsdl4j.api.gamecontroller.SDL_GameController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 import static io.github.libsdl4j.api.Sdl.SDL_Init;
@@ -30,6 +33,11 @@ import static io.github.libsdl4j.api.joystick.SdlJoystick.SDL_NumJoysticks;
  *
  * <p>The MBC5 rumble carts' motor (issue #93) is forwarded to the controller's force
  * feedback when it has any.
+ *
+ * <p>libsdl4j bundles the SDL2 native only for Linux and Windows. On macOS SDL2 must be
+ * installed separately ({@code brew install sdl2}); this looks it up in Homebrew's lib
+ * directories, which JNA does not search by default, and otherwise degrades to
+ * keyboard-only input with a hint in the log.
  */
 public class SwingGamepad implements Runnable {
 
@@ -64,13 +72,23 @@ public class SwingGamepad implements Runnable {
 
     @Override
     public void run() {
+        locateSystemSdl();
         try {
             if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0) {
                 LOG.info("Game controllers unavailable: {}", SDL_GetError());
                 return;
             }
+        } catch (UnsatisfiedLinkError e) {
+            // no SDL2 library on this machine - keyboard input still works. libsdl4j
+            // bundles the native only for Linux and Windows; macOS must supply its own.
+            if (isMac()) {
+                LOG.warn("Game controllers need SDL2, which macOS builds don't bundle. "
+                        + "Install it with 'brew install sdl2' and restart. Keyboard input still works.");
+            } else {
+                LOG.info("Game controllers unavailable (no SDL2 native): {}", e.getMessage());
+            }
+            return;
         } catch (Throwable e) {
-            // no SDL native for this platform - keyboard input still works
             LOG.info("Game controllers unavailable: {}", e.toString());
             return;
         }
@@ -93,6 +111,25 @@ public class SwingGamepad implements Runnable {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            }
+        }
+    }
+
+    private static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase().contains("mac");
+    }
+
+    // libsdl4j ships the native only for Linux and Windows; on macOS SDL2 comes from a
+    // system install (Homebrew). JNA's default dlopen search misses Homebrew's dirs - the
+    // Apple-Silicon prefix /opt/homebrew/lib especially - so add them explicitly for the
+    // "SDL2" library JNA will look up.
+    private static void locateSystemSdl() {
+        if (!isMac()) {
+            return;
+        }
+        for (String dir : List.of("/opt/homebrew/lib", "/usr/local/lib")) {
+            if (new File(dir, "libSDL2.dylib").exists()) {
+                NativeLibrary.addSearchPath("SDL2", dir);
             }
         }
     }
