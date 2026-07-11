@@ -28,6 +28,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGames
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
+import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
 import eu.rekawek.coffeegb.core.genie.PatchFactory
@@ -293,6 +294,29 @@ class SwingMenu(
     arClear.addActionListener {
       properties.setProperty(EmulatorProperties.Key.DatelSlotRom, "")
       arGame.text = arGameLabel()
+    }
+
+    // the Full Changer, the IR toy of Zok Zok Heroes: picking a Cosmic Character sends
+    // its transformation over the CGB infrared port (issue #94)
+    val fullChanger = JMenuItem("Full Changer transformation...")
+    peripheralsMenu.add(fullChanger)
+    fullChanger.isEnabled = false
+    enableWhenEmulationActive(fullChanger)
+    fullChanger.addActionListener {
+      val choice =
+          JOptionPane.showInputDialog(
+              window,
+              "Cosmic Character to transform into:",
+              "Full Changer",
+              JOptionPane.PLAIN_MESSAGE,
+              null,
+              COSMIC_CHARACTERS,
+              properties.getProperty(EmulatorProperties.Key.FullChangerCharacter, COSMIC_CHARACTERS[0]),
+          )
+      if (choice != null) {
+        properties.setProperty(EmulatorProperties.Key.FullChangerCharacter, choice as String)
+        eventBus.post(FullChanger.TransformEvent(COSMIC_CHARACTERS.indexOf(choice) + 1))
+      }
     }
 
     val barcodeMenu = JMenu("Barcode Boy")
@@ -568,6 +592,81 @@ class SwingMenu(
   }
 
   private companion object {
+    // the 70 Cosmic Characters of Zok Zok Heroes, in Full Changer ID order (1-70)
+    val COSMIC_CHARACTERS =
+        arrayOf(
+            "01 \u3042 Alkaline Powered",
+            "02 \u3044 In Water",
+            "03 \u3046 Ultra Runner",
+            "04 \u3048 Aero Power",
+            "05 \u304a Ochaapa",
+            "06 \u304b Kaizer Edge",
+            "07 \u304d King Batter",
+            "08 \u304f Crash Car",
+            "09 \u3051 Cellphone Tiger",
+            "10 \u3053 Cup Ace",
+            "11 \u3055 Sakanard",
+            "12 \u3057 Thin Delta",
+            "13 \u3059 Skateboard Rider",
+            "14 \u305b Celery Star",
+            "15 \u305d Cleaning Killer",
+            "16 \u305f Takoyaki Kid",
+            "17 \u3061 Chinkoman",
+            "18 \u3064 Tsukai Stater",
+            "19 \u3066 Teppangar",
+            "20 \u3068 Tongararin",
+            "21 \u306a Nagashiman",
+            "22 \u306b Ninja",
+            "23 \u306c Plushy-chan",
+            "24 \u306d Screw Razor",
+            "25 \u306e Nobel Brain",
+            "26 \u306f Hard Hammer",
+            "27 \u3072 Heat Man",
+            "28 \u3075 Flame Gourmet",
+            "29 \u3078 Hercules Army",
+            "30 \u307b Hot Card",
+            "31 \u307e Mr. Muscle",
+            "32 \u307f Mist Water",
+            "33 \u3080 Mushimushi Man",
+            "34 \u3081 Megaaten",
+            "35 \u3082 Mobile Robot X",
+            "36 \u3084 Yaki Bird",
+            "37 \u3086 Utron",
+            "38 \u3088 Yo-Yo Mask",
+            "39 \u3089 Radial Road",
+            "40 \u308a Remote-Control Man",
+            "41 \u308b Ruby Hook",
+            "42 \u308c Retro Sounder",
+            "43 \u308d Rocket Bastard",
+            "44 \u308f Wild Sword",
+            "45 \u304c Guts Lago",
+            "46 \u304e Giniun",
+            "47 \u3050 Great Fire",
+            "48 \u3052 Gamemark",
+            "49 \u3054 Gorilla Killa",
+            "50 \u3056 The Climber",
+            "51 \u3058 G Shark",
+            "52 \u305a Zoom Laser",
+            "53 \u305c Zenmai",
+            "54 \u305e Elephant Shower",
+            "55 \u3060 Diamond Mall",
+            "56 \u3062 Digronyan",
+            "57 \u3065 Ziza One",
+            "58 \u3067 Danger Red",
+            "59 \u3069 Dohatsuten",
+            "60 \u3070 Balloon",
+            "61 \u3073 Videoja",
+            "62 \u3076 Boo Boo",
+            "63 \u3079 Belt Jain",
+            "64 \u307c Boat Ron",
+            "65 \u3071 Perfect Sun",
+            "66 \u3074 Pinspawn",
+            "67 \u3077 Press Arm",
+            "68 \u307a Pegasus Boy",
+            "69 \u307d Pop Thunder",
+            "70 \u3093 Ndjamenas",
+        )
+
     val KEY_MODIFIER: Int =
         if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
           KeyEvent.META_DOWN_MASK
