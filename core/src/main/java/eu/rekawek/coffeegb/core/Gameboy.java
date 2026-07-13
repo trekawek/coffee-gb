@@ -322,6 +322,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             hdma.onGpuUpdate(newMode);
         }
 
+        boolean stopFrameBlanked = cpu.consumeStopFrameBlankRequest();
+        if (stopFrameBlanked) {
+            display.blankFrame();
+            result = true;
+        }
+
         if (!gpu.isLcdEnabled()) {
             if (!lcdDisabled) {
                 lcdDisabled = true;
@@ -342,7 +348,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 lcdDisabled = false;
                 hdma.onLcdSwitch(true);
             }
-            if (newMode == Mode.VBlank) {
+            if (!stopFrameBlanked && newMode == Mode.VBlank) {
                 requestedScreenRefresh = true;
                 display.frameIsReady();
                 vRamTransfer.frameIsReady();
@@ -358,8 +364,17 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     private Mode tickSubsystems() {
-        timer.tick();
-        if (hdma.isTransferInProgress()) {
+        boolean speedSwitching = cpu.isSpeedSwitching();
+        if (!speedSwitching) {
+            timer.tick();
+        }
+        if (speedSwitching) {
+            // A CGB speed switch pauses the CPU and DIV, but the PPU keeps running.
+            cpu.tick();
+            if (hdma.isTransferInProgress()) {
+                hdma.tick();
+            }
+        } else if (hdma.isTransferInProgress()) {
             hdma.tick();
         } else {
             cpu.tick();

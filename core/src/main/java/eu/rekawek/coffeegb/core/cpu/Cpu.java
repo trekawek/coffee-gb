@@ -14,9 +14,13 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     public enum State {
         OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_WAIT_1, IRQ_WAIT_2, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED,
+        SPEED_SWITCH,
         // an illegal opcode was executed: the CPU is frozen for good (hardware hangs)
         LOCKED
     }
+
+    // Fixed 4.19 MHz PPU-clock ticks. The PPU continues throughout the pause.
+    private static final int SPEED_SWITCH_DELAY = 65_544;
 
     private final Registers registers;
 
@@ -56,7 +60,12 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private boolean haltBugMode;
 
-    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode, Display display) {
+    private int speedSwitchTicks;
+
+    private boolean stopFrameBlankRequested;
+
+    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode,
+               Display display) {
         this.registers = new Registers();
         this.addressSpace = addressSpace;
         this.interruptManager = interruptManager;
@@ -66,6 +75,16 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     public void tick() {
+        if (state == State.SPEED_SWITCH) {
+            if (speedSwitchTicks > 0) {
+                speedSwitchTicks--;
+            }
+            if (speedSwitchTicks == 0) {
+                state = State.OPCODE;
+            }
+            return;
+        }
+
         if (++clockCycle >= (4 / speedMode.getSpeedMode())) {
             clockCycle = 0;
         } else {
@@ -165,9 +184,19 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 case RUNNING:
                     if (opcode1 == 0x10) {
                         if (speedMode.onStop()) {
-                            state = State.OPCODE;
+                            // A CGB speed switch resets and freezes DIV while the CPU clock
+                            // is stopped. The PPU remains in its independent clock domain.
+                            addressSpace.setByte(0xff04, 0);
+                            speedSwitchTicks = SPEED_SWITCH_DELAY;
+                            state = State.SPEED_SWITCH;
                         } else {
                             state = State.STOPPED;
+                            // A stopped DMG drives color 0 (white). A CGB outside mode 3
+                            // loses VRAM access and drives color 0 (black); during mode 3 it
+                            // retains the picture that is already being scanned out.
+                            if (gpu == null || !gpu.isGbc() || gpu.getMode() != Mode.PixelTransfer) {
+                                stopFrameBlankRequested = true;
+                            }
                             display.disableLcd();
                         }
                         return;
@@ -224,6 +253,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
                 case HALTED:
                 case STOPPED:
+                case SPEED_SWITCH:
                     return;
             }
         }
@@ -306,6 +336,16 @@ public class Cpu implements Serializable, Originator<Cpu> {
         return state;
     }
 
+    public boolean isSpeedSwitching() {
+        return state == State.SPEED_SWITCH;
+    }
+
+    public boolean consumeStopFrameBlankRequest() {
+        boolean requested = stopFrameBlankRequested;
+        stopFrameBlankRequested = false;
+        return requested;
+    }
+
     Opcode getCurrentOpcode() {
         return currentOpcode;
     }
@@ -315,7 +355,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
         int[] operand = new int[2];
         operand[0] = this.operand[0];
         operand[1] = this.operand[1];
-        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex, state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode);
+        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex,
+                state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
+                speedSwitchTicks);
     }
 
     @Override
@@ -337,6 +379,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
         this.requestedIrq = mem.requestedIrq;
         this.clockCycle = mem.clockCycle;
         this.haltBugMode = mem.haltBugMode;
+        this.speedSwitchTicks = mem.speedSwitchTicks;
+        this.stopFrameBlankRequested = false;
 
         this.currentOpcode = (opcode1 == 0xcb) ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1);
         this.ops = (currentOpcode == null) ? null : currentOpcode.getOps();
@@ -345,7 +389,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
     private record CpuMemento(Memento<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
                               int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
                               int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
-                              boolean haltBugMode) implements Memento<Cpu> {
+                              boolean haltBugMode, int speedSwitchTicks) implements Memento<Cpu> {
     }
 
 }

@@ -76,6 +76,12 @@ The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a gre
 
     mvn clean test -f core/pom.xml -Ptest-mooneye
 
+## Daid tests
+
+The screenshot-based [Daid test suite](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) can be run with the baseline-guarded `test-daid` profile:
+
+    mvn clean test -f core/pom.xml -Ptest-daid
+
 ## Screenshots
 
 ![Coffee GB running game](doc/screenshot1.png)
