@@ -31,6 +31,7 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
 
     public void setSpeedMode(eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
         gbcRam.setSpeedMode(speedMode);
+        undocumentedGbcRegisters.setSpeedMode(speedMode);
     }
 
     private final UndocumentedGbcRegisters undocumentedGbcRegisters = new UndocumentedGbcRegisters();

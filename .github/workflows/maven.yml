@@ -37,6 +37,8 @@ jobs:
       run: mvn -B -pl core test -Ptest-blargg-individual
     - name: Daid tests (baseline-guarded)
       run: mvn -B -pl core test -Ptest-daid
+    - name: BullyGB tests
+      run: mvn -B -pl core test -Ptest-bullygb
     - name: dmg-acid2
       run: mvn -B -pl core test -Ptest-dmgacid2
     - name: Mealybug Tearoom (baseline-guarded)

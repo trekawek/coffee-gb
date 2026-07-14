@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -13,10 +14,15 @@ public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Ori
 
     private int xff6c;
 
+    private SpeedMode speedMode;
+
     public UndocumentedGbcRegisters() {
         xff6c = 0xfe;
-        ram.setByte(0xff74, 0xff);
         ram.setByte(0xff75, 0x8f);
+    }
+
+    public void setSpeedMode(SpeedMode speedMode) {
+        this.speedMode = speedMode;
     }
 
     @Override
@@ -33,8 +39,13 @@ public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Ori
 
             case 0xff72:
             case 0xff73:
-            case 0xff74:
                 ram.setByte(address, value);
+                break;
+
+            case 0xff74:
+                if (speedMode == null || !speedMode.isDmgCompat()) {
+                    ram.setByte(address, value);
+                }
                 break;
 
             case 0xff75:
@@ -46,6 +57,8 @@ public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Ori
     public int getByte(int address) {
         if (address == 0xff6c) {
             return xff6c;
+        } else if (address == 0xff74 && speedMode != null && speedMode.isDmgCompat()) {
+            return 0xff;
         } else if (ram.accepts(address)) {
             return ram.getByte(address);
         } else {

@@ -28,7 +28,7 @@ public class BullyGbTestRunner {
     public BullyGbTestRunner(File romFile, GameboyType gameboyType) throws IOException {
         EventBus eventBus = new EventBusImpl();
         gb = new Gameboy.GameboyConfiguration(romFile)
-                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
                 .setGameboyType(gameboyType)
                 .setSupportBatterySave(false)
                 .build();
