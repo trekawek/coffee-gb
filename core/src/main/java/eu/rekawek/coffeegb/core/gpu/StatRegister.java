@@ -38,6 +38,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private boolean coincidence;
 
+    // The readable coincidence flag updates at the line-start latch, while
+    // its contribution to the STAT interrupt line settles one M-cycle later.
+    private boolean intCoincidence;
+
     private boolean intLine;
 
     private boolean lycWriteSuppressed;
@@ -54,6 +58,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     public void tick() {
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
+            if (gpu.getLine() <= 144 && ticksInLine == 0) {
+                // Release the preceding line's early mode-2 edge before a
+                // possible new LYC edge is registered below.
+                interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
+            }
             if (lycWriteSuppressed
                     && ((gpu.getLine() != 153 && ticksInLine == 0)
                     || (gpu.getLine() == 153 && ticksInLine == 8))) {
@@ -82,11 +91,21 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 // interrupt fires only once per frame there
                 coincidence = false;
             }
+
+            intCoincidence = coincidence;
+            if (ticksInLine < 4 && gpu.getLine() != 0 && gpu.getLine() != 153) {
+                intCoincidence = false;
+                if (ticksInLine == 0
+                        && coincidence
+                        && (enableBits & 0b01000000) != 0
+                        && !intLine) {
+                    // The comparison edge reaches IF at the line-start latch,
+                    // before its level contribution to the STAT line settles.
+                    interruptManager.requestInterrupt(InterruptType.LCDC);
+                }
+            }
             if (gpu.getLine() == 144 && ticksInLine == 0) {
                 interruptManager.requestInterrupt(InterruptType.VBlank);
-            }
-            if (gpu.getLine() <= 144 && ticksInLine == 0) {
-                interruptManager.releaseHaltWake(InterruptType.LCDC);
             }
         }
 
@@ -99,7 +118,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     public void onLcdDisabled() {
-        interruptManager.releaseHaltWake(InterruptType.LCDC);
+        interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
     }
 
     /**
@@ -133,7 +152,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     private boolean computeIntLine(int enable) {
-        boolean line = (enable & 0b01000000) != 0 && coincidence;
+        boolean line = (enable & 0b01000000) != 0 && intCoincidence;
         if (gpu.isLcdEnabled()) {
             line |= (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
             line |= (enable & 0b00010000) != 0 && gpu.getVisibleStatMode() == 1;
@@ -146,7 +165,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         if (newLine && !intLine) {
             int earlyMode2Edge = gpu.isFirstLine() ? 451 : 452;
             if (gpu.getLine() < 144 && gpu.getTicksInLine() == earlyMode2Edge) {
-                interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+                interruptManager.requestInterruptBeforeCpuAcceptance(InterruptType.LCDC);
             } else {
                 interruptManager.requestInterrupt(InterruptType.LCDC);
             }
@@ -176,7 +195,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public Memento<StatRegister> saveToMemento() {
-        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intLine, lycWriteSuppressed);
+        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intCoincidence, intLine,
+                lycWriteSuppressed);
     }
 
     @Override
@@ -187,11 +207,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.enableBits = mem.enableBits;
         this.registeredLy = mem.registeredLy;
         this.coincidence = mem.coincidence;
+        this.intCoincidence = mem.intCoincidence;
         this.intLine = mem.intLine;
         this.lycWriteSuppressed = mem.lycWriteSuppressed;
     }
 
-    private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence, boolean intLine,
+    private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,
+                                       boolean intCoincidence, boolean intLine,
                                        boolean lycWriteSuppressed) implements Memento<StatRegister> {
     }
 }

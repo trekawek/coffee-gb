@@ -60,18 +60,22 @@ One level line; the IF flag (LCDC bit) is set only on its **rising edge** — th
 blocking" (`stat_irq_blocking`) with no special cases:
 
 ```
-line = (LYC enabled  AND coincidence)
+line = (LYC enabled  AND settled coincidence)
     OR (mode0 enabled AND tl >= hblankIntFrom, lines 0-143)
     OR (mode1 enabled AND visible mode == 1)
     OR (mode2 enabled AND previous tl >= 452 or tl < 4, lines 0-144)
 ```
 
+- The readable **coincidence flag** updates at `tl=0`, while its interrupt-line contribution
+  settles at `tl=4` on ordinary lines. The comparison edge reaches IF at `tl=0` and is
+  available to the CPU at its next interrupt sample (`ly_lyc_write-GS`).
 - The **mode-2 term** becomes visible in IF during the final 4 ticks of the preceding line
   and remains high through the first 4 ticks of the new line — per the schematic
   annotation: *"INT_STAT = 1 when LY = LYC (whole line), VBLANK (MODE1), HBLANK (MODE0), and
-  only for a few cycles at the start of OAM parsing when VCLK is high."* A halted CPU sees
-  the wake-up edge at the line boundary, after IF has become readable. The condition also
-  fires at the start of line 144 (`vblank_stat_intr-GS`, Wilbert Pol `intr_2_timing`).
+  only for a few cycles at the start of OAM parsing when VCLK is high."* The CPU accepts
+  the edge at the line boundary, after IF has become readable; this applies to both normal
+  IME dispatch and HALT wake. The condition also fires at the start of line 144
+  (`vblank_stat_intr-GS`, Wilbert Pol `intr_2_timing`, Mealybug mode-3 tests).
 - The **mode-0 term** rises 3 T after the visible mode 0, i.e. at `E+4`
   (`hblank_ly_scx_timing-GS`, `intr_2_0_timing`); the pixel pipeline is T-exact, so no
   quantization is applied.

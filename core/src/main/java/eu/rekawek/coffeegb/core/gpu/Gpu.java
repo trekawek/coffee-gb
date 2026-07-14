@@ -359,7 +359,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         // IF exposes the OAM condition during the final machine cycle of the
         // preceding line and keeps it asserted through the first four ticks
-        // of the new line. HALT wake-up is synchronized at the line boundary.
+        // of the new line. CPU acceptance is synchronized at the line boundary.
         return (line < 144 && ticksInLine >= (firstLine ? 451 : 452))
                 || (!firstLine && line <= 144 && ticksInLine < 4);
     }

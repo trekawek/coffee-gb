@@ -92,9 +92,10 @@ change one without re-running the full battery.**
 - LY increments (visible) at tl=452 of the previous line (451 on the firstLine);
   coincidence re-latched at tl=0 (+ tl=8); mode-2 IF rises during the final M-cycle
   of the preceding line and remains asserted through tl<4 (also line 144), while
-  HALT wake is synchronized at the boundary; STAT int is one level line, IF on
-  rising edge only (this yields stat_irq_blocking for free); DMG STAT-write glitch
-  = all enables act 1 for a moment.
+  CPU acceptance (normal dispatch and HALT wake) is synchronized at the boundary;
+  readable coincidence and its IF edge update at tl=0 but the level contribution
+  settles at tl=4; STAT int is one level line, IF on rising edge only (this yields
+  stat_irq_blocking for free); DMG STAT-write glitch = all enables act 1 for a moment.
 - firstLine (LCD enable): no OAM scan and mode reads 0 until tl=79, but the early
   mode-2 interrupt condition still appears at the shortened line's end;
   OAM/VRAM open until then; end-of-line events at 451 instead of 452.
@@ -109,7 +110,8 @@ change one without re-running the full battery.**
 ### CPU
 
 - Halted CPU behaves exactly like NOPs once a peripheral edge reaches its wake
-  synchronizer; timer IF and the early mode-2 STAT IF become readable before HALT wakes.
+  synchronizer. Timer IF becomes readable before HALT wakes; the early mode-2 STAT
+  IF becomes readable before either normal CPU dispatch or HALT wake accepts it.
 - EI commits when HALT executes (`ei; halt` → IME=1, no halt bug).
 - Interrupt dispatch = 5 M-cycles; RST has an internal delay before the pushes.
 - `Mmu.indexSpaces()` caches `accepts()` results **once at construction** — an
