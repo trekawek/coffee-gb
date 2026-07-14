@@ -28,13 +28,12 @@ public class Display implements Serializable, Originator<Display> {
 
     private boolean enabled = true;
 
-    // On the CGB the first frame after the LCD is switched back on is not shown: real
-    // hardware puts out a garbage/incomplete frame while the PPU re-locks to the line grid,
-    // so the previous frame is repeated for one frame instead (SameBoy's frame_skip_state /
-    // GB_VBLANK_TYPE_REPEAT). Games that swap BG buffers behind a brief mid-frame LCD-off
-    // (e.g. A Bug's Life every 7 frames) would otherwise flash the transient enable-frame
-    // render, flickering once per swap.
-    private transient boolean repeatFrame;
+    // The first frame after the LCD is switched back on is not shown while the PPU re-locks
+    // to the line grid. A CGB repeats the previous frame; a DMG outputs a blank frame.
+    // SameBoy models these as the two GB_FRAMESKIP_LCD_TURNED_ON paths. Exposing the
+    // incomplete DMG frame leaves fragments of the old screen behind during transitions
+    // (Hitori de Dekirumon, issue #126).
+    private transient boolean firstFrameAfterLcdEnable;
 
     public Display(boolean gbc) {
         this.gbc = gbc;
@@ -45,7 +44,7 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     void putDmgPixel(int color) {
-        if (!enabled || repeatFrame) {
+        if (!enabled || firstFrameAfterLcdEnable) {
             return;
         }
         if (i >= buffer.length) {
@@ -55,7 +54,7 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     void putColorPixel(int gbcRgb) {
-        if (!enabled || repeatFrame) {
+        if (!enabled || firstFrameAfterLcdEnable) {
             return;
         }
         if (i >= buffer.length) {
@@ -66,10 +65,17 @@ public class Display implements Serializable, Originator<Display> {
 
     public void frameIsReady() {
         i = 0;
-        if (repeatFrame) {
-            // discard the just-rendered enable frame; re-show the previous complete frame
-            repeatFrame = false;
-            eventBus.post(gbc ? new GbcFrameReadyEvent(lastFrame) : new DmgFrameReadyEvent(lastFrame));
+        if (firstFrameAfterLcdEnable) {
+            firstFrameAfterLcdEnable = false;
+            if (gbc) {
+                // The CGB keeps the previous complete frame on its panel.
+                eventBus.post(new GbcFrameReadyEvent(lastFrame));
+            } else {
+                // The DMG drives a blank frame instead of exposing the incomplete render.
+                Arrays.fill(buffer, 0);
+                System.arraycopy(buffer, 0, lastFrame, 0, buffer.length);
+                eventBus.post(new DmgFrameReadyEvent(buffer));
+            }
             return;
         }
         System.arraycopy(buffer, 0, lastFrame, 0, buffer.length);
@@ -86,9 +92,7 @@ public class Display implements Serializable, Originator<Display> {
     public void enableLcd() {
         i = 0;
         enabled = true;
-        if (gbc) {
-            repeatFrame = true;
-        }
+        firstFrameAfterLcdEnable = true;
     }
 
     public void disableLcd() {
@@ -104,8 +108,8 @@ public class Display implements Serializable, Originator<Display> {
 
     /** Emits a blank frame while the LCD stays off (a sustained off blanks the screen). */
     public void blankFrame() {
-        // a deliberate blank overrides any pending enable-frame repeat
-        repeatFrame = false;
+        // a deliberate blank overrides any pending enable-frame skip
+        firstFrameAfterLcdEnable = false;
         Arrays.fill(buffer, 0);
         i = 0;
         frameIsReady();
