@@ -56,6 +56,12 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         fillWithGarbage(ramC000, 0xc000, 0x1000, garbage);
         fillWithGarbage(ramD000, 0xd000, 0x1000, garbage);
         gbcRam.fillWithGarbage(garbage);
+        // The fixed garbage pattern must still contain zero runs. Older GBDK font
+        // code uses this block as a lazy-init sentinel (issue #111), while the
+        // following block remains nonzero for Minesweeper's seed (issue #48).
+        for (int address = 0xc0f8; address < 0xc100; address++) {
+            ramC000.setByte(address, 0);
+        }
 
         addAddressSpace(ramC000);
         if (gbc) {
