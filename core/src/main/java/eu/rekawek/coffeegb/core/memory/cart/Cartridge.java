@@ -13,6 +13,7 @@ import org.apache.commons.io.FilenameUtils;
 
 import java.io.File;
 import java.io.Serializable;
+import java.util.zip.CRC32;
 
 public class Cartridge implements AddressSpace, Serializable, Originator<Cartridge> {
 
@@ -40,7 +41,9 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         this.battery = battery;
 
         var type = rom.getType();
-        if (type.isMmm01()) {
+        if (isBungEms(rom)) {
+            addressSpace = new BungEms(rom, battery);
+        } else if (type.isMmm01()) {
             // the dump has the menu program first; the mapper wants it last
             addressSpace = new Mmm01(rom, battery, true);
         } else if (isHiddenMmm01(rom)) {
@@ -222,6 +225,45 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
                 && rom.getRom().length > 0x8000;
     }
 
+    /** Bung/EMS flashcarts use an MBC5-like bank register plus a configurable OR mask. */
+    private static boolean isBungEms(Rom rom) {
+        int[] data = rom.getRom();
+        if (data.length < 0x150) {
+            return false;
+        }
+
+        int rawType = data[0x0147];
+        // Pocket Voice uses the proposed 0xBE marker for unrelated voice hardware.
+        if (rawType == 0xbe && rom.getTitle().startsWith("Pocket Voice")) {
+            return false;
+        }
+
+        CRC32 crc = new CRC32();
+        for (int value : data) {
+            crc.update(value);
+        }
+        switch ((int) crc.getValue()) {
+            case 0x2ed509d9: // Green Beret
+            case 0xf004440c: // Cube Raider
+            case 0xfdc1483a: // Bugs Bunny - Crazy Castle 3 trainer
+                return true;
+        }
+
+        return hasNullTerminatedTitle(data, "EMSMENU")
+                || hasNullTerminatedTitle(data, "GB16M")
+                || rawType == 0xbe
+                || (rawType == 0x1b && data[0x014a] == 0xe1);
+    }
+
+    private static boolean hasNullTerminatedTitle(int[] data, String title) {
+        for (int i = 0; i < title.length(); i++) {
+            if (data[0x0134 + i] != title.charAt(i)) {
+                return false;
+            }
+        }
+        return data[0x0134 + title.length()] == 0;
+    }
+
     /**
      * Detects the Sachen MMC1/MMC2 multicarts (issues #73/#75) by their scrambled header:
      * the 0x0100-0x01FF page is wired with A0/A6 and A1/A4 swapped, so the logo bytes sit
@@ -303,6 +345,9 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             // is the exception: its 2 KiB header size is mirrored across A000-BFFF.
             int ramSize = rom.getType() == CartridgeType.ROM_RAM_BATTERY
                     ? rom.getRamSize() : 0x2000 * rom.getRamBanks();
+            if (isBungEms(rom)) {
+                ramSize = 0x8000;
+            }
             if (ramSize == 0 && rom.getType().isRam()) {
                 ramSize = 0x2000;
             }
