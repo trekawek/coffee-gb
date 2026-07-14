@@ -76,6 +76,47 @@ The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a gre
 
     mvn clean test -f core/pom.xml -Ptest-mooneye
 
+## RTC3Test
+
+The [RTC3Test](https://github.com/aaaaaa123456789/rtc3test) MBC3 real-time
+clock tests can be run with the `test-rtc3` profile. The runner automates each
+menu in the interactive ROM and checks its color-coded results:
+
+    mvn clean test -f core/pom.xml -Ptest-rtc3
+
+## SameSuite
+
+The [SameSuite](https://github.com/LIJI32/SameSuite) APU, DMA, interrupt, PPU,
+and SGB tests use their automated register result protocol:
+
+    mvn clean test -f core/pom.xml -Ptest-samesuite
+
+ROMs for older CGB revisions are included as resources but excluded from this
+profile because Coffee GB's generic CGB mode targets the later revision behavior.
+
+## BullyGB
+
+The [BullyGB](https://github.com/Ashiepaws/BullyGB) framework is run in both
+DMG and CGB modes. Its runner captures debugger-style writes to the serial data
+register and verifies the terminal message:
+
+    mvn clean test -f core/pom.xml -Ptest-bullygb
+
+## MBC30Test
+
+The [MBC30Test](https://github.com/ZoomTen/mbc30test) profile checks both the
+four-megabyte ROM banking and eight-bank SRAM verdicts displayed by the ROM:
+
+    mvn clean test -f core/pom.xml -Ptest-mbc30
+
+## CGB-ACID2
+
+The [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) profile captures the
+CGB framebuffer at the ROM's software breakpoint and compares every pixel with
+the upstream reference image:
+
+    mvn clean test -f core/pom.xml -Ptest-cgbacid2
+
 ## Screenshots
 
 ![Coffee GB running game](doc/screenshot1.png)
