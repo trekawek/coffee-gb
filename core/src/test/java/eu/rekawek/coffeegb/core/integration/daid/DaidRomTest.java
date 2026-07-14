@@ -50,12 +50,13 @@ public class DaidRomTest {
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() {
         return Arrays.asList(new Object[][]{
-                // Correct palette patterns, currently phased 4 DMG / 5 CGB dots early.
+                // Correct palette patterns, currently phased 4 DMG / 7 CGB dots early.
+                // The CGB phase includes the boot ROM's full 32-dot GDMA block stalls.
                 {"ppu_scanline_bgp (DMG)", "ppu_scanline_bgp.gb", GameboyType.DMG,
                         new String[]{"ppu_scanline_bgp_0.dmg.png", "ppu_scanline_bgp_1.dmg.png",
                                 "ppu_scanline_bgp_2.dmg.png"}, 2192},
                 {"ppu_scanline_bgp (CGB)", "ppu_scanline_bgp.gb", GameboyType.CGB,
-                        new String[]{"ppu_scanline_bgp.gbc.png"}, 2880},
+                        new String[]{"ppu_scanline_bgp.gbc.png"}, 4032},
                 {"stop_instr (DMG)", "stop_instr.gb", GameboyType.DMG,
                         new String[]{"stop_instr.dmg.png"}, 0},
                 {"stop_instr (CGB)", "stop_instr.gb", GameboyType.CGB,
