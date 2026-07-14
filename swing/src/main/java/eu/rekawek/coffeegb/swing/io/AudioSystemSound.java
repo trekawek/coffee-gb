@@ -38,11 +38,10 @@ public class AudioSystemSound implements Runnable {
     private static final int VOLUME_SCALE = 62;
 
     /**
-     * One-pole DC-blocking high-pass (~7 Hz at 44.1 kHz), mirroring the console's analog
-     * output path: an idle-but-enabled DAC parks a constant offset on the line which the
-     * speaker never sees, but its master-volume modulation (PCM speech) passes through.
+     * The console's output capacitor has a cutoff of about 28 Hz. It removes the
+     * baseline steps caused by channel routing while preserving master-volume PCM.
      */
-    private static final double HIGHPASS = 0.999;
+    private static final double HIGHPASS_CUTOFF = 28.0;
 
     private static final double TICKS_PER_SAMPLE = (double) Gameboy.TICKS_PER_SEC / SAMPLE_RATE;
 
@@ -68,7 +67,9 @@ public class AudioSystemSound implements Runnable {
 
     private int cnt, prevCnt;
 
-    private double hpInL, hpInR, hpOutL, hpOutR;
+    private final DcBlocker dcBlockerL = new DcBlocker(SAMPLE_RATE, HIGHPASS_CUTOFF);
+
+    private final DcBlocker dcBlockerR = new DcBlocker(SAMPLE_RATE, HIGHPASS_CUTOFF);
 
     public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
         enabled = properties.getSoundEnabled();
@@ -148,12 +149,10 @@ public class AudioSystemSound implements Runnable {
                 int total = prevCnt + cnt;
                 double rawL = (double) (prevSumL + sumL) / total;
                 double rawR = (double) (prevSumR + sumR) / total;
-                hpOutL = rawL - hpInL + HIGHPASS * hpOutL;
-                hpOutR = rawR - hpInR + HIGHPASS * hpOutR;
-                hpInL = rawL;
-                hpInR = rawR;
-                int left = enabled ? (int) (hpOutL * VOLUME_SCALE) : 0;
-                int right = enabled ? (int) (hpOutR * VOLUME_SCALE) : 0;
+                double filteredL = dcBlockerL.filter(rawL);
+                double filteredR = dcBlockerR.filter(rawR);
+                int left = enabled ? (int) (filteredL * VOLUME_SCALE) : 0;
+                int right = enabled ? (int) (filteredR * VOLUME_SCALE) : 0;
                 out[j++] = (byte) left;
                 out[j++] = (byte) (left >> 8);
                 out[j++] = (byte) right;
