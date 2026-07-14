@@ -39,7 +39,7 @@ public class SuperGameboy implements Originator<SuperGameboy> {
     }
 
     private void handleVBlank(int[] buffer) {
-        if (waitingTransferCommand != null && transferCountdown-- == 0) {
+        if (waitingTransferCommand != null && --transferCountdown == 0) {
             waitingTransferCommand.setDataTransfer(buffer.clone());
             LOG.atInfo().log("Transfer command: {}", waitingTransferCommand);
             sgbBus.post(waitingTransferCommand);
