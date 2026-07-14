@@ -12,7 +12,8 @@ that work without re-deriving it.
 - mooneye acceptance + misc: all pass, including `intr_2_mode0_timing_sprites`
   (63 sprite-stall cases, T-exact), `boot_div-cgbABCDE` *and* `boot_div-cgb0`
   (different CGB revisions, selected via `GameboyConfiguration.setCgb0Revision`),
-  `boot_hwio-C`, `hblank_ly_scx_timing-GS`, `lcdon_timing-GS`.
+  `boot_hwio-C`, `hblank_ly_scx_timing-GS`, `lcdon_timing-GS`, and the Wilbert Pol
+  GPU/timer suites (older `$ED` breakpoint protocol).
 - blargg: cpu_instrs, instr_timing, mem_timing-2, halt_bug, dmg_sound-2 12/12,
   cgb_sound 12/12, oam_bug-2 8/8, interrupt_time.
 - dmg-acid2, all unit tests.
@@ -89,11 +90,13 @@ change one without re-running the full battery.**
 - Pixel end `E = 248 + SCX%8 + stalls`; **visible STAT mode 0 = E+1**;
   **mode-0 STAT interrupt line = E+4** (3 T after visible; no quantization).
 - LY increments (visible) at tl=452 of the previous line (451 on the firstLine);
-  coincidence re-latched at tl=0 (+ tl=8); mode-2 int is a 4-T pulse at tl<4
-  (also line 144); STAT int is one level line, IF on rising edge only (this
-  yields stat_irq_blocking for free); DMG STAT-write glitch = all enables act 1
-  for a moment.
-- firstLine (LCD enable): no OAM scan/mode-2 int; mode reads 0 until tl=79;
+  coincidence re-latched at tl=0 (+ tl=8); mode-2 IF rises during the final M-cycle
+  of the preceding line and remains asserted through tl<4 (also line 144), while
+  HALT wake is synchronized at the boundary; STAT int is one level line, IF on
+  rising edge only (this yields stat_irq_blocking for free); DMG STAT-write glitch
+  = all enables act 1 for a moment.
+- firstLine (LCD enable): no OAM scan and mode reads 0 until tl=79, but the early
+  mode-2 interrupt condition still appears at the shortened line's end;
   OAM/VRAM open until then; end-of-line events at 451 instead of 452.
 - OAM bug (`SpriteBug`, ported from SameBoy memory.c): write corruption
   `((a^c)&(b^c))^c` + row copy; read corruptions row-dependent (secondary for
@@ -105,7 +108,8 @@ change one without re-running the full battery.**
 
 ### CPU
 
-- Halted CPU behaves exactly like NOPs (wake = same timing as running state).
+- Halted CPU behaves exactly like NOPs once a peripheral edge reaches its wake
+  synchronizer; timer IF and the early mode-2 STAT IF become readable before HALT wakes.
 - EI commits when HALT executes (`ei; halt` → IME=1, no halt bug).
 - Interrupt dispatch = 5 M-cycles; RST has an internal delay before the pushes.
 - `Mmu.indexSpaces()` caches `accepts()` results **once at construction** — an
@@ -128,6 +132,8 @@ change one without re-running the full battery.**
   expiry).
 - Serial clock: DIV-derived, tap leads the counter by +4, bit 8 (CGB fast:
   bit 3). SC (FF02) bit 1 (CGB speed bit) reads 1 at power-on.
+- Timer overflow sets IF before its edge reaches the HALT wake path; the wake becomes
+  eligible 4 T later (`timer_if`).
 
 ### APU
 

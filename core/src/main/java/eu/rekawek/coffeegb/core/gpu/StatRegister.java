@@ -38,11 +38,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private boolean coincidence;
 
-    // the coincidence term feeding the interrupt line; unlike the readable flag it stays
-    // low for the first 4 ticks of a line while the comparator output settles
-    private boolean intCoincidence;
-
     private boolean intLine;
+
+    private boolean lycWriteSuppressed;
 
     public StatRegister(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;
@@ -56,14 +54,27 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     public void tick() {
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
+            if (lycWriteSuppressed
+                    && ((gpu.getLine() != 153 && ticksInLine == 0)
+                    || (gpu.getLine() == 153 && ticksInLine == 8))) {
+                lycWriteSuppressed = false;
+            }
             // the comparison uses the LY value registered at the line start; the extra
             // latch point at tick 8 handles the LY=153 -> 0 transition during line 153
             if (ticksInLine == 0 || ticksInLine == 8) {
-                registeredLy = gpu.getVisibleLy();
+                // On monochrome hardware LY has already returned to 0 when line 153
+                // starts, but the comparator still samples the short-lived 153 value.
+                registeredLy = gpu.getLine() == 153 && ticksInLine == 0
+                        ? 153
+                        : gpu.getVisibleLy();
             }
             coincidence = registeredLy == gpu.getRegisters().get(LYC);
-            if ((ticksInLine >= (gpu.isFirstLine() ? 451 : 452) && gpu.getLine() != 153)
-                    || (gpu.getLine() == 153 && ticksInLine >= 4 && ticksInLine < 8)) {
+            if ((!gpu.isGbc()
+                    && ticksInLine >= (gpu.isFirstLine() ? 451 : 452)
+                    && gpu.getLine() != 153)
+                    || (!gpu.isGbc() && gpu.getLine() == 153
+                    && ticksInLine >= 4 && ticksInLine < 8)
+                    || lycWriteSuppressed) {
                 // when LY changes, the comparison result reads 0 until the new value
                 // is registered at the beginning of the next line (lcdon_timing-GS);
                 // at the end of line 153 the comparison stays valid: LY already flipped
@@ -71,24 +82,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 // interrupt fires only once per frame there
                 coincidence = false;
             }
-            intCoincidence = coincidence;
-            if (ticksInLine < 4 && gpu.getLine() != 0 && gpu.getLine() != 153) {
-                // the coincidence term feeding the interrupt line settles one machine
-                // cycle after the line-start latch (the readable flag is already valid
-                // at tick 0, lcdon_timing-GS). This guarantees the STAT interrupt line
-                // dips between the previous line's mode-0 term (high until the line
-                // ends) and the new line's LY=LYC term, so an enabled mode-0 interrupt
-                // cannot swallow the LYC interrupt of the following line (Ken Griffey's
-                // Slugfest chains LYC and HBlank interrupts for its per-band palette
-                // engine, issue #68). Lines 0 and 153 keep the existing model: LY=0 is
-                // registered at tick 8 of line 153 and stays valid into line 0 (single
-                // LYC=0 interrupt per frame, Altered Space), and LYC=153 has only the
-                // tl=0..3 window.
-                intCoincidence = false;
-            }
-
             if (gpu.getLine() == 144 && ticksInLine == 0) {
                 interruptManager.requestInterrupt(InterruptType.VBlank);
+            }
+            if (gpu.getLine() <= 144 && ticksInLine == 0) {
+                interruptManager.releaseHaltWake(InterruptType.LCDC);
             }
         }
 
@@ -97,10 +95,45 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     public void onLcdEnabled() {
         registeredLy = 0;
+        lycWriteSuppressed = false;
+    }
+
+    public void onLcdDisabled() {
+        interruptManager.releaseHaltWake(InterruptType.LCDC);
+    }
+
+    /**
+     * Models the CGB's LYC write conflicts around the LY latch points.
+     */
+    public void onLycWrite(int oldValue) {
+        if (!gpu.isGbc() || !gpu.isLcdEnabled()) {
+            return;
+        }
+        int ticksInLine = gpu.getTicksInLine();
+        if (ticksInLine == 452
+                && oldValue == gpu.getVisibleLy()
+                && (enableBits & 0b01000000) != 0) {
+            // At this phase the comparator sees the old LYC value before the
+            // CPU write settles on the register bus.
+            updateIntLine(true);
+        }
+        if (gpu.getLine() == 153
+                && ticksInLine == 4
+                && oldValue == 0
+                && (enableBits & 0b01000000) != 0) {
+            // During the CGB's 153-to-0 transition, the old LYC value is
+            // compared against the next LY value before this write settles.
+            updateIntLine(true);
+        }
+        if (ticksInLine == 448 || (gpu.getLine() == 153 && ticksInLine == 0)) {
+            // A write in the complementary conflict window is not observed by
+            // the comparator until the next LY latch point.
+            lycWriteSuppressed = true;
+        }
     }
 
     private boolean computeIntLine(int enable) {
-        boolean line = (enable & 0b01000000) != 0 && intCoincidence;
+        boolean line = (enable & 0b01000000) != 0 && coincidence;
         if (gpu.isLcdEnabled()) {
             line |= (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
             line |= (enable & 0b00010000) != 0 && gpu.getVisibleStatMode() == 1;
@@ -111,7 +144,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private void updateIntLine(boolean newLine) {
         if (newLine && !intLine) {
-            interruptManager.requestInterrupt(InterruptType.LCDC);
+            int earlyMode2Edge = gpu.isFirstLine() ? 451 : 452;
+            if (gpu.getLine() < 144 && gpu.getTicksInLine() == earlyMode2Edge) {
+                interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+            } else {
+                interruptManager.requestInterrupt(InterruptType.LCDC);
+            }
         }
         intLine = newLine;
     }
@@ -138,7 +176,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public Memento<StatRegister> saveToMemento() {
-        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intCoincidence, intLine);
+        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intLine, lycWriteSuppressed);
     }
 
     @Override
@@ -149,11 +187,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.enableBits = mem.enableBits;
         this.registeredLy = mem.registeredLy;
         this.coincidence = mem.coincidence;
-        this.intCoincidence = mem.intCoincidence;
         this.intLine = mem.intLine;
+        this.lycWriteSuppressed = mem.lycWriteSuppressed;
     }
 
-    private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,
-                                       boolean intCoincidence, boolean intLine) implements Memento<StatRegister> {
+    private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence, boolean intLine,
+                                       boolean lycWriteSuppressed) implements Memento<StatRegister> {
     }
 }

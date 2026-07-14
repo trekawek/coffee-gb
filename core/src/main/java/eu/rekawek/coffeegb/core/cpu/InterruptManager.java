@@ -36,6 +36,9 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
 
     private int interruptEnabled;
 
+    // Some peripheral edges set IF shortly before the edge can wake HALT.
+    private int haltBlockedInterrupts;
+
     private int pendingEnableInterrupts = -1;
 
     private int pendingDisableInterrupts = -1;
@@ -70,10 +73,24 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
 
     public void requestInterrupt(InterruptType type) {
         interruptFlag = interruptFlag | (1 << type.ordinal());
+        haltBlockedInterrupts &= ~(1 << type.ordinal());
+    }
+
+    public void requestInterruptBeforeHaltWake(InterruptType type) {
+        int mask = 1 << type.ordinal();
+        if ((interruptFlag & mask) == 0) {
+            haltBlockedInterrupts |= mask;
+        }
+        interruptFlag |= mask;
+    }
+
+    public void releaseHaltWake(InterruptType type) {
+        haltBlockedInterrupts &= ~(1 << type.ordinal());
     }
 
     public void clearInterrupt(InterruptType type) {
         interruptFlag = interruptFlag & ~(1 << type.ordinal());
+        haltBlockedInterrupts &= ~(1 << type.ordinal());
     }
 
     public void onInstructionFinished() {
@@ -97,8 +114,12 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         return (interruptFlag & interruptEnabled & 0x1f) != 0;
     }
 
+    public boolean isInterruptRequestedForHalt() {
+        return (interruptFlag & interruptEnabled & ~haltBlockedInterrupts & 0x1f) != 0;
+    }
+
     public boolean isHaltBug() {
-        return (interruptFlag & interruptEnabled & 0x1f) != 0 && !ime;
+        return isInterruptRequestedForHalt() && !ime;
     }
 
     @Override
@@ -111,6 +132,7 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         switch (address) {
             case 0xff0f:
                 interruptFlag = value | 0xe0;
+                haltBlockedInterrupts = 0;
                 break;
 
             case 0xffff:
@@ -135,7 +157,8 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
 
     @Override
     public Memento<InterruptManager> saveToMemento() {
-        return new InterruptManagerMemento(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts, pendingDisableInterrupts);
+        return new InterruptManagerMemento(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts,
+                pendingDisableInterrupts, haltBlockedInterrupts);
     }
 
     @Override
@@ -148,11 +171,13 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         this.interruptEnabled = mem.interruptEnabled;
         this.pendingEnableInterrupts = mem.pendingEnableInterrupts;
         this.pendingDisableInterrupts = mem.pendingDisableInterrupts;
+        this.haltBlockedInterrupts = mem.haltBlockedInterrupts;
     }
 
     private record InterruptManagerMemento(boolean ime, int interruptFlag, int interruptEnabled,
                                            int pendingEnableInterrupts,
-                                           int pendingDisableInterrupts) implements Memento<InterruptManager> {
+                                           int pendingDisableInterrupts,
+                                           int haltBlockedInterrupts) implements Memento<InterruptManager> {
     }
 
 }

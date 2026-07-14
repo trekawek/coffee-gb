@@ -30,6 +30,8 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private boolean divReset;
 
+    private int haltWakeDelay;
+
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.speedMode = speedMode;
         this.interruptManager = interruptManager;
@@ -45,11 +47,15 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     public void tick() {
         divReset = false;
+        if (haltWakeDelay > 0 && --haltWakeDelay == 0) {
+            interruptManager.releaseHaltWake(InterruptManager.InterruptType.Timer);
+        }
         updateDiv((div + speedMode.getSpeedMode()) & 0xffff);
         if (overflow) {
             ticksSinceOverflow++;
             if (ticksSinceOverflow == 4) {
-                interruptManager.requestInterrupt(InterruptManager.InterruptType.Timer);
+                interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Timer);
+                haltWakeDelay = 4;
             }
             if (ticksSinceOverflow == 5) {
                 tima = tma;
@@ -143,7 +149,8 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     @Override
     public Memento<Timer> saveToMemento() {
-        return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow, divReset);
+        return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow, divReset,
+                haltWakeDelay);
     }
 
     @Override
@@ -159,10 +166,12 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         this.overflow = mem.overflow;
         this.ticksSinceOverflow = mem.ticksSinceOverflow;
         this.divReset = mem.divReset;
+        this.haltWakeDelay = mem.haltWakeDelay;
     }
 
     public record TimerMemento(int div, int tac, int tma, int tima, boolean previousBit, boolean overflow,
-                               int ticksSinceOverflow, boolean divReset) implements Memento<Timer> {
+                               int ticksSinceOverflow, boolean divReset,
+                               int haltWakeDelay) implements Memento<Timer> {
     }
 
 }
