@@ -139,6 +139,12 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     // window mid-window-fetch suppresses the glitch for the rest of the line
     private boolean insertionGlitchDisabled;
 
+    // The DMG's disabled-window insertion glitch is gated by the PPU's latched WY
+    // comparison, not by LY merely having passed WY. A game may leave arbitrary WY/WX
+    // values behind while never enabling the window (Bo Jackson does); those values must
+    // not create pixels on their own.
+    private boolean windowYTriggered;
+
     public Fetcher(
             PixelFifo fifo,
             AddressSpace videoRam0,
@@ -181,6 +187,10 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     public void disableInsertionGlitch() {
         insertionGlitchDisabled = true;
+    }
+
+    public void setWindowYTriggered(boolean windowYTriggered) {
+        this.windowYTriggered = windowYTriggered;
     }
 
     /**
@@ -267,8 +277,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 if (fifo.getLength() == 0) {
                     if (!gbc
                             && !insertionGlitchDisabled
-                            && !lcdc.isWindowDisplay()
-                            && r.get(GpuRegister.LY) >= r.get(GpuRegister.WY)) {
+                            && windowYTriggered
+                            && !lcdc.isWindowDisplay()) {
                         int logicalPosition = (position + 7) & 0xff;
                         if (logicalPosition > 167) {
                             logicalPosition = 0;
