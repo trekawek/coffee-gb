@@ -33,6 +33,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     private int currentPlayer;
 
     private boolean transferInProgress;
+    private boolean transferWaitForHigh;
     private int currentByte;
     private final int[] currentPacket = new int[16];
     private int currentByteIndex;
@@ -42,6 +43,11 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         this.interruptManager = interruptManager;
         this.isSgb = isSgb;
         this.sgbBus = sgbBus;
+        // JOYP powers on with both selector lines low. On an SGB, that level has already
+        // reset the ICD2 receiver, so the first transition to idle-high may release the
+        // start pulse without software having to create another falling edge first.
+        transferInProgress = isSgb;
+        transferWaitForHigh = isSgb;
         sgbBus.register(event -> {
             players = event.getMultiplayerControl();
             if (players == 2) {
@@ -99,31 +105,11 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     @Override
     public void setByte(int address, int value) {
         if (isSgb) {
-            boolean bit4 = BitUtils.getBit(value, 4);
-            boolean bit5 = BitUtils.getBit(value, 5);
-
-            if (!bit4 && !bit5) {
-                transferInProgress = true;
-                currentByte = 0;
-                currentByteIndex = 0;
-                currentPacketIndex = 0;
-                Arrays.fill(currentPacket, 0);
-            } else if (transferInProgress && (!bit4 || !bit5)) {
-                if (!bit5) {
-                    currentByte |= (1 << currentByteIndex);
-                }
-                currentByteIndex++;
-                if (currentByteIndex == 8) {
-                    if (currentPacketIndex < 16) {
-                        currentPacket[currentPacketIndex++] = currentByte;
-                        if (currentPacketIndex == 16) {
-                            transferInProgress = false;
-                            sgbBus.post(new SuperGameboy.PacketReceivedEvent(currentPacket.clone()));
-                        }
-                    }
-                    currentByteIndex = 0;
-                    currentByte = 0;
-                }
+            int input = value & 0x30;
+            // The ICD2 receiver reacts to line transitions. Rewriting the level that is
+            // already on JOYP must neither add a bit nor abort an in-flight packet.
+            if (input != p1) {
+                receiveSgbPacketPulse(input);
             }
         }
         if (players > 0 && players != 2 && !BitUtils.getBit(p1, 5) && BitUtils.getBit(value, 5)) {
@@ -134,6 +120,62 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
             LOG.atDebug().log("Player changed to {}", currentPlayer);
         }
         p1 = value & 0b00110000;
+    }
+
+    private void receiveSgbPacketPulse(int input) {
+        if (input == 0x00) {
+            // Both lines low reset the receiver and start a fresh 16-byte packet.
+            transferInProgress = true;
+            transferWaitForHigh = true;
+            currentByte = 0;
+            currentByteIndex = 0;
+            currentPacketIndex = 0;
+            Arrays.fill(currentPacket, 0);
+            return;
+        }
+        if (!transferInProgress) {
+            return;
+        }
+        if (transferWaitForHigh) {
+            if (input == 0x30) {
+                transferWaitForHigh = false;
+            } else {
+                abortSgbPacket();
+            }
+            return;
+        }
+        if (input == 0x30) {
+            // Licensed software commonly leaves both lines high much longer than the
+            // receiver requires. Additional writes during that idle period are harmless.
+            return;
+        }
+
+        if (currentPacketIndex == currentPacket.length) {
+            // A packet is complete only after its mandatory 129th, zero-valued stop bit.
+            if (input == 0x20) {
+                sgbBus.post(new SuperGameboy.PacketReceivedEvent(currentPacket.clone()));
+            }
+            abortSgbPacket();
+            return;
+        }
+
+        // P14 low ($20) transmits zero; P15 low ($10) transmits one, least-significant
+        // bit first. No next pulse is accepted until both lines return high.
+        if (input == 0x10) {
+            currentByte |= 1 << currentByteIndex;
+        }
+        currentByteIndex++;
+        if (currentByteIndex == 8) {
+            currentPacket[currentPacketIndex++] = currentByte;
+            currentByteIndex = 0;
+            currentByte = 0;
+        }
+        transferWaitForHigh = true;
+    }
+
+    private void abortSgbPacket() {
+        transferInProgress = false;
+        transferWaitForHigh = false;
     }
 
     @Override
@@ -165,7 +207,9 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         // button held in a rewound-past frame would be re-applied and, with no matching
         // release event ever arriving, stick when forward emulation resumes (issue: rewind
         // replays past button presses).
-        return new JoypadMemento(p1, tick, players, currentPlayer, transferInProgress, currentByte, currentPacket, currentByteIndex, currentPacketIndex);
+        return new JoypadMemento(p1, tick, players, currentPlayer, transferInProgress,
+                transferWaitForHigh, currentByte, currentPacket.clone(), currentByteIndex,
+                currentPacketIndex);
     }
 
     @Override
@@ -178,6 +222,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         this.players = mem.players;
         this.currentPlayer = mem.currentPlayer;
         this.transferInProgress = mem.transferInProgress;
+        this.transferWaitForHigh = mem.transferWaitForHigh;
         this.currentByte = mem.currentByte;
         if (mem.currentPacket.length != this.currentPacket.length) {
             throw new IllegalArgumentException("Invalid memento length");
@@ -188,7 +233,10 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
 
     }
 
-    private record JoypadMemento(int p1, long tick, int players, int currentPlayer, boolean transferInProgress, int currentByte, int[] currentPacket, int currentByteIndex, int currentPacketIndex) implements Memento<Joypad> {
+    private record JoypadMemento(int p1, long tick, int players, int currentPlayer,
+                                boolean transferInProgress, boolean transferWaitForHigh,
+                                int currentByte, int[] currentPacket, int currentByteIndex,
+                                int currentPacketIndex) implements Memento<Joypad> {
     }
 
     public record JoypadPressEvent(Button button, long tick) implements Event {
