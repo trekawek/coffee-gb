@@ -212,6 +212,7 @@ public class Rom {
             case 2 -> 0x2000;
             case 3 -> 0x8000;
             case 4 -> 0x20000;
+            case 5 -> 0x10000;
             default -> throw new IllegalArgumentException("Unsupported RAM size: " + Integer.toHexString(id));
         };
     }
