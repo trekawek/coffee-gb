@@ -15,7 +15,7 @@ so several events lead the boundary by 4 ticks.
 
 | tl | event |
 |----|-------|
-| 452 (prev. line) | LY increments (CPU-visible); OAM read-lock engages |
+| 452 (prev. line) | LY increments (CPU-visible); OAM read-lock engages; mode-2 STAT IF can rise |
 | 0 | STAT mode bits read 2; LY=LYC comparison re-latched for the new LY |
 | 76 | VRAM read-lock engages |
 | 80 | STAT mode bits read 3 (internal pixel transfer starts) |
@@ -25,9 +25,12 @@ so several events lead the boundary by 4 ticks.
 
 - The **LY=LYC coincidence bit** (STAT bit 2) compares LYC against an LY value registered at
   `tl=0`; between the LY increment (452) and the next latch (0) the flag reads **0**
-  (`lcdon_timing-GS`). LYC writes take effect immediately against the registered LY
-  (`stat_lyc_onoff`). On line 153 LY reads 153 only during `tl=0..3`, then 0; the comparison
-  follows with the same 4-tick latch (extra latch point at `tl=8`).
+  (`lcdon_timing-GS`). On DMG, LY=153 is exposed during the early increment at the end of
+  line 152 and is already 0 when internal line 153 starts; CGB holds 153 through `tl=0..3`.
+  The comparator still latches 153 at line 153 `tl=0`, then latches 0 at `tl=8`.
+- CGB LYC writes conflict with the comparator latch around `tl=448/452` and the line-153
+  transition. The write-conflict windows can either expose the old LYC comparison briefly
+  or defer the new comparison until the next latch (`ly_lyc*_write-C`).
 - **Write asymmetry** (`lcdon_write_timing-GS`): CPU *writes* are only blocked by the actual
   scan/transfer: OAM writes pass during `tl=452..455` and during `tl=76..79` (between the end
   of the OAM scan and the pixel transfer); VRAM writes are blocked only while the mode is 3.
@@ -57,16 +60,22 @@ One level line; the IF flag (LCDC bit) is set only on its **rising edge** — th
 blocking" (`stat_irq_blocking`) with no special cases:
 
 ```
-line = (LYC enabled  AND coincidence)
+line = (LYC enabled  AND settled coincidence)
     OR (mode0 enabled AND tl >= hblankIntFrom, lines 0-143)
     OR (mode1 enabled AND visible mode == 1)
-    OR (mode2 enabled AND tl < 4, lines 0-144)
+    OR (mode2 enabled AND previous tl >= 452 or tl < 4, lines 0-144)
 ```
 
-- The **mode-2 term** is a 4-tick pulse at the start of each line — per the schematic
+- The readable **coincidence flag** updates at `tl=0`, while its interrupt-line contribution
+  settles at `tl=4` on ordinary lines. The comparison edge reaches IF at `tl=0` and is
+  available to the CPU at its next interrupt sample (`ly_lyc_write-GS`).
+- The **mode-2 term** becomes visible in IF during the final 4 ticks of the preceding line
+  and remains high through the first 4 ticks of the new line — per the schematic
   annotation: *"INT_STAT = 1 when LY = LYC (whole line), VBLANK (MODE1), HBLANK (MODE0), and
-  only for a few cycles at the start of OAM parsing when VCLK is high."* It also fires at the
-  start of line 144 (`vblank_stat_intr-GS`).
+  only for a few cycles at the start of OAM parsing when VCLK is high."* The CPU accepts
+  the edge at the line boundary, after IF has become readable; this applies to both normal
+  IME dispatch and HALT wake. The condition also fires at the start of line 144
+  (`vblank_stat_intr-GS`, Wilbert Pol `intr_2_timing`, Mealybug mode-3 tests).
 - The **mode-0 term** rises 3 T after the visible mode 0, i.e. at `E+4`
   (`hblank_ly_scx_timing-GS`, `intr_2_0_timing`); the pixel pipeline is T-exact, so no
   quantization is applied.
@@ -87,8 +96,8 @@ re-enable the LCD and tests that run on the boot grid (`intr_2_mode0_timing` vs
 
 The first line (`Gpu.firstLine`) additionally:
 
-- has no OAM scan and no mode-2 STAT/interrupt; the mode bits read 0 until the pixel
-  transfer (`tl=79`),
+- has no OAM scan and its mode bits read 0 until the pixel transfer (`tl=79`); the early
+  mode-2 interrupt condition still appears at the end of this shortened line,
 - keeps OAM and VRAM accessible until the pixel transfer,
 - runs the LY=LYC comparison from the moment of enabling (`registeredLy=0`), dropping to 0
   at the end of the line (451) like a normal LY change.

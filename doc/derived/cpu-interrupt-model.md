@@ -25,6 +25,11 @@ cycle-exactly against the mooneye acceptance tests. This is the specification im
 - `EI` enables IME after the *following* instruction. The pending enable also commits when the
   following instruction is HALT, so `ei; halt` halts with IME=1: the wake dispatches and there
   is no halt bug (`halt_ime0_ei`).
+- A peripheral can expose an IF bit before the CPU interrupt input accepts its edge. The
+  early mode-2 STAT edge is readable during the preceding line's final M-cycle, but normal
+  IME dispatch and HALT wake both accept it at the line boundary. A new LYC comparison,
+  by contrast, exposes its IF edge at the line-start latch even though its level contribution
+  to the STAT line takes one M-cycle to settle.
 
 ## HALT
 
@@ -32,13 +37,16 @@ The schematic's halt latch only gates the instruction-register load/PC increment
 sequencer keeps cycling. Consequently **a halted CPU behaves exactly as if it were executing
 NOPs**:
 
-- Wake condition: `(IE & IF & 0x1F) != 0`, regardless of IME.
+- Wake condition: `(IE & IF & 0x1F) != 0`, regardless of IME, after the peripheral edge has
+  crossed the HALT wake synchronizer. IF itself can become CPU-readable slightly earlier:
+  the timer overflow edge takes another 4 T to wake HALT. An already-pending IF bit is never
+  re-delayed.
 - With IME=1, the dispatch starts at the same machine cycle at which it would have started in
   a NOP stream (`halt_ime1_timing2-GS`).
 - With IME=0, the instruction after HALT is fetched at that same cycle — no extra delay
   (`halt_ime0_nointr_timing`).
-- Halt bug: executing HALT with IME=0 and `(IE & IF) != 0` skips the PC increment of the next
-  fetch (`halt_bug`).
+- Halt bug: executing HALT with IME=0 and a wake-synchronized `(IE & IF) != 0` skips the PC
+  increment of the next fetch (`halt_bug`).
 
 ## RST
 

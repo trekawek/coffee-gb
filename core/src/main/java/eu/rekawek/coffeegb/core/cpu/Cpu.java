@@ -95,7 +95,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
             return;
         }
 
-        if (state == State.HALTED && interruptManager.isInterruptRequested()) {
+        if (state == State.HALTED && interruptManager.isInterruptRequestedForHalt()) {
             // a halted CPU behaves exactly like it was executing NOPs, so the wake-up
             // has the same timing as the running state: the interrupt dispatch starts
             // (IME=1) or the next instruction is fetched (IME=0) at the cycle following
@@ -204,7 +204,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
                         // committing a pending EI happens even when entering halt, so
                         // "ei; halt" halts with IME=1 (no halt bug, wake dispatches)
                         boolean imeBeforeHalt = interruptManager.isIme();
-                        boolean interruptPendingBeforeHalt = interruptManager.isInterruptRequested();
+                        boolean interruptPendingBeforeHalt = interruptManager.isInterruptRequestedForHalt();
                         interruptManager.onInstructionFinished();
                         if (!imeBeforeHalt && interruptPendingBeforeHalt && interruptManager.isIme()) {
                             // HALT was fetched while EI's delayed enable was still pending.

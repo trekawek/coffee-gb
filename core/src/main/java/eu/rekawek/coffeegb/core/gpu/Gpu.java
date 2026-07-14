@@ -141,6 +141,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public void setByte(int address, int value) {
+        if (address == LYC.getAddress()) {
+            statRegister.onLycWrite(r.get(LYC));
+        }
         if (oamRam.accepts(address)) {
             if (!dma.isOamBlocked() && isOamAvailableForCpu(true)) {
                 oamRam.setByte(address, value);
@@ -308,15 +311,19 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     /**
-     * LY value as visible to the CPU: it increments 4 ticks before the end of the line, and
-     * on line 153 it reads 153 only for the first 4 ticks, then 0.
+     * LY value as visible to the CPU: it increments 4 ticks before the end of the line. On
+     * DMG, 153 is exposed only by that early increment on line 152; CGB also holds it for
+     * the first 4 ticks of internal line 153 before returning to 0.
      */
     public int getVisibleLy() {
         if (!lcdEnabled) {
             return 0;
         }
         if (line == 153) {
-            return ticksInLine < 4 ? 153 : 0;
+            // Monochrome hardware exposes 153 only during the early increment at
+            // the end of line 152. CGB hardware holds it for one additional
+            // machine cycle after line 153 starts.
+            return gbc && ticksInLine < 4 ? 153 : 0;
         }
         if (ticksInLine >= (firstLine ? 451 : 452)) {
             return line + 1;
@@ -331,6 +338,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return 0;
         }
+        // The last VBlank line briefly exposes mode 0 before line 0 enters
+        // mode 2 (Wilbert Pol's ly00_mode1_0/ly00_mode0_2 tests).
+        if (!gbc && line == 153 && ticksInLine >= 452) {
+            return 0;
+        }
         if (firstLine && ticksInLine < 79) {
             return 0;
         }
@@ -338,11 +350,18 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     /**
-     * The "mode 2" STAT interrupt condition is a short pulse at the beginning of each visible
-     * line (and also at the beginning of line 144).
+     * The "mode 2" STAT interrupt condition starts during the final machine cycle of the
+     * preceding line and lasts through the first 4 ticks of each visible line (and line 144).
      */
     public boolean isMode2IntWindow() {
-        return lcdEnabled && !firstLine && line <= 144 && ticksInLine < 4;
+        if (!lcdEnabled) {
+            return false;
+        }
+        // IF exposes the OAM condition during the final machine cycle of the
+        // preceding line and keeps it asserted through the first four ticks
+        // of the new line. CPU acceptance is synchronized at the line boundary.
+        return (line < 144 && ticksInLine >= (firstLine ? 451 : 452))
+                || (!firstLine && line <= 144 && ticksInLine < 4);
     }
 
     /**
@@ -454,6 +473,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.mode = Mode.HBlank;
         this.lcdEnabled = false;
         this.displayEnabledDelay = 0;
+        statRegister.onLcdDisabled();
         pixelMachine.clearOutput();
         pixelMachine.stop();
         display.disableLcd();

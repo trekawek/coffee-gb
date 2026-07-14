@@ -62,7 +62,7 @@ public class MooneyeTestRunner {
     public Boolean runTest(long maxTicks) throws IOException {
         int divider = 0;
         long ticks = 0;
-        while (!isByteSequenceAtPc(gb, 0x40)) { // infinite loop
+        while (!isTestFinished()) {
             if (++ticks > maxTicks) {
                 return null;
             }
@@ -73,6 +73,12 @@ public class MooneyeTestRunner {
             }
         }
         return regs.getA() == 0 && regs.getB() == 3 && regs.getC() == 5 && regs.getD() == 8 && regs.getE() == 13 && regs.getH() == 21 && regs.getL() == 34;
+    }
+
+    private boolean isTestFinished() {
+        // Current Mooneye ROMs use LD B,B as their emulator breakpoint. Older
+        // Wilbert Pol ROMs use the undefined $ED opcode for the same purpose.
+        return isByteSequenceAtPc(gb, 0x40) || isByteSequenceAtPc(gb, 0xed);
     }
 
     public String dumpRegs() {
