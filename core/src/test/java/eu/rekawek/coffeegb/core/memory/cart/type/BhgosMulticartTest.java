@@ -50,9 +50,28 @@ public class BhgosMulticartTest {
         assertEquals(0xff, mapper.getByte(0xa123));
     }
 
+    @Test
+    public void relocatesToTheLastGameInTheFourMiBY2KodeCombo() throws IOException {
+        MemoryController mapper = new BhgosMulticart(
+                new Rom(multicartRom(256)), Battery.NULL_BATTERY);
+
+        mapper.setByte(0x6100, 0xd0);
+        mapper.setByte(0x6000, 120); // Kitty Quest starts at ROM bank 240
+
+        assertEquals(240, mapper.getByte(0x0000));
+        assertEquals(241, mapper.getByte(0x4000));
+
+        mapper.setByte(0x2000, 15);
+        assertEquals(255, mapper.getByte(0x4000));
+    }
+
     private static byte[] multicartRom() {
-        byte[] data = new byte[8 * 0x4000];
-        for (int bank = 0; bank < 8; bank++) {
+        return multicartRom(8);
+    }
+
+    private static byte[] multicartRom(int banks) {
+        byte[] data = new byte[banks * 0x4000];
+        for (int bank = 0; bank < banks; bank++) {
             data[bank * 0x4000] = (byte) bank;
         }
         byte[] title = "MultiCart".getBytes(StandardCharsets.US_ASCII);
