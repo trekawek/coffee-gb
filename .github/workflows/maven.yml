@@ -43,6 +43,8 @@ jobs:
       run: mvn -B -pl core test -Ptest-mbc30
     - name: dmg-acid2
       run: mvn -B -pl core test -Ptest-dmgacid2
+    - name: cgbacid2
+      run: mvn -B -pl core test -Ptest-cgbacid2
     - name: Mealybug Tearoom (baseline-guarded)
       run: mvn -B -pl core test -Ptest-mealybug
 
