@@ -15,6 +15,8 @@ import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.serial.SerialPort;
 import eu.rekawek.coffeegb.core.sgb.Background;
@@ -132,9 +134,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         infraredPort = new eu.rekawek.coffeegb.core.ir.InfraredPort(gbc, speedMode);
 
         if (configuration.batteryData != null) {
-            cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData));
+            cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
+                    configuration.rtcTimeSource);
         } else {
-            cartridge = new Cartridge(configuration.rom, configuration.supportBatterySave);
+            cartridge = new Cartridge(configuration.rom, configuration.supportBatterySave,
+                    configuration.rtcTimeSource);
         }
         if (configuration.slotRom != null && cartridge.getDatel() != null) {
             // the game cartridge in the Action Replay's pass-through slot
@@ -530,6 +534,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         private boolean cgb0Revision;
 
+        private TimeSource rtcTimeSource = new SystemTimeSource();
+
         public GameboyConfiguration(File romFile) throws IOException {
             this(new Rom(romFile));
         }
@@ -591,6 +597,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             return this;
         }
 
+        public GameboyConfiguration setRtcTimeSource(TimeSource rtcTimeSource) {
+            this.rtcTimeSource = rtcTimeSource;
+            return this;
+        }
+
         /**
          * A copy of this configuration that skips the boot sequence, for building a
          * Gameboy whose state is immediately overwritten by a memento restore. With
@@ -606,6 +617,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             copy.supportBatterySave = supportBatterySave;
             copy.displaySgbBorder = displaySgbBorder;
             copy.cgb0Revision = cgb0Revision;
+            copy.rtcTimeSource = rtcTimeSource;
             return copy;
         }
 

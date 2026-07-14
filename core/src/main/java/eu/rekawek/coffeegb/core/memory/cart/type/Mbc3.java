@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 
 import java.util.Arrays;
 
@@ -32,10 +33,14 @@ public class Mbc3 implements MemoryController {
     private boolean clockLatched;
 
     public Mbc3(Rom rom, Battery battery) {
+        this(rom, battery, new SystemTimeSource());
+    }
+
+    public Mbc3(Rom rom, Battery battery, TimeSource timeSource) {
         this.cartridge = rom.getRom();
         this.ram = new int[0x2000 * Math.max(rom.getRamBanks(), 1)];
         Arrays.fill(ram, 0xff);
-        this.clock = new RealTimeClock(new SystemTimeSource());
+        this.clock = new RealTimeClock(timeSource);
         this.battery = battery;
         this.mbc30 = rom.getRomBanks() > 128 || rom.getRamBanks() > 4;
 
@@ -60,13 +65,8 @@ public class Mbc3 implements MemoryController {
             selectedRamBank = value;
         } else if (address >= 0x6000 && address < 0x8000) {
             if (value == 0x01 && latchClockReg == 0x00) {
-                if (clockLatched) {
-                    clock.unlatch();
-                    clockLatched = false;
-                } else {
-                    clock.latch();
-                    clockLatched = true;
-                }
+                clock.latch();
+                clockLatched = true;
             }
             latchClockReg = value;
         } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled && isRamBankSelected()) {
@@ -153,7 +153,6 @@ public class Mbc3 implements MemoryController {
     }
 
     private void setTimer(int value) {
-        int dayCounter = clock.getDayCounter();
         switch (selectedRamBank) {
             case 0x08:
                 clock.setSeconds(value);
@@ -168,15 +167,13 @@ public class Mbc3 implements MemoryController {
                 break;
 
             case 0x0b:
-                clock.setDayCounter((dayCounter & 0x100) | (value & 0xff));
+                clock.setDayCounterLow(value);
                 break;
 
             case 0x0c:
-                clock.setDayCounter((dayCounter & 0xff) | ((value & 1) << 8));
+                clock.setDayCounterHigh(value);
                 clock.setHalt((value & (1 << 6)) != 0);
-                if ((value & (1 << 7)) == 0) {
-                    clock.clearCounterOverflow();
-                }
+                clock.setCounterOverflow((value & (1 << 7)) != 0);
                 break;
         }
     }

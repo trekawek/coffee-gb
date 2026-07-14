@@ -41,6 +41,8 @@ jobs:
       run: mvn -B -pl core test -Ptest-bullygb
     - name: MBC30 tests
       run: mvn -B -pl core test -Ptest-mbc30
+    - name: RTC3 tests
+      run: mvn -B -pl core test -Ptest-rtc3
     - name: dmg-acid2
       run: mvn -B -pl core test -Ptest-dmgacid2
     - name: Mealybug Tearoom (baseline-guarded)
