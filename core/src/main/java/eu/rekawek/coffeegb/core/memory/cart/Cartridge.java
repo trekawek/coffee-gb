@@ -49,6 +49,8 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new Mani32kMulticart(rom);
         } else if (isDuzMulticart(rom)) {
             addressSpace = new DuzMulticart(rom, battery);
+        } else if (isBhgosMulticart(rom)) {
+            addressSpace = new BhgosMulticart(rom, battery);
         } else if (sachenType(rom) >= 0) {
             addressSpace = new SachenMmc(rom, sachenType(rom) == 2);
         } else if (isCookedSachen(rom)) {
@@ -207,6 +209,17 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             }
         }
         return false;
+    }
+
+    /**
+     * Blue Hippo's Game Boy Operating System multicarts keep the menu's MBC5 header but
+     * add a register that relocates the complete 32 KiB cartridge window to a selected
+     * embedded game. A standalone 32 KiB copy of the menu needs no special mapping.
+     */
+    private static boolean isBhgosMulticart(Rom rom) {
+        return "MultiCart".equals(rom.getTitle())
+                && rom.getType().isMbc5()
+                && rom.getRom().length > 0x8000;
     }
 
     /**
