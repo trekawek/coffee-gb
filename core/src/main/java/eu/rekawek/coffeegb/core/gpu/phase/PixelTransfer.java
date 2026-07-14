@@ -60,6 +60,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private int windowLineCounter = -1;
 
+    // Latched when the window is enabled while LY equals WY. It remains set for the
+    // frame even if LCDC.5 is later cleared; hardware uses this latch both for window
+    // activation and for the disabled-window insertion glitch.
+    private boolean windowYTriggered;
+
     // a WX comparator match holds the activation pending for one tick: the comparator
     // on hardware sees register writes one machine cycle before our CPU commits them,
     // so a WX write landing within the skew means the window never triggered. The
@@ -265,6 +270,20 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     public void resetWindowLineCounter() {
         // pre-incremented at window activation: the first activated line renders row 0
         windowLineCounter = -1;
+        windowYTriggered = false;
+        fetcher.setWindowYTriggered(false);
+    }
+
+    /** Samples the DMG/CGB WY comparator. Called every PPU tick, including mode 2. */
+    public void checkWindowY() {
+        if (!windowYTriggered && lcdc.isWindowDisplay() && r.get(LY) == r.get(WY)) {
+            windowYTriggered = true;
+            fetcher.setWindowYTriggered(true);
+        }
+    }
+
+    boolean isWindowYTriggered() {
+        return windowYTriggered;
     }
 
     @Override
@@ -397,7 +416,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // desync branch below). Only for regular WX>=7 positions so the discard-phase
         // WX=0..6 activation is untouched.
         if (!gbc && !window && !lcdc.isWindowDisplay() && !windowActivatedThisLine
-                && r.get(LY) >= r.get(WY)) {
+                && windowYTriggered) {
             int wxNow = r.get(WX);
             if (wxNow >= 7 && wxNow < 166 && !r.isWxJustChanged()
                     && wxNow == ((position + 7) & 0xff)) {
@@ -412,7 +431,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (!window
                 && lcdc.isWindowDisplay()
                 && (gbc || lcdc.isBgAndWindowDisplay())
-                && r.get(LY) >= r.get(WY)) {
+                && windowYTriggered) {
             int wx = r.get(WX);
             boolean activate;
             if (wx == 0) {
@@ -641,7 +660,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowPendingPos,
                 windowActivatedThisLine,
                 insertBgPixel,
-                machineStall);
+                machineStall,
+                windowYTriggered);
     }
 
     @Override
@@ -686,6 +706,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         this.windowActivatedThisLine = mem.windowActivatedThisLine;
         this.insertBgPixel = mem.insertBgPixel;
         this.machineStall = mem.machineStall;
+        this.windowYTriggered = mem.windowYTriggered;
+        fetcher.setWindowYTriggered(windowYTriggered);
     }
 
     private record PixelTransferMemento(
@@ -710,7 +732,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             int windowPendingPos,
             boolean windowActivatedThisLine,
             boolean insertBgPixel,
-            int machineStall)
+            int machineStall,
+            boolean windowYTriggered)
             implements Memento<PixelTransfer> {
     }
 }
