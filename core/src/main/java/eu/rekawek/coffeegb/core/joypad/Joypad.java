@@ -44,7 +44,11 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         this.sgbBus = sgbBus;
         sgbBus.register(event -> {
             players = event.getMultiplayerControl();
-            currentPlayer = currentPlayer & players;
+            if (players == 2) {
+                currentPlayer = currentPlayer == 1 || currentPlayer == 2 ? 2 : 0;
+            } else {
+                currentPlayer = currentPlayer & players;
+            }
             LOG.atDebug().log("Players: {}, current player: {}", players, currentPlayer);
         }, Commands.MltReqCmd.class);
     }
@@ -122,7 +126,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
                 }
             }
         }
-        if (players > 0 && !BitUtils.getBit(p1, 5) && BitUtils.getBit(value, 5)) {
+        if (players > 0 && players != 2 && !BitUtils.getBit(p1, 5) && BitUtils.getBit(value, 5)) {
             currentPlayer++;
             if (currentPlayer > players) {
                 currentPlayer = 0;

@@ -28,6 +28,8 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private int ticksSinceOverflow;
 
+    private boolean divReset;
+
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.speedMode = speedMode;
         this.interruptManager = interruptManager;
@@ -42,6 +44,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     }
 
     public void tick() {
+        divReset = false;
         updateDiv((div + speedMode.getSpeedMode()) & 0xffff);
         if (overflow) {
             ticksSinceOverflow++;
@@ -89,6 +92,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         switch (address) {
             case 0xff04:
                 updateDiv(0);
+                divReset = true;
                 break;
 
             case 0xff05:
@@ -107,6 +111,16 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
                 tac = value;
                 break;
         }
+    }
+
+    public boolean consumeDivReset() {
+        boolean result = divReset;
+        divReset = false;
+        return result;
+    }
+
+    public boolean isDivResetPending() {
+        return divReset;
     }
 
     @Override
@@ -129,7 +143,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     @Override
     public Memento<Timer> saveToMemento() {
-        return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow);
+        return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow, divReset);
     }
 
     @Override
@@ -144,10 +158,11 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         this.previousBit = mem.previousBit;
         this.overflow = mem.overflow;
         this.ticksSinceOverflow = mem.ticksSinceOverflow;
+        this.divReset = mem.divReset;
     }
 
     public record TimerMemento(int div, int tac, int tma, int tima, boolean previousBit, boolean overflow,
-                               int ticksSinceOverflow) implements Memento<Timer> {
+                               int ticksSinceOverflow, boolean divReset) implements Memento<Timer> {
     }
 
 }

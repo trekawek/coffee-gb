@@ -25,20 +25,37 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
 
     private boolean negging;
 
+    /**
+     * The overflow check following a sweep calculation is performed by a 1 MHz
+     * ripple counter, rather than in the frame-sequencer callback itself.
+     */
+    private int calculationDelay;
+
+    private boolean unshiftedCalculation;
+
+    private int restartHold;
+
     public void start() {
         counterEnabled = false;
+        calculationDelay = 0;
+        unshiftedCalculation = false;
+        restartHold = 0;
     }
 
-    public void trigger() {
+    public void trigger(boolean wasActive, boolean lowFrequencyPhase, boolean gbc) {
         this.negging = false;
         this.overflow = false;
 
         this.shadowFreq = nr13 | ((nr14 & 0b111) << 8);
         this.timer = period == 0 ? 8 : period;
         this.counterEnabled = period != 0 || shift != 0;
-
-        if (shift > 0) {
-            calculate();
+        // The sweep adder holds its pre-restart input while the trigger pipeline drains.
+        // CGB hardware keeps that hold for two additional stages.
+        restartHold = (4 - (lowFrequencyPhase ? 1 : 0) + (gbc ? 2 : 0)) * 2;
+        if (shift == 0) {
+            cancelCalculation();
+        } else {
+            scheduleCalculation(shift + (wasActive ? 2 : 3), false);
         }
     }
 
@@ -57,9 +74,6 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
 
     public void setNr14(int value) {
         this.nr14 = value;
-        if ((value & (1 << 7)) != 0) {
-            trigger();
-        }
     }
 
     public int getNr13() {
@@ -77,15 +91,48 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         if (--timer == 0) {
             timer = period == 0 ? 8 : period;
             if (period != 0) {
-                int newFreq = calculate();
-                if (!overflow && shift != 0) {
-                    shadowFreq = newFreq;
-                    nr13 = shadowFreq & 0xff;
-                    nr14 = (shadowFreq & 0x700) >> 8;
-                    calculate();
+                if (shift == 0) {
+                    if (restartHold == 0) {
+                        scheduleCalculation(1, true);
+                    } else {
+                        cancelCalculation();
+                    }
+                } else {
+                    int newFreq = calculate();
+                    if (!overflow) {
+                        shadowFreq = newFreq;
+                        nr13 = shadowFreq & 0xff;
+                        nr14 = (shadowFreq & 0x700) >> 8;
+                        scheduleCalculation(shift + 1, false);
+                    }
                 }
             }
         }
+    }
+
+    /** Advances the delayed sweep calculation by one CPU T-cycle. */
+    public void tick() {
+        if (restartHold > 0) {
+            restartHold--;
+        }
+        // A zero shift disconnects the calculation counter until NR10 enables it again.
+        if (calculationDelay == 0 || (shift == 0 && !unshiftedCalculation)) {
+            return;
+        }
+        if (--calculationDelay == 0) {
+            calculate();
+            unshiftedCalculation = false;
+        }
+    }
+
+    private void scheduleCalculation(int oneMhzTicks, boolean unshifted) {
+        calculationDelay = oneMhzTicks * 4;
+        unshiftedCalculation = unshifted;
+    }
+
+    private void cancelCalculation() {
+        calculationDelay = 0;
+        unshiftedCalculation = false;
     }
 
     private int calculate() {
@@ -108,7 +155,8 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
 
     @Override
     public Memento<FrequencySweep> saveToMemento() {
-        return new FrequencySweepMemento(period, negate, shift, timer, shadowFreq, nr13, nr14, overflow, counterEnabled, negging);
+        return new FrequencySweepMemento(period, negate, shift, timer, shadowFreq, nr13, nr14, overflow,
+                counterEnabled, negging, calculationDelay, unshiftedCalculation, restartHold);
     }
 
     @Override
@@ -126,10 +174,14 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         this.overflow = mem.overflow;
         this.counterEnabled = mem.counterEnabled;
         this.negging = mem.negging;
+        this.calculationDelay = mem.calculationDelay;
+        this.unshiftedCalculation = mem.unshiftedCalculation;
+        this.restartHold = mem.restartHold;
     }
 
     private record FrequencySweepMemento(int period, boolean negate, int shift, int timer, int shadowFreq, int nr13,
                                          int nr14, boolean overflow, boolean counterEnabled,
-                                         boolean negging) implements Memento<FrequencySweep> {
+                                         boolean negging, int calculationDelay,
+                                         boolean unshiftedCalculation, int restartHold) implements Memento<FrequencySweep> {
     }
 }

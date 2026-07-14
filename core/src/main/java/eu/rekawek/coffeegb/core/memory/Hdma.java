@@ -58,6 +58,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         }
         src = (src + 0x10) & 0xffff;
         dst = (dst + 0x10) & 0xffff;
+        tick = 0;
         if (length-- == 0) {
             transferInProgress = false;
             length = 0x7f;
@@ -83,7 +84,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                 break;
             case HDMA5:
                 if (transferInProgress && (value & (1 << 7)) == 0) {
-                    stopTransfer();
+                    stopTransfer(value);
                 } else {
                     startTransfer(value);
                 }
@@ -110,7 +111,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     public boolean isTransferInProgress() {
         if (!transferInProgress) {
             return false;
-        } else if (hblankTransfer && (gpuMode == Mode.HBlank || !lcdEnabled)) {
+        } else if (hblankTransfer && gpuMode == Mode.HBlank) {
             return true;
         } else return !hblankTransfer;
     }
@@ -119,10 +120,17 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         hblankTransfer = (reg & (1 << 7)) != 0;
         length = reg & 0x7f;
         transferInProgress = true;
+        tick = 0;
+        if (hblankTransfer && !lcdEnabled) {
+            // With the LCD off, starting HDMA copies one block immediately. There are
+            // no subsequent HBlanks, so the transfer then remains paused.
+            gpuMode = Mode.HBlank;
+        }
     }
 
-    private void stopTransfer() {
+    private void stopTransfer(int reg) {
         transferInProgress = false;
+        length = reg & 0x7f;
     }
 
     @Override

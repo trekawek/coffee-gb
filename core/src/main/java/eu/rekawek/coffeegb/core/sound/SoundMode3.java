@@ -38,6 +38,9 @@ public class SoundMode3 extends AbstractSoundMode {
 
     private boolean triggered;
 
+    // CH3 is clocked by the APU's fixed 2 MHz clock, independently of CPU speed.
+    private boolean clock2Mhz;
+
     public SoundMode3(FrameSequencer frameSequencer, Timer timer, boolean gbc) {
         super(0xff1a, 256, frameSequencer, gbc);
         this.timer = timer;
@@ -97,6 +100,14 @@ public class SoundMode3 extends AbstractSoundMode {
     }
 
     @Override
+    protected void setNr2(int value) {
+        super.setNr2(value);
+        if (channelEnabled) {
+            lastOutput = getBufferedOutput();
+        }
+    }
+
+    @Override
     protected void setNr3(int value) {
         super.setNr3(value);
     }
@@ -124,6 +135,7 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void start() {
         i = 0;
+        clock2Mhz = false;
         if (gbc) {
             length.reset();
         }
@@ -151,13 +163,17 @@ public class SoundMode3 extends AbstractSoundMode {
         freqDivider = getFrequency() + 3;
         triggered = !gbc;
         if (gbc) {
-            getWaveEntry();
+            // CGB wave-RAM access is redirected to the current byte immediately,
+            // but the sample buffer itself is not refreshed by a trigger.
+            lastReadAddr = 0xff30;
+            ticksSinceRead = 0;
         }
     }
 
     @Override
     public int tick() {
         ticksSinceRead++;
+        clock2Mhz = !clock2Mhz;
         if (!channelEnabled) {
             return lastOutput;
         }
@@ -165,7 +181,7 @@ public class SoundMode3 extends AbstractSoundMode {
             return 0;
         }
 
-        if ((timer.getDivCounter() & 1) == 0 && --freqDivider == 0) {
+        if (clock2Mhz && --freqDivider == 0) {
             resetFreqDivider();
             i = (i + 1) % 32;
             int stale = (buffer >> 4) & 0x0f;
@@ -178,6 +194,11 @@ public class SoundMode3 extends AbstractSoundMode {
         return lastOutput;
     }
 
+    @Override
+    public int getCurrentOutput() {
+        return lastOutput;
+    }
+
     private int getVolume() {
         return (getNr2() >> 5) & 0b11;
     }
@@ -186,6 +207,10 @@ public class SoundMode3 extends AbstractSoundMode {
         ticksSinceRead = 0;
         lastReadAddr = 0xff30 + i / 2;
         buffer = waveRam.getByte(lastReadAddr);
+        return getBufferedOutput();
+    }
+
+    private int getBufferedOutput() {
         int b = buffer;
         if (i % 2 == 0) {
             b = (b >> 4) & 0x0f;
@@ -212,7 +237,7 @@ public class SoundMode3 extends AbstractSoundMode {
 
     @Override
     public Memento<AbstractSoundMode> saveToMemento() {
-        return new SoundMode3Memento(super.saveToMemento(), waveRam.saveToMemento(), freqDivider, lastOutput, i, ticksSinceRead, lastReadAddr, buffer, triggered);
+        return new SoundMode3Memento(super.saveToMemento(), waveRam.saveToMemento(), freqDivider, lastOutput, i, ticksSinceRead, lastReadAddr, buffer, triggered, clock2Mhz);
     }
 
     @Override
@@ -229,10 +254,12 @@ public class SoundMode3 extends AbstractSoundMode {
         this.lastReadAddr = mem.lastReadAddr;
         this.buffer = mem.buffer;
         this.triggered = mem.triggered;
+        this.clock2Mhz = mem.clock2Mhz;
     }
 
     private record SoundMode3Memento(Memento<AbstractSoundMode> abstractSoundMemento, Memento<Ram> waveRamMemento,
                                      int freqDivider, int lastOutput, int i, int ticksSinceRead, int lastReadAddr,
-                                     int buffer, boolean triggered) implements Memento<AbstractSoundMode> {
+                                     int buffer, boolean triggered,
+                                     boolean clock2Mhz) implements Memento<AbstractSoundMode> {
     }
 }

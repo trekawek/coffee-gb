@@ -64,28 +64,16 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     }
 
     public void tick() {
-        int firedStep = frameSequencer.tick(timer.getDivCounter(), enabled, speedMode.getSpeedMode() == 2);
+        boolean divReset = timer.consumeDivReset();
         if (!enabled) {
             play(0, 0);
             return;
         }
 
-        if (firedStep >= 0) {
-            if ((firedStep & 1) == 0) {
-                for (AbstractSoundMode m : allModes) m.tickLength();
-            }
-            if (firedStep == 2 || firedStep == 6) {
-                for (AbstractSoundMode m : allModes) m.tickSweep();
-            }
-            if (firedStep == 7) {
-                for (AbstractSoundMode m : allModes) m.tickEnvelope();
-            }
-        }
-
-        channels[0] = allModes[0].tick();
-        channels[1] = allModes[1].tick();
-        channels[2] = allModes[2].tick();
-        channels[3] = allModes[3].tick();
+        channels[0] = allModes[0].tick(divReset);
+        channels[1] = allModes[1].tick(divReset);
+        channels[2] = allModes[2].tick(divReset);
+        channels[3] = allModes[3].tick(divReset);
 
         int selection = r.getByte(0xff25);
         int left = 0;
@@ -114,6 +102,26 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         right *= (volumes & 0b111) + 1;
 
         play(left, right);
+    }
+
+    /**
+     * Updates DIV-APU independently of channel sampling. It is called both before the
+     * CPU (for natural DIV edges) and after it (for an edge caused by an FF04 write).
+     */
+    public void tickFrameSequencer() {
+        int firedStep = frameSequencer.tick(timer.getDivCounter(), enabled, speedMode.getSpeedMode() == 2);
+        if (firedStep >= 0) {
+            for (AbstractSoundMode m : allModes) m.tickEnvelopeClock(firedStep);
+            if ((firedStep & 1) == 0) {
+                for (AbstractSoundMode m : allModes) m.tickLength();
+            }
+            if (firedStep == 2 || firedStep == 6) {
+                for (AbstractSoundMode m : allModes) m.tickSweep();
+            }
+            if (firedStep == 7) {
+                for (AbstractSoundMode m : allModes) m.tickEnvelope();
+            }
+        }
     }
 
     private void play(int left, int right) {
@@ -167,19 +175,21 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         if (!enabled && address < 0xff30) {
             // while the APU is off, the only writable register bits are the DMG length
             // counters (and NR52 handled above); everything else is ignored
-            switch (address) {
-                case 0xff11:
-                    allModes[0].writeLengthWhileOff(value);
-                    break;
-                case 0xff16:
-                    allModes[1].writeLengthWhileOff(value);
-                    break;
-                case 0xff1b:
-                    allModes[2].writeLengthWhileOff(value);
-                    break;
-                case 0xff20:
-                    allModes[3].writeLengthWhileOff(value);
-                    break;
+            if (!gbc) {
+                switch (address) {
+                    case 0xff11:
+                        allModes[0].writeLengthWhileOff(value);
+                        break;
+                    case 0xff16:
+                        allModes[1].writeLengthWhileOff(value);
+                        break;
+                    case 0xff1b:
+                        allModes[2].writeLengthWhileOff(value);
+                        break;
+                    case 0xff20:
+                        allModes[3].writeLengthWhileOff(value);
+                        break;
+                }
             }
             return;
         }
@@ -202,9 +212,11 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             }
             result |= enabled ? (1 << 7) : 0;
         } else if (address == 0xff76) {
-            return channels[0] | (channels[1] << 4);
+            return (allModes[0].isEnabled() ? allModes[0].getCurrentOutput() : 0)
+                    | (allModes[1].isEnabled() ? allModes[1].getCurrentOutput() << 4 : 0);
         } else if (address == 0xff77) {
-            return channels[2] | (channels[3] << 4);
+            return (allModes[2].isEnabled() ? allModes[2].getCurrentOutput() : 0)
+                    | (allModes[3].isEnabled() ? allModes[3].getCurrentOutput() << 4 : 0);
         } else {
             result = getUnmaskedByte(address);
         }
@@ -224,7 +236,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         for (AbstractSoundMode m : allModes) {
             m.start();
         }
-        frameSequencer.reset();
+        frameSequencer.reset(timer.getDivCounter(), speedMode.getSpeedMode() == 2);
     }
 
     private void stop() {

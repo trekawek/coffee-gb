@@ -20,6 +20,8 @@ public class FrameSequencer implements Serializable, Originator<FrameSequencer> 
 
     private boolean previousBit;
 
+    private boolean skipNextEdge;
+
     /**
      * @param divCounter the current value of the internal 16-bit divider
      * @param apuEnabled whether the APU is powered on
@@ -27,11 +29,15 @@ public class FrameSequencer implements Serializable, Originator<FrameSequencer> 
      * @return the fired step, or -1
      */
     public int tick(int divCounter, boolean apuEnabled, boolean doubleSpeed) {
-        boolean bit = (divCounter & (doubleSpeed ? DIV_BIT << 2 : DIV_BIT)) != 0;
+        boolean bit = (divCounter & (doubleSpeed ? DIV_BIT << 1 : DIV_BIT)) != 0;
         int firedStep = -1;
         if (previousBit && !bit && apuEnabled) {
-            firedStep = step;
-            step = (step + 1) & 7;
+            if (skipNextEdge) {
+                skipNextEdge = false;
+            } else {
+                firedStep = step;
+                step = (step + 1) & 7;
+            }
         }
         previousBit = bit;
         return firedStep;
@@ -42,16 +48,27 @@ public class FrameSequencer implements Serializable, Originator<FrameSequencer> 
      * Writing NRx4 in this phase causes the extra length clocking.
      */
     public boolean isFirstHalfOfLengthPeriod() {
-        return (step & 1) == 1;
+        return skipNextEdge || (step & 1) == 1;
     }
 
     public void reset() {
         step = 0;
+        skipNextEdge = false;
+    }
+
+    /**
+     * Powers the divider down/up. If the selected DIV bit is already high, CGB hardware
+     * suppresses the first falling edge after power-on.
+     */
+    public void reset(int divCounter, boolean doubleSpeed) {
+        step = 0;
+        previousBit = (divCounter & (doubleSpeed ? DIV_BIT << 1 : DIV_BIT)) != 0;
+        skipNextEdge = previousBit;
     }
 
     @Override
     public Memento<FrameSequencer> saveToMemento() {
-        return new FrameSequencerMemento(step, previousBit);
+        return new FrameSequencerMemento(step, previousBit, skipNextEdge);
     }
 
     @Override
@@ -61,8 +78,10 @@ public class FrameSequencer implements Serializable, Originator<FrameSequencer> 
         }
         this.step = mem.step;
         this.previousBit = mem.previousBit;
+        this.skipNextEdge = mem.skipNextEdge;
     }
 
-    private record FrameSequencerMemento(int step, boolean previousBit) implements Memento<FrameSequencer> {
+    private record FrameSequencerMemento(int step, boolean previousBit,
+                                         boolean skipNextEdge) implements Memento<FrameSequencer> {
     }
 }
