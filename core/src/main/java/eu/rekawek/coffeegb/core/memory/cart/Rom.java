@@ -93,7 +93,15 @@ public class Rom {
         }
         cartridgeType = type;
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
-        gameboyColorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
+        GameboyColorFlag colorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
+        if (isDmgOnlyCrazyCastleTrainer(rom, title)) {
+            // This trainer advertises CGB compatibility but only initializes the DMG
+            // BGP/OBP registers. Native CGB startup therefore renders its menu entirely
+            // white and also leaves HRAM in a state the trainer does not expect.
+            LOG.info("DMG-only Crazy Castle 3 trainer detected; ignoring its CGB flag");
+            colorFlag = GameboyColorFlag.NON_CGB;
+        }
+        gameboyColorFlag = colorFlag;
         superGameboyFlag = rom[0x0146] == 0x03;
         romBanks = getRomBanks(rom[0x0148], rom.length);
         int ramSize = getRamSize(rom[0x0149]);
@@ -148,6 +156,20 @@ public class Rom {
     // reuse 0xBE is not mislabelled.
     private static boolean isPocketVoice(int[] rom, String title) {
         return rom[0x0147] == 0xBE && title.startsWith("Pocket Voice");
+    }
+
+    private static boolean isDmgOnlyCrazyCastleTrainer(int[] rom, String title) {
+        int[] entryStub = {0xf5, 0x3e, 0x03, 0xea, 0x00, 0x21, 0xf1, 0xc3, 0x00, 0x68};
+        if (rom.length != 0x100000 || !"BUGS CC3 CRACK".equals(title)
+                || rom[0x0143] != 0x80 || rom[0x0147] != 0x19) {
+            return false;
+        }
+        for (int i = 0; i < entryStub.length; i++) {
+            if (rom[0x00e0 + i] != entryStub[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String getTitle(int[] rom) {
