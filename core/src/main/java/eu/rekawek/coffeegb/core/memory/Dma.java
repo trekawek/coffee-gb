@@ -67,6 +67,32 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         return restarted || (transferInProgress && ticks >= 5);
     }
 
+    public boolean isCpuAccessBlocked(int address, boolean gbc) {
+        if (!isOamBlocked() || address == 0xff46 || (address >= 0xfe00 && address < 0xff00)
+                || (address >= 0xff80 && address < 0xffff)) {
+            return false;
+        }
+        int cpuBus = getBus(address, gbc);
+        return cpuBus >= 0 && cpuBus == getBus(from, gbc);
+    }
+
+    public int getCpuBusValue() {
+        int byteIndex = Math.max(0, Math.min(0x9f, (ticks - 5) / 4));
+        return addressSpace.getByte(from + byteIndex);
+    }
+
+    private static int getBus(int address, boolean gbc) {
+        if (address < 0x8000 || (address >= 0xa000 && address < 0xc000)) {
+            return 0; // cartridge
+        } else if (address >= 0x8000 && address < 0xa000) {
+            return 1; // VRAM
+        } else if (address >= 0xc000 && address < 0xfe00) {
+            return gbc ? 2 : 0; // WRAM has its own bus only on CGB
+        } else {
+            return -1; // OAM, I/O and HRAM are not on a DMA source bus
+        }
+    }
+
     @Override
     public Memento<Dma> saveToMemento() {
         return new DmaMemento(transferInProgress, restarted, from, ticks, regValue);
