@@ -203,7 +203,17 @@ public class Cpu implements Serializable, Originator<Cpu> {
                     } else if (opcode1 == 0x76) {
                         // committing a pending EI happens even when entering halt, so
                         // "ei; halt" halts with IME=1 (no halt bug, wake dispatches)
+                        boolean imeBeforeHalt = interruptManager.isIme();
+                        boolean interruptPendingBeforeHalt = interruptManager.isInterruptRequested();
                         interruptManager.onInstructionFinished();
+                        if (!imeBeforeHalt && interruptPendingBeforeHalt && interruptManager.isIme()) {
+                            // HALT was fetched while EI's delayed enable was still pending.
+                            // The interrupt is accepted at instruction completion, but hardware
+                            // pushes HALT's address so RETI executes it again.
+                            registers.setPC((registers.getPC() - 1) & 0xffff);
+                            state = State.OPCODE;
+                            return;
+                        }
                         if (interruptManager.isHaltBug()) {
                             state = State.OPCODE;
                             haltBugMode = true;

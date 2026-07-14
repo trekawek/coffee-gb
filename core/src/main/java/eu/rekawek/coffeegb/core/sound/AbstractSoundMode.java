@@ -28,6 +28,12 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
 
     public abstract int tick();
 
+    public int tick(boolean divReset) {
+        return tick();
+    }
+
+    public abstract int getCurrentOutput();
+
     protected abstract void trigger();
 
     public void tickLength() {
@@ -49,6 +55,9 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
     }
 
     public void tickEnvelope() {
+    }
+
+    public void tickEnvelopeClock(int frameSequencerStep) {
     }
 
     public void tickSweep() {
@@ -213,4 +222,3 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
                                             Memento<LengthCounter> lengthMemento) implements Memento<AbstractSoundMode> {
     }
 }
-

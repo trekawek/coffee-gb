@@ -24,6 +24,7 @@ public class SoundMode4 extends AbstractSoundMode {
             length.reset();
         }
         lfsr.start();
+        polynomialCounter.start();
         volumeEnvelope.start();
     }
 
@@ -32,12 +33,14 @@ public class SoundMode4 extends AbstractSoundMode {
         super.stop();
         lastResult = 0;
         volumeEnvelope.setNr2(0);
-        polynomialCounter.setNr43(0);
+        polynomialCounter.stop();
     }
 
     @Override
     public void trigger() {
         lfsr.reset();
+        lastResult = 0;
+        polynomialCounter.trigger();
         volumeEnvelope.trigger();
     }
 
@@ -47,7 +50,13 @@ public class SoundMode4 extends AbstractSoundMode {
     }
 
     @Override
+    public void tickEnvelopeClock(int frameSequencerStep) {
+        volumeEnvelope.apuClockTick(frameSequencerStep);
+    }
+
+    @Override
     public int tick() {
+        boolean stepLfsr = polynomialCounter.tick();
         if (!updateLength()) {
             return 0;
         }
@@ -55,9 +64,14 @@ public class SoundMode4 extends AbstractSoundMode {
             return 0;
         }
 
-        if (polynomialCounter.tick()) {
+        if (stepLfsr) {
             lastResult = lfsr.nextBit((nr3 & (1 << 3)) != 0);
         }
+        return getCurrentOutput();
+    }
+
+    @Override
+    public int getCurrentOutput() {
         return lastResult * volumeEnvelope.getVolume();
     }
 
@@ -70,7 +84,7 @@ public class SoundMode4 extends AbstractSoundMode {
     @Override
     protected void setNr2(int value) {
         super.setNr2(value);
-        volumeEnvelope.setNr2(value);
+        volumeEnvelope.setNr2(value, channelEnabled);
         dacEnabled = (value & 0b11111000) != 0;
         channelEnabled &= dacEnabled;
     }

@@ -26,7 +26,7 @@ public class Lfsr implements Serializable, Originator<Lfsr> {
         lfsr = lfsr >> 1;
         lfsr = lfsr | (x ? (1 << 14) : 0);
         if (widthMode7) {
-            lfsr = lfsr | (x ? (1 << 6) : 0);
+            lfsr = (lfsr & ~(1 << 6)) | (x ? (1 << 6) : 0);
         }
         return 1 & ~lfsr;
     }

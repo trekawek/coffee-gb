@@ -177,10 +177,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         interruptManager.disableInterrupts(false);
         if (configuration.bootstrapMode != BootstrapMode.SKIP) {
             // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
-            // line grid to that write; the divider has counted a few cycles more on
-            // the CGB by the time the CPU starts, and the revision 0 CGB adds
-            // another 512 T (boot_div-cgbABCDE, boot_div-cgb0)
-            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 536 : 12) : 4);
+            // line grid to that write; the CGB divider phase accounts for the boot
+            // ROM's accurately paced HDMA, and revision 0 adds another 512 T
+            // (boot_div-cgbABCDE, boot_div-cgb0)
+            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 518 : 0xfffa) : 4);
             gpu.setByte(0xff40, 0x00);
         }
         boolean bootTimedOut = false;
@@ -373,6 +373,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (!speedSwitching) {
             timer.tick();
         }
+        sound.tickFrameSequencer();
         if (speedSwitching) {
             // A CGB speed switch pauses the CPU and DIV, but the PPU keeps running.
             cpu.tick();
@@ -383,6 +384,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             hdma.tick();
         } else {
             cpu.tick();
+        }
+        if (timer.isDivResetPending()) {
+            sound.tickFrameSequencer();
         }
         dma.tick();
         sound.tick();

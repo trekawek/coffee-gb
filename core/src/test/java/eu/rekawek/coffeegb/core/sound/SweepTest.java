@@ -33,12 +33,14 @@ public class SweepTest {
         wregNR(10, 0x01);
         wregNR(13, 0xff);
         wregNR(14, 0xc7);
+        delaySweepCalculation(4);
         shouldBeOff();
 
         begin();
         wregNR(10, 0x11);
         wregNR(13, 0xff);
         wregNR(14, 0xc7);
+        delaySweepCalculation(4);
         shouldBeOff();
     }
 
@@ -113,6 +115,7 @@ public class SweepTest {
         wregNR(10, 0x02);
         wregNR(13, 0x67);
         wregNR(14, 0xc6);
+        delaySweepCalculation(5);
         shouldBeOff();
     }
 
@@ -323,6 +326,7 @@ public class SweepTest {
             if (firedStep == 2 || firedStep == 6) {
                 sweep.clockTick();
             }
+            sweep.tick();
         }
     }
 
@@ -338,6 +342,9 @@ public class SweepTest {
 
             case 14:
                 sweep.setNr14(value);
+                if ((value & 0x80) != 0) {
+                    sweep.trigger(false, false, false);
+                }
                 break;
 
             default:
@@ -351,6 +358,13 @@ public class SweepTest {
             if (firedStep == 2 || firedStep == 6) {
                 sweep.clockTick();
             }
+            sweep.tick();
+        }
+    }
+
+    private void delaySweepCalculation(int oneMhzTicks) {
+        for (int i = 0; i < oneMhzTicks * 4; i++) {
+            sweep.tick();
         }
     }
 }

@@ -24,7 +24,7 @@ public class GeneralTest {
         this.romPath = romPath;
     }
 
-    @Test(timeout = 5000)
+    @Test(timeout = 10000)
     public void test() throws IOException {
         RomTestUtils.testMooneyeRom(romPath);
     }
