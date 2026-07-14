@@ -78,6 +78,68 @@ public class RealTimeTimeSourceTest {
         assertClockEquals(12, 18, 23, 34);
     }
 
+    @Test
+    public void writesAreMaskedAndAllowedWhileRunning() {
+        rtc.setSeconds(0xff);
+        rtc.setMinutes(0xff);
+        rtc.setHours(0xff);
+        rtc.setDayCounter(0x3ff);
+        rtc.setCounterOverflow(true);
+
+        assertClockEquals(511, 31, 63, 63);
+        assertTrue(rtc.isCounterOverflow());
+    }
+
+    @Test
+    public void secondsWriteResetsOnlyTheSubSecondCounter() {
+        clock.forward(600, TimeUnit.MILLISECONDS);
+        rtc.setMinutes(12);
+        clock.forward(399, TimeUnit.MILLISECONDS);
+        assertClockEquals(0, 0, 12, 0);
+        clock.forward(1, TimeUnit.MILLISECONDS);
+        assertClockEquals(0, 0, 12, 1);
+
+        clock.forward(600, TimeUnit.MILLISECONDS);
+        rtc.setSeconds(20);
+        clock.forward(999, TimeUnit.MILLISECONDS);
+        assertClockEquals(0, 0, 12, 20);
+        clock.forward(1, TimeUnit.MILLISECONDS);
+        assertClockEquals(0, 0, 12, 21);
+    }
+
+    @Test
+    public void haltPreservesTheSubSecondCounter() {
+        clock.forward(600, TimeUnit.MILLISECONDS);
+        rtc.setHalt(true);
+        clock.forward(10, TimeUnit.SECONDS);
+        rtc.setHalt(false);
+
+        clock.forward(399, TimeUnit.MILLISECONDS);
+        assertEquals(0, rtc.getSeconds());
+        clock.forward(1, TimeUnit.MILLISECONDS);
+        assertEquals(1, rtc.getSeconds());
+    }
+
+    @Test
+    public void invalidRegisterValuesUseHardwareRolloverRules() {
+        rtc.setMinutes(10);
+        rtc.setSeconds(63);
+        clock.forward(1, TimeUnit.SECONDS);
+        assertClockEquals(0, 0, 10, 0);
+
+        rtc.setHours(5);
+        rtc.setMinutes(63);
+        rtc.setSeconds(59);
+        clock.forward(1, TimeUnit.SECONDS);
+        assertClockEquals(0, 5, 0, 0);
+
+        rtc.setHours(31);
+        rtc.setMinutes(59);
+        rtc.setSeconds(59);
+        clock.forward(1, TimeUnit.SECONDS);
+        assertClockEquals(0, 0, 0, 0);
+    }
+
     private void forward(int days, int hours, int minutes, int seconds) {
         clock.forward(days, TimeUnit.DAYS);
         clock.forward(hours, TimeUnit.HOURS);

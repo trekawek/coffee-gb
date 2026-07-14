@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.joypad.Button;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 
 import java.io.File;
@@ -29,12 +30,15 @@ public class Rtc3TestRunner {
 
     private final AddressSpace memory;
 
+    private final EmulatedTimeSource rtcTimeSource = new EmulatedTimeSource();
+
     public Rtc3TestRunner(File romFile) throws IOException {
         EventBus eventBus = new EventBusImpl();
         gb = new Gameboy.GameboyConfiguration(romFile)
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                 .setGameboyType(GameboyType.DMG)
                 .setSupportBatterySave(false)
+                .setRtcTimeSource(rtcTimeSource)
                 .build();
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
         memory = gb.getAddressSpace();
@@ -56,7 +60,7 @@ public class Rtc3TestRunner {
             if (++ticks > MAX_TEST_TICKS) {
                 return new TestResult(false, "RTC3Test timed out\n" + dumpScreen());
             }
-            gb.tick();
+            tick();
         }
 
         return new TestResult(!hasFailedResult(), dumpScreen());
@@ -73,8 +77,13 @@ public class Rtc3TestRunner {
 
     private void runTicks(long ticks) {
         while (ticks-- > 0) {
-            gb.tick();
+            tick();
         }
+    }
+
+    private void tick() {
+        rtcTimeSource.tick();
+        gb.tick();
     }
 
     private boolean hasReturnLabel() {
@@ -165,6 +174,20 @@ public class Rtc3TestRunner {
 
         public String getOutput() {
             return output;
+        }
+    }
+
+    private static class EmulatedTimeSource implements TimeSource {
+
+        private long ticks;
+
+        @Override
+        public long currentTimeMillis() {
+            return ticks * 1000 / Gameboy.TICKS_PER_SEC;
+        }
+
+        private void tick() {
+            ticks++;
         }
     }
 }
