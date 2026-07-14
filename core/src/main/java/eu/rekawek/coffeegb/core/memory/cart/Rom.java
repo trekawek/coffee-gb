@@ -27,6 +27,8 @@ public class Rom {
 
     private final int ramBanks;
 
+    private final int ramSize;
+
     private final int[] rom;
 
     private final GameboyColorFlag gameboyColorFlag;
@@ -94,13 +96,14 @@ public class Rom {
         gameboyColorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
         superGameboyFlag = rom[0x0146] == 0x03;
         romBanks = getRomBanks(rom[0x0148], rom.length);
-        int ramBanks = getRamBanks(rom[0x0149]);
-        if (ramBanks == 0 && cartridgeType.isRam()) {
+        int ramSize = getRamSize(rom[0x0149]);
+        if (ramSize == 0 && cartridgeType.isRam()) {
             LOG.warn("RAM bank is defined to 0. Overriding to 1.");
-            ramBanks = 1;
+            ramSize = 0x2000;
         }
-        this.ramBanks = ramBanks;
-        LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, ramBanks);
+        this.ramSize = ramSize;
+        this.ramBanks = (ramSize + 0x1fff) / 0x2000;
+        LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, this.ramBanks);
         this.romFile = romFile;
     }
 
@@ -110,6 +113,10 @@ public class Rom {
 
     public int getRamBanks() {
         return ramBanks;
+    }
+
+    public int getRamSize() {
+        return ramSize;
     }
 
     public CartridgeType getType() {
@@ -198,14 +205,14 @@ public class Rom {
         };
     }
 
-    private static int getRamBanks(int id) {
+    private static int getRamSize(int id) {
         return switch (id) {
             case 0 -> 0;
-            case 1 -> 1;
-            case 2 -> 1;
-            case 3 -> 4;
-            case 4 -> 16;
-            case 5 -> 8;
+            case 1 -> 0x0800;
+            case 2 -> 0x2000;
+            case 3 -> 0x8000;
+            case 4 -> 0x20000;
+            case 5 -> 0x10000;
             default -> throw new IllegalArgumentException("Unsupported RAM size: " + Integer.toHexString(id));
         };
     }

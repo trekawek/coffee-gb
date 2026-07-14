@@ -79,7 +79,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             // this never breaks a genuinely 32 KB-addressable dump.
             addressSpace = new Mbc1(rom, battery);
         } else {
-            addressSpace = new BasicRom(rom);
+            addressSpace = new BasicRom(rom, battery);
         }
     }
 
@@ -274,7 +274,10 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
 
     private static Battery createBattery(Rom rom) {
         if (rom.getType().isBattery()) {
-            int ramSize = 0x2000 * rom.getRamBanks();
+            // Existing MBC implementations expose RAM in 8 KiB banks. Plain ROM+RAM
+            // is the exception: its 2 KiB header size is mirrored across A000-BFFF.
+            int ramSize = rom.getType() == CartridgeType.ROM_RAM_BATTERY
+                    ? rom.getRamSize() : 0x2000 * rom.getRamBanks();
             if (ramSize == 0 && rom.getType().isRam()) {
                 ramSize = 0x2000;
             }

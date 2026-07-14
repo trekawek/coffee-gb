@@ -117,6 +117,12 @@ the upstream reference image:
 
     mvn clean test -f core/pom.xml -Ptest-cgbacid2
 
+## Daid tests
+
+The screenshot-based [Daid test suite](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) can be run with the baseline-guarded `test-daid` profile:
+
+    mvn clean test -f core/pom.xml -Ptest-daid
+
 ## Screenshots
 
 ![Coffee GB running game](doc/screenshot1.png)
