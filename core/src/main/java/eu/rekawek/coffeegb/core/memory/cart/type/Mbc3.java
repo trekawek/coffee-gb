@@ -19,6 +19,8 @@ public class Mbc3 implements MemoryController {
 
     private final Battery battery;
 
+    private final boolean mbc30;
+
     private int selectedRamBank;
 
     private int selectedRomBank = 1;
@@ -35,6 +37,7 @@ public class Mbc3 implements MemoryController {
         Arrays.fill(ram, 0xff);
         this.clock = new RealTimeClock(new SystemTimeSource());
         this.battery = battery;
+        this.mbc30 = rom.getRomBanks() > 128 || rom.getRamBanks() > 4;
 
         long[] clockData = new long[12];
         battery.loadRamWithClock(ram, clockData);
@@ -51,7 +54,7 @@ public class Mbc3 implements MemoryController {
         if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = (value & 0b1010) != 0;
         } else if (address >= 0x2000 && address < 0x4000) {
-            int bank = value & 0b01111111;
+            int bank = value & (mbc30 ? 0xff : 0x7f);
             selectRomBank(bank);
         } else if (address >= 0x4000 && address < 0x6000) {
             selectedRamBank = value;
@@ -66,7 +69,7 @@ public class Mbc3 implements MemoryController {
                 }
             }
             latchClockReg = value;
-        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled && selectedRamBank < 4) {
+        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled && isRamBankSelected()) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
                 ram[ramAddress] = value;
@@ -95,7 +98,7 @@ public class Mbc3 implements MemoryController {
             return getRomByte(0, address);
         } else if (address >= 0x4000 && address < 0x8000) {
             return getRomByte(selectedRomBank, address - 0x4000);
-        } else if (address >= 0xa000 && address < 0xc000 && selectedRamBank < 4) {
+        } else if (address >= 0xa000 && address < 0xc000 && isRamBankSelected()) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
                 return ram[ramAddress];
@@ -120,6 +123,10 @@ public class Mbc3 implements MemoryController {
 
     private int getRamAddress(int address) {
         return selectedRamBank * 0x2000 + (address - 0xa000);
+    }
+
+    private boolean isRamBankSelected() {
+        return selectedRamBank < (mbc30 ? 8 : 4);
     }
 
     private int getTimer() {
