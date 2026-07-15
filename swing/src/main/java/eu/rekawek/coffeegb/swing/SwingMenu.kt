@@ -28,6 +28,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGames
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
+import eu.rekawek.coffeegb.core.genie.CheatDatabase
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
@@ -44,11 +45,14 @@ import java.io.File
 import javax.swing.JCheckBoxMenuItem
 import javax.swing.JFileChooser
 import javax.swing.JFrame
+import javax.swing.JList
 import javax.swing.JMenu
 import javax.swing.JMenuBar
 import javax.swing.JMenuItem
 import javax.swing.JOptionPane
+import javax.swing.JScrollPane
 import javax.swing.KeyStroke
+import javax.swing.ListSelectionModel
 
 class SwingMenu(
     private val properties: EmulatorProperties,
@@ -64,6 +68,14 @@ class SwingMenu(
 
   private var webcamSource: WebcamCameraSource? = null
 
+  private var currentRomFileName: String? = null
+
+  private var pendingRomFileName: String? = null
+
+  private var currentRomTitle: String? = null
+
+  private val cheatDatabase: CheatDatabase by lazy { CheatDatabase.loadBundled() }
+
   // the link port carries one device at a time: the netplay cable, the Barcode Boy or the
   // printer. These are the menu toggles for each; enabling one disconnects the rest.
   private lateinit var barcodeBoyItem: JCheckBoxMenuItem
@@ -77,6 +89,16 @@ class SwingMenu(
   init {
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
     eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
+    eventBus.register<LoadRomEvent> { pendingRomFileName = it.rom.nameWithoutExtension }
+    eventBus.register<EmulationStartedEvent> {
+      currentRomFileName = pendingRomFileName ?: currentRomFileName
+      pendingRomFileName = null
+      currentRomTitle = it.romName
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      currentRomFileName = null
+      currentRomTitle = null
+    }
   }
 
   fun addMenu() {
@@ -198,7 +220,13 @@ class SwingMenu(
     stop.addActionListener { eventBus.post(StopEmulationEvent()) }
     enableWhenEmulationActive(stop)
 
-    val gameGenie = JMenuItem("Cheat code")
+    val cheatDatabaseItem = JMenuItem("Cheat database…")
+    cheatDatabaseItem.isEnabled = false
+    gameMenu.add(cheatDatabaseItem)
+    cheatDatabaseItem.addActionListener { showCheatDatabase() }
+    enableWhenEmulationActive(cheatDatabaseItem)
+
+    val gameGenie = JMenuItem("Cheat code…")
     gameGenie.isEnabled = false
     gameMenu.add(gameGenie)
     gameGenie.addActionListener {
@@ -224,6 +252,71 @@ class SwingMenu(
     enableWhenEmulationActive(gameGenie)
 
     return gameMenu
+  }
+
+  private fun showCheatDatabase() {
+    try {
+      val romNames = listOfNotNull(currentRomFileName, currentRomTitle).distinct()
+      val matches = cheatDatabase.findCheatLists(romNames, 25)
+      if (matches.isEmpty()) {
+        JOptionPane.showMessageDialog(
+            window,
+            "No cheat list matched ${romNames.firstOrNull() ?: "the loaded ROM"}.",
+            "Cheat database",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
+        return
+      }
+
+      val selectedList =
+          JOptionPane.showInputDialog(
+              window,
+              "Select a cheat list for ${romNames.firstOrNull() ?: "the loaded ROM"}:",
+              "Cheat database",
+              JOptionPane.PLAIN_MESSAGE,
+              null,
+              matches.toTypedArray(),
+              matches.first(),
+          ) as? CheatDatabase.CheatList ?: return
+
+      val supportedCheats =
+          selectedList.cheats().filter { cheat ->
+            runCatching { PatchFactory.createPatches(cheat.code()) }.isSuccess
+          }
+      if (supportedCheats.isEmpty()) {
+        JOptionPane.showMessageDialog(
+            window,
+            "This list contains no supported Game Genie or GameShark codes.",
+            "Cheat database",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
+        return
+      }
+
+      val cheatChoices = JList(supportedCheats.toTypedArray())
+      cheatChoices.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+      cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
+      val result =
+          JOptionPane.showConfirmDialog(
+              window,
+              JScrollPane(cheatChoices),
+              "${selectedList.name()} — select cheats",
+              JOptionPane.OK_CANCEL_OPTION,
+              JOptionPane.PLAIN_MESSAGE,
+          )
+      if (result == JOptionPane.OK_OPTION && cheatChoices.selectedValuesList.isNotEmpty()) {
+        val patches =
+            cheatChoices.selectedValuesList.flatMap { PatchFactory.createPatches(it.code()) }
+        eventBus.post(AddPatches(patches))
+      }
+    } catch (e: Exception) {
+      JOptionPane.showMessageDialog(
+          window,
+          "Can't load the cheat database: ${e.message}",
+          "Cheat database",
+          JOptionPane.ERROR_MESSAGE,
+      )
+    }
   }
 
   private fun createPeripheralsMenu(): JMenu {
