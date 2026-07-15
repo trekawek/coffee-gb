@@ -43,8 +43,12 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
+import java.awt.event.ActionEvent
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.io.File
+import javax.swing.AbstractAction
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.JCheckBoxMenuItem
@@ -61,6 +65,7 @@ import javax.swing.JScrollPane
 import javax.swing.JTextField
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
+import javax.swing.SwingUtilities
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
@@ -296,12 +301,41 @@ class SwingMenu(
             override fun changedUpdate(event: DocumentEvent) = refreshGameList()
           })
 
+      fun moveGameSelection(offset: Int) {
+        if (gameListModel.isEmpty) {
+          return
+        }
+        val currentIndex = gameList.selectedIndex
+        val nextIndex =
+            if (currentIndex < 0) {
+              if (offset > 0) 0 else gameListModel.size - 1
+            } else {
+              (currentIndex + offset).coerceIn(0, gameListModel.size - 1)
+            }
+        gameList.selectedIndex = nextIndex
+        gameList.ensureIndexIsVisible(nextIndex)
+      }
+
+      gameTitle.inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_UP, 0), "previousGame")
+      gameTitle.actionMap.put(
+          "previousGame",
+          object : AbstractAction() {
+            override fun actionPerformed(event: ActionEvent) = moveGameSelection(-1)
+          })
+      gameTitle.inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_DOWN, 0), "nextGame")
+      gameTitle.actionMap.put(
+          "nextGame",
+          object : AbstractAction() {
+            override fun actionPerformed(event: ActionEvent) = moveGameSelection(1)
+          })
+
       val titlePanel = JPanel(BorderLayout(8, 0))
       titlePanel.add(JLabel("Game title:"), BorderLayout.WEST)
       titlePanel.add(gameTitle, BorderLayout.CENTER)
 
       val gameListScrollPane = JScrollPane(gameList)
       gameListScrollPane.preferredSize = Dimension(CHEAT_LIST_WIDTH, 220)
+      installDoubleClickConfirm(gameList)
 
       val gamePicker = JPanel(BorderLayout(0, 8))
       gamePicker.add(titlePanel, BorderLayout.NORTH)
@@ -338,6 +372,7 @@ class SwingMenu(
       val cheatChoices = JList(supportedCheats.toTypedArray())
       cheatChoices.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
       cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
+      installDoubleClickConfirm(cheatChoices)
       cheatChoices.cellRenderer =
           object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
@@ -399,6 +434,25 @@ class SwingMenu(
         if (code.length <= CHEAT_CODE_MAX_LENGTH) code
         else "${code.take(CHEAT_CODE_MAX_LENGTH - 1)}…"
     return "${cheat.description()} ($visibleCode)"
+  }
+
+  private fun installDoubleClickConfirm(list: JList<*>) {
+    list.addMouseListener(
+        object : MouseAdapter() {
+          override fun mouseClicked(event: MouseEvent) {
+            if (event.clickCount != 2 || !SwingUtilities.isLeftMouseButton(event)) {
+              return
+            }
+            val index = list.locationToIndex(event.point)
+            if (index < 0 || !list.getCellBounds(index, index).contains(event.point)) {
+              return
+            }
+            val optionPane =
+                SwingUtilities.getAncestorOfClass(JOptionPane::class.java, list) as? JOptionPane
+                    ?: return
+            optionPane.value = JOptionPane.OK_OPTION
+          }
+        })
   }
 
   private fun createPeripheralsMenu(): JMenu {
