@@ -43,14 +43,14 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
-import java.awt.event.ActionEvent
+import java.awt.KeyEventDispatcher
+import java.awt.KeyboardFocusManager
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
-import javax.swing.AbstractAction
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.JCheckBoxMenuItem
@@ -303,34 +303,6 @@ class SwingMenu(
             override fun changedUpdate(event: DocumentEvent) = refreshGameList()
           })
 
-      fun moveGameSelection(offset: Int) {
-        if (gameListModel.isEmpty) {
-          return
-        }
-        val currentIndex = gameList.selectedIndex
-        val nextIndex =
-            if (currentIndex < 0) {
-              if (offset > 0) 0 else gameListModel.size - 1
-            } else {
-              (currentIndex + offset).coerceIn(0, gameListModel.size - 1)
-            }
-        gameList.selectedIndex = nextIndex
-        gameList.ensureIndexIsVisible(nextIndex)
-      }
-
-      gameTitle.inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_UP, 0), "previousGame")
-      gameTitle.actionMap.put(
-          "previousGame",
-          object : AbstractAction() {
-            override fun actionPerformed(event: ActionEvent) = moveGameSelection(-1)
-          })
-      gameTitle.inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_DOWN, 0), "nextGame")
-      gameTitle.actionMap.put(
-          "nextGame",
-          object : AbstractAction() {
-            override fun actionPerformed(event: ActionEvent) = moveGameSelection(1)
-          })
-
       val titlePanel = JPanel(BorderLayout(8, 0))
       titlePanel.add(JLabel("Game title:"), BorderLayout.WEST)
       titlePanel.add(gameTitle, BorderLayout.CENTER)
@@ -345,12 +317,11 @@ class SwingMenu(
       refreshGameList()
 
       val gamePickerResult =
-          JOptionPane.showConfirmDialog(
-              window,
+          showListConfirmDialog(
               gamePicker,
+              gameList,
               "Cheat database",
-              JOptionPane.OK_CANCEL_OPTION,
-              JOptionPane.PLAIN_MESSAGE,
+              gameTitle,
           )
       if (gamePickerResult != JOptionPane.OK_OPTION) {
         return
@@ -411,6 +382,7 @@ class SwingMenu(
               scrollPane,
               cheatChoices,
               "${selectedList.name()} — select cheats",
+              cheatChoices,
           )
       if (
           cheatPickerResult == JOptionPane.OK_OPTION &&
@@ -456,7 +428,12 @@ class SwingMenu(
         })
   }
 
-  private fun showListConfirmDialog(content: Component, list: JList<*>, title: String): Int {
+  private fun showListConfirmDialog(
+      content: Component,
+      list: JList<*>,
+      title: String,
+      initialFocus: Component,
+  ): Int {
     val optionPane =
         JOptionPane(
             content,
@@ -470,13 +447,47 @@ class SwingMenu(
           override fun windowGainedFocus(event: WindowEvent) {
             if (initialFocusPending) {
               initialFocusPending = false
-              SwingUtilities.invokeLater { list.requestFocusInWindow() }
+              SwingUtilities.invokeLater { initialFocus.requestFocusInWindow() }
             }
           }
         })
-    dialog.isVisible = true
-    dialog.dispose()
+    val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
+    val arrowKeyDispatcher =
+        KeyEventDispatcher { event ->
+          if (
+              SwingUtilities.getWindowAncestor(event.component) !== dialog ||
+                  (event.keyCode != KeyEvent.VK_UP && event.keyCode != KeyEvent.VK_DOWN)) {
+            false
+          } else {
+            if (event.id == KeyEvent.KEY_PRESSED) {
+              moveListSelection(list, if (event.keyCode == KeyEvent.VK_UP) -1 else 1)
+            }
+            true
+          }
+        }
+    focusManager.addKeyEventDispatcher(arrowKeyDispatcher)
+    try {
+      dialog.isVisible = true
+    } finally {
+      focusManager.removeKeyEventDispatcher(arrowKeyDispatcher)
+      dialog.dispose()
+    }
     return optionPane.value as? Int ?: JOptionPane.CLOSED_OPTION
+  }
+
+  private fun moveListSelection(list: JList<*>, offset: Int) {
+    if (list.model.size == 0) {
+      return
+    }
+    val currentIndex = list.selectedIndex
+    val nextIndex =
+        if (currentIndex < 0) {
+          if (offset > 0) 0 else list.model.size - 1
+        } else {
+          (currentIndex + offset).coerceIn(0, list.model.size - 1)
+        }
+    list.selectedIndex = nextIndex
+    list.ensureIndexIsVisible(nextIndex)
   }
 
   private fun createPeripheralsMenu(): JMenu {
