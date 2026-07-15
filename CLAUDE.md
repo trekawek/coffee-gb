@@ -27,13 +27,14 @@ them before touching Gpu/StatRegister/Cpu/Sound.**
 - Use `/opt/maven/bin/mvn` in scripts (PATH lacks mvn in non-interactive shells).
 - Run java/mvn from the repo root; use **absolute paths in classpaths** (relative
   classpath entries misbehaved under zsh in this environment).
+- Integration profiles can be combined with commas. Their test methods run on two
+  threads by default; override with `-Dintegration.test.threadCount=N`. BullyGB is
+  kept serial because its two methods have tight 10-second timeouts.
 - Full battery (each ~1-2 min):
   ```
   mvn -pl core test                            # unit
-  mvn -pl core test -Ptest-mooneye             # all mooneye suites
-  mvn -pl core test -Ptest-dmgacid2
-  mvn -pl core test -Ptest-blargg-individual
-  mvn -pl core test -Ptest-blargg              # aggregate roms
+  mvn -pl core test -Ptest-mooneye,test-dmgacid2,test-cgbacid2
+  mvn -pl core test -Ptest-blargg-individual,test-blargg
   ```
 - Fast iteration mains in `core/src/test/.../integration/support/`:
   - `MooneyeMain <roms...>` — prints PASS/FAIL + register dump + test output

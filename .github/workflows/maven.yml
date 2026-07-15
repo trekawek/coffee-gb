@@ -16,7 +16,6 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
@@ -29,29 +28,39 @@ jobs:
         cache: maven
     - name: Build with Maven
       run: mvn -B package --file pom.xml
-    - name: Mooneye acceptance tests
-      run: mvn -B -pl core test -Ptest-mooneye
-    - name: Blargg tests (aggregate)
-      run: mvn -B -pl core test -Ptest-blargg
-    - name: Blargg tests (individual)
-      run: mvn -B -pl core test -Ptest-blargg-individual
-    - name: Daid tests (baseline-guarded)
-      run: mvn -B -pl core test -Ptest-daid
-    - name: BullyGB tests
-      run: mvn -B -pl core test -Ptest-bullygb
-    - name: MBC30 tests
-      run: mvn -B -pl core test -Ptest-mbc30
-    - name: RTC3 tests
-      run: mvn -B -pl core test -Ptest-rtc3
-    - name: SameSuite tests
-      run: mvn -B -pl core test -Ptest-samesuite
-    - name: dmg-acid2
-      run: mvn -B -pl core test -Ptest-dmgacid2
-    - name: cgbacid2
-      run: mvn -B -pl core test -Ptest-cgbacid2
-    - name: Mealybug Tearoom (baseline-guarded)
-      run: mvn -B -pl core test -Ptest-mealybug
 
     # Optional: Uploads the full dependency graph to GitHub to improve the quality of Dependabot alerts this repository can receive
     - name: Update dependency graph
       uses: advanced-security/maven-dependency-submission-action@571e99aab1055c2e71a1e2309b9691de18d6b7d6
+
+  integration-tests:
+    name: Integration tests (${{ matrix.name }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Mooneye
+            profiles: test-mooneye
+          - name: Blargg aggregate
+            profiles: test-blargg
+          - name: Blargg individual
+            profiles: test-blargg-individual
+          - name: Compatibility ROMs
+            profiles: test-daid,test-bullygb,test-mbc30,test-rtc3,test-samesuite
+          - name: Acid2
+            profiles: test-dmgacid2,test-cgbacid2
+          - name: Mealybug Tearoom
+            profiles: test-mealybug
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+    - name: Run integration tests
+      run: mvn -B -pl core test -P"${{ matrix.profiles }}"
