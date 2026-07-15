@@ -184,7 +184,7 @@ public class SoundMode3 extends AbstractSoundMode {
         if (clock2Mhz && --freqDivider == 0) {
             resetFreqDivider();
             i = (i + 1) % 32;
-            int stale = (buffer >> 4) & 0x0f;
+            int stale = applyVolume((buffer >> 4) & 0x0f);
             int out = getWaveEntry();
             // the first advance after the trigger fetches the sample (opening the CPU
             // access window), but the stale buffer value is what gets played
@@ -217,15 +217,19 @@ public class SoundMode3 extends AbstractSoundMode {
         } else {
             b = b & 0x0f;
         }
+        return applyVolume(b);
+    }
+
+    private int applyVolume(int sample) {
         switch (getVolume()) {
             case 0:
                 return 0;
             case 1:
-                return b;
+                return sample;
             case 2:
-                return b >> 1;
+                return sample >> 1;
             case 3:
-                return b >> 2;
+                return sample >> 2;
             default:
                 throw new IllegalStateException();
         }
