@@ -80,7 +80,8 @@ public class Background implements Originator<Background> {
 
     @Override
     public Memento<Background> saveToMemento() {
-        return new BackgroundMemento(tiles.clone());
+        return new BackgroundMemento(tiles.clone(),
+                lastPicture == null ? null : lastPicture.saveToMemento());
     }
 
     @Override
@@ -92,9 +93,20 @@ public class Background implements Originator<Background> {
             throw new IllegalArgumentException("Memento array length doesn't match");
         }
         System.arraycopy(mem.tiles, 0, this.tiles, 0, this.tiles.length);
+        if (mem.lastPictureMemento == null) {
+            this.lastPicture = null;
+        } else {
+            var restored = Commands.TransferCommand.restoreFromMemento(mem.lastPictureMemento);
+            if (!(restored instanceof Commands.PctTrnCmd picture)) {
+                throw new IllegalArgumentException("Memento does not contain a picture transfer command");
+            }
+            this.lastPicture = picture;
+        }
     }
 
-    private record BackgroundMemento(int[] tiles) implements Memento<Background> {
+    private record BackgroundMemento(int[] tiles,
+                                     Memento<Commands.TransferCommand> lastPictureMemento)
+            implements Memento<Background> {
     }
 
     public record SgbBackgroundReadyEvent(int[] buffer, int[] mask) implements Event {

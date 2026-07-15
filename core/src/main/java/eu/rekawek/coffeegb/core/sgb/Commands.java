@@ -77,9 +77,9 @@ public class Commands {
             if (!(memento instanceof TransferCommandMemento mem)) {
                 throw new IllegalArgumentException("Invalid memento type");
             }
-            var command = Commands.toCommand(mem.packet);
+            var command = Commands.toCommand(mem.packet.clone());
             if (command instanceof TransferCommand transferCommand) {
-                transferCommand.setDataTransfer(mem.dataTransfer);
+                transferCommand.setDataTransfer(mem.dataTransfer == null ? null : mem.dataTransfer.clone());
                 return transferCommand;
             } else {
                 throw new IllegalArgumentException("Memento does not contain a transfer command");
@@ -91,7 +91,7 @@ public class Commands {
         }
 
         public Memento<TransferCommand> saveToMemento() {
-            return new TransferCommandMemento(packet, dataTransfer);
+            return new TransferCommandMemento(packet.clone(), dataTransfer == null ? null : dataTransfer.clone());
         }
 
         private record TransferCommandMemento(int[] packet, int[] dataTransfer) implements Memento<TransferCommand> {

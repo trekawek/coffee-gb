@@ -57,6 +57,32 @@ public class DisplayTest {
         assertArrayEquals(expected, frame.get());
     }
 
+    @Test
+    public void mementoRestoresPendingLcdEnableFrameAndCachedPicture() {
+        Display display = new Display(true);
+        EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        AtomicReference<int[]> frame = new AtomicReference<>();
+        eventBus.register(event -> frame.set(event.pixels().clone()), Display.GbcFrameReadyEvent.class);
+        display.init(eventBus);
+
+        int[] expected = new int[PIXELS];
+        java.util.Arrays.fill(expected, 0x1234);
+        fillCgb(display, 0x1234);
+        display.frameIsReady();
+        display.disableLcd();
+        display.enableLcd();
+        var memento = display.saveToMemento();
+
+        // Destroy both pieces of display state before restoring: blankFrame clears the
+        // cached picture and cancels the pending first-frame repeat.
+        display.blankFrame();
+        display.restoreFromMemento(memento);
+        fillCgb(display, 0x4321);
+        display.frameIsReady();
+
+        assertArrayEquals(expected, frame.get());
+    }
+
     private static void fillDmg(Display display, int color) {
         for (int i = 0; i < PIXELS; i++) {
             display.putDmgPixel(color);
