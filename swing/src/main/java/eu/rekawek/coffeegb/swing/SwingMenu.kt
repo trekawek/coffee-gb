@@ -40,11 +40,15 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetColorCorrectionEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetRotationEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
+import java.awt.Component
+import java.awt.Dimension
 import java.awt.event.KeyEvent
 import java.io.File
 import javax.swing.JCheckBoxMenuItem
+import javax.swing.DefaultListCellRenderer
 import javax.swing.JFileChooser
 import javax.swing.JFrame
+import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JMenu
 import javax.swing.JMenuBar
@@ -299,10 +303,40 @@ class SwingMenu(
       val cheatChoices = JList(supportedCheats.toTypedArray())
       cheatChoices.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
       cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
+      cheatChoices.cellRenderer =
+          object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(
+                list: JList<*>?,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean,
+            ): Component {
+              val component =
+                  super.getListCellRendererComponent(
+                      list,
+                      value,
+                      index,
+                      isSelected,
+                      cellHasFocus,
+                  )
+              if (component is JLabel && value is CheatDatabase.Cheat) {
+                component.text = cheatLabel(value)
+                component.toolTipText = "${value.description()} (${value.code()})"
+              }
+              return component
+            }
+          }
+      val scrollPane = JScrollPane(cheatChoices)
+      scrollPane.preferredSize =
+          Dimension(
+              CHEAT_LIST_WIDTH,
+              maxOf(80, minOf(CHEAT_LIST_MAX_HEIGHT, supportedCheats.size * 24 + 8)),
+          )
       val result =
           JOptionPane.showConfirmDialog(
               window,
-              JScrollPane(cheatChoices),
+              scrollPane,
               "${selectedList.name()} — select cheats",
               JOptionPane.OK_CANCEL_OPTION,
               JOptionPane.PLAIN_MESSAGE,
@@ -320,6 +354,14 @@ class SwingMenu(
           JOptionPane.ERROR_MESSAGE,
       )
     }
+  }
+
+  private fun cheatLabel(cheat: CheatDatabase.Cheat): String {
+    val code = cheat.code()
+    val visibleCode =
+        if (code.length <= CHEAT_CODE_MAX_LENGTH) code
+        else "${code.take(CHEAT_CODE_MAX_LENGTH - 1)}…"
+    return "${cheat.description()} ($visibleCode)"
   }
 
   private fun createPeripheralsMenu(): JMenu {
@@ -688,6 +730,12 @@ class SwingMenu(
   }
 
   private companion object {
+    const val CHEAT_CODE_MAX_LENGTH = 36
+
+    const val CHEAT_LIST_WIDTH = 600
+
+    const val CHEAT_LIST_MAX_HEIGHT = 300
+
     // the 70 Cosmic Characters of Zok Zok Heroes, in Full Changer ID order (1-70)
     val COSMIC_CHARACTERS =
         arrayOf(
