@@ -228,6 +228,18 @@ rising edge) — see `StatRegister`.
 
 ## Game-level debugging (issue work)
 
+### GitHub issue workflow
+
+- Handle each GitHub issue in its own branch and create a separate pull request
+  for that issue. Do not combine fixes for unrelated issues in one branch or PR.
+- If an issue cannot be reproduced, do not close it or claim it is fixed. Leave
+  it open and add a comment describing the attempted reproduction, environment,
+  observed result, and current reproduction state.
+- When possible, attach a screenshot showing the fixed state to the issue or
+  pull request, especially for graphics, UI, and game-behavior regressions.
+- Every comment posted to a GitHub issue by an agent must be clearly identified
+  as AI-generated. Begin the comment with `**AI-generated comment:**`.
+
 - **Headless screenshots**: `ShotMain <rom> <outdir> <frames> <shot1,shot2,..> [f:BUTTON[:dur],..]`
   (core test scope) — runs a ROM with scripted input and writes PNGs. SGB variant and a
   FAST_FORWARD variant live in the scratchpad pattern; SameBoy equivalents (`sb_shot`,
