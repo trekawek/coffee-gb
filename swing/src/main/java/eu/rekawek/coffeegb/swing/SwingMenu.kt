@@ -263,12 +263,26 @@ class SwingMenu(
 
   private fun showCheatDatabase() {
     try {
-      val romNames = listOfNotNull(currentRomFileName, currentRomTitle).distinct()
-      val matches = cheatDatabase.findCheatLists(romNames, 25)
+      val suggestedTitle = currentRomFileName ?: currentRomTitle ?: ""
+      val gameTitle =
+          JOptionPane.showInputDialog(
+              window,
+              "Game title:",
+              "Cheat database",
+              JOptionPane.PLAIN_MESSAGE,
+              null,
+              null,
+              suggestedTitle,
+          ) as? String ?: return
+      if (gameTitle.isBlank()) {
+        return
+      }
+
+      val matches = cheatDatabase.findCheatLists(listOf(gameTitle.trim()), 25)
       if (matches.isEmpty()) {
         JOptionPane.showMessageDialog(
             window,
-            "No cheat list matched ${romNames.firstOrNull() ?: "the loaded ROM"}.",
+            "No cheat list matched ${gameTitle.trim()}.",
             "Cheat database",
             JOptionPane.INFORMATION_MESSAGE,
         )
@@ -278,7 +292,7 @@ class SwingMenu(
       val selectedList =
           JOptionPane.showInputDialog(
               window,
-              "Select a cheat list for ${romNames.firstOrNull() ?: "the loaded ROM"}:",
+              "Select a cheat list for ${gameTitle.trim()}:",
               "Cheat database",
               JOptionPane.PLAIN_MESSAGE,
               null,
