@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.sound.Sound;
+import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.SoundProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +61,8 @@ public class AudioSystemSound implements Runnable {
     private volatile boolean isStopped;
     private volatile boolean enabled;
 
+    private volatile GameboyType gameboyType = GameboyType.DMG;
+
     private final BlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(3);
 
     private double resamplePos;
@@ -71,10 +75,21 @@ public class AudioSystemSound implements Runnable {
 
     private final DcBlocker dcBlockerR = new DcBlocker(SAMPLE_RATE, HIGHPASS_CUTOFF);
 
+    private final SgbOutputLowPass lowPassL = new SgbOutputLowPass(SAMPLE_RATE);
+
+    private final SgbOutputLowPass lowPassR = new SgbOutputLowPass(SAMPLE_RATE);
+
     public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
         enabled = properties.getSoundEnabled();
         eventBus.register(this::play, Sound.SoundSampleEvent.class, callerId);
+        eventBus.register(this::onGameboyType, Controller.GameboyTypeEvent.class, callerId);
         eventBus.register(e -> this.enabled = e.enabled(), Sound.SoundEnabledEvent.class);
+    }
+
+    private void onGameboyType(Controller.GameboyTypeEvent event) {
+        gameboyType = event.getGameboyType();
+        lowPassL.reset();
+        lowPassR.reset();
     }
 
     @Override
@@ -133,6 +148,7 @@ public class AudioSystemSound implements Runnable {
     private void play(Sound.SoundSampleEvent event) {
         int[] source = event.buffer();
         int ticks = source.length / 2;
+        GameboyType outputModel = gameboyType;
 
         byte[] out = new byte[MAX_FRAME_SAMPLES * 4];
         int j = 0;
@@ -149,8 +165,8 @@ public class AudioSystemSound implements Runnable {
                 int total = prevCnt + cnt;
                 double rawL = (double) (prevSumL + sumL) / total;
                 double rawR = (double) (prevSumR + sumR) / total;
-                double filteredL = dcBlockerL.filter(rawL);
-                double filteredR = dcBlockerR.filter(rawR);
+                double filteredL = lowPassL.filter(dcBlockerL.filter(rawL), outputModel);
+                double filteredR = lowPassR.filter(dcBlockerR.filter(rawR), outputModel);
                 int left = enabled ? (int) (filteredL * VOLUME_SCALE) : 0;
                 int right = enabled ? (int) (filteredR * VOLUME_SCALE) : 0;
                 out[j++] = (byte) left;
