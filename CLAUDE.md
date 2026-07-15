@@ -96,7 +96,8 @@ change one without re-running the full battery.**
   CPU acceptance (normal dispatch and HALT wake) is synchronized at the boundary;
   readable coincidence and its IF edge update at tl=0 but the level contribution
   settles at tl=4; STAT int is one level line, IF on rising edge only (this yields
-  stat_irq_blocking for free); DMG STAT-write glitch = all enables act 1 for a moment.
+  stat_irq_blocking for free); DMG STAT-write glitch = all enables act 1 for a moment,
+  except that HBlank masks the transient OAM source at the HBlank-to-OAM boundary.
 - firstLine (LCD enable): no OAM scan and mode reads 0 until tl=79, but the early
   mode-2 interrupt condition still appears at the shortened line's end;
   OAM/VRAM open until then; end-of-line events at 451 instead of 452.

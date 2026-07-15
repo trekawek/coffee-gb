@@ -183,7 +183,17 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         if (!gpu.isGbc()) {
             // DMG STAT write glitch: all interrupt sources are enabled for a moment
             // before the written data settles
-            updateIntLine(computeIntLine(0b01111000));
+            int glitchEnable = 0b01111000;
+            if (gpu.isLcdEnabled()
+                    && gpu.getTicksInLine() == 0
+                    && (enableBits & 0b00101000) == 0b00001000) {
+                // At the HBlank -> OAM boundary, an already-enabled HBlank source
+                // masks the transient OAM source. Treating the write as a plain 0xff
+                // here creates a second STAT edge and can recursively re-enter a
+                // scanline handler (Initial D Gaiden).
+                glitchEnable &= ~0b00100000;
+            }
+            updateIntLine(computeIntLine(glitchEnable));
         }
         enableBits = value & 0b01111000;
     }
