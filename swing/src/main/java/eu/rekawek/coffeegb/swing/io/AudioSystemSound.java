@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 public class AudioSystemSound implements Runnable {
     private static final Logger LOG = LoggerFactory.getLogger(AudioSystemSound.class);
 
-    private static final int SAMPLE_RATE = 44100;
+    private static final int SAMPLE_RATE = AudioResampler.OUTPUT_RATE;
 
     private static final AudioFormat FORMAT =
             new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, SAMPLE_RATE, 16, 2, 4, SAMPLE_RATE, false);
@@ -43,12 +43,11 @@ public class AudioSystemSound implements Runnable {
      */
     private static final double HIGHPASS_CUTOFF = 28.0;
 
-    private static final double TICKS_PER_SAMPLE = (double) Gameboy.TICKS_PER_SEC / SAMPLE_RATE;
-
     /**
      * Samples produced by one frame's worth of ticks, rounded up.
      */
-    private static final int MAX_FRAME_SAMPLES = Gameboy.TICKS_PER_FRAME / 95 + 2;
+    private static final int MAX_FRAME_SAMPLES =
+            AudioResampler.maxOutputFrames(Gameboy.TICKS_PER_FRAME);
 
     /**
      * Line buffer of about 45 ms; the frame queue adds at most three frames (50 ms).
@@ -61,11 +60,9 @@ public class AudioSystemSound implements Runnable {
 
     private final BlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(3);
 
-    private double resamplePos;
+    private final AudioResampler resampler = new AudioResampler();
 
-    private long sumL, sumR, prevSumL, prevSumR;
-
-    private int cnt, prevCnt;
+    private final double[] resampled = new double[MAX_FRAME_SAMPLES * 2];
 
     private final DcBlocker dcBlockerL = new DcBlocker(SAMPLE_RATE, HIGHPASS_CUTOFF);
 
@@ -132,46 +129,29 @@ public class AudioSystemSound implements Runnable {
 
     private void play(Sound.SoundSampleEvent event) {
         int[] source = event.buffer();
-        int ticks = source.length / 2;
+        int samples = resampler.resample(source, resampled);
 
-        byte[] out = new byte[MAX_FRAME_SAMPLES * 4];
-        int j = 0;
-        // moving average over two output periods (a width-2 box filter): near-Nyquist
-        // content is attenuated ~38 dB, so games parking a channel on an ultrasonic
-        // frequency stay inaudible like on hardware instead of aliasing into a buzz
-        // (Pit-Fighter, issue #59), at the cost of ~3 dB roll-off at 10 kHz
-        for (int t = 0; t < ticks; t++) {
-            sumL += source[t * 2];
-            sumR += source[t * 2 + 1];
-            cnt++;
-            if (++resamplePos >= TICKS_PER_SAMPLE) {
-                resamplePos -= TICKS_PER_SAMPLE;
-                int total = prevCnt + cnt;
-                double rawL = (double) (prevSumL + sumL) / total;
-                double rawR = (double) (prevSumR + sumR) / total;
-                double filteredL = dcBlockerL.filter(rawL);
-                double filteredR = dcBlockerR.filter(rawR);
-                int left = enabled ? (int) (filteredL * VOLUME_SCALE) : 0;
-                int right = enabled ? (int) (filteredR * VOLUME_SCALE) : 0;
-                out[j++] = (byte) left;
-                out[j++] = (byte) (left >> 8);
-                out[j++] = (byte) right;
-                out[j++] = (byte) (right >> 8);
-                prevSumL = sumL;
-                prevSumR = sumR;
-                prevCnt = cnt;
-                sumL = 0;
-                sumR = 0;
-                cnt = 0;
-            }
+        byte[] out = new byte[samples * 4];
+        for (int i = 0; i < samples; i++) {
+            double filteredL = dcBlockerL.filter(resampled[i * 2]);
+            double filteredR = dcBlockerR.filter(resampled[i * 2 + 1]);
+            int left = enabled ? clampToPcm16(filteredL * VOLUME_SCALE) : 0;
+            int right = enabled ? clampToPcm16(filteredR * VOLUME_SCALE) : 0;
+            int j = i * 4;
+            out[j] = (byte) left;
+            out[j + 1] = (byte) (left >> 8);
+            out[j + 2] = (byte) right;
+            out[j + 3] = (byte) (right >> 8);
         }
 
-        byte[] trimmed = new byte[j];
-        System.arraycopy(out, 0, trimmed, 0, j);
-        if (!queue.offer(trimmed)) {
+        if (!queue.offer(out)) {
             // the writer is behind; drop the oldest frame to keep the latency bounded
             queue.poll();
-            queue.offer(trimmed);
+            queue.offer(out);
         }
+    }
+
+    static int clampToPcm16(double sample) {
+        return (int) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, sample));
     }
 }
