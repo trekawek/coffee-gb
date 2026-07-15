@@ -18,7 +18,7 @@ public class CheatDatabaseTest {
     public void parsesLibretroCheatFiles() throws Exception {
         String contents = """
                 cheats = 2
-                cheat0_desc = "Infinite lives"
+                cheat0_desc = "Infinite lives &amp; health"
                 cheat0_code = "010999C0"
                 cheat0_enable = false
                 cheat1_desc = "Start at level 5"
@@ -32,7 +32,7 @@ public class CheatDatabaseTest {
         CheatDatabase.CheatList list = database.getCheatLists().get(0);
         assertEquals("Tetris (World)", list.name());
         assertEquals(List.of(
-                new CheatDatabase.Cheat("Infinite lives", "010999C0"),
+                new CheatDatabase.Cheat("Infinite lives & health", "010999C0"),
                 new CheatDatabase.Cheat("Start at level 5", "045-ABC-123")
         ), list.cheats());
     }

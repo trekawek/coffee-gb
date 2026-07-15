@@ -163,7 +163,9 @@ public final class CheatDatabase {
     }
 
     private static String unescape(String value) {
-        return value.replace("\\\"", "\"").replace("\\\\", "\\");
+        return value.replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .replace("&amp;", "&");
     }
 
     public record Cheat(String description, String code) {
