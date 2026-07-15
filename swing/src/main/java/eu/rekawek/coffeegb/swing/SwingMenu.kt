@@ -40,12 +40,14 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetColorCorrectionEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetRotationEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
+import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.event.KeyEvent
 import java.io.File
-import javax.swing.JCheckBoxMenuItem
 import javax.swing.DefaultListCellRenderer
+import javax.swing.DefaultListModel
+import javax.swing.JCheckBoxMenuItem
 import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JLabel
@@ -54,9 +56,13 @@ import javax.swing.JMenu
 import javax.swing.JMenuBar
 import javax.swing.JMenuItem
 import javax.swing.JOptionPane
+import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.JTextField
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 class SwingMenu(
     private val properties: EmulatorProperties,
@@ -264,41 +270,56 @@ class SwingMenu(
   private fun showCheatDatabase() {
     try {
       val suggestedTitle = currentRomFileName ?: currentRomTitle ?: ""
-      val gameTitle =
-          JOptionPane.showInputDialog(
-              window,
-              "Game title:",
-              "Cheat database",
-              JOptionPane.PLAIN_MESSAGE,
-              null,
-              null,
-              suggestedTitle,
-          ) as? String ?: return
-      if (gameTitle.isBlank()) {
-        return
+      val gameTitle = JTextField(suggestedTitle, 32)
+      val gameListModel = DefaultListModel<CheatDatabase.CheatList>()
+      val gameList = JList(gameListModel)
+      gameList.selectionMode = ListSelectionModel.SINGLE_SELECTION
+      gameList.visibleRowCount = 10
+
+      fun refreshGameList() {
+        gameListModel.clear()
+        val title = gameTitle.text.trim()
+        if (title.isNotEmpty()) {
+          cheatDatabase.findCheatLists(listOf(title), 25).forEach(gameListModel::addElement)
+        }
+        if (!gameListModel.isEmpty) {
+          gameList.selectedIndex = 0
+        }
       }
 
-      val matches = cheatDatabase.findCheatLists(listOf(gameTitle.trim()), 25)
-      if (matches.isEmpty()) {
-        JOptionPane.showMessageDialog(
-            window,
-            "No cheat list matched ${gameTitle.trim()}.",
-            "Cheat database",
-            JOptionPane.INFORMATION_MESSAGE,
-        )
+      gameTitle.document.addDocumentListener(
+          object : DocumentListener {
+            override fun insertUpdate(event: DocumentEvent) = refreshGameList()
+
+            override fun removeUpdate(event: DocumentEvent) = refreshGameList()
+
+            override fun changedUpdate(event: DocumentEvent) = refreshGameList()
+          })
+
+      val titlePanel = JPanel(BorderLayout(8, 0))
+      titlePanel.add(JLabel("Game title:"), BorderLayout.WEST)
+      titlePanel.add(gameTitle, BorderLayout.CENTER)
+
+      val gameListScrollPane = JScrollPane(gameList)
+      gameListScrollPane.preferredSize = Dimension(CHEAT_LIST_WIDTH, 220)
+
+      val gamePicker = JPanel(BorderLayout(0, 8))
+      gamePicker.add(titlePanel, BorderLayout.NORTH)
+      gamePicker.add(gameListScrollPane, BorderLayout.CENTER)
+      refreshGameList()
+
+      val gamePickerResult =
+          JOptionPane.showConfirmDialog(
+              window,
+              gamePicker,
+              "Cheat database",
+              JOptionPane.OK_CANCEL_OPTION,
+              JOptionPane.PLAIN_MESSAGE,
+          )
+      if (gamePickerResult != JOptionPane.OK_OPTION) {
         return
       }
-
-      val selectedList =
-          JOptionPane.showInputDialog(
-              window,
-              "Select a cheat list for ${gameTitle.trim()}:",
-              "Cheat database",
-              JOptionPane.PLAIN_MESSAGE,
-              null,
-              matches.toTypedArray(),
-              matches.first(),
-          ) as? CheatDatabase.CheatList ?: return
+      val selectedList = gameList.selectedValue ?: return
 
       val supportedCheats =
           selectedList.cheats().filter { cheat ->
@@ -347,7 +368,7 @@ class SwingMenu(
               CHEAT_LIST_WIDTH,
               maxOf(80, minOf(CHEAT_LIST_MAX_HEIGHT, supportedCheats.size * 24 + 8)),
           )
-      val result =
+      val cheatPickerResult =
           JOptionPane.showConfirmDialog(
               window,
               scrollPane,
@@ -355,7 +376,9 @@ class SwingMenu(
               JOptionPane.OK_CANCEL_OPTION,
               JOptionPane.PLAIN_MESSAGE,
           )
-      if (result == JOptionPane.OK_OPTION && cheatChoices.selectedValuesList.isNotEmpty()) {
+      if (
+          cheatPickerResult == JOptionPane.OK_OPTION &&
+              cheatChoices.selectedValuesList.isNotEmpty()) {
         val patches =
             cheatChoices.selectedValuesList.flatMap { PatchFactory.createPatches(it.code()) }
         eventBus.post(AddPatches(patches))
