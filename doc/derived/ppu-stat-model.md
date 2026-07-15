@@ -82,7 +82,9 @@ line = (LYC enabled  AND settled coincidence)
 - VBLANK IF (bit 0) is requested at `tl=0` of line 144.
 - **DMG STAT write glitch**: during a STAT write all four enable bits act as 1 for a moment
   ("all interrupts are enabled before data settles" — `ff41_stat` annotation), which can
-  produce a spurious rising edge.
+  produce a spurious rising edge. At the HBlank-to-OAM boundary, however, an enabled
+  HBlank source masks the transient OAM source; this prevents a second edge when software
+  writes STAT from its HBlank handler.
 
 ## LCD enable and the line grid phase
 
