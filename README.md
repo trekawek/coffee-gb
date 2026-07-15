@@ -23,7 +23,7 @@ Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</
 Game Genie and GameShark cheats can be entered manually with **Game > Cheats >
 Enter code**. **Game > Cheats > Browse database** suggests matching named cheats from the
 bundled [libretro database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy)
-using the loaded ROM filename and cartridge title.
+using an editable game title prefilled from the loaded ROM filename or cartridge title.
 
 ## Features
 
