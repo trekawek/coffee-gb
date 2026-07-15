@@ -11,6 +11,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.zip.CRC32;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -149,6 +150,43 @@ public class BungEmsTest {
     }
 
     @Test
+    public void detectsMainBlowByItsKnownRomCrc() throws IOException {
+        byte[] data = mainBlowCrcRom();
+        CRC32 crc = new CRC32();
+        crc.update(data);
+        assertEquals(0x96c29163L, crc.getValue());
+
+        Cartridge cartridge = new Cartridge(new Rom(data), Battery.NULL_BATTERY);
+        assertTrue(cartridge.getMemoryController() instanceof BungEms);
+    }
+
+    @Test
+    public void allocatesFourRamBanksForMainBlowDespiteIts8KiBHeader() throws IOException {
+        File romFile = Files.createTempFile("mainblow", ".gbc").toFile();
+        File saveFile = Cartridge.getSaveName(romFile);
+        try {
+            Files.write(romFile.toPath(), mainBlowCrcRom());
+            Cartridge cartridge = new Cartridge(new Rom(romFile), true);
+            assertTrue(cartridge.getMemoryController() instanceof BungEms);
+
+            for (int bank = 0; bank < 4; bank++) {
+                cartridge.setByte(0x4000, bank);
+                cartridge.setByte(0xa000, 0x40 + bank);
+            }
+            for (int bank = 0; bank < 4; bank++) {
+                cartridge.setByte(0x4000, bank);
+                assertEquals(0x40 + bank, cartridge.getByte(0xa000));
+            }
+            cartridge.flushBattery();
+
+            assertEquals(0x8000, saveFile.length());
+        } finally {
+            Files.deleteIfExists(saveFile.toPath());
+            Files.deleteIfExists(romFile.toPath());
+        }
+    }
+
+    @Test
     public void doesNotTreatPocketVoiceAsBungEms() throws IOException {
         Cartridge cartridge = new Cartridge(
                 new Rom(bankMarkedRom("Pocket Voice2.0", 0xbe, 0x00)),
@@ -179,6 +217,33 @@ public class BungEmsTest {
         data[0x148] = 0x03;
         data[0x149] = 0x03;
         data[0x14a] = (byte) region;
+        return data;
+    }
+
+    /**
+     * Small, valid MBC5+RAM+battery image whose final four bytes were chosen so the whole
+     * image has MainBlow's known CRC32. This exercises CRC routing without distributing the
+     * full ROM as a test fixture.
+     */
+    private static byte[] mainBlowCrcRom() {
+        byte[] data = new byte[0x8000];
+        byte[] title = "MAINBLOW".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(title, 0, data, 0x134, title.length);
+        data[0x143] = (byte) 0xc0;
+        data[0x147] = 0x1b;
+        data[0x148] = 0x00;
+        data[0x149] = 0x02;
+
+        int headerChecksum = 0;
+        for (int address = 0x134; address <= 0x14c; address++) {
+            headerChecksum = (headerChecksum - data[address] - 1) & 0xff;
+        }
+        data[0x14d] = (byte) headerChecksum;
+
+        data[data.length - 4] = (byte) 0x83;
+        data[data.length - 3] = (byte) 0x3e;
+        data[data.length - 2] = (byte) 0xad;
+        data[data.length - 1] = (byte) 0xe9;
         return data;
     }
 }
