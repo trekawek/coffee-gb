@@ -403,6 +403,7 @@ class SwingMenu(
               CHEAT_LIST_WIDTH,
               maxOf(80, minOf(CHEAT_LIST_MAX_HEIGHT, supportedCheats.size * 24 + 8)),
           )
+      SwingUtilities.invokeLater { cheatChoices.requestFocusInWindow() }
       val cheatPickerResult =
           JOptionPane.showConfirmDialog(
               window,
