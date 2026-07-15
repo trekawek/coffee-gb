@@ -47,6 +47,8 @@ import java.awt.event.ActionEvent
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.io.File
 import javax.swing.AbstractAction
 import javax.swing.DefaultListCellRenderer
@@ -372,6 +374,7 @@ class SwingMenu(
       val cheatChoices = JList(supportedCheats.toTypedArray())
       cheatChoices.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
       cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
+      cheatChoices.selectedIndex = 0
       installDoubleClickConfirm(cheatChoices)
       cheatChoices.cellRenderer =
           object : DefaultListCellRenderer() {
@@ -403,14 +406,11 @@ class SwingMenu(
               CHEAT_LIST_WIDTH,
               maxOf(80, minOf(CHEAT_LIST_MAX_HEIGHT, supportedCheats.size * 24 + 8)),
           )
-      SwingUtilities.invokeLater { cheatChoices.requestFocusInWindow() }
       val cheatPickerResult =
-          JOptionPane.showConfirmDialog(
-              window,
+          showListConfirmDialog(
               scrollPane,
+              cheatChoices,
               "${selectedList.name()} — select cheats",
-              JOptionPane.OK_CANCEL_OPTION,
-              JOptionPane.PLAIN_MESSAGE,
           )
       if (
           cheatPickerResult == JOptionPane.OK_OPTION &&
@@ -454,6 +454,29 @@ class SwingMenu(
             optionPane.value = JOptionPane.OK_OPTION
           }
         })
+  }
+
+  private fun showListConfirmDialog(content: Component, list: JList<*>, title: String): Int {
+    val optionPane =
+        JOptionPane(
+            content,
+            JOptionPane.PLAIN_MESSAGE,
+            JOptionPane.OK_CANCEL_OPTION,
+        )
+    val dialog = optionPane.createDialog(window, title)
+    var initialFocusPending = true
+    dialog.addWindowFocusListener(
+        object : WindowAdapter() {
+          override fun windowGainedFocus(event: WindowEvent) {
+            if (initialFocusPending) {
+              initialFocusPending = false
+              SwingUtilities.invokeLater { list.requestFocusInWindow() }
+            }
+          }
+        })
+    dialog.isVisible = true
+    dialog.dispose()
+    return optionPane.value as? Int ?: JOptionPane.CLOSED_OPTION
   }
 
   private fun createPeripheralsMenu(): JMenu {
