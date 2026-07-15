@@ -106,6 +106,15 @@ and SGB tests use their automated register result protocol:
 ROMs for older CGB revisions are included as resources but excluded from this
 profile because Coffee GB's generic CGB mode targets the later revision behavior.
 
+## Gambatte emulator HWTests
+
+The [Gambatte emulator HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test)
+archive includes the complete upstream ROM set and sources. A representative
+automated set covers startup state, TIMA, OAM, DMA, palettes, sprites, and
+window timing:
+
+    mvn clean test -f core/pom.xml -Ptest-gambatte-hw
+
 ## BullyGB
 
 The [BullyGB](https://github.com/Ashiepaws/BullyGB) framework is run in both
