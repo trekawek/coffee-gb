@@ -246,6 +246,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             case 0x2ed509d9: // Green Beret
             case 0xf004440c: // Cube Raider
             case 0xfdc1483a: // Bugs Bunny - Crazy Castle 3 trainer
+            case 0x96c29163: // MainBlow: Bung's 32 KiB SRAM despite its MBC5+8 KiB header
                 return true;
         }
 
