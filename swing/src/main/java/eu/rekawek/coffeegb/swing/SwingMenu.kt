@@ -220,15 +220,18 @@ class SwingMenu(
     stop.addActionListener { eventBus.post(StopEmulationEvent()) }
     enableWhenEmulationActive(stop)
 
-    val cheatDatabaseItem = JMenuItem("Cheat database…")
+    val cheatsMenu = JMenu("Cheats")
+    gameMenu.add(cheatsMenu)
+
+    val cheatDatabaseItem = JMenuItem("Browse database")
     cheatDatabaseItem.isEnabled = false
-    gameMenu.add(cheatDatabaseItem)
+    cheatsMenu.add(cheatDatabaseItem)
     cheatDatabaseItem.addActionListener { showCheatDatabase() }
     enableWhenEmulationActive(cheatDatabaseItem)
 
-    val gameGenie = JMenuItem("Cheat code…")
+    val gameGenie = JMenuItem("Enter code")
     gameGenie.isEnabled = false
-    gameMenu.add(gameGenie)
+    cheatsMenu.add(gameGenie)
     gameGenie.addActionListener {
       val code: String? =
           JOptionPane.showInputDialog(

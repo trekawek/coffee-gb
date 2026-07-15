@@ -20,8 +20,8 @@ The coffee-gb-*.jar executable file will be available in the `./swing/target` di
 
 Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Shift</kbd>. Hold <kbd>Backspace</kbd> to rewind.
 
-Game Genie and GameShark cheats can be entered manually with **Game > Cheat
-code…**. **Game > Cheat database…** suggests matching named cheats from the
+Game Genie and GameShark cheats can be entered manually with **Game > Cheats >
+Enter code**. **Game > Cheats > Browse database** suggests matching named cheats from the
 bundled [libretro database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy)
 using the loaded ROM filename and cartridge title.
 
