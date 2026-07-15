@@ -47,7 +47,7 @@ The [Blargg's test ROMs](http://gbdev.gg8.se/wiki/articles/Test_ROMs) are used f
     mvn clean test -f core/pom.xml -Ptest-blargg
     mvn clean test -f core/pom.xml -Ptest-blargg-individual # for running "single" tests providing more diagnostic info
 
-They are also part of the [Travis-based CI](https://travis-ci.org/trekawek/coffee-gb).
+They are also part of the GitHub Actions build.
 
 The tests output (normally displayed on the Gameboy screen) is redirected to the stdout:
 
@@ -69,6 +69,18 @@ Coffee GB passes all the tests:
 * interrupt_time
 * mem_timing-2
 * oam_bug-2
+
+## Running multiple integration test suites
+
+Integration test profiles can be combined in one Maven invocation by separating
+their names with commas:
+
+    mvn clean test -f core/pom.xml -Ptest-mooneye,test-dmgacid2,test-cgbacid2
+
+Each selected profile has its own test execution, so no profile overrides another.
+Integration test methods use two threads by default. Override that number when
+needed with `-Dintegration.test.threadCount=4`, or set it to `1` to run serially.
+The timeout-sensitive BullyGB profile always runs its two methods serially.
 
 ## Mooneye tests
 

@@ -29,6 +29,8 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <kotlin.version>2.4.0</kotlin.version>
+        <skip.unit.tests>false</skip.unit.tests>
+        <integration.test.threadCount>2</integration.test.threadCount>
     </properties>
     <build>
         <pluginManagement>
@@ -101,6 +103,14 @@
                         <exclude>**/integration/**</exclude>
                     </excludes>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <skipTests>${skip.unit.tests}</skipTests>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
