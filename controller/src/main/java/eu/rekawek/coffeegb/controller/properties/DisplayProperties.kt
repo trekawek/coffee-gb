@@ -11,7 +11,7 @@ class DisplayProperties(private val properties: EmulatorProperties) {
     get() = properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, "false").toBoolean()
 
   val blending
-    get() = properties.getProperty(EmulatorProperties.Key.DisplayBlending, "false").toBoolean()
+    get() = properties.getProperty(EmulatorProperties.Key.DisplayBlending, "true").toBoolean()
 
   val colorCorrection
     get() =

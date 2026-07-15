@@ -26,6 +26,9 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private int[] imgPixels;
 
+    /** Guards replacement, upload, and painting of {@link #img}'s directly accessed raster. */
+    private final Object rasterLock = new Object();
+
     private final int[] waitingFrame;
 
     private boolean isSgbBorder;
@@ -125,8 +128,10 @@ public class SwingDisplay extends JPanel implements Runnable {
      * color model); TYPE_INT_RGB matches the int-packed RGB produced by the emulator.
      */
     private void createFrameImage(int width, int height) {
-        img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        imgPixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+        synchronized (rasterLock) {
+            img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            imgPixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+        }
     }
 
     private synchronized void setScale(int scale) {
@@ -154,13 +159,22 @@ public class SwingDisplay extends JPanel implements Runnable {
         return (rotation == 90 || rotation == 270) ? new Dimension(h, w) : new Dimension(w, h);
     }
 
+    // run() uploads directly into img's raster. The EDT uses the dedicated raster lock while
+    // scanning it, or alternating frames can be shown with a horizontal boundary between the
+    // old and new pictures (F-1 Race, issue #147). Do not use the component monitor here:
+    // Swing paints children while holding the AWT tree lock, and border resizing takes that
+    // lock while handling a synchronized frame callback.
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
 
         int localScale = scale;
-        int w = getDisplayWidth() * localScale;
-        int h = getDisplayHeight() * localScale;
+        BufferedImage localImg;
+        synchronized (rasterLock) {
+            localImg = img;
+        }
+        int w = localImg.getWidth() * localScale;
+        int h = localImg.getHeight() * localScale;
         Graphics2D g2d = (Graphics2D) g.create();
         g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
@@ -184,7 +198,9 @@ public class SwingDisplay extends JPanel implements Runnable {
             default -> {
             }
         }
-        g2d.drawImage(img, 0, 0, w, h, null);
+        synchronized (rasterLock) {
+            g2d.drawImage(localImg, 0, 0, w, h, null);
+        }
         g2d.dispose();
     }
 
@@ -208,7 +224,10 @@ public class SwingDisplay extends JPanel implements Runnable {
                     if (blending) {
                         blendWithPreviousFrame();
                     }
-                    System.arraycopy(waitingFrame, 0, imgPixels, 0, getDisplayWidth() * getDisplayHeight());
+                    synchronized (rasterLock) {
+                        System.arraycopy(waitingFrame, 0, imgPixels, 0,
+                                getDisplayWidth() * getDisplayHeight());
+                    }
                     repaint();
                     frameIsWaiting = false;
                 } else {
