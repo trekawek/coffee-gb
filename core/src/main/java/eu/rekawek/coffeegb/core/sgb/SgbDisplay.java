@@ -210,7 +210,8 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     @Override
     public Memento<SgbDisplay> saveToMemento() {
-        return new SgbDisplayMemento(sgbBuffer.clone(), sgbMask.clone(), palettes.clone(), systemPalettes.clone(), paletteMap.clone(), attributeFiles.clone(), screenMask, atfNumber);
+        return new SgbDisplayMemento(sgbBuffer.clone(), sgbMask.clone(), clone2(palettes),
+                clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask, atfNumber);
     }
 
     @Override
@@ -238,15 +239,15 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         }
         System.arraycopy(mem.sgbBuffer, 0, this.sgbBuffer, 0, this.sgbBuffer.length);
         System.arraycopy(mem.sgbMask, 0, this.sgbMask, 0, this.sgbMask.length);
-        arraycopy2(mem.palettes, this.palettes);
-        arraycopy2(mem.systemPalettes, this.systemPalettes);
+        replaceRows(mem.palettes, this.palettes, 4);
+        replaceRows(mem.systemPalettes, this.systemPalettes, 4);
         System.arraycopy(mem.paletteMap, 0, this.paletteMap, 0, this.paletteMap.length);
-        arraycopy2(mem.attributeFiles, this.attributeFiles);
+        replaceRows(mem.attributeFiles, this.attributeFiles, DMG_TILES_WIDTH * DMG_TILES_HEIGHT);
         this.screenMask = mem.screenMask;
         this.atfNumber = mem.atfNumber;
     }
 
-    private static void arraycopy2(int[][] src, int[][] dst) {
+    private static void replaceRows(int[][] src, int[][] dst, int expectedRowLength) {
         if (src.length != dst.length) {
             throw new IllegalArgumentException("Array length doesn't match");
         }
@@ -255,11 +256,21 @@ public class SgbDisplay implements Originator<SgbDisplay> {
                 dst[i] = null;
                 continue;
             }
-            if (src[i].length != dst[i].length) {
+            if (src[i].length != expectedRowLength) {
                 throw new IllegalArgumentException("Array length doesn't match at i=" + i);
             }
-            System.arraycopy(src[i], 0, dst[i], 0, src[i].length);
+            // PAL_SET makes active palette rows aliases of system palette rows. Replace
+            // each row so restore cannot write through aliases left by the abandoned timeline.
+            dst[i] = src[i].clone();
         }
+    }
+
+    private static int[][] clone2(int[][] src) {
+        int[][] clone = new int[src.length][];
+        for (int i = 0; i < src.length; i++) {
+            clone[i] = src[i] == null ? null : src[i].clone();
+        }
+        return clone;
     }
 
     private record SgbDisplayMemento(int[] sgbBuffer, int[] sgbMask, int[][] palettes, int[][] systemPalettes,

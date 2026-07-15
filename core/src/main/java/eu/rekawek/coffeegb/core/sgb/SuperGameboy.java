@@ -84,7 +84,9 @@ public class SuperGameboy implements Originator<SuperGameboy> {
 
     @Override
     public Memento<SuperGameboy> saveToMemento() {
-        return new SuperGameboyMemento(multipacket, multipacketIndex, multipacketLength, transferCountdown, waitingTransferCommand == null ? null : waitingTransferCommand.saveToMemento());
+        int[][] multipacketCopy = Arrays.stream(multipacket).map(int[]::clone).toArray(int[][]::new);
+        return new SuperGameboyMemento(multipacketCopy, multipacketIndex, multipacketLength, transferCountdown,
+                waitingTransferCommand == null ? null : waitingTransferCommand.saveToMemento());
     }
 
     @Override
@@ -101,9 +103,9 @@ public class SuperGameboy implements Originator<SuperGameboy> {
             System.arraycopy(mem.multipacket[i], 0, this.multipacket[i], 0, 16);
         }
         this.transferCountdown = mem.transferCountdown;
-        if (mem.waitingTransferCommandMemento != null) {
-            this.waitingTransferCommand = TransferCommand.restoreFromMemento(mem.waitingTransferCommandMemento);
-        }
+        this.waitingTransferCommand = mem.waitingTransferCommandMemento == null
+                ? null
+                : TransferCommand.restoreFromMemento(mem.waitingTransferCommandMemento);
     }
 
     private record SuperGameboyMemento(int[][] multipacket, int multipacketIndex,

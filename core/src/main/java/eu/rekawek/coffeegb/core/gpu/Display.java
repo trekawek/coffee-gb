@@ -19,7 +19,8 @@ public class Display implements Serializable, Originator<Display> {
     private final int[] buffer = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
     // the last complete frame that was shown, re-emitted for the one-frame repeat after a
-    // CGB LCD-on (see repeatFrame); a display-only cache, not part of the machine state
+    // CGB LCD-on. It is panel/output state rather than PPU state, but must be in the memento
+    // so restoring during the enable delay does not repeat a frame from the abandoned timeline.
     private final transient int[] lastFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
     private final boolean gbc;
@@ -117,7 +118,7 @@ public class Display implements Serializable, Originator<Display> {
 
     @Override
     public Memento<Display> saveToMemento() {
-        return new DisplayMemento(buffer.clone(), i, enabled);
+        return new DisplayMemento(buffer.clone(), i, enabled, lastFrame.clone(), firstFrameAfterLcdEnable);
     }
 
     @Override
@@ -131,6 +132,17 @@ public class Display implements Serializable, Originator<Display> {
         System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
         this.i = mem.i;
         this.enabled = mem.enabled;
+        if (mem.lastFrame == null) {
+            // Older snapshots predate the LCD-on frame cache. The current buffer is the
+            // closest available complete picture and avoids leaking the live pre-restore frame.
+            System.arraycopy(mem.buffer, 0, this.lastFrame, 0, this.lastFrame.length);
+        } else {
+            if (this.lastFrame.length != mem.lastFrame.length) {
+                throw new IllegalArgumentException("Memento last frame length doesn't match");
+            }
+            System.arraycopy(mem.lastFrame, 0, this.lastFrame, 0, this.lastFrame.length);
+        }
+        this.firstFrameAfterLcdEnable = mem.firstFrameAfterLcdEnable;
     }
 
     public record GbcFrameReadyEvent(int[] pixels) implements Event {
@@ -206,6 +218,7 @@ public class Display implements Serializable, Originator<Display> {
         }
     }
 
-    private record DisplayMemento(int[] buffer, int i, boolean enabled) implements Memento<Display> {
+    private record DisplayMemento(int[] buffer, int i, boolean enabled, int[] lastFrame,
+                                  boolean firstFrameAfterLcdEnable) implements Memento<Display> {
     }
 }
