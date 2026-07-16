@@ -237,6 +237,8 @@ rising edge) — see `StatRegister`.
 - If an issue cannot be reproduced, do not close it or claim it is fixed. Leave
   it open and add a comment describing the attempted reproduction, environment,
   observed result, and current reproduction state.
+- If an issue cannot be reproduced or fixed, the issue comment must explicitly
+  state that the issue will be verified manually.
 - When possible, attach a screenshot showing the fixed state to the issue or
   pull request, especially for graphics, UI, and game-behavior regressions.
 - Every comment posted to a GitHub issue by an agent must be clearly identified
