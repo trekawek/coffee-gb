@@ -207,7 +207,7 @@ public class Rom {
     }
 
     private static int getRomBanks(int id, int romLength) {
-        return switch (id) {
+        int declaredBanks = switch (id) {
             case 0 -> 2;
             case 1 -> 4;
             case 2 -> 8;
@@ -225,6 +225,13 @@ public class Rom {
             // bank) instead of refusing to load (issue #58)
             default -> Math.max(2, (romLength + 0x3fff) / 0x4000);
         };
+        // The dumped data is authoritative when it contains more ROM than the header
+        // declares. Some unlicensed cartridges keep a smaller stock MBC header even
+        // though their software selects the extra physical banks (Touch Boy selects
+        // bank 7 while declaring only banks 0-3). Keep the declared capacity for
+        // truncated dumps, whose missing banks should continue to read as FF.
+        int physicalBanks = Math.max(2, (romLength + 0x3fff) / 0x4000);
+        return Math.max(declaredBanks, physicalBanks);
     }
 
     private static int getRamSize(int id) {
