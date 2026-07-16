@@ -207,7 +207,7 @@ public class Rom {
     }
 
     private static int getRomBanks(int id, int romLength) {
-        return switch (id) {
+        int declaredBanks = switch (id) {
             case 0 -> 2;
             case 1 -> 4;
             case 2 -> 8;
@@ -223,8 +223,13 @@ public class Rom {
             // unlicensed carts (Sachen multicarts, some homebrew) store a non-standard
             // size byte; derive the bank count from the actual file size (16 KB per
             // bank) instead of refusing to load (issue #58)
-            default -> Math.max(2, (romLength + 0x3fff) / 0x4000);
+            default -> 2;
         };
+        // A few unlicensed carts put executable code over the standard header, so even a
+        // syntactically valid size byte can be an instruction operand. Never hide banks
+        // that are physically present in the image (Sonic 3D Blast 5, #186).
+        int actualBanks = Math.max(2, (romLength + 0x3fff) / 0x4000);
+        return Math.max(declaredBanks, actualBanks);
     }
 
     private static int getRamSize(int id) {
@@ -235,7 +240,12 @@ public class Rom {
             case 3 -> 0x8000;
             case 4 -> 0x20000;
             case 5 -> 0x10000;
-            default -> throw new IllegalArgumentException("Unsupported RAM size: " + Integer.toHexString(id));
+            // Unlicensed cartridges sometimes place executable code across the standard
+            // header fields. In that case 0x0149 is an instruction byte rather than a RAM
+            // size declaration (Sonic 3D Blast 5 uses JR NZ, 0x20). Treat an unknown value
+            // as no declared RAM, just as physical hardware does; mapper-specific detection
+            // can still provide RAM when the cartridge is known to have it.
+            default -> 0;
         };
     }
 
