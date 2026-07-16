@@ -23,6 +23,10 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     private int ticks;
 
+    // Index of the next OAM byte written by the transfer. The PPU sees the DMA's
+    // current two-byte OAM bus row while the copy is running, not an atomic snapshot.
+    private int currentByte;
+
     private int regValue = 0xff;
 
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
@@ -38,13 +42,17 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     public void tick() {
         if (transferInProgress) {
-            if (++ticks >= 648 / speedMode.getSpeedMode()) {
+            ticks++;
+            int dmaTicks = ticks * speedMode.getSpeedMode();
+            if (dmaTicks >= 8 && dmaTicks <= 644 && dmaTicks % 4 == 0) {
+                oam.setByte(0xfe00 + currentByte, addressSpace.getByte(from + currentByte));
+                currentByte++;
+            }
+            if (dmaTicks >= 648) {
                 transferInProgress = false;
                 restarted = false;
                 ticks = 0;
-                for (int i = 0; i < 0xa0; i++) {
-                    oam.setByte(0xfe00 + i, addressSpace.getByte(from + i));
-                }
+                currentByte = 0;
             }
         }
     }
@@ -54,6 +62,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         from = value * 0x100;
         restarted = isOamBlocked();
         ticks = 0;
+        currentByte = 0;
         transferInProgress = true;
         regValue = value;
     }
@@ -65,6 +74,10 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     public boolean isOamBlocked() {
         return restarted || (transferInProgress && ticks >= 5);
+    }
+
+    public boolean isTransferInProgress() {
+        return transferInProgress;
     }
 
     public boolean isCpuAccessBlocked(int address, boolean gbc) {
@@ -81,6 +94,15 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         return addressSpace.getByte(from + byteIndex);
     }
 
+    /** Reads OAM as seen by the PPU while an OAM DMA owns its bus. */
+    public int getOamByteForPpu(int address) {
+        if (transferInProgress && currentByte > 0 && currentByte < 0xa0) {
+            int busAddress = (currentByte & ~1) | (address & 1);
+            return oam.getByte(0xfe00 + busAddress);
+        }
+        return oam.getByte(address);
+    }
+
     private static int getBus(int address, boolean gbc) {
         if (address < 0x8000 || (address >= 0xa000 && address < 0xc000)) {
             return 0; // cartridge
@@ -95,7 +117,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     @Override
     public Memento<Dma> saveToMemento() {
-        return new DmaMemento(transferInProgress, restarted, from, ticks, regValue);
+        return new DmaMemento(transferInProgress, restarted, from, ticks, currentByte, regValue);
     }
 
     @Override
@@ -107,10 +129,11 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         this.restarted = mem.restarted;
         this.from = mem.from;
         this.ticks = mem.ticks;
+        this.currentByte = mem.currentByte;
         this.regValue = mem.regValue;
     }
 
     public record DmaMemento(boolean transferInProgress, boolean restarted, int from, int ticks,
-                             int regValue) implements Memento<Dma> {
+                             int currentByte, int regValue) implements Memento<Dma> {
     }
 }
