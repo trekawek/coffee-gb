@@ -27,6 +27,13 @@ public class Mbc1 implements MemoryController {
 
     private final boolean multicart;
 
+    // This unlicensed translation has an MBC1 header but a different board: 0x2000 is
+    // a complete 6-bit ROM-bank register and 0x4000 does not contribute ROM bank bits.
+    // Its patched far-call stubs select bank 0x21 directly, while surviving original
+    // code still writes 2 to 0x4000; treating that as MBC1 bit 6 maps data as code and
+    // freezes on an illegal opcode at 0x4004 (issue #179).
+    private final boolean hongKongPokemonRed;
+
     private int selectedRamBank;
 
     private int selectedRomBank = 1;
@@ -53,6 +60,11 @@ public class Mbc1 implements MemoryController {
     public Mbc1(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
         this.multicart = rom.getRomBanks() == 64 && isMulticart(this.cartridge);
+        this.hongKongPokemonRed = rom.getRomBanks() == 64
+                && "POCKETMON BE".equals(rom.getTitle())
+                && this.cartridge[0x014e] == 0x9c
+                && this.cartridge[0x014f] == 0x8c;
+        this.wideBank = hongKongPokemonRed;
         this.ramBanks = rom.getRamBanks();
         this.romBanks = rom.getRomBanks();
         this.ram = new int[0x2000 * this.ramBanks];
@@ -87,17 +99,23 @@ public class Mbc1 implements MemoryController {
             }
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 0) {
-            LOG.trace("High 2 bits of ROM bank: {}", ((value & 0b11) << 5));
-            upperRegisterUsed = true;
-            wideBank = false;
-            int bank = selectedRomBank & 0b00011111;
-            bank = bank | ((value & 0b11) << 5);
-            selectRomBank(bank);
+            if (hongKongPokemonRed) {
+                LOG.trace("Ignoring upper ROM bank write on Hong Kong Pokemon Red");
+            } else {
+                LOG.trace("High 2 bits of ROM bank: {}", ((value & 0b11) << 5));
+                upperRegisterUsed = true;
+                wideBank = false;
+                int bank = selectedRomBank & 0b00011111;
+                bank = bank | ((value & 0b11) << 5);
+                selectRomBank(bank);
+            }
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x4000 && address < 0x6000 && memoryModel == 1) {
             LOG.trace("RAM bank: {}", (value & 0b11));
-            upperRegisterUsed = true;
-            wideBank = false;
+            if (!hongKongPokemonRed) {
+                upperRegisterUsed = true;
+                wideBank = false;
+            }
             selectedRamBank = value & 0b11;
             cachedRomBankFor0x0000 = cachedRomBankFor0x4000 = -1;
         } else if (address >= 0x6000 && address < 0x8000) {
