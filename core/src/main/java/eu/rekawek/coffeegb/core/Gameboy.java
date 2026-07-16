@@ -190,9 +190,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (configuration.bootstrapMode != BootstrapMode.SKIP) {
             // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
             // line grid to that write; the CGB divider phase accounts for the boot
-            // ROM's accurately paced HDMA, and revision 0 adds another 512 T
+            // ROM's accurately paced HDMA setup, and revision 0 adds another 512 T
             // (boot_div-cgbABCDE, boot_div-cgb0)
-            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 518 : 0xfffa) : 4);
+            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 536 : 12) : 4);
             gpu.setByte(0xff40, 0x00);
         }
         boolean bootTimedOut = false;
