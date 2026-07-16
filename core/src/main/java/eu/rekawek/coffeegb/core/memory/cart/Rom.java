@@ -33,6 +33,8 @@ public class Rom {
 
     private final GameboyColorFlag gameboyColorFlag;
 
+    private final boolean legacySpeedSwitchRequired;
+
     private final boolean superGameboyFlag;
 
     public Rom(File romFile) throws IOException {
@@ -94,14 +96,23 @@ public class Rom {
         cartridgeType = type;
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
         GameboyColorFlag colorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
+        boolean legacySpeedSwitchRequired = false;
         if (isDmgOnlyCrazyCastleTrainer(rom, title)) {
             // This trainer advertises CGB compatibility but only initializes the DMG
             // BGP/OBP registers. Native CGB startup therefore renders its menu entirely
             // white and also leaves HRAM in a state the trainer does not expect.
             LOG.info("DMG-only Crazy Castle 3 trainer detected; ignoring its CGB flag");
             colorFlag = GameboyColorFlag.NON_CGB;
+        } else if (isNamcoGallery2Trainer(rom, title)) {
+            // This old emulator-oriented trainer keeps the original DMG header, but its
+            // launch stub writes KEY1 and executes STOP before handing off to the game.
+            // Accept that speed switch as a narrowly scoped extension while retaining
+            // DMG rendering; treating the whole image as native CGB corrupts its colours.
+            LOG.info("Namco Gallery Vol.2 trainer detected; enabling its CGB speed-switch extension");
+            legacySpeedSwitchRequired = true;
         }
         gameboyColorFlag = colorFlag;
+        this.legacySpeedSwitchRequired = legacySpeedSwitchRequired;
         superGameboyFlag = rom[0x0146] == 0x03;
         romBanks = getRomBanks(rom[0x0148], rom.length);
         int ramSize = getRamSize(rom[0x0149]);
@@ -147,6 +158,10 @@ public class Rom {
         return gameboyColorFlag;
     }
 
+    public boolean isLegacySpeedSwitchRequired() {
+        return legacySpeedSwitchRequired;
+    }
+
     public boolean isSuperGameboyFlag() {
         return superGameboyFlag;
     }
@@ -190,6 +205,21 @@ public class Rom {
         }
         for (int i = 0; i < entryStub.length; i++) {
             if (rom[0x00e0 + i] != entryStub[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isNamcoGallery2Trainer(int[] rom, String title) {
+        int[] speedSwitchStub = {0x3e, 0x01, 0xe0, 0x4d, 0x10, 0x00, 0x00, 0x00,
+                0xcd, 0x0d, 0x71, 0xfa, 0xf0, 0xdf, 0xc3, 0x50, 0x01};
+        if (rom.length != 0x80000 || !"GALLERY2 +4".equals(title)
+                || rom[0x0143] != 0x00 || rom[0x0147] != 0x01) {
+            return false;
+        }
+        for (int i = 0; i < speedSwitchStub.length; i++) {
+            if (rom[0x3f0fc + i] != speedSwitchStub[i]) {
                 return false;
             }
         }

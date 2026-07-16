@@ -113,7 +113,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         boolean sgb = configuration.gameboyType == GameboyType.SGB;
         blankCgbBootTilePending = configuration.rom.requiresBlankCgbBootTile();
 
-        speedMode = new SpeedMode(gbc);
+        boolean legacySpeedSwitchRequired = configuration.rom.isLegacySpeedSwitchRequired();
+        speedMode = new SpeedMode(gbc, legacySpeedSwitchRequired);
         interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
         mmu = new Mmu(gbc);
@@ -166,8 +167,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         mmu.addAddressSpace(dma);
         mmu.addAddressSpace(sound);
 
-        if (gbc) {
+        if (gbc || legacySpeedSwitchRequired) {
             mmu.addAddressSpace(speedMode);
+        }
+        if (gbc) {
             mmu.addAddressSpace(hdma);
             mmu.addAddressSpace(infraredPort);
         }
