@@ -79,6 +79,10 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
         return currentSpeed ? 2 : 1;
     }
 
+    public boolean isGbc() {
+        return gbc;
+    }
+
     @Override
     public Memento<SpeedMode> saveToMemento() {
         return new SpeedModeMomento(currentSpeed, prepareSpeedSwitch, dmgCompat);
