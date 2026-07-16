@@ -89,7 +89,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
-        oamPalette.fillWithFF();
+        if (gbc) {
+            oamPalette.initializeCgbBootValues();
+        }
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
