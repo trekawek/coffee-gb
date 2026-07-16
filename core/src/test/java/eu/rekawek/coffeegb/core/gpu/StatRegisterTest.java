@@ -9,6 +9,8 @@ import org.junit.Test;
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.LCDC;
 import static eu.rekawek.coffeegb.core.events.EventBus.NULL_EVENT_BUS;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class StatRegisterTest {
 
@@ -36,26 +38,53 @@ public class StatRegisterTest {
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
     }
 
+    @Test
+    public void lycEdgeIsNotRepeatedWhenIfIsClearedWhileComparatorSettles() {
+        Fixture fixture = new Fixture(true);
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+
+        fixture.advanceToNextLineStart();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertTrue(fixture.interrupts.isInterruptRequested());
+        fixture.clearInterrupts();
+        for (int i = 0; i < 4; i++) {
+            fixture.tick();
+        }
+        assertFalse(fixture.interrupts.isInterruptRequested());
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
     private static class Fixture {
 
-        private final InterruptManager interrupts = new InterruptManager(false);
+        private final InterruptManager interrupts;
 
-        private final StatRegister stat = new StatRegister(interrupts);
+        private final StatRegister stat;
 
-        private final SpeedMode speedMode = new SpeedMode(false);
+        private final SpeedMode speedMode;
 
         private final Ram oam = new Ram(0xfe00, 0xa0);
 
-        private final Gpu gpu = new Gpu(
-                new Display(false),
-                new Dma(new Ram(0, 0x10000), oam, speedMode),
-                oam,
-                new VRamTransfer(NULL_EVENT_BUS),
-                stat,
-                false,
-                speedMode);
+        private final Gpu gpu;
 
         private Fixture() {
+            this(false);
+        }
+
+        private Fixture(boolean gbc) {
+            interrupts = new InterruptManager(gbc);
+            stat = new StatRegister(interrupts);
+            speedMode = new SpeedMode(gbc);
+            gpu = new Gpu(
+                    new Display(gbc),
+                    new Dma(new Ram(0, 0x10000), oam, speedMode),
+                    oam,
+                    new VRamTransfer(NULL_EVENT_BUS),
+                    stat,
+                    gbc,
+                    speedMode);
             stat.init(gpu);
         }
 
