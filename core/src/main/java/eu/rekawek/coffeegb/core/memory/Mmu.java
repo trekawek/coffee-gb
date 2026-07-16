@@ -38,8 +38,8 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
 
     private AddressSpace[] addressToSpace;
 
-    // the Sachen MMC2 cart watches the external bus for reads at 0xC000 and above to tell
-    // a CGB boot from a DMG one; null for every other cartridge (see SachenMmc)
+    // the Sachen MMC2 cart watches pre-header WRAM writes to tell a CGB boot from a DMG
+    // one; null for every other cartridge (see SachenMmc)
     private transient eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc busListener;
 
     public void setBusListener(eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc listener) {
@@ -106,15 +106,15 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     public void setByte(int address, int value) {
         checkByteArgument("value", value);
         checkWordArgument("address", address);
+        if (busListener != null && address >= 0xc000 && address < 0xe000) {
+            busListener.onHighBusWrite();
+        }
         getSpace(address).setByte(address, value);
     }
 
     @Override
     public int getByte(int address) {
         checkWordArgument("address", address);
-        if (busListener != null && address >= 0xc000) {
-            busListener.onHighBusRead();
-        }
         return getSpace(address).getByte(address);
     }
 

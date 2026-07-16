@@ -49,12 +49,19 @@ public class Rom {
             rom[i] = romByteArray[i] & 0xFF;
         }
 
+        // Raw Sachen MMC1/MMC2 dumps have A0/A6 and A1/A4 swapped throughout the
+        // 0x0100-0x01ff page. Parse their logical header rather than the scrambled bytes
+        // in the file; in particular, 31B-001's CGB flag is physically stored elsewhere.
+        // The mapper still receives the untouched raw image so it can reproduce the bus.
+        boolean rawSachen = isRawSachen(rom);
+        int[] header = rawSachen ? unscrambleSachenHeader(rom) : rom;
+
         // Correct an invalid header checksum (0x14D) so the authentic boot ROM does not lock
         // up. The real DMG/CGB boot ROM verifies the checksum over 0x134-0x14C and hangs on
         // the logo screen if it is wrong; some homebrew/PD dumps ship a bad one (e.g.
         // Dimensionless Sample, #76 - it renders past a SKIP boot but hangs the boot ROM).
         // BGB, SameBoy and real flashcarts silently fix it; only touches already-invalid ROMs.
-        if (rom.length > 0x014D) {
+        if (!rawSachen && rom.length > 0x014D) {
             int headerChecksum = 0;
             for (int a = 0x0134; a <= 0x014C; a++) {
                 headerChecksum = (headerChecksum - rom[a] - 1) & 0xFF;
@@ -66,15 +73,15 @@ public class Rom {
             }
         }
 
-        title = getTitle(rom);
+        title = getTitle(header);
         CartridgeType type;
         try {
-            type = CartridgeType.getById(rom[0x0147]);
+            type = CartridgeType.getById(header[0x0147]);
         } catch (IllegalArgumentException e) {
             // Unknown/custom mapper byte. Some are known unlicensed carts we handle
             // deliberately as MBC5; the rest fall back to MBC5 banking rather than
             // refusing to load (issues #58, #71).
-            if (isPocketVoice(rom, title)) {
+            if (isPocketVoice(header, title)) {
                 // The Pocket Voice V2.0 voice recorder (type 0xBE) is MBC5-compatible for
                 // everything the Game Boy can observe: it banks 32x16 KB normally and its
                 // full UI (record screen, built-in sample library) is reachable. The voice
@@ -87,13 +94,13 @@ public class Rom {
                 LOG.info("Pocket Voice cartridge detected; handling as MBC5 (external voice chip not emulated)");
             } else {
                 LOG.warn("Unsupported cartridge type {}, falling back to MBC5",
-                        Integer.toHexString(rom[0x0147]));
+                        Integer.toHexString(header[0x0147]));
             }
             type = CartridgeType.getById(0x19);
         }
         cartridgeType = type;
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
-        GameboyColorFlag colorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
+        GameboyColorFlag colorFlag = GameboyColorFlag.getFlag(header[0x0143]);
         if (isDmgOnlyCrazyCastleTrainer(rom, title)) {
             // This trainer advertises CGB compatibility but only initializes the DMG
             // BGP/OBP registers. Native CGB startup therefore renders its menu entirely
@@ -102,9 +109,10 @@ public class Rom {
             colorFlag = GameboyColorFlag.NON_CGB;
         }
         gameboyColorFlag = colorFlag;
-        superGameboyFlag = rom[0x0146] == 0x03;
-        romBanks = getRomBanks(rom[0x0148], rom.length);
-        int ramSize = getRamSize(rom[0x0149]);
+        superGameboyFlag = header[0x0146] == 0x03;
+        romBanks = rawSachen ? Math.max(2, (rom.length + 0x3fff) / 0x4000)
+                : getRomBanks(header[0x0148], rom.length);
+        int ramSize = getRamSize(header[0x0149]);
         if (ramSize == 0 && cartridgeType.isRam()) {
             LOG.warn("RAM bank is defined to 0. Overriding to 1.");
             ramSize = 0x2000;
@@ -170,6 +178,32 @@ public class Rom {
             }
         }
         return true;
+    }
+
+    private static boolean isRawSachen(int[] data) {
+        if (data.length < 0x200) {
+            return false;
+        }
+        boolean mmc1 = data[0x104] == 0xce && data[0x144] == 0xed && data[0x114] == 0x66;
+        boolean mmc2 = data[0x184] == 0xce && data[0x1c4] == 0xed && data[0x194] == 0x66;
+        return mmc1 || mmc2;
+    }
+
+    private static int[] unscrambleSachenHeader(int[] data) {
+        int[] header = new int[0x150];
+        for (int address = 0x100; address < header.length; address++) {
+            header[address] = data[unscrambleSachenAddress(address)];
+        }
+        return header;
+    }
+
+    private static int unscrambleSachenAddress(int address) {
+        int unscrambled = address & 0xffac;
+        unscrambled |= (address & 0x40) >> 6;
+        unscrambled |= (address & 0x10) >> 3;
+        unscrambled |= (address & 0x02) << 3;
+        unscrambled |= (address & 0x01) << 6;
+        return unscrambled;
     }
 
     private static String getTitle(int[] rom) {
