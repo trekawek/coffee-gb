@@ -55,6 +55,9 @@ them before touching Gpu/StatRegister/Cpu/Sound.**
   revision for `*-cgb0*`, NORMAL boot for `boot_*` roms, SKIP otherwise.
 - `GbMicrotestRunner` reads the suite's automated result at `$FF82`; run all
   513 hardware-verified DMG timing tests with `-Ptest-gbmicrotest`.
+- `GbcHwTestRunner` compares the AntonioND suite's SRAM output with original DMG/CGB
+  captures; use `-Ptest-gbc-hw`. The smaller alyosha-tas Mooneye-derived collection
+  runs with `-Ptest-misc-gb`.
 
 ## The timing model — calibrated constants and their interlocks
 

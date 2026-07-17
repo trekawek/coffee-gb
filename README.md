@@ -131,6 +131,22 @@ baselined so accuracy improvements are accepted without hiding new failures:
 
     mvn clean test -f core/pom.xml -Ptest-gbmicrotest
 
+## gbc-hw-tests
+
+The automated portion of [AntonioND's gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests)
+compares Coffee GB's SRAM output with captures made on original DMG and CGB hardware.
+Current mismatches are explicitly baselined so new regressions still fail the profile:
+
+    mvn clean test -f core/pom.xml -Ptest-gbc-hw
+
+## Misc.-GB-Tests
+
+All ROMs from [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests)
+run through their Mooneye-compatible breakpoint and register-verdict protocol. The
+unresolved sprite/scroll/window timing cases are explicitly baselined:
+
+    mvn clean test -f core/pom.xml -Ptest-misc-gb
+
 ## BullyGB
 
 The [BullyGB](https://github.com/Ashiepaws/BullyGB) framework is run in both
