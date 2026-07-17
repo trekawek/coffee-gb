@@ -68,7 +68,9 @@ line = (LYC enabled  AND settled coincidence)
 
 - The readable **coincidence flag** updates at `tl=0`, while its interrupt-line contribution
   settles at `tl=4` on ordinary lines. The comparison edge reaches IF at `tl=0` and is
-  available to the CPU at its next interrupt sample (`ly_lyc_write-GS`).
+  available to the CPU at its next interrupt sample (`ly_lyc_write-GS`). The edge-detector
+  latch remains high through this settling window, so clearing IF before `tl=4` does not
+  turn the settled level into a second edge.
 - The **mode-2 term** becomes visible in IF during the final 4 ticks of the preceding line
   and remains high through the first 4 ticks of the new line — per the schematic
   annotation: *"INT_STAT = 1 when LY = LYC (whole line), VBLANK (MODE1), HBLANK (MODE0), and
