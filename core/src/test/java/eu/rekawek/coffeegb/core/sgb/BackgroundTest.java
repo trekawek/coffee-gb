@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.sgb;
 
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.gpu.Display;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -35,6 +36,7 @@ public class BackgroundTest {
         pictureData[0x081f] = 0x12;
         picture.setDataTransfer(pictureData);
         sgbBus.post(picture);
+        advanceFrames(eventBus, 73);
 
         int firstGameboyPixel = 48 + 40 * SuperGameboy.SGB_DISPLAY_WIDTH;
         assertEquals(0, rendered.get().mask()[firstGameboyPixel]);
@@ -54,5 +56,12 @@ public class BackgroundTest {
     private static void setMapEntry(int[] pictureData, int index, int value) {
         pictureData[2 * index] = value & 0xff;
         pictureData[2 * index + 1] = value >> 8;
+    }
+
+    private static void advanceFrames(EventBusImpl eventBus, int count) {
+        int[] pixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        for (int i = 0; i < count; i++) {
+            eventBus.post(new Display.DmgFrameReadyEvent(pixels));
+        }
     }
 }

@@ -279,11 +279,13 @@ public class Rom {
             // bank) instead of refusing to load (issue #58)
             default -> 2;
         };
-        // A few unlicensed carts put executable code over the standard header, so even a
-        // syntactically valid size byte can be an instruction operand. Never hide banks
-        // that are physically present in the image (Sonic 3D Blast 5, #186).
-        int actualBanks = Math.max(2, (romLength + 0x3fff) / 0x4000);
-        return Math.max(declaredBanks, actualBanks);
+        // A few unlicensed carts put executable code over the standard header, while
+        // others keep a smaller stock header despite selecting extra physical banks.
+        // Never hide banks present in the image (Sonic 3D Blast 5, #186; Touch Boy,
+        // #182), but retain the declared capacity for truncated dumps so missing banks
+        // continue to read as FF.
+        int physicalBanks = Math.max(2, (romLength + 0x3fff) / 0x4000);
+        return Math.max(declaredBanks, physicalBanks);
     }
 
     private static int getRamSize(int id) {
