@@ -155,7 +155,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         boolean line = (enable & 0b01000000) != 0 && intCoincidence;
         if (gpu.isLcdEnabled()) {
             line |= (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
-            line |= (enable & 0b00010000) != 0 && gpu.getVisibleStatMode() == 1;
+            line |= (enable & 0b00010000) != 0 && gpu.isMode1IntWindow();
             line |= (enable & 0b00100000) != 0 && gpu.isMode2IntWindow();
         }
         return line;
