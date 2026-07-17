@@ -13,6 +13,8 @@ import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class BasicController(
     parentEventBus: EventBus,
@@ -58,17 +60,7 @@ class BasicController(
 
   init {
     eventQueue.register<AddPatches> { patches.addAll(it.patches) }
-    eventQueue.register<Controller.LoadRomEvent> {
-      stop()
-      patches.clear()
-      rewindManager.clear()
-      val config = Controller.createGameboyConfig(properties, Rom(it.rom))
-      session = createSession(config)
-      if (it.memento != null) {
-        session?.gameboy?.restoreFromMemento(it.memento)
-      }
-      start()
-    }
+    eventQueue.register<Controller.LoadRomEvent> { loadRom(properties, it) }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventQueue.register<Controller.PauseEmulationEvent> { isPaused = true }
@@ -132,7 +124,44 @@ class BasicController(
 
   private fun createSession(config: Gameboy.GameboyConfiguration): Session {
     val sessionBus = eventBus.fork("main")
-    return Session(config, sessionBus, console, createLinkDevice(sessionBus))
+    try {
+      return Session(config, sessionBus, console, createLinkDevice(sessionBus))
+    } catch (e: Exception) {
+      try {
+        sessionBus.close()
+      } catch (cleanupException: Exception) {
+        e.addSuppressed(cleanupException)
+      }
+      throw e
+    }
+  }
+
+  private fun loadRom(properties: EmulatorProperties, event: Controller.LoadRomEvent) {
+    var nextSession: Session? = null
+    try {
+      // Validate the ROM before closing the running game. A bad file selected in the picker
+      // should not interrupt the current session, and must never kill the controller thread.
+      val config = Controller.createGameboyConfig(properties, Rom(event.rom))
+
+      stop()
+      patches.clear()
+      rewindManager.clear()
+
+      nextSession = createSession(config)
+      event.memento?.let { nextSession.gameboy.restoreFromMemento(it) }
+      session = nextSession
+      nextSession = null
+      start()
+    } catch (e: Exception) {
+      try {
+        nextSession?.close()
+      } catch (cleanupException: Exception) {
+        e.addSuppressed(cleanupException)
+      }
+      LOG.error("Can't load ROM ${event.rom}", e)
+      val message = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+      eventBus.post(Controller.LoadRomFailedEvent(event.rom, message))
+    }
   }
 
   private fun createLinkDevice(sessionBus: EventBus): SerialEndpoint =
@@ -214,5 +243,9 @@ class BasicController(
     eventBus.close()
 
     return state
+  }
+
+  private companion object {
+    val LOG: Logger = LoggerFactory.getLogger(BasicController::class.java)
   }
 }

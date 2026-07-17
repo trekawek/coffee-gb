@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
@@ -28,6 +29,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGames
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
+import eu.rekawek.coffeegb.core.genie.CheatDatabase
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
@@ -39,16 +41,36 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetColorCorrectionEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetRotationEvent
 import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
+import java.awt.BorderLayout
+import java.awt.Component
+import java.awt.Dimension
+import java.awt.KeyEventDispatcher
+import java.awt.KeyboardFocusManager
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.io.File
+import javax.swing.DefaultListCellRenderer
+import javax.swing.DefaultListModel
 import javax.swing.JCheckBoxMenuItem
 import javax.swing.JFileChooser
 import javax.swing.JFrame
+import javax.swing.JLabel
+import javax.swing.JList
 import javax.swing.JMenu
 import javax.swing.JMenuBar
 import javax.swing.JMenuItem
 import javax.swing.JOptionPane
+import javax.swing.JPanel
+import javax.swing.JScrollPane
+import javax.swing.JTextField
 import javax.swing.KeyStroke
+import javax.swing.ListSelectionModel
+import javax.swing.SwingUtilities
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 class SwingMenu(
     private val properties: EmulatorProperties,
@@ -64,6 +86,14 @@ class SwingMenu(
 
   private var webcamSource: WebcamCameraSource? = null
 
+  private var currentRomFileName: String? = null
+
+  private var pendingRomFileName: String? = null
+
+  private var currentRomTitle: String? = null
+
+  private val cheatDatabase: CheatDatabase by lazy { CheatDatabase.loadBundled() }
+
   // the link port carries one device at a time: the netplay cable, the Barcode Boy or the
   // printer. These are the menu toggles for each; enabling one disconnects the rest.
   private lateinit var barcodeBoyItem: JCheckBoxMenuItem
@@ -77,6 +107,27 @@ class SwingMenu(
   init {
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
     eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
+    eventBus.register<LoadRomEvent> { pendingRomFileName = it.rom.nameWithoutExtension }
+    eventBus.register<EmulationStartedEvent> {
+      currentRomFileName = pendingRomFileName ?: currentRomFileName
+      pendingRomFileName = null
+      currentRomTitle = it.romName
+    }
+    eventBus.register<LoadRomFailedEvent> {
+      pendingRomFileName = null
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            "Can't open ${it.rom.name}: ${it.message}",
+            "Error",
+            JOptionPane.ERROR_MESSAGE,
+        )
+      }
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      currentRomFileName = null
+      currentRomTitle = null
+    }
   }
 
   fun addMenu() {
@@ -198,9 +249,18 @@ class SwingMenu(
     stop.addActionListener { eventBus.post(StopEmulationEvent()) }
     enableWhenEmulationActive(stop)
 
-    val gameGenie = JMenuItem("Cheat code")
+    val cheatsMenu = JMenu("Cheats")
+    gameMenu.add(cheatsMenu)
+
+    val cheatDatabaseItem = JMenuItem("Browse database")
+    cheatDatabaseItem.isEnabled = false
+    cheatsMenu.add(cheatDatabaseItem)
+    cheatDatabaseItem.addActionListener { showCheatDatabase() }
+    enableWhenEmulationActive(cheatDatabaseItem)
+
+    val gameGenie = JMenuItem("Enter code")
     gameGenie.isEnabled = false
-    gameMenu.add(gameGenie)
+    cheatsMenu.add(gameGenie)
     gameGenie.addActionListener {
       val code: String? =
           JOptionPane.showInputDialog(
@@ -224,6 +284,222 @@ class SwingMenu(
     enableWhenEmulationActive(gameGenie)
 
     return gameMenu
+  }
+
+  private fun showCheatDatabase() {
+    try {
+      val suggestedTitle = currentRomFileName ?: currentRomTitle ?: ""
+      val gameTitle = JTextField(suggestedTitle, 32)
+      val gameListModel = DefaultListModel<CheatDatabase.CheatList>()
+      val gameList = JList(gameListModel)
+      gameList.selectionMode = ListSelectionModel.SINGLE_SELECTION
+      gameList.visibleRowCount = 10
+
+      fun refreshGameList() {
+        gameListModel.clear()
+        val title = gameTitle.text.trim()
+        if (title.isNotEmpty()) {
+          cheatDatabase.findCheatLists(listOf(title), 25).forEach(gameListModel::addElement)
+        }
+        if (!gameListModel.isEmpty) {
+          gameList.selectedIndex = 0
+        }
+      }
+
+      gameTitle.document.addDocumentListener(
+          object : DocumentListener {
+            override fun insertUpdate(event: DocumentEvent) = refreshGameList()
+
+            override fun removeUpdate(event: DocumentEvent) = refreshGameList()
+
+            override fun changedUpdate(event: DocumentEvent) = refreshGameList()
+          })
+
+      val titlePanel = JPanel(BorderLayout(8, 0))
+      titlePanel.add(JLabel("Game title:"), BorderLayout.WEST)
+      titlePanel.add(gameTitle, BorderLayout.CENTER)
+
+      val gameListScrollPane = JScrollPane(gameList)
+      gameListScrollPane.preferredSize = Dimension(CHEAT_LIST_WIDTH, 220)
+      installDoubleClickConfirm(gameList)
+
+      val gamePicker = JPanel(BorderLayout(0, 8))
+      gamePicker.add(titlePanel, BorderLayout.NORTH)
+      gamePicker.add(gameListScrollPane, BorderLayout.CENTER)
+      refreshGameList()
+
+      val gamePickerResult =
+          showListConfirmDialog(
+              gamePicker,
+              gameList,
+              "Cheat database",
+              gameTitle,
+          )
+      if (gamePickerResult != JOptionPane.OK_OPTION) {
+        return
+      }
+      val selectedList = gameList.selectedValue ?: return
+
+      val supportedCheats =
+          selectedList.cheats().filter { cheat ->
+            runCatching { PatchFactory.createPatches(cheat.code()) }.isSuccess
+          }
+      if (supportedCheats.isEmpty()) {
+        JOptionPane.showMessageDialog(
+            window,
+            "This list contains no supported Game Genie or GameShark codes.",
+            "Cheat database",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
+        return
+      }
+
+      val cheatChoices = JList(supportedCheats.toTypedArray())
+      cheatChoices.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+      cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
+      cheatChoices.selectedIndex = 0
+      installDoubleClickConfirm(cheatChoices)
+      cheatChoices.cellRenderer =
+          object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(
+                list: JList<*>?,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean,
+            ): Component {
+              val component =
+                  super.getListCellRendererComponent(
+                      list,
+                      value,
+                      index,
+                      isSelected,
+                      cellHasFocus,
+                  )
+              if (component is JLabel && value is CheatDatabase.Cheat) {
+                component.text = cheatLabel(value)
+                component.toolTipText = "${value.description()} (${value.code()})"
+              }
+              return component
+            }
+          }
+      val scrollPane = JScrollPane(cheatChoices)
+      scrollPane.preferredSize =
+          Dimension(
+              CHEAT_LIST_WIDTH,
+              maxOf(80, minOf(CHEAT_LIST_MAX_HEIGHT, supportedCheats.size * 24 + 8)),
+          )
+      val cheatPickerResult =
+          showListConfirmDialog(
+              scrollPane,
+              cheatChoices,
+              "${selectedList.name()} — select cheats",
+              cheatChoices,
+          )
+      if (
+          cheatPickerResult == JOptionPane.OK_OPTION &&
+              cheatChoices.selectedValuesList.isNotEmpty()) {
+        val patches =
+            cheatChoices.selectedValuesList.flatMap { PatchFactory.createPatches(it.code()) }
+        eventBus.post(AddPatches(patches))
+      }
+    } catch (e: Exception) {
+      JOptionPane.showMessageDialog(
+          window,
+          "Can't load the cheat database: ${e.message}",
+          "Cheat database",
+          JOptionPane.ERROR_MESSAGE,
+      )
+    }
+  }
+
+  private fun cheatLabel(cheat: CheatDatabase.Cheat): String {
+    val code = cheat.code()
+    val visibleCode =
+        if (code.length <= CHEAT_CODE_MAX_LENGTH) code
+        else "${code.take(CHEAT_CODE_MAX_LENGTH - 1)}…"
+    return "${cheat.description()} ($visibleCode)"
+  }
+
+  private fun installDoubleClickConfirm(list: JList<*>) {
+    list.addMouseListener(
+        object : MouseAdapter() {
+          override fun mouseClicked(event: MouseEvent) {
+            if (event.clickCount != 2 || !SwingUtilities.isLeftMouseButton(event)) {
+              return
+            }
+            val index = list.locationToIndex(event.point)
+            if (index < 0 || !list.getCellBounds(index, index).contains(event.point)) {
+              return
+            }
+            val optionPane =
+                SwingUtilities.getAncestorOfClass(JOptionPane::class.java, list) as? JOptionPane
+                    ?: return
+            optionPane.value = JOptionPane.OK_OPTION
+          }
+        })
+  }
+
+  private fun showListConfirmDialog(
+      content: Component,
+      list: JList<*>,
+      title: String,
+      initialFocus: Component,
+  ): Int {
+    val optionPane =
+        JOptionPane(
+            content,
+            JOptionPane.PLAIN_MESSAGE,
+            JOptionPane.OK_CANCEL_OPTION,
+        )
+    val dialog = optionPane.createDialog(window, title)
+    var initialFocusPending = true
+    dialog.addWindowFocusListener(
+        object : WindowAdapter() {
+          override fun windowGainedFocus(event: WindowEvent) {
+            if (initialFocusPending) {
+              initialFocusPending = false
+              SwingUtilities.invokeLater { initialFocus.requestFocusInWindow() }
+            }
+          }
+        })
+    val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
+    val arrowKeyDispatcher =
+        KeyEventDispatcher { event ->
+          if (
+              SwingUtilities.getWindowAncestor(event.component) !== dialog ||
+                  (event.keyCode != KeyEvent.VK_UP && event.keyCode != KeyEvent.VK_DOWN)) {
+            false
+          } else {
+            if (event.id == KeyEvent.KEY_PRESSED) {
+              moveListSelection(list, if (event.keyCode == KeyEvent.VK_UP) -1 else 1)
+            }
+            true
+          }
+        }
+    focusManager.addKeyEventDispatcher(arrowKeyDispatcher)
+    try {
+      dialog.isVisible = true
+    } finally {
+      focusManager.removeKeyEventDispatcher(arrowKeyDispatcher)
+      dialog.dispose()
+    }
+    return optionPane.value as? Int ?: JOptionPane.CLOSED_OPTION
+  }
+
+  private fun moveListSelection(list: JList<*>, offset: Int) {
+    if (list.model.size == 0) {
+      return
+    }
+    val currentIndex = list.selectedIndex
+    val nextIndex =
+        if (currentIndex < 0) {
+          if (offset > 0) 0 else list.model.size - 1
+        } else {
+          (currentIndex + offset).coerceIn(0, list.model.size - 1)
+        }
+    list.selectedIndex = nextIndex
+    list.ensureIndexIsVisible(nextIndex)
   }
 
   private fun createPeripheralsMenu(): JMenu {
@@ -592,6 +868,12 @@ class SwingMenu(
   }
 
   private companion object {
+    const val CHEAT_CODE_MAX_LENGTH = 36
+
+    const val CHEAT_LIST_WIDTH = 600
+
+    const val CHEAT_LIST_MAX_HEIGHT = 300
+
     // the 70 Cosmic Characters of Zok Zok Heroes, in Full Changer ID order (1-70)
     val COSMIC_CHARACTERS =
         arrayOf(
