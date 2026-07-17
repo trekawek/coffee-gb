@@ -21,9 +21,9 @@
         </developer>
     </developers>
     <scm>
-        <connection>scm:git:https://github.com/trekawek/coffee-gb.git</connection>
-        <developerConnection>scm:git:https://github.com/trekawek/coffee-gb.git</developerConnection>
-        <url>https://github.com/trekawek/coffee-gb</url>
+        <connection>scm:git:git@github.com:trekawek/coffee-gb.git</connection>
+        <developerConnection>scm:git:git@github.com:trekawek/coffee-gb.git</developerConnection>
+        <url>git@github.com:trekawek/coffee-gb.git</url>
         <tag>HEAD</tag>
     </scm>
     <properties>
