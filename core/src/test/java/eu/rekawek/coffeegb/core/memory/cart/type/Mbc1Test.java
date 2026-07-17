@@ -30,12 +30,12 @@ public class Mbc1Test {
     }
 
     @Test
-    public void workMasterCanStillDisableAndEnableRam() throws IOException {
+    public void workMasterFlashCommandsDoNotUnmapRam() throws IOException {
         Mbc1 mapper = mapper(mbc1Rom("WORK MASTER 1.00", 0x80000));
         mapper.setByte(0xa123, 0x5a);
 
         mapper.setByte(0x0000, 0x00);
-        assertEquals(0xff, mapper.getByte(0xa123));
+        assertEquals(0x5a, mapper.getByte(0xa123));
         mapper.setByte(0x0000, 0x0a);
         assertEquals(0x5a, mapper.getByte(0xa123));
     }
