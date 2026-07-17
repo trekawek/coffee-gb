@@ -110,6 +110,13 @@ public class Rom {
             // white and also leaves HRAM in a state the trainer does not expect.
             LOG.info("DMG-only Crazy Castle 3 trainer detected; ignoring its CGB flag");
             colorFlag = GameboyColorFlag.NON_CGB;
+        } else if (isDarkFaderThreadsDemo(rom, title)) {
+            // This early homebrew marks itself CGB-compatible but never initializes CGB
+            // palette RAM; the CGB boot ROM leaves every color white, so native CGB mode
+            // displays a blank screen. Its scheduler only uses hardware shared with DMG,
+            // where BGP supplies the intended monochrome palette.
+            LOG.info("DMG-only DarkFader Threads Demo detected; ignoring its CGB flag");
+            colorFlag = GameboyColorFlag.NON_CGB;
         } else if (isNamcoGallery2Trainer(rom, title)) {
             // This old emulator-oriented trainer keeps the original DMG header, but its
             // launch stub writes KEY1 and executes STOP before handing off to the game.
@@ -217,6 +224,16 @@ public class Rom {
             }
         }
         return true;
+    }
+
+    private static boolean isDarkFaderThreadsDemo(int[] rom, String title) {
+        return rom.length == 0x10000
+                && "OS".equals(title)
+                && rom[0x0100] == 0x00 && rom[0x0101] == 0xc3
+                && rom[0x0102] == 0x91 && rom[0x0103] == 0x09
+                && rom[0x0143] == 0x80 && rom[0x0147] == 0x01
+                && rom[0x0149] == 0x00 && rom[0x014c] == 0x01
+                && rom[0x014e] == 0x7b && rom[0x014f] == 0x1e;
     }
 
     private static boolean isRawSachen(int[] data) {
