@@ -51,7 +51,7 @@ public class LinearSachenMmcTest {
         SachenMmc mapper = cart.getSachenMmc();
 
         // The CGB boot ROM's WRAM access moves MMC2 directly to CGB-locked mode.
-        mapper.onHighBusRead();
+        mapper.onHighBusWrite();
         for (int i = 0; i < NINTENDO_LOGO.length; i++) {
             assertEquals(NINTENDO_LOGO[i], cart.getByte(0x104 + i));
         }

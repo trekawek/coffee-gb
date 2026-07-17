@@ -25,9 +25,9 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom;
  * reads of that page are counted and (in the CGB-locked state) redirected to 0x0180-0x01FF,
  * where the carts store the logo the boot ROM must see; the 0x31st read advances the lock
  * state. The MMC2 additionally starts in a DMG-locked state and moves to the CGB-locked
- * state on the first bus read at or above 0xC000 (the CGB boot ROM touches WRAM before
- * reading the logo, the DMG one does not - that is how the cart tells the consoles apart
- * and serves the right logo to each).
+ * state on the CGB boot ROM's first WRAM write (the DMG boot ROM does not perform one
+ * before reading the header - that is how the cart tells the consoles apart and serves
+ * the right logo to each).
  */
 public class SachenMmc implements MemoryController {
 
@@ -106,8 +106,8 @@ public class SachenMmc implements MemoryController {
         return address >= 0x0000 && address < 0x8000;
     }
 
-    /** Notified by the MMU of reads at 0xC000 and above (visible on the cartridge bus). */
-    public void onHighBusRead() {
+    /** Notified by the MMU of the WRAM write the CGB boot ROM performs before reading the header. */
+    public void onHighBusWrite() {
         if (mmc2 && lockState == LOCKED_DMG) {
             lockState = LOCKED_CGB;
             transition = 0;
