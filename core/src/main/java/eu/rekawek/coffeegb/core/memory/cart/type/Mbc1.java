@@ -71,6 +71,13 @@ public class Mbc1 implements MemoryController {
         Arrays.fill(ram, 0xff);
         this.battery = battery;
         battery.loadRam(ram);
+        // Work Master was made for A.D.Inform's 4 Mbit flash cartridge rather than a
+        // Nintendo MBC1 board. Its header says MBC1+RAM, but its startup writes the
+        // workspace at A000 without issuing the usual 0000=0A RAM-enable command. The
+        // original flash cartridge exposes that RAM at power-on; without this initial
+        // state the OS reads back FF and immediately runs its WM CLOSE path.
+        ramWriteEnabled = "WORK MASTER 1.00".equals(rom.getTitle())
+                && cartridge.length == 0x80000;
     }
 
     @Override
