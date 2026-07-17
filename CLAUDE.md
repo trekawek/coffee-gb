@@ -242,6 +242,12 @@ rising edge) — see `StatRegister`.
   observed result, and current reproduction state.
 - If an issue cannot be reproduced or fixed, the issue comment must explicitly
   state that the issue will be verified manually.
+- Comparing behavior with SameBoy, Gearboy, and other emulators is useful for
+  diagnosis, but their behavior is not a compatibility ceiling. If the same bug
+  exists elsewhere, continue researching original hardware behavior,
+  documentation, test ROMs, and an independent solution instead of treating the
+  shared bug as unfixable. The goal is the most compatible emulator possible,
+  not merely parity with other implementations.
 - When possible, attach a screenshot showing the fixed state to the issue or
   pull request, especially for graphics, UI, and game-behavior regressions.
 - Every comment posted to a GitHub issue by an agent must be clearly identified
