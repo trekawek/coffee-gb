@@ -8,6 +8,19 @@ import java.io.Serializable;
 
 public class ColorPalette implements AddressSpace, Serializable, Originator<ColorPalette> {
 
+    // Object palette RAM observed immediately after the CGB boot ROM. Some early
+    // homebrew, including Vila Caldan, relies on these values for its sprites.
+    private static final int[] CGB_OBJECT_PALETTE_BOOT_VALUES = {
+            0x0000, 0xabf2, 0xc261, 0xbad9,
+            0x6e88, 0x63dd, 0x2728, 0x9ffb,
+            0x4235, 0xd4d6, 0x4850, 0x5e57,
+            0x3e23, 0xca3d, 0x2171, 0xc037,
+            0xb3c6, 0xf9fb, 0x0008, 0x298d,
+            0x20a3, 0x87db, 0x0562, 0xd45d,
+            0x080e, 0xaffe, 0x0220, 0xffd7,
+            0x6a07, 0xec55, 0x4083, 0x770b
+    };
+
     private final int indexAddr;
 
     private final int dataAddr;
@@ -98,11 +111,9 @@ public class ColorPalette implements AddressSpace, Serializable, Originator<Colo
         return b.toString();
     }
 
-    public void fillWithFF() {
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 4; j++) {
-                palettes[i][j] = 0x7fff;
-            }
+    void initializeCgbBootValues() {
+        for (int i = 0; i < CGB_OBJECT_PALETTE_BOOT_VALUES.length; i++) {
+            palettes[i / 4][i % 4] = CGB_OBJECT_PALETTE_BOOT_VALUES[i];
         }
     }
 

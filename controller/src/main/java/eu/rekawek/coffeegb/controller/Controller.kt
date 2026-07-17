@@ -22,6 +22,8 @@ interface Controller : AutoCloseable {
 
   data class LoadRomEvent(val rom: File, val memento: Memento<Gameboy>? = null) : Event
 
+  data class LoadRomFailedEvent(val rom: File, val message: String) : Event
+
   class PauseEmulationEvent : Event
 
   class ResumeEmulationEvent : Event
@@ -33,6 +35,12 @@ interface Controller : AutoCloseable {
   data class SaveSnapshotEvent(val slot: Int) : Event
 
   data class RestoreSnapshotEvent(val slot: Int) : Event
+
+  /** Emitted after a snapshot has been written successfully. */
+  data class SnapshotSavedEvent(val slot: Int) : Event
+
+  /** Emitted after a snapshot has been restored successfully. */
+  data class SnapshotRestoredEvent(val slot: Int) : Event
 
   data class SessionPauseSupportEvent(val enabled: Boolean) : Event
 

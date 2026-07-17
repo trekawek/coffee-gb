@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.core.gpu.Lcdc;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.memory.Dma;
 
 import java.io.Serializable;
 import java.util.Arrays;
@@ -77,6 +78,8 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     private final AddressSpace oemRam;
 
+    private final Dma dma;
+
     private final GpuRegisterValues registers;
 
     private final SpritePosition[] sprites;
@@ -91,10 +94,13 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     private int spriteX;
 
+    private boolean spriteDmaBlocked;
+
     private int i;
 
-    public OamSearch(AddressSpace oemRam, Lcdc lcdc, GpuRegisterValues registers) {
+    public OamSearch(AddressSpace oemRam, Dma dma, Lcdc lcdc, GpuRegisterValues registers) {
         this.oemRam = oemRam;
+        this.dma = dma;
         this.registers = registers;
         this.lcdc = lcdc;
         this.sprites = new SpritePosition[10];
@@ -108,6 +114,7 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         state = State.READING_Y;
         spriteY = 0;
         spriteX = 0;
+        spriteDmaBlocked = false;
         i = 0;
         for (SpritePosition sprite : sprites) {
             sprite.disable();
@@ -121,12 +128,15 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         switch (state) {
             case READING_Y:
                 spriteY = oemRam.getByte(spriteAddress);
+                spriteDmaBlocked = dma.isTransferInProgress();
                 state = State.READING_X;
                 break;
 
             case READING_X:
                 spriteX = oemRam.getByte(spriteAddress + 1);
-                if (spritePosIndex < sprites.length
+                spriteDmaBlocked |= dma.isTransferInProgress();
+                if (!spriteDmaBlocked
+                        && spritePosIndex < sprites.length
                         && between(
                         spriteY, registers.get(GpuRegister.LY) + 16, spriteY + lcdc.getSpriteHeight())) {
                     sprites[spritePosIndex++].enable(spriteX, spriteY, spriteAddress);
@@ -150,7 +160,8 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
     public Memento<OamSearch> saveToMemento() {
         Memento<?>[] spriteMementos =
                 Arrays.stream(sprites).map(SpritePosition::saveToMemento).toArray(Memento[]::new);
-        return new OamSearchMemento(spriteMementos, spritePosIndex, state, spriteY, spriteX, i);
+        return new OamSearchMemento(
+                spriteMementos, spritePosIndex, state, spriteY, spriteX, spriteDmaBlocked, i);
     }
 
     @Override
@@ -168,11 +179,13 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         this.state = mem.state;
         this.spriteY = mem.spriteY;
         this.spriteX = mem.spriteX;
+        this.spriteDmaBlocked = mem.spriteDmaBlocked;
         this.i = mem.i;
     }
 
     private record OamSearchMemento(
-            Memento<?>[] sprites, int spritePosIndex, State state, int spriteY, int spriteX, int i)
+            Memento<?>[] sprites, int spritePosIndex, State state, int spriteY, int spriteX,
+            boolean spriteDmaBlocked, int i)
             implements Memento<OamSearch> {
     }
 }

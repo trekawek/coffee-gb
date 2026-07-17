@@ -28,6 +28,7 @@ public class SgbMementoTest {
         Commands.PctTrnCmd picture = (Commands.PctTrnCmd) command(0x14);
         picture.setDataTransfer(new int[0x1000]);
         sgbBus.post(picture);
+        advanceFrames(eventBus, 73);
         assertEquals(1, renderedPictures.get());
 
         background.restoreFromMemento(emptyMemento);
@@ -35,6 +36,7 @@ public class SgbMementoTest {
         Commands.ChrTrnCmd characters = (Commands.ChrTrnCmd) command(0x13);
         characters.setDataTransfer(new int[0x1000]);
         sgbBus.post(characters);
+        advanceFrames(eventBus, 105);
 
         assertEquals(0, renderedPictures.get());
     }
@@ -64,8 +66,64 @@ public class SgbMementoTest {
         Commands.ChrTrnCmd characters = (Commands.ChrTrnCmd) command(0x13);
         characters.setDataTransfer(new int[0x1000]);
         sgbBus.post(characters);
+        advanceFrames(eventBus, 73);
 
         assertEquals(0x1234, rendered.get()[0]);
+    }
+
+    @Test
+    public void bothBorderCharacterHalvesRemainPendingUntilThePictureTransition() {
+        EventBusImpl sgbBus = new EventBusImpl(null, null, false);
+        Background background = new Background(sgbBus);
+        EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        AtomicInteger renderedPictures = new AtomicInteger();
+        eventBus.register(event -> renderedPictures.incrementAndGet(),
+                Background.SgbBackgroundReadyEvent.class);
+        background.init(eventBus);
+
+        Commands.ChrTrnCmd firstHalf = characterTransfer(0);
+        firstHalf.setDataTransfer(new int[0x1000]);
+        sgbBus.post(firstHalf);
+        advanceFrames(eventBus, 50);
+        assertEquals(0, renderedPictures.get());
+
+        Commands.ChrTrnCmd secondHalf = characterTransfer(1);
+        secondHalf.setDataTransfer(new int[0x1000]);
+        sgbBus.post(secondHalf);
+        advanceFrames(eventBus, 50);
+        assertEquals(0, renderedPictures.get());
+
+        Commands.PctTrnCmd picture = (Commands.PctTrnCmd) command(0x14);
+        picture.setDataTransfer(new int[0x1000]);
+        sgbBus.post(picture);
+        advanceFrames(eventBus, 72);
+        assertEquals(0, renderedPictures.get());
+        advanceFrames(eventBus, 1);
+        assertEquals(1, renderedPictures.get());
+    }
+
+    @Test
+    public void displayAppliesAndRestoresBorderFade() throws IOException {
+        EventBusImpl sgbBus = new EventBusImpl(null, null, false);
+        EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        SgbDisplay display = new SgbDisplay(testRom(), sgbBus, true, true);
+        display.init(eventBus);
+        AtomicReference<int[]> frame = new AtomicReference<>();
+        eventBus.register(event -> frame.set(event.buffer().clone()), SgbDisplay.SgbFrameReadyEvent.class);
+
+        int[] border = new int[SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
+        int[] mask = new int[border.length];
+        Arrays.fill(border, 0x7fff);
+        Arrays.fill(mask, 1);
+        eventBus.post(new Background.SgbBackgroundReadyEvent(border, mask));
+        eventBus.post(new Background.SgbBackgroundFadeEvent(1));
+        var memento = display.saveToMemento();
+
+        eventBus.post(new Background.SgbBackgroundFadeEvent(31));
+        display.restoreFromMemento(memento);
+        eventBus.post(new Display.DmgFrameReadyEvent(new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
+
+        assertEquals(Display.GbcFrameReadyEvent.translateGbcRgb(0x7bde), frame.get()[0]);
     }
 
     @Test
@@ -133,6 +191,20 @@ public class SgbMementoTest {
         int[] packet = new int[16];
         packet[0] = (code << 3) | 1;
         return Commands.toCommand(packet);
+    }
+
+    private static Commands.ChrTrnCmd characterTransfer(int half) {
+        int[] packet = new int[16];
+        packet[0] = (0x13 << 3) | 1;
+        packet[1] = half;
+        return (Commands.ChrTrnCmd) Commands.toCommand(packet);
+    }
+
+    private static void advanceFrames(EventBusImpl eventBus, int count) {
+        int[] pixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        for (int i = 0; i < count; i++) {
+            eventBus.post(new Display.DmgFrameReadyEvent(pixels));
+        }
     }
 
     private static Commands.PalSetCmd paletteSet(int paletteId) {

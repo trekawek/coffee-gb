@@ -4,10 +4,12 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.SaveSnapshotEvent
+import eu.rekawek.coffeegb.controller.Controller.SnapshotSavedEvent
 import eu.rekawek.coffeegb.controller.Controller.SessionSnapshotSupportEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.SnapshotSupport
@@ -112,6 +114,17 @@ class SwingMenu(
       pendingRomFileName = null
       currentRomTitle = it.romName
     }
+    eventBus.register<LoadRomFailedEvent> {
+      pendingRomFileName = null
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            "Can't open ${it.rom.name}: ${it.message}",
+            "Error",
+            JOptionPane.ERROR_MESSAGE,
+        )
+      }
+    }
     eventBus.register<EmulationStoppedEvent> {
       currentRomFileName = null
       currentRomTitle = null
@@ -192,7 +205,11 @@ class SwingMenu(
     gameMenu.add(saveSnapshot)
     saveSnapshot.addActionListener {
       eventBus.post(SaveSnapshotEvent(stateSlot))
-      loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(stateSlot) == true
+    }
+    eventBus.register<SnapshotSavedEvent> {
+      if (it.slot == stateSlot) {
+        loadSnapshot.isEnabled = true
+      }
     }
     eventBus.register<EmulationStartedEvent> { saveSnapshot.isEnabled = snapshotSupport != null }
     eventBus.register<EmulationStoppedEvent> { saveSnapshot.isEnabled = false }

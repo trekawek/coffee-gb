@@ -194,8 +194,13 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         entryTicks = entryDelay + extraEntryDelay;
         machineActive = true;
         position = -16;
+        // Comparator state is local to the scanline. A CGB WX=166 match is normally
+        // settled at the end of tick(); this reset is the defensive boundary that keeps
+        // any cancelled/serialized pending match from jumping the next line to X=159.
+        windowPendingTicks = 0;
         windowActivatedThisLine = false;
         windowCatchUpPos = -1;
+        insertBgPixel = false;
         machineStall = 0;
         fifo.startLine();
         window = false;
@@ -284,6 +289,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     boolean isWindowYTriggered() {
         return windowYTriggered;
+    }
+
+    boolean isWindowActivationPending() {
+        return windowPendingTicks > 0;
+    }
+
+    int getWindowLineCounter() {
+        return windowLineCounter;
     }
 
     @Override
@@ -534,7 +547,16 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             wdwRefreshPops = 0;
             System.arraycopy(fetcher.getWindowRefreshZip(), 0, wdwRefreshZip, 0, 8);
         }
-        return position != 160;
+        boolean active = position != 160;
+        if (!active && gbc && windowPendingTicks > 0 && windowPendingWx == 166) {
+            // WX=166 matches only after the final visible CGB pixel. Hardware performs
+            // the activation in HBlank: it advances the window's internal Y counter but
+            // draws no window pixel. Committing the ordinary delayed activation on the
+            // next scanline would instead skip that line to X=159 (Cardcaptor Sakura).
+            windowLineCounter++;
+            windowPendingTicks = 0;
+        }
+        return active;
     }
 
 
