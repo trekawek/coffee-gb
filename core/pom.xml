@@ -454,5 +454,73 @@
                 </plugins>
             </build>
         </profile>
+        <profile>
+            <id>test-gbc-hw</id>
+            <properties>
+                <skip.unit.tests>true</skip.unit.tests>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>integration-test-gbc-hw</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>test</goal>
+                                </goals>
+                                <configuration>
+                                    <excludes combine.self="override">
+                                        <exclude>x</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>**/integration/gbchw/*</include>
+                                    </includes>
+                                    <parallel>methods</parallel>
+                                    <threadCount>${integration.test.threadCount}</threadCount>
+                                    <perCoreThreadCount>false</perCoreThreadCount>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>test-misc-gb</id>
+            <properties>
+                <skip.unit.tests>true</skip.unit.tests>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>integration-test-misc-gb</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>test</goal>
+                                </goals>
+                                <configuration>
+                                    <excludes combine.self="override">
+                                        <exclude>x</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>**/integration/miscgb/*</include>
+                                    </includes>
+                                    <parallel>methods</parallel>
+                                    <threadCount>${integration.test.threadCount}</threadCount>
+                                    <perCoreThreadCount>false</perCoreThreadCount>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>

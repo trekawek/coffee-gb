@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.cpu.Registers;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 
 import java.io.File;
@@ -31,15 +32,23 @@ public class MooneyeTestRunner {
     private final OutputStream os;
 
     public MooneyeTestRunner(File romFile, OutputStream os) throws IOException {
+        this(new Rom(romFile), romFile.getName(), os);
+    }
+
+    public MooneyeTestRunner(byte[] rom, String name, OutputStream os) throws IOException {
+        this(new Rom(rom), name, os);
+    }
+
+    private MooneyeTestRunner(Rom rom, String name, OutputStream os) throws IOException {
         EventBus eventBus = new EventBusImpl();
-        GameboyConfiguration config = new GameboyConfiguration(romFile).setSupportBatterySave(false);
-        if (romFile.toString().endsWith("-C.gb") || romFile.toString().contains("-cgb")) {
+        GameboyConfiguration config = new GameboyConfiguration(rom).setSupportBatterySave(false);
+        if (name.endsWith("-C.gb") || name.contains("-cgb")) {
             config.setGameboyType(GameboyType.CGB);
-            config.setCgb0Revision(romFile.getName().contains("-cgb0"));
+            config.setCgb0Revision(name.contains("-cgb0"));
         } else {
             config.setGameboyType(GameboyType.DMG);
         }
-        if (romFile.getName().startsWith("boot_")) {
+        if (name.startsWith("boot_")) {
             config.setBootstrapMode(NORMAL);
         } else {
             config.setBootstrapMode(SKIP);
@@ -82,8 +91,10 @@ public class MooneyeTestRunner {
     }
 
     public String dumpRegs() {
-        return String.format("A=%02x B=%02x C=%02x D=%02x E=%02x H=%02x L=%02x",
-                regs.getA(), regs.getB(), regs.getC(), regs.getD(), regs.getE(), regs.getH(), regs.getL());
+        return String.format("PC=%04x SP=%04x state=%s A=%02x B=%02x C=%02x D=%02x E=%02x H=%02x L=%02x IF=%02x IE=%02x LY=%02x",
+                regs.getPC(), regs.getSP(), cpu.getState(), regs.getA(), regs.getB(), regs.getC(), regs.getD(),
+                regs.getE(), regs.getH(), regs.getL(), mem.getByte(0xff0f), mem.getByte(0xffff),
+                mem.getByte(0xff44));
     }
 
     private void displayProgress() throws IOException {
