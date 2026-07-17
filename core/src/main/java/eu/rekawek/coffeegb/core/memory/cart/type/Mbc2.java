@@ -17,6 +17,15 @@ public class Mbc2 implements MemoryController {
 
     private final int romBanks;
 
+    /**
+     * The Chinese Gokuu Hishouden translation was assembled for older emulators that
+     * decoded the whole 2000-3FFF range as a five-bit ROM-bank register. Its launcher
+     * consequently writes bank 0x0c to 0x2000 instead of an address with A8 set, and
+     * the translated game later selects banks 0x10-0x1f in its expanded 512 KiB image.
+     * It cannot run on an accurately decoded four-bit MBC2 without both quirks.
+     */
+    private final boolean legacyExtendedBanking;
+
     private int selectedRomBank = 1;
 
     private boolean ramWriteEnabled;
@@ -26,6 +35,7 @@ public class Mbc2 implements MemoryController {
     public Mbc2(Rom rom, Battery battery) {
         this.romBanks = rom.getRomBanks();
         this.cartridge = rom.getRom();
+        this.legacyExtendedBanking = isGokuuHishoudenChineseTranslation(rom);
         this.ram = new int[0x0200];
         Arrays.fill(ram, 0xff);
         this.battery = battery;
@@ -40,10 +50,10 @@ public class Mbc2 implements MemoryController {
     @Override
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x4000) {
-            if ((address & 0x0100) == 0) {
+            if ((address & 0x0100) == 0 && !(legacyExtendedBanking && address >= 0x2000)) {
                 ramWriteEnabled = (value & 0b1111) == 0b1010;
             } else {
-                selectedRomBank = value & 0b00001111;
+                selectedRomBank = value & (legacyExtendedBanking ? 0b00011111 : 0b00001111);
                 if (selectedRomBank == 0) {
                     selectedRomBank = 1;
                 }
@@ -100,6 +110,29 @@ public class Mbc2 implements MemoryController {
 
     private int getRamAddress(int address) {
         return (address - 0xa000) % ram.length;
+    }
+
+    private static boolean isGokuuHishoudenChineseTranslation(Rom rom) {
+        int[] data = rom.getRom();
+        int[] entryAndBankStub = {
+                0x00, 0xc3, 0xf0, 0x3f,
+                0xf5, 0x3e, 0x0c, 0xea, 0x00, 0x20, 0xf1, 0xc3, 0x00, 0x70
+        };
+        if (data.length != 0x80000 || !"GB DBZ GOKOU".equals(rom.getTitle())
+                || data[0x0147] != 0x06 || data[0x0148] != 0x04) {
+            return false;
+        }
+        for (int i = 0; i < 4; i++) {
+            if (data[0x0100 + i] != entryAndBankStub[i]) {
+                return false;
+            }
+        }
+        for (int i = 4; i < entryAndBankStub.length; i++) {
+            if (data[0x3ff0 + i - 4] != entryAndBankStub[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
