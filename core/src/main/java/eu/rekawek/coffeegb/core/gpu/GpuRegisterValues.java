@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -36,8 +37,21 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
 
     private boolean gbc;
 
+    private SpeedMode speedMode;
+
+    // On CGB in normal speed, a tile-index fetch colliding with an SCX write reads the
+    // old value. The CPU write is processed before the PPU in our tick, so retain that
+    // old value for the PPU side of the same tick (SameBoy GB_CONFLICT_READ_OLD).
+    private int scxOldValue = -1;
+
+    private int pendingScxOldValue = -1;
+
     public void setGbc(boolean gbc) {
         this.gbc = gbc;
+    }
+
+    public void setSpeedMode(SpeedMode speedMode) {
+        this.speedMode = speedMode;
     }
 
     public GpuRegisterValues() {
@@ -54,6 +68,14 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
         return values[reg.ordinal()];
     }
 
+    /** Register value seen by the tile fetcher during the current PPU tick. */
+    public int getForFetcher(GpuRegister reg) {
+        if (reg == GpuRegister.SCX && scxOldValue >= 0) {
+            return scxOldValue;
+        }
+        return values[reg.ordinal()];
+    }
+
     /** Register value as seen by the LCD output stage (with the DMG write-conflict mix). */
     public int getEffective(GpuRegister reg) {
         int mix = mixValues[reg.ordinal()];
@@ -62,6 +84,8 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
 
     /** Called once per GPU tick: a mix value lives for the single tick after the write. */
     void tickConflicts() {
+        scxOldValue = pendingScxOldValue;
+        pendingScxOldValue = -1;
         for (GpuRegister reg : PALETTE_REGISTERS) {
             mixValues[reg.ordinal()] = pendingMixValues[reg.ordinal()];
             pendingMixValues[reg.ordinal()] = -1;
@@ -102,6 +126,10 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
             if (reg == GpuRegister.WX) {
                 wxJustChangedTicks = WX_CHANGE_TICKS;
             }
+            if (gbc && reg == GpuRegister.SCX
+                    && (speedMode == null || speedMode.getSpeedMode() == 1)) {
+                pendingScxOldValue = values[reg.ordinal()];
+            }
             values[reg.ordinal()] = value;
         }
     }
@@ -127,7 +155,8 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
 
     @Override
     public Memento<GpuRegisterValues> saveToMemento() {
-        return new GpuRegisterValuesMemento(values.clone(), mixValues.clone(), pendingMixValues.clone(), wxJustChangedTicks);
+        return new GpuRegisterValuesMemento(values.clone(), mixValues.clone(), pendingMixValues.clone(),
+                wxJustChangedTicks, scxOldValue, pendingScxOldValue);
     }
 
     @Override
@@ -147,10 +176,13 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
             java.util.Arrays.fill(this.pendingMixValues, -1);
         }
         this.wxJustChangedTicks = mem.wxJustChangedTicks;
+        this.scxOldValue = mem.scxOldValue;
+        this.pendingScxOldValue = mem.pendingScxOldValue;
     }
 
     private record GpuRegisterValuesMemento(int[] values, int[] mixValues, int[] pendingMixValues,
-                                            int wxJustChangedTicks)
+                                            int wxJustChangedTicks, int scxOldValue,
+                                            int pendingScxOldValue)
             implements Memento<GpuRegisterValues> {
     }
 }
