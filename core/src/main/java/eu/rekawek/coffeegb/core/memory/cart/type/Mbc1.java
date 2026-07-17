@@ -34,6 +34,10 @@ public class Mbc1 implements MemoryController {
     // freezes on an illegal opcode at 0x4004 (issue #179).
     private final boolean hongKongPokemonRed;
 
+    // Work Master targets A.D.Inform's 4 Mbit flash cartridge. Unlike Nintendo's
+    // MBC1, that board keeps its SRAM mapped regardless of writes to 0000-1FFF.
+    private final boolean workMasterFlashCart;
+
     private int selectedRamBank;
 
     private int selectedRomBank = 1;
@@ -65,19 +69,19 @@ public class Mbc1 implements MemoryController {
                 && this.cartridge[0x014e] == 0x9c
                 && this.cartridge[0x014f] == 0x8c;
         this.wideBank = hongKongPokemonRed;
+        this.workMasterFlashCart = "WORK MASTER 1.00".equals(rom.getTitle())
+                && this.cartridge.length == 0x80000;
         this.ramBanks = rom.getRamBanks();
         this.romBanks = rom.getRomBanks();
         this.ram = new int[0x2000 * this.ramBanks];
         Arrays.fill(ram, 0xff);
         this.battery = battery;
         battery.loadRam(ram);
-        // Work Master was made for A.D.Inform's 4 Mbit flash cartridge rather than a
-        // Nintendo MBC1 board. Its header says MBC1+RAM, but its startup writes the
-        // workspace at A000 without issuing the usual 0000=0A RAM-enable command. The
-        // original flash cartridge exposes that RAM at power-on; without this initial
-        // state the OS reads back FF and immediately runs its WM CLOSE path.
-        ramWriteEnabled = "WORK MASTER 1.00".equals(rom.getTitle())
-                && cartridge.length == 0x80000;
+        // The header says MBC1+RAM, but the original flash cartridge exposes SRAM at
+        // power-on and never gates it off. Work Master writes ordinary flash commands
+        // through 0000-1FFF; treating those as MBC1 RAM-disable commands makes later
+        // file reads return FF and sends the image viewer into unmapped work RAM.
+        ramWriteEnabled = workMasterFlashCart;
     }
 
     @Override
@@ -88,7 +92,7 @@ public class Mbc1 implements MemoryController {
     @Override
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x2000) {
-            ramWriteEnabled = (value & 0b1111) == 0b1010;
+            ramWriteEnabled = workMasterFlashCart || (value & 0b1111) == 0b1010;
             LOG.trace("RAM write: {}", ramWriteEnabled);
         } else if (address >= 0x2000 && address < 0x4000) {
             if (!wideBank && !multicart && !upperRegisterUsed && memoryModel == 0
