@@ -76,6 +76,19 @@ public class DisplayTest {
     }
 
     @Test
+    public void cgbUsesBlackWhenStopHaltsAnEnabledLcd() {
+        Display display = new Display(true);
+        EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        AtomicReference<int[]> frame = new AtomicReference<>();
+        eventBus.register(event -> frame.set(event.pixels().clone()), Display.GbcFrameReadyEvent.class);
+        display.init(eventBus);
+
+        display.blankFrameForStop();
+
+        assertArrayEquals(new int[PIXELS], frame.get());
+    }
+
+    @Test
     public void cgbCorrectionClipsHardwareHighlights() {
         int[] rgb = new int[3];
         // NBA Jam '99's two transition colors: RGB555 (28, 27, 31), sum 86,

@@ -109,11 +109,21 @@ public class Display implements Serializable, Originator<Display> {
 
     /** Emits a blank frame while the LCD stays off (a sustained off blanks the screen). */
     public void blankFrame() {
+        emitSolidFrame(gbc ? 0x7fff : 0);
+    }
+
+    /**
+     * Emits the panel state produced by STOP while LCDC remains enabled. CGB drives black
+     * pixels in that state; DMG shade 0 remains the normal blank output.
+     */
+    public void blankFrameForStop() {
+        emitSolidFrame(0);
+    }
+
+    private void emitSolidFrame(int color) {
         // a deliberate blank overrides any pending enable-frame skip
         firstFrameAfterLcdEnable = false;
-        // Color 0 is black in CGB RGB555, unlike DMG shade 0. An inactive LCD is
-        // white, so use the CGB white value instead of clearing both modes to zero.
-        Arrays.fill(buffer, gbc ? 0x7fff : 0);
+        Arrays.fill(buffer, color);
         i = 0;
         frameIsReady();
     }
