@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.gpu.phase.*;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.Dma;
+import eu.rekawek.coffeegb.core.memory.DmaOamAddressSpace;
 import eu.rekawek.coffeegb.core.memory.Ram;
 
 import java.io.Serializable;
@@ -87,6 +88,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         this.oamRam = oamRam;
         this.dma = dma;
+        AddressSpace ppuOam = new DmaOamAddressSpace(oamRam, dma);
 
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
@@ -94,9 +96,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             oamPalette.initializeCgbBootValues();
         }
 
-        this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
-        this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
+        this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
+        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
+        this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
