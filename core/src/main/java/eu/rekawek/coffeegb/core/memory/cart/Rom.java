@@ -151,6 +151,30 @@ public class Rom {
         return superGameboyFlag;
     }
 
+    /**
+     * The Lightforce +1 trainer for The Adventures of the Smurfs uses tile 0x0A as
+     * its blank background without uploading that tile. The CGB boot ROM leaves logo
+     * pixels there, while the skip-boot environment the trainer was authored for starts
+     * it at zero. Match the injected trainer code rather than the filename so renamed
+     * copies receive the same compatibility handling.
+     */
+    public boolean requiresBlankCgbBootTile() {
+        int[] trainerSignature = {
+                0x7d, 0xea, 0xa1, 0xc0, 0xe6, 0x03, 0x6f, 0x01,
+                0xe0, 0x01, 0xcb, 0x25, 0xcb, 0x25, 0x09, 0xe9
+        };
+        int signatureOffset = 0xddea4;
+        if (rom.length != 0x100000 || rom[0x0143] != 0xc0 || rom[0x0147] != 0x1b) {
+            return false;
+        }
+        for (int i = 0; i < trainerSignature.length; i++) {
+            if (rom[signatureOffset + i] != trainerSignature[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // The Pocket Voice V2.0 voice recorder uses cartridge-type byte 0xBE and stamps its name
     // in the header title ("Pocket Voice2.0"); match both so an unrelated cart that happens to
     // reuse 0xBE is not mislabelled.
