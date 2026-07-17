@@ -77,6 +77,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.lcdc = new Lcdc();
         this.gbc = gbc;
         this.r.setGbc(gbc);
+        this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
         this.videoRam0 = new Ram(0x8000, 0x2000);
         if (gbc) {
