@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -50,6 +51,29 @@ public class PixelTransferWindowTriggerTest {
         assertTrue(h.transfer.isWindowYTriggered());
     }
 
+    @Test
+    public void cgbWx166MatchAdvancesCounterWithoutCarryingIntoNextScanline() {
+        Harness h = new Harness(true);
+        h.registers.put(GpuRegister.LY, 0);
+        h.registers.put(GpuRegister.WY, 0);
+        h.registers.put(GpuRegister.WX, 166);
+        h.lcdc.set(0xb1);
+        h.transfer.checkWindowY();
+
+        h.transfer.start();
+        int guard = 1000;
+        while (h.transfer.tick() && guard-- > 0) {
+            // Run the line through the final visible-pixel comparator match.
+        }
+        assertFalse("the end-of-line match should settle in HBlank", h.transfer.isWindowActivationPending());
+        assertEquals("WX=166 advances the internal window Y counter",
+                0, h.transfer.getWindowLineCounter());
+
+        h.registers.put(GpuRegister.LY, 1);
+        h.transfer.start();
+        assertFalse("a pending activation is scanline-local", h.transfer.isWindowActivationPending());
+    }
+
     private static class Harness {
 
         private final GpuRegisterValues registers = new GpuRegisterValues();
@@ -57,23 +81,29 @@ public class PixelTransferWindowTriggerTest {
         private final PixelTransfer transfer;
 
         private Harness() {
+            this(false);
+        }
+
+        private Harness(boolean gbc) {
+            registers.setGbc(gbc);
+            lcdc.setGbc(gbc);
             SpritePosition[] sprites = new SpritePosition[10];
             for (int i = 0; i < sprites.length; i++) {
                 sprites[i] = new SpritePosition();
             }
             transfer = new PixelTransfer(
-                    new Display(false),
+                    new Display(gbc),
                     new Ram(0x8000, 0x2000),
-                    null,
+                    gbc ? new Ram(0x8000, 0x2000) : null,
                     new Ram(0xfe00, 0xa0),
                     lcdc,
                     registers,
-                    false,
+                    gbc,
                     new ColorPalette(0xff68),
                     new ColorPalette(0xff6a),
                     sprites,
                     null,
-                    new SpeedMode(false),
+                    new SpeedMode(gbc),
                     0);
         }
     }
