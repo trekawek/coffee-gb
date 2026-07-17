@@ -12,6 +12,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.util.concurrent.TimeUnit;
 
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_WIDTH;
@@ -19,6 +20,8 @@ import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
 
 public class SwingDisplay extends JPanel implements Runnable {
+
+    private static final int NOTIFICATION_DURATION_MS = 1500;
 
     private final EventBus eventBus;
 
@@ -59,6 +62,10 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private int rumblePhase;
 
+    private volatile String notificationText;
+
+    private volatile long notificationExpiresAt;
+
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
         super();
         this.eventBus = eventBus;
@@ -74,6 +81,10 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
         eventBus.register(e -> setRotation(e.rotation), SetRotationEvent.class);
         eventBus.register(e -> this.rumbling = e.on(), eu.rekawek.coffeegb.core.memory.cart.type.Mbc5.RumbleEvent.class, callerId);
+        eventBus.register(e -> showNotification("State saved (slot " + e.slot() + ")"),
+                Controller.SnapshotSavedEvent.class, callerId);
+        eventBus.register(e -> showNotification("State loaded (slot " + e.slot() + ")"),
+                Controller.SnapshotRestoredEvent.class, callerId);
         this.grayscale = properties.getGrayscale();
         this.rotation = normalizeRotation(properties.getRotation());
         setBlending(properties.getBlending());
@@ -201,7 +212,43 @@ public class SwingDisplay extends JPanel implements Runnable {
         synchronized (rasterLock) {
             g2d.drawImage(localImg, 0, 0, w, h, null);
         }
+        paintNotification(g2d, w, h, localScale);
         g2d.dispose();
+    }
+
+    private void showNotification(String text) {
+        notificationText = text;
+        notificationExpiresAt = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(NOTIFICATION_DURATION_MS);
+        SwingUtilities.invokeLater(() -> {
+            repaint();
+            Timer timer = new Timer(NOTIFICATION_DURATION_MS, e -> repaint());
+            timer.setRepeats(false);
+            timer.start();
+        });
+    }
+
+    private void paintNotification(Graphics2D g, int width, int height, int localScale) {
+        String text = notificationText;
+        if (text == null || System.nanoTime() >= notificationExpiresAt) {
+            return;
+        }
+
+        int fontSize = Math.max(12, 7 * localScale);
+        g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, fontSize));
+        FontMetrics metrics = g.getFontMetrics();
+        int paddingX = Math.max(6, 4 * localScale);
+        int paddingY = Math.max(4, 2 * localScale);
+        int boxWidth = metrics.stringWidth(text) + 2 * paddingX;
+        int boxHeight = metrics.getHeight() + 2 * paddingY;
+        int x = (width - boxWidth) / 2;
+        int y = height - boxHeight - Math.max(4, 4 * localScale);
+        int arc = Math.max(6, 4 * localScale);
+
+        g.setColor(new Color(0, 0, 0, 190));
+        g.fillRoundRect(x, y, boxWidth, boxHeight, arc, arc);
+        g.setColor(Color.WHITE);
+        g.drawString(text, x + paddingX, y + paddingY + metrics.getAscent());
     }
 
     private int getDisplayWidth() {

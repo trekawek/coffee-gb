@@ -34,6 +34,12 @@ interface Controller : AutoCloseable {
 
   data class RestoreSnapshotEvent(val slot: Int) : Event
 
+  /** Emitted after a snapshot has been written successfully. */
+  data class SnapshotSavedEvent(val slot: Int) : Event
+
+  /** Emitted after a snapshot has been restored successfully. */
+  data class SnapshotRestoredEvent(val slot: Int) : Event
+
   data class SessionPauseSupportEvent(val enabled: Boolean) : Event
 
   data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event
