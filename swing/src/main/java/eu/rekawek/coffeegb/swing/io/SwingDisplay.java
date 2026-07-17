@@ -86,33 +86,36 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private synchronized void onGbcFrame(Display.GbcFrameReadyEvent e) {
-        if (frameIsWaiting) {
-            return;
-        }
-        frameIsWaiting = true;
         e.toRgb(waitingFrame, colorCorrection);
         setBorder(false);
-        notify();
+        frameQueued();
     }
 
     private synchronized void onDmgFrame(Display.DmgFrameReadyEvent e) {
-        if (frameIsWaiting || gameboyType == GameboyType.SGB) {
+        if (gameboyType == GameboyType.SGB) {
             return;
         }
-        frameIsWaiting = true;
         e.toRgb(waitingFrame, grayscale);
         setBorder(false);
-        notify();
+        frameQueued();
     }
 
     private synchronized void onSgbFrame(SgbDisplay.SgbFrameReadyEvent e) {
-        if (frameIsWaiting) {
-            return;
-        }
-        frameIsWaiting = true;
         e.toRgb(waitingFrame, grayscale);
         setBorder(e.includeBorder());
-        notify();
+        frameQueued();
+    }
+
+    /**
+     * Keep the newest panel state while the display thread has not uploaded the pending
+     * frame yet. In particular, LCD-off can replace a just-finished partial scanout before
+     * Swing paints it instead of leaving that stale transition visible for a host frame.
+     */
+    private void frameQueued() {
+        if (!frameIsWaiting) {
+            frameIsWaiting = true;
+            notify();
+        }
     }
 
     private void setBorder(boolean isSgbBorder) {

@@ -62,13 +62,15 @@ blocking" (`stat_irq_blocking`) with no special cases:
 ```
 line = (LYC enabled  AND settled coincidence)
     OR (mode0 enabled AND tl >= hblankIntFrom, lines 0-143)
-    OR (mode1 enabled AND visible mode == 1)
+    OR (mode1 enabled AND internal VBlank state)
     OR (mode2 enabled AND previous tl >= 452 or tl < 4, lines 0-144)
 ```
 
 - The readable **coincidence flag** updates at `tl=0`, while its interrupt-line contribution
   settles at `tl=4` on ordinary lines. The comparison edge reaches IF at `tl=0` and is
-  available to the CPU at its next interrupt sample (`ly_lyc_write-GS`).
+  available to the CPU at its next interrupt sample (`ly_lyc_write-GS`). The edge-detector
+  latch remains high through this settling window, so clearing IF before `tl=4` does not
+  turn the settled level into a second edge.
 - The **mode-2 term** becomes visible in IF during the final 4 ticks of the preceding line
   and remains high through the first 4 ticks of the new line — per the schematic
   annotation: *"INT_STAT = 1 when LY = LYC (whole line), VBLANK (MODE1), HBLANK (MODE0), and
@@ -79,6 +81,10 @@ line = (LYC enabled  AND settled coincidence)
 - The **mode-0 term** rises 3 T after the visible mode 0, i.e. at `E+4`
   (`hblank_ly_scx_timing-GS`, `intr_2_0_timing`); the pixel pipeline is T-exact, so no
   quantization is applied.
+- The **mode-1 term** follows the internal VBlank state through the end of line 153. On
+  DMG the readable mode bits briefly expose mode 0 there, but the interrupt source stays
+  high until the line-0 mode-2 pulse takes over. Keeping those sources continuous is
+  required for STAT blocking across the frame boundary (Altered Space).
 - VBLANK IF (bit 0) is requested at `tl=0` of line 144.
 - **DMG STAT write glitch**: during a STAT write all four enable bits act as 1 for a moment
   ("all interrupts are enabled before data settles" — `ff41_stat` annotation), which can

@@ -25,9 +25,9 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom;
  * reads of that page are counted and (in the CGB-locked state) redirected to 0x0180-0x01FF,
  * where the carts store the logo the boot ROM must see; the 0x31st read advances the lock
  * state. The MMC2 additionally starts in a DMG-locked state and moves to the CGB-locked
- * state on the first bus read at or above 0xC000 (the CGB boot ROM touches WRAM before
- * reading the logo, the DMG one does not - that is how the cart tells the consoles apart
- * and serves the right logo to each).
+ * state on the CGB boot ROM's first WRAM write (the DMG boot ROM does not perform one
+ * before reading the header - that is how the cart tells the consoles apart and serves
+ * the right logo to each).
  */
 public class SachenMmc implements MemoryController {
 
@@ -51,8 +51,12 @@ public class SachenMmc implements MemoryController {
 
     private int transition;
 
-    // false for post-unlock ("cooked") dumps stored with a linear 0x0100-0x01FF page
-    private final boolean scrambled;
+    // Raw carts use the lockout state machine; cooked dumps have already been captured
+    // after it unlocked. This is separate from header scrambling because some MMC2
+    // boards use straight-through address wiring (issue #187).
+    private final boolean cooked;
+
+    private final boolean scrambledHeader;
 
     // while true, reads of the 0x0104-0x0133 logo window return the Nintendo logo instead of
     // the linear ROM data. Cooked dumps have no logo stored (the raw carts serve it through
@@ -71,10 +75,16 @@ public class SachenMmc implements MemoryController {
             0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E};
 
     public SachenMmc(Rom rom, boolean mmc2) {
+        this(rom, mmc2, true);
+    }
+
+    /** Raw cart, optionally using the alternate straight-through header wiring. */
+    public SachenMmc(Rom rom, boolean mmc2, boolean scrambledHeader) {
         this.rom = rom.getRom();
         this.romBanks = Math.max(2, this.rom.length / 0x4000);
         this.mmc2 = mmc2;
-        this.scrambled = true;
+        this.cooked = false;
+        this.scrambledHeader = scrambledHeader;
         // the MMC1 has no DMG/CGB detection phase; it starts in the counting state
         this.lockState = mmc2 ? LOCKED_DMG : LOCKED_CGB;
     }
@@ -84,7 +94,8 @@ public class SachenMmc implements MemoryController {
         this.rom = rom.getRom();
         this.romBanks = Math.max(2, this.rom.length / 0x4000);
         this.mmc2 = true;
-        this.scrambled = false;
+        this.cooked = true;
+        this.scrambledHeader = false;
         this.lockState = UNLOCKED;
         this.base = initialBase;
         this.serveBootLogo = true;
@@ -95,8 +106,8 @@ public class SachenMmc implements MemoryController {
         return address >= 0x0000 && address < 0x8000;
     }
 
-    /** Notified by the MMU of reads at 0xC000 and above (visible on the cartridge bus). */
-    public void onHighBusRead() {
+    /** Notified by the MMU of the WRAM write the CGB boot ROM performs before reading the header. */
+    public void onHighBusWrite() {
         if (mmc2 && lockState == LOCKED_DMG) {
             lockState = LOCKED_CGB;
             transition = 0;
@@ -153,13 +164,13 @@ public class SachenMmc implements MemoryController {
         if (serveBootLogo && address >= 0x0104 && address < 0x0134) {
             return NINTENDO_LOGO[address - 0x0104];
         }
-        if (scrambled) {
+        if (!cooked) {
             address = lockAndUnscramble(address);
         }
         if (address < 0x4000) {
             // the cooked dumps hold the menu at its physical bank; the raw carts map
             // the masked base like mGBA does
-            int bank0 = scrambled ? (base & mask) : base;
+            int bank0 = cooked ? base : (base & mask);
             return rom[(bank0 % romBanks) * 0x4000 + address];
         } else if (address < 0x8000) {
             int effective = ((unmaskedBank & ~mask) | (base & mask)) % romBanks;
@@ -179,7 +190,7 @@ public class SachenMmc implements MemoryController {
                 address |= 0x80;
             }
         }
-        if ((address & 0xff00) == 0x0100) {
+        if (scrambledHeader && (address & 0xff00) == 0x0100) {
             address = unscramble(address);
         }
         return address;

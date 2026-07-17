@@ -19,6 +19,9 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     private static final int HDMA5 = 0xff55;
 
+    // The CGB spends two dots setting up a VRAM DMA burst before copying data.
+    private static final int STARTUP_TICKS = 2;
+
     private final AddressSpace addressSpace;
 
     private Mode gpuMode;
@@ -58,7 +61,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         }
         src = (src + 0x10) & 0xffff;
         dst = (dst + 0x10) & 0xffff;
-        tick = 0;
+        tick = hblankTransfer ? -STARTUP_TICKS : 0;
         if (length-- == 0) {
             transferInProgress = false;
             length = 0x7f;
@@ -120,7 +123,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         hblankTransfer = (reg & (1 << 7)) != 0;
         length = reg & 0x7f;
         transferInProgress = true;
-        tick = 0;
+        tick = -STARTUP_TICKS;
         if (hblankTransfer && !lcdEnabled) {
             // With the LCD off, starting HDMA copies one block immediately. There are
             // no subsequent HBlanks, so the transfer then remains paused.

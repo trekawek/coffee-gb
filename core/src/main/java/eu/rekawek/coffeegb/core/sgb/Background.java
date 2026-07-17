@@ -82,6 +82,14 @@ public class Background implements Originator<Background> {
 
             Commands.PctTrnCmd.BgMapEntry e = picture.getBgMapEntry(charX + charY * 32);
 
+            // CHR_TRN only supplies tiles 0x00-0xff. Some games (Pocket Kanjirou,
+            // issue #174) fill the Game Boy window with 0x2ff entries so that the
+            // SNES background leaves it unobstructed. Do not wrap those entries to
+            // transferred tile 0xff.
+            if (e.isUnusedTile()) {
+                continue;
+            }
+
             int charPixelX = x % 8;
             int charPixelY = y % 8;
 
