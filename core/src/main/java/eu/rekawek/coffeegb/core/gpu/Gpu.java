@@ -375,6 +375,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     /**
+     * The mode-1 STAT source follows the PPU's internal VBlank state. On DMG the readable
+     * STAT mode briefly becomes 0 at the end of line 153, but the interrupt source remains
+     * asserted until the line-0 mode-2 source takes over.
+     */
+    public boolean isMode1IntWindow() {
+        return lcdEnabled && mode == Mode.VBlank;
+    }
+
+    /**
      * OAM is locked from 4 ticks before the end of the preceding line until the end of the
      * pixel transfer. On the first line after enabling the LCD, it is locked when the pixel
      * transfer starts.
