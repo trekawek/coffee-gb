@@ -28,6 +28,16 @@ public class ColorPaletteTest {
         assertArrayEquals(new int[]{0xee44, 0xff55, 0x0000, 0x0000}, p.getPalette(1));
     }
 
+    @Test
+    public void initializesCgbObjectPaletteFromPostBootDump() {
+        ColorPalette p = new ColorPalette(0xff6a);
+
+        p.initializeCgbBootValues();
+
+        assertArrayEquals(new int[]{0x0000, 0xabf2, 0xc261, 0xbad9}, p.getPalette(0));
+        assertArrayEquals(new int[]{0x6a07, 0xec55, 0x4083, 0x770b}, p.getPalette(7));
+    }
+
     private static void assertArrayEquals(int[] expected, int[] actual) {
         assertEquals(expected.length, actual.length);
         for (int i = 0; i < expected.length; i++) {

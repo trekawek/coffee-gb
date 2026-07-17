@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
@@ -112,6 +113,17 @@ class SwingMenu(
       currentRomFileName = pendingRomFileName ?: currentRomFileName
       pendingRomFileName = null
       currentRomTitle = it.romName
+    }
+    eventBus.register<LoadRomFailedEvent> {
+      pendingRomFileName = null
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            "Can't open ${it.rom.name}: ${it.message}",
+            "Error",
+            JOptionPane.ERROR_MESSAGE,
+        )
+      }
     }
     eventBus.register<EmulationStoppedEvent> {
       currentRomFileName = null

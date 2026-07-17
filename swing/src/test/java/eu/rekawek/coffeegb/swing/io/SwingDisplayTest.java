@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.gpu.Display;
 import org.junit.Test;
 
 import java.awt.Graphics;
@@ -53,6 +54,27 @@ public class SwingDisplayTest {
         session.post(new Controller.SnapshotRestoredEvent(7));
         assertEquals("State loaded (slot 7)", textField.get(display));
         root.close();
+    }
+
+    @Test
+    public void newestFrameReplacesPendingTransitionFrame() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = new SwingDisplay(
+                new EmulatorProperties().getDisplay(), eventBus, "test");
+        int[] transition = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        java.util.Arrays.fill(transition, 3);
+        int[] blank = new int[transition.length];
+
+        eventBus.post(new Display.DmgFrameReadyEvent(transition));
+        eventBus.post(new Display.DmgFrameReadyEvent(blank));
+
+        Field waitingFrameField = SwingDisplay.class.getDeclaredField("waitingFrame");
+        waitingFrameField.setAccessible(true);
+        int[] waitingFrame = (int[]) waitingFrameField.get(display);
+        int[] expected = new int[waitingFrame.length];
+        new Display.DmgFrameReadyEvent(blank).toRgb(
+                expected, new EmulatorProperties().getDisplay().getGrayscale());
+        assertArrayEquals(expected, waitingFrame);
     }
 
     @Test

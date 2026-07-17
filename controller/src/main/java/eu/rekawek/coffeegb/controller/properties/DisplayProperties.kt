@@ -15,7 +15,7 @@ class DisplayProperties(private val properties: EmulatorProperties) {
 
   val colorCorrection
     get() =
-        properties.getProperty(EmulatorProperties.Key.DisplayColorCorrection, "false").toBoolean()
+        properties.getProperty(EmulatorProperties.Key.DisplayColorCorrection, "true").toBoolean()
 
   val rotation
     get() = properties.getProperty(EmulatorProperties.Key.DisplayRotation, "0").toInt()
