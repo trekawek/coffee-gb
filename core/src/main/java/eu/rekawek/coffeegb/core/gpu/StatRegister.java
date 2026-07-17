@@ -56,6 +56,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     public void tick() {
+        boolean settlingLycLine = false;
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
             if (gpu.getLine() <= 144 && ticksInLine == 0) {
@@ -95,13 +96,15 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             intCoincidence = coincidence;
             if (ticksInLine < 4 && gpu.getLine() != 0 && gpu.getLine() != 153) {
                 intCoincidence = false;
-                if (ticksInLine == 0
-                        && coincidence
-                        && (enableBits & 0b01000000) != 0
-                        && !intLine) {
+                settlingLycLine = coincidence && (enableBits & 0b01000000) != 0;
+                if (ticksInLine == 0 && settlingLycLine && !intLine) {
                     // The comparison edge reaches IF at the line-start latch,
-                    // before its level contribution to the STAT line settles.
+                    // before its level contribution to the STAT line settles. Keep the
+                    // edge detector latched across that settling window: if IRQ
+                    // dispatch clears IF before tick 4, the same comparison must not
+                    // be observed as a second edge (Army Men).
                     interruptManager.requestInterrupt(InterruptType.LCDC);
+                    intLine = true;
                 }
             }
             if (gpu.getLine() == 144 && ticksInLine == 0) {
@@ -109,7 +112,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             }
         }
 
-        updateIntLine(computeIntLine(enableBits));
+        if (!settlingLycLine) {
+            updateIntLine(computeIntLine(enableBits));
+        }
     }
 
     public void onLcdEnabled() {
@@ -155,7 +160,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         boolean line = (enable & 0b01000000) != 0 && intCoincidence;
         if (gpu.isLcdEnabled()) {
             line |= (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
-            line |= (enable & 0b00010000) != 0 && gpu.getVisibleStatMode() == 1;
+            line |= (enable & 0b00010000) != 0 && gpu.isMode1IntWindow();
             line |= (enable & 0b00100000) != 0 && gpu.isMode2IntWindow();
         }
         return line;

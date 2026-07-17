@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.gpu.phase.*;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.Dma;
+import eu.rekawek.coffeegb.core.memory.DmaOamAddressSpace;
 import eu.rekawek.coffeegb.core.memory.Ram;
 
 import java.io.Serializable;
@@ -77,6 +78,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.lcdc = new Lcdc();
         this.gbc = gbc;
         this.r.setGbc(gbc);
+        this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
         this.videoRam0 = new Ram(0x8000, 0x2000);
         if (gbc) {
@@ -86,14 +88,17 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         this.oamRam = oamRam;
         this.dma = dma;
+        AddressSpace ppuOam = new DmaOamAddressSpace(oamRam, dma);
 
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
-        oamPalette.fillWithFF();
+        if (gbc) {
+            oamPalette.initializeCgbBootValues();
+        }
 
-        this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
-        this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
+        this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
+        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
+        this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
@@ -372,6 +377,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      */
     public boolean isMode0IntWindow() {
         return lcdEnabled && line < 144 && ticksInLine >= hblankIntFrom;
+    }
+
+    /**
+     * The mode-1 STAT source follows the PPU's internal VBlank state. On DMG the readable
+     * STAT mode briefly becomes 0 at the end of line 153, but the interrupt source remains
+     * asserted until the line-0 mode-2 source takes over.
+     */
+    public boolean isMode1IntWindow() {
+        return lcdEnabled && mode == Mode.VBlank;
     }
 
     /**

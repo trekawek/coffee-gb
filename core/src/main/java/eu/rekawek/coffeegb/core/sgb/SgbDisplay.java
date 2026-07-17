@@ -50,6 +50,8 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private int atfNumber = -1;
 
+    private int borderFade;
+
     public SgbDisplay(Rom rom, EventBus sgbBus, boolean sgb, boolean sgbBorder) {
         this.sgbBorder = sgbBorder;
         this.sgb = sgb;
@@ -62,6 +64,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         if (sgb) {
             this.eventBus = eventBus;
             eventBus.register(this::onSgbBackground, Background.SgbBackgroundReadyEvent.class);
+            eventBus.register(e -> borderFade = e.amount(), Background.SgbBackgroundFadeEvent.class);
             eventBus.register(this::onDmgFrame, DmgFrameReadyEvent.class);
             eventBus.register(e -> this.sgbBorder = e.borderEnabled, SetSgbBorder.class);
 
@@ -196,7 +199,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
                 if (mask == 0) {
                     result[i] = translateGbcRgb(dmgPixel);
                 } else {
-                    result[i] = translateGbcRgb(sgbPixel);
+                    result[i] = translateGbcRgb(fadeBorderColor(sgbPixel, borderFade));
                 }
             }
         }
@@ -208,10 +211,18 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         System.arraycopy(sgbBackgroundReadyEvent.mask(), 0, sgbMask, 0, sgbMask.length);
     }
 
+    private static int fadeBorderColor(int color, int fade) {
+        int red = Math.max(0, (color & 0x1f) - fade);
+        int green = Math.max(0, ((color >> 5) & 0x1f) - fade);
+        int blue = Math.max(0, ((color >> 10) & 0x1f) - fade);
+        return red | (green << 5) | (blue << 10);
+    }
+
     @Override
     public Memento<SgbDisplay> saveToMemento() {
         return new SgbDisplayMemento(sgbBuffer.clone(), sgbMask.clone(), clone2(palettes),
-                clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask, atfNumber);
+                clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask, atfNumber,
+                borderFade);
     }
 
     @Override
@@ -245,6 +256,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         replaceRows(mem.attributeFiles, this.attributeFiles, DMG_TILES_WIDTH * DMG_TILES_HEIGHT);
         this.screenMask = mem.screenMask;
         this.atfNumber = mem.atfNumber;
+        this.borderFade = mem.borderFade;
     }
 
     private static void replaceRows(int[][] src, int[][] dst, int expectedRowLength) {
@@ -275,7 +287,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private record SgbDisplayMemento(int[] sgbBuffer, int[] sgbMask, int[][] palettes, int[][] systemPalettes,
                                      int[] paletteMap, int[][] attributeFiles, GameboyScreenMask screenMask,
-                                     int atfNumber) implements Memento<SgbDisplay> {
+                                     int atfNumber, int borderFade) implements Memento<SgbDisplay> {
     }
 
     public record SgbFrameReadyEvent(int[] buffer, boolean includeBorder) implements Event {
