@@ -21,28 +21,31 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     public static final int GET_TILE_T1 = 0;
 
-    // the horizontal part of the map offset: the position is frozen at the fetch
-    // start, but SCX is read two dots later - the DMG commits SCX writes two cycles
-    // into the write, earlier than other registers (SameBoy
-    // GB_CONFLICT_SCX_DMG_AND_CGB_DOUBLE; m3_scx_high_5_bits)
+    // The horizontal part of the map offset. CGB latches SCX with the fetch position at
+    // GET_TILE_T1. DMG reads SCX two dots later because its register write commits early
+    // (SameBoy GB_CONFLICT_SCX_DMG_AND_CGB_DOUBLE; m3_scx_high_5_bits).
     private int tileMapX;
 
     private int xBasePosition;
 
     private boolean xBaseObjectFetch;
 
-    private void sampleXBase(int position, boolean duringObjectFetch) {
+    private void sampleXBase(int position, boolean window, boolean duringObjectFetch) {
         xBasePosition = position;
         xBaseObjectFetch = duringObjectFetch;
+        if (gbc) {
+            sampleX(window);
+        }
     }
 
     private void sampleX(boolean window) {
+        int scx = r.getForFetcher(GpuRegister.SCX);
         if (window) {
             tileMapX = windowTileX;
         } else if (xBasePosition + 16 < 8) {
-            tileMapX = r.get(GpuRegister.SCX) >> 3;
+            tileMapX = scx >> 3;
         } else {
-            tileMapX = ((r.get(GpuRegister.SCX) + xBasePosition + 8 - ((gbc && !xBaseObjectFetch) ? 1 : 0)) / 8) & 0x1f;
+            tileMapX = ((scx + xBasePosition + 8 - ((gbc && !xBaseObjectFetch) ? 1 : 0)) / 8) & 0x1f;
         }
     }
 
@@ -221,7 +224,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             case GET_TILE_T1:
                 // the pipeline position for the horizontal map coordinate is frozen
                 // at the fetch start ...
-                sampleXBase(position, duringObjectFetch);
+                sampleXBase(position, window, duringObjectFetch);
                 state++;
                 break;
 
@@ -234,9 +237,11 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 break;
 
             case GET_TILE_DATA_LOW_T2: {
-                // ... SCX itself and the vertical coordinate (SCY) resolve with the
-                // map read here (m3_scx_high_5_bits, m3_scy_change)
-                sampleX(window);
+                // ... on DMG, SCX resolves here; the vertical coordinate (SCY) resolves
+                // here on both families (m3_scx_high_5_bits, m3_scy_change)
+                if (!gbc) {
+                    sampleX(window);
+                }
                 sampleY(window, windowY);
                 // the map read (and the map-select LCDC bit with it) resolves here,
                 // two T-cycles after the offset was sampled (m3_lcdc_bg_map_change,

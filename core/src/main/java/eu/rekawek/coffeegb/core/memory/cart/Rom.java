@@ -33,6 +33,8 @@ public class Rom {
 
     private final GameboyColorFlag gameboyColorFlag;
 
+    private final boolean legacySpeedSwitchRequired;
+
     private final boolean superGameboyFlag;
 
     public Rom(File romFile) throws IOException {
@@ -94,14 +96,23 @@ public class Rom {
         cartridgeType = type;
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
         GameboyColorFlag colorFlag = GameboyColorFlag.getFlag(rom[0x0143]);
+        boolean legacySpeedSwitchRequired = false;
         if (isDmgOnlyCrazyCastleTrainer(rom, title)) {
             // This trainer advertises CGB compatibility but only initializes the DMG
             // BGP/OBP registers. Native CGB startup therefore renders its menu entirely
             // white and also leaves HRAM in a state the trainer does not expect.
             LOG.info("DMG-only Crazy Castle 3 trainer detected; ignoring its CGB flag");
             colorFlag = GameboyColorFlag.NON_CGB;
+        } else if (isNamcoGallery2Trainer(rom, title)) {
+            // This old emulator-oriented trainer keeps the original DMG header, but its
+            // launch stub writes KEY1 and executes STOP before handing off to the game.
+            // Accept that speed switch as a narrowly scoped extension while retaining
+            // DMG rendering; treating the whole image as native CGB corrupts its colours.
+            LOG.info("Namco Gallery Vol.2 trainer detected; enabling its CGB speed-switch extension");
+            legacySpeedSwitchRequired = true;
         }
         gameboyColorFlag = colorFlag;
+        this.legacySpeedSwitchRequired = legacySpeedSwitchRequired;
         superGameboyFlag = rom[0x0146] == 0x03;
         romBanks = getRomBanks(rom[0x0148], rom.length);
         int ramSize = getRamSize(rom[0x0149]);
@@ -147,8 +158,36 @@ public class Rom {
         return gameboyColorFlag;
     }
 
+    public boolean isLegacySpeedSwitchRequired() {
+        return legacySpeedSwitchRequired;
+    }
+
     public boolean isSuperGameboyFlag() {
         return superGameboyFlag;
+    }
+
+    /**
+     * The Lightforce +1 trainer for The Adventures of the Smurfs uses tile 0x0A as
+     * its blank background without uploading that tile. The CGB boot ROM leaves logo
+     * pixels there, while the skip-boot environment the trainer was authored for starts
+     * it at zero. Match the injected trainer code rather than the filename so renamed
+     * copies receive the same compatibility handling.
+     */
+    public boolean requiresBlankCgbBootTile() {
+        int[] trainerSignature = {
+                0x7d, 0xea, 0xa1, 0xc0, 0xe6, 0x03, 0x6f, 0x01,
+                0xe0, 0x01, 0xcb, 0x25, 0xcb, 0x25, 0x09, 0xe9
+        };
+        int signatureOffset = 0xddea4;
+        if (rom.length != 0x100000 || rom[0x0143] != 0xc0 || rom[0x0147] != 0x1b) {
+            return false;
+        }
+        for (int i = 0; i < trainerSignature.length; i++) {
+            if (rom[signatureOffset + i] != trainerSignature[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // The Pocket Voice V2.0 voice recorder uses cartridge-type byte 0xBE and stamps its name
@@ -166,6 +205,21 @@ public class Rom {
         }
         for (int i = 0; i < entryStub.length; i++) {
             if (rom[0x00e0 + i] != entryStub[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isNamcoGallery2Trainer(int[] rom, String title) {
+        int[] speedSwitchStub = {0x3e, 0x01, 0xe0, 0x4d, 0x10, 0x00, 0x00, 0x00,
+                0xcd, 0x0d, 0x71, 0xfa, 0xf0, 0xdf, 0xc3, 0x50, 0x01};
+        if (rom.length != 0x80000 || !"GALLERY2 +4".equals(title)
+                || rom[0x0143] != 0x00 || rom[0x0147] != 0x01) {
+            return false;
+        }
+        for (int i = 0; i < speedSwitchStub.length; i++) {
+            if (rom[0x3f0fc + i] != speedSwitchStub[i]) {
                 return false;
             }
         }
@@ -207,7 +261,7 @@ public class Rom {
     }
 
     private static int getRomBanks(int id, int romLength) {
-        return switch (id) {
+        int declaredBanks = switch (id) {
             case 0 -> 2;
             case 1 -> 4;
             case 2 -> 8;
@@ -223,8 +277,13 @@ public class Rom {
             // unlicensed carts (Sachen multicarts, some homebrew) store a non-standard
             // size byte; derive the bank count from the actual file size (16 KB per
             // bank) instead of refusing to load (issue #58)
-            default -> Math.max(2, (romLength + 0x3fff) / 0x4000);
+            default -> 2;
         };
+        // A few unlicensed carts put executable code over the standard header, so even a
+        // syntactically valid size byte can be an instruction operand. Never hide banks
+        // that are physically present in the image (Sonic 3D Blast 5, #186).
+        int actualBanks = Math.max(2, (romLength + 0x3fff) / 0x4000);
+        return Math.max(declaredBanks, actualBanks);
     }
 
     private static int getRamSize(int id) {
@@ -235,7 +294,12 @@ public class Rom {
             case 3 -> 0x8000;
             case 4 -> 0x20000;
             case 5 -> 0x10000;
-            default -> throw new IllegalArgumentException("Unsupported RAM size: " + Integer.toHexString(id));
+            // Unlicensed cartridges sometimes place executable code across the standard
+            // header fields. In that case 0x0149 is an instruction byte rather than a RAM
+            // size declaration (Sonic 3D Blast 5 uses JR NZ, 0x20). Treat an unknown value
+            // as no declared RAM, just as physical hardware does; mapper-specific detection
+            // can still provide RAM when the cartridge is known to have it.
+            default -> 0;
         };
     }
 

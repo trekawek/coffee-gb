@@ -41,6 +41,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         this.battery = battery;
 
         var type = rom.getType();
+        int sachenType = sachenType(rom);
         if (isBungEms(rom)) {
             addressSpace = new BungEms(rom, battery);
         } else if (type.isMmm01()) {
@@ -54,8 +55,10 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             addressSpace = new DuzMulticart(rom, battery);
         } else if (isBhgosMulticart(rom)) {
             addressSpace = new BhgosMulticart(rom, battery);
-        } else if (sachenType(rom) >= 0) {
-            addressSpace = new SachenMmc(rom, sachenType(rom) == 2);
+        } else if (sachenType >= 0) {
+            // Type 3 is the alternate MMC2 wiring: its header page is linear, but it
+            // otherwise uses the same lockout and banking logic as a raw MMC2 cart.
+            addressSpace = new SachenMmc(rom, sachenType != 1, sachenType != 3);
         } else if (isCookedSachen(rom)) {
             // post-unlock ("cooked") Sachen dumps: no lockout, boot at base 0 like the
             // power-on cart (issues #73/#75)
@@ -270,7 +273,8 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
      * the 0x0100-0x01FF page is wired with A0/A6 and A1/A4 swapped, so the logo bytes sit
      * at the scrambled offsets (0xED at 0x144, 0x66 at 0x114); the MMC2 stores the logo
      * served during boot in the 0x0180-0x01FF half of the page (mGBA's detection).
-     * Returns 1 for MMC1, 2 for MMC2, -1 for regular carts.
+     * Returns 1 for MMC1, 2 for the address-scrambled MMC2, 3 for the alternate
+     * linear-header MMC2 wiring, and -1 for regular carts.
      */
     /**
      * The fixed, cart-independent header the Sachen mapper descrambles for the boot ROM. The
@@ -312,17 +316,31 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         if (data[0x184] == 0xce && data[0x1c4] == 0xed && data[0x194] == 0x66) {
             return 2;
         }
+        // Some MMC2 boards wire the four lower ROM address lines straight through.
+        // Their raw dumps contain Sachen's replacement logo linearly at 0x0104 and
+        // the Nintendo logo selected by RA7 linearly at 0x0184 (issue #187).
+        if (data[0x104] == 0x7c && data[0x105] == 0xe7
+                && data[0x106] == 0xc0 && data[0x107] == 0x00
+                && hasLogoAt(data, 0x184)) {
+            return 3;
+        }
         return -1;
     }
 
-    private static boolean hasValidLogo(Rom rom) {
-        int[] data = rom.getRom();
+    private static boolean hasLogoAt(int[] data, int offset) {
+        if (offset + NINTENDO_LOGO.length > data.length) {
+            return false;
+        }
         for (int i = 0; i < NINTENDO_LOGO.length; i++) {
-            if (data[0x104 + i] != NINTENDO_LOGO[i]) {
+            if (data[offset + i] != NINTENDO_LOGO[i]) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static boolean hasValidLogo(Rom rom) {
+        return hasLogoAt(rom.getRom(), 0x104);
     }
 
     private static boolean isHiddenMmm01(Rom rom) {

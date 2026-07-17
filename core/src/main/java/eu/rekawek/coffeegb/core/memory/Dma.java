@@ -23,12 +23,15 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     private int ticks;
 
-    private int regValue = 0xff;
+    private int regValue;
 
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
         this.addressSpace = new DmaAddressSpace(addressSpace);
         this.speedMode = speedMode;
         this.oam = oam;
+        // FF46 most commonly powers up as 00 on CGB and FF on DMG.
+        // Doc Cosmos reads FF46 to choose the phase of its title-screen scroller.
+        regValue = speedMode.isGbc() ? 0x00 : 0xff;
     }
 
     @Override

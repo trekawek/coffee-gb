@@ -62,7 +62,7 @@ blocking" (`stat_irq_blocking`) with no special cases:
 ```
 line = (LYC enabled  AND settled coincidence)
     OR (mode0 enabled AND tl >= hblankIntFrom, lines 0-143)
-    OR (mode1 enabled AND visible mode == 1)
+    OR (mode1 enabled AND internal VBlank state)
     OR (mode2 enabled AND previous tl >= 452 or tl < 4, lines 0-144)
 ```
 
@@ -81,6 +81,10 @@ line = (LYC enabled  AND settled coincidence)
 - The **mode-0 term** rises 3 T after the visible mode 0, i.e. at `E+4`
   (`hblank_ly_scx_timing-GS`, `intr_2_0_timing`); the pixel pipeline is T-exact, so no
   quantization is applied.
+- The **mode-1 term** follows the internal VBlank state through the end of line 153. On
+  DMG the readable mode bits briefly expose mode 0 there, but the interrupt source stays
+  high until the line-0 mode-2 pulse takes over. Keeping those sources continuous is
+  required for STAT blocking across the frame boundary (Altered Space).
 - VBLANK IF (bit 0) is requested at `tl=0` of line 144.
 - **DMG STAT write glitch**: during a STAT write all four enable bits act as 1 for a moment
   ("all interrupts are enabled before data settles" — `ff41_stat` annotation), which can

@@ -77,6 +77,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.lcdc = new Lcdc();
         this.gbc = gbc;
         this.r.setGbc(gbc);
+        this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
         this.videoRam0 = new Ram(0x8000, 0x2000);
         if (gbc) {
@@ -89,7 +90,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
-        oamPalette.fillWithFF();
+        if (gbc) {
+            oamPalette.initializeCgbBootValues();
+        }
 
         this.oamSearchPhase = new OamSearch(oamRam, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, oamRam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
@@ -372,6 +375,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      */
     public boolean isMode0IntWindow() {
         return lcdEnabled && line < 144 && ticksInLine >= hblankIntFrom;
+    }
+
+    /**
+     * The mode-1 STAT source follows the PPU's internal VBlank state. On DMG the readable
+     * STAT mode briefly becomes 0 at the end of line 153, but the interrupt source remains
+     * asserted until the line-0 mode-2 source takes over.
+     */
+    public boolean isMode1IntWindow() {
+        return lcdEnabled && mode == Mode.VBlank;
     }
 
     /**

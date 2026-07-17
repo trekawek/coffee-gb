@@ -57,6 +57,18 @@ public class StatRegisterTest {
         assertEquals(0, fixture.lcdInterruptFlag());
     }
 
+    @Test
+    public void vblankSourceMasksLineZeroOamSource() {
+        Fixture fixture = new Fixture();
+        fixture.advanceTo(144, 8);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x30);
+        fixture.clearInterrupts();
+
+        fixture.advanceTo(0, 4);
+
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
     private static class Fixture {
 
         private final InterruptManager interrupts;
@@ -99,6 +111,12 @@ public class StatRegisterTest {
             while (gpu.getLine() != targetLine || gpu.getTicksInLine() != 0) {
                 tick();
             }
+        }
+
+        private void advanceTo(int line, int ticksInLine) {
+            do {
+                tick();
+            } while (gpu.getLine() != line || gpu.getTicksInLine() != ticksInLine);
         }
 
         private void tick() {
