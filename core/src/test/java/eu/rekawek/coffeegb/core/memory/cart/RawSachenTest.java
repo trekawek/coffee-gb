@@ -44,8 +44,18 @@ public class RawSachenTest {
         }
     }
 
+    @Test
+    public void derivesBankCountFromRawDumpSize() throws IOException {
+        assertEquals(32, new Rom(rawMmc2Rom(0x80000)).getRomBanks());
+        assertEquals(128, new Rom(rawMmc2Rom(0x200000)).getRomBanks());
+    }
+
     private static byte[] rawMmc2Rom() {
-        byte[] data = new byte[0x200000];
+        return rawMmc2Rom(0x200000);
+    }
+
+    private static byte[] rawMmc2Rom(int size) {
+        byte[] data = new byte[size];
         // The low half contains the pirate logo; the CGB-selected A7-high copy contains
         // the Nintendo logo. Header fields are identical in both halves.
         for (int i = 0; i < NINTENDO_LOGO.length; i++) {
