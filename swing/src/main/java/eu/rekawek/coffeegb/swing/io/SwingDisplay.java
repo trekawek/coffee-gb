@@ -81,9 +81,9 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
         eventBus.register(e -> setRotation(e.rotation), SetRotationEvent.class);
         eventBus.register(e -> this.rumbling = e.on(), eu.rekawek.coffeegb.core.memory.cart.type.Mbc5.RumbleEvent.class, callerId);
-        eventBus.register(e -> showNotification("State saved (slot " + e.slot() + ")"),
+        eventBus.register(e -> showNotification("State saved (slot " + e.getSlot() + ")"),
                 Controller.SnapshotSavedEvent.class, callerId);
-        eventBus.register(e -> showNotification("State loaded (slot " + e.slot() + ")"),
+        eventBus.register(e -> showNotification("State loaded (slot " + e.getSlot() + ")"),
                 Controller.SnapshotRestoredEvent.class, callerId);
         this.grayscale = properties.getGrayscale();
         this.rotation = normalizeRotation(properties.getRotation());
