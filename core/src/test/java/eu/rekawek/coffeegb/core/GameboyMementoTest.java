@@ -6,6 +6,8 @@ import org.junit.Test;
 import java.io.IOException;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class GameboyMementoTest {
 
@@ -30,7 +32,41 @@ public class GameboyMementoTest {
             do {
                 ticksUntilBlank++;
             } while (!gameboy.tick());
-            assertEquals(Gameboy.TICKS_PER_FRAME - elapsedBeforeSave, ticksUntilBlank);
+            assertEquals(Gameboy.LCD_OFF_BLANK_DELAY - elapsedBeforeSave, ticksUntilBlank);
+        }
+    }
+
+    @Test
+    public void briefLcdOffDoesNotPublishBlankFrame() throws IOException {
+        byte[] romBytes = new byte[0x8000];
+        romBytes[0x147] = 0;
+        try (Gameboy gameboy = new Gameboy(new Rom(romBytes))) {
+            gameboy.getGpu().setByte(0xff40, 0);
+            for (int i = 1; i < Gameboy.LCD_OFF_BLANK_DELAY; i++) {
+                assertFalse(gameboy.tick());
+            }
+
+            gameboy.getGpu().setByte(0xff40, 0x91);
+            assertFalse(gameboy.tick());
+        }
+    }
+
+    @Test
+    public void sustainedLcdOffKeepsNormalCadenceAfterEarlyBlank() throws IOException {
+        byte[] romBytes = new byte[0x8000];
+        romBytes[0x147] = 0;
+        try (Gameboy gameboy = new Gameboy(new Rom(romBytes))) {
+            gameboy.getGpu().setByte(0xff40, 0);
+            for (int i = 1; i < Gameboy.LCD_OFF_BLANK_DELAY; i++) {
+                assertFalse(gameboy.tick());
+            }
+            assertTrue(gameboy.tick());
+
+            int ticksUntilNextBlank = 0;
+            do {
+                ticksUntilNextBlank++;
+            } while (!gameboy.tick());
+            assertEquals(Gameboy.TICKS_PER_FRAME, ticksUntilNextBlank);
         }
     }
 }

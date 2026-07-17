@@ -37,6 +37,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     // 60 frames per second
     public static final int TICKS_PER_FRAME = Gameboy.TICKS_PER_SEC / 60;
 
+    // Keep very short LCD-off VRAM rewrites on the previous panel image, but do not
+    // hold a partial scanout until the next emulated refresh. Four scanlines are longer
+    // than known sub-frame rewrites (A Bug's Life uses about 1100 ticks) while still
+    // allowing a sustained LCD-off to replace a transition fragment before host paint.
+    static final int LCD_OFF_BLANK_DELAY = 4 * 456;
+
     private final Cartridge cartridge;
 
     private final Cartridge slotCartridge;
@@ -360,12 +366,18 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 hdma.onLcdSwitch(false);
                 lcdOffTicks = 0;
             }
-            // a game that only blanks the LCD for a fraction of a frame (a common way to
-            // squeeze a big VRAM rewrite in, e.g. the A Bug's Life intro) must not flash a
-            // blank frame - the display keeps the last picture. Only a sustained LCD-off
-            // blanks the screen, at the normal refresh cadence.
-            if (++lcdOffTicks >= TICKS_PER_FRAME) {
-                lcdOffTicks = 0;
+            // A very short LCD-off (a common way to squeeze in a VRAM rewrite, e.g. the
+            // A Bug's Life intro) keeps the last panel image. Once the off period outlives
+            // that settling window, publish the blank state immediately. Otherwise a
+            // partial scanout immediately before LCD-off is held for a complete host frame
+            // (Konami GB Collection Vol. 1, issue #127). Subsequent blank refreshes retain
+            // the normal cadence.
+            lcdOffTicks++;
+            if (lcdOffTicks == LCD_OFF_BLANK_DELAY
+                    || lcdOffTicks >= LCD_OFF_BLANK_DELAY + TICKS_PER_FRAME) {
+                if (lcdOffTicks >= LCD_OFF_BLANK_DELAY + TICKS_PER_FRAME) {
+                    lcdOffTicks = LCD_OFF_BLANK_DELAY;
+                }
                 display.blankFrame();
                 result = true;
             }
