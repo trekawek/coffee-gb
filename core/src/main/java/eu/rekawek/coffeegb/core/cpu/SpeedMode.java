@@ -11,6 +11,8 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
 
     private final boolean gbc;
 
+    private final boolean allowLegacySpeedSwitch;
+
     private boolean currentSpeed;
 
     private boolean prepareSpeedSwitch;
@@ -22,7 +24,12 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
     private BiosShadow biosShadow;
 
     public SpeedMode(boolean gbc) {
+        this(gbc, false);
+    }
+
+    public SpeedMode(boolean gbc, boolean allowLegacySpeedSwitch) {
         this.gbc = gbc;
+        this.allowLegacySpeedSwitch = allowLegacySpeedSwitch;
     }
 
     public void setBiosShadow(BiosShadow biosShadow) {
@@ -48,7 +55,7 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
             if (biosShadow == null || !biosShadow.isBootFinished()) {
                 dmgCompat = (value & 0x0c) != 0;
             }
-        } else if (!dmgCompat) {
+        } else if (isSpeedSwitchAccessible()) {
             prepareSpeedSwitch = (value & 0x01) != 0;
         }
     }
@@ -58,11 +65,15 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
         if (address == 0xff4c) {
             return 0xff;
         }
-        if (gbc && !dmgCompat) {
+        if (isSpeedSwitchAccessible()) {
             return (currentSpeed ? (1 << 7) : 0) | (prepareSpeedSwitch ? (1 << 0) : 0) | 0b01111110;
         } else {
             return 0xff;
         }
+    }
+
+    private boolean isSpeedSwitchAccessible() {
+        return allowLegacySpeedSwitch || (gbc && !dmgCompat);
     }
 
     boolean onStop() {
@@ -77,6 +88,10 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
 
     public int getSpeedMode() {
         return currentSpeed ? 2 : 1;
+    }
+
+    public boolean isGbc() {
+        return gbc;
     }
 
     @Override
