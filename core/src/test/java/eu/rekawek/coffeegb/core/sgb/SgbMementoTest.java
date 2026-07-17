@@ -72,7 +72,7 @@ public class SgbMementoTest {
     }
 
     @Test
-    public void borderCharactersRemainPendingUntilThePictureTransition() {
+    public void bothBorderCharacterHalvesRemainPendingUntilThePictureTransition() {
         EventBusImpl sgbBus = new EventBusImpl(null, null, false);
         Background background = new Background(sgbBus);
         EventBusImpl eventBus = new EventBusImpl(null, null, false);
@@ -81,10 +81,16 @@ public class SgbMementoTest {
                 Background.SgbBackgroundReadyEvent.class);
         background.init(eventBus);
 
-        Commands.ChrTrnCmd characters = (Commands.ChrTrnCmd) command(0x13);
-        characters.setDataTransfer(new int[0x1000]);
-        sgbBus.post(characters);
-        advanceFrames(eventBus, 100);
+        Commands.ChrTrnCmd firstHalf = characterTransfer(0);
+        firstHalf.setDataTransfer(new int[0x1000]);
+        sgbBus.post(firstHalf);
+        advanceFrames(eventBus, 50);
+        assertEquals(0, renderedPictures.get());
+
+        Commands.ChrTrnCmd secondHalf = characterTransfer(1);
+        secondHalf.setDataTransfer(new int[0x1000]);
+        sgbBus.post(secondHalf);
+        advanceFrames(eventBus, 50);
         assertEquals(0, renderedPictures.get());
 
         Commands.PctTrnCmd picture = (Commands.PctTrnCmd) command(0x14);
@@ -185,6 +191,13 @@ public class SgbMementoTest {
         int[] packet = new int[16];
         packet[0] = (code << 3) | 1;
         return Commands.toCommand(packet);
+    }
+
+    private static Commands.ChrTrnCmd characterTransfer(int half) {
+        int[] packet = new int[16];
+        packet[0] = (0x13 << 3) | 1;
+        packet[1] = half;
+        return (Commands.ChrTrnCmd) Commands.toCommand(packet);
     }
 
     private static void advanceFrames(EventBusImpl eventBus, int count) {
