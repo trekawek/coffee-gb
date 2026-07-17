@@ -16,14 +16,15 @@ class SnapshotManager(private val rom: File) {
     gameboy.saveToMemento().serialize().let { snapshotFile.writeBytes(it) }
   }
 
-  fun loadSnapshot(slot: Int, gameboy: Gameboy) {
+  fun loadSnapshot(slot: Int, gameboy: Gameboy): Boolean {
     val snapshotFile = getSnapshotFile(slot)
     if (!snapshotFile.exists()) {
-      return
+      return false
     }
 
     val memento = snapshotFile.readBytes().deserializeToGameboyMemento()
     gameboy.restoreFromMemento(memento)
+    return true
   }
 
   private fun getSnapshotFile(slot: Int): File {

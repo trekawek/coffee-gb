@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing.io;
 
+import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
@@ -17,6 +18,43 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.*;
 
 public class SwingDisplayTest {
+
+    @Test
+    public void snapshotCompletionEventsShowAnOnScreenNotification() throws Exception {
+        EventBusImpl root = new EventBusImpl(null, null, false);
+        EventBus session = root.fork("test");
+        SwingDisplay display = new SwingDisplay(
+                new EmulatorProperties().getDisplay(), root, "test");
+        Field textField = SwingDisplay.class.getDeclaredField("notificationText");
+        textField.setAccessible(true);
+
+        session.post(new Controller.SnapshotSavedEvent(3));
+        assertEquals("State saved (slot 3)", textField.get(display));
+
+        display.setSize(display.getPreferredSize());
+        BufferedImage target = new BufferedImage(
+                display.getWidth(), display.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics graphics = target.getGraphics();
+        try {
+            display.paintComponent(graphics);
+        } finally {
+            graphics.dispose();
+        }
+        boolean hasVisibleText = false;
+        for (int y = 0; y < target.getHeight() && !hasVisibleText; y++) {
+            for (int x = 0; x < target.getWidth(); x++) {
+                if ((target.getRGB(x, y) & 0xffffff) != 0) {
+                    hasVisibleText = true;
+                    break;
+                }
+            }
+        }
+        assertTrue("notification was not painted over the game image", hasVisibleText);
+
+        session.post(new Controller.SnapshotRestoredEvent(7));
+        assertEquals("State loaded (slot 7)", textField.get(display));
+        root.close();
+    }
 
     @Test
     public void newestFrameReplacesPendingTransitionFrame() throws Exception {

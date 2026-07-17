@@ -216,12 +216,19 @@ class BasicController(
   }
 
   private fun saveSnapshot(slot: Int) {
-    session?.gameboy?.let { snapshotManager?.saveSnapshot(slot, it) }
+    val currentSession = session ?: return
+    val manager = snapshotManager ?: return
+    manager.saveSnapshot(slot, currentSession.gameboy)
+    currentSession.eventBus.post(Controller.SnapshotSavedEvent(slot))
   }
 
   private fun loadSnapshot(slot: Int) {
-    session?.gameboy?.let { snapshotManager?.loadSnapshot(slot, it) }
-    rewindManager.clear()
+    val currentSession = session ?: return
+    val manager = snapshotManager ?: return
+    if (manager.loadSnapshot(slot, currentSession.gameboy)) {
+      rewindManager.clear()
+      currentSession.eventBus.post(Controller.SnapshotRestoredEvent(slot))
+    }
   }
 
   override fun snapshotAvailable(slot: Int): Boolean {
