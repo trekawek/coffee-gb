@@ -111,7 +111,9 @@ public class Display implements Serializable, Originator<Display> {
     public void blankFrame() {
         // a deliberate blank overrides any pending enable-frame skip
         firstFrameAfterLcdEnable = false;
-        Arrays.fill(buffer, 0);
+        // Color 0 is black in CGB RGB555, unlike DMG shade 0. An inactive LCD is
+        // white, so use the CGB white value instead of clearing both modes to zero.
+        Arrays.fill(buffer, gbc ? 0x7fff : 0);
         i = 0;
         frameIsReady();
     }
@@ -159,9 +161,23 @@ public class Display implements Serializable, Originator<Display> {
             if (lut == null) {
                 lut = new int[0x8000];
                 for (int color = 0; color < 0x8000; color++) {
-                    int r = CURVE[color & 0x1f];
-                    int g = CURVE[(color >> 5) & 0x1f];
-                    int b = CURVE[(color >> 10) & 0x1f];
+                    int r5 = color & 0x1f;
+                    int g5 = (color >> 5) & 0x1f;
+                    int b5 = (color >> 10) & 0x1f;
+
+                    // The original reflective LCD loses chroma at the very top of its
+                    // range. KiGB derived this clipping point while testing the complete
+                    // GoodGBX set on hardware: RGB555 colors whose component sum reaches
+                    // 86 are one indistinguishable highlight. NBA Jam '99 relies on that
+                    // response to hide a screen rebuild behind two colors at sums 86 and
+                    // 90; raw-RGB displays expose the rebuild as transition garbage.
+                    if (r5 + g5 + b5 >= 86) {
+                        r5 = g5 = b5 = 31;
+                    }
+
+                    int r = CURVE[r5];
+                    int g = CURVE[g5];
+                    int b = CURVE[b5];
                     if (g != b) {
                         g = (int) Math.round(Math.pow(
                                 (Math.pow(g / 255.0, 2.2) * 3 + Math.pow(b / 255.0, 2.2)) / 4, 1 / 2.2) * 255);
