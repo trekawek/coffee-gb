@@ -329,7 +329,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         boolean stopFrameBlanked = cpu.consumeStopFrameBlankRequest();
         if (stopFrameBlanked) {
-            display.blankFrame();
+            display.blankFrameForStop();
             result = true;
         }
 
