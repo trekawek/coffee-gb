@@ -1,10 +1,11 @@
 package eu.rekawek.coffeegb.swing.io;
 
+import com.sun.jna.NativeLibrary;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent;
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent;
-import com.sun.jna.NativeLibrary;
+import eu.rekawek.coffeegb.core.memory.cart.type.AccelerometerEvent;
 import eu.rekawek.coffeegb.core.memory.cart.type.Mbc5;
 import io.github.libsdl4j.api.gamecontroller.SDL_GameController;
 import org.slf4j.Logger;
@@ -20,6 +21,8 @@ import static io.github.libsdl4j.api.SdlSubSystemConst.SDL_INIT_GAMECONTROLLER;
 import static io.github.libsdl4j.api.error.SdlError.SDL_GetError;
 import static io.github.libsdl4j.api.gamecontroller.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTX;
 import static io.github.libsdl4j.api.gamecontroller.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTY;
+import static io.github.libsdl4j.api.gamecontroller.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_RIGHTX;
+import static io.github.libsdl4j.api.gamecontroller.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_RIGHTY;
 import static io.github.libsdl4j.api.gamecontroller.SDL_GameControllerButton.*;
 import static io.github.libsdl4j.api.gamecontroller.SdlGamecontroller.*;
 import static io.github.libsdl4j.api.joystick.SdlJoystick.SDL_NumJoysticks;
@@ -28,8 +31,9 @@ import static io.github.libsdl4j.api.joystick.SdlJoystick.SDL_NumJoysticks;
  * Game-controller input via SDL2 (issue #78): any pad SDL recognizes - PS3/PS4/PS5,
  * Xbox, Switch Pro, generic HID - works out of the box through SDL's built-in mapping
  * database. The first connected controller drives the joypad: d-pad or left stick for
- * the directions, A/B for the buttons, Start, and Back/Select for select. Hotplug is
- * handled by rescanning while no controller is open.
+ * the directions, A/B for the buttons, Start, and Back/Select for select. The right stick
+ * controls MBC7 cartridge tilt for Kirby's Tilt 'n' Tumble. Hotplug is handled by
+ * rescanning while no controller is open.
  *
  * <p>The MBC5 rumble carts' motor (issue #93) is forwarded to the controller's force
  * feedback when it has any.
@@ -48,6 +52,10 @@ public class SwingGamepad implements Runnable {
     // half of the axis range: the left stick acts as a digital d-pad past this deflection
     private static final int AXIS_THRESHOLD = 16384;
 
+    // Ignore the center eighth of the right stick, then rescale the remaining travel so
+    // controllers with ordinary resting drift do not continuously tilt the cartridge.
+    static final int TILT_DEAD_ZONE = 4096;
+
     private final EventBus eventBus;
 
     private volatile boolean doStop;
@@ -60,6 +68,8 @@ public class SwingGamepad implements Runnable {
     private final Set<Button> pressed = EnumSet.noneOf(Button.class);
 
     private boolean rumbleActive;
+
+    private boolean tiltActive;
 
     public SwingGamepad(EventBus eventBus) {
         this.eventBus = eventBus;
@@ -104,6 +114,7 @@ public class SwingGamepad implements Runnable {
             }
             if (controller != null) {
                 pollButtons();
+                pollTilt();
                 applyRumble();
             }
             try {
@@ -160,6 +171,36 @@ public class SwingGamepad implements Runnable {
         update(Button.SELECT, isDown(SDL_CONTROLLER_BUTTON_BACK));
     }
 
+    private void pollTilt() {
+        updateTilt(
+                SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX),
+                SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY));
+    }
+
+    void updateTilt(int rawX, int rawY) {
+        double x = normalizeTiltAxis(rawX);
+        double y = normalizeTiltAxis(rawY);
+        if (x != 0 || y != 0) {
+            // Keep asserting a held stick so it remains authoritative over mouse movement.
+            eventBus.post(new AccelerometerEvent(x, y));
+            tiltActive = true;
+        } else if (tiltActive) {
+            // Post center once, then leave the idle controller quiet so mouse tilt remains
+            // available as an alternative input.
+            eventBus.post(new AccelerometerEvent(0, 0));
+            tiltActive = false;
+        }
+    }
+
+    static double normalizeTiltAxis(int raw) {
+        int magnitude = Math.abs(raw);
+        if (magnitude <= TILT_DEAD_ZONE) {
+            return 0;
+        }
+        double normalized = (double) (magnitude - TILT_DEAD_ZONE) / (32767 - TILT_DEAD_ZONE);
+        return Math.copySign(Math.min(1, normalized), raw);
+    }
+
     private boolean isDown(int button) {
         return SDL_GameControllerGetButton(controller, button) != 0;
     }
@@ -177,6 +218,10 @@ public class SwingGamepad implements Runnable {
             eventBus.post(new ButtonReleaseEvent(button));
         }
         pressed.clear();
+        if (tiltActive) {
+            eventBus.post(new AccelerometerEvent(0, 0));
+            tiltActive = false;
+        }
     }
 
     private void applyRumble() {

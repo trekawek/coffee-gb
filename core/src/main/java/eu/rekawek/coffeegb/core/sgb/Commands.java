@@ -642,6 +642,10 @@ public class Commands {
                 return value & 0b0000000011111111;
             }
 
+            public boolean isUnusedTile() {
+                return (value & 0b0000001100000000) != 0;
+            }
+
             public int getPaletteNumber() {
                 return (value >> 10) & 0b00000111;
             }
