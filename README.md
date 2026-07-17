@@ -122,6 +122,15 @@ window timing:
 
     mvn clean test -f core/pom.xml -Ptest-gambatte-hw
 
+## GBMicrotest
+
+All 513 hardware-verified timing ROMs from
+[GBMicrotest](https://github.com/aappleby/GBMicrotest) run in DMG mode. The
+374 current passes are regression-locked; known failures are explicitly
+baselined so accuracy improvements are accepted without hiding new failures:
+
+    mvn clean test -f core/pom.xml -Ptest-gbmicrotest
+
 ## BullyGB
 
 The [BullyGB](https://github.com/Ashiepaws/BullyGB) framework is run in both

@@ -53,6 +53,8 @@ them before touching Gpu/StatRegister/Cpu/Sound.**
   `core/target/test-classes` (absolute paths).
 - Test runners: `MooneyeTestRunner` picks CGB for `*-C.gb`/`*-cgb*` roms, CGB0
   revision for `*-cgb0*`, NORMAL boot for `boot_*` roms, SKIP otherwise.
+- `GbMicrotestRunner` reads the suite's automated result at `$FF82`; run all
+  513 hardware-verified DMG timing tests with `-Ptest-gbmicrotest`.
 
 ## The timing model — calibrated constants and their interlocks
 
