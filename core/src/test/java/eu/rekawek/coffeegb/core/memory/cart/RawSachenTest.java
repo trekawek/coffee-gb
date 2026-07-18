@@ -45,9 +45,44 @@ public class RawSachenTest {
     }
 
     @Test
+    public void mmc2ThresholdReadUsesTheNewLockState() throws IOException {
+        SachenMmc mapper = new SachenMmc(new Rom(rawMmc2Rom()), true);
+
+        for (int i = 0; i < 0x30; i++) {
+            assertEquals(NINTENDO_LOGO[0] ^ 0xff, mapper.getByte(0x0104));
+        }
+        // The 49th read changes DMG-locked to CGB-locked and must already use the
+        // A7-high Nintendo-logo copy, matching the real mapper's combinational output.
+        assertEquals(NINTENDO_LOGO[0], mapper.getByte(0x0104));
+
+        for (int i = 0; i < 0x30; i++) {
+            assertEquals(NINTENDO_LOGO[0], mapper.getByte(0x0104));
+        }
+        // The next threshold read unlocks the header and exposes the primary copy.
+        assertEquals(NINTENDO_LOGO[0] ^ 0xff, mapper.getByte(0x0104));
+    }
+
+    @Test
     public void derivesBankCountFromRawDumpSize() throws IOException {
         assertEquals(32, new Rom(rawMmc2Rom(0x80000)).getRomBanks());
         assertEquals(128, new Rom(rawMmc2Rom(0x200000)).getRomBanks());
+    }
+
+    @Test
+    public void outOfRangeBanksReadAsOpenBusRatherThanMirroring() throws IOException {
+        byte[] data = rawMmc2Rom(0x80000); // 32 physical banks
+        data[0x0200] = 0x42;
+        SachenMmc mapper = new SachenMmc(new Rom(data), true, true, true);
+        assertEquals(0x42, mapper.getByte(0x0200));
+
+        // The Rocman X Gold startup probes banks 0x20 and 0x40 to detect the MMC2
+        // board's solder options. These addresses are beyond its 32-bank ROM and must
+        // see the pulled-up bus; wrapping them to bank zero makes the probe loop forever.
+        mapper.setByte(0x2000, 0xff); // enable base/mask register writes
+        mapper.setByte(0x0000, 0x20);
+        mapper.setByte(0x4000, 0x20);
+        assertEquals(0xff, mapper.getByte(0x0200));
+        assertEquals(0xff, mapper.getByte(0x4200));
     }
 
     private static byte[] rawMmc2Rom() {
