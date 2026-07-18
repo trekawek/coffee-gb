@@ -6,7 +6,7 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.memento.Memento
-import eu.rekawek.coffeegb.core.memory.cart.Cartridge
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.io.File
 
@@ -81,11 +81,13 @@ interface Controller : AutoCloseable {
 
   companion object {
     fun createGameboyConfig(
-        properties: EmulatorProperties,
-        rom: Rom,
+      properties: EmulatorProperties,
+      rom: Rom,
     ): Gameboy.GameboyConfiguration {
       val config = Gameboy.GameboyConfiguration(rom)
-      if (Cartridge.isDatel(rom)) {
+      val isDatel =
+          rom.cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER)
+      if (isDatel) {
         properties.getProperty(EmulatorProperties.Key.DatelSlotRom, null)?.let { path ->
           val file = File(path)
           if (file.isFile) {
@@ -97,7 +99,7 @@ interface Controller : AutoCloseable {
       config.setGameboyType(gameboyType)
       if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB &&
           gameboyType == GameboyType.CGB &&
-          !Cartridge.isDatel(rom)) {
+          !isDatel) {
         // (Datel carts ship a deliberately bad logo; the visible boot ROM would hang on
         // it forever - FAST_FORWARD times out and falls back to the post-boot presets)
         config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
@@ -121,7 +123,7 @@ interface Controller : AutoCloseable {
               rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL ||
               // the Action Replay dumps carry a garbage CGB flag; the real cart's ASIC
               // presents a colour header to the console
-              Cartridge.isDatel(rom)
+              rom.cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER)
       ) {
         if (properties.cgbGamesType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
           return GameboyType.CGB

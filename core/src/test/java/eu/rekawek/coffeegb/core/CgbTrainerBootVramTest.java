@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -28,7 +29,8 @@ public class CgbTrainerBootVramTest {
     @Test
     public void clearsOnlyTheUninitializedBlankTileAfterCgbBoot() throws IOException {
         Rom rom = new Rom(trainerRom());
-        assertTrue(rom.requiresBlankCgbBootTile());
+        assertTrue(rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.BLANK_CGB_BOOT_TILE));
 
         Gameboy gb = new Gameboy.GameboyConfiguration(rom)
                 .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
@@ -53,7 +55,8 @@ public class CgbTrainerBootVramTest {
         byte[] data = trainerRom();
         data[0xddea4] ^= 1;
 
-        assertFalse(new Rom(data).requiresBlankCgbBootTile());
+        assertFalse(new Rom(data).getCartridgeProperties().has(
+                CartridgeProperties.Feature.BLANK_CGB_BOOT_TILE));
     }
 
     private static boolean isBlankTile(Gameboy gb) {

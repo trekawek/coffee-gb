@@ -66,7 +66,8 @@ public class DatelTest {
     @Test
     public void detectedAsDatel() throws IOException {
         assertNotNull(build().getDatel());
-        assertEquals(true, Cartridge.isDatel(new Rom(datelRom())));
+        assertEquals(CartridgeProperties.Mapper.DATEL,
+                new Rom(datelRom()).getCartridgeProperties().getMapper());
     }
 
     @Test

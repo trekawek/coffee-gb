@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
@@ -117,9 +118,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         this.gbc = configuration.gameboyType == GameboyType.CGB;
         boolean gbc = this.gbc;
         boolean sgb = configuration.gameboyType == GameboyType.SGB;
-        blankCgbBootTilePending = configuration.rom.requiresBlankCgbBootTile();
+        CartridgeProperties cartridgeProperties = configuration.rom.getCartridgeProperties();
+        blankCgbBootTilePending = cartridgeProperties.has(
+                CartridgeProperties.Feature.BLANK_CGB_BOOT_TILE);
 
-        boolean legacySpeedSwitchRequired = configuration.rom.isLegacySpeedSwitchRequired();
+        boolean legacySpeedSwitchRequired = cartridgeProperties.has(
+                CartridgeProperties.Feature.LEGACY_SPEED_SWITCH);
         speedMode = new SpeedMode(gbc, legacySpeedSwitchRequired);
         interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
@@ -211,7 +215,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             // the Datel Action Replay's ASIC presents a valid CGB header to the console,
             // so the machine boots native-colour despite the dump's garbage flag byte
             applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
-                    && !Cartridge.isDatel(configuration.rom));
+                    && !cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
         }
         applyBootVramCompatibilityIfReady();
     }
