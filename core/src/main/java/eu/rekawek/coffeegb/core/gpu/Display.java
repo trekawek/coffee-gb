@@ -75,7 +75,7 @@ public class Display implements Serializable, Originator<Display> {
                 // The DMG drives a blank frame instead of exposing the incomplete render.
                 Arrays.fill(buffer, 0);
                 System.arraycopy(buffer, 0, lastFrame, 0, buffer.length);
-                eventBus.post(new DmgFrameReadyEvent(buffer));
+                eventBus.post(new DmgFrameReadyEvent(buffer, true));
             }
             return;
         }
@@ -125,7 +125,10 @@ public class Display implements Serializable, Originator<Display> {
         firstFrameAfterLcdEnable = false;
         Arrays.fill(buffer, color);
         i = 0;
-        frameIsReady();
+        System.arraycopy(buffer, 0, lastFrame, 0, buffer.length);
+        eventBus.post(gbc
+                ? new GbcFrameReadyEvent(buffer)
+                : new DmgFrameReadyEvent(buffer, true));
     }
 
     @Override
@@ -227,7 +230,15 @@ public class Display implements Serializable, Originator<Display> {
         }
     }
 
-    public record DmgFrameReadyEvent(int[] pixels) implements Event {
+    /**
+     * {@code lcdBlank} distinguishes panel blanking from a game-rendered shade-0 frame.
+     * Frontends use it to avoid carrying a short-lived transition scanout into the blank.
+     */
+    public record DmgFrameReadyEvent(int[] pixels, boolean lcdBlank) implements Event {
+
+        public DmgFrameReadyEvent(int[] pixels) {
+            this(pixels, false);
+        }
 
         public static final int[] COLORS = new int[]{0xe6f8da, 0x99c886, 0x437969, 0x051f2a};
 
