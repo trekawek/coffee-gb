@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.ir.Peer2PeerInfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.memento.Memento
@@ -73,6 +74,9 @@ class StateHistory() {
     val mainLink = Peer2PeerSerialEndpoint()
     val peerLink = Peer2PeerSerialEndpoint()
     mainLink.init(peerLink)
+    val mainIrLink = Peer2PeerInfraredEndpoint()
+    val peerIrLink = Peer2PeerInfraredEndpoint()
+    mainIrLink.init(peerIrLink)
 
     val mainEventBus = EventBusImpl(null, null, false)
     val peerEventBus = EventBusImpl(null, null, false)
@@ -87,11 +91,23 @@ class StateHistory() {
     // boot sequence, which FAST_FORWARD would otherwise emulate on every rebase
     val mainSession =
         mainConfig?.let {
-          Session(if (baseState.mainMemento != null) it.forRestore() else it, mainEventBus, null, mainLink)
+          Session(
+              if (baseState.mainMemento != null) it.forRestore() else it,
+              mainEventBus,
+              null,
+              mainLink,
+              mainIrLink,
+          )
         }
     val peerSession =
         peerConfig?.let {
-          Session(if (baseState.peerMemento != null) it.forRestore() else it, peerEventBus, null, peerLink)
+          Session(
+              if (baseState.peerMemento != null) it.forRestore() else it,
+              peerEventBus,
+              null,
+              peerLink,
+              peerIrLink,
+          )
         }
     if (mainSession != null && baseState.mainMemento != null) {
       mainSession.restoreFromMemento(baseState.mainMemento)

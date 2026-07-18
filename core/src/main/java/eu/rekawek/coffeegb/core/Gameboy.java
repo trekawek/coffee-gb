@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.genie.Genie;
 import eu.rekawek.coffeegb.core.gpu.*;
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
+import eu.rekawek.coffeegb.core.ir.InfraredPort;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
@@ -74,7 +76,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final SerialPort serialPort;
 
-    private final eu.rekawek.coffeegb.core.ir.InfraredPort infraredPort;
+    private final InfraredPort infraredPort;
 
     private final Joypad joypad;
 
@@ -145,7 +147,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sound = new Sound(timer, speedMode, gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
         serialPort = new SerialPort(interruptManager, timer, gbc, speedMode);
-        infraredPort = new eu.rekawek.coffeegb.core.ir.InfraredPort(gbc, speedMode);
+        infraredPort = new InfraredPort(gbc, speedMode);
 
         if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
@@ -287,6 +289,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
+        init(eventBus, serialEndpoint, InfraredEndpoint.NULL_ENDPOINT, console);
+    }
+
+    public void init(EventBus eventBus, SerialEndpoint serialEndpoint,
+                     InfraredEndpoint infraredEndpoint, Console console) {
         this.console = console;
         if (console != null) {
             console.setGameboy(this);
@@ -296,7 +303,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display.init(eventBus);
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
-        infraredPort.init(eventBus);
+        infraredPort.init(eventBus, infraredEndpoint);
         background.init(eventBus);
         sgbDisplay.init(eventBus);
         gameGenie.init(eventBus);
@@ -534,6 +541,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public void close() {
+        infraredPort.close();
         cartridge.flushBattery();
         if (slotCartridge != null) {
             slotCartridge.flushBattery();
@@ -547,7 +555,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento,
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
-                                  Memento<eu.rekawek.coffeegb.core.ir.InfraredPort> infraredPortMemento,
+                                  Memento<InfraredPort> infraredPortMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
                                   Memento<SuperGameboy> superGameboyMemento, Memento<Background> backgroundMemento,
                                   Memento<VRamTransfer> vRamTransferMemento, Memento<SgbDisplay> sgbDisplayMemento,
