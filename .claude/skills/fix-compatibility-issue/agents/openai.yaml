@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fix Compatibility Issue"
+  short_description: "Investigate and fix a game issue"
+  default_prompt: "Use $fix-compatibility-issue to investigate and fix the specified Coffee GB GitHub issue."

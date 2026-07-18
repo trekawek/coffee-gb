@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release New Version"
+  short_description: "Publish a new Coffee GB version"
+  default_prompt: "Use $release-new-version to publish the current Coffee GB snapshot as a release."

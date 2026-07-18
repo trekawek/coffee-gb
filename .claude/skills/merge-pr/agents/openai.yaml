@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge Pull Request"
+  short_description: "Safely validate and merge a PR"
+  default_prompt: "Use $merge-pr to validate, merge, and clean up the specified Coffee GB pull request."

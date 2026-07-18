@@ -1,26 +1,21 @@
 # CLAUDE.md — coffee-gb agent knowledge base
 
-coffee-gb is a Game Boy (DMG) / Game Boy Color (CGB) emulator in Java (Maven,
-modules: `core`, `swing`, `controller`, ...). The accuracy work lives on the
-**`claude-compat`** branch. This file serializes everything needed to continue
-that work without re-deriving it.
-
-## Current status
-
-**The whole test battery is green — no known failures** (as of commit 99f0005):
-
-- mooneye acceptance + misc: all pass, including `intr_2_mode0_timing_sprites`
-  (63 sprite-stall cases, T-exact), `boot_div-cgbABCDE` *and* `boot_div-cgb0`
-  (different CGB revisions, selected via `GameboyConfiguration.setCgb0Revision`),
-  `boot_hwio-C`, `hblank_ly_scx_timing-GS`, `lcdon_timing-GS`, and the Wilbert Pol
-  GPU/timer suites (older `$ED` breakpoint protocol).
-- blargg: cpu_instrs, instr_timing, mem_timing-2, halt_bug, dmg_sound-2 12/12,
-  cgb_sound 12/12, oam_bug-2 8/8, interrupt_time.
-- dmg-acid2, all unit tests.
+coffee-gb is a Game Boy (DMG) / Game Boy Color (CGB) emulator in Java with
+Maven modules including `core`, `swing`, and `controller`.
 
 The derived hardware models are documented in `doc/derived/` (ppu-stat-model.md,
 cpu-interrupt-model.md, apu-model.md) — **the code implements those specs; read
 them before touching Gpu/StatRegister/Cpu/Sound.**
+
+## Operational workflows
+
+Use the repository skills instead of duplicating their procedures here:
+
+- `.claude/skills/release-new-version/SKILL.md` for Maven and GitHub releases.
+- `.claude/skills/fix-compatibility-issue/SKILL.md` for issue investigation,
+  isolated fixes, PR creation, screenshots, and issue follow-up.
+- `.claude/skills/merge-pr/SKILL.md` for conflict handling, CI gating, merging,
+  and branch cleanup.
 
 ## Build & test loop
 
@@ -238,25 +233,7 @@ rising edge) — see `StatRegister`.
 
 ## Game-level debugging (issue work)
 
-### GitHub issue workflow
-
-- Handle each GitHub issue in its own branch and create a separate pull request
-  for that issue. Do not combine fixes for unrelated issues in one branch or PR.
-- If an issue cannot be reproduced, do not close it or claim it is fixed. Leave
-  it open and add a comment describing the attempted reproduction, environment,
-  observed result, and current reproduction state.
-- If an issue cannot be reproduced or fixed, the issue comment must explicitly
-  state that the issue will be verified manually.
-- Comparing behavior with SameBoy, Gearboy, and other emulators is useful for
-  diagnosis, but their behavior is not a compatibility ceiling. If the same bug
-  exists elsewhere, continue researching original hardware behavior,
-  documentation, test ROMs, and an independent solution instead of treating the
-  shared bug as unfixable. The goal is the most compatible emulator possible,
-  not merely parity with other implementations.
-- When possible, attach a screenshot showing the fixed state to the issue or
-  pull request, especially for graphics, UI, and game-behavior regressions.
-- Every comment posted to a GitHub issue by an agent must be clearly identified
-  as AI-generated. Begin the comment with `**AI-generated comment:**`.
+### Reproduction and diagnosis tools
 
 - **Headless screenshots**: `ShotMain <rom> <outdir> <frames> <shot1,shot2,..> [f:BUTTON[:dur],..]`
   (core test scope) — runs a ROM with scripted input and writes PNGs. SGB variant and a
