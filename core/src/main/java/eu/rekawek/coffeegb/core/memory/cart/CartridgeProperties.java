@@ -41,6 +41,7 @@ public final class CartridgeProperties {
         MBC1_MULTICART,
         MBC1_FULL_BANK_REGISTER,
         MBC1_ALWAYS_ENABLED_RAM,
+        MBC1_RAM_ENABLED_AT_POWER_ON,
         MBC2_EXTENDED_BANKING
     }
 
@@ -101,6 +102,8 @@ public final class CartridgeProperties {
                     Feature.LEGACY_SPEED_SWITCH),
             features("Smurfs Lightforce trainer", CartridgeProperties::isSmurfsTrainer,
                     Feature.BLANK_CGB_BOOT_TILE),
+            features("FreeArt Intro V2", CartridgeProperties::isFreeArtIntroV2,
+                    Feature.MBC1_RAM_ENABLED_AT_POWER_ON),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -363,6 +366,23 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0143) == 0xc0
                 && info.rawType() == 0x1b
                 && matches(info.data, 0xddea4, trainerSignature);
+    }
+
+    private static boolean isFreeArtIntroV2(RomInfo info) {
+        int[] entryStub = {
+                0xf3, 0x31, 0xff, 0xff, 0x97, 0xe0, 0x40, 0xe0,
+                0x42, 0xe0, 0x43, 0x3c, 0xe0, 0x4d, 0xe0, 0xff,
+                0x10, 0x00, 0xcd, 0x78, 0x16
+        };
+        return info.data.length == 0x8000
+                && info.title().startsWith("FreeArt Intro 2")
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x02
+                && info.byteAt(0x0148) == 0x00
+                && info.byteAt(0x0149) == 0x03
+                && info.byteAt(0x014e) == 0xc1
+                && info.byteAt(0x014f) == 0x1d
+                && matches(info.data, 0x0150, entryStub);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {
