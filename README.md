@@ -1,200 +1,74 @@
 # Coffee GB
 
-Coffee GB is a Gameboy Color emulator written in Java 16 (core) and Kotlin (UI). It's meant to be a development exercise. More info can be found in the blog post [Why did I spend 1.5 months creating a Gameboy emulator?](http://blog.rekawek.eu/2017/02/09/coffee-gb/)
-
-![Coffee GB running game](doc/tetris.gif)
-
-## Building
-
-The emulator can be build with [Maven](https://maven.apache.org/):
-
-    mvn clean package
-
-The coffee-gb-*.jar executable file will be available in the `./swing/target` directory.
-
-## Usage
-
-1. Download the [most recent release](https://github.com/trekawek/coffee-gb/releases).
-2. Double-click the JAR or launch it with `java -jar coffee-gb-*.jar` command.
-3. Load a game.
-
-Play with <kbd>&larr;</kbd>, <kbd>&uarr;</kbd>, <kbd>&darr;</kbd>, <kbd>&rarr;</kbd>, <kbd>Z</kbd>, <kbd>X</kbd>, <kbd>Enter</kbd>, <kbd>Shift</kbd>. Hold <kbd>Backspace</kbd> to rewind.
-
-Game Genie and GameShark cheats can be entered manually with **Game > Cheats >
-Enter code**. **Game > Cheats > Browse database** suggests matching named cheats from the
-bundled [libretro database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy)
-using an editable game title prefilled from the loaded ROM filename or cartridge title; matching
-games refresh as the title is changed.
-
-## Features
-
-* Full support for GB & GBC emulation.
-* Partial Super Gameboy emulation (borders and palette).
-* Cycle-exact CPU emulation. Each opcode is split into a few micro-operations (load value from memory, store it to register, etc.) and each micro-operation is run in a separate CPU cycle.
-* Quite compatible (all the Blargg's tests are passed, although some game still doesn't work)
-* [Rollback-based netplay](https://blog.rekawek.eu/2025/07/26/rollback-netplay-gb/) 
-* MBC1-5 support
-* Battery saves
-* Support for zipped ROMs
-* Bundled libretro cheat database with automatic ROM-name matching
-* ROM-based compatibility tests run from Maven
-
-## Modules
-
-Emulator is split into modules:
-
-* core - the core emulator. This module can be easily referenced from other projects.
-* swing - the desktop UI with executable.
-* controller - the middleware between the UI and the core. It also contains network support.
-
-## Running Blargg's tests
-
-The [Blargg's test ROMs](http://gbdev.gg8.se/wiki/articles/Test_ROMs) are used for testing the compatibility. Tests can be launched from Maven using appropriate profile:
-
-    mvn clean test -f core/pom.xml -Ptest-blargg
-    mvn clean test -f core/pom.xml -Ptest-blargg-individual # for running "single" tests providing more diagnostic info
-
-They are also part of the GitHub Actions build.
-
-The tests output (normally displayed on the Gameboy screen) is redirected to the stdout:
-
-```
-cpu_instrs
-
-01:ok  02:ok  03:ok  04:ok  05:ok  06:ok  07:ok  08:ok  09:ok  10:ok  11:ok
-
-Passed all tests
-```
-
-Coffee GB passes all the tests:
-
-* cgb_sound
-* cpu_instrs
-* dmg_sound-2
-* halt_bug
-* instr_timing
-* interrupt_time
-* mem_timing-2
-* oam_bug-2
-
-## Running multiple integration test suites
-
-Integration test profiles can be combined in one Maven invocation by separating
-their names with commas:
-
-    mvn clean test -f core/pom.xml -Ptest-mooneye,test-dmgacid2,test-cgbacid2
-
-Each selected profile has its own test execution, so no profile overrides another.
-Integration test methods use two threads by default. Override that number when
-needed with `-Dintegration.test.threadCount=4`, or set it to `1` to run serially.
-The timeout-sensitive BullyGB profile always runs its two methods serially.
-
-## Mooneye tests
-
-The [Mooneye GB](https://github.com/Gekkio/mooneye-gb) emulator comes with a great set of test ROMs. They can be used to test the Coffee GB as well. Use -Ptest-mooneye profile:
-
-    mvn clean test -f core/pom.xml -Ptest-mooneye
-
-## RTC3Test
-
-The [RTC3Test](https://github.com/aaaaaa123456789/rtc3test) MBC3 real-time
-clock tests can be run with the `test-rtc3` profile. The runner automates each
-menu in the interactive ROM and checks its color-coded results:
-
-    mvn clean test -f core/pom.xml -Ptest-rtc3
-
-## SameSuite
-
-The [SameSuite](https://github.com/LIJI32/SameSuite) APU, DMA, interrupt, PPU,
-and SGB tests use their automated register result protocol:
-
-    mvn clean test -f core/pom.xml -Ptest-samesuite
-
-ROMs for older CGB revisions are included as resources but excluded from this
-profile because Coffee GB's generic CGB mode targets the later revision behavior.
-
-## Gambatte emulator HWTests
-
-The [Gambatte emulator HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test)
-archive includes the complete upstream ROM set and sources. A representative
-automated set covers startup state, TIMA, OAM, DMA, palettes, sprites, and
-window timing:
-
-    mvn clean test -f core/pom.xml -Ptest-gambatte-hw
-
-## GBMicrotest
-
-All 513 hardware-verified timing ROMs from
-[GBMicrotest](https://github.com/aappleby/GBMicrotest) run in DMG mode. The
-374 current passes are regression-locked; known failures are explicitly
-baselined so accuracy improvements are accepted without hiding new failures:
-
-    mvn clean test -f core/pom.xml -Ptest-gbmicrotest
-
-## gbc-hw-tests
-
-The automated portion of [AntonioND's gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests)
-compares Coffee GB's SRAM output with captures made on original DMG and CGB hardware.
-Current mismatches are explicitly baselined so new regressions still fail the profile:
-
-    mvn clean test -f core/pom.xml -Ptest-gbc-hw
-
-## Misc.-GB-Tests
-
-All ROMs from [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests)
-run through their Mooneye-compatible breakpoint and register-verdict protocol.
-The fractional-scroll cases pass; the remaining window-and-sprite timing cases
-are explicitly baselined:
-
-    mvn clean test -f core/pom.xml -Ptest-misc-gb
-
-## BullyGB
-
-The [BullyGB](https://github.com/Ashiepaws/BullyGB) framework is run in both
-DMG and CGB modes. Its runner captures debugger-style writes to the serial data
-register and verifies the terminal message:
-
-    mvn clean test -f core/pom.xml -Ptest-bullygb
-
-## MBC30Test
-
-The [MBC30Test](https://github.com/ZoomTen/mbc30test) profile checks both the
-four-megabyte ROM banking and eight-bank SRAM verdicts displayed by the ROM:
-
-    mvn clean test -f core/pom.xml -Ptest-mbc30
-
-## CGB-ACID2
-
-The [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) profile captures the
-CGB framebuffer at the ROM's software breakpoint and compares every pixel with
-the upstream reference image:
-
-    mvn clean test -f core/pom.xml -Ptest-cgbacid2
-
-## Daid tests
-
-The screenshot-based [Daid test suite](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) can be run with the baseline-guarded `test-daid` profile:
-
-    mvn clean test -f core/pom.xml -Ptest-daid
-
-## Screenshots
-
-![Coffee GB running game](doc/screenshot1.png)
-![Coffee GB running game](doc/screenshot2.png)
-![Coffee GB running game](doc/screenshot3.png)
-![Coffee GB running game](doc/screenshot4.png)
-![Coffee GB running game](doc/screenshot5.png)
-![Coffee GB running game](doc/screenshot6.png)
-![Coffee GB running game](doc/screenshot7.png)
-![Coffee GB running game](doc/screenshot8.png)
-![Coffee GB running game](doc/screenshot9.png)
-![Coffee GB running game](doc/screenshot10.png)
-
-## Key bindings
-
-The default key bindings can be changed with the `~/.coffeegb.properties` file. The file has following format:
-
-```
+<p align="center">
+  <strong>A highly compatible Game Boy and Game Boy Color emulator for the desktop.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/trekawek/coffee-gb/actions/workflows/maven.yml"><img alt="Java CI" src="https://github.com/trekawek/coffee-gb/actions/workflows/maven.yml/badge.svg"></a>
+  <a href="https://github.com/trekawek/coffee-gb/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/trekawek/coffee-gb?sort=semver"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
+
+<p align="center">
+  <img src="doc/tetris.gif" width="326" alt="Coffee GB running Tetris DX">
+</p>
+
+Coffee GB emulates the original Game Boy (GB/DMG) and Game Boy Color (GBC/CGB).
+It is built for high compatibility across the historic game library, unusual
+cartridges and accessories, and modern homebrew, demos, and diagnostic ROMs.
+The reusable emulation core is written in Java; the desktop application and its
+orchestration layer use Kotlin and Java.
+
+## Download and play
+
+Coffee GB is distributed as a single executable JAR. It requires a desktop
+**Java 16 or newer** runtime; [Java 21 LTS](https://adoptium.net/temurin/releases/?version=21)
+is recommended and is the version used by CI and release builds.
+
+1. Download the JAR from the [latest Coffee GB release](https://github.com/trekawek/coffee-gb/releases/latest).
+2. Open it through your desktop's Java launcher, or start it from a terminal:
+
+   ```bash
+   java -jar coffee-gb-VERSION.jar
+   ```
+
+3. Choose **File > Load ROM**, or pass a ROM on the command line:
+
+   ```bash
+   java -jar coffee-gb-VERSION.jar path/to/game.gb
+   ```
+
+ROMs are not included. Coffee GB accepts `.gb`, `.gbc`, and `.rom` files, as
+well as ZIP archives containing a ROM. On macOS, game-controller support also
+requires SDL2 (`brew install sdl2`); keyboard input works without it.
+
+For netplay, one player chooses **Link > Start server** and the other chooses
+**Link > Connect to server**.
+
+### Default controls
+
+| Action | Key |
+| --- | --- |
+| D-pad | Arrow keys |
+| A / B | <kbd>Z</kbd> / <kbd>X</kbd> |
+| Start / Select | <kbd>Enter</kbd> / <kbd>Shift</kbd> |
+| Pause | <kbd>Space</kbd> |
+| Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
+| Rewind | Hold <kbd>Backspace</kbd> |
+
+In single-player mode, there are ten save-state slots. Battery saves (`.sav`)
+and save states (`.sn0`&ndash;`.sn9`) are stored next to the ROM. Pause, save
+states, and rewind are disabled during netplay.
+
+<details>
+<summary>Custom keyboard mapping</summary>
+
+Edit `~/.coffeegb.properties` and use
+[`KeyEvent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/event/KeyEvent.html)
+constant names:
+
+```properties
 btn_up=VK_UP
 btn_down=VK_DOWN
 btn_left=VK_LEFT
@@ -205,17 +79,152 @@ btn_start=VK_ENTER
 btn_select=VK_SHIFT
 ```
 
-The key list can be found in the [KeyEvent JavaDoc](https://docs.oracle.com/javase/10/docs/api/java/awt/event/KeyEvent.html#field.summary).
+</details>
 
-## Resources
+## Features
 
-* [GameBoy CPU manual](http://marc.rawer.de/Gameboy/Docs/GBCPUman.pdf)
-* [The Ultimate GameBoy talk](https://www.youtube.com/watch?v=HyzD8pNlpwI)
-* [Gameboy opcodes](http://pastraiser.com/cpu/gameboy/gameboy_opcodes.html)
-* [Nitty Gritty Gameboy cycle timing](http://blog.kevtris.org/blogfiles/Nitty%20Gritty%20Gameboy%20VRAM%20Timing.txt)
-* [Video Timing](https://github.com/jdeblese/gbcpu/wiki/Video-Timing)
-* [BGB emulator](http://bgb.bircd.org/) --- good for testing / debugging, works fine with Wine
-* [The Cycle-Accurate Game Boy Docs](https://github.com/AntonioND/giibiiadvance/tree/master/docs)
-* [Test ROMs](http://slack.net/~ant/old/gb-tests/) - included in the [src/test/resources/roms](src/test/resources/roms)
-* [Pandocs](http://bgb.bircd.org/pandocs.htm)
-* [Mooneye GB](https://github.com/Gekkio/mooneye-gb) - an accurate emulator written in Rust, contains great ROM-based acceptance tests
+- **Systems:** full DMG and CGB emulation, plus Super Game
+  Boy borders and palettes.
+- **Hardware-focused accuracy:** a cycle-stepped CPU and high-accuracy PPU, APU,
+  timer, DMA, serial, and infrared behavior.
+- **Everyday play:** battery-backed saves, ten save-state slots, pause/reset,
+  hold-to-rewind, recent ROMs, and ZIP archive loading.
+- **Rollback netplay:** TCP multiplayer for link-cable games, with local rollback
+  hiding normal network latency and synchronized infrared communication.
+- **Broad cartridge support:** MBC1/1M, MBC2, MBC3 with RTC and MBC30, MBC5,
+  MBC6 with flash, MBC7 with EEPROM/accelerometer, MMM01, HuC1, HuC3, TAMA5,
+  Pocket Camera, and numerous unlicensed and multicart mappers.
+- **Accessories:** webcam-backed Game Boy Camera, Game Boy Printer with PNG
+  export, Barcode Boy, Full Changer infrared, Datel Action Replay pass-through,
+  cartridge rumble, and tilt input.
+- **Desktop controls and display:** keyboard and game-controller input, scaling,
+  rotation, grayscale, CGB color correction, LCD ghosting, and an SGB-border toggle.
+- **Cheats:** Game Genie and GameShark codes, plus a bundled searchable
+  [libretro cheat database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy).
+
+## Compatibility
+
+Compatibility is treated as a continuously tested feature, not as a static game
+list. CI exercises **1,056 cases from 13 suite families through 15 Maven
+profiles**. Every profile is green under either an exact-pass requirement or a
+pinned regression baseline.
+
+> **Pixel status:** both Acid2 references are pixel-perfect. In Mealybug
+> Tearoom, 23 of 24 reference images are pixel-perfect and the remaining image
+> differs by a single pixel.
+
+| Test suite | Cases exercised | Current result |
+| --- | ---: | --- |
+| [Blargg](https://github.com/retrio/gb-test-roms) | 54 | 54 / 54 pass\* |
+| [Mooneye Test Suite](https://github.com/Gekkio/mooneye-test-suite) | 130 | 130 / 130 selected cases pass |
+| [RTC3Test](https://github.com/aaaaaa123456789/rtc3test) | 3 | 3 / 3 menus pass |
+| [SameSuite](https://github.com/LIJI32/SameSuite) | 71 | 71 / 71 later-revision cases pass |
+| [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 9 | 9 / 9 selected cases pass |
+| [BullyGB](https://github.com/Ashiepaws/BullyGB) | 2 | 2 / 2 DMG and CGB cases pass |
+| [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
+| [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 6 / 8 images have no out-of-tolerance pixels; 2 are baseline-guarded; ROM+RAM passes |
+| [DMG-ACID2](https://github.com/mattcurrie/dmg-acid2) and [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) | 2 | 2 / 2 are pixel-perfect |
+| [Mealybug Tearoom](https://github.com/mattcurrie/mealybug-tearoom-tests) | 24 | 23 / 24 are pixel-perfect; 1 differs by one pixel |
+| [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 513 | 376 pass verdicts; 107 non-pass verdicts; 30 diagnostic ROMs without a verdict |
+| [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 116 required hardware-capture matches; 105 guarded outliers |
+| [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 6 required pass verdicts; 11 guarded outliers |
+| **Total** | **1,056** | **All 15 profiles green under their exact or baseline criteria** |
+
+\* Blargg's aggregate and individual checks overlap by design.
+
+<details>
+<summary>How regression baselines are interpreted</summary>
+
+The broad archival collections deliberately cover behavior that Coffee GB does
+not yet emulate exactly. A known outlier is pinned to its current result: it may
+improve, but it may not silently regress. An exact case must continue to pass.
+Green CI therefore describes the automated acceptance contract, not
+byte-for-byte hardware identity for every archival ROM. The one-pixel Mealybug
+difference is likewise the maximum accepted output; any regression fails CI.
+
+</details>
+
+## AI-assisted compatibility work
+
+Since 2026, Coffee GB has used AI coding agents as compatibility research tools.
+A purpose-built [`controller.Agent`](controller/src/main/java/eu/rekawek/coffeegb/controller/Agent.kt)
+API lets an agent run a ROM headlessly under scripted control, inject input,
+capture frames and audio, inspect registers and memory, and disassemble
+execution without driving the desktop UI.
+
+The working loop is deliberately evidence-based:
+
+1. Reproduce a reported problem with scripted input and capture the first point
+   where emulation diverges.
+2. Diagnose it against hardware-backed test ROMs, hardware captures, schematics,
+   and targeted comparisons with reference emulators.
+3. Make a focused change, add a regression test where practical, and run the
+   focused checks; CI runs the full compatibility matrix before merge.
+
+This makes AI useful for exploring difficult timing and cartridge edge cases,
+while hardware evidence, automated tests, and maintainer review remain the
+standard for correctness.
+
+## Project history
+
+Coffee GB began as a six-week deep dive into how a small computer works. The
+[2017 origin story](https://blog.rekawek.eu/2017/02/09/coffee-gb/) covers the CPU,
+pixel pipeline, audio, early compatibility testing, and first GBC implementation.
+The later [rollback-netplay article](https://blog.rekawek.eu/2025/07/26/rollback-netplay-gb/)
+explains how per-frame snapshots made high-latency link play practical.
+
+| Date | Milestone |
+| --- | --- |
+| 31 Dec 2016 | [The project starts](https://github.com/trekawek/coffee-gb/commit/f83a638c6c296adbf8020f24cea80be23f69fb10). |
+| 14 Jan 2017 | [The first playable version runs Tetris](https://github.com/trekawek/coffee-gb/commit/624885e1b6a390fd4ddc10ffb16d7375e2d43647), two weeks after the initial commit. |
+| 5&ndash;7 Feb 2017 | [Game Boy Color support](https://github.com/trekawek/coffee-gb/commit/4ca6808b79bedc6a68311ed5402d9b54456e1ffd) lands with double-speed mode, banked RAM/VRAM, color graphics, and the GBC boot path. |
+| 22 Dec 2017 | [Coffee GB 1.0.0](https://github.com/trekawek/coffee-gb/releases/tag/coffee-gb-1.0.0) is released. |
+| 29 Feb 2024 | [Save-state support](https://github.com/trekawek/coffee-gb/commit/1ec86cb4aa8d69e3289f0542ea509013b228b67d) is added. |
+| Jul 2025 | Fast mementos enable [rollback netplay](https://blog.rekawek.eu/2025/07/26/rollback-netplay-gb/), released in [1.5.0](https://github.com/trekawek/coffee-gb/releases/tag/coffee-gb-1.5.0). |
+| Aug 2025 | [Super Game Boy borders and palettes](https://github.com/trekawek/coffee-gb/releases/tag/coffee-gb-1.5.2) arrive alongside command support and predefined game palettes. |
+| Feb 2026 | [The headless agent interface](https://github.com/trekawek/coffee-gb/commit/377742d41f80105f8e042b9eccd1b257f7dadc2b) begins the AI-assisted compatibility workflow. |
+
+## Architecture
+
+Coffee GB is a Maven reactor with three modules. The dependency flow is
+`swing` &rarr; `controller` &rarr; `core`; the desktop module also uses the core
+directly.
+
+| Module | Role | Depends on |
+| --- | --- | --- |
+| [`core`](core) | Reusable Java emulation engine: CPU, graphics, audio, memory, cartridges, serial/IR, SGB, and peripherals. | &mdash; |
+| [`controller`](controller) | Kotlin orchestration: sessions, timing, save states, rewind, rollback history, and networking. | `core` |
+| [`swing`](swing) | Kotlin/Java desktop UI, video/audio/input adapters, webcam and printer integration, and executable-JAR packaging. | `controller`, `core` |
+
+The root [`pom.xml`](pom.xml) defines the reactor and shared build configuration.
+
+## Build from source
+
+Use a **JDK 16 or newer** and [Maven](https://maven.apache.org/) to build. JDK 21
+is recommended and is used by CI.
+
+```bash
+git clone https://github.com/trekawek/coffee-gb.git
+cd coffee-gb
+mvn clean package
+```
+
+The executable fat JAR is created in `swing/target/`. On a development snapshot,
+run it with:
+
+```bash
+java -jar swing/target/coffee-gb-*-SNAPSHOT.jar
+```
+
+## Kudos
+
+Special thanks to [@ScottNash042](https://github.com/ScottNash042), whose
+thorough compatibility testing, hard-to-find edge-case reports, and thoughtful
+feature proposals have provided enormous value to Coffee GB.
+
+Coffee GB also owes a great deal to the Game Boy hardware research community
+and to the authors of every test suite linked above.
+
+## License
+
+Coffee GB is available under the [MIT License](LICENSE).
