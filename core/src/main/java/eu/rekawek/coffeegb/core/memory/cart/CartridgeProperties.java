@@ -23,6 +23,7 @@ public final class CartridgeProperties {
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
         BBD,
+        SINTAX,
         SACHEN_MMC1,
         SACHEN_MMC2,
         SACHEN_MMC2_LINEAR,
@@ -81,6 +82,8 @@ public final class CartridgeProperties {
                     Mapper.MAKON_NT_OLD_2),
             mapper("BBD unlicensed mapper", CartridgeProperties::isBbd,
                     Mapper.BBD),
+            mapper("Sintax unlicensed mapper", CartridgeProperties::isSintax,
+                    Mapper.SINTAX),
             profile("raw Sachen MMC1", CartridgeProperties::isRawSachenMmc1,
                     Mapper.SACHEN_MMC1, Feature.SCRAMBLED_SACHEN_HEADER),
             profile("raw Sachen MMC2", CartridgeProperties::isRawSachenMmc2,
@@ -268,6 +271,12 @@ public final class CartridgeProperties {
     private static boolean isBbd(RomInfo info) {
         int secondaryLogo = info.crc32(0x0184, 0x30);
         return (secondaryLogo == 0xc7d8c1df || secondaryLogo == 0x6d1ea662)
+                && info.byteAt(0x7fff) != 0x01;
+    }
+
+    private static boolean isSintax(RomInfo info) {
+        int secondaryLogo = info.crc32(0x0184, 0x30);
+        return (secondaryLogo == 0x6c1dcf2d || secondaryLogo == 0x99e3449d)
                 && info.byteAt(0x7fff) != 0x01;
     }
 
