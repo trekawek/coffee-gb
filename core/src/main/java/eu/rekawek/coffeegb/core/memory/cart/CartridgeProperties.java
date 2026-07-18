@@ -22,6 +22,7 @@ public final class CartridgeProperties {
         DUZ_MULTICART,
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
+        BBD,
         SACHEN_MMC1,
         SACHEN_MMC2,
         SACHEN_MMC2_LINEAR,
@@ -77,6 +78,8 @@ public final class CartridgeProperties {
                     Mapper.BHGOS_MULTICART),
             mapper("Makon/NT old type 2 multicart", CartridgeProperties::isMakonNtOld2,
                     Mapper.MAKON_NT_OLD_2),
+            mapper("BBD unlicensed mapper", CartridgeProperties::isBbd,
+                    Mapper.BBD),
             profile("raw Sachen MMC1", CartridgeProperties::isRawSachenMmc1,
                     Mapper.SACHEN_MMC1, Feature.SCRAMBLED_SACHEN_HEADER),
             profile("raw Sachen MMC2", CartridgeProperties::isRawSachenMmc2,
@@ -257,6 +260,12 @@ public final class CartridgeProperties {
         return info.data.length > 0x80000
                 && "POKEBOM USA".equals(info.title())
                 && info.byteAt(0x0102) == 0xe0;
+    }
+
+    private static boolean isBbd(RomInfo info) {
+        int secondaryLogo = info.crc32(0x0184, 0x30);
+        return (secondaryLogo == 0xc7d8c1df || secondaryLogo == 0x6d1ea662)
+                && info.byteAt(0x7fff) != 0x01;
     }
 
     private static boolean isRawSachenMmc1(RomInfo info) {
@@ -516,13 +525,20 @@ public final class CartridgeProperties {
 
         private int crc32() {
             if (crc32 == null) {
-                CRC32 value = new CRC32();
-                for (int b : data) {
-                    value.update(b);
-                }
-                crc32 = (int) value.getValue();
+                crc32 = crc32(0, data.length);
             }
             return crc32;
+        }
+
+        private int crc32(int offset, int length) {
+            if (offset < 0 || length < 0 || offset + length > data.length) {
+                return -1;
+            }
+            CRC32 value = new CRC32();
+            for (int i = offset; i < offset + length; i++) {
+                value.update(data[i]);
+            }
+            return (int) value.getValue();
         }
     }
 }
