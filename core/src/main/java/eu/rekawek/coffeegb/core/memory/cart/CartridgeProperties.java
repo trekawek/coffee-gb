@@ -36,6 +36,7 @@ public final class CartridgeProperties {
         FORCE_DMG,
         LEGACY_SPEED_SWITCH,
         BLANK_CGB_BOOT_TILE,
+        CLEAR_BOOT_TILEMAP,
         DATEL_CGB_HEADER,
         SCRAMBLED_SACHEN_HEADER,
         MBC1_MULTICART,
@@ -101,6 +102,8 @@ public final class CartridgeProperties {
                     Feature.LEGACY_SPEED_SWITCH),
             features("Smurfs Lightforce trainer", CartridgeProperties::isSmurfsTrainer,
                     Feature.BLANK_CGB_BOOT_TILE),
+            features("AudioArts Gameboy Music V1", CartridgeProperties::isAudioArtsMusicV1,
+                    Feature.CLEAR_BOOT_TILEMAP),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -363,6 +366,25 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0143) == 0xc0
                 && info.rawType() == 0x1b
                 && matches(info.data, 0xddea4, trainerSignature);
+    }
+
+    private static boolean isAudioArtsMusicV1(RomInfo info) {
+        int[] entryStub = {
+                0xf3, 0x31, 0xf4, 0xff, 0xc3, 0x69, 0x01, 0x33,
+                0x15, 0x00, 0x40, 0x4b, 0x47, 0x6b, 0x48, 0x00
+        };
+        return info.data.length == 0x8000
+                && "Gameboy Music V1".equals(info.title())
+                && info.rawType() == 0x00
+                && info.byteAt(0x0148) == 0x00
+                && info.byteAt(0x0149) == 0x00
+                && info.byteAt(0x014a) == 0xde
+                && info.byteAt(0x014b) == 0xc0
+                && info.byteAt(0x014c) == 0x03
+                && info.byteAt(0x014d) == 0xba
+                && info.byteAt(0x014e) == 0x0f
+                && info.byteAt(0x014f) == 0x84
+                && matches(info.data, 0x0150, entryStub);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {
