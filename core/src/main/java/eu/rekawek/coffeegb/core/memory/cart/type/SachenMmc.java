@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 
+import static eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Feature.SACHEN_OPEN_BUS_BANKS;
+
 /**
  * The Sachen MMC1/MMC2 multicart mapper ("4B-xxx" 4-in-1 collections and the Rocket Games
  * two-in-one carts, issues #73/#75), modelled after mGBA's reverse-engineered
@@ -58,6 +60,8 @@ public class SachenMmc implements MemoryController {
 
     private final boolean scrambledHeader;
 
+    private final boolean openBusForOutOfRangeBanks;
+
     // while true, reads of the 0x0104-0x0133 logo window return the Nintendo logo instead of
     // the linear ROM data. Cooked dumps have no logo stored (the raw carts serve it through
     // the scrambling/lockout); this reproduces that so the authentic boot ROM's logo check
@@ -80,11 +84,19 @@ public class SachenMmc implements MemoryController {
 
     /** Raw cart, optionally using the alternate straight-through header wiring. */
     public SachenMmc(Rom rom, boolean mmc2, boolean scrambledHeader) {
+        this(rom, mmc2, scrambledHeader,
+                rom.getCartridgeProperties().has(SACHEN_OPEN_BUS_BANKS));
+    }
+
+    /** Raw cart with an explicit out-of-range bank behavior (for focused mapper tests). */
+    public SachenMmc(Rom rom, boolean mmc2, boolean scrambledHeader,
+                     boolean openBusForOutOfRangeBanks) {
         this.rom = rom.getRom();
         this.romBanks = Math.max(2, this.rom.length / 0x4000);
         this.mmc2 = mmc2;
         this.cooked = false;
         this.scrambledHeader = scrambledHeader;
+        this.openBusForOutOfRangeBanks = openBusForOutOfRangeBanks;
         // the MMC1 has no DMG/CGB detection phase; it starts in the counting state
         this.lockState = mmc2 ? LOCKED_DMG : LOCKED_CGB;
     }
@@ -96,6 +108,7 @@ public class SachenMmc implements MemoryController {
         this.mmc2 = true;
         this.cooked = true;
         this.scrambledHeader = false;
+        this.openBusForOutOfRangeBanks = false;
         this.lockState = UNLOCKED;
         this.base = initialBase;
         this.serveBootLogo = true;
@@ -171,12 +184,22 @@ public class SachenMmc implements MemoryController {
             // the cooked dumps hold the menu at its physical bank; the raw carts map
             // the masked base like mGBA does
             int bank0 = cooked ? base : (base & mask);
-            return rom[(bank0 % romBanks) * 0x4000 + address];
+            return readBank(bank0, address);
         } else if (address < 0x8000) {
-            int effective = ((unmaskedBank & ~mask) | (base & mask)) % romBanks;
-            return rom[effective * 0x4000 + (address - 0x4000)];
+            int effective = (unmaskedBank & ~mask) | (base & mask);
+            return readBank(effective, address - 0x4000);
         }
         return 0xff;
+    }
+
+    private int readBank(int bank, int address) {
+        if (bank < 0 || bank >= romBanks) {
+            if (openBusForOutOfRangeBanks) {
+                return 0xff;
+            }
+            bank = Math.floorMod(bank, romBanks);
+        }
+        return rom[bank * 0x4000 + address];
     }
 
     private int lockAndUnscramble(int address) {
