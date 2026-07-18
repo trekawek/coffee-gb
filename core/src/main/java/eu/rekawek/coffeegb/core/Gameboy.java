@@ -104,6 +104,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private boolean blankCgbBootTilePending;
 
+    private boolean clearBootTilemapPending;
+
     private boolean clearCgbBootOamShadowPending;
 
     private transient volatile boolean doPause;
@@ -123,6 +125,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         CartridgeProperties cartridgeProperties = configuration.rom.getCartridgeProperties();
         blankCgbBootTilePending = cartridgeProperties.has(
                 CartridgeProperties.Feature.BLANK_CGB_BOOT_TILE);
+        clearBootTilemapPending = cartridgeProperties.has(
+                CartridgeProperties.Feature.CLEAR_BOOT_TILEMAP);
         clearCgbBootOamShadowPending = cartridgeProperties.has(
                 CartridgeProperties.Feature.CLEAR_CGB_BOOT_OAM_SHADOW);
 
@@ -237,6 +241,15 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 gpu.getVideoRam0().setByte(address, 0);
             }
             blankCgbBootTilePending = false;
+        }
+        if (clearBootTilemapPending) {
+            // This emulator-targeted music player replaces its font tiles and writes
+            // the visible strings, but never clears the boot logo's tile-map entries.
+            // Period emulators launched it from a zeroed map, which is its intended UI.
+            for (int address = 0x9800; address < 0xa000; address++) {
+                gpu.getVideoRam0().setByte(address, 0);
+            }
+            clearBootTilemapPending = false;
         }
         if (clearCgbBootOamShadowPending) {
             // This early demo uses C000-C09F as its OAM shadow without initializing the
@@ -515,7 +528,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, blankCgbBootTilePending, clearCgbBootOamShadowPending);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
     }
 
     @Override
@@ -549,6 +562,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         lcdDisabled = mem.lcdDisabled();
         lcdOffTicks = mem.lcdOffTicks();
         blankCgbBootTilePending = mem.blankCgbBootTilePending();
+        clearBootTilemapPending = mem.clearBootTilemapPending();
         clearCgbBootOamShadowPending = mem.clearCgbBootOamShadowPending();
     }
 
@@ -574,6 +588,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<Genie> genieMemento, boolean requestScreenRefresh,
                                   boolean lcdDisabled, int lcdOffTicks,
                                   boolean blankCgbBootTilePending,
+                                  boolean clearBootTilemapPending,
                                   boolean clearCgbBootOamShadowPending) implements Memento<Gameboy> {
     }
 
