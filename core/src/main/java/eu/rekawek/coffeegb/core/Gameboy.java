@@ -304,6 +304,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         eventBus.register(
                 e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent) e).nonCgbGame),
                 eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);
+        eventBus.register(
+                e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent) e).nonCgbGame()),
+                eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent.class);
     }
 
     /**
