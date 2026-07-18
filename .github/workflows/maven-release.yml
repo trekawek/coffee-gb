@@ -101,3 +101,23 @@ jobs:
           "-Dtag=coffee-gb-${RELEASE_VERSION}"
           "-Darguments=-Dmaven.javadoc.skip=true --no-transfer-progress"
           release:clean release:prepare release:perform
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          tag="coffee-gb-${RELEASE_VERSION}"
+          asset="target/checkout/swing/target/coffee-gb-${RELEASE_VERSION}.jar"
+
+          if [[ ! -f "$asset" ]]; then
+            echo "Expected release asset not found: $asset" >&2
+            exit 1
+          fi
+
+          gh release create "$tag" "$asset" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "coffee-gb ${RELEASE_VERSION}"
