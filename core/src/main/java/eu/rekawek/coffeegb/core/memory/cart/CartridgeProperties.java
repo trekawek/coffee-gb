@@ -41,7 +41,8 @@ public final class CartridgeProperties {
         MBC1_MULTICART,
         MBC1_FULL_BANK_REGISTER,
         MBC1_ALWAYS_ENABLED_RAM,
-        MBC2_EXTENDED_BANKING
+        MBC2_EXTENDED_BANKING,
+        SACHEN_OPEN_BUS_BANKS
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -81,6 +82,8 @@ public final class CartridgeProperties {
                     Mapper.SACHEN_MMC1, Feature.SCRAMBLED_SACHEN_HEADER),
             profile("raw Sachen MMC2", CartridgeProperties::isRawSachenMmc2,
                     Mapper.SACHEN_MMC2, Feature.SCRAMBLED_SACHEN_HEADER),
+            features("Rocman X Gold option probe", CartridgeProperties::isRocmanXGold,
+                    Feature.SACHEN_OPEN_BUS_BANKS),
             mapper("linear-header Sachen MMC2", CartridgeProperties::isLinearSachenMmc2,
                     Mapper.SACHEN_MMC2_LINEAR),
             mapper("cooked Sachen MMC", CartridgeProperties::isCookedSachen,
@@ -280,6 +283,10 @@ public final class CartridgeProperties {
                 && info.byteAt(0x106) == 0xc0
                 && info.byteAt(0x107) == 0x00
                 && hasLogoAt(info.data, 0x184);
+    }
+
+    private static boolean isRocmanXGold(RomInfo info) {
+        return info.crc32() == 0x7e1351cf;
     }
 
     private static boolean isCookedSachen(RomInfo info) {
