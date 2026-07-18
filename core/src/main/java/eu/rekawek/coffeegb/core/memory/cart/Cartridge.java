@@ -47,6 +47,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             case MANI_32K_MULTICART -> new Mani32kMulticart(rom);
             case DUZ_MULTICART -> new DuzMulticart(rom, battery);
             case BHGOS_MULTICART -> new BhgosMulticart(rom, battery);
+            case MAKON_NT_OLD_2 -> new MakonNtOld2(rom, battery);
             case SACHEN_MMC1 -> new SachenMmc(rom, false, true);
             case SACHEN_MMC2 -> new SachenMmc(rom, true, true);
             case SACHEN_MMC2_LINEAR -> new SachenMmc(rom, true, false);

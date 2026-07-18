@@ -21,6 +21,7 @@ public final class CartridgeProperties {
         MANI_32K_MULTICART,
         DUZ_MULTICART,
         BHGOS_MULTICART,
+        MAKON_NT_OLD_2,
         SACHEN_MMC1,
         SACHEN_MMC2,
         SACHEN_MMC2_LINEAR,
@@ -74,6 +75,8 @@ public final class CartridgeProperties {
                     Mapper.DUZ_MULTICART),
             mapper("Blue Hippo G.B.O.S. multicart", CartridgeProperties::isBhgosMulticart,
                     Mapper.BHGOS_MULTICART),
+            mapper("Makon/NT old type 2 multicart", CartridgeProperties::isMakonNtOld2,
+                    Mapper.MAKON_NT_OLD_2),
             profile("raw Sachen MMC1", CartridgeProperties::isRawSachenMmc1,
                     Mapper.SACHEN_MMC1, Feature.SCRAMBLED_SACHEN_HEADER),
             profile("raw Sachen MMC2", CartridgeProperties::isRawSachenMmc2,
@@ -248,6 +251,12 @@ public final class CartridgeProperties {
         return "MultiCart".equals(info.title())
                 && isMbc5Type(info.rawType())
                 && info.data.length > 0x8000;
+    }
+
+    private static boolean isMakonNtOld2(RomInfo info) {
+        return info.data.length > 0x80000
+                && "POKEBOM USA".equals(info.title())
+                && info.byteAt(0x0102) == 0xe0;
     }
 
     private static boolean isRawSachenMmc1(RomInfo info) {
