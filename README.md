@@ -142,8 +142,9 @@ Current mismatches are explicitly baselined so new regressions still fail the pr
 ## Misc.-GB-Tests
 
 All ROMs from [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests)
-run through their Mooneye-compatible breakpoint and register-verdict protocol. The
-unresolved sprite/scroll/window timing cases are explicitly baselined:
+run through their Mooneye-compatible breakpoint and register-verdict protocol.
+The fractional-scroll cases pass; the remaining window-and-sprite timing cases
+are explicitly baselined:
 
     mvn clean test -f core/pom.xml -Ptest-misc-gb
 

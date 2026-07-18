@@ -353,6 +353,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (firstLine && ticksInLine < 79) {
             return 0;
         }
+        // A fractional-scroll or window fetch can leave the readable mode-3 tail
+        // asserted through the mode-0 interrupt edge even though the internal
+        // phase has already released the VRAM/OAM locks (Misc.-GB-Tests' NOP-
+        // shifted sprite timing variants). Keep this separate from `mode`: the
+        // lock handoff and HBlank interrupt retain their calibrated timings.
+        if (mode == Mode.HBlank
+                && ticksInLine <= hblankIntFrom
+                && ((r.get(SCX) & 7) != 0 || lcdc.isWindowDisplay())) {
+            return Mode.PixelTransfer.ordinal();
+        }
         return mode.ordinal();
     }
 
