@@ -185,7 +185,11 @@ public class SachenMmc implements MemoryController {
             if (transition == 0x31) {
                 lockState++;
                 transition = 0;
-            } else if (!mmc2 || lockState == LOCKED_CGB) {
+            }
+            // The threshold read observes the state it just entered. In particular,
+            // MMC2's DMG -> CGB transition must serve the A7-high Nintendo-logo copy
+            // immediately or the boot ROM rejects that first comparison byte.
+            if (lockState != UNLOCKED && (!mmc2 || lockState == LOCKED_CGB)) {
                 // while locked the page serves the 0x0180-0x01FF logo copy
                 address |= 0x80;
             }

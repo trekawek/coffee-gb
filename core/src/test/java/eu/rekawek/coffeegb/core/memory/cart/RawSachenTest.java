@@ -45,6 +45,24 @@ public class RawSachenTest {
     }
 
     @Test
+    public void mmc2ThresholdReadUsesTheNewLockState() throws IOException {
+        SachenMmc mapper = new SachenMmc(new Rom(rawMmc2Rom()), true);
+
+        for (int i = 0; i < 0x30; i++) {
+            assertEquals(NINTENDO_LOGO[0] ^ 0xff, mapper.getByte(0x0104));
+        }
+        // The 49th read changes DMG-locked to CGB-locked and must already use the
+        // A7-high Nintendo-logo copy, matching the real mapper's combinational output.
+        assertEquals(NINTENDO_LOGO[0], mapper.getByte(0x0104));
+
+        for (int i = 0; i < 0x30; i++) {
+            assertEquals(NINTENDO_LOGO[0], mapper.getByte(0x0104));
+        }
+        // The next threshold read unlocks the header and exposes the primary copy.
+        assertEquals(NINTENDO_LOGO[0] ^ 0xff, mapper.getByte(0x0104));
+    }
+
+    @Test
     public void derivesBankCountFromRawDumpSize() throws IOException {
         assertEquals(32, new Rom(rawMmc2Rom(0x80000)).getRomBanks());
         assertEquals(128, new Rom(rawMmc2Rom(0x200000)).getRomBanks());
