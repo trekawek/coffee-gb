@@ -126,7 +126,7 @@ public class SachenMmc implements MemoryController {
                 }
                 break;
             case 1:
-                if ((address & 0x40) != 0) {
+                if (cooked && (address & 0x40) != 0) {
                     // 0x2000-0x3FFF with A6 set is the multicart outer/game-select register.
                     // The 2-in-1 carts (issues #73/#75) point the 0x0000-0x3FFF window at the
                     // chosen 256 KB game (base bank = game * 16) and force that offset into the
@@ -190,7 +190,13 @@ public class SachenMmc implements MemoryController {
                 address |= 0x80;
             }
         }
-        if (scrambledHeader && (address & 0xff00) == 0x0100) {
+        // The alternate MMC2 dump keeps the menu's power-on header linear, but the
+        // embedded games retain the ordinary Sachen-scrambled header pages. Once the
+        // menu maps a non-zero base, expose those pages through the same permutation as
+        // the other raw boards. Flea War enters through its 0x0100 reset header.
+        boolean mappedGameHeader = !cooked && !scrambledHeader
+                && (base & mask) % romBanks != 0;
+        if ((scrambledHeader || mappedGameHeader) && (address & 0xff00) == 0x0100) {
             address = unscramble(address);
         }
         return address;
