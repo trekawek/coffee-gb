@@ -53,6 +53,12 @@ jobs:
             profiles: test-dmgacid2,test-cgbacid2
           - name: Mealybug Tearoom
             profiles: test-mealybug
+          - name: GBMicrotest
+            profiles: test-gbmicrotest
+          - name: gbc-hw-tests
+            profiles: test-gbc-hw
+          - name: Misc.-GB-Tests
+            profiles: test-misc-gb
 
     steps:
     - uses: actions/checkout@v4
