@@ -1,19 +1,14 @@
-# These tests expose unresolved DMG mode-3/STAT boundary differences when
-# fractional SCX or the window is combined with sprites. SameBoy passes all of
-# them; keep the baseline until Coffee GB matches those hardware timings.
-intr_2_mode0_timing_sprites_scx5_nops.gb
-intr_2_mode0_timing_sprites_scx6_nops.gb
-intr_2_mode0_timing_sprites_scx7_nops.gb
+# These remaining tests expose unresolved DMG window + sprite fetch timing
+# differences. SameBoy passes all of them; keep the baseline until Coffee GB
+# matches those hardware timings.
 intr_2_mode0_timing_sprites_win0_nops.gb
 intr_2_mode0_timing_sprites_win11_nops.gb
 intr_2_mode0_timing_sprites_win12_nops.gb
 intr_2_mode0_timing_sprites_win13_nops.gb
 intr_2_mode0_timing_sprites_win14_nops.gb
 intr_2_mode0_timing_sprites_win1_nops.gb
-intr_2_mode0_timing_sprites_win23_nops.gb
 intr_2_mode0_timing_sprites_win24_nops.gb
 intr_2_mode0_timing_sprites_win25_nops.gb
 intr_2_mode0_timing_sprites_win26_nops.gb
 intr_2_mode0_timing_sprites_win5_nops.gb
 intr_2_mode0_timing_sprites_win6_nops.gb
-intr_2_mode0_timing_sprites_win7_nops.gb

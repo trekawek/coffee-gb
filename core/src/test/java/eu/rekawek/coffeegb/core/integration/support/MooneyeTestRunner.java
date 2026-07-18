@@ -86,8 +86,11 @@ public class MooneyeTestRunner {
 
     private boolean isTestFinished() {
         // Current Mooneye ROMs use LD B,B as their emulator breakpoint. Older
-        // Wilbert Pol ROMs use the undefined $ED opcode for the same purpose.
-        return isByteSequenceAtPc(gb, 0x40) || isByteSequenceAtPc(gb, 0xed);
+        // Wilbert Pol ROMs use the undefined $ED opcode. Alyosha's misc tests
+        // use a NOP / JR -3 loop after loading the Mooneye success registers.
+        return isByteSequenceAtPc(gb, 0x40)
+                || isByteSequenceAtPc(gb, 0xed)
+                || isByteSequenceAtPc(gb, 0x00, 0x18, 0xfd);
     }
 
     public String dumpRegs() {
