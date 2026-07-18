@@ -79,7 +79,11 @@ public class Mbc1 implements MemoryController {
         // power-on and never gates it off. Work Master writes ordinary flash commands
         // through 0000-1FFF; treating those as MBC1 RAM-disable commands makes later
         // file reads return FF and sends the image viewer into unmapped work RAM.
-        ramWriteEnabled = workMasterFlashCart;
+        // FreeArt Intro V2 writes a lookup table to external RAM before its first MBC1
+        // enable command. Period emulators exposed the RAM at startup, and the demo was
+        // authored around that behaviour; after boot it uses the normal enable register.
+        ramWriteEnabled = workMasterFlashCart || properties.has(
+                CartridgeProperties.Feature.MBC1_RAM_ENABLED_AT_POWER_ON);
     }
 
     @Override
