@@ -13,10 +13,18 @@ public class DmaCpuAddressSpace implements AddressSpace, Serializable {
 
     private final boolean gbc;
 
+    private final boolean blockedReadsReturnFF;
+
     public DmaCpuAddressSpace(AddressSpace addressSpace, Dma dma, boolean gbc) {
+        this(addressSpace, dma, gbc, false);
+    }
+
+    public DmaCpuAddressSpace(AddressSpace addressSpace, Dma dma, boolean gbc,
+                              boolean blockedReadsReturnFF) {
         this.addressSpace = addressSpace;
         this.dma = dma;
         this.gbc = gbc;
+        this.blockedReadsReturnFF = blockedReadsReturnFF;
     }
 
     @Override
@@ -34,7 +42,7 @@ public class DmaCpuAddressSpace implements AddressSpace, Serializable {
     @Override
     public int getByte(int address) {
         if (dma.isCpuAccessBlocked(address, gbc)) {
-            return dma.getCpuBusValue();
+            return blockedReadsReturnFF ? 0xff : dma.getCpuBusValue();
         }
         return addressSpace.getByte(address);
     }

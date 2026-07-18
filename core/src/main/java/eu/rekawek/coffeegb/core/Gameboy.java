@@ -191,7 +191,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         mmu.indexSpaces();
         mmu.setBusListener(cartridge.getSachenMmc());
 
-        cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc),
+        cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc,
+                cartridgeProperties.has(CartridgeProperties.Feature.DMA_BLOCKED_READS_RETURN_FF)),
                 interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
@@ -319,6 +320,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         eventBus.register(
                 e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent) e).nonCgbGame),
                 eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);
+        eventBus.register(
+                e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent) e).nonCgbGame()),
+                eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent.class);
     }
 
     /**
