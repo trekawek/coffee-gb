@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -12,8 +13,6 @@ import java.util.Arrays;
 public class Mbc1 implements MemoryController {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mbc1.class);
-
-    private static final int[] NINTENDO_LOGO = {0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E};
 
     private final int romBanks;
 
@@ -63,14 +62,13 @@ public class Mbc1 implements MemoryController {
 
     public Mbc1(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
-        this.multicart = rom.getRomBanks() == 64 && isMulticart(this.cartridge);
-        this.hongKongPokemonRed = rom.getRomBanks() == 64
-                && "POCKETMON BE".equals(rom.getTitle())
-                && this.cartridge[0x014e] == 0x9c
-                && this.cartridge[0x014f] == 0x8c;
+        CartridgeProperties properties = rom.getCartridgeProperties();
+        this.multicart = properties.has(CartridgeProperties.Feature.MBC1_MULTICART);
+        this.hongKongPokemonRed = properties.has(
+                CartridgeProperties.Feature.MBC1_FULL_BANK_REGISTER);
         this.wideBank = hongKongPokemonRed;
-        this.workMasterFlashCart = "WORK MASTER 1.00".equals(rom.getTitle())
-                && this.cartridge.length == 0x80000;
+        this.workMasterFlashCart = properties.has(
+                CartridgeProperties.Feature.MBC1_ALWAYS_ENABLED_RAM);
         this.ramBanks = rom.getRamBanks();
         this.romBanks = rom.getRomBanks();
         this.ram = new int[0x2000 * this.ramBanks];
@@ -231,23 +229,6 @@ public class Mbc1 implements MemoryController {
         } else {
             return (selectedRamBank % ramBanks) * 0x2000 + (address - 0xa000);
         }
-    }
-
-    private static boolean isMulticart(int[] rom) {
-        int logoCount = 0;
-        for (int i = 0; i < rom.length; i += 0x4000) {
-            boolean logoMatches = true;
-            for (int j = 0; j < NINTENDO_LOGO.length; j++) {
-                if (rom[i + 0x104 + j] != NINTENDO_LOGO[j]) {
-                    logoMatches = false;
-                    break;
-                }
-            }
-            if (logoMatches) {
-                logoCount++;
-            }
-        }
-        return logoCount > 1;
     }
 
     @Override

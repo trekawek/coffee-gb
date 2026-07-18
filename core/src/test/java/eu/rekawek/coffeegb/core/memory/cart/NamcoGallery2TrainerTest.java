@@ -18,7 +18,8 @@ public class NamcoGallery2TrainerTest {
         Rom rom = new Rom(trainerRom());
 
         assertEquals(Rom.GameboyColorFlag.NON_CGB, rom.getGameboyColorFlag());
-        assertTrue(rom.isLegacySpeedSwitchRequired());
+        assertTrue(rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.LEGACY_SPEED_SWITCH));
         assertEquals(GameboyType.DMG, new Gameboy.GameboyConfiguration(rom).getGameboyType());
     }
 
@@ -29,7 +30,8 @@ public class NamcoGallery2TrainerTest {
         Rom rom = new Rom(data);
 
         assertEquals(Rom.GameboyColorFlag.NON_CGB, rom.getGameboyColorFlag());
-        assertFalse(rom.isLegacySpeedSwitchRequired());
+        assertFalse(rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.LEGACY_SPEED_SWITCH));
     }
 
     @Test

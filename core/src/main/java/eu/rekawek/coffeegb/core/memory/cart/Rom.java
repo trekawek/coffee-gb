@@ -33,9 +33,9 @@ public class Rom {
 
     private final GameboyColorFlag gameboyColorFlag;
 
-    private final boolean legacySpeedSwitchRequired;
-
     private final boolean superGameboyFlag;
+
+    private final CartridgeProperties cartridgeProperties;
 
     public Rom(File romFile) throws IOException {
         this(loadFile(romFile), romFile);
@@ -51,19 +51,19 @@ public class Rom {
             rom[i] = romByteArray[i] & 0xFF;
         }
 
-        // Raw Sachen MMC1/MMC2 dumps have A0/A6 and A1/A4 swapped throughout the
-        // 0x0100-0x01ff page. Parse their logical header rather than the scrambled bytes
-        // in the file; in particular, 31B-001's CGB flag is physically stored elsewhere.
-        // The mapper still receives the untouched raw image so it can reproduce the bus.
-        boolean rawSachen = isRawSachen(rom);
-        int[] header = rawSachen ? unscrambleSachenHeader(rom) : rom;
+        cartridgeProperties = CartridgeProperties.detect(rom);
+        int[] header = cartridgeProperties.getHeader(rom);
+        if (!cartridgeProperties.getProfiles().isEmpty()) {
+            LOG.info("Cartridge compatibility profiles: {}", cartridgeProperties.getProfiles());
+        }
 
         // Correct an invalid header checksum (0x14D) so the authentic boot ROM does not lock
         // up. The real DMG/CGB boot ROM verifies the checksum over 0x134-0x14C and hangs on
         // the logo screen if it is wrong; some homebrew/PD dumps ship a bad one (e.g.
         // Dimensionless Sample, #76 - it renders past a SKIP boot but hangs the boot ROM).
         // BGB, SameBoy and real flashcarts silently fix it; only touches already-invalid ROMs.
-        if (!rawSachen && rom.length > 0x014D) {
+        if (!cartridgeProperties.has(CartridgeProperties.Feature.SCRAMBLED_SACHEN_HEADER)
+                && rom.length > 0x014D) {
             int headerChecksum = 0;
             for (int a = 0x0134; a <= 0x014C; a++) {
                 headerChecksum = (headerChecksum - rom[a] - 1) & 0xFF;
@@ -83,7 +83,7 @@ public class Rom {
             // Unknown/custom mapper byte. Some are known unlicensed carts we handle
             // deliberately as MBC5; the rest fall back to MBC5 banking rather than
             // refusing to load (issues #58, #71).
-            if (isPocketVoice(header, title)) {
+            if (cartridgeProperties.has(CartridgeProperties.Feature.POCKET_VOICE)) {
                 // The Pocket Voice V2.0 voice recorder (type 0xBE) is MBC5-compatible for
                 // everything the Game Boy can observe: it banks 32x16 KB normally and its
                 // full UI (record screen, built-in sample library) is reachable. The voice
@@ -103,32 +103,13 @@ public class Rom {
         cartridgeType = type;
         LOG.debug("Cartridge {}, type: {}", title, cartridgeType);
         GameboyColorFlag colorFlag = GameboyColorFlag.getFlag(header[0x0143]);
-        boolean legacySpeedSwitchRequired = false;
-        if (isDmgOnlyCrazyCastleTrainer(rom, title)) {
-            // This trainer advertises CGB compatibility but only initializes the DMG
-            // BGP/OBP registers. Native CGB startup therefore renders its menu entirely
-            // white and also leaves HRAM in a state the trainer does not expect.
-            LOG.info("DMG-only Crazy Castle 3 trainer detected; ignoring its CGB flag");
+        if (cartridgeProperties.has(CartridgeProperties.Feature.FORCE_DMG)) {
             colorFlag = GameboyColorFlag.NON_CGB;
-        } else if (isDarkFaderThreadsDemo(rom, title)) {
-            // This early homebrew marks itself CGB-compatible but never initializes CGB
-            // palette RAM; the CGB boot ROM leaves every color white, so native CGB mode
-            // displays a blank screen. Its scheduler only uses hardware shared with DMG,
-            // where BGP supplies the intended monochrome palette.
-            LOG.info("DMG-only DarkFader Threads Demo detected; ignoring its CGB flag");
-            colorFlag = GameboyColorFlag.NON_CGB;
-        } else if (isNamcoGallery2Trainer(rom, title)) {
-            // This old emulator-oriented trainer keeps the original DMG header, but its
-            // launch stub writes KEY1 and executes STOP before handing off to the game.
-            // Accept that speed switch as a narrowly scoped extension while retaining
-            // DMG rendering; treating the whole image as native CGB corrupts its colours.
-            LOG.info("Namco Gallery Vol.2 trainer detected; enabling its CGB speed-switch extension");
-            legacySpeedSwitchRequired = true;
         }
         gameboyColorFlag = colorFlag;
-        this.legacySpeedSwitchRequired = legacySpeedSwitchRequired;
         superGameboyFlag = header[0x0146] == 0x03;
-        romBanks = rawSachen ? Math.max(2, (rom.length + 0x3fff) / 0x4000)
+        romBanks = cartridgeProperties.has(CartridgeProperties.Feature.SCRAMBLED_SACHEN_HEADER)
+                ? Math.max(2, (rom.length + 0x3fff) / 0x4000)
                 : getRomBanks(header[0x0148], rom.length);
         int ramSize = getRamSize(header[0x0149]);
         if (ramSize == 0 && cartridgeType.isRam()) {
@@ -173,108 +154,12 @@ public class Rom {
         return gameboyColorFlag;
     }
 
-    public boolean isLegacySpeedSwitchRequired() {
-        return legacySpeedSwitchRequired;
-    }
-
     public boolean isSuperGameboyFlag() {
         return superGameboyFlag;
     }
 
-    /**
-     * The Lightforce +1 trainer for The Adventures of the Smurfs uses tile 0x0A as
-     * its blank background without uploading that tile. The CGB boot ROM leaves logo
-     * pixels there, while the skip-boot environment the trainer was authored for starts
-     * it at zero. Match the injected trainer code rather than the filename so renamed
-     * copies receive the same compatibility handling.
-     */
-    public boolean requiresBlankCgbBootTile() {
-        int[] trainerSignature = {
-                0x7d, 0xea, 0xa1, 0xc0, 0xe6, 0x03, 0x6f, 0x01,
-                0xe0, 0x01, 0xcb, 0x25, 0xcb, 0x25, 0x09, 0xe9
-        };
-        int signatureOffset = 0xddea4;
-        if (rom.length != 0x100000 || rom[0x0143] != 0xc0 || rom[0x0147] != 0x1b) {
-            return false;
-        }
-        for (int i = 0; i < trainerSignature.length; i++) {
-            if (rom[signatureOffset + i] != trainerSignature[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    // The Pocket Voice V2.0 voice recorder uses cartridge-type byte 0xBE and stamps its name
-    // in the header title ("Pocket Voice2.0"); match both so an unrelated cart that happens to
-    // reuse 0xBE is not mislabelled.
-    private static boolean isPocketVoice(int[] rom, String title) {
-        return rom[0x0147] == 0xBE && title.startsWith("Pocket Voice");
-    }
-
-    private static boolean isDmgOnlyCrazyCastleTrainer(int[] rom, String title) {
-        int[] entryStub = {0xf5, 0x3e, 0x03, 0xea, 0x00, 0x21, 0xf1, 0xc3, 0x00, 0x68};
-        if (rom.length != 0x100000 || !"BUGS CC3 CRACK".equals(title)
-                || rom[0x0143] != 0x80 || rom[0x0147] != 0x19) {
-            return false;
-        }
-        for (int i = 0; i < entryStub.length; i++) {
-            if (rom[0x00e0 + i] != entryStub[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean isDarkFaderThreadsDemo(int[] rom, String title) {
-        return rom.length == 0x10000
-                && "OS".equals(title)
-                && rom[0x0100] == 0x00 && rom[0x0101] == 0xc3
-                && rom[0x0102] == 0x91 && rom[0x0103] == 0x09
-                && rom[0x0143] == 0x80 && rom[0x0147] == 0x01
-                && rom[0x0149] == 0x00 && rom[0x014c] == 0x01
-                && rom[0x014e] == 0x7b && rom[0x014f] == 0x1e;
-    }
-
-    private static boolean isRawSachen(int[] data) {
-        if (data.length < 0x200) {
-            return false;
-        }
-        boolean mmc1 = data[0x104] == 0xce && data[0x144] == 0xed && data[0x114] == 0x66;
-        boolean mmc2 = data[0x184] == 0xce && data[0x1c4] == 0xed && data[0x194] == 0x66;
-        return mmc1 || mmc2;
-    }
-
-    private static int[] unscrambleSachenHeader(int[] data) {
-        int[] header = new int[0x150];
-        for (int address = 0x100; address < header.length; address++) {
-            header[address] = data[unscrambleSachenAddress(address)];
-        }
-        return header;
-    }
-
-    private static int unscrambleSachenAddress(int address) {
-        int unscrambled = address & 0xffac;
-        unscrambled |= (address & 0x40) >> 6;
-        unscrambled |= (address & 0x10) >> 3;
-        unscrambled |= (address & 0x02) << 3;
-        unscrambled |= (address & 0x01) << 6;
-        return unscrambled;
-    }
-
-    private static boolean isNamcoGallery2Trainer(int[] rom, String title) {
-        int[] speedSwitchStub = {0x3e, 0x01, 0xe0, 0x4d, 0x10, 0x00, 0x00, 0x00,
-                0xcd, 0x0d, 0x71, 0xfa, 0xf0, 0xdf, 0xc3, 0x50, 0x01};
-        if (rom.length != 0x80000 || !"GALLERY2 +4".equals(title)
-                || rom[0x0143] != 0x00 || rom[0x0147] != 0x01) {
-            return false;
-        }
-        for (int i = 0; i < speedSwitchStub.length; i++) {
-            if (rom[0x3f0fc + i] != speedSwitchStub[i]) {
-                return false;
-            }
-        }
-        return true;
+    public CartridgeProperties getCartridgeProperties() {
+        return cartridgeProperties;
     }
 
     private static String getTitle(int[] rom) {

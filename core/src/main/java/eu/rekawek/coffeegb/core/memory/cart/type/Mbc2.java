@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -35,7 +36,8 @@ public class Mbc2 implements MemoryController {
     public Mbc2(Rom rom, Battery battery) {
         this.romBanks = rom.getRomBanks();
         this.cartridge = rom.getRom();
-        this.legacyExtendedBanking = isGokuuHishoudenChineseTranslation(rom);
+        this.legacyExtendedBanking = rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.MBC2_EXTENDED_BANKING);
         this.ram = new int[0x0200];
         Arrays.fill(ram, 0xff);
         this.battery = battery;
@@ -110,29 +112,6 @@ public class Mbc2 implements MemoryController {
 
     private int getRamAddress(int address) {
         return (address - 0xa000) % ram.length;
-    }
-
-    private static boolean isGokuuHishoudenChineseTranslation(Rom rom) {
-        int[] data = rom.getRom();
-        int[] entryAndBankStub = {
-                0x00, 0xc3, 0xf0, 0x3f,
-                0xf5, 0x3e, 0x0c, 0xea, 0x00, 0x20, 0xf1, 0xc3, 0x00, 0x70
-        };
-        if (data.length != 0x80000 || !"GB DBZ GOKOU".equals(rom.getTitle())
-                || data[0x0147] != 0x06 || data[0x0148] != 0x04) {
-            return false;
-        }
-        for (int i = 0; i < 4; i++) {
-            if (data[0x0100 + i] != entryAndBankStub[i]) {
-                return false;
-            }
-        }
-        for (int i = 4; i < entryAndBankStub.length; i++) {
-            if (data[0x3ff0 + i - 4] != entryAndBankStub[i]) {
-                return false;
-            }
-        }
-        return true;
     }
 
     @Override
