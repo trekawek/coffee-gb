@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
+import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.serial.SerialPort;
 import eu.rekawek.coffeegb.core.sgb.Background;
@@ -75,6 +76,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     private final SerialPort serialPort;
 
     private final eu.rekawek.coffeegb.core.ir.InfraredPort infraredPort;
+
+    private final CodeBreakerRumble codeBreakerRumble;
 
     private final Joypad joypad;
 
@@ -146,6 +149,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         joypad = new Joypad(interruptManager, sgbBus, sgb);
         serialPort = new SerialPort(interruptManager, timer, gbc, speedMode);
         infraredPort = new eu.rekawek.coffeegb.core.ir.InfraredPort(gbc, speedMode);
+        codeBreakerRumble = new CodeBreakerRumble();
+        mmu.setCodeBreakerRumble(codeBreakerRumble);
 
         if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
@@ -297,6 +302,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
         infraredPort.init(eventBus);
+        codeBreakerRumble.init(eventBus);
         background.init(eventBus);
         sgbDisplay.init(eventBus);
         gameGenie.init(eventBus);
@@ -496,7 +502,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, blankCgbBootTilePending);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, blankCgbBootTilePending);
     }
 
     @Override
@@ -519,6 +525,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sound.restoreFromMemento(mem.soundMemento());
         serialPort.restoreFromMemento(mem.serialPortMemento());
         infraredPort.restoreFromMemento(mem.infraredPortMemento());
+        codeBreakerRumble.restoreFromMemento(mem.codeBreakerRumbleMemento());
         joypad.restoreFromMemento(mem.joypadMemento());
         speedMode.restoreFromMemento(mem.speedModeMemento());
         superGameboy.restoreFromMemento(mem.superGameboyMemento());
@@ -534,6 +541,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public void close() {
+        codeBreakerRumble.close();
         cartridge.flushBattery();
         if (slotCartridge != null) {
             slotCartridge.flushBattery();
@@ -548,6 +556,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
                                   Memento<eu.rekawek.coffeegb.core.ir.InfraredPort> infraredPortMemento,
+                                  Memento<CodeBreakerRumble> codeBreakerRumbleMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
                                   Memento<SuperGameboy> superGameboyMemento, Memento<Background> backgroundMemento,
                                   Memento<VRamTransfer> vRamTransferMemento, Memento<SgbDisplay> sgbDisplayMemento,

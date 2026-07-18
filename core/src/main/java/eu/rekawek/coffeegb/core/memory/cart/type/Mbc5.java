@@ -1,19 +1,15 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 
 import java.util.Arrays;
 
 public class Mbc5 implements MemoryController {
-
-    /** The rumble carts' motor turning on or off (issue #93). */
-    public record RumbleEvent(boolean on) implements Event {
-    }
 
     private final int romBanks;
 

@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -93,7 +94,7 @@ public class MakonNtOld2Test {
         MakonNtOld2 mapper = new MakonNtOld2(
                 new Rom(multicartRom(0xe0)), Battery.NULL_BATTERY);
         EventBusImpl bus = new EventBusImpl(null, null, false);
-        bus.register(event -> motorLog.add(event.on()), Mbc5.RumbleEvent.class);
+        bus.register(event -> motorLog.add(event.on()), RumbleEvent.class);
         mapper.init(bus);
 
         mapper.setByte(0x5001, 0x80); // enable rumble; old mode uses bit 1

@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.controller.properties.DisplayProperties;
 
@@ -58,8 +59,8 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private GameboyType gameboyType;
 
-    // the rumble carts' motor (issue #93): while it runs, the picture is jiggled by a
-    // pixel each frame - a dependency-free stand-in for a vibrating console
+    // while a rumble motor runs, jiggle the picture by a pixel each frame as a
+    // dependency-free stand-in for a vibrating console
     private volatile boolean rumbling;
 
     private int rumblePhase;
@@ -82,7 +83,7 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
         eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
         eventBus.register(e -> setRotation(e.rotation), SetRotationEvent.class);
-        eventBus.register(e -> this.rumbling = e.on(), eu.rekawek.coffeegb.core.memory.cart.type.Mbc5.RumbleEvent.class, callerId);
+        eventBus.register(e -> this.rumbling = e.on(), RumbleEvent.class, callerId);
         eventBus.register(e -> showNotification("State saved (slot " + e.getSlot() + ")"),
                 Controller.SnapshotSavedEvent.class, callerId);
         eventBus.register(e -> showNotification("State loaded (slot " + e.getSlot() + ")"),

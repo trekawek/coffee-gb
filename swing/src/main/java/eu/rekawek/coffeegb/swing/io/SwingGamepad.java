@@ -6,7 +6,7 @@ import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent;
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent;
 import eu.rekawek.coffeegb.core.memory.cart.type.AccelerometerEvent;
-import eu.rekawek.coffeegb.core.memory.cart.type.Mbc5;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import io.github.libsdl4j.api.gamecontroller.SDL_GameController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,8 +35,8 @@ import static io.github.libsdl4j.api.joystick.SdlJoystick.SDL_NumJoysticks;
  * controls MBC7 cartridge tilt for Kirby's Tilt 'n' Tumble. Hotplug is handled by
  * rescanning while no controller is open.
  *
- * <p>The MBC5 rumble carts' motor (issue #93) is forwarded to the controller's force
- * feedback when it has any.
+ * <p>Rumble requests from cartridges and pass-through accessories are forwarded to the
+ * controller's force feedback when it has any.
  *
  * <p>libsdl4j bundles the SDL2 native only for Linux and Windows. On macOS SDL2 must be
  * installed separately ({@code brew install sdl2}); this looks it up in Homebrew's lib
@@ -73,7 +73,7 @@ public class SwingGamepad implements Runnable {
 
     public SwingGamepad(EventBus eventBus) {
         this.eventBus = eventBus;
-        eventBus.register(e -> rumbleRequested = e.on(), Mbc5.RumbleEvent.class);
+        eventBus.register(e -> rumbleRequested = e.on(), RumbleEvent.class);
     }
 
     public void stop() {

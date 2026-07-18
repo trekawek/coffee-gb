@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -31,7 +32,7 @@ public class Mbc5RumbleTest {
     private static Mbc5 build(int type, List<Boolean> motorLog) throws IOException {
         Mbc5 mbc = new Mbc5(new Rom(rom(type)), Battery.NULL_BATTERY);
         EventBusImpl bus = new EventBusImpl(null, null, false);
-        bus.register(e -> motorLog.add(e.on()), Mbc5.RumbleEvent.class);
+        bus.register(e -> motorLog.add(e.on()), RumbleEvent.class);
         mbc.init(bus);
         return mbc;
     }

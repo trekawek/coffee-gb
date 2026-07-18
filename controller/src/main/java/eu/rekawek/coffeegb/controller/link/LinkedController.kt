@@ -35,6 +35,7 @@ import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
@@ -237,6 +238,7 @@ class LinkedController(
             Display.GbcFrameReadyEvent::class,
             SgbDisplay.SgbFrameReadyEvent::class,
             Sound.SoundSampleEvent::class,
+            RumbleEvent::class,
             Joypad.JoypadPressEvent::class,
         ),
     )
