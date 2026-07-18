@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.genie.Genie;
 import eu.rekawek.coffeegb.core.gpu.*;
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
+import eu.rekawek.coffeegb.core.ir.InfraredPort;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
@@ -75,7 +77,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final SerialPort serialPort;
 
-    private final eu.rekawek.coffeegb.core.ir.InfraredPort infraredPort;
+    private final InfraredPort infraredPort;
 
     private final CodeBreakerRumble codeBreakerRumble;
 
@@ -107,6 +109,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private boolean blankCgbBootTilePending;
 
+    private boolean clearBootTilemapPending;
+
+    private boolean clearCgbBootOamShadowPending;
+
     private transient volatile boolean doPause;
 
     private transient volatile boolean paused;
@@ -124,6 +130,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         CartridgeProperties cartridgeProperties = configuration.rom.getCartridgeProperties();
         blankCgbBootTilePending = cartridgeProperties.has(
                 CartridgeProperties.Feature.BLANK_CGB_BOOT_TILE);
+        clearBootTilemapPending = cartridgeProperties.has(
+                CartridgeProperties.Feature.CLEAR_BOOT_TILEMAP);
+        clearCgbBootOamShadowPending = cartridgeProperties.has(
+                CartridgeProperties.Feature.CLEAR_CGB_BOOT_OAM_SHADOW);
 
         boolean legacySpeedSwitchRequired = cartridgeProperties.has(
                 CartridgeProperties.Feature.LEGACY_SPEED_SWITCH);
@@ -148,7 +158,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sound = new Sound(timer, speedMode, gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
         serialPort = new SerialPort(interruptManager, timer, gbc, speedMode);
-        infraredPort = new eu.rekawek.coffeegb.core.ir.InfraredPort(gbc, speedMode);
+        infraredPort = new InfraredPort(gbc, speedMode);
         codeBreakerRumble = new CodeBreakerRumble();
         mmu.setCodeBreakerRumble(codeBreakerRumble);
 
@@ -192,7 +202,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         mmu.indexSpaces();
         mmu.setBusListener(cartridge.getSachenMmc());
 
-        cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc),
+        cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc,
+                cartridgeProperties.has(CartridgeProperties.Feature.DMA_BLOCKED_READS_RETURN_FF)),
                 interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
@@ -222,20 +233,40 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
                     && !cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
         }
-        applyBootVramCompatibilityIfReady();
+        applyBootCompatibilityIfReady();
     }
 
-    private void applyBootVramCompatibilityIfReady() {
-        if (!blankCgbBootTilePending || !biosShadow.isBootFinished()) {
+    private void applyBootCompatibilityIfReady() {
+        if (!biosShadow.isBootFinished()) {
             return;
         }
-        // This trainer treats tile 0x0A as blank but does not replace the CGB boot
-        // logo residue in its 16 data bytes. Do not sanitize any other cartridge or
-        // any other part of VRAM: boot-state-dependent software still sees hardware.
-        for (int address = 0x80a0; address < 0x80b0; address++) {
-            gpu.getVideoRam0().setByte(address, 0);
+        if (blankCgbBootTilePending) {
+            // This trainer treats tile 0x0A as blank but does not replace the CGB boot
+            // logo residue in its 16 data bytes. Do not sanitize any other cartridge or
+            // any other part of VRAM: boot-state-dependent software still sees hardware.
+            for (int address = 0x80a0; address < 0x80b0; address++) {
+                gpu.getVideoRam0().setByte(address, 0);
+            }
+            blankCgbBootTilePending = false;
         }
-        blankCgbBootTilePending = false;
+        if (clearBootTilemapPending) {
+            // This emulator-targeted music player replaces its font tiles and writes
+            // the visible strings, but never clears the boot logo's tile-map entries.
+            // Period emulators launched it from a zeroed map, which is its intended UI.
+            for (int address = 0x9800; address < 0xa000; address++) {
+                gpu.getVideoRam0().setByte(address, 0);
+            }
+            clearBootTilemapPending = false;
+        }
+        if (clearCgbBootOamShadowPending) {
+            // This early demo uses C000-C09F as its OAM shadow without initializing the
+            // unused entries. The authentic CGB boot leaves cartridge scratch data there,
+            // while boot-skipping emulators leave zeroes; clear only that shadow once.
+            for (int address = 0xc000; address < 0xc0a0; address++) {
+                mmu.setByte(address, 0);
+            }
+            clearCgbBootOamShadowPending = false;
+        }
     }
 
     /**
@@ -292,6 +323,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
+        init(eventBus, serialEndpoint, InfraredEndpoint.NULL_ENDPOINT, console);
+    }
+
+    public void init(EventBus eventBus, SerialEndpoint serialEndpoint,
+                     InfraredEndpoint infraredEndpoint, Console console) {
         this.console = console;
         if (console != null) {
             console.setGameboy(this);
@@ -301,7 +337,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display.init(eventBus);
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
-        infraredPort.init(eventBus);
+        infraredPort.init(eventBus, infraredEndpoint);
         codeBreakerRumble.init(eventBus);
         background.init(eventBus);
         sgbDisplay.init(eventBus);
@@ -310,6 +346,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         eventBus.register(
                 e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent) e).nonCgbGame),
                 eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);
+        eventBus.register(
+                e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent) e).nonCgbGame()),
+                eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent.class);
     }
 
     /**
@@ -359,7 +398,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         boolean result = false;
 
         Mode newMode = tickSubsystems();
-        applyBootVramCompatibilityIfReady();
+        applyBootCompatibilityIfReady();
         if (newMode != null) {
             hdma.onGpuUpdate(newMode);
         }
@@ -502,7 +541,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, blankCgbBootTilePending);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
     }
 
     @Override
@@ -537,11 +576,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         lcdDisabled = mem.lcdDisabled();
         lcdOffTicks = mem.lcdOffTicks();
         blankCgbBootTilePending = mem.blankCgbBootTilePending();
+        clearBootTilemapPending = mem.clearBootTilemapPending();
+        clearCgbBootOamShadowPending = mem.clearCgbBootOamShadowPending();
     }
 
     @Override
     public void close() {
         codeBreakerRumble.close();
+        infraredPort.close();
         cartridge.flushBattery();
         if (slotCartridge != null) {
             slotCartridge.flushBattery();
@@ -555,14 +597,16 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<InterruptManager> interruptManagerMemento, Memento<Timer> timerMemento,
                                   Memento<Dma> dmaMemento, Memento<Hdma> hdmaMemento, Memento<Display> displayMemento,
                                   Memento<Sound> soundMemento, Memento<SerialPort> serialPortMemento,
-                                  Memento<eu.rekawek.coffeegb.core.ir.InfraredPort> infraredPortMemento,
+                                  Memento<InfraredPort> infraredPortMemento,
                                   Memento<CodeBreakerRumble> codeBreakerRumbleMemento,
                                   Memento<Joypad> joypadMemento, Memento<SpeedMode> speedModeMemento,
                                   Memento<SuperGameboy> superGameboyMemento, Memento<Background> backgroundMemento,
                                   Memento<VRamTransfer> vRamTransferMemento, Memento<SgbDisplay> sgbDisplayMemento,
                                   Memento<Genie> genieMemento, boolean requestScreenRefresh,
                                   boolean lcdDisabled, int lcdOffTicks,
-                                  boolean blankCgbBootTilePending) implements Memento<Gameboy> {
+                                  boolean blankCgbBootTilePending,
+                                  boolean clearBootTilemapPending,
+                                  boolean clearCgbBootOamShadowPending) implements Memento<Gameboy> {
     }
 
     public enum BootstrapMode {

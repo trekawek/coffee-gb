@@ -29,6 +29,7 @@ import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
+import eu.rekawek.coffeegb.core.ir.Peer2PeerInfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
@@ -75,6 +76,10 @@ class LinkedController(
 
   private val peerSerialEndpoint = Peer2PeerSerialEndpoint()
 
+  private val mainInfraredEndpoint = Peer2PeerInfraredEndpoint()
+
+  private val peerInfraredEndpoint = Peer2PeerInfraredEndpoint()
+
   private var frame = 0L
 
   private var currentInput: Input? = null
@@ -91,6 +96,7 @@ class LinkedController(
 
   init {
     peerSerialEndpoint.init(mainSerialEndpoint)
+    peerInfraredEndpoint.init(mainInfraredEndpoint)
 
     eventQueue.register<LoadedMainConfigEvent> { e ->
       mainSession?.close()
@@ -248,6 +254,7 @@ class LinkedController(
             mainEventBus,
             console,
             mainSerialEndpoint,
+            mainInfraredEndpoint,
         )
     if (snapshot != null) {
       mainSession?.gameboy?.restoreFromMemento(snapshot.deserializeToGameboyMemento())
@@ -283,6 +290,7 @@ class LinkedController(
             peerEventBus,
             null,
             peerSerialEndpoint,
+            peerInfraredEndpoint,
         )
     if (state != null) {
       peerSession.gameboy.restoreFromMemento(state)

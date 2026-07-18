@@ -16,8 +16,8 @@ import java.io.Serializable;
  * read-enable bits 6-7 are set; otherwise bit 1 reads 1. The register does not exist in
  * DMG-compatibility mode (reads 0xFF), matching the other CGB-only registers.
  *
- * <p>Received light comes from a pluggable external device; the only one emulated so far
- * is the {@link FullChanger} (Zok Zok Heroes).
+ * <p>Received light comes from a pluggable external device. Supported sources are another
+ * linked Game Boy and the {@link FullChanger} (Zok Zok Heroes).
  */
 public class InfraredPort implements AddressSpace, Serializable, Originator<InfraredPort> {
 
@@ -26,6 +26,8 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
     private final SpeedMode speedMode;
 
     private final FullChanger fullChanger = new FullChanger();
+
+    private transient InfraredEndpoint endpoint = InfraredEndpoint.NULL_ENDPOINT;
 
     // the written bits of RP: bit 0 (own LED) and bits 6-7 (read enable)
     private int rp;
@@ -36,7 +38,19 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
     }
 
     public void init(EventBus eventBus) {
+        init(eventBus, InfraredEndpoint.NULL_ENDPOINT);
+    }
+
+    public void init(EventBus eventBus, InfraredEndpoint endpoint) {
+        this.endpoint.setLightOn(false);
+        this.endpoint = endpoint;
+        endpoint.setLightOn((rp & 0x01) != 0);
         eventBus.register(e -> fullChanger.transform(e.characterId()), FullChanger.TransformEvent.class);
+    }
+
+    public void close() {
+        endpoint.setLightOn(false);
+        endpoint = InfraredEndpoint.NULL_ENDPOINT;
     }
 
     public void tick() {
@@ -53,6 +67,7 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
     @Override
     public void setByte(int address, int value) {
         rp = value & 0xc1;
+        endpoint.setLightOn((rp & 0x01) != 0);
     }
 
     @Override
@@ -64,7 +79,7 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
         // loop observes the first pulse from its beginning
         fullChanger.onRpRead();
         int result = rp | 0x3c | 0x02;
-        if ((rp & 0xc0) == 0xc0 && fullChanger.isLightOn()) {
+        if ((rp & 0xc0) == 0xc0 && (fullChanger.isLightOn() || endpoint.isLightOn())) {
             result &= ~0x02;
         }
         return result;
@@ -81,6 +96,7 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
             throw new IllegalArgumentException("Invalid memento type");
         }
         this.rp = mem.rp;
+        endpoint.setLightOn((rp & 0x01) != 0);
         fullChanger.restoreFromMemento(mem.fullChangerMemento);
     }
 

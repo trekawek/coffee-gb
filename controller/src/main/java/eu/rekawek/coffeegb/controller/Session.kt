@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memento.Originator
@@ -13,6 +14,7 @@ class Session(
     val eventBus: EventBus,
     private val console: Console?,
     serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
+    infraredEndpoint: InfraredEndpoint = InfraredEndpoint.NULL_ENDPOINT,
 ) : AutoCloseable, Originator<Session> {
 
   internal val gameboy: Gameboy = config.build()
@@ -21,7 +23,7 @@ class Session(
     private set
 
   init {
-    gameboy.init(eventBus, serialEndpoint, console)
+    gameboy.init(eventBus, serialEndpoint, infraredEndpoint, console)
   }
 
   /** Hot-swaps the link-port device (e.g. connecting the printer) without a reset. */

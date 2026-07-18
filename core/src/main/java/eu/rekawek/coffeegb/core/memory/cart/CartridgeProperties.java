@@ -19,9 +19,12 @@ public final class CartridgeProperties {
         BUNG_EMS,
         HIDDEN_MMM01,
         MANI_32K_MULTICART,
+        SL_MULTICART,
         DUZ_MULTICART,
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
+        BBD,
+        SINTAX,
         SACHEN_MMC1,
         SACHEN_MMC2,
         SACHEN_MMC2_LINEAR,
@@ -36,12 +39,17 @@ public final class CartridgeProperties {
         FORCE_DMG,
         LEGACY_SPEED_SWITCH,
         BLANK_CGB_BOOT_TILE,
+        CLEAR_BOOT_TILEMAP,
         DATEL_CGB_HEADER,
         SCRAMBLED_SACHEN_HEADER,
         MBC1_MULTICART,
         MBC1_FULL_BANK_REGISTER,
         MBC1_ALWAYS_ENABLED_RAM,
-        MBC2_EXTENDED_BANKING
+        MBC1_RAM_ENABLED_AT_POWER_ON,
+        MBC2_EXTENDED_BANKING,
+        CLEAR_CGB_BOOT_OAM_SHADOW,
+        DMA_BLOCKED_READS_RETURN_FF,
+        SACHEN_OPEN_BUS_BANKS
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -71,16 +79,24 @@ public final class CartridgeProperties {
                     Mapper.HIDDEN_MMM01),
             mapper("Mani 32 KiB multicart", CartridgeProperties::isMani32kMulticart,
                     Mapper.MANI_32K_MULTICART),
+            mapper("SL multicart", CartridgeProperties::isSlMulticart,
+                    Mapper.SL_MULTICART),
             mapper("Duz multicart", CartridgeProperties::isDuzMulticart,
                     Mapper.DUZ_MULTICART),
             mapper("Blue Hippo G.B.O.S. multicart", CartridgeProperties::isBhgosMulticart,
                     Mapper.BHGOS_MULTICART),
             mapper("Makon/NT old type 2 multicart", CartridgeProperties::isMakonNtOld2,
                     Mapper.MAKON_NT_OLD_2),
+            mapper("BBD unlicensed mapper", CartridgeProperties::isBbd,
+                    Mapper.BBD),
+            mapper("Sintax unlicensed mapper", CartridgeProperties::isSintax,
+                    Mapper.SINTAX),
             profile("raw Sachen MMC1", CartridgeProperties::isRawSachenMmc1,
                     Mapper.SACHEN_MMC1, Feature.SCRAMBLED_SACHEN_HEADER),
             profile("raw Sachen MMC2", CartridgeProperties::isRawSachenMmc2,
                     Mapper.SACHEN_MMC2, Feature.SCRAMBLED_SACHEN_HEADER),
+            features("Rocman X Gold option probe", CartridgeProperties::isRocmanXGold,
+                    Feature.SACHEN_OPEN_BUS_BANKS),
             mapper("linear-header Sachen MMC2", CartridgeProperties::isLinearSachenMmc2,
                     Mapper.SACHEN_MMC2_LINEAR),
             mapper("cooked Sachen MMC", CartridgeProperties::isCookedSachen,
@@ -101,6 +117,14 @@ public final class CartridgeProperties {
                     Feature.LEGACY_SPEED_SWITCH),
             features("Smurfs Lightforce trainer", CartridgeProperties::isSmurfsTrainer,
                     Feature.BLANK_CGB_BOOT_TILE),
+            features("AudioArts Gameboy Music V1", CartridgeProperties::isAudioArtsMusicV1,
+                    Feature.CLEAR_BOOT_TILEMAP),
+            features("FreeArt Intro V2", CartridgeProperties::isFreeArtIntroV2,
+                    Feature.MBC1_RAM_ENABLED_AT_POWER_ON),
+            features("Helitac V0.01 boot WRAM", CartridgeProperties::isHelitacV001,
+                    Feature.CLEAR_CGB_BOOT_OAM_SHADOW),
+            features("Helitac demo DMA compatibility", CartridgeProperties::isHelitacDemo,
+                    Feature.DMA_BLOCKED_READS_RETURN_FF),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -247,6 +271,18 @@ public final class CartridgeProperties {
         return false;
     }
 
+    private static boolean isSlMulticart(RomInfo info) {
+        int[] title = {
+                'P', 'O', 'K', 'E', 'M', 'O', 'N', '_',
+                'G', 'L', 'D', 'A', 'A', 'U', 'J'
+        };
+        return info.data.length == 0x400000
+                && matches(info.data, 0x0134, title)
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x10
+                && info.byteAt(0x0148) == 0x06;
+    }
+
     private static boolean isBhgosMulticart(RomInfo info) {
         return "MultiCart".equals(info.title())
                 && isMbc5Type(info.rawType())
@@ -257,6 +293,18 @@ public final class CartridgeProperties {
         return info.data.length > 0x80000
                 && "POKEBOM USA".equals(info.title())
                 && info.byteAt(0x0102) == 0xe0;
+    }
+
+    private static boolean isBbd(RomInfo info) {
+        int secondaryLogo = info.crc32(0x0184, 0x30);
+        return (secondaryLogo == 0xc7d8c1df || secondaryLogo == 0x6d1ea662)
+                && info.byteAt(0x7fff) != 0x01;
+    }
+
+    private static boolean isSintax(RomInfo info) {
+        int secondaryLogo = info.crc32(0x0184, 0x30);
+        return (secondaryLogo == 0x6c1dcf2d || secondaryLogo == 0x99e3449d)
+                && info.byteAt(0x7fff) != 0x01;
     }
 
     private static boolean isRawSachenMmc1(RomInfo info) {
@@ -280,6 +328,10 @@ public final class CartridgeProperties {
                 && info.byteAt(0x106) == 0xc0
                 && info.byteAt(0x107) == 0x00
                 && hasLogoAt(info.data, 0x184);
+    }
+
+    private static boolean isRocmanXGold(RomInfo info) {
+        return info.crc32() == 0x7e1351cf;
     }
 
     private static boolean isCookedSachen(RomInfo info) {
@@ -363,6 +415,64 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0143) == 0xc0
                 && info.rawType() == 0x1b
                 && matches(info.data, 0xddea4, trainerSignature);
+    }
+
+    private static boolean isAudioArtsMusicV1(RomInfo info) {
+        int[] entryStub = {
+                0xf3, 0x31, 0xf4, 0xff, 0xc3, 0x69, 0x01, 0x33,
+                0x15, 0x00, 0x40, 0x4b, 0x47, 0x6b, 0x48, 0x00
+        };
+        return info.data.length == 0x8000
+                && "Gameboy Music V1".equals(info.title())
+                && info.rawType() == 0x00
+                && info.byteAt(0x0148) == 0x00
+                && info.byteAt(0x0149) == 0x00
+                && info.byteAt(0x014a) == 0xde
+                && info.byteAt(0x014b) == 0xc0
+                && info.byteAt(0x014c) == 0x03
+                && info.byteAt(0x014d) == 0xba
+                && info.byteAt(0x014e) == 0x0f
+                && info.byteAt(0x014f) == 0x84
+                && matches(info.data, 0x0150, entryStub);
+    }
+
+    private static boolean isFreeArtIntroV2(RomInfo info) {
+        int[] entryStub = {
+                0xf3, 0x31, 0xff, 0xff, 0x97, 0xe0, 0x40, 0xe0,
+                0x42, 0xe0, 0x43, 0x3c, 0xe0, 0x4d, 0xe0, 0xff,
+                0x10, 0x00, 0xcd, 0x78, 0x16
+        };
+        return info.data.length == 0x8000
+                && info.title().startsWith("FreeArt Intro 2")
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x02
+                && info.byteAt(0x0148) == 0x00
+                && info.byteAt(0x0149) == 0x03
+                && info.byteAt(0x014e) == 0xc1
+                && info.byteAt(0x014f) == 0x1d
+                && matches(info.data, 0x0150, entryStub);
+    }
+
+    private static boolean isHelitacV001(RomInfo info) {
+        return info.data.length == 0x100000
+                && "Helitac".equals(info.title())
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x1c
+                && info.byteAt(0x0148) == 0x05
+                && info.byteAt(0x0149) == 0x00
+                && info.byteAt(0x014e) == 0x5e
+                && info.byteAt(0x014f) == 0xb8;
+    }
+
+    private static boolean isHelitacDemo(RomInfo info) {
+        return info.data.length == 0x100000
+                && "Helitac".equals(info.title())
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x1c
+                && info.byteAt(0x0148) == 0x05
+                && info.byteAt(0x0149) == 0x00
+                && info.byteAt(0x014e) == 0x35
+                && info.byteAt(0x014f) == 0xbc;
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {
@@ -516,13 +626,20 @@ public final class CartridgeProperties {
 
         private int crc32() {
             if (crc32 == null) {
-                CRC32 value = new CRC32();
-                for (int b : data) {
-                    value.update(b);
-                }
-                crc32 = (int) value.getValue();
+                crc32 = crc32(0, data.length);
             }
             return crc32;
+        }
+
+        private int crc32(int offset, int length) {
+            if (offset < 0 || length < 0 || offset + length > data.length) {
+                return -1;
+            }
+            CRC32 value = new CRC32();
+            for (int i = offset; i < offset + length; i++) {
+                value.update(data[i]);
+            }
+            return (int) value.getValue();
         }
     }
 }
