@@ -259,6 +259,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return objStep >= 0 || objWaiting;
     }
 
+    public boolean hasObjectsOnLine() {
+        return spriteCount > 0;
+    }
+
     public boolean isWindowBeingFetched() {
         return windowBeingFetched;
     }
