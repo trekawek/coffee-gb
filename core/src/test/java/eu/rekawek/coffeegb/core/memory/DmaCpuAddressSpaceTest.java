@@ -39,6 +39,14 @@ public class DmaCpuAddressSpaceTest {
         assertEquals(0x42, fixture.cpu.getByte(0xc001));
     }
 
+    @Test
+    public void compatibilityModeReturnsFFForBlockedReads() {
+        Fixture fixture = new Fixture(true, 0xc0, true);
+
+        assertEquals(0xff, fixture.cpu.getByte(0xc001));
+        assertEquals(0x11, fixture.cpu.getByte(0x0100));
+    }
+
     private static class Fixture {
 
         private final TestAddressSpace memory = new TestAddressSpace();
@@ -46,6 +54,10 @@ public class DmaCpuAddressSpaceTest {
         private final DmaCpuAddressSpace cpu;
 
         private Fixture(boolean gbc, int sourceHigh) {
+            this(gbc, sourceHigh, false);
+        }
+
+        private Fixture(boolean gbc, int sourceHigh, boolean blockedReadsReturnFF) {
             memory.setByte(0x0100, 0x11);
             memory.setByte(0x8000, 0x55);
             memory.setByte(0xc001, 0x22);
@@ -53,7 +65,7 @@ public class DmaCpuAddressSpaceTest {
             memory.setByte(sourceHigh << 8, 0x42);
 
             Dma dma = new Dma(memory, new Ram(0xfe00, 0xa0), new SpeedMode(gbc));
-            cpu = new DmaCpuAddressSpace(memory, dma, gbc);
+            cpu = new DmaCpuAddressSpace(memory, dma, gbc, blockedReadsReturnFF);
             dma.setByte(0xff46, sourceHigh);
             for (int i = 0; i < 5; i++) {
                 dma.tick();

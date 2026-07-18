@@ -187,7 +187,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         mmu.indexSpaces();
         mmu.setBusListener(cartridge.getSachenMmc());
 
-        cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc),
+        cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc,
+                cartridgeProperties.has(CartridgeProperties.Feature.DMA_BLOCKED_READS_RETURN_FF)),
                 interruptManager, gpu, speedMode, display);
 
         interruptManager.disableInterrupts(false);
