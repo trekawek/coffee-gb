@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.memory;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,8 +43,16 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     // one; null for every other cartridge (see SachenMmc)
     private transient eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc busListener;
 
+    // the CodeBreaker pass-through cartridge watches the console bus for writes to the
+    // last byte of HRAM, using bit 7 as its built-in motor line
+    private transient CodeBreakerRumble codeBreakerRumble;
+
     public void setBusListener(eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc listener) {
         this.busListener = listener;
+    }
+
+    public void setCodeBreakerRumble(CodeBreakerRumble codeBreakerRumble) {
+        this.codeBreakerRumble = codeBreakerRumble;
     }
 
     public Mmu(boolean gbc) {
@@ -110,6 +119,9 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
             busListener.onHighBusWrite();
         }
         getSpace(address).setByte(address, value);
+        if (codeBreakerRumble != null && address == 0xfffe) {
+            codeBreakerRumble.onHramWrite(value);
+        }
     }
 
     @Override

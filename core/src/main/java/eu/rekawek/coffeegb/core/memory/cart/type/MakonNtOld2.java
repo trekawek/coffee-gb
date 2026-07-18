@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 
 import java.util.Arrays;
 
@@ -134,7 +135,7 @@ public class MakonNtOld2 implements MemoryController {
         }
         motorOn = on;
         if (eventBus != null) {
-            eventBus.post(new Mbc5.RumbleEvent(on));
+            eventBus.post(new RumbleEvent(on));
         }
     }
 
