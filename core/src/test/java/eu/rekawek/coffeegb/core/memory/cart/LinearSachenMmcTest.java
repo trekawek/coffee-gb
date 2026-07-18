@@ -18,7 +18,11 @@ public class LinearSachenMmcTest {
             0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E};
 
     private static byte[] linearSachenRom() {
-        byte[] rom = new byte[0x10000];
+        return linearSachenRom(0x10000);
+    }
+
+    private static byte[] linearSachenRom(int size) {
+        byte[] rom = new byte[size];
         rom[0x100] = 0x00;
         rom[0x101] = (byte) 0xc3;
         rom[0x102] = 0x50;
@@ -73,5 +77,67 @@ public class LinearSachenMmcTest {
         assertEquals(0x11, cart.getByte(0x6000));
         cart.setByte(0x2000, 0x03);
         assertEquals(0x33, cart.getByte(0x6000));
+    }
+
+    @Test
+    public void rawLinearCartTreatsA6HighWritesAsNormalBankWrites() throws IOException {
+        byte[] rom = linearSachenRom(0x80000);
+        for (int bank = 0; bank < 32; bank++) {
+            rom[bank * 0x4000 + 0x200] = (byte) bank;
+        }
+        Cartridge cart = new Cartridge(new Rom(rom), Battery.NULL_BATTERY);
+
+        // This is the menu's launch sequence for Flea War: select banks 20/21.
+        cart.setByte(0x2000, 0xff);
+        cart.setByte(0x0000, 0x14);
+        cart.setByte(0x4000, 0x14);
+        cart.setByte(0x2000, 0x00);
+        assertEquals(0x14, cart.getByte(0x0200));
+        assertEquals(0x15, cart.getByte(0x4200));
+
+        // Flea War clears memory through the cartridge window. On a raw MMC2, A6 is
+        // not an outer-select signal: these remain ordinary bank-register writes.
+        cart.setByte(0x3fff, 0x04);
+        assertEquals(0x14, cart.getByte(0x0200));
+        assertEquals(0x14, cart.getByte(0x4200));
+        cart.setByte(0x3ffe, 0x01);
+        assertEquals(0x15, cart.getByte(0x4200));
+    }
+
+    @Test
+    public void keepsWrappedMenuHeaderLinearAndUnscramblesMappedGameHeader() throws IOException {
+        byte[] rom = linearSachenRom(0x80000);
+        rom[0x0140] = 0x3c;
+        rom[0x14 * 0x4000 + 0x0101] = 0x69;
+        rom[0x14 * 0x4000 + unscramble(0x0100)] = 0x5a;
+        rom[0x14 * 0x4000 + unscramble(0x0101)] = (byte) 0xa5;
+        Cartridge cart = new Cartridge(new Rom(rom), Battery.NULL_BATTERY);
+
+        // The menu probes base 0x20 on this 32-bank image. It wraps to physical bank 0,
+        // whose alternate-wiring power-on header remains linear.
+        cart.setByte(0x2000, 0xff);
+        cart.setByte(0x0000, 0x20);
+        cart.setByte(0x4000, 0x20);
+        cart.setByte(0x2000, 0x00);
+        assertEquals(0x00, cart.getByte(0x0100));
+        assertEquals(0xc3, cart.getByte(0x0101));
+
+        // Embedded games keep the normal Sachen header permutation. Flea War maps
+        // physical bank 20 and enters through this 0x0100 reset header.
+        cart.setByte(0x2000, 0xff);
+        cart.setByte(0x0000, 0x14);
+        cart.setByte(0x4000, 0x14);
+        cart.setByte(0x2000, 0x00);
+        assertEquals(0x5a, cart.getByte(0x0100));
+        assertEquals(0xa5, cart.getByte(0x0101));
+    }
+
+    private static int unscramble(int address) {
+        int result = address & 0xffac;
+        result |= (address & 0x40) >> 6;
+        result |= (address & 0x10) >> 3;
+        result |= (address & 0x02) << 3;
+        result |= (address & 0x01) << 6;
+        return result;
     }
 }
