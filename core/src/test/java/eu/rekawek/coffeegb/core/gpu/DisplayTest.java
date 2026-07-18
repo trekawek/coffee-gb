@@ -7,7 +7,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertTrue;
 
 public class DisplayTest {
 
@@ -17,8 +19,9 @@ public class DisplayTest {
     public void dmgBlanksFirstFrameAfterLcdEnable() {
         Display display = new Display(false);
         EventBusImpl eventBus = new EventBusImpl(null, null, false);
-        AtomicReference<int[]> frame = new AtomicReference<>();
-        eventBus.register(event -> frame.set(event.pixels().clone()), Display.DmgFrameReadyEvent.class);
+        AtomicReference<Display.DmgFrameReadyEvent> frame = new AtomicReference<>();
+        eventBus.register(event -> frame.set(new Display.DmgFrameReadyEvent(
+                event.pixels().clone(), event.lcdBlank())), Display.DmgFrameReadyEvent.class);
         display.init(eventBus);
 
         fillDmg(display, 3);
@@ -29,13 +32,30 @@ public class DisplayTest {
         fillDmg(display, 2);
         display.frameIsReady();
 
-        assertArrayEquals(new int[PIXELS], frame.get());
+        assertArrayEquals(new int[PIXELS], frame.get().pixels());
+        assertTrue(frame.get().lcdBlank());
 
         int[] expected = new int[PIXELS];
         java.util.Arrays.fill(expected, 1);
         fillDmg(display, 1);
         display.frameIsReady();
-        assertArrayEquals(expected, frame.get());
+        assertArrayEquals(expected, frame.get().pixels());
+        assertFalse(frame.get().lcdBlank());
+    }
+
+    @Test
+    public void dmgMarksLcdOffBlankForPresentation() {
+        Display display = new Display(false);
+        EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        AtomicReference<Display.DmgFrameReadyEvent> frame = new AtomicReference<>();
+        eventBus.register(frame::set, Display.DmgFrameReadyEvent.class);
+        display.init(eventBus);
+
+        display.disableLcd();
+        display.blankFrame();
+
+        assertArrayEquals(new int[PIXELS], frame.get().pixels());
+        assertTrue(frame.get().lcdBlank());
     }
 
     @Test

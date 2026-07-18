@@ -42,6 +42,8 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private boolean frameIsWaiting;
 
+    private boolean resetBlendForWaitingFrame;
+
     private int scale;
 
     private boolean grayscale;
@@ -99,7 +101,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     private synchronized void onGbcFrame(Display.GbcFrameReadyEvent e) {
         e.toRgb(waitingFrame, colorCorrection);
         setBorder(false);
-        frameQueued();
+        frameQueued(false);
     }
 
     private synchronized void onDmgFrame(Display.DmgFrameReadyEvent e) {
@@ -108,13 +110,13 @@ public class SwingDisplay extends JPanel implements Runnable {
         }
         e.toRgb(waitingFrame, grayscale);
         setBorder(false);
-        frameQueued();
+        frameQueued(e.lcdBlank());
     }
 
     private synchronized void onSgbFrame(SgbDisplay.SgbFrameReadyEvent e) {
         e.toRgb(waitingFrame, grayscale);
         setBorder(e.includeBorder());
-        frameQueued();
+        frameQueued(false);
     }
 
     /**
@@ -122,7 +124,8 @@ public class SwingDisplay extends JPanel implements Runnable {
      * frame yet. In particular, LCD-off can replace a just-finished partial scanout before
      * Swing paints it instead of leaving that stale transition visible for a host frame.
      */
-    private void frameQueued() {
+    private void frameQueued(boolean resetBlend) {
+        resetBlendForWaitingFrame = resetBlend;
         if (!frameIsWaiting) {
             frameIsWaiting = true;
             notify();
@@ -272,6 +275,11 @@ public class SwingDisplay extends JPanel implements Runnable {
             synchronized (this) {
                 if (frameIsWaiting) {
                     if (blending) {
+                        if (resetBlendForWaitingFrame) {
+                            // LCD-off is a new panel state, not another rendered frame to
+                            // average. Retaining a partial scanout here creates ghost sprites.
+                            previousFrame = null;
+                        }
                         blendWithPreviousFrame();
                     }
                     synchronized (rasterLock) {

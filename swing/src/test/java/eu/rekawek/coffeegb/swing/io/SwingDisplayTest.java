@@ -78,6 +78,46 @@ public class SwingDisplayTest {
     }
 
     @Test
+    public void lcdBlankDoesNotBlendWithTransitionFrame() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = new SwingDisplay(
+                new EmulatorProperties().getDisplay(), eventBus, "test");
+        eventBus.post(new SwingDisplay.SetBlendingEvent(true));
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+
+        int size = Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT;
+        int[] scene = new int[size];
+        java.util.Arrays.fill(scene, 3);
+        int[] transition = new int[size];
+        transition[0] = 3;
+        int[] blank = new int[size];
+        int[] expectedBlank = new int[size];
+        new Display.DmgFrameReadyEvent(blank).toRgb(
+                expectedBlank, new EmulatorProperties().getDisplay().getGrayscale());
+
+        Field previousFrameField = SwingDisplay.class.getDeclaredField("previousFrame");
+        previousFrameField.setAccessible(true);
+        Field imagePixelsField = SwingDisplay.class.getDeclaredField("imgPixels");
+        imagePixelsField.setAccessible(true);
+        try {
+            eventBus.post(new Display.DmgFrameReadyEvent(scene));
+            awaitArray(previousFrameField, display, dmgRgb(scene));
+
+            eventBus.post(new Display.DmgFrameReadyEvent(transition));
+            awaitArray(previousFrameField, display, dmgRgb(transition));
+
+            eventBus.post(new Display.DmgFrameReadyEvent(blank, true));
+            awaitArray(previousFrameField, display, expectedBlank);
+            assertArrayEquals(expectedBlank, (int[]) imagePixelsField.get(display));
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
     public void paintingDoesNotAcquireTheComponentMonitor() throws Exception {
         int modifiers = SwingDisplay.class
                 .getDeclaredMethod("paintComponent", Graphics.class)
@@ -165,6 +205,27 @@ public class SwingDisplayTest {
         Thread thread = new Thread(runnable);
         thread.setDaemon(true);
         return thread;
+    }
+
+    private static int[] dmgRgb(int[] pixels) {
+        int[] rgb = new int[pixels.length];
+        new Display.DmgFrameReadyEvent(pixels).toRgb(
+                rgb, new EmulatorProperties().getDisplay().getGrayscale());
+        return rgb;
+    }
+
+    private static void awaitArray(Field field, Object target, int[] expected) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline) {
+            synchronized (target) {
+                int[] actual = (int[]) field.get(target);
+                if (actual != null && java.util.Arrays.equals(expected, actual)) {
+                    return;
+                }
+            }
+            Thread.yield();
+        }
+        fail("display thread did not upload the expected frame");
     }
 
     private static void paint(SwingDisplay display, Graphics graphics, CountDownLatch painted,
