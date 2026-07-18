@@ -45,6 +45,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             case BUNG_EMS -> new BungEms(rom, battery);
             case HIDDEN_MMM01 -> new Mmm01(rom, battery, false);
             case MANI_32K_MULTICART -> new Mani32kMulticart(rom);
+            case SL_MULTICART -> new SlMulticart(rom, battery);
             case DUZ_MULTICART -> new DuzMulticart(rom, battery);
             case BHGOS_MULTICART -> new BhgosMulticart(rom, battery);
             case MAKON_NT_OLD_2 -> new MakonNtOld2(rom, battery);
@@ -136,6 +137,9 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
                     ? rom.getRamSize() : 0x2000 * rom.getRamBanks();
             if (rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.BUNG_EMS) {
                 ramSize = 0x8000;
+            }
+            if (rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.SL_MULTICART) {
+                ramSize = 0x20000;
             }
             if (ramSize == 0 && rom.getType().isRam()) {
                 ramSize = 0x2000;

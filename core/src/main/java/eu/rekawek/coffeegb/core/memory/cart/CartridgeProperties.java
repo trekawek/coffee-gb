@@ -19,6 +19,7 @@ public final class CartridgeProperties {
         BUNG_EMS,
         HIDDEN_MMM01,
         MANI_32K_MULTICART,
+        SL_MULTICART,
         DUZ_MULTICART,
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
@@ -71,6 +72,8 @@ public final class CartridgeProperties {
                     Mapper.HIDDEN_MMM01),
             mapper("Mani 32 KiB multicart", CartridgeProperties::isMani32kMulticart,
                     Mapper.MANI_32K_MULTICART),
+            mapper("SL multicart", CartridgeProperties::isSlMulticart,
+                    Mapper.SL_MULTICART),
             mapper("Duz multicart", CartridgeProperties::isDuzMulticart,
                     Mapper.DUZ_MULTICART),
             mapper("Blue Hippo G.B.O.S. multicart", CartridgeProperties::isBhgosMulticart,
@@ -245,6 +248,18 @@ public final class CartridgeProperties {
             }
         }
         return false;
+    }
+
+    private static boolean isSlMulticart(RomInfo info) {
+        int[] title = {
+                'P', 'O', 'K', 'E', 'M', 'O', 'N', '_',
+                'G', 'L', 'D', 'A', 'A', 'U', 'J'
+        };
+        return info.data.length == 0x400000
+                && matches(info.data, 0x0134, title)
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x10
+                && info.byteAt(0x0148) == 0x06;
     }
 
     private static boolean isBhgosMulticart(RomInfo info) {
