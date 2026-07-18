@@ -41,7 +41,8 @@ public final class CartridgeProperties {
         MBC1_MULTICART,
         MBC1_FULL_BANK_REGISTER,
         MBC1_ALWAYS_ENABLED_RAM,
-        MBC2_EXTENDED_BANKING
+        MBC2_EXTENDED_BANKING,
+        CLEAR_CGB_BOOT_OAM_SHADOW
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -101,6 +102,8 @@ public final class CartridgeProperties {
                     Feature.LEGACY_SPEED_SWITCH),
             features("Smurfs Lightforce trainer", CartridgeProperties::isSmurfsTrainer,
                     Feature.BLANK_CGB_BOOT_TILE),
+            features("Helitac V0.01 boot WRAM", CartridgeProperties::isHelitacV001,
+                    Feature.CLEAR_CGB_BOOT_OAM_SHADOW),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -363,6 +366,17 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0143) == 0xc0
                 && info.rawType() == 0x1b
                 && matches(info.data, 0xddea4, trainerSignature);
+    }
+
+    private static boolean isHelitacV001(RomInfo info) {
+        return info.data.length == 0x100000
+                && "Helitac".equals(info.title())
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x1c
+                && info.byteAt(0x0148) == 0x05
+                && info.byteAt(0x0149) == 0x00
+                && info.byteAt(0x014e) == 0x5e
+                && info.byteAt(0x014f) == 0xb8;
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {
