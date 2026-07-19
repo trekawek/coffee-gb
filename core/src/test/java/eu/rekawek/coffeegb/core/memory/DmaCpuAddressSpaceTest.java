@@ -77,15 +77,17 @@ public class DmaCpuAddressSpaceTest {
     }
 
     @Test
-    public void dmgHighSourceCopiesEchoRamAndDrivesTheCopiedByte() {
+    public void dmgHighSourceReleasesPartialDecodeForCopiedByteTail() {
         Fixture fixture = new Fixture(false, 0xe0);
-        fixture.memory.setByte(0xc000, 0x66);
+        fixture.memory.setByte(0xc09d, 0x66);
 
-        // The source changed after slot 0 was copied, so the CPU still sees the
-        // byte held by the DMA/OAM latch rather than a fresh source-memory read.
-        assertEquals(0x42, fixture.cpu.getByte(0xe000));
-        assertEquals(0x42, fixture.cpu.getByte(0xfd00));
+        assertEquals(0x80, fixture.cpu.getByte(0xe000));
+        assertEquals(0x80, fixture.cpu.getByte(0xfd00));
         assertEquals(0x42, fixture.oam.getByte(0xfe00));
+
+        fixture.tick(628); // clock 636 releases the partial page decode
+        assertEquals(0x66, fixture.cpu.getByte(0xe000));
+        assertEquals(0x66, fixture.cpu.getByte(0xfd00));
     }
 
     @Test
