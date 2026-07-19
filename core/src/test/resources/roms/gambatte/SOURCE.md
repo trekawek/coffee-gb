@@ -13,4 +13,11 @@ archive were rebuilt from the linked source so their expected DMG/CGB results
 remain encoded in their canonical upstream filenames and the build is
 reproducible.
 
+The automated profile pins the archive at 3,524 ROMs and discovers every
+canonical hexadecimal tile verdict: 4,674 strict model cases (1,651 DMG and
+3,023 CGB) across 3,077 ROMs. Audio, PNG-only, `xout`, `blank`, and diagnostic
+dumper entries do not encode a hexadecimal tile verdict and remain in the
+complete archive. Optional deterministic batches partition the sorted manifest;
+the default profile still selects every verdict.
+
 SHA-256: `5492d5a2d79296fedd732fc3dfc8e3de702946cea7cd7e4977f9470b00815900`

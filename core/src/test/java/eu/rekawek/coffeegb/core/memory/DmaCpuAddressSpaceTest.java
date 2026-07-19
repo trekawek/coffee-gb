@@ -21,6 +21,7 @@ public class DmaCpuAddressSpaceTest {
         fixture.cpu.setByte(0xc001, 0x99);
         fixture.cpu.setByte(0xff80, 0x99);
         assertEquals(0x22, fixture.memory.getByte(0xc001));
+        assertEquals(0x99, fixture.oam.getByte(0xfe00));
         assertEquals(0x99, fixture.memory.getByte(0xff80));
     }
 
@@ -50,6 +51,16 @@ public class DmaCpuAddressSpaceTest {
     }
 
     @Test
+    public void cgbCartridgeDmaNormalizesEchoBeforeSelectingWramHalf() {
+        Fixture fixture = new Fixture(true, 0x7f);
+
+        fixture.cpu.setByte(0xefff, 0xaa);
+
+        assertEquals(0xaa, fixture.memory.getByte(0xdfff));
+        assertEquals(0x00, fixture.memory.getByte(0xffff));
+    }
+
+    @Test
     public void cgbCanUseTheCartridgeBusDuringWramDma() {
         Fixture fixture = new Fixture(true, 0xc0);
 
@@ -66,15 +77,24 @@ public class DmaCpuAddressSpaceTest {
     }
 
     @Test
-    public void dmgInvalidHighSourceCopiesEchoRamButSynthesizesCpuBusValue() {
+    public void dmgHighSourceCopiesEchoRamAndDrivesTheCopiedByte() {
         Fixture fixture = new Fixture(false, 0xe0);
         fixture.memory.setByte(0xc000, 0x66);
 
-        assertEquals(0x80, fixture.cpu.getByte(0xe000));
-        assertEquals(0x80, fixture.cpu.getByte(0xfd00));
+        // The source changed after slot 0 was copied, so the CPU still sees the
+        // byte held by the DMA/OAM latch rather than a fresh source-memory read.
+        assertEquals(0x42, fixture.cpu.getByte(0xe000));
+        assertEquals(0x42, fixture.cpu.getByte(0xfd00));
+        assertEquals(0x42, fixture.oam.getByte(0xfe00));
+    }
 
-        fixture.tick(3); // clock 8 copies the first source byte
-        assertEquals(0x66, fixture.oam.getByte(0xfe00));
+    @Test
+    public void sourceBusConflictStartsWithTheFirstCopiedByte() {
+        Fixture fixture = new Fixture(false, 0x12, false, 7);
+
+        assertEquals(0x11, fixture.cpu.getByte(0x0100));
+        fixture.tick(1);
+        assertEquals(0x42, fixture.cpu.getByte(0x0100));
     }
 
     @Test
@@ -90,12 +110,87 @@ public class DmaCpuAddressSpaceTest {
         Fixture fixture = new Fixture(false, 0x90);
         fixture.memory.setByte(0xfd00, 0x77);
 
-        fixture.tick(630); // 5 constructor clocks + 630 = clock 635
+        fixture.tick(627); // 8 constructor clocks + 627 = clock 635
         assertEquals(0x9d, fixture.cpu.getByte(0xfd00));
 
         fixture.tick(1); // clock 636 releases the source bus
         assertEquals(0x77, fixture.cpu.getByte(0xfd00));
         assertTrue(fixture.dma.isOamBlocked());
+    }
+
+    @Test
+    public void dmgWramWriteCollisionAndsTheCurrentOamByte() {
+        Fixture fixture = new Fixture(false, 0xc0);
+
+        fixture.cpu.setByte(0xc001, 0x0f);
+
+        assertEquals(0x02, fixture.oam.getByte(0xfe00));
+        assertEquals(0x22, fixture.memory.getByte(0xc001));
+    }
+
+    @Test
+    public void cgbVramReadCollisionReturnsAndThenClearsTheCurrentOamByte() {
+        Fixture fixture = new Fixture(true, 0x80);
+
+        assertEquals(0x42, fixture.cpu.getByte(0x8000));
+        assertEquals(0x00, fixture.oam.getByte(0xfe00));
+    }
+
+    @Test
+    public void cgbVramWriteCollisionClearsTheCurrentOamByte() {
+        Fixture fixture = new Fixture(true, 0x80);
+
+        fixture.cpu.setByte(0x8000, 0x99);
+
+        assertEquals(0x00, fixture.oam.getByte(0xfe00));
+        assertEquals(0x42, fixture.memory.getByte(0x8000));
+    }
+
+    @Test
+    public void cgbWramWriteCollisionIsDropped() {
+        Fixture fixture = new Fixture(true, 0xc0);
+
+        fixture.cpu.setByte(0xc001, 0x99);
+
+        assertEquals(0x42, fixture.oam.getByte(0xfe00));
+        assertEquals(0x22, fixture.memory.getByte(0xc001));
+    }
+
+    @Test
+    public void unusableOamRangeIsDisconnectedDuringDma() {
+        Fixture fixture = new Fixture(true, 0x02);
+        fixture.memory.setByte(0xfeff, 0x34);
+
+        fixture.cpu.setByte(0xfeff, 0xaa);
+
+        assertEquals(0xff, fixture.cpu.getByte(0xfeff));
+        assertEquals(0x34, fixture.memory.getByte(0xfeff));
+    }
+
+    @Test
+    public void interruptStackWritesDriveTheFollowingDmaSlots() {
+        Fixture fixture = new Fixture(false, 0x12);
+        fixture.memory.setByte(0x129e, 0x76);
+        fixture.memory.setByte(0x129f, 0x87);
+        fixture.tick(628); // clock 636; byte 158 has not reached OAM yet
+
+        fixture.dma.setCpuInterruptStackWrite(true);
+        fixture.cpu.setByte(0x0001, 0xff);
+        Dma restored = new Dma(fixture.memory, fixture.oam, new SpeedMode(false));
+        restored.restoreFromMemento(fixture.dma.saveToMemento());
+        DmaCpuAddressSpace restoredCpu =
+                new DmaCpuAddressSpace(fixture.memory, restored, false);
+        for (int i = 0; i < 4; i++) {
+            restored.tick();
+        }
+        assertEquals(0xff, fixture.oam.getByte(0xfe9e));
+
+        restored.setCpuInterruptStackWrite(true);
+        restoredCpu.setByte(0x0000, 0x94);
+        for (int i = 0; i < 4; i++) {
+            restored.tick();
+        }
+        assertEquals(0x94, fixture.oam.getByte(0xfe9f));
     }
 
     @Test
@@ -126,17 +221,22 @@ public class DmaCpuAddressSpaceTest {
         }
 
         private Fixture(boolean gbc, int sourceHigh, boolean blockedReadsReturnFF) {
+            this(gbc, sourceHigh, blockedReadsReturnFF, 8);
+        }
+
+        private Fixture(boolean gbc, int sourceHigh, boolean blockedReadsReturnFF,
+                        int initialTicks) {
             memory.setByte(0x0100, 0x11);
             memory.setByte(0x8000, 0x55);
             memory.setByte(0xc001, 0x22);
             memory.setByte(0xd001, 0x44);
             memory.setByte(0xff80, 0x33);
-            memory.setByte(sourceHigh << 8, 0x42);
+            memory.setByte(DmaAddressSpace.mapAddress(sourceHigh << 8, gbc), 0x42);
 
             dma = new Dma(memory, oam, new SpeedMode(gbc));
             cpu = new DmaCpuAddressSpace(memory, dma, gbc, blockedReadsReturnFF);
             dma.setByte(0xff46, sourceHigh);
-            tick(5);
+            tick(initialTicks);
         }
 
         private void tick(int count) {

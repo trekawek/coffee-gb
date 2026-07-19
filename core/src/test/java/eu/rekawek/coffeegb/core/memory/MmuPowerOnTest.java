@@ -24,4 +24,17 @@ public class MmuPowerOnTest {
         }
         assertTrue(hasNonZeroSeed);
     }
+
+    @Test
+    public void dmgHighWramPagesFollowTheMeasuredPowerOnBias() {
+        Mmu mmu = new Mmu(false);
+        mmu.indexSpaces();
+
+        for (int address = 0xde00; address < 0xdf00; address++) {
+            assertEquals(0xff, mmu.getByte(address));
+        }
+        for (int address = 0xdf00; address < 0xe000; address++) {
+            assertEquals(0x00, mmu.getByte(address));
+        }
+    }
 }

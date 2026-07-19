@@ -34,13 +34,24 @@ public class DmaCpuAddressSpace implements AddressSpace, Serializable {
 
     @Override
     public void setByte(int address, int value) {
-        if (!dma.isCpuAccessBlocked(address, gbc)) {
+        if (dma.isOamBlocked() && address >= 0xfea0 && address < 0xff00) {
+            // CGB normally mirrors parts of OAM through the unusable range. OAM DMA
+            // disconnects that whole range, so a stack write there must not leak into
+            // the mirror (or the generic backing address space).
+            return;
+        }
+        if (dma.isCpuAccessBlocked(address, gbc)) {
+            dma.onCpuBusWrite(value);
+        } else {
             addressSpace.setByteFromCpu(dma.mapUnblockedCpuAddress(address), value);
         }
     }
 
     @Override
     public int getByte(int address) {
+        if (dma.isOamBlocked() && address >= 0xfea0 && address < 0xff00) {
+            return 0xff;
+        }
         if (dma.isCpuAccessBlocked(address, gbc)) {
             return blockedReadsReturnFF ? 0xff : dma.getCpuBusValue();
         }
