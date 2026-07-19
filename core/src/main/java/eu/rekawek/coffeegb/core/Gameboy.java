@@ -47,6 +47,17 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     // allowing a sustained LCD-off to replace a transition fragment before host paint.
     static final int LCD_OFF_BLANK_DELAY = 4 * 456;
 
+    // Once the CGB speed-switch countdown releases the CPU, the clock mux needs
+    // eight final master ticks to settle. The PPU and independently clocked
+    // peripherals continue, but CPU, timer and DMA clocks remain held.
+    static final int SPEED_SWITCH_TAIL_TICKS = 8;
+
+    // If HBlank DMA remains armed across a single-to-double speed switch, its
+    // pending bus request overlaps the last double-speed machine cycle of the
+    // clock-mux tail. Hardware therefore releases the CPU two master ticks
+    // earlier while leaving the independently clocked PPU phase unchanged.
+    static final int PENDING_HBLANK_SPEED_SWITCH_OVERLAP_TICKS = 2;
+
     private final Cartridge cartridge;
 
     private final Cartridge slotCartridge;
@@ -107,6 +118,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private int lcdOffTicks;
 
+    private int speedSwitchTailTicks;
+
     private boolean blankCgbBootTilePending;
 
     private boolean clearBootTilemapPending;
@@ -153,11 +166,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         dma = new Dma(getAddressSpace(), oamRam, speedMode);
         statRegister = new StatRegister(interruptManager);
         gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode);
+        mmu.setGpu(gpu);
         statRegister.init(gpu);
-        hdma = new Hdma(getAddressSpace());
+        hdma = new Hdma(getAddressSpace(), speedMode);
         sound = new Sound(timer, speedMode, gbc);
         joypad = new Joypad(interruptManager, sgbBus, sgb);
-        serialPort = new SerialPort(interruptManager, timer, gbc, speedMode);
+        serialPort = new SerialPort(interruptManager, gbc, speedMode);
         infraredPort = new InfraredPort(gbc, speedMode);
         codeBreakerRumble = new CodeBreakerRumble();
         mmu.setCodeBreakerRumble(codeBreakerRumble);
@@ -204,15 +218,16 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc,
                 cartridgeProperties.has(CartridgeProperties.Feature.DMA_BLOCKED_READS_RETURN_FF)),
-                interruptManager, gpu, speedMode, display);
+                interruptManager, gpu, speedMode, display, timer);
 
         interruptManager.disableInterrupts(false);
         if (configuration.bootstrapMode != BootstrapMode.SKIP) {
             // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
             // line grid to that write; the CGB divider phase accounts for the boot
-            // ROM's accurately paced HDMA setup, and revision 0 adds another 512 T
-            // (boot_div-cgbABCDE, boot_div-cgb0)
-            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 536 : 12) : 4);
+            // ROM's accurately paced HDMA setup. Revision 0 starts 524 T later, which
+            // is 512 T at its first test read after three fewer NOPs
+            // (boot_div-cgbABCDE, boot_div-cgb0).
+            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 524 : 0) : 4);
             gpu.setByte(0xff40, 0x00);
         }
         boolean bootTimedOut = false;
@@ -452,25 +467,50 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private Mode tickSubsystems() {
         boolean speedSwitching = cpu.isSpeedSwitching();
-        if (!speedSwitching) {
+        boolean speedSwitchTail = speedSwitchTailTicks > 0;
+        // STOP's CGB speed-switch delay pauses instruction execution, not the
+        // timer clock domain. DIV/TIMA continue advancing after STOP resets DIV.
+        if (!speedSwitchTail) {
             timer.tick();
         }
         sound.tickFrameSequencer();
-        if (speedSwitching) {
-            // A CGB speed switch pauses the CPU and DIV, but the PPU keeps running.
+        if (speedSwitchTail) {
+            speedSwitchTailTicks--;
+        } else if (speedSwitching) {
+            // A CGB speed switch pauses instruction execution and VRAM DMA while
+            // the independent timer and PPU clocks continue running.
             cpu.tick();
-            if (hdma.isTransferInProgress()) {
-                hdma.tick();
+            if (!cpu.isSpeedSwitching()) {
+                speedSwitchTailTicks = SPEED_SWITCH_TAIL_TICKS
+                        - (hdma.hasPendingHblankTransfer()
+                        ? PENDING_HBLANK_SPEED_SWITCH_OVERLAP_TICKS : 0);
             }
         } else if (hdma.isTransferInProgress()) {
-            hdma.tick();
+            if (cpu.getState() == Cpu.State.HALTED
+                    || cpu.getState() == Cpu.State.STOPPED) {
+                // HBlank DMA is suspended while the CPU clock is halted or
+                // stopped. Keep ticking the CPU so an interrupt or asserted
+                // joypad line can wake it; a later HBlank can then service the
+                // still-pending transfer.
+                cpu.tick();
+            } else {
+                // VRAM is not connected as a CGB VRAM-DMA source. Its first invalid
+                // read slots expose the instruction bus left at the CPU's next PC.
+                hdma.setCpuBusValue(getAddressSpace().getByte(cpu.getRegisters().getPC()));
+                hdma.tick();
+            }
         } else {
             cpu.tick();
         }
         if (timer.isDivResetPending()) {
             sound.tickFrameSequencer();
         }
-        dma.tick();
+        // OAM DMA is driven by the CPU clock domain. HALT pauses it after the
+        // entry latency; STOP and a CGB speed switch pause it immediately.
+        boolean halted = cpu.getState() == Cpu.State.HALTED;
+        dma.tick(halted || cpu.getState() == Cpu.State.STOPPED
+                        || cpu.getState() == Cpu.State.SPEED_SWITCH || speedSwitchTail,
+                halted);
         sound.tick();
         serialPort.tick();
         infraredPort.tick();
@@ -486,6 +526,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     public Cpu getCpu() {
         return cpu;
+    }
+
+    boolean isSpeedSwitchTailActive() {
+        return speedSwitchTailTicks > 0;
     }
 
     public SpeedMode getSpeedMode() {
@@ -541,7 +585,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, speedSwitchTailTicks, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
     }
 
     @Override
@@ -575,6 +619,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         requestedScreenRefresh = mem.requestScreenRefresh();
         lcdDisabled = mem.lcdDisabled();
         lcdOffTicks = mem.lcdOffTicks();
+        speedSwitchTailTicks = mem.speedSwitchTailTicks();
         blankCgbBootTilePending = mem.blankCgbBootTilePending();
         clearBootTilemapPending = mem.clearBootTilemapPending();
         clearCgbBootOamShadowPending = mem.clearCgbBootOamShadowPending();
@@ -603,7 +648,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                                   Memento<SuperGameboy> superGameboyMemento, Memento<Background> backgroundMemento,
                                   Memento<VRamTransfer> vRamTransferMemento, Memento<SgbDisplay> sgbDisplayMemento,
                                   Memento<Genie> genieMemento, boolean requestScreenRefresh,
-                                  boolean lcdDisabled, int lcdOffTicks,
+                                  boolean lcdDisabled, int lcdOffTicks, int speedSwitchTailTicks,
                                   boolean blankCgbBootTilePending,
                                   boolean clearBootTilemapPending,
                                   boolean clearCgbBootOamShadowPending) implements Memento<Gameboy> {

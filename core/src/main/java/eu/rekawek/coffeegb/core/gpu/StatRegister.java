@@ -27,6 +27,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     public static final int ADDRESS = 0xff41;
 
+    private static final int NEW_FRAME_LYC_EDGE = 8;
+
+    private static final int CGB_DOUBLE_TAIL_LATCH = 454;
+
     private final InterruptManager interruptManager;
 
     private Gpu gpu;
@@ -59,19 +63,52 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         boolean settlingLycLine = false;
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
-            if (gpu.getLine() <= 144 && ticksInLine == 0) {
-                // Release the preceding line's early mode-2 edge before a
-                // possible new LYC edge is registered below.
-                interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
+            boolean nativeDoubleTailLycLatch = isNativeDoubleSpeed()
+                    && ticksInLine == CGB_DOUBLE_TAIL_LATCH
+                    && gpu.getLine() != 153;
+            // In double-speed mode the PPU's line-144 request is readable during
+            // the last two dots of line 143. CPU acceptance remains synchronized
+            // to the internal rollover, preserving ordinary VBlank dispatch timing.
+            if (isNativeDoubleSpeed() && gpu.getLine() == 143
+                    && ticksInLine == CGB_DOUBLE_TAIL_LATCH) {
+                interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
+                        InterruptType.VBlank);
+            }
+            if (gpu.isMode0HaltWakeTick()) {
+                interruptManager.releaseHaltWake(InterruptType.LCDC);
+            }
+            if (gpu.isGbc() && ticksInLine == gpu.getCpuMachineCycleDots()) {
+                interruptManager.releaseHaltWake(InterruptType.LCDC);
+            }
+            // The LY=0 comparison reaches IF four dots after readable LY falls
+            // (dot 8 normally, dot 6 in native double speed), then crosses the
+            // CPU/HALT input synchronizer one CPU M-cycle later.
+            if (gpu.getLine() == 153 && ticksInLine == getNewFrameLycCpuAcceptTick()) {
+                interruptManager.releaseHaltWake(InterruptType.LCDC);
+            }
+            if ((gpu.getLine() <= 144 || gpu.isGbc()) && ticksInLine == 0) {
+                // Release a request latched in the preceding line's tail before a
+                // possible new edge is registered below. Native double speed also
+                // latches LYC requests this way during VBlank (for example 151->152).
+                // PixelTransfer still describes the preceding line here. On DMG an
+                // object-stalled line holds the early mode-2 edge away from both CPU
+                // inputs until rollover; a BG-only line only holds the HALT path.
+                if (gpu.isGbc() || gpu.hasObjectsOnLine()) {
+                    interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
+                } else {
+                    interruptManager.releaseHaltWake(InterruptType.LCDC);
+                }
             }
             if (lycWriteSuppressed
                     && ((gpu.getLine() != 153 && ticksInLine == 0)
-                    || (gpu.getLine() == 153 && ticksInLine == 8))) {
+                    || (gpu.getLine() == 153 && ticksInLine == getNewFrameLycEdgeTick()))) {
                 lycWriteSuppressed = false;
             }
-            // the comparison uses the LY value registered at the line start; the extra
-            // latch point at tick 8 handles the LY=153 -> 0 transition during line 153
-            if (ticksInLine == 0 || ticksInLine == 8) {
+            // The normal comparison uses LY registered at the line start. Native
+            // double speed has a separate tail latch at dot 454; the extra speed-scaled
+            // latch handles the LY=153 -> 0 transition during line 153.
+            if (ticksInLine == 0 || ticksInLine == getNewFrameLycEdgeTick()
+                    || nativeDoubleTailLycLatch) {
                 // On monochrome hardware LY has already returned to 0 when line 153
                 // starts, but the comparator still samples the short-lived 153 value.
                 registeredLy = gpu.getLine() == 153 && ticksInLine == 0
@@ -79,11 +116,17 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                         : gpu.getVisibleLy();
             }
             coincidence = registeredLy == gpu.getRegisters().get(LYC);
-            if ((!gpu.isGbc()
-                    && ticksInLine >= (gpu.isFirstLine() ? 451 : 452)
+            int coincidenceReleaseTick = gpu.getCoincidenceReleaseTick();
+            boolean coincidenceRelease = gpu.isGbc()
+                    ? ticksInLine > coincidenceReleaseTick
+                    : ticksInLine >= coincidenceReleaseTick;
+            boolean nativeDoubleTailComparison = isNativeDoubleSpeed()
+                    && ticksInLine >= CGB_DOUBLE_TAIL_LATCH
+                    && gpu.getLine() != 153;
+            if ((coincidenceRelease && !nativeDoubleTailComparison
                     && gpu.getLine() != 153)
                     || (!gpu.isGbc() && gpu.getLine() == 153
-                    && ticksInLine >= 4 && ticksInLine < 8)
+                    && ticksInLine >= 4 && ticksInLine < getNewFrameLycEdgeTick())
                     || lycWriteSuppressed) {
                 // when LY changes, the comparison result reads 0 until the new value
                 // is registered at the beginning of the next line (lcdon_timing-GS);
@@ -103,7 +146,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                     // edge detector latched across that settling window: if IRQ
                     // dispatch clears IF before tick 4, the same comparison must not
                     // be observed as a second edge (Army Men).
-                    interruptManager.requestInterrupt(InterruptType.LCDC);
+                    if (isNativeDoubleSpeed()) {
+                        interruptManager.requestInterrupt(InterruptType.LCDC);
+                    } else if (gpu.isGbc()) {
+                        interruptManager.requestPhasedInterruptBeforeHaltWake(InterruptType.LCDC);
+                    } else {
+                        interruptManager.requestInterrupt(InterruptType.LCDC);
+                    }
                     intLine = true;
                 }
             }
@@ -168,14 +217,51 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private void updateIntLine(boolean newLine) {
         if (newLine && !intLine) {
-            int earlyMode2Edge = gpu.isFirstLine() ? 451 : 452;
-            if (gpu.getLine() < 144 && gpu.getTicksInLine() == earlyMode2Edge) {
-                interruptManager.requestInterruptBeforeCpuAcceptance(InterruptType.LCDC);
+            int earlyMode2Edge = gpu.getEarlyLineEdgeTick();
+            boolean nativeDoubleTailLycLatch = isNativeDoubleSpeed()
+                    && gpu.getTicksInLine() == CGB_DOUBLE_TAIL_LATCH
+                    && gpu.getLine() != 153;
+            if (nativeDoubleTailLycLatch) {
+                // IF is already readable in the line tail, but running and halted
+                // CPUs both accept this direct edge only after the line rolls over.
+                interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
+                        InterruptType.LCDC);
+            } else if (gpu.getLine() < 144 && gpu.getTicksInLine() == earlyMode2Edge) {
+                if (gpu.isGbc() || gpu.hasObjectsOnLine()) {
+                    interruptManager.requestInterruptBeforeCpuAcceptance(InterruptType.LCDC);
+                } else {
+                    interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+                }
+            } else if (gpu.getLine() == 153
+                    && gpu.getTicksInLine() == getNewFrameLycEdgeTick()
+                    && coincidence && (enableBits & 0b01000000) != 0) {
+                interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+            } else if (gpu.isMode0IntWindow()) {
+                if (!gpu.isGbc() && gpu.hasObjectsOnLine()) {
+                    // The object-fetch tail has already crossed the DMG's interrupt
+                    // synchronizer by the time its delayed mode-0 edge becomes visible.
+                    interruptManager.requestInterrupt(InterruptType.LCDC);
+                } else {
+                    interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+                }
             } else {
                 interruptManager.requestInterrupt(InterruptType.LCDC);
             }
         }
         intLine = newLine;
+    }
+
+    private boolean isNativeDoubleSpeed() {
+        return gpu.isGbc() && !gpu.isDmgCompatMode()
+                && gpu.getCpuMachineCycleDots() == 2;
+    }
+
+    private int getNewFrameLycEdgeTick() {
+        return isNativeDoubleSpeed() ? NEW_FRAME_LYC_EDGE - 2 : NEW_FRAME_LYC_EDGE;
+    }
+
+    private int getNewFrameLycCpuAcceptTick() {
+        return getNewFrameLycEdgeTick() + gpu.getCpuMachineCycleDots();
     }
 
     @Override
@@ -186,6 +272,18 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     @Override
     public void setByte(int address, int value) {
         if (!gpu.isGbc()) {
+            if ((value & 0b01111000) == 0
+                    && gpu.isLcdEnabled()
+                    && gpu.getTicksInLine() == 0
+                    && !gpu.isMode0IntWindow()
+                    && !gpu.isMode1IntWindow()
+                    && !gpu.isMode2IntWindow()
+                    && interruptManager.isInterruptFlagSet(InterruptType.VBlank)) {
+                // At the first visible-line latch the retiring VBlank request and the
+                // FF41 write share an asynchronous read gate. The next IF read sees
+                // bit 0 low even though the IF latch itself remains set.
+                interruptManager.maskVBlankOnNextRead();
+            }
             // DMG STAT write glitch: all interrupt sources are enabled for a moment
             // before the written data settles
             int glitchEnable = 0b01111000;

@@ -51,7 +51,7 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     public int getByte(int address) {
         if (address == SVBK) {
             // reads FF on a CGB in DMG compatibility mode (boot_hwio-C)
-            return isDmgCompat() ? 0xff : svbk;
+            return isDmgCompat() ? 0xff : 0xf8 | (svbk & 0x07);
         } else {
             return ram[translate(address)];
         }

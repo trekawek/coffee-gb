@@ -527,8 +527,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         while (spriteHead < spriteCount && sprites[spriteOrder[spriteHead]].getX() < match) {
             spriteHead++;
         }
+        // Window activation wins when its comparator and an object match on the same
+        // dot. The activation is held pending for one tick in this model so CPU writes
+        // can cancel it; do not let the object start against the old background FIFO in
+        // that tick. Once the activation commits, the object waits for fresh window tile
+        // data just as it does on hardware.
         if (spriteHead < spriteCount
                 && sprites[spriteOrder[spriteHead]].getX() == match
+                && windowPendingTicks == 0
                 && (lcdc.isObjDisplayEffective() || gbc)) {
             if (fetcher.getState() < Fetcher.GET_TILE_DATA_HIGH_T2 || fifo.getLength() == 0) {
                 // the object fetch waits for the background fetcher's tile data; the wait

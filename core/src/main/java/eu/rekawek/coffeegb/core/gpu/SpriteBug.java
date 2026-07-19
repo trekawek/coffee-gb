@@ -45,6 +45,26 @@ public final class SpriteBug {
     }
 
     /**
+     * Applies the corruption caused by a CPU read from locked OAM. Rows 0 and 20 are
+     * the two address-dependent latch states immediately before and after the regular
+     * 19 scan rows.
+     */
+    public static void corruptOamRead(AddressSpace oamRam, int address, int row) {
+        if (row == 0) {
+            firstRowReadCorruption(oamRam, address);
+        } else if (row == 20) {
+            lastRowReadCorruption(oamRam, address);
+        } else {
+            readCorruption(oamRam, row);
+        }
+    }
+
+    /** Applies the corruption caused by a CPU write to locked OAM. */
+    public static void corruptOamWrite(AddressSpace oamRam, int row) {
+        writeCorruption(oamRam, row);
+    }
+
+    /**
      * A write (or a plain 16-bit increment/decrement) corrupts the first word of the
      * currently accessed row and copies the rest from the preceding row.
      */
@@ -118,6 +138,56 @@ public final class SpriteBug {
         if (row == 16) {
             copyRow(oam, 16, 0);
         }
+    }
+
+    private static void firstRowReadCorruption(AddressSpace oam, int address) {
+        int relativeAddress = address - 0xfe00;
+        int addressedRow = (relativeAddress & 0xf8) / 8;
+        int addressedWord = (relativeAddress & 0x06) / 2;
+        int a = word(oam, 0, 0);
+        int b = word(oam, addressedRow, 0);
+        int c = word(oam, addressedRow, addressedWord);
+        int value = b | (a & c);
+        setWord(oam, addressedRow, 0, value);
+        setWord(oam, 0, 0, value);
+        for (int i = 2; i < 8; i++) {
+            oam.setByte(0xfe00 + i, oam.getByte(0xfe00 + addressedRow * 8 + i));
+        }
+    }
+
+    private static void lastRowReadCorruption(AddressSpace oam, int address) {
+        int relativeAddress = address - 0xfe00;
+        int addressedRow = (relativeAddress & 0xf8) / 8;
+        int byteOffset = relativeAddress & 7;
+        int targetWord = byteOffset / 2;
+        int a = word(oam, 19, 2);
+        int b = word(oam, 19, targetWord);
+        int c = word(oam, addressedRow, 0);
+        int value;
+        switch (byteOffset) {
+            case 0:
+            case 1:
+                value = (a & b) | (a & c) | (b & c);
+                setWord(oam, 19, targetWord, value);
+                break;
+            case 2:
+            case 3:
+                c = word(oam, addressedRow, targetWord);
+                value = (a & b) | (a & c) | (b & c);
+                setWord(oam, 19, targetWord, value);
+                break;
+            case 4:
+            case 5:
+                break;
+            case 6:
+            case 7:
+                value = b | (a & c);
+                setWord(oam, 19, targetWord, value);
+                break;
+            default:
+                throw new AssertionError();
+        }
+        copyRow(oam, 19, addressedRow);
     }
 
     private static void copyRow(AddressSpace oam, int fromRow, int toRow) {

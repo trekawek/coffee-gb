@@ -9,6 +9,8 @@ import java.io.Serializable;
 
 public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
+    private static final int PAUSE_ENTRY_CLOCKS = 8;
+
     private final AddressSpace addressSpace;
 
     private final AddressSpace oam;
@@ -23,6 +25,17 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     private int ticks;
 
+    // CPU clocks elapsed since the transfer started. Keep this separate from
+    // fixed-rate PPU ticks so changing KEY1 during a copy cannot retroactively
+    // rescale the portion that has already completed.
+    private int transferClocks;
+
+    // HALT stops the OAM-DMA clock after its two-M-cycle clock-gating latency;
+    // STOP and a CGB speed switch gate it immediately.
+    private boolean cpuClockPaused;
+
+    private int pauseEntryClocks;
+
     // Index of the next OAM byte written by the transfer. The PPU sees the DMA's
     // current two-byte OAM bus row while the copy is running, not an atomic snapshot.
     private int currentByte;
@@ -30,7 +43,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     private int regValue;
 
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
-        this.addressSpace = new DmaAddressSpace(addressSpace);
+        this.addressSpace = new DmaAddressSpace(addressSpace, speedMode.isGbc());
         this.speedMode = speedMode;
         this.oam = oam;
         // FF46 most commonly powers up as 00 on CGB and FF on DMG.
@@ -44,18 +57,45 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     public void tick() {
+        tick(false);
+    }
+
+    public void tick(boolean cpuClockPaused) {
+        tick(cpuClockPaused, true);
+    }
+
+    public void tick(boolean cpuClockPaused, boolean haltEntryLatency) {
+        if (cpuClockPaused && !this.cpuClockPaused) {
+            pauseEntryClocks = haltEntryLatency ? PAUSE_ENTRY_CLOCKS : 0;
+        }
+        this.cpuClockPaused = cpuClockPaused;
         if (transferInProgress) {
-            ticks++;
-            int dmaTicks = ticks * speedMode.getSpeedMode();
-            if (dmaTicks >= 8 && dmaTicks <= 644 && dmaTicks % 4 == 0) {
-                oam.setByte(0xfe00 + currentByte, addressSpace.getByte(from + currentByte));
-                currentByte++;
+            if (cpuClockPaused && pauseEntryClocks == 0) {
+                return;
             }
-            if (dmaTicks >= 648) {
-                transferInProgress = false;
-                restarted = false;
-                ticks = 0;
-                currentByte = 0;
+            ticks++;
+            for (int i = 0; i < speedMode.getSpeedMode(); i++) {
+                if (cpuClockPaused && pauseEntryClocks == 0) {
+                    break;
+                }
+                transferClocks++;
+                if (cpuClockPaused) {
+                    pauseEntryClocks--;
+                }
+                if (transferClocks >= 8 && transferClocks <= 644
+                        && transferClocks % 4 == 0) {
+                    oam.setByte(0xfe00 + currentByte,
+                            addressSpace.getByte(from + currentByte));
+                    currentByte++;
+                }
+                if (transferClocks >= 648) {
+                    transferInProgress = false;
+                    restarted = false;
+                    ticks = 0;
+                    transferClocks = 0;
+                    currentByte = 0;
+                    break;
+                }
             }
         }
     }
@@ -65,6 +105,9 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         from = value * 0x100;
         restarted = isOamBlocked();
         ticks = 0;
+        transferClocks = 0;
+        cpuClockPaused = false;
+        pauseEntryClocks = 0;
         currentByte = 0;
         transferInProgress = true;
         regValue = value;
@@ -89,12 +132,57 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
             return false;
         }
         int cpuBus = getBus(address, gbc);
-        return cpuBus >= 0 && cpuBus == getBus(from, gbc);
+        // On DMG, an invalid $E0-$FF copy source follows echo RAM and therefore
+        // owns the shared main bus. CGB instead classifies its cartridge-RAM alias
+        // ($A0-$BF, on the cartridge bus).
+        int sourceAddress;
+        if (speedMode.isGbc()) {
+            sourceAddress = DmaAddressSpace.mapAddress(from, true);
+        } else {
+            // The invalid top 8 KiB select the DMG's main bus even though the
+            // value driven on it is derived from the partially decoded address.
+            sourceAddress = from >= 0xe000 ? 0xc000 : from;
+        }
+        return cpuBus >= 0 && cpuBus == getBus(sourceAddress, gbc);
     }
 
     public int getCpuBusValue() {
-        int byteIndex = Math.max(0, Math.min(0x9f, (ticks - 5) / 4));
+        int byteIndex = Math.max(0, Math.min(0x9f, (transferClocks - 5) / 4));
+        if (!speedMode.isGbc() && from >= 0xe000) {
+            // The DMG copy engine follows echo RAM here, but a conflicting CPU
+            // read sees the source page after the DMA unit's partial decode.
+            return ((from + byteIndex) >> 8) & 0x9f;
+        }
         return addressSpace.getByte(from + byteIndex);
+    }
+
+    int getUnblockedDmgHighBusValue(int address) {
+        if (!speedMode.isGbc() && isOamBlocked()
+                && from >= 0x8000 && from < 0xa000
+                && transferClocks < 636
+                && address >= 0xe000 && address < 0xfe00) {
+            // During a VRAM-source DMA, the otherwise unblocked DMG high range
+            // exposes its partially decoded $80-$9D page on the bus. The source
+            // bus releases during the transfer tail (Mooneye call/ret timing),
+            // while OAM itself remains blocked until the transfer completes.
+            return (address >> 8) & 0x9f;
+        }
+        return -1;
+    }
+
+    int mapUnblockedCpuAddress(int address) {
+        if (!speedMode.isGbc() || !isOamBlocked()
+                || address < 0xc000 || address >= 0xfe00) {
+            return address;
+        }
+        int sourceAddress = DmaAddressSpace.mapAddress(from, true);
+        if (getBus(sourceAddress, true) != 0) {
+            return address;
+        }
+        // A cartridge-bus OAM DMA drives A12 while the CPU still has access to
+        // the CGB's separate WRAM bus. Consequently, the source page chooses
+        // which $C/$D (and echoed $E/$F) half the CPU actually addresses.
+        return (address & ~0x1000) | (sourceAddress & 0x1000);
     }
 
     /** Reads OAM as seen by the PPU while an OAM DMA owns its bus. */
@@ -120,7 +208,8 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     @Override
     public Memento<Dma> saveToMemento() {
-        return new DmaMemento(transferInProgress, restarted, from, ticks, currentByte, regValue);
+        return new DmaMemento(transferInProgress, restarted, from, ticks, transferClocks,
+                cpuClockPaused, pauseEntryClocks, currentByte, regValue);
     }
 
     @Override
@@ -132,11 +221,16 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         this.restarted = mem.restarted;
         this.from = mem.from;
         this.ticks = mem.ticks;
+        this.transferClocks = mem.transferClocks;
+        this.cpuClockPaused = mem.cpuClockPaused;
+        this.pauseEntryClocks = mem.pauseEntryClocks;
         this.currentByte = mem.currentByte;
         this.regValue = mem.regValue;
     }
 
     public record DmaMemento(boolean transferInProgress, boolean restarted, int from, int ticks,
-                             int currentByte, int regValue) implements Memento<Dma> {
+                             int transferClocks, boolean cpuClockPaused, int pauseEntryClocks,
+                             int currentByte,
+                             int regValue) implements Memento<Dma> {
     }
 }

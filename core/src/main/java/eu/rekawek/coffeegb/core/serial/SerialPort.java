@@ -4,7 +4,6 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.timer.Timer;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import org.slf4j.Logger;
@@ -24,22 +23,30 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private final SpeedMode speedMode;
 
-    private final Timer timer;
-
     private int sb;
 
     // the CGB clock-speed bit (bit 1) reads 1 at power-on (mooneye boot_hwio-C)
     private int sc = 0x02;
 
-    private boolean prevClockBit;
+    /** Free-running 8-bit link clock, independent of the CPU's DIV register. */
+    private int serialClocks;
+
+    private boolean serialClockSignal;
 
     private int receivedBits;
 
-    public SerialPort(InterruptManager interruptManager, Timer timer, boolean gbc, SpeedMode speedMode) {
+    // IF is visible as soon as the eighth bit lands, while HALT's wake input
+    // receives the serial edge one CPU machine cycle later.
+    private int haltWakeDelay;
+
+    public SerialPort(InterruptManager interruptManager, boolean gbc, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
-        this.timer = timer;
         this.gbc = gbc;
         this.speedMode = speedMode;
+        // The oscillator is already eight clocks into its phase when a DMG is
+        // released from reset; CGB starts at zero. Authentic boot execution is
+        // then captured in the integration runner's boot memento.
+        this.serialClocks = gbc ? 0 : 8;
     }
 
     public void init(SerialEndpoint serialEndpoint) {
@@ -47,37 +54,49 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
     }
 
     public void tick() {
-        boolean transferInProgress = (sc & (1 << 7)) != 0;
-        int incomingBit = -1;
-        // We're receiving bits even without the transfer in progress.
-        if (ClockType.getFromSc(sc) == ClockType.EXTERNAL) {
-            serialEndpoint.setExternalTransfer(transferInProgress);
-            incomingBit = serialEndpoint.recvBit();
-        } else {
-            // the serial clock is derived from the DIV counter, so the first bit of
-            // a transfer is aligned to the free-running divider; the tap leads the
-            // counter by 4 cycles (boot_sclk_align)
-            boolean clockBit = ((timer.getDivCounter() + 4) & (1 << getClockBitPos())) != 0;
-            if (transferInProgress && prevClockBit && !clockBit) {
-                incomingBit = serialEndpoint.sendBit();
-            }
-            prevClockBit = clockBit;
-        }
-
-        if (incomingBit != -1) {
-            sb = (sb << 1) & 0xff | (incomingBit & 1);
-            receivedBits++;
-            if (receivedBits == 8) {
-                interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
-                sc = sc & 0b01111111; // stop transfer
-                LOG.atDebug().log("[{}] Received sb = {}", this.hashCode(), Integer.toBinaryString(sb));
-            }
+        for (int i = 0; i < speedMode.getSpeedMode(); i++) {
+            tickCpuClock();
         }
     }
 
-    private int getClockBitPos() {
-        // 8192 Hz = falling edge of bit 8; CGB fast mode 262144 Hz = bit 3
-        return (gbc && (sc & (1 << 1)) != 0) ? 3 : 8;
+    private void tickCpuClock() {
+        if (haltWakeDelay > 0 && --haltWakeDelay == 0) {
+            interruptManager.releaseHaltWake(InterruptManager.InterruptType.Serial);
+        }
+        boolean transferInProgress = (sc & (1 << 7)) != 0;
+        if (ClockType.getFromSc(sc) == ClockType.EXTERNAL) {
+            serialEndpoint.setExternalTransfer(transferInProgress);
+            int incomingBit = serialEndpoint.recvBit();
+            if (incomingBit != -1) {
+                shiftBit(incomingBit);
+            }
+        } else if (transferInProgress) {
+            int flipClocks = isColorMode() && (sc & (1 << 1)) != 0 ? 8 : 256;
+            int oldPhase = serialClocks & (flipClocks - 1);
+            if (oldPhase == flipClocks - 1) {
+                serialClockSignal = !serialClockSignal;
+                if (!serialClockSignal) {
+                    shiftBit(serialEndpoint.sendBit());
+                }
+            }
+        }
+        serialClocks = (serialClocks + 1) & 0xff;
+    }
+
+    private void shiftBit(int incomingBit) {
+        sb = (sb << 1) & 0xff | (incomingBit & 1);
+        receivedBits++;
+        if (receivedBits == 8) {
+            interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Serial);
+            haltWakeDelay = 4;
+            sc = sc & 0b01111111; // stop transfer
+            receivedBits = 0;
+            LOG.atDebug().log("[{}] Received sb = {}", this.hashCode(), Integer.toBinaryString(sb));
+        }
+    }
+
+    private boolean isColorMode() {
+        return gbc && !speedMode.isDmgCompat();
     }
 
     @Override
@@ -92,10 +111,20 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
             serialEndpoint.setSb(sb);
             LOG.atDebug().log("[{}] Set SB = {}", this.hashCode(), Integer.toBinaryString(sb));
         } else if (address == 0xff02) {
-            if ((sc & (1 << 7)) == 0 && (value & (1 << 7)) != 0) {
+            if ((value & (1 << 7)) != 0) {
                 receivedBits = 0;
+                serialClockSignal = false;
+                if (isColorMode() && (sc & 0x80) != 0 && ((sc ^ value) & 0x02) != 0) {
+                    int oldClockMask = (sc & 0x02) != 0 ? 1 << 2 : 1 << 7;
+                    int newClockMask = (value & 0x02) != 0 ? 1 << 2 : 1 << 7;
+                    if ((serialClocks & oldClockMask) != 0 && (serialClocks & newClockMask) == 0) {
+                        serialClockSignal = true;
+                    }
+                }
                 serialEndpoint.startSending();
                 LOG.atDebug().log("[{}] Start transfer", this.hashCode());
+            } else {
+                receivedBits = 0;
             }
             sc = value;
             LOG.atDebug().log("[{}] Set SC = {}", this.hashCode(), Integer.toBinaryString(sc));
@@ -108,7 +137,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
             LOG.atDebug().log("[{}] Get SB = {}", this.hashCode(), Integer.toBinaryString(sb));
             return sb;
         } else if (address == 0xff02) {
-            int effectiveSc = sc | (gbc ? 0b01111100 : 0b01111110);
+            int effectiveSc = sc | (isColorMode() ? 0b01111100 : 0b01111110);
             LOG.atDebug().log("[{}] Get SC = {}", this.hashCode(), Integer.toBinaryString(effectiveSc));
             return effectiveSc;
         } else {
@@ -118,7 +147,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     @Override
     public Memento<SerialPort> saveToMemento() {
-        return new SerialPortMemento(sb, sc, prevClockBit, receivedBits);
+        return new SerialPortMemento(sb, sc, serialClocks, serialClockSignal, receivedBits, haltWakeDelay);
     }
 
     @Override
@@ -129,10 +158,13 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         }
         this.sb = mem.sb;
         this.sc = mem.sc;
-        this.prevClockBit = mem.prevClockBit;
+        this.serialClocks = mem.serialClocks;
+        this.serialClockSignal = mem.serialClockSignal;
         this.receivedBits = mem.receivedBits;
+        this.haltWakeDelay = mem.haltWakeDelay;
     }
 
-    private record SerialPortMemento(int sb, int sc, boolean prevClockBit, int receivedBits) implements Memento<SerialPort> {
+    private record SerialPortMemento(int sb, int sc, int serialClocks, boolean serialClockSignal,
+                                     int receivedBits, int haltWakeDelay) implements Memento<SerialPort> {
     }
 }

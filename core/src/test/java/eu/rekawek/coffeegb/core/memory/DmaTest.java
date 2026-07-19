@@ -48,6 +48,46 @@ public class DmaTest {
     }
 
     @Test
+    public void haltPausesAfterTwoMachineCycleEntryLatency() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+        fixture.tick(8);
+
+        for (int i = 0; i < 8; i++) {
+            fixture.dma.tick(true);
+        }
+        for (int i = 0; i < 32; i++) {
+            fixture.dma.tick(true);
+        }
+
+        assertEquals(0x40, fixture.oam.getByte(0xfe00));
+        assertEquals(0x41, fixture.oam.getByte(0xfe01));
+        assertEquals(0x42, fixture.oam.getByte(0xfe02));
+        assertEquals(0xee, fixture.oam.getByte(0xfe03));
+
+        fixture.dma.tick(false);
+        fixture.tick(3);
+        assertEquals(0x43, fixture.oam.getByte(0xfe03));
+    }
+
+    @Test
+    public void speedSwitchPausesWithoutHaltEntryLatency() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+        fixture.tick(8);
+
+        for (int i = 0; i < 40; i++) {
+            fixture.dma.tick(true, false);
+        }
+        assertEquals(0x40, fixture.oam.getByte(0xfe00));
+        assertEquals(0xee, fixture.oam.getByte(0xfe01));
+
+        fixture.dma.tick(false);
+        fixture.tick(3);
+        assertEquals(0x41, fixture.oam.getByte(0xfe01));
+    }
+
+    @Test
     public void dmaRegisterPowersUpAsZeroOnCgb() {
         assertEquals(0x00, createDma(true).getByte(0xff46));
     }
@@ -55,6 +95,18 @@ public class DmaTest {
     @Test
     public void dmaRegisterPowersUpAsFfOnDmg() {
         assertEquals(0xff, createDma(false).getByte(0xff46));
+    }
+
+    @Test
+    public void dmgHighSourceRangeUsesEchoRamForTheCopy() {
+        assertEquals(0xc000, DmaAddressSpace.mapAddress(0xe000, false));
+        assertEquals(0xdf9f, DmaAddressSpace.mapAddress(0xff9f, false));
+    }
+
+    @Test
+    public void cgbHighSourceRangeAliasesCartridgeRam() {
+        assertEquals(0xa000, DmaAddressSpace.mapAddress(0xe000, true));
+        assertEquals(0xbf9f, DmaAddressSpace.mapAddress(0xff9f, true));
     }
 
     private static Dma createDma(boolean gbc) {

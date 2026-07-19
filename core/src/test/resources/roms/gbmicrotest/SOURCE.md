@@ -8,3 +8,8 @@ That release pins
 
 Upstream commit `463eb6b` adds the included MIT license without changing any
 of the binaries from the pinned commit.
+
+The automated profile pins the exact 31 interactive diagnostics and test benches
+without a terminal pass/fail byte. It requires every one of the other 482 ROMs to
+retain GBMicrotest's documented FF80-FF82 HRAM verdict protocol, so archive membership
+cannot silently change because the same opcode bytes appeared in unrelated data.

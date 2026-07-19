@@ -6,11 +6,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -20,18 +17,55 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-import static org.junit.Assert.fail;
+import static org.junit.Assert.assertEquals;
 
 @RunWith(Parameterized.class)
 public class GbMicrotestRomTest {
 
     private static final String ARCHIVE = "/roms/gbmicrotest/gbmicrotest-v7.zip";
 
-    private static final String KNOWN_FAILURES_RESOURCE = "/roms/gbmicrotest/known-failures.txt";
+    private static final int ARCHIVE_ROM_COUNT = 513;
 
-    private static final Set<String> KNOWN_FAILURES = readKnownFailures();
+    private static final int VERDICT_ROM_COUNT = 482;
 
-    private static final long DMG_TICKS_PER_FRAME = 456L * 154L;
+    /**
+     * Upstream's interactive diagnostics, visual test benches, and incomplete
+     * experiments do not implement the FF80-FF82 terminal verdict protocol. Pin the
+     * exact archive membership so an unrelated opcode byte cannot silently move a ROM
+     * into or out of the automated suite while the aggregate count stays unchanged.
+     */
+    private static final Set<String> NON_VERDICT_ROMS = Set.of(
+            "gbmicrotest/ly_while_lcd_off.gb",
+            "gbmicrotest/ppu_win_vs_wx.gb",
+            "gbmicrotest/oam_sprite_trashing.gb",
+            "gbmicrotest/801-ppu-latch-scy.gb",
+            "gbmicrotest/004-tima_cycle_timer.gb",
+            "gbmicrotest/toggle_lcdc.gb",
+            "gbmicrotest/000-write_to_x8000.gb",
+            "gbmicrotest/004-tima_boot_phase.gb",
+            "gbmicrotest/lcdon_write_timing.gb",
+            "gbmicrotest/wave_write_to_0xC003.gb",
+            "gbmicrotest/400-dma.gb",
+            "gbmicrotest/ppu_spritex_vs_scx.gb",
+            "gbmicrotest/000-oam_lock.gb",
+            "gbmicrotest/ppu_wx_early.gb",
+            "gbmicrotest/803-ppu-latch-bgdisplay.gb",
+            "gbmicrotest/minimal.gb",
+            "gbmicrotest/audio_testbench.gb",
+            "gbmicrotest/dma_basic.gb",
+            "gbmicrotest/001-vram_unlocked.gb",
+            "gbmicrotest/800-ppu-latch-scx.gb",
+            "gbmicrotest/500-scx-timing.gb",
+            "gbmicrotest/mode2_stat_int_to_oam_unlock.gb",
+            "gbmicrotest/007-lcd_on_stat.gb",
+            "gbmicrotest/flood_vram.gb",
+            "gbmicrotest/poweron.gb",
+            "gbmicrotest/cpu_bus_1.gb",
+            "gbmicrotest/802-ppu-latch-tileselect.gb",
+            "gbmicrotest/002-vram_locked.gb",
+            "gbmicrotest/ppu_scx_vs_bgp.gb",
+            "gbmicrotest/ppu_sprite_testbench.gb",
+            "gbmicrotest/temp.gb");
 
     private final String name;
 
@@ -50,57 +84,77 @@ public class GbMicrotestRomTest {
         }
 
         List<Object[]> parameters = new ArrayList<>();
+        Set<String> archiveRomPaths = new HashSet<>();
+        Set<String> verdictNames = new HashSet<>();
+        int archiveRomCount = 0;
         try (input; ZipInputStream zip = new ZipInputStream(input)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 if (!entry.isDirectory() && entry.getName().endsWith(".gb")) {
+                    archiveRomCount++;
+                    String path = entry.getName();
+                    if (!archiveRomPaths.add(path)) {
+                        throw new IOException("Duplicate GBMicrotest archive path: " + path);
+                    }
                     String name = entry.getName().substring(entry.getName().lastIndexOf('/') + 1);
-                    parameters.add(new Object[]{name, zip.readAllBytes()});
+                    byte[] rom = zip.readAllBytes();
+                    boolean hasVerdictOpcode = usesHramVerdictProtocol(rom);
+                    if (NON_VERDICT_ROMS.contains(path)) {
+                        if (hasVerdictOpcode) {
+                            throw new IOException("Non-verdict GBMicrotest now contains the terminal "
+                                    + "protocol opcode: " + path);
+                        }
+                    } else {
+                        if (!hasVerdictOpcode) {
+                            throw new IOException("Automated GBMicrotest lost its terminal protocol: "
+                                    + path);
+                        }
+                        if (!verdictNames.add(name)) {
+                            throw new IOException("Duplicate GBMicrotest verdict name: " + name);
+                        }
+                        parameters.add(new Object[]{name, rom});
+                    }
                 }
                 zip.closeEntry();
             }
         }
         parameters.sort(Comparator.comparing(parameter -> (String) parameter[0]));
 
-        Set<String> romNames = new HashSet<>();
-        parameters.forEach(parameter -> romNames.add((String) parameter[0]));
-        if (parameters.size() != 513) {
-            throw new IOException("Expected 513 GBMicrotest ROMs, found " + parameters.size());
+        if (archiveRomCount != ARCHIVE_ROM_COUNT) {
+            throw new IOException("Expected " + ARCHIVE_ROM_COUNT + " GBMicrotest ROMs, found "
+                    + archiveRomCount);
         }
-        if (!romNames.containsAll(KNOWN_FAILURES)) {
-            Set<String> missing = new HashSet<>(KNOWN_FAILURES);
-            missing.removeAll(romNames);
-            throw new IOException("GBMicrotest baseline names missing from archive: " + missing);
+        if (!archiveRomPaths.containsAll(NON_VERDICT_ROMS)) {
+            Set<String> missing = new HashSet<>(NON_VERDICT_ROMS);
+            missing.removeAll(archiveRomPaths);
+            throw new IOException("Pinned non-verdict GBMicrotests missing from archive: " + missing);
+        }
+        if (parameters.size() != VERDICT_ROM_COUNT) {
+            throw new IOException("Expected " + VERDICT_ROM_COUNT
+                    + " GBMicrotest ROMs using the HRAM verdict protocol, found "
+                    + parameters.size());
         }
         return parameters;
     }
 
-    @Test(timeout = 10000)
-    public void test() throws IOException {
-        long ticks = name.equals("is_if_set_during_ime0.gb")
-                ? Gameboy.TICKS_PER_SEC / 2L
-                : 2L * DMG_TICKS_PER_FRAME;
-        GbMicrotestRunner.TestResult result = new GbMicrotestRunner(rom).runTest(ticks);
-        if (result.status() != 0x01 && !KNOWN_FAILURES.contains(name)) {
-            fail(name + " regressed: " + result);
+    /**
+     * Automated GBMicrotests finish by writing their status byte to FF82 with
+     * {@code ldh ($82), a}. The remaining archive entries are interactive diagnostics
+     * and test benches without a machine-readable pass/fail result.
+     */
+    private static boolean usesHramVerdictProtocol(byte[] rom) {
+        for (int i = 0; i + 1 < rom.length; i++) {
+            if ((rom[i] & 0xff) == 0xe0 && (rom[i + 1] & 0xff) == 0x82) {
+                return true;
+            }
         }
+        return false;
     }
 
-    private static Set<String> readKnownFailures() {
-        InputStream input = GbMicrotestRomTest.class.getResourceAsStream(KNOWN_FAILURES_RESOURCE);
-        if (input == null) {
-            throw new ExceptionInInitializerError("Missing GBMicrotest baseline: " + KNOWN_FAILURES_RESOURCE);
-        }
-        try (input;
-             BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
-            Set<String> names = new HashSet<>();
-            reader.lines()
-                    .map(String::trim)
-                    .filter(line -> !line.isEmpty() && !line.startsWith("#"))
-                    .forEach(names::add);
-            return Set.copyOf(names);
-        } catch (IOException e) {
-            throw new ExceptionInInitializerError(e);
-        }
+    @Test(timeout = 10000)
+    public void test() throws IOException {
+        GbMicrotestRunner.TestResult result = new GbMicrotestRunner(rom)
+                .runTest(Gameboy.TICKS_PER_SEC / 2L);
+        assertEquals(name + ": " + result, 0x01, result.status());
     }
 }

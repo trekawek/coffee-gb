@@ -106,8 +106,8 @@ btn_select=VK_SHIFT
 
 Compatibility is treated as a continuously tested feature, not as a static game
 list. CI exercises **1,056 cases from 13 suite families through 15 Maven
-profiles**. Every profile is green under either an exact-pass requirement or a
-pinned regression baseline.
+profiles**. Every automated verdict is strict; the only accepted output
+discrepancy is the single documented Mealybug pixel below.
 
 > **Pixel status:** both Acid2 references are pixel-perfect. In Mealybug
 > Tearoom, 23 of 24 reference images are pixel-perfect and the remaining image
@@ -122,25 +122,23 @@ pinned regression baseline.
 | [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 9 | 9 / 9 selected cases pass |
 | [BullyGB](https://github.com/Ashiepaws/BullyGB) | 2 | 2 / 2 DMG and CGB cases pass |
 | [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
-| [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 6 / 8 images have no out-of-tolerance pixels; 2 are baseline-guarded; ROM+RAM passes |
+| [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 8 / 8 images have no out-of-tolerance pixels; ROM+RAM passes |
 | [DMG-ACID2](https://github.com/mattcurrie/dmg-acid2) and [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) | 2 | 2 / 2 are pixel-perfect |
 | [Mealybug Tearoom](https://github.com/mattcurrie/mealybug-tearoom-tests) | 24 | 23 / 24 are pixel-perfect; 1 differs by one pixel |
-| [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 513 | 376 pass verdicts; 107 non-pass verdicts; 30 diagnostic ROMs without a verdict |
-| [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 116 required hardware-capture matches; 105 guarded outliers |
-| [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 6 required pass verdicts; 11 guarded outliers |
-| **Total** | **1,056** | **All 15 profiles green under their exact or baseline criteria** |
+| [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 513 | 482 / 482 machine-readable verdicts pass; 31 diagnostic ROMs have no verdict |
+| [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 221 / 221 hardware-capture verdicts match |
+| [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 17 / 17 pass verdicts match |
+| **Total** | **1,056** | **All machine-readable verdicts are strict; one Mealybug pixel is the sole output exception** |
 
 \* Blargg's aggregate and individual checks overlap by design.
 
 <details>
-<summary>How regression baselines are interpreted</summary>
+<summary>How strict compatibility results are interpreted</summary>
 
-The broad archival collections deliberately cover behavior that Coffee GB does
-not yet emulate exactly. A known outlier is pinned to its current result: it may
-improve, but it may not silently regress. An exact case must continue to pass.
-Green CI therefore describes the automated acceptance contract, not
-byte-for-byte hardware identity for every archival ROM. The one-pixel Mealybug
-difference is likewise the maximum accepted output; any regression fails CI.
+Every ROM with a machine-readable result must produce its documented pass value
+or match its selected raw hardware capture exactly. No known-failure allowlist or
+guarded outlier is accepted. The one-pixel Mealybug difference is pinned as the
+maximum accepted output; any additional differing pixel fails CI.
 
 </details>
 

@@ -8,11 +8,11 @@ import java.io.Serializable;
 
 public class ColorPixelFifo implements PixelFifo, Serializable, Originator<ColorPixelFifo> {
 
-    // Like on the DMG, the CGB resolves pixels at the LCD interface, a few dots after the
-    // FIFO pop. The CGB palette writes settle one T-cycle earlier than the DMG ones and
-    // don't produce the old|new mix (SameBoy's PALETTE_CGB vs PALETTE_DMG conflicts), which
-    // in this model corresponds to a one-dot shorter delay line with live register reads.
-    static final int OUTPUT_DELAY = 2;
+    // Like on the DMG, the CGB resolves pixels at the LCD interface after the FIFO pop.
+    // CGB palette writes do not produce the DMG's old|new mix, and Daid's scanline palette
+    // capture pins the CGB sample two dots ahead of the DMG one. With the pixel machine's
+    // four-dot entry skew, that leaves one dot in this final output stage.
+    static final int OUTPUT_DELAY = 1;
 
     private final IntQueue pixels = new IntQueue(16);
 
