@@ -110,7 +110,7 @@ public class GameboyMementoTest {
     }
 
     @Test
-    public void pendingHblankTransferOverlapsLastDoubleSpeedTailMachineCycle()
+    public void pendingHblankTransferExtendsDoubleSpeedTailForArbitration()
             throws IOException {
         byte[] romBytes = cgbSpeedSwitchWithPendingHdmaRom();
         Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(new Rom(romBytes))
@@ -126,9 +126,10 @@ public class GameboyMementoTest {
             assertEquals(2, gameboy.getSpeedMode().getSpeedMode());
             assertFalse(gameboy.getCpu().isSpeedSwitching());
             assertEquals(0, gameboy.getAddressSpace().getByte(0xff55) & 0x80);
-            assertEquals(Gameboy.PENDING_HBLANK_SPEED_SWITCH_OVERLAP_TICKS,
-                    Gameboy.SPEED_SWITCH_TAIL_TICKS);
-            assertFalse(gameboy.isSpeedSwitchTailActive());
+            assertTrue(gameboy.isSpeedSwitchTailActive());
+            assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS
+                            + Gameboy.PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS,
+                    drainSpeedSwitchTail(gameboy));
         }
     }
 

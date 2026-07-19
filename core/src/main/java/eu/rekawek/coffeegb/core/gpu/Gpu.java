@@ -394,8 +394,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             pixelTransferPhase.resetWindowLineCounter();
             pixelMachine.resetWindowLineCounter();
         }
-        pixelTransferPhase.checkWindowY(line, ticksInLine);
-        pixelMachine.checkWindowY(line, ticksInLine);
+        if (gbc) {
+            pixelTransferPhase.checkWindowY(line, ticksInLine);
+            pixelMachine.checkWindowY(line, ticksInLine);
+        } else {
+            // The DMG comparator samples continuously. CGB uses the delayed
+            // line-edge checkpoints modelled by the overload above.
+            pixelTransferPhase.checkWindowY();
+            pixelMachine.checkWindowY();
+        }
         pixelMachine.outputTick();
         pixelMachine.machineTick();
 
@@ -503,11 +510,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private boolean shouldDelayPpuWrite(int address, int value) {
         if (address == LCDC_ADDRESS) {
-            // DMG applies LCDC.5 on the CPU write edge. CGB synchronizes the full LCDC
-            // value two CPU clocks later; model only the independently observable
-            // window-enable bit here, while LCD enable still controls the skeleton
-            // immediately. FF40 itself remains CPU-readable through the visible queue.
-            return gbc && lcdEnabled && (value & 0x80) != 0
+            // LCD enable itself controls the timing skeleton directly. LCDC.5 crosses
+            // through the delayed mode-3 comparator latch on both models; CGB has a
+            // shorter, speed-scaled synchronizer. FF40 itself remains CPU-readable
+            // through the visible queue.
+            return lcdEnabled && (gbc || line != 0) && (value & 0x80) != 0
                     && ((lcdc.get() ^ value) & 0x20) != 0;
         }
         if (gbc || !lcdEnabled || line == 0 || mode != Mode.PixelTransfer) {
@@ -697,12 +704,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         if (line == 153) {
             if (gbc) {
-                if (lcdEnableClockPhase && !speedMode.isDmgCompat()
-                        && speedMode.getSpeedMode() == 1 && ticksInLine < 4) {
-                    // The shortened enable line leaves the first frame's normal-speed
-                    // CPU read phase one dot past the transient LY=153 latch.
-                    return 0;
-                }
                 int lastLyTicks = speedMode.getSpeedMode() == 2 ? 2 : 4;
                 return ticksInLine < lastLyTicks ? 153 : 0;
             }
@@ -764,6 +765,30 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // internal OAM scan hands the pixel pipeline over to mode 3 at dot 80.
         int pixelTransferModeTick = gbc ? 78 : 80;
         if (gbc && mode == Mode.OamSearch && ticksInLine >= pixelTransferModeTick) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        if (gbc && mode == Mode.PixelTransfer && ticksInLine < 250) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        if (gbc && speedMode.isDmgCompat() && mode == Mode.PixelTransfer) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        if (gbc && speedMode.isDmgCompat() && mode == Mode.HBlank
+                && ticksInLine >= 250) {
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+                && mode == Mode.PixelTransfer && pixelTransferDone) {
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 1
+                && mode == Mode.HBlank && ticksInLine < hblankIntFrom
+                && !pixelTransferPhase.hasObjectsOnLine()) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 2
+                && ((mode == Mode.PixelTransfer && pixelTransferDone)
+                || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
             return Mode.PixelTransfer.ordinal();
         }
         // The CGB's readable mode-3 latch is tied to the LCD output delay rather than
@@ -890,6 +915,13 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                     ? Mode.PixelTransfer.ordinal()
                     : Mode.HBlank.ordinal();
         }
+        if (gbc && speedMode.isDmgCompat() && mode == Mode.HBlank
+                && ticksInLine <= hblankIntFrom
+                && lcdc.isObjDisplayEffective()
+                && pixelTransferPhase.hasObjectsOnLine()
+                && ((r.get(SCX) & 7) != 0 || lcdc.isWindowDisplay())) {
+            return Mode.PixelTransfer.ordinal();
+        }
         // A scanline containing enabled objects, combined with fractional scroll or the
         // window, can leave the readable mode-3 tail asserted through the mode-0
         // interrupt edge even after the internal phase released the VRAM/OAM locks
@@ -898,9 +930,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // Vertically inactive objects and sprite-disabled lines do not produce this tail
         // (GBMicrotest), while selected objects beyond the right edge still do.
         if (!gbc && mode == Mode.HBlank
-                && (lcdc.isWindowDisplay()
-                ? ticksInLine <= hblankIntFrom
-                : ticksInLine < hblankIntFrom - 2)
+                && ticksInLine <= hblankIntFrom
                 && lcdc.isObjDisplayEffective()
                 && pixelTransferPhase.hasObjectsOnLine()
                 && ((r.get(SCX) & 7) != 0 || lcdc.isWindowDisplay())) {
@@ -954,7 +984,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * 4-tick steps of the SCX scroll delay, and stays active until the end of the line.
      */
     public boolean isMode0IntWindow() {
-        return lcdEnabled && line < 144 && ticksInLine >= mode0IntFrom;
+        return lcdEnabled && line < 144 && ticksInLine >= getMode0InterruptTick();
     }
 
     boolean hasObjectsOnLine() {
@@ -966,7 +996,13 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * visible in IF. A running CPU can sample IF immediately.
      */
     public boolean isMode0HaltWakeTick() {
-        return lcdEnabled && line < 144 && ticksInLine == mode0IntFrom + 2;
+        return lcdEnabled && line < 144 && ticksInLine == getMode0InterruptTick() + 2;
+    }
+
+    private int getMode0InterruptTick() {
+        // The predictive edge is a CGB timing feature. DMG mode 0 follows the
+        // completed pixel-transfer latch, including its sprite-fetch tail.
+        return gbc ? mode0IntFrom : hblankIntFrom;
     }
 
     /**
@@ -997,12 +1033,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (firstLine && ticksInLine < firstLineOamOpenTicks) {
             return true;
         }
-        if (gbc && speedMode.getSpeedMode() == 2
-                && !write && mode == Mode.OamSearch && ticksInLine == 0) {
-            // At double speed the read latch closes one CPU read phase after the line
-            // rolls over. The write latch is already closed on dot 0.
-            return true;
-        }
         if (mode == Mode.OamSearch) {
             // Only DMG releases the OAM write bus between the end of the scan and the
             // start of pixel transfer (lcdon_write_timing-GS).
@@ -1011,29 +1041,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (mode == Mode.PixelTransfer) {
             return gbc && pixelTransferDone;
         }
-        if (gbc && mode == Mode.HBlank && !pixelTransferPhase.hasObjectsOnLine()) {
-            // BG-only lines release the CGB OAM latch with the final mode-3 output
-            // stage. Normal-speed release is quantized by fine SCX; double speed
-            // follows the internal HBlank hand-off. Object lines release immediately
-            // at that hand-off.
-            int handoffTick = speedMode.getSpeedMode() == 1 && !firstLine
-                    ? 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0)
-                    : hblankIntFrom + 4;
-            if (ticksInLine < handoffTick) {
-                return false;
-            }
+        if (!write && gbc && mode == Mode.HBlank && ticksInLine < hblankIntFrom) {
+            // The CGB exposes mode 0 before the OAM read latch is released. The latch
+            // opens with the internal HBlank edge two dots later.
+            return false;
         }
 
-        // DMG writes still pass during its early read-lock window. On CGB at double
-        // speed, the read/write latch transition occupies dots 452-453; the read latch
-        // has the separate dot-0 release above.
-        boolean dmgEarlyReadLock = !gbc && !write
-                && ticksInLine >= getEarlyLineEdgeTick();
-        boolean cgbNormalSpeedLineEdgeLock = gbc && speedMode.getSpeedMode() == 1
-                && !firstLine && ticksInLine >= 454;
-        boolean cgbDoubleSpeedLineEdgeLock = gbc && speedMode.getSpeedMode() == 2
-                && ticksInLine >= 452 && ticksInLine < 454;
-        if ((dmgEarlyReadLock || cgbNormalSpeedLineEdgeLock || cgbDoubleSpeedLineEdgeLock)
+        // DMG writes still pass during the early OAM read window
+        // (lcdon_write_timing-GS); CGB has already switched both OAM bus latches.
+        if ((!write || gbc) && ticksInLine >= getEarlyLineEdgeTick()
                 && (line < 143 || line == 153)) {
             return false;
         }
@@ -1057,12 +1073,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             // entered its final non-readable comparison slot: dot 451 normal speed,
             // dot 453 double speed (the `> releaseTick` CGB rule below maps to 452).
             return speedMode.getSpeedMode() == 2 ? 452 : getEarlyLineEdgeTick();
-        }
-        if (lcdEnableClockPhase && gbc && !speedMode.isDmgCompat()
-                && speedMode.getSpeedMode() == 1) {
-            // The LCD-enable grid makes the CPU's stored dot 452 correspond to the
-            // non-readable tail slot in Gambatte's comparator timeline.
-            return 451;
         }
         if (!gbc) {
             return getEarlyLineEdgeTick();

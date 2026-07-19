@@ -42,7 +42,7 @@ public class GpuCpuWriteSynchronizationTest {
         assertEquals(0x55, fixture.gpu.getByte(GpuRegister.WX.getAddress()));
         assertEquals(0, fixture.gpu.getRegisters().get(GpuRegister.WX));
         assertEquals(0xb1, fixture.gpu.getByte(0xff40));
-        assertEquals(0xb1, fixture.gpu.getLcdc().get());
+        assertEquals(0x91, fixture.gpu.getLcdc().get());
 
         fixture.tick(5);
 

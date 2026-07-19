@@ -36,7 +36,7 @@ public class GambatteHwRomTest {
     private static final String CURRENT_BASELINE =
             "/roms/gambatte/current-baseline.tsv";
 
-    private static final int CURRENT_BASELINE_COUNT = 299;
+    private static final int CURRENT_BASELINE_COUNT = 444;
 
     private static final int ARCHIVE_ROM_COUNT = 3_524;
 

@@ -196,13 +196,14 @@ public class StatRegisterTest {
     }
 
     @Test
-    public void cgbWindowEnabledBackgroundMode3ReleaseIsQuantizedByFineScroll() {
-        for (int scrollX : new int[] {0, 2, 3, 5}) {
+    public void cgbWindowEnabledBackgroundMode3ReleaseFollowsReadableLatchPhase() {
+        for (int[] timing : new int[][] {{0, 250}, {2, 252}, {3, 250}, {5, 250}}) {
+            int scrollX = timing[0];
             Fixture fixture = new Fixture(true);
             fixture.gpu.setByte(GpuRegister.WY.getAddress(), 0xff);
             fixture.gpu.setByte(0xff40, 0xb1);
             fixture.gpu.setByte(GpuRegister.SCX.getAddress(), scrollX);
-            int releaseTick = 243 + ((scrollX & 0x04) != 0 ? 4 : 0);
+            int releaseTick = timing[1];
             fixture.advanceTo(1, releaseTick - 1);
 
             assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());

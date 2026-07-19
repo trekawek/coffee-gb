@@ -466,6 +466,19 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     /**
+     * Returns the instruction-bus residue observed when VRAM DMA takes the bus.
+     * If the next opcode was already fetched in the scheduler tick that wrote
+     * HDMA5, its opcode byte remains on the bus even though PC now addresses an
+     * operand. Otherwise the grant samples the byte at the next PC.
+     */
+    public int getBusValueForHdma() {
+        if (state == State.EXT_OPCODE || state == State.OPERAND || state == State.RUNNING) {
+            return opcode1;
+        }
+        return addressSpace.getByte(registers.getPC());
+    }
+
+    /**
      * Hardware fetches the opcode at the next PC immediately before a VRAM-DMA
      * burst. Decode that byte and hold the resulting pipeline state until the DMA
      * releases the CPU; operands and operations must not run during the burst.

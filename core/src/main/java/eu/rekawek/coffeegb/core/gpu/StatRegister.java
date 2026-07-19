@@ -275,7 +275,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                     && gpu.getLine() != 153;
             if ((coincidenceRelease && !nativeDoubleTailComparison
                     && gpu.getLine() != 153)
-                    || ((!gpu.isGbc() || !isDoubleSpeed()) && gpu.getLine() == 153
+                    || (!gpu.isGbc() && gpu.getLine() == 153
                     && ticksInLine >= 4 && ticksInLine < getNewFrameLycEdgeTick())
                     || lycWriteSuppressed) {
                 // when LY changes, the comparison result reads 0 until the new value

@@ -156,14 +156,14 @@ public class DmaTest {
     }
 
     @Test
-    public void cgbHighSourceCopyReadsAnUndrivenBus() {
+    public void cgbHighSourceCopyAliasesCartridgeRam() {
         Ram memory = new Ram(0, 0x10000);
         memory.setByte(0xa000, 0x42);
 
         DmaAddressSpace dmaMemory = new DmaAddressSpace(memory, true);
 
-        assertEquals(0xff, dmaMemory.getByte(0xe000));
-        assertEquals(0xff, dmaMemory.getByte(0xff9f));
+        assertEquals(0x42, dmaMemory.getByte(0xe000));
+        assertEquals(0x00, dmaMemory.getByte(0xff9f));
     }
 
     private static Dma createDma(boolean gbc) {

@@ -48,15 +48,19 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     static final int LCD_OFF_BLANK_DELAY = 4 * 456;
 
     // Once the CGB speed-switch countdown releases the CPU, the clock mux needs
-    // two final master ticks to settle. The PPU and independently clocked
+    // eight final master ticks to settle. The PPU and independently clocked
     // peripherals continue, but CPU, timer and DMA clocks remain held.
-    static final int SPEED_SWITCH_TAIL_TICKS = 2;
+    static final int SPEED_SWITCH_TAIL_TICKS = 8;
 
-    // If HBlank DMA remains armed across a single-to-double speed switch, its
-    // pending bus request overlaps the last double-speed machine cycle of the
-    // clock-mux tail. Hardware therefore releases the CPU two master ticks
-    // earlier while leaving the independently clocked PPU phase unchanged.
-    static final int PENDING_HBLANK_SPEED_SWITCH_OVERLAP_TICKS = 2;
+    // The native CGB boot ROM hands control to the cartridge before its final
+    // peripheral-clock handoff has propagated. The CPU is already at $0100 while
+    // the serial port and PPU finish these independently clocked ticks.
+    static final int CGB_BOOT_HANDOFF_TICKS = 12;
+
+    // A pending HBlank DMA request retains the prefetched STOP pipeline slot across
+    // a speed switch. Its arbiter releases the CPU two master ticks after the normal
+    // clock-mux tail, keeping the resumed instruction phase aligned with the PPU.
+    static final int PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS = 2;
 
     private final Cartridge cartridge;
 
@@ -227,10 +231,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
             // line grid to that write; the CGB divider phase accounts for the boot
             // ROM's accurately paced HDMA setup. Later revisions start 10 T into the
-            // divider period; revision 0 starts at 524 T, which is 512 T at its first
-            // test read after three fewer NOPs
+            // divider period. Revision 0 does not take the handoff path, so its
+            // divider preset includes the equivalent 12-T offset: 536 T, which is
+            // 512 T at its first test read after three fewer NOPs
             // (boot_div-cgbABCDE, boot_div-cgb0).
-            timer.presetDiv(gbc ? (configuration.cgb0Revision ? 524 : 10) : 4);
+            timer.presetDiv(gbc ? (configuration.cgb0Revision
+                    ? 524 + CGB_BOOT_HANDOFF_TICKS : 10) : 4);
             gpu.setByte(0xff40, 0x00);
         }
         boolean bootTimedOut = false;
@@ -242,6 +248,13 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             long limit = 40_000_000L;
             while (cpu.getRegisters().getPC() != 0x100 && limit-- > 0) {
                 tick();
+            }
+            if (gbc && !configuration.cgb0Revision && cpu.getRegisters().getPC() == 0x100) {
+                for (int i = 0; i < CGB_BOOT_HANDOFF_TICKS; i++) {
+                    serialPort.tick();
+                    gpu.tick();
+                    statRegister.tick();
+                }
             }
             bootTimedOut = cpu.getRegisters().getPC() != 0x100;
         }
@@ -471,7 +484,6 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     private Mode tickSubsystems() {
-        statRegister.preCpuTick();
         boolean speedSwitching = cpu.isSpeedSwitching();
         boolean speedSwitchTail = speedSwitchTailTicks > 0;
         dma.setCpuInterruptStackWrite(cpu.getState() == Cpu.State.IRQ_PUSH_1
@@ -498,8 +510,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             if (!cpu.isSpeedSwitching()) {
                 speedSwitchTailTicks = SPEED_SWITCH_TAIL_TICKS
                         + (speedMode.getSpeedMode() == 2 && speedSwitchClockPhaseShifted ? 1 : 0)
-                        - (hdma.hasPendingHblankTransfer()
-                        ? PENDING_HBLANK_SPEED_SWITCH_OVERLAP_TICKS : 0);
+                        + (hdma.hasPendingHblankTransfer()
+                        ? PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS : 0);
                 if (speedMode.getSpeedMode() == 1) {
                     speedSwitchClockPhaseShifted = true;
                 }
@@ -531,16 +543,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 // the following opcode boundary. This ordering is visible when the
                 // DMA source is the top of that same stack.
                 cpu.tick();
-            } else if (cpu.hasInFlightInstructionForHdma()
-                    && !hdma.preemptsCpuInstructionForSpeedSwitchWake()) {
-                // An opcode fetch that already won arbitration is allowed to finish
-                // its instruction. The next opcode boundary is where the DMA grant
-                // holds the CPU.
-                cpu.tick();
             } else {
                 // VRAM is not connected as a CGB VRAM-DMA source. Its first invalid
                 // read slots expose the instruction bus left at the CPU's next PC.
-                hdma.setCpuBusValue(getAddressSpace().getByte(cpu.getRegisters().getPC()));
+                hdma.setCpuBusValue(cpu.getBusValueForHdma());
                 cpu.prefetchOpcodeForHdma();
                 if (hdma.tick() && hdma.yieldsCpuAfterBlock()) {
                     cpu.releaseHdmaPrefetchedOpcode();
