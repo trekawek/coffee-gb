@@ -11,6 +11,8 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     private static final int PAUSE_ENTRY_CLOCKS = 8;
 
+    private static final int DMG_SOURCE_BUS_RELEASE_CLOCKS = 636;
+
     private final AddressSpace addressSpace;
 
     private final AddressSpace oam;
@@ -203,6 +205,14 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     public int getCpuBusValue() {
+        if (!speedMode.isGbc() && from >= 0xe000
+                && transferClocks < DMG_SOURCE_BUS_RELEASE_CLOCKS) {
+            // The invalid top pages own the DMG main bus, but its incomplete address
+            // decode drives the source page rather than the copied byte. The last
+            // three transfer slots release that decode and expose the OAM latch.
+            int byteIndex = Math.max(0, Math.min(0x9f, (transferClocks - 5) / 4));
+            return ((from + byteIndex) >> 8) & 0x9f;
+        }
         int oamAddress = getActiveOamAddress();
         int value = oam.getByte(oamAddress);
         if (speedMode.isGbc() && getSourceType() == SourceType.VRAM) {
@@ -273,7 +283,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     int getUnblockedDmgHighBusValue(int address) {
         if (!speedMode.isGbc() && isCpuBusConflictActive()
                 && from >= 0x8000 && from < 0xa000
-                && transferClocks < 636
+                && transferClocks < DMG_SOURCE_BUS_RELEASE_CLOCKS
                 && address >= 0xe000 && address < 0xfe00) {
             // During a VRAM-source DMA, the otherwise unblocked DMG high range
             // exposes its partially decoded $80-$9D page on the bus. The source
