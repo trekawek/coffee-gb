@@ -26,17 +26,17 @@ public class GpuOamAccessTest {
     }
 
     @Test
-    public void cgbBgOnlyOamHandoffUsesNormalSpeedCpuPhase() {
-        assertBgOnlyHandoff(1, 4);
+    public void cgbBgOnlyOamOpensAtNormalSpeedMode0Edge() {
+        assertBgOnlyMode0Edge(1);
     }
 
     @Test
-    public void cgbBgOnlyOamHandoffUsesDoubleSpeedCpuPhase() {
-        assertBgOnlyHandoff(2, 4);
+    public void cgbBgOnlyOamOpensAtDoubleSpeedMode0Edge() {
+        assertBgOnlyMode0Edge(2);
     }
 
     @Test
-    public void cgbObjectLineReleasesOamAtInternalHblank() {
+    public void cgbObjectLineKeepsReadLatchClosedUntilMode0Edge() {
         Fixture fixture = new Fixture(true, 1);
         fixture.oam.setByte(0xfe00, 16);
         fixture.oam.setByte(0xfe01, 8);
@@ -45,14 +45,14 @@ public class GpuOamAccessTest {
         fixture.advanceToInternalHBlank();
 
         assertTrue(fixture.gpu.hasObjectsOnLine());
-        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
+        assertFalse(fixture.gpu.isOamAvailableForCpu(false));
         assertTrue(fixture.gpu.isOamAvailableForCpu(true));
     }
 
     @Test
-    public void cgbNormalSpeedOamClosesAtDot454() {
+    public void cgbNormalSpeedWriteLatchClosesAtCgbLineEdge() {
         Fixture fixture = new Fixture(true, 1);
-        fixture.advanceTo(0, 453);
+        fixture.advanceTo(0, 447);
 
         assertTrue(fixture.gpu.isOamAvailableForCpu(false));
         assertTrue(fixture.gpu.isOamAvailableForCpu(true));
@@ -63,7 +63,7 @@ public class GpuOamAccessTest {
     }
 
     @Test
-    public void cgbDoubleSpeedHasSeparateLineEdgeReadAndWriteLatches() {
+    public void cgbDoubleSpeedKeepsBothLineEdgeLatchesClosed() {
         Fixture fixture = new Fixture(true, 2);
         fixture.advanceTo(0, 452);
 
@@ -72,20 +72,13 @@ public class GpuOamAccessTest {
 
         fixture.tick();
         fixture.tick();
-        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
-        assertTrue(fixture.gpu.isOamAvailableForCpu(true));
-
-        fixture.tick();
-        fixture.tick();
-        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
-        assertFalse(fixture.gpu.isOamAvailableForCpu(true));
-
         fixture.tick();
         assertFalse(fixture.gpu.isOamAvailableForCpu(false));
+        assertFalse(fixture.gpu.isOamAvailableForCpu(true));
     }
 
     @Test
-    public void mode0PredictionCountsX166SpritesButNotX167Sprites() {
+    public void cgbMode0PredictionCountsX166SpritesWhileDmgUsesCompletedTransfer() {
         for (boolean gbc : new boolean[] {false, true}) {
             Fixture atPredictionEdge = new Fixture(gbc, 1);
             atPredictionEdge.putTenSpritesAt(166);
@@ -95,7 +88,7 @@ public class GpuOamAccessTest {
             afterPredictionEdge.putTenSpritesAt(167);
             int x167Edge = afterPredictionEdge.advanceToMode0InterruptEdge();
 
-            assertEquals(10 * 6, x166Edge - x167Edge);
+            assertEquals(gbc ? 10 * 6 : 0, x166Edge - x167Edge);
         }
     }
 
@@ -118,19 +111,11 @@ public class GpuOamAccessTest {
         assertEquals(Mode.PixelTransfer, fixture.gpu.getMode());
     }
 
-    private static void assertBgOnlyHandoff(int speed, int blockedDots) {
+    private static void assertBgOnlyMode0Edge(int speed) {
         Fixture fixture = new Fixture(true, speed);
         fixture.advanceTo(1, 0);
         fixture.advanceToInternalHBlank();
         while (!fixture.gpu.isMode0IntWindow()) {
-            fixture.tick();
-        }
-
-        for (int dot = 0; dot < blockedDots; dot++) {
-            assertFalse("OAM read opened at line dot " + fixture.gpu.getTicksInLine(),
-                    fixture.gpu.isOamAvailableForCpu(false));
-            assertFalse("OAM write opened at line dot " + fixture.gpu.getTicksInLine(),
-                    fixture.gpu.isOamAvailableForCpu(true));
             fixture.tick();
         }
 

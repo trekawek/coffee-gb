@@ -82,7 +82,13 @@ public class GpuDisplayEnableTimingTest {
         fixture.advanceTo(247);
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
 
-        fixture.advanceTo(248);
+        while (fixture.gpu.getMode() != Mode.HBlank) {
+            fixture.tick();
+        }
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
+        while (fixture.gpu.getVisibleStatMode() == Mode.PixelTransfer.ordinal()) {
+            fixture.tick();
+        }
         assertEquals(Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
     }
 
