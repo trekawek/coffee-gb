@@ -40,10 +40,20 @@ public class Genie implements AddressSpace, Originator<Genie> {
 
     @Override
     public void setByte(int address, int value) {
+        updateRamBank(address, value);
+        delegate.setByte(address, value);
+    }
+
+    @Override
+    public void setByteFromCpu(int address, int value) {
+        updateRamBank(address, value);
+        delegate.setByteFromCpu(address, value);
+    }
+
+    private void updateRamBank(int address, int value) {
         if (address >= 0x4000 && address <= 0x5fff) {
             ramBank = value & 0xf;
         }
-        delegate.setByte(address, value);
     }
 
     @Override

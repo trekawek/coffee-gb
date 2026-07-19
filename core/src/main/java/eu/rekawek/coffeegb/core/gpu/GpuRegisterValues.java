@@ -119,6 +119,12 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
     public void setByte(int address, int value) {
         GpuRegister reg = fromAddress(address);
         if (reg != null && reg.getType().isAllowsWrite()) {
+            // A physical CGB keeps VBK readable as bank 0 (FE) in DMG
+            // compatibility mode, but writes to the bank-select bit are ignored.
+            if (gbc && reg == GpuRegister.VBK
+                    && speedMode != null && speedMode.isDmgCompat()) {
+                return;
+            }
             // the DMG palette-write conflict mix does not exist on the CGB
             if (!gbc && (reg == GpuRegister.BGP || reg == GpuRegister.OBP0 || reg == GpuRegister.OBP1)) {
                 pendingMixValues[reg.ordinal()] = values[reg.ordinal()] | value;

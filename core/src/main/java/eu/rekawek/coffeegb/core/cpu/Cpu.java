@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.core.gpu.*;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.timer.Timer;
 
 import java.io.Serializable;
 import java.util.List;
@@ -19,8 +20,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
         LOCKED
     }
 
-    // Fixed 4.19 MHz PPU-clock ticks. The PPU continues throughout the pause.
-    private static final int SPEED_SWITCH_DELAY = 65_544;
+    // CPU-clock ticks. Hardware's full STOP/speed-switch sequence is $20008
+    // clocks; this countdown begins after Coffee GB has already consumed the
+    // final 8 STOP-entry clocks. Both directions use the same CPU-clock delay,
+    // so single-to-double occupies half as many 4.19 MHz system ticks.
+    private static final int SPEED_SWITCH_DELAY = 0x20000;
 
     private final Registers registers;
 
@@ -33,6 +37,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
     private final Display display;
 
     private final SpeedMode speedMode;
+
+    private final Timer timer;
 
     private int opcode1, opcode2;
 
@@ -66,20 +72,27 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode,
                Display display) {
+        this(addressSpace, interruptManager, gpu, speedMode, display, null);
+    }
+
+    public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode,
+               Display display, Timer timer) {
         this.registers = new Registers();
         this.addressSpace = addressSpace;
         this.interruptManager = interruptManager;
         this.gpu = gpu;
         this.speedMode = speedMode;
         this.display = display;
+        this.timer = timer;
     }
 
     public void tick() {
         if (state == State.SPEED_SWITCH) {
             if (speedSwitchTicks > 0) {
-                speedSwitchTicks--;
+                speedSwitchTicks -= speedMode.getSpeedMode();
             }
-            if (speedSwitchTicks == 0) {
+            if (speedSwitchTicks <= 0) {
+                speedSwitchTicks = 0;
                 state = State.OPCODE;
             }
             return;
@@ -95,12 +108,22 @@ public class Cpu implements Serializable, Originator<Cpu> {
             return;
         }
 
+        boolean wokeFromHalt = false;
         if (state == State.HALTED && interruptManager.isInterruptRequestedForHalt()) {
             // a halted CPU behaves exactly like it was executing NOPs, so the wake-up
             // has the same timing as the running state: the interrupt dispatch starts
             // (IME=1) or the next instruction is fetched (IME=0) at the cycle following
             // the interrupt request (halt_ime1_timing2-GS, halt_ime0_nointr_timing)
             state = State.OPCODE;
+            wokeFromHalt = true;
+        }
+
+        if (state == State.STOPPED && isJoypadLineLow()) {
+            // STOP is released by the physical joypad line, independently of IE and
+            // IME. This is also sampled before entering STOP: a button that is already
+            // held makes STOP fall through instead of turning the clocks/LCD off.
+            state = State.OPCODE;
+            display.enableLcd();
         }
 
         if (state == State.OPCODE || state == State.STOPPED) {
@@ -108,7 +131,16 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 if (state == State.STOPPED) {
                     display.enableLcd();
                 }
-                state = State.IRQ_WAIT_1;
+                boolean fastCgbPpuDispatch = speedMode.isGbc()
+                        && interruptManager.isUnphasedPpuInterruptRequested()
+                        && !wokeFromHalt;
+                if (fastCgbPpuDispatch) {
+                    // The direct CGB PPU path skips IRQ_WAIT_1 to accept the edge one
+                    // machine cycle earlier. IRQ_WAIT_1 normally clears IME, so retain
+                    // that acceptance side effect even though its wait cycle is absent.
+                    interruptManager.disableInterrupts(false);
+                }
+                state = fastCgbPpuDispatch ? State.IRQ_WAIT_2 : State.IRQ_WAIT_1;
             }
         }
 
@@ -183,12 +215,18 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
                 case RUNNING:
                     if (opcode1 == 0x10) {
-                        if (speedMode.onStop()) {
+                        boolean exitByJoypad = isJoypadLineLow();
+                        if (!exitByJoypad && speedMode.onStop()) {
                             // A CGB speed switch resets and freezes DIV while the CPU clock
                             // is stopped. The PPU remains in its independent clock domain.
                             addressSpace.setByte(0xff04, 0);
                             speedSwitchTicks = SPEED_SWITCH_DELAY;
                             state = State.SPEED_SWITCH;
+                        } else if (exitByJoypad) {
+                            // A selected, asserted P10-P13 input wins over KEY1 and makes
+                            // STOP exit immediately. In particular, do not consume the
+                            // pending speed-switch request in this case.
+                            state = State.OPCODE;
                         } else {
                             state = State.STOPPED;
                             // A stopped DMG drives color 0 (white). A CGB outside mode 3
@@ -215,6 +253,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
                             return;
                         }
                         if (interruptManager.isHaltBug()) {
+                            if (timer != null) {
+                                timer.onHaltBug();
+                            }
                             state = State.OPCODE;
                             haltBugMode = true;
                             return;
@@ -267,6 +308,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
                     return;
             }
         }
+    }
+
+    private boolean isJoypadLineLow() {
+        return (addressSpace.getByte(0xff00) & 0x0f) != 0x0f;
     }
 
     private void handleInterrupt() {

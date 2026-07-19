@@ -35,7 +35,7 @@ public class DmaCpuAddressSpace implements AddressSpace, Serializable {
     @Override
     public void setByte(int address, int value) {
         if (!dma.isCpuAccessBlocked(address, gbc)) {
-            addressSpace.setByte(address, value);
+            addressSpace.setByteFromCpu(dma.mapUnblockedCpuAddress(address), value);
         }
     }
 
@@ -44,6 +44,10 @@ public class DmaCpuAddressSpace implements AddressSpace, Serializable {
         if (dma.isCpuAccessBlocked(address, gbc)) {
             return blockedReadsReturnFF ? 0xff : dma.getCpuBusValue();
         }
-        return addressSpace.getByte(address);
+        int highBusValue = dma.getUnblockedDmgHighBusValue(address);
+        if (highBusValue >= 0) {
+            return highBusValue;
+        }
+        return addressSpace.getByte(dma.mapUnblockedCpuAddress(address));
     }
 }

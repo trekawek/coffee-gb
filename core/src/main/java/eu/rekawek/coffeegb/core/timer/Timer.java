@@ -32,6 +32,16 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private int haltWakeDelay;
 
+    // On the DMG the divider is an asynchronous ripple counter. If the HALT bug is
+    // entered in the M-cycle immediately following a DIV reset, the duplicated fetch
+    // can line the subsequent DIV read up with the first carry ripple. The high byte
+    // briefly exposes the alternating ripple nodes before settling to 0x01.
+    private int ticksSinceDivReset = Integer.MAX_VALUE;
+
+    private boolean haltBugDivRipplePending;
+
+    private boolean haltBugDivRippleVisible;
+
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.speedMode = speedMode;
         this.interruptManager = interruptManager;
@@ -39,6 +49,9 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     public void presetDiv(int value) {
         this.div = value & 0xffff;
+        ticksSinceDivReset = Integer.MAX_VALUE;
+        haltBugDivRipplePending = false;
+        haltBugDivRippleVisible = false;
     }
 
     public int getDivCounter() {
@@ -47,10 +60,25 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     public void tick() {
         divReset = false;
+        for (int i = 0; i < speedMode.getSpeedMode(); i++) {
+            tickCpuClock();
+        }
+    }
+
+    private void tickCpuClock() {
+        haltBugDivRippleVisible = false;
         if (haltWakeDelay > 0 && --haltWakeDelay == 0) {
             interruptManager.releaseHaltWake(InterruptManager.InterruptType.Timer);
         }
-        updateDiv((div + speedMode.getSpeedMode()) & 0xffff);
+        int oldDiv = div;
+        updateDiv((div + 1) & 0xffff);
+        if (ticksSinceDivReset != Integer.MAX_VALUE) {
+            ticksSinceDivReset++;
+        }
+        if (haltBugDivRipplePending && (oldDiv & 0xff) == 0xff && (div & 0xff) == 0) {
+            haltBugDivRipplePending = false;
+            haltBugDivRippleVisible = true;
+        }
         if (overflow) {
             ticksSinceOverflow++;
             if (ticksSinceOverflow == 4) {
@@ -79,13 +107,16 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private void updateDiv(int newDiv) {
         this.div = newDiv;
-        int bitPos = FREQ_TO_BIT[tac & 0b11];
-        boolean bit = (div & (1 << bitPos)) != 0;
-        bit &= (tac & (1 << 2)) != 0;
+        boolean bit = timerInput(div, tac);
         if (!bit && previousBit) {
             incTima();
         }
         previousBit = bit;
+    }
+
+    private static boolean timerInput(int div, int tac) {
+        int bitPos = FREQ_TO_BIT[tac & 0b11];
+        return (tac & (1 << 2)) != 0 && (div & (1 << bitPos)) != 0;
     }
 
     @Override
@@ -99,6 +130,9 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
             case 0xff04:
                 updateDiv(0);
                 divReset = true;
+                ticksSinceDivReset = 0;
+                haltBugDivRipplePending = false;
+                haltBugDivRippleVisible = false;
                 break;
 
             case 0xff05:
@@ -114,7 +148,20 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
                 break;
 
             case 0xff07:
-                tac = value;
+                if (speedMode.isGbc()) {
+                    // TAC changes the input of the timer's falling-edge detector at
+                    // the write edge itself. Waiting for the following divider tick
+                    // is observably one T-cycle late on CGB (tac_set_enabled).
+                    boolean oldInput = timerInput(div, tac);
+                    boolean newInput = timerInput(div, value);
+                    tac = value;
+                    if (oldInput && !newInput) {
+                        incTima();
+                    }
+                    previousBit = newInput;
+                } else {
+                    tac = value;
+                }
                 break;
         }
     }
@@ -129,11 +176,21 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         return divReset;
     }
 
+    /**
+     * Records the DMG HALT-bug clock phase. This is intentionally tied to the
+     * divider reset phase rather than to a particular instruction stream.
+     */
+    public void onHaltBug() {
+        if (!speedMode.isGbc() && speedMode.getSpeedMode() == 1 && ticksSinceDivReset == 4) {
+            haltBugDivRipplePending = true;
+        }
+    }
+
     @Override
     public int getByte(int address) {
         switch (address) {
             case 0xff04:
-                return div >> 8;
+                return haltBugDivRippleVisible ? 0x55 : div >> 8;
 
             case 0xff05:
                 return tima;
@@ -150,7 +207,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     @Override
     public Memento<Timer> saveToMemento() {
         return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow, divReset,
-                haltWakeDelay);
+                haltWakeDelay, ticksSinceDivReset, haltBugDivRipplePending, haltBugDivRippleVisible);
     }
 
     @Override
@@ -167,11 +224,16 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         this.ticksSinceOverflow = mem.ticksSinceOverflow;
         this.divReset = mem.divReset;
         this.haltWakeDelay = mem.haltWakeDelay;
+        this.ticksSinceDivReset = mem.ticksSinceDivReset;
+        this.haltBugDivRipplePending = mem.haltBugDivRipplePending;
+        this.haltBugDivRippleVisible = mem.haltBugDivRippleVisible;
     }
 
     public record TimerMemento(int div, int tac, int tma, int tima, boolean previousBit, boolean overflow,
                                int ticksSinceOverflow, boolean divReset,
-                               int haltWakeDelay) implements Memento<Timer> {
+                               int haltWakeDelay, int ticksSinceDivReset,
+                               boolean haltBugDivRipplePending,
+                               boolean haltBugDivRippleVisible) implements Memento<Timer> {
     }
 
 }

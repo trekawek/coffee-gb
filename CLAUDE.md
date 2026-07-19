@@ -48,8 +48,9 @@ Use the repository skills instead of duplicating their procedures here:
   `core/target/test-classes` (absolute paths).
 - Test runners: `MooneyeTestRunner` picks CGB for `*-C.gb`/`*-cgb*` roms, CGB0
   revision for `*-cgb0*`, NORMAL boot for `boot_*` roms, SKIP otherwise.
-- `GbMicrotestRunner` reads the suite's automated result at `$FF82`; run all
-  513 hardware-verified DMG timing tests with `-Ptest-gbmicrotest`.
+- `GbMicrotestRunner` reads the suite's automated result at `$FF82`; the profile
+  runs all 482 self-verifying DMG timing ROMs and pins the 31 interactive/test-bench
+  archive entries that have no machine-readable verdict.
 - `GbcHwTestRunner` compares the AntonioND suite's SRAM output with original DMG/CGB
   captures; use `-Ptest-gbc-hw`. The smaller alyosha-tas Mooneye-derived collection
   runs with `-Ptest-misc-gb`.
@@ -125,8 +126,8 @@ change one without re-running the full battery.**
 
 ### Timer / DIV / boot
 
-- Internal divider: `Timer.presetDiv()`; **power-on presets: DMG 4, CGB 12,
-  CGB0 536** (`Gameboy` ctor, non-SKIP branch); SKIP-boot presets (value at
+- Internal divider: `Timer.presetDiv()`; **power-on presets: DMG 4, CGB 0,
+  CGB0 524** (`Gameboy` ctor, non-SKIP branch); SKIP-boot presets (value at
   PC=0x100): DMG 0xABCC, CGB 0xB644.
 - These are calibrated against mooneye boot_div tests **with our late-read
   quirk**; SameBoy hardware truth: DIV counter at 0x100 = 0xABCC (DMG),
@@ -137,8 +138,9 @@ change one without re-running the full battery.**
   counter). This keeps the FS at 512 Hz real time — it's what blargg
   interrupt_time's `get_cpu_speed` measures (races a loop against length
   expiry).
-- Serial clock: DIV-derived, tap leads the counter by +4, bit 8 (CGB fast:
-  bit 3). SC (FF02) bit 1 (CGB speed bit) reads 1 at power-on.
+- Serial clock: independent free-running 8-bit link clock, advanced in the CPU
+  clock domain; normal internal transfer flips every 256 clocks and CGB fast mode
+  every 8. SC (FF02) bit 1 (CGB speed bit) reads 1 at power-on.
 - Timer overflow sets IF before its edge reaches the HALT wake path; the wake becomes
   eligible 4 T later (`timer_if`).
 
@@ -221,13 +223,13 @@ rising edge) — see `StatRegister`.
 - Memento pattern everywhere (save states): every stateful class implements
   `Originator<T>` with a private record memento — **add new fields to the
   memento** or save states silently corrupt.
-- `Gameboy.tick()` order: timer → cpu (or hdma) → dma → sound → serial → joypad
-  → gpu → statRegister. A CPU read at tick T sees GPU state from tick T-1.
+- `Gameboy.tick()` order: timer (unless in the clock-mux tail) → frame sequencer
+  → cpu/hdma/speed-switch tail → dma → sound → serial → infrared → joypad → gpu
+  → statRegister. A CPU read at tick T sees GPU state from tick T-1.
 - `GameboyConfiguration` bootstrap modes: NORMAL (run boot ROM), SKIP (preset
   registers/DIV), FAST_FORWARD.
-- Double speed: `div += 2` per tick, DMA `648/speed`; the PPU is *not* slowed
-  relative to ticks (a known simplification — CGB double-speed PPU timing is
-  not hardware-exact).
+- Double speed: timer/DIV, OAM DMA, serial, infrared and CPU machine cycles use
+  the doubled CPU clock domain while the PPU remains on the fixed master-dot grid.
 - blargg cgb_sound/dmg_sound "same" subtests are different builds (the CGB one
   defines `CGB_02` and adds tests); don't assume binary equality.
 
@@ -257,7 +259,8 @@ rising edge) — see `StatRegister`.
 
 ## Mealybug Tearoom status (mid-mode-3 register writes, DMG)
 
-`mvn -pl core test -Ptest-mealybug` — 24 DMG tests, baselines GUARD CI.
+`mvn -pl core test -Ptest-mealybug` — 24 DMG tests compared strictly with the
+hardware references, with only the single documented pixel exception below.
 **Status (machine-retiming branch, 2026-07-10): 23/24 pixel-perfect, 1 diff
 pixel total** (m3_lcdc_win_en_change_multiple_wx row 39 — an LCD-PPU desync
 boundary case SameBoy documents as present on "most but not all" DMG units).
@@ -267,6 +270,10 @@ boundary case SameBoy documents as present on "most but not all" DMG units).
   modes/locks/STAT (mooneye-exact) and a +4-shifted pixel machine rendering
   pixels (entryDelay=4; line 0 runs at 0). DMG OUTPUT_DELAY=3 (CGB 2): pixels
   pop as raw indices and resolve palettes/LCDC-mux at the LCD interface.
+- During DMG mode 3, selected CPU-written LCDC, SCX, WX, and BGP slices cross
+  into the shifted pixel domain through four-dot latches while CPU readback is
+  immediate. Direct debugger, DMA, boot-state, and fixture writes remain
+  immediate; the pending latch state is included in save states.
 - **CPU-write events reach the hardware machine ~3 dots earlier in machine
   progress than our shifted machine observes them.** Every mid-fetch conflict
   fix is an instance of this constant:
@@ -293,9 +300,4 @@ boundary case SameBoy documents as present on "most but not all" DMG units).
 
 - CGB PPU rendering in DMG-compat mode (palettes via KEY0 path) — IO regs are
   compat-correct, rendering path is plain CGB.
-- CGB double-speed PPU/APU relative timing (only the frame sequencer tap is
-  double-speed-aware today).
-- mealybug-tearoom-tests (mid-scanline register writes) — the T-exact pipeline
-  is the right foundation; the fetcher currently latches LCDC map/tiledata per
-  fetch state, close to hardware.
 - SGB-specific timing is untested territory.

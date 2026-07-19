@@ -9,10 +9,20 @@ import eu.rekawek.coffeegb.core.memory.DmaOamAddressSpace;
 import eu.rekawek.coffeegb.core.memory.Ram;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.*;
 
 public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
+
+    private static final int LCDC_ADDRESS = 0xff40;
+
+    private static final int LAST_STANDARD_REGISTER_ADDRESS = 0xff4b;
+
+    /** Pixel-domain synchronization delay for selected DMG register latches. */
+    private static final int PPU_WRITE_DELAY_DOTS = 4;
 
     private final Ram videoRam0;
 
@@ -27,6 +37,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     private final Lcdc lcdc;
 
     private final boolean gbc;
+
+    private final eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode;
 
     private final ColorPalette bgPalette;
 
@@ -71,12 +83,33 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // visible mode 0 and is quantized to 4-tick steps (hblank_ly_scx_timing-GS)
     private int hblankIntFrom = Integer.MAX_VALUE;
 
+    /**
+     * Coffee GB keeps a calibrated CPU-visible timing skeleton and a pixel-producing
+     * dot machine four dots behind it. Selected DMG register slices cross into that
+     * second clock domain through their own latches; CPU reads still see the bus value
+     * immediately. This queue models that crossing without delaying the CPU or timer.
+     */
+    private final List<PendingPpuWrite> pendingPpuWrites = new ArrayList<>();
+
+    private final int[] cpuVisiblePpuRegisters =
+            new int[LAST_STANDARD_REGISTER_ADDRESS - LCDC_ADDRESS + 1];
+
+    private boolean directOamReadCorruptionThisTick;
+
+    private boolean suppressNextDirectOamReadCorruption;
+
+    private boolean directOamWriteCorruptionThisTick;
+
+    private boolean suppressNextDirectOamWriteCorruption;
+
     public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, StatRegister statRegister, boolean gbc, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
         this.statRegister = statRegister;
+        Arrays.fill(cpuVisiblePpuRegisters, -1);
         this.display = display;
         this.r = new GpuRegisterValues();
         this.lcdc = new Lcdc();
         this.gbc = gbc;
+        this.speedMode = speedMode;
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -146,10 +179,47 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public void setByte(int address, int value) {
+        cancelPendingPpuWrites(address);
+        setByteImmediately(address, value);
+    }
+
+    @Override
+    public void setByteFromCpu(int address, int value) {
+        if (!shouldDelayPpuWrite(address, value)) {
+            cancelPendingPpuWrites(address);
+            setByteImmediately(address, value);
+            return;
+        }
+
+        int mask = getDelayedPpuWriteMask(address);
+        int current = getCurrentPpuWriteValue(address);
+        cpuVisiblePpuRegisters[address - LCDC_ADDRESS] = value;
+
+        // Non-delayed bits take effect on the CPU write edge. Writing the retained
+        // value also preserves the DMG's separate write-strobe effects (notably the
+        // immediate WX "just changed" pulse) while the synchronized value is pending.
+        int immediateValue = (value & ~mask) | (current & mask);
+        setByteImmediately(address, immediateValue);
+        pendingPpuWrites.add(new PendingPpuWrite(
+                address, value, mask, PPU_WRITE_DELAY_DOTS));
+    }
+
+    private void setByteImmediately(int address, int value) {
         if (address == LYC.getAddress()) {
             statRegister.onLycWrite(r.get(LYC));
         }
         if (oamRam.accepts(address)) {
+            if (!gbc) {
+                int accessedRow = getDirectOamWriteRow();
+                if (accessedRow >= 0) {
+                    if (suppressNextDirectOamWriteCorruption) {
+                        suppressNextDirectOamWriteCorruption = false;
+                    } else {
+                        SpriteBug.corruptOamWrite(oamRam, accessedRow);
+                        directOamWriteCorruptionThisTick = true;
+                    }
+                }
+            }
             if (!dma.isOamBlocked() && isOamAvailableForCpu(true)) {
                 oamRam.setByte(address, value);
             }
@@ -179,8 +249,25 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public int getByte(int address) {
+        if (address >= LCDC_ADDRESS && address <= LAST_STANDARD_REGISTER_ADDRESS) {
+            int cpuVisible = cpuVisiblePpuRegisters[address - LCDC_ADDRESS];
+            if (cpuVisible >= 0) {
+                return cpuVisible;
+            }
+        }
         if (address == LY.getAddress()) {
             return getVisibleLy();
+        }
+        if (!gbc && oamRam.accepts(address)) {
+            int accessedRow = getDirectOamReadRow();
+            if (accessedRow >= 0) {
+                if (suppressNextDirectOamReadCorruption) {
+                    suppressNextDirectOamReadCorruption = false;
+                } else {
+                    SpriteBug.corruptOamRead(oamRam, address, accessedRow);
+                    directOamReadCorruptionThisTick = true;
+                }
+            }
         }
         AddressSpace space = getAddressSpace(address);
         if (space == null) {
@@ -202,6 +289,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     public Mode tick() {
+        directOamReadCorruptionThisTick = false;
+        suppressNextDirectOamReadCorruption = false;
+        directOamWriteCorruptionThisTick = false;
+        suppressNextDirectOamWriteCorruption = false;
         if (displayEnabledDelay > 0 && --displayEnabledDelay == 0) {
             display.enableLcd();
         }
@@ -209,6 +300,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return null;
         }
+
+        advancePendingPpuWrites();
 
         // write-conflict mixes settle and the LCD output stage advances every tick,
         // in all modes (the last pixels of a line leave the delay line during HBlank)
@@ -220,8 +313,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         pixelMachine.machineTick();
 
         Mode oldMode = mode;
-        WALL_TL = ticksInLine;
-        WALL_LINE = line;
         ticksInLine++;
         // the line started by enabling the LCD is one tick shorter: its grid starts at
         // the LCDC write itself, while the machine-cycle-locked line grid starts one
@@ -264,12 +355,21 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         pixelTransferDone = false;
                         mode = Mode.HBlank;
                     } else if (!phase.tick()) {
-                        // the visible mode/locks change one tick after the last pixel
-                        // (intr_2_mode0_timing_sprites); the interrupt line lags the
-                        // visible mode by 3 ticks (hblank_ly_scx_timing-GS,
-                        // intr_2_0_timing)
-                        pixelTransferDone = true;
-                        hblankIntFrom = ticksInLine + 4;
+                        // DMG raises the internal HBlank request on the following dot.
+                        // CGB exposes it immediately; VRAM DMA relies on that internal
+                        // edge for its normal per-line request cadence.
+                        if (gbc && !firstLine) {
+                            mode = Mode.HBlank;
+                        } else {
+                            pixelTransferDone = true;
+                        }
+                        // The DMG's object fetch path has an additional two-dot
+                        // output-latch tail before STAT mode 0 rises. BG-only steady
+                        // lines use the shorter latch; the LCD-enable line always uses
+                        // the full four-dot settling path.
+                        hblankIntFrom = ticksInLine
+                                + (firstLine || (!gbc && pixelTransferPhase.hasObjectsOnLine())
+                                ? 4 : 2);
                     }
                     break;
 
@@ -285,6 +385,93 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
     }
 
+    private boolean shouldDelayPpuWrite(int address, int value) {
+        if (gbc || !lcdEnabled || line == 0 || mode != Mode.PixelTransfer) {
+            return false;
+        }
+        if (address == LCDC_ADDRESS) {
+            // LCD enable itself controls the timing skeleton directly. Only the window
+            // enable bit crosses through the delayed mode-3 comparator latch.
+            return (value & 0x80) != 0 && ((lcdc.get() ^ value) & 0x20) != 0;
+        }
+        if (address == SCX.getAddress()) {
+            // Coarse tile selection sees SCX directly; only the fine-scroll counter is
+            // synchronized into the shifted pixel domain.
+            return ((r.get(SCX) ^ value) & 0x07) != 0;
+        }
+        if (address == BGP.getAddress()) {
+            // The object/window pixel paths cross the delayed LCD output pipeline. An
+            // actual object fetch contributes that skew itself; otherwise their enabled
+            // path needs the palette latch. With both paths disabled, BGP feeds the pure
+            // background scanner directly (Daid's scanline palette capture).
+            return (lcdc.isObjDisplay() || lcdc.isWindowDisplay())
+                    && !pixelTransferPhase.hasObjectsOnLine();
+        }
+        // WX is consumed by the mode-3 window comparator as a complete byte.
+        return address == WX.getAddress();
+    }
+
+    private static int getDelayedPpuWriteMask(int address) {
+        if (address == LCDC_ADDRESS) {
+            return 0x20;
+        }
+        if (address == SCX.getAddress()) {
+            return 0x07;
+        }
+        return 0xff;
+    }
+
+    private int getCurrentPpuWriteValue(int address) {
+        if (address == LCDC_ADDRESS) {
+            return lcdc.get();
+        }
+        if (address == SCX.getAddress()) {
+            return r.get(SCX);
+        }
+        if (address == BGP.getAddress()) {
+            return r.get(BGP);
+        }
+        if (address == WX.getAddress()) {
+            return r.get(WX);
+        }
+        throw new IllegalArgumentException("Unsupported delayed PPU register: "
+                + Integer.toHexString(address));
+    }
+
+    private void advancePendingPpuWrites() {
+        for (int i = 0; i < pendingPpuWrites.size(); ) {
+            PendingPpuWrite pending = pendingPpuWrites.get(i);
+            if (pending.remainingDots() == 0) {
+                pendingPpuWrites.remove(i);
+                int current = getCurrentPpuWriteValue(pending.address());
+                setByteImmediately(pending.address(),
+                        (pending.value() & pending.mask()) | (current & ~pending.mask()));
+                if (pendingPpuWrites.stream()
+                        .noneMatch(p -> p.address() == pending.address())) {
+                    cpuVisiblePpuRegisters[pending.address() - LCDC_ADDRESS] = -1;
+                }
+            } else {
+                pendingPpuWrites.set(i, new PendingPpuWrite(
+                        pending.address(), pending.value(), pending.mask(),
+                        pending.remainingDots() - 1));
+                i++;
+            }
+        }
+    }
+
+    private void cancelPendingPpuWrites(int address) {
+        if (address < LCDC_ADDRESS || address > LAST_STANDARD_REGISTER_ADDRESS) {
+            return;
+        }
+        pendingPpuWrites.removeIf(pending -> pending.address() == address);
+        cpuVisiblePpuRegisters[address - LCDC_ADDRESS] = -1;
+    }
+
+    private void clearPendingPpuWrites() {
+        pendingPpuWrites.clear();
+        Arrays.fill(cpuVisiblePpuRegisters, -1);
+    }
+
     public int getTicksInLine() {
         return ticksInLine;
     }
@@ -296,6 +483,28 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (gbc || !lcdEnabled) {
             return;
         }
+        if (type == SpriteBug.CorruptionType.POP_1
+                || type == SpriteBug.CorruptionType.POP_2) {
+            if (directOamReadCorruptionThisTick) {
+                directOamReadCorruptionThisTick = false;
+                return;
+            }
+            suppressNextDirectOamReadCorruption = true;
+        }
+        if (type == SpriteBug.CorruptionType.PUSH_1
+                || type == SpriteBug.CorruptionType.PUSH_2) {
+            if (directOamWriteCorruptionThisTick) {
+                directOamWriteCorruptionThisTick = false;
+                return;
+            }
+            suppressNextDirectOamWriteCorruption = true;
+        }
+        if (type == SpriteBug.CorruptionType.LD_HL
+                && (directOamReadCorruptionThisTick || directOamWriteCorruptionThisTick)) {
+            directOamReadCorruptionThisTick = false;
+            directOamWriteCorruptionThisTick = false;
+            return;
+        }
         // The OAM scan accesses rows 1..19, starting 4 ticks before the end of the
         // preceding line and finishing at tick 72 (blargg oam_bug 4-scanline_timing,
         // 5-timing_bug, 6-timing_no_bug). The INC/DEC bug check runs one machine cycle
@@ -305,8 +514,39 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (t >= (firstLine ? 451 : 452) && (line < 143 || line == 153)) {
             SpriteBug.corruptOam(oamRam, type, 1);
         } else if (mode == Mode.OamSearch && t >= -4 && t < 72) {
-            SpriteBug.corruptOam(oamRam, type, t < 0 ? 1 : t / 4 + 2);
+            int row = t < 0 ? 1 : t / 4 + 2;
+            SpriteBug.corruptOam(oamRam, type, row);
         }
+    }
+
+    private int getDirectOamReadRow() {
+        if (!lcdEnabled || firstLine) {
+            return -1;
+        }
+        if (ticksInLine >= getEarlyLineEdgeTick()
+                && (line < 143 || line == 153)) {
+            return 0;
+        }
+        if (mode != Mode.OamSearch) {
+            return -1;
+        }
+        int scanTick = ticksInLine - 4;
+        if (scanTick >= -4 && scanTick < 72) {
+            return scanTick < 0 ? 1 : scanTick / 4 + 2;
+        }
+        return scanTick < 76 ? 20 : -1;
+    }
+
+    private int getDirectOamWriteRow() {
+        if (!lcdEnabled || firstLine || mode != Mode.OamSearch
+                || isOamAvailableForCpu(true)) {
+            return -1;
+        }
+        int scanTick = ticksInLine - 4;
+        if (scanTick < -4 || scanTick >= 72) {
+            return -1;
+        }
+        return scanTick < 0 ? 1 : scanTick / 4 + 2;
     }
 
     public int getLine() {
@@ -318,21 +558,23 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     /**
-     * LY value as visible to the CPU: it increments 4 ticks before the end of the line. On
-     * DMG, 153 is exposed only by that early increment on line 152; CGB also holds it for
-     * the first 4 ticks of internal line 153 before returning to 0.
+     * LY value as visible to the CPU. Native CGB mode uses the steady-state DMG line
+     * edge, while CGB DMG-compatibility mode has its own intermediate latch timing.
+     * CGB retains 153 briefly after line 153 starts: four dots at normal speed
+     * (native or compatibility mode), and two dots at double speed.
      */
     public int getVisibleLy() {
         if (!lcdEnabled) {
             return 0;
         }
         if (line == 153) {
-            // Monochrome hardware exposes 153 only during the early increment at
-            // the end of line 152. CGB hardware holds it for one additional
-            // machine cycle after line 153 starts.
-            return gbc && ticksInLine < 4 ? 153 : 0;
+            if (gbc) {
+                int lastLyTicks = speedMode.getSpeedMode() == 2 ? 2 : 4;
+                return ticksInLine < lastLyTicks ? 153 : 0;
+            }
+            return 0;
         }
-        if (ticksInLine >= (firstLine ? 451 : 452)) {
+        if (ticksInLine >= getVisibleLyLineEdgeTick()) {
             return line + 1;
         }
         return line;
@@ -345,6 +587,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return 0;
         }
+        // The CGB's CPU-readable latch projects the next line's mode during the
+        // final two dots, independently of compatibility or CPU speed.
+        int nextLineModeTick = 454;
+        if (gbc && ticksInLine >= nextLineModeTick) {
+            if (line < 143 || (line == 153 && !speedMode.isDmgCompat())) {
+                return Mode.OamSearch.ordinal();
+            } else if (line == 143) {
+                return Mode.VBlank.ordinal();
+            }
+        }
         // The last VBlank line briefly exposes mode 0 before line 0 enters
         // mode 2 (Wilbert Pol's ly00_mode1_0/ly00_mode0_2 tests).
         if (!gbc && line == 153 && ticksInLine >= 452) {
@@ -352,6 +604,41 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         if (firstLine && ticksInLine < 79) {
             return 0;
+        }
+        // The CGB's CPU-readable mode latch changes at dot 78, just before the
+        // internal OAM scan hands the pixel pipeline over to mode 3 at dot 80.
+        int pixelTransferModeTick = gbc ? 78 : 80;
+        if (gbc && mode == Mode.OamSearch && ticksInLine >= pixelTransferModeTick) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        // The CGB's readable mode-3 latch is tied to the LCD output delay rather than
+        // directly to the timing skeleton. At normal speed, a line containing objects
+        // retains mode 3 through output position 159 and releases it with the final
+        // pixel latch. At double speed the CPU read latch retains mode 3 for the two
+        // dots after the skeleton completes, including BG-only lines where object
+        // display is disabled.
+        if (gbc && speedMode.getSpeedMode() == 1
+                && mode == Mode.PixelTransfer
+                && pixelTransferPhase.hasObjectsOnLine()
+                && lcdc.isObjDisplayEffective()
+                && pixelTransferPhase.getPosition() >= 160) {
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 1
+                && mode == Mode.PixelTransfer && pixelTransferDone) {
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 1
+                && mode == Mode.HBlank && ticksInLine < hblankIntFrom
+                && !pixelTransferPhase.hasObjectsOnLine()) {
+            // On a BG-only line the internal phase can enter HBlank before the
+            // CPU-visible mode latch reaches the calibrated mode-0 edge.
+            return Mode.PixelTransfer.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 2
+                && ((mode == Mode.PixelTransfer && pixelTransferDone)
+                || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
+            return Mode.PixelTransfer.ordinal();
         }
         // A scanline containing enabled objects, combined with fractional scroll or the
         // window, can leave the readable mode-3 tail asserted through the mode-0
@@ -371,18 +658,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     /**
-     * The "mode 2" STAT interrupt condition starts during the final machine cycle of the
-     * preceding line and lasts through the first 4 ticks of each visible line (and line 144).
+     * The mode-2 STAT source is a short pulse during the final machine cycle of the
+     * preceding line. At the frame boundary there is no visible preceding line, so the
+     * pulse is exposed during the first four ticks of line 0 instead.
      */
     public boolean isMode2IntWindow() {
         if (!lcdEnabled) {
             return false;
         }
-        // IF exposes the OAM condition during the final machine cycle of the
-        // preceding line and keeps it asserted through the first four ticks
-        // of the new line. CPU acceptance is synchronized at the line boundary.
-        return (line < 144 && ticksInLine >= (firstLine ? 451 : 452))
-                || (!firstLine && line <= 144 && ticksInLine < 4);
+        return (line < 144 && ticksInLine >= getEarlyLineEdgeTick())
+                || (!firstLine && line == 0 && ticksInLine < 4);
     }
 
     /**
@@ -393,13 +678,26 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return lcdEnabled && line < 144 && ticksInLine >= hblankIntFrom;
     }
 
+    boolean hasObjectsOnLine() {
+        return pixelTransferPhase.hasObjectsOnLine();
+    }
+
+    /**
+     * The mode-0 edge reaches the HALT wake input two T-cycles after it becomes
+     * visible in IF. A running CPU can sample IF immediately.
+     */
+    public boolean isMode0HaltWakeTick() {
+        return lcdEnabled && line < 144 && ticksInLine == hblankIntFrom + 2;
+    }
+
     /**
      * The mode-1 STAT source follows the PPU's internal VBlank state. On DMG the readable
      * STAT mode briefly becomes 0 at the end of line 153, but the interrupt source remains
      * asserted until the line-0 mode-2 source takes over.
      */
     public boolean isMode1IntWindow() {
-        return lcdEnabled && mode == Mode.VBlank;
+        return lcdEnabled && (mode == Mode.VBlank
+                || (gbc && line == 143 && ticksInLine >= 448));
     }
 
     /**
@@ -411,7 +709,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return isOamAvailableForCpu(false);
     }
 
-    private boolean isOamAvailableForCpu(boolean write) {
+    public boolean isOamAvailableForCpu(boolean write) {
         if (!lcdEnabled) {
             return true;
         }
@@ -421,17 +719,56 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (mode == Mode.OamSearch) {
             // the OAM write bus is released between the end of the OAM scan and the
             // start of the pixel transfer (lcdon_write_timing-GS)
-            return write && ticksInLine >= 76;
+            return write && ticksInLine >= 76 && ticksInLine < 80;
         }
         if (mode == Mode.PixelTransfer) {
+            return gbc && pixelTransferDone;
+        }
+        if (!write && gbc && mode == Mode.HBlank && ticksInLine < hblankIntFrom) {
+            // The CGB exposes mode 0 before the OAM read latch is released. The latch
+            // opens with the internal HBlank edge two dots later.
             return false;
         }
-        // reads are blocked from 4 ticks before the end of the preceding line, but
-        // writes still pass (lcdon_write_timing-GS)
-        if (!write && ticksInLine >= (firstLine ? 451 : 452) && (line < 143 || line == 153)) {
+        // DMG writes still pass during the early OAM read window
+        // (lcdon_write_timing-GS); CGB has already switched both OAM bus latches.
+        if ((!write || gbc) && ticksInLine >= getEarlyLineEdgeTick()
+                && (line < 143 || line == 153)) {
             return false;
         }
         return true;
+    }
+
+    public int getEarlyLineEdgeTick() {
+        if (firstLine) {
+            return 451;
+        }
+        return gbc ? 448 : 452;
+    }
+
+    public int getCpuMachineCycleDots() {
+        return 4 / speedMode.getSpeedMode();
+    }
+
+    public int getCoincidenceReleaseTick() {
+        if (!gbc) {
+            return getEarlyLineEdgeTick();
+        }
+        if (speedMode.isDmgCompat()) {
+            return 452;
+        }
+        // At double speed FF44 has already advanced, but the old coincidence
+        // result remains readable through dot 454 in its separate STAT latch.
+        return speedMode.getSpeedMode() == 2 ? 454 : getVisibleLyLineEdgeTick();
+    }
+
+    private int getVisibleLyLineEdgeTick() {
+        if (!gbc || firstLine) {
+            return getEarlyLineEdgeTick();
+        }
+        if (speedMode.isDmgCompat()) {
+            return 450;
+        }
+        return 452;
     }
 
     /**
@@ -448,7 +785,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return true;
         }
         if (mode == Mode.PixelTransfer) {
-            return false;
+            return gbc && pixelTransferDone;
         }
         if (!write && !firstLine && mode == Mode.OamSearch && ticksInLine >= 76) {
             return false;
@@ -456,14 +793,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return true;
     }
 
-    public static boolean DBG = false;
-    public static int DBG_ROW = -1;
-    public static int WALL_TL, WALL_LINE;
-
     private void setLcdc(int value) {
-        if (DBG && line == DBG_ROW) {
-            System.err.printf("LCDCW tl=%d bg_en=%d%n", ticksInLine, value & 1);
-        }
         // SameBoy's DMG_LCDC position_in_line == 0 special: hardware's position at the
         // write sits 3 dots behind our +4-shifted machine's, so the gate is position 3
         boolean dropObjEnInMix = !gbc
@@ -493,6 +823,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return;
         }
+        clearPendingPpuWrites();
         r.put(LY, 0);
         pixelTransferPhase.resetWindowLineCounter();
         pixelMachine.resetWindowLineCounter();
@@ -547,6 +878,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return gbc;
     }
 
+    public boolean isDmgCompatMode() {
+        return speedMode.isDmgCompat();
+    }
+
     public ColorPalette getBgPalette() {
         return bgPalette;
     }
@@ -560,7 +895,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, pixelTransferDone, hblankIntFrom, mode);
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, pixelTransferDone, hblankIntFrom, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
@@ -596,6 +931,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.pixelTransferDone = mem.pixelTransferDone;
         this.hblankIntFrom = mem.hblankIntFrom;
         this.mode = mem.mode;
+        pendingPpuWrites.clear();
+        if (mem.pendingPpuWrites != null) {
+            pendingPpuWrites.addAll(mem.pendingPpuWrites);
+        }
+        Arrays.fill(cpuVisiblePpuRegisters, -1);
+        if (mem.cpuVisiblePpuRegisters != null) {
+            System.arraycopy(mem.cpuVisiblePpuRegisters, 0, cpuVisiblePpuRegisters, 0,
+                    Math.min(mem.cpuVisiblePpuRegisters.length,
+                            cpuVisiblePpuRegisters.length));
+        }
 
         if (mode == Mode.PixelTransfer) {
             phase = pixelTransferPhase;
@@ -612,6 +957,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                               Memento<PixelTransfer> pixelMachineMemento,
                               Memento<GpuRegisterValues> rMemento, boolean lcdEnabled, int displayEnabledDelay,
                               int line, int ticksInLine, boolean firstLine, boolean pixelTransferDone,
-                              int hblankIntFrom, Mode mode) implements Memento<Gpu> {
+                              int hblankIntFrom, Mode mode,
+                              List<PendingPpuWrite> pendingPpuWrites,
+                              int[] cpuVisiblePpuRegisters) implements Memento<Gpu> {
+    }
+
+    private record PendingPpuWrite(int address, int value, int mask,
+                                   int remainingDots) implements Serializable {
     }
 }

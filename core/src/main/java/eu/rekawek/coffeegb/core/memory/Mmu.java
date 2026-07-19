@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.gpu.Gpu;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
@@ -30,9 +31,15 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
 
     private final GbcRam gbcRam = new GbcRam();
 
+    private final OamEchoRam oamEchoRam;
+
     public void setSpeedMode(eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
         gbcRam.setSpeedMode(speedMode);
         undocumentedGbcRegisters.setSpeedMode(speedMode);
+    }
+
+    public void setGpu(Gpu gpu) {
+        oamEchoRam.setGpu(gpu);
     }
 
     private final UndocumentedGbcRegisters undocumentedGbcRegisters = new UndocumentedGbcRegisters();
@@ -56,6 +63,7 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     }
 
     public Mmu(boolean gbc) {
+        oamEchoRam = new OamEchoRam(gbc);
         // WRAM powers up with garbage, and neither boot ROM clears it. Games with
         // lazily-seeded random generators rely on that: Minesweeper for 'Windows'
         // spins forever placing mines when its LFSR seed area reads all zeros
@@ -81,6 +89,7 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         }
         addAddressSpace(ramFF80);
         addAddressSpace(new ShadowAddressSpace(this, 0xe000, 0xc000, 0x1e00));
+        addAddressSpace(oamEchoRam);
     }
 
     private static void fillWithGarbage(Ram ram, int offset, int length, java.util.Random garbage) {
@@ -113,12 +122,26 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
 
     @Override
     public void setByte(int address, int value) {
+        setByte(address, value, false);
+    }
+
+    @Override
+    public void setByteFromCpu(int address, int value) {
+        setByte(address, value, true);
+    }
+
+    private void setByte(int address, int value, boolean fromCpu) {
         checkByteArgument("value", value);
         checkWordArgument("address", address);
         if (busListener != null && address >= 0xc000 && address < 0xe000) {
             busListener.onHighBusWrite();
         }
-        getSpace(address).setByte(address, value);
+        AddressSpace space = getSpace(address);
+        if (fromCpu) {
+            space.setByteFromCpu(address, value);
+        } else {
+            space.setByte(address, value);
+        }
         if (codeBreakerRumble != null && address == 0xfffe) {
             codeBreakerRumble.onHramWrite(value);
         }
@@ -170,7 +193,9 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
 
     @Override
     public Memento<Mmu> saveToMemento() {
-        return new MmuMemento(ramC000.saveToMemento(), ramD000.saveToMemento(), ramFF80.saveToMemento(), gbcRam.saveToMemento(), undocumentedGbcRegisters.saveToMemento());
+        return new MmuMemento(ramC000.saveToMemento(), ramD000.saveToMemento(), ramFF80.saveToMemento(),
+                gbcRam.saveToMemento(), undocumentedGbcRegisters.saveToMemento(),
+                oamEchoRam.saveToMemento());
     }
 
     @Override
@@ -183,11 +208,13 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         this.ramFF80.restoreFromMemento(mem.ramFF80Memento);
         this.gbcRam.restoreFromMemento(mem.gbcRamMemento);
         this.undocumentedGbcRegisters.restoreFromMemento(mem.undocumentedGbcRegistersMemento);
+        this.oamEchoRam.restoreFromMemento(mem.oamEchoRamMemento);
     }
 
     private record MmuMemento(Memento<Ram> ramC000Memento, Memento<Ram> ramD000Memento, Memento<Ram> ramFF80Memento,
                               Memento<GbcRam> gbcRamMemento,
-                              Memento<UndocumentedGbcRegisters> undocumentedGbcRegistersMemento
+                              Memento<UndocumentedGbcRegisters> undocumentedGbcRegistersMemento,
+                              Memento<OamEchoRam> oamEchoRamMemento
     ) implements Memento<Mmu> {
     }
 }

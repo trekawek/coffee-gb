@@ -8,8 +8,11 @@ public class DmaAddressSpace implements AddressSpace, Serializable {
 
     private final AddressSpace addressSpace;
 
-    public DmaAddressSpace(AddressSpace addressSpace) {
+    private final boolean gbc;
+
+    public DmaAddressSpace(AddressSpace addressSpace, boolean gbc) {
         this.addressSpace = addressSpace;
+        this.gbc = gbc;
     }
 
     @Override
@@ -24,10 +27,16 @@ public class DmaAddressSpace implements AddressSpace, Serializable {
 
     @Override
     public int getByte(int address) {
+        return addressSpace.getByte(mapAddress(address, gbc));
+    }
+
+    static int mapAddress(int address, boolean gbc) {
         if (address < 0xe000) {
-            return addressSpace.getByte(address);
-        } else {
-            return addressSpace.getByte(address - 0x2000);
+            return address;
         }
+        // The DMG copy engine follows the normal echo mapping for the high
+        // source range. CGB instead decodes those source pages onto cartridge
+        // RAM, including while running in monochrome compatibility mode.
+        return gbc ? address & 0xbfff : address - 0x2000;
     }
 }

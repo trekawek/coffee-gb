@@ -79,7 +79,12 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
         // loop observes the first pulse from its beginning
         fullChanger.onRpRead();
         int result = rp | 0x3c | 0x02;
-        if ((rp & 0xc0) == 0xc0 && (fullChanger.isLightOn() || endpoint.isLightOn())) {
+        int readMode = rp & 0xc0;
+        // The intermediate $80 mode pulls the sensor bit low even without a
+        // light source. In the normal $C0 receive mode it is active-low only
+        // while infrared light is present.
+        if (readMode == 0x80
+                || (readMode == 0xc0 && (fullChanger.isLightOn() || endpoint.isLightOn()))) {
             result &= ~0x02;
         }
         return result;
