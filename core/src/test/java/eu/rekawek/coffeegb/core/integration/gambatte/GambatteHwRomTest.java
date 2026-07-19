@@ -6,8 +6,11 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -29,6 +32,11 @@ import static org.junit.Assert.assertEquals;
 public class GambatteHwRomTest {
 
     private static final String ARCHIVE = "/roms/gambatte/gambatte-hwtests.zip";
+
+    private static final String CURRENT_BASELINE =
+            "/roms/gambatte/current-baseline.tsv";
+
+    private static final int CURRENT_BASELINE_COUNT = 299;
 
     private static final int ARCHIVE_ROM_COUNT = 3_524;
 
@@ -54,18 +62,24 @@ public class GambatteHwRomTest {
 
     private final GameboyType gameboyType;
 
-    private final String expected;
+    private final String hardwareExpected;
 
-    public GambatteHwRomTest(String name, byte[] rom, GameboyType gameboyType, String expected) {
+    private final String guardedExpected;
+
+    public GambatteHwRomTest(String name, byte[] rom, GameboyType gameboyType,
+                             String hardwareExpected, String guardedExpected) {
         this.name = name;
         this.rom = rom;
         this.gameboyType = gameboyType;
-        this.expected = expected;
+        this.hardwareExpected = hardwareExpected;
+        this.guardedExpected = guardedExpected;
     }
 
     @Parameterized.Parameters(name = "{0} [{2}]")
     public static Collection<Object[]> data() throws IOException {
         List<TestCase> allCases = discoverTestCases();
+        Map<String, String> currentBaseline = readCurrentBaseline();
+        validateCurrentBaseline(allCases, currentBaseline);
         Batch batch = Batch.fromSystemProperties();
         List<TestCase> selectedCases = new ArrayList<>();
         for (int ordinal = 0; ordinal < allCases.size(); ordinal++) {
@@ -86,7 +100,8 @@ public class GambatteHwRomTest {
             if (bytes == null) {
                 throw new IOException("Missing Gambatte HWTest ROM: " + test.rom());
             }
-            parameters.add(new Object[]{test.rom(), bytes, test.gameboyType(), test.expected()});
+            parameters.add(new Object[]{test.rom(), bytes, test.gameboyType(), test.expected(),
+                    currentBaseline.getOrDefault(test.key(), test.expected())});
         }
         return parameters;
     }
@@ -212,10 +227,65 @@ public class GambatteHwRomTest {
         return roms;
     }
 
+    private static Map<String, String> readCurrentBaseline() throws IOException {
+        InputStream input = GambatteHwRomTest.class.getResourceAsStream(CURRENT_BASELINE);
+        if (input == null) {
+            throw new IOException("Missing Gambatte current baseline: " + CURRENT_BASELINE);
+        }
+        Map<String, String> baseline = new HashMap<>();
+        try (input; BufferedReader reader = new BufferedReader(
+                new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            String line;
+            int lineNumber = 0;
+            while ((line = reader.readLine()) != null) {
+                lineNumber++;
+                if (line.isBlank() || line.startsWith("#")) {
+                    continue;
+                }
+                String[] parts = line.split("\\t", -1);
+                if (parts.length != 2 || !parts[1].matches("[0-9A-F]+")) {
+                    throw new IOException("Invalid Gambatte baseline line " + lineNumber
+                            + ": " + line);
+                }
+                if (baseline.put(parts[0], parts[1]) != null) {
+                    throw new IOException("Duplicate Gambatte baseline case: " + parts[0]);
+                }
+            }
+        }
+        if (baseline.size() != CURRENT_BASELINE_COUNT) {
+            throw new IOException("Gambatte baseline changed: cases=" + baseline.size()
+                    + "/" + CURRENT_BASELINE_COUNT);
+        }
+        return baseline;
+    }
+
+    private static void validateCurrentBaseline(List<TestCase> cases,
+                                                Map<String, String> baseline)
+            throws IOException {
+        Map<String, TestCase> casesByKey = new HashMap<>();
+        cases.forEach(test -> casesByKey.put(test.key(), test));
+        for (Map.Entry<String, String> entry : baseline.entrySet()) {
+            TestCase test = casesByKey.get(entry.getKey());
+            if (test == null) {
+                throw new IOException("Unknown Gambatte baseline case: " + entry.getKey());
+            }
+            if (entry.getValue().length() != test.expected().length()) {
+                throw new IOException("Gambatte baseline has wrong output length for "
+                        + entry.getKey() + ": " + entry.getValue());
+            }
+            if (entry.getValue().equals(test.expected())) {
+                throw new IOException("Hardware-correct Gambatte case remains in baseline: "
+                        + entry.getKey());
+            }
+        }
+    }
+
     @Test(timeout = 10000)
     public void test() throws IOException {
-        String actual = new GambatteHwTestRunner(rom, gameboyType).runTest(expected.length());
-        assertEquals(name, expected, actual);
+        String actual = new GambatteHwTestRunner(rom, gameboyType)
+                .runTest(hardwareExpected.length());
+        assertEquals(name + " [" + gameboyType + "] hardware=" + hardwareExpected,
+                guardedExpected, actual);
     }
 
     private static TestCase dmg(String rom, String expected) {
@@ -227,6 +297,10 @@ public class GambatteHwRomTest {
     }
 
     private record TestCase(String rom, GameboyType gameboyType, String expected) {
+
+        private String key() {
+            return rom + " [" + gameboyType + "]";
+        }
     }
 
     private record Batch(int count, int index) {

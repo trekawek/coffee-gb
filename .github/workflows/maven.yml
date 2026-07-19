@@ -48,7 +48,9 @@ jobs:
           - name: Blargg individual
             profiles: test-blargg-individual
           - name: Compatibility ROMs
-            profiles: test-daid,test-bullygb,test-mbc30,test-rtc3,test-samesuite,test-gambatte-hw
+            profiles: test-daid,test-bullygb,test-mbc30,test-rtc3,test-samesuite
+          - name: Gambatte HWTests
+            profiles: test-gambatte-hw
           - name: Acid2
             profiles: test-dmgacid2,test-cgbacid2
           - name: Mealybug Tearoom
