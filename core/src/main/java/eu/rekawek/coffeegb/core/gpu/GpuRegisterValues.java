@@ -54,6 +54,14 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
         this.speedMode = speedMode;
     }
 
+    public boolean isGbc() {
+        return gbc;
+    }
+
+    public int getSpeedMode() {
+        return speedMode == null ? 1 : speedMode.getSpeedMode();
+    }
+
     public GpuRegisterValues() {
         values = new int[GpuRegister.values().length];
         java.util.Arrays.fill(mixValues, -1);

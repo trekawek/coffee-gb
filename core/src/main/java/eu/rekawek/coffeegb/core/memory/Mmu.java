@@ -73,6 +73,9 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         fillWithGarbage(ramC000, 0xc000, 0x1000, garbage);
         fillWithGarbage(ramD000, 0xd000, 0x1000, garbage);
         gbcRam.fillWithGarbage(garbage);
+        if (!gbc) {
+            initializeDmgHighWramPowerOnPattern();
+        }
         // The fixed garbage pattern must still contain zero runs. Older GBDK font
         // code uses this block as a lazy-init sentinel (issue #111), while the
         // following block remains nonzero for Minesweeper's seed (issue #48).
@@ -95,6 +98,23 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     private static void fillWithGarbage(Ram ram, int offset, int length, java.util.Random garbage) {
         for (int i = 0; i < length; i++) {
             ram.setByte(offset + i, garbage.nextInt(0x100));
+        }
+    }
+
+    /**
+     * The upper two pages of bank 1 have a strong, repeatable bias on DMG-CPU B:
+     * the $DE page powers up high and the $DF page low (with occasional individual
+     * bit decay). Preserve that model-wide power-on characteristic instead of using
+     * synthetic random bytes there. Besides being closer to the measured DMG-08 WRAM
+     * dump, it matters when the partially decoded $FE/$FF OAM-DMA source aliases these
+     * physical WRAM pages.
+     */
+    private void initializeDmgHighWramPowerOnPattern() {
+        for (int address = 0xde00; address < 0xdf00; address++) {
+            ramD000.setByte(address, 0xff);
+        }
+        for (int address = 0xdf00; address < 0xe000; address++) {
+            ramD000.setByte(address, 0x00);
         }
     }
 

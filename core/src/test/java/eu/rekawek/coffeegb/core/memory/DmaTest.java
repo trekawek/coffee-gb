@@ -71,6 +71,52 @@ public class DmaTest {
     }
 
     @Test
+    public void vramDmaBusSampleUsesItsSourceLowByteAsTheOamDestination() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+        fixture.tick(51);
+
+        fixture.dma.setVramDmaBusSample(new Hdma.SourceBusSample(0x0001, 0x9e));
+        fixture.dma.tick();
+
+        assertEquals(0x40, fixture.oam.getByte(0xfe00));
+        assertEquals(0x9e, fixture.oam.getByte(0xfe01));
+        assertEquals(0x4a, fixture.oam.getByte(0xfe0a));
+        assertEquals(0xee, fixture.oam.getByte(0xfe0b));
+    }
+
+    @Test
+    public void transientVramDmaBusSampleIsClearedByMementoRestore() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+        fixture.tick(51);
+        var beforeCollision = fixture.dma.saveToMemento();
+        fixture.dma.setVramDmaBusSample(new Hdma.SourceBusSample(0x0001, 0x9e));
+
+        fixture.dma.restoreFromMemento(beforeCollision);
+        fixture.dma.tick();
+
+        assertEquals(0x41, fixture.oam.getByte(0xfe01));
+        assertEquals(0x4b, fixture.oam.getByte(0xfe0b));
+    }
+
+    @Test
+    public void vramDmaCollisionBusPhaseSurvivesMementoRestore() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+        fixture.tick(51);
+        fixture.dma.setVramDmaBusSample(new Hdma.SourceBusSample(0x0001, 0x9e));
+        fixture.dma.tick();
+        var afterCollision = fixture.dma.saveToMemento();
+
+        assertEquals(0x4a, fixture.dma.getCpuBusValue());
+        fixture.start();
+        fixture.dma.restoreFromMemento(afterCollision);
+
+        assertEquals(0x4a, fixture.dma.getCpuBusValue());
+    }
+
+    @Test
     public void speedSwitchPausesWithoutHaltEntryLatency() {
         Fixture fixture = new Fixture();
         fixture.start();
@@ -107,6 +153,17 @@ public class DmaTest {
     public void cgbHighSourceRangeAliasesCartridgeRam() {
         assertEquals(0xa000, DmaAddressSpace.mapAddress(0xe000, true));
         assertEquals(0xbf9f, DmaAddressSpace.mapAddress(0xff9f, true));
+    }
+
+    @Test
+    public void cgbHighSourceCopyReadsAnUndrivenBus() {
+        Ram memory = new Ram(0, 0x10000);
+        memory.setByte(0xa000, 0x42);
+
+        DmaAddressSpace dmaMemory = new DmaAddressSpace(memory, true);
+
+        assertEquals(0xff, dmaMemory.getByte(0xe000));
+        assertEquals(0xff, dmaMemory.getByte(0xff9f));
     }
 
     private static Dma createDma(boolean gbc) {

@@ -42,12 +42,62 @@ public class GpuCpuWriteSynchronizationTest {
         assertEquals(0x55, fixture.gpu.getByte(GpuRegister.WX.getAddress()));
         assertEquals(0, fixture.gpu.getRegisters().get(GpuRegister.WX));
         assertEquals(0xb1, fixture.gpu.getByte(0xff40));
-        assertEquals(0x91, fixture.gpu.getLcdc().get());
+        assertEquals(0xb1, fixture.gpu.getLcdc().get());
 
         fixture.tick(5);
 
         assertEquals(0x47, fixture.gpu.getRegisters().get(GpuRegister.SCX));
         assertEquals(0x55, fixture.gpu.getRegisters().get(GpuRegister.WX));
+        assertEquals(0xb1, fixture.gpu.getLcdc().get());
+    }
+
+    @Test
+    public void cgbWindowEnableArrivesTwoPpuDotsAfterNormalSpeedCpuWrite() {
+        Fixture fixture = new Fixture(true, 1);
+        fixture.advanceTo(1, 100);
+        fixture.gpu.setByte(0xff40, 0x91);
+
+        fixture.gpu.setByteFromCpu(0xff40, 0xb1);
+
+        assertEquals(0xb1, fixture.gpu.getByte(0xff40));
+        assertEquals(0x91, fixture.gpu.getLcdc().get());
+        fixture.tick();
+        assertEquals(0x91, fixture.gpu.getLcdc().get());
+        fixture.tick();
+        assertEquals(0xb1, fixture.gpu.getLcdc().get());
+    }
+
+    @Test
+    public void cgbWindowEnableArrivesOnePpuDotAfterDoubleSpeedCpuWrite() {
+        Fixture fixture = new Fixture(true, 2);
+        fixture.advanceTo(1, 100);
+        fixture.gpu.setByte(0xff40, 0x91);
+
+        fixture.gpu.setByteFromCpu(0xff40, 0xb1);
+
+        assertEquals(0xb1, fixture.gpu.getByte(0xff40));
+        assertEquals(0x91, fixture.gpu.getLcdc().get());
+        fixture.tick();
+        assertEquals(0xb1, fixture.gpu.getLcdc().get());
+    }
+
+    @Test
+    public void pendingCgbWindowEnableSurvivesMementoRestore() {
+        Fixture fixture = new Fixture(true, 1);
+        fixture.advanceTo(1, 100);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.gpu.setByteFromCpu(0xff40, 0xb1);
+        var saved = fixture.gpu.saveToMemento();
+
+        fixture.tick(2);
+        assertEquals(0xb1, fixture.gpu.getLcdc().get());
+
+        fixture.gpu.restoreFromMemento(saved);
+        assertEquals(0xb1, fixture.gpu.getByte(0xff40));
+        assertEquals(0x91, fixture.gpu.getLcdc().get());
+        fixture.tick();
+        assertEquals(0x91, fixture.gpu.getLcdc().get());
+        fixture.tick();
         assertEquals(0xb1, fixture.gpu.getLcdc().get());
     }
 
@@ -119,20 +169,33 @@ public class GpuCpuWriteSynchronizationTest {
         private final Gpu gpu;
 
         private Fixture(boolean objectOnLineOne) {
+            this(false, 1, objectOnLineOne);
+        }
+
+        private Fixture(boolean gbc, int speed) {
+            this(gbc, speed, false);
+        }
+
+        private Fixture(boolean gbc, int speed, boolean objectOnLineOne) {
             if (objectOnLineOne) {
                 oam.setByte(0xfe00, 17);
                 oam.setByte(0xfe01, 8);
             }
-            InterruptManager interrupts = new InterruptManager(false);
+            InterruptManager interrupts = new InterruptManager(gbc);
             stat = new StatRegister(interrupts);
-            SpeedMode speedMode = new SpeedMode(false);
+            SpeedMode speedMode = new SpeedMode(gbc) {
+                @Override
+                public int getSpeedMode() {
+                    return speed;
+                }
+            };
             gpu = new Gpu(
-                    new Display(false),
+                    new Display(gbc),
                     new Dma(new Ram(0, 0x10000), oam, speedMode),
                     oam,
                     new VRamTransfer(NULL_EVENT_BUS),
                     stat,
-                    false,
+                    gbc,
                     speedMode);
             stat.init(gpu);
             gpu.setByte(0xff40, 0x93);

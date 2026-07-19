@@ -66,7 +66,21 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private boolean haltBugMode;
 
+    private boolean hdmaOpcodePrefetched;
+
+    private int haltPrefetchedOpcode;
+
+    private boolean haltOpcodePrefetchValid;
+
+    private int speedSwitchPaddingOpcode;
+
+    private boolean speedSwitchPaddingReplayValid;
+
     private int speedSwitchTicks;
+
+    private boolean phasedPpuInputHigh;
+
+    private boolean fastPhasedPpuDispatch;
 
     private boolean stopFrameBlankRequested;
 
@@ -87,6 +101,21 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     public void tick() {
+        // VRAM DMA performs the next opcode fetch before taking the bus. Once the
+        // burst releases the CPU, this ordinary machine cycle consumes that held
+        // opcode and resumes the instruction pipeline.
+        hdmaOpcodePrefetched = false;
+
+        boolean phasedPpuInput = interruptManager.isPhasedMode2InterruptRequested();
+        if (phasedPpuInput && !phasedPpuInputHigh) {
+            int cpuCycleTicks = 4 / speedMode.getSpeedMode();
+            fastPhasedPpuDispatch = (cpuCycleTicks == 4 && clockCycle == 1)
+                    || interruptManager.isFirstLineMode2InterruptRequested();
+        } else if (!phasedPpuInput) {
+            fastPhasedPpuDispatch = false;
+        }
+        phasedPpuInputHigh = phasedPpuInput;
+
         if (state == State.SPEED_SWITCH) {
             if (speedSwitchTicks > 0) {
                 speedSwitchTicks -= speedMode.getSpeedMode();
@@ -128,19 +157,37 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
         if (state == State.OPCODE || state == State.STOPPED) {
             if (interruptManager.isIme() && interruptManager.isInterruptRequested()) {
+                haltOpcodePrefetchValid = false;
                 if (state == State.STOPPED) {
                     display.enableLcd();
                 }
                 boolean fastCgbPpuDispatch = speedMode.isGbc()
-                        && interruptManager.isUnphasedPpuInterruptRequested()
+                        && (interruptManager.isUnphasedPpuInterruptRequested()
+                        || fastPhasedPpuDispatch)
                         && !wokeFromHalt;
+                boolean phasedMode2Dispatch = fastCgbPpuDispatch
+                        && fastPhasedPpuDispatch;
+                boolean firstLineMode2Dispatch = phasedMode2Dispatch
+                        && interruptManager.isFirstLineMode2InterruptRequested();
                 if (fastCgbPpuDispatch) {
                     // The direct CGB PPU path skips IRQ_WAIT_1 to accept the edge one
                     // machine cycle earlier. IRQ_WAIT_1 normally clears IME, so retain
                     // that acceptance side effect even though its wait cycle is absent.
                     interruptManager.disableInterrupts(false);
                 }
-                state = fastCgbPpuDispatch ? State.IRQ_WAIT_2 : State.IRQ_WAIT_1;
+                if (firstLineMode2Dispatch && speedMode.getSpeedMode() == 2) {
+                    // The LCD-start mode-2 edge reaches both interrupt wait latches
+                    // before the next double-speed machine cycle, so neither wait state
+                    // is visible to the dispatch micro-sequence.
+                    state = State.IRQ_PUSH_1;
+                } else {
+                    state = fastCgbPpuDispatch ? State.IRQ_WAIT_2 : State.IRQ_WAIT_1;
+                }
+                if (firstLineMode2Dispatch && speedMode.getSpeedMode() == 1) {
+                    // At normal speed the same asynchronous edge lands one dot after
+                    // the start of the skipped four-dot wait cycle.
+                    clockCycle = -1;
+                }
             }
         }
 
@@ -158,8 +205,21 @@ public class Cpu implements Serializable, Originator<Cpu> {
             int pc = registers.getPC();
             switch (state) {
                 case OPCODE:
+                    boolean useHdmaHaltPrefetch = haltOpcodePrefetchValid;
+                    boolean useSpeedSwitchPadding = speedSwitchPaddingReplayValid;
+                    haltOpcodePrefetchValid = false;
+                    speedSwitchPaddingReplayValid = false;
+                    if (useHdmaHaltPrefetch) {
+                        // A request acknowledged by HALT owns the bus before the held
+                        // opcode may run, just like the ordinary DMA prefetch below.
+                        hdmaOpcodePrefetched = true;
+                    }
                     clearState();
-                    opcode1 = addressSpace.getByte(pc);
+                    opcode1 = useHdmaHaltPrefetch
+                            ? haltPrefetchedOpcode
+                            : useSpeedSwitchPadding
+                            ? speedSwitchPaddingOpcode
+                            : addressSpace.getByte(pc);
                     accessedMemory = true;
                     if (opcode1 == 0xcb) {
                         state = State.EXT_OPCODE;
@@ -176,7 +236,13 @@ public class Cpu implements Serializable, Originator<Cpu> {
                             return;
                         }
                     }
-                    if (!haltBugMode) {
+                    if (useHdmaHaltPrefetch || useSpeedSwitchPadding) {
+                        // HALT samples the next opcode without advancing PC. If an
+                        // already-latched HDMA request takes the bus, that sampled byte
+                        // is consumed after wake while PC still addresses the same byte.
+                        // STOP's padding byte has already advanced PC, so its held replay
+                        // likewise must not advance the counter a second time.
+                    } else if (!haltBugMode) {
                         registers.incrementPC();
                     } else {
                         haltBugMode = false;
@@ -217,6 +283,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
                     if (opcode1 == 0x10) {
                         boolean exitByJoypad = isJoypadLineLow();
                         if (!exitByJoypad && speedMode.onStop()) {
+                            if (timer != null) {
+                                timer.onSpeedSwitch();
+                            }
                             // A CGB speed switch resets and freezes DIV while the CPU clock
                             // is stopped. The PPU remains in its independent clock domain.
                             addressSpace.setByte(0xff04, 0);
@@ -239,6 +308,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
                         }
                         return;
                     } else if (opcode1 == 0x76) {
+                        // HALT always samples the next opcode. It is normally fetched
+                        // again on wake, but a simultaneously acknowledged HDMA request
+                        // turns this sample into the held pipeline opcode.
+                        haltPrefetchedOpcode = addressSpace.getByte(registers.getPC());
+                        haltOpcodePrefetchValid = false;
                         // committing a pending EI happens even when entering halt, so
                         // "ei; halt" halts with IME=1 (no halt bug, wake dispatches)
                         boolean imeBeforeHalt = interruptManager.isIme();
@@ -391,8 +465,123 @@ public class Cpu implements Serializable, Originator<Cpu> {
         return state;
     }
 
+    /**
+     * Hardware fetches the opcode at the next PC immediately before a VRAM-DMA
+     * burst. Decode that byte and hold the resulting pipeline state until the DMA
+     * releases the CPU; operands and operations must not run during the burst.
+     */
+    public void prefetchOpcodeForHdma() {
+        if (state != State.OPCODE || hdmaOpcodePrefetched
+                || (interruptManager.isIme() && interruptManager.isInterruptRequested())) {
+            return;
+        }
+        int pc = registers.getPC();
+        if (gpu != null && pc >= 0x8000 && pc < 0xa000
+                && gpu.getMode() == Mode.OamSearch && gpu.getTicksInLine() >= 79) {
+            // At the closing mode-2 arbitration slot, the PPU has already claimed
+            // VRAM for mode 3. A simultaneously started VRAM DMA wins before the
+            // CPU can perform its speculative opcode fetch.
+            return;
+        }
+
+        boolean useSpeedSwitchPadding = speedSwitchPaddingReplayValid;
+        speedSwitchPaddingReplayValid = false;
+        clearState();
+        opcode1 = useSpeedSwitchPadding
+                ? speedSwitchPaddingOpcode
+                : addressSpace.getByte(pc);
+        if (opcode1 == 0xcb || opcode1 == 0x10) {
+            state = State.EXT_OPCODE;
+            if (opcode1 == 0x10) {
+                currentOpcode = Opcodes.COMMANDS.get(opcode1);
+            }
+        } else {
+            currentOpcode = Opcodes.COMMANDS.get(opcode1);
+            state = currentOpcode == null ? State.LOCKED : State.OPERAND;
+        }
+        if (useSpeedSwitchPadding) {
+            // STOP already advanced PC past this held byte before the clock switch.
+        } else if (!haltBugMode) {
+            registers.incrementPC();
+        } else {
+            haltBugMode = false;
+        }
+        hdmaOpcodePrefetched = true;
+    }
+
+    /** Preserve HALT's sampled next opcode when HALT acknowledges an HDMA request. */
+    public void latchHdmaHaltOpcode(boolean requestLatched) {
+        if (requestLatched && state == State.HALTED && !haltOpcodePrefetchValid) {
+            // A mode-3-to-HBlank acknowledge owns VRAM's internal bus even while the
+            // ordinary CPU-facing gate is still returning ff. Preserve the byte HALT
+            // sampled from that bus, not the gated CPU read value.
+            int pc = registers.getPC();
+            if (gpu != null && pc >= 0x8000 && pc < 0xa000) {
+                haltPrefetchedOpcode = gpu.getVideoRam().getByte(pc);
+            }
+            haltOpcodePrefetchValid = true;
+        }
+    }
+
+    /** Release the held opcode when one HDMA block yields to a queued block. */
+    public void releaseHdmaPrefetchedOpcode() {
+        hdmaOpcodePrefetched = false;
+    }
+
+    /**
+     * Once an instruction's opcode fetch has won bus arbitration, the instruction is
+     * allowed to finish when an HBlank-DMA request arrives. An instruction that has not
+     * started yet remains at the opcode boundary until the burst completes.
+     */
+    public boolean hasInFlightInstructionForHdma() {
+        return !hdmaOpcodePrefetched
+                && (state == State.EXT_OPCODE || state == State.OPERAND || state == State.RUNNING
+                || (state == State.OPCODE && clockCycle >= 2));
+    }
+
+    public boolean isInterruptEntryInFlightForHdma() {
+        return state == State.IRQ_WAIT_1 || state == State.IRQ_WAIT_2
+                || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2;
+    }
+
+    /**
+     * Whether interrupt acceptance has won the current CPU/HDMA arbitration slot.
+     * At the second tick of an opcode-boundary cycle, an enabled pending interrupt
+     * has already been sampled even though the dispatch state is entered only when
+     * that machine cycle completes.
+     */
+    public boolean winsInterruptEntryArbitrationForHdma() {
+        return isInterruptEntryInFlightForHdma()
+                || ((state == State.OPCODE || state == State.RUNNING) && clockCycle == 2
+                && interruptManager.isIme() && interruptManager.isInterruptRequested());
+    }
+
+    /** Continue the CPU side of a previously won interrupt/HDMA arbitration slot. */
+    public boolean advancesInterruptEntryForHdma() {
+        return isInterruptEntryInFlightForHdma()
+                || (state == State.OPCODE
+                && interruptManager.isIme() && interruptManager.isInterruptRequested());
+    }
+
+    /** Whether an already-started CPU write cycle overlaps the HDMA request edge. */
+    public boolean hasInFlightWriteCycleForHdma() {
+        return clockCycle >= 2 && state == State.RUNNING && ops != null
+                && opIndex < ops.size() && ops.get(opIndex).writesMemory();
+    }
+
     public boolean isSpeedSwitching() {
         return state == State.SPEED_SWITCH;
+    }
+
+    /**
+     * A VRAM-DMA grant overlapping STOP retains the fetched padding byte as the
+     * first opcode after the speed-switch clock resumes.
+     */
+    public void replaySpeedSwitchPaddingByte() {
+        if (state == State.SPEED_SWITCH) {
+            speedSwitchPaddingOpcode = opcode2;
+            speedSwitchPaddingReplayValid = true;
+        }
     }
 
     public boolean consumeStopFrameBlankRequest() {
@@ -412,7 +601,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
         operand[1] = this.operand[1];
         return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex,
                 state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
-                speedSwitchTicks);
+                hdmaOpcodePrefetched, haltPrefetchedOpcode, haltOpcodePrefetchValid,
+                speedSwitchPaddingOpcode, speedSwitchPaddingReplayValid,
+                speedSwitchTicks, phasedPpuInputHigh, fastPhasedPpuDispatch);
     }
 
     @Override
@@ -434,7 +625,14 @@ public class Cpu implements Serializable, Originator<Cpu> {
         this.requestedIrq = mem.requestedIrq;
         this.clockCycle = mem.clockCycle;
         this.haltBugMode = mem.haltBugMode;
+        this.hdmaOpcodePrefetched = mem.hdmaOpcodePrefetched;
+        this.haltPrefetchedOpcode = mem.haltPrefetchedOpcode;
+        this.haltOpcodePrefetchValid = mem.haltOpcodePrefetchValid;
+        this.speedSwitchPaddingOpcode = mem.speedSwitchPaddingOpcode;
+        this.speedSwitchPaddingReplayValid = mem.speedSwitchPaddingReplayValid;
         this.speedSwitchTicks = mem.speedSwitchTicks;
+        this.phasedPpuInputHigh = mem.phasedPpuInputHigh;
+        this.fastPhasedPpuDispatch = mem.fastPhasedPpuDispatch;
         this.stopFrameBlankRequested = false;
 
         this.currentOpcode = (opcode1 == 0xcb) ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1);
@@ -444,7 +642,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
     private record CpuMemento(Memento<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
                               int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
                               int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
-                              boolean haltBugMode, int speedSwitchTicks) implements Memento<Cpu> {
+                              boolean haltBugMode, boolean hdmaOpcodePrefetched,
+                              int haltPrefetchedOpcode, boolean haltOpcodePrefetchValid,
+                              int speedSwitchPaddingOpcode, boolean speedSwitchPaddingReplayValid,
+                              int speedSwitchTicks, boolean phasedPpuInputHigh,
+                              boolean fastPhasedPpuDispatch) implements Memento<Cpu> {
     }
 
 }

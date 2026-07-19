@@ -105,9 +105,9 @@ btn_select=VK_SHIFT
 ## Compatibility
 
 Compatibility is treated as a continuously tested feature, not as a static game
-list. CI exercises **1,056 cases from 13 suite families through 15 Maven
-profiles**. Every automated verdict is strict; the only accepted output
-discrepancy is the single documented Mealybug pixel below.
+list. The test profiles exercise **5,721 cases from 13 suite families**. Every
+non-Gambatte automated verdict is strict; the exhaustive Gambatte profile is a
+work in progress whose unresolved cases remain ordinary failing assertions.
 
 > **Pixel status:** both Acid2 references are pixel-perfect. In Mealybug
 > Tearoom, 23 of 24 reference images are pixel-perfect and the remaining image
@@ -119,7 +119,7 @@ discrepancy is the single documented Mealybug pixel below.
 | [Mooneye Test Suite](https://github.com/Gekkio/mooneye-test-suite) | 130 | 130 / 130 selected cases pass |
 | [RTC3Test](https://github.com/aaaaaa123456789/rtc3test) | 3 | 3 / 3 menus pass |
 | [SameSuite](https://github.com/LIJI32/SameSuite) | 71 | 71 / 71 later-revision cases pass |
-| [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 9 | 9 / 9 selected cases pass |
+| [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 4,674 | Full strict manifest enabled; hardware-timing convergence is in progress |
 | [BullyGB](https://github.com/Ashiepaws/BullyGB) | 2 | 2 / 2 DMG and CGB cases pass |
 | [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
 | [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 8 / 8 images have no out-of-tolerance pixels; ROM+RAM passes |
@@ -128,7 +128,7 @@ discrepancy is the single documented Mealybug pixel below.
 | [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 513 | 482 / 482 machine-readable verdicts pass; 31 diagnostic ROMs have no verdict |
 | [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 221 / 221 hardware-capture verdicts match |
 | [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 17 / 17 pass verdicts match |
-| **Total** | **1,056** | **All machine-readable verdicts are strict; one Mealybug pixel is the sole output exception** |
+| **Total** | **5,721** | **Non-Gambatte verdicts are strict; Gambatte remains an unguarded work in progress** |
 
 \* Blargg's aggregate and individual checks overlap by design.
 
@@ -138,7 +138,30 @@ discrepancy is the single documented Mealybug pixel below.
 Every ROM with a machine-readable result must produce its documented pass value
 or match its selected raw hardware capture exactly. No known-failure allowlist or
 guarded outlier is accepted. The one-pixel Mealybug difference is pinned as the
-maximum accepted output; any additional differing pixel fails CI.
+maximum accepted output; any additional differing pixel fails CI. In the
+expanded Gambatte profile, unresolved cases fail normally rather than being
+converted into accepted baselines.
+
+</details>
+
+<details>
+<summary>Running the exhaustive Gambatte profile</summary>
+
+The profile evaluates all 4,674 canonical hexadecimal DMG/CGB verdicts from
+3,077 ROMs in a serial test JVM capped at 1 GiB:
+
+```bash
+mvn clean test -f core/pom.xml -Ptest-gambatte-hw
+```
+
+For bounded local runs, set both `gambatte.batchCount` and the zero-based
+`gambatte.batchIndex`. Every index must run; batching partitions the pinned
+manifest and does not suppress failures:
+
+```bash
+mvn test -f core/pom.xml -Ptest-gambatte-hw \
+  -Dgambatte.batchCount=64 -Dgambatte.batchIndex=0
+```
 
 </details>
 

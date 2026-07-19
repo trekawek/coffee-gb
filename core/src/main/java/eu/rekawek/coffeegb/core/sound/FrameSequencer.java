@@ -61,8 +61,15 @@ public class FrameSequencer implements Serializable, Originator<FrameSequencer> 
      * suppresses the first falling edge after power-on.
      */
     public void reset(int divCounter, boolean doubleSpeed) {
-        step = 0;
-        previousBit = (divCounter & (doubleSpeed ? DIV_BIT << 1 : DIV_BIT)) != 0;
+        int selectedBit = doubleSpeed ? DIV_BIT << 1 : DIV_BIT;
+        int phase = divCounter & (selectedBit * 2 - 1);
+        // NR52 is latched at the end of the CPU write cycle. If power is enabled in
+        // the final four divider clocks before the selected DIV bit rises, the frame
+        // sequencer has already crossed into step 1 by the time channel writes can
+        // observe it. This changes both the NRx4 extra-length clock and which later
+        // falling edges clock length (Gambatte ch2_late_reset_nr52_2b).
+        step = phase >= selectedBit - 4 && phase < selectedBit ? 1 : 0;
+        previousBit = (divCounter & selectedBit) != 0;
         skipNextEdge = previousBit;
     }
 

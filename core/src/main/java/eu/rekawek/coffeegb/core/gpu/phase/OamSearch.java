@@ -92,11 +92,21 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     private int spriteY;
 
+    private int spriteHeight;
+
+    private int previousOamSpriteHeight;
+
+    private boolean spriteHeightTransitionThisLine;
+
     private int spriteX;
 
     private boolean spriteDmaBlocked;
 
     private int i;
+
+    private boolean selectSprites;
+
+    private boolean spriteCandidateSeen;
 
     public OamSearch(AddressSpace oemRam, Dma dma, Lcdc lcdc, GpuRegisterValues registers) {
         this.oemRam = oemRam;
@@ -110,9 +120,17 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
     }
 
     public OamSearch start() {
+        return start(true);
+    }
+
+    public OamSearch start(boolean selectSprites) {
+        this.selectSprites = selectSprites;
+        spriteCandidateSeen = false;
         spritePosIndex = 0;
         state = State.READING_Y;
         spriteY = 0;
+        previousOamSpriteHeight = getOamSpriteHeight();
+        spriteHeightTransitionThisLine = false;
         spriteX = 0;
         spriteDmaBlocked = false;
         i = 0;
@@ -124,10 +142,18 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     @Override
     public boolean tick() {
+        int currentSpriteHeight = getOamSpriteHeight();
+        spriteHeightTransitionThisLine |= currentSpriteHeight != previousOamSpriteHeight;
+        previousOamSpriteHeight = currentSpriteHeight;
         int spriteAddress = 0xfe00 + 4 * i;
         switch (state) {
             case READING_Y:
                 spriteY = oemRam.getByte(spriteAddress);
+                if (registers.isGbc()) {
+                    // CGB latches the size source with Y. The X half of the slot below
+                    // ORs in the source again, reproducing the old|new crossing state.
+                    spriteHeight = currentSpriteHeight;
+                }
                 spriteDmaBlocked = dma.isTransferInProgress();
                 state = State.READING_X;
                 break;
@@ -135,10 +161,14 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
             case READING_X:
                 spriteX = oemRam.getByte(spriteAddress + 1);
                 spriteDmaBlocked |= dma.isTransferInProgress();
-                if (!spriteDmaBlocked
-                        && spritePosIndex < sprites.length
-                        && between(
-                        spriteY, registers.get(GpuRegister.LY) + 16, spriteY + lcdc.getSpriteHeight())) {
+                spriteHeight = registers.isGbc()
+                        ? Math.max(spriteHeight, currentSpriteHeight)
+                        : currentSpriteHeight;
+                boolean candidate = !spriteDmaBlocked
+                        && between(spriteY, registers.get(GpuRegister.LY) + 16,
+                        spriteY + spriteHeight);
+                spriteCandidateSeen |= candidate;
+                if (selectSprites && candidate && spritePosIndex < sprites.length) {
                     sprites[spritePosIndex++].enable(spriteX, spriteY, spriteAddress);
                 }
                 i++;
@@ -152,6 +182,22 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         return sprites;
     }
 
+    public boolean hadSpriteHeightTransition() {
+        return spriteHeightTransitionThisLine;
+    }
+
+    public boolean hadSpriteCandidate() {
+        return spriteCandidateSeen;
+    }
+
+    private int getOamSpriteHeight() {
+        // LCDC.2 has its own synchronizer before the OAM reader. Relative to Coffee
+        // GB's CPU-before-PPU tick ordering, DMG and CGB double speed sample two ticks
+        // back; the normal-speed CGB path includes one additional latch tick.
+        int dotsAgo = registers.isGbc() && registers.getSpeedMode() == 1 ? 3 : 2;
+        return lcdc.getOamSpriteHeight(dotsAgo);
+    }
+
     private static boolean between(int from, int x, int to) {
         return from <= x && x < to;
     }
@@ -161,7 +207,10 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         Memento<?>[] spriteMementos =
                 Arrays.stream(sprites).map(SpritePosition::saveToMemento).toArray(Memento[]::new);
         return new OamSearchMemento(
-                spriteMementos, spritePosIndex, state, spriteY, spriteX, spriteDmaBlocked, i);
+                spriteMementos, spritePosIndex, state, spriteY, spriteHeight,
+                previousOamSpriteHeight,
+                spriteHeightTransitionThisLine, spriteX, spriteDmaBlocked, i,
+                selectSprites, spriteCandidateSeen);
     }
 
     @Override
@@ -178,14 +227,21 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         this.spritePosIndex = mem.spritePosIndex;
         this.state = mem.state;
         this.spriteY = mem.spriteY;
+        this.spriteHeight = mem.spriteHeight;
+        this.previousOamSpriteHeight = mem.previousOamSpriteHeight;
+        this.spriteHeightTransitionThisLine = mem.spriteHeightTransitionThisLine;
         this.spriteX = mem.spriteX;
         this.spriteDmaBlocked = mem.spriteDmaBlocked;
         this.i = mem.i;
+        this.selectSprites = mem.selectSprites;
+        this.spriteCandidateSeen = mem.spriteCandidateSeen;
     }
 
     private record OamSearchMemento(
-            Memento<?>[] sprites, int spritePosIndex, State state, int spriteY, int spriteX,
-            boolean spriteDmaBlocked, int i)
+            Memento<?>[] sprites, int spritePosIndex, State state, int spriteY, int spriteHeight,
+            int previousOamSpriteHeight,
+            boolean spriteHeightTransitionThisLine, int spriteX, boolean spriteDmaBlocked, int i,
+            boolean selectSprites, boolean spriteCandidateSeen)
             implements Memento<OamSearch> {
     }
 }

@@ -27,6 +27,12 @@ public class DmaAddressSpace implements AddressSpace, Serializable {
 
     @Override
     public int getByte(int address) {
+        if (gbc && address >= 0xe000) {
+            // CGB pages E0-FF select the cartridge bus for contention, but no
+            // memory device answers the OAM-DMA read itself. The undriven copy
+            // data therefore pulls high rather than reading the A/B-page alias.
+            return 0xff;
+        }
         return addressSpace.getByte(mapAddress(address, gbc));
     }
 

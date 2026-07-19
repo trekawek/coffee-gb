@@ -42,6 +42,24 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     private int regValue;
 
+    // Interrupt dispatch drives its two stack bytes one OAM-DMA slot later than
+    // an ordinary CPU write. Keep the value until that still-pending copy edge.
+    private boolean cpuInterruptStackWrite;
+
+    private int pendingInterruptWriteByte = -1;
+
+    private int pendingInterruptWriteValue;
+
+    // VRAM DMA can drive the OAM-DMA destination bus during one copy edge. This
+    // sample is supplied and consumed within a single Gameboy scheduler tick.
+    private int vramDmaBusAddress = -1;
+
+    private int vramDmaBusValue;
+
+    // Once VRAM DMA has won a shared OAM copy edge, the CPU continues to observe
+    // the preceding OAM source-bus phase for the remainder of this transfer.
+    private boolean vramDmaBusCollisionObserved;
+
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
         this.addressSpace = new DmaAddressSpace(addressSpace, speedMode.isGbc());
         this.speedMode = speedMode;
@@ -84,8 +102,23 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
                 }
                 if (transferClocks >= 8 && transferClocks <= 644
                         && transferClocks % 4 == 0) {
-                    oam.setByte(0xfe00 + currentByte,
-                            addressSpace.getByte(from + currentByte));
+                    int vramDmaOamIndex = vramDmaBusAddress & 0xff;
+                    if (vramDmaBusAddress >= 0 && vramDmaOamIndex < 0xa0) {
+                        // The shared bus addresses OAM with the low byte of the VRAM-DMA
+                        // source, rather than OAM DMA's ordinary sequential destination.
+                        oam.setByte(0xfe00 + vramDmaOamIndex, vramDmaBusValue);
+                        vramDmaBusCollisionObserved = true;
+                        if (pendingInterruptWriteByte == currentByte) {
+                            pendingInterruptWriteByte = -1;
+                        }
+                    } else {
+                        int value = addressSpace.getByte(from + currentByte);
+                        if (pendingInterruptWriteByte == currentByte) {
+                            value = applyCpuWriteCollision(value, pendingInterruptWriteValue);
+                            pendingInterruptWriteByte = -1;
+                        }
+                        oam.setByte(0xfe00 + currentByte, value);
+                    }
                     currentByte++;
                 }
                 if (transferClocks >= 648) {
@@ -94,9 +127,20 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
                     ticks = 0;
                     transferClocks = 0;
                     currentByte = 0;
+                    pendingInterruptWriteByte = -1;
                     break;
                 }
             }
+        }
+        vramDmaBusAddress = -1;
+    }
+
+    public void setVramDmaBusSample(Hdma.SourceBusSample sample) {
+        if (sample == null) {
+            vramDmaBusAddress = -1;
+        } else {
+            vramDmaBusAddress = sample.address();
+            vramDmaBusValue = sample.value();
         }
     }
 
@@ -109,6 +153,9 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         cpuClockPaused = false;
         pauseEntryClocks = 0;
         currentByte = 0;
+        pendingInterruptWriteByte = -1;
+        vramDmaBusAddress = -1;
+        vramDmaBusCollisionObserved = false;
         transferInProgress = true;
         regValue = value;
     }
@@ -127,7 +174,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     public boolean isCpuAccessBlocked(int address, boolean gbc) {
-        if (!isOamBlocked() || address == 0xff46 || (address >= 0xfe00 && address < 0xff00)
+        if (!isCpuBusConflictActive() || address == 0xff46 || (address >= 0xfe00 && address < 0xff00)
                 || (address >= 0xff80 && address < 0xffff)) {
             return false;
         }
@@ -146,18 +193,85 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         return cpuBus >= 0 && cpuBus == getBus(sourceAddress, gbc);
     }
 
+    /**
+     * The PPU loses OAM slightly before the DMA engine starts driving its source bus.
+     * Keep the two conditions separate: CPU accesses only contend once the first byte
+     * has reached OAM (or throughout the hand-over when an active DMA is restarted).
+     */
+    private boolean isCpuBusConflictActive() {
+        return restarted || (transferInProgress && currentByte > 0);
+    }
+
     public int getCpuBusValue() {
-        int byteIndex = Math.max(0, Math.min(0x9f, (transferClocks - 5) / 4));
-        if (!speedMode.isGbc() && from >= 0xe000) {
-            // The DMG copy engine follows echo RAM here, but a conflicting CPU
-            // read sees the source page after the DMA unit's partial decode.
-            return ((from + byteIndex) >> 8) & 0x9f;
+        int oamAddress = getActiveOamAddress();
+        int value = oam.getByte(oamAddress);
+        if (speedMode.isGbc() && getSourceType() == SourceType.VRAM) {
+            // A CGB read collision on the VRAM bus returns the byte currently driven
+            // into OAM and then discharges that OAM-DMA latch to zero.
+            oam.setByte(oamAddress, 0);
         }
-        return addressSpace.getByte(from + byteIndex);
+        return value;
+    }
+
+    /** Applies a blocked CPU write to the byte currently driven by OAM DMA. */
+    void onCpuBusWrite(int value) {
+        int oamAddress;
+        if (cpuInterruptStackWrite && transferInProgress && currentByte < 0xa0) {
+            oamAddress = 0xfe00 + currentByte;
+            pendingInterruptWriteByte = currentByte;
+            pendingInterruptWriteValue = value;
+        } else {
+            oamAddress = getActiveOamAddress();
+        }
+        SourceType sourceType = getSourceType();
+        if (speedMode.isGbc()) {
+            if (sourceType == SourceType.VRAM) {
+                // Neither writer wins a CGB VRAM-bus collision; the OAM latch sees 00.
+                oam.setByte(oamAddress, 0);
+            } else if (sourceType != SourceType.WRAM) {
+                // Cartridge-bus writes replace the byte being transferred. A WRAM
+                // source owns the separate WRAM bus and therefore drops the CPU write.
+                oam.setByte(oamAddress, value);
+            }
+        } else if (sourceType == SourceType.WRAM) {
+            // The DMG's WRAM driver and CPU write driver are both active-low.
+            oam.setByte(oamAddress, oam.getByte(oamAddress) & value);
+        } else {
+            oam.setByte(oamAddress, value);
+        }
+    }
+
+    private int applyCpuWriteCollision(int sourceValue, int cpuValue) {
+        SourceType sourceType = getSourceType();
+        if (speedMode.isGbc()) {
+            if (sourceType == SourceType.VRAM) {
+                return 0;
+            } else if (sourceType == SourceType.WRAM) {
+                return sourceValue;
+            } else {
+                return cpuValue;
+            }
+        }
+        return sourceType == SourceType.WRAM ? sourceValue & cpuValue : cpuValue;
+    }
+
+    /** Marks the CPU bus phase used by the interrupt dispatch stack sequence. */
+    public void setCpuInterruptStackWrite(boolean cpuInterruptStackWrite) {
+        this.cpuInterruptStackWrite = cpuInterruptStackWrite;
+    }
+
+    private int getActiveOamAddress() {
+        // The source-bus phase advances one clock after the OAM write edge. This is
+        // intentionally not just currentByte - 1: interrupt stack writes can land in
+        // that one-clock window and contend with the following byte.
+        int sourceBusPhase = vramDmaBusCollisionObserved ? 9 : 5;
+        int byteIndex = Math.max(0, Math.min(0x9f,
+                (transferClocks - sourceBusPhase) / 4));
+        return 0xfe00 + byteIndex;
     }
 
     int getUnblockedDmgHighBusValue(int address) {
-        if (!speedMode.isGbc() && isOamBlocked()
+        if (!speedMode.isGbc() && isCpuBusConflictActive()
                 && from >= 0x8000 && from < 0xa000
                 && transferClocks < 636
                 && address >= 0xe000 && address < 0xfe00) {
@@ -171,7 +285,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     int mapUnblockedCpuAddress(int address) {
-        if (!speedMode.isGbc() || !isOamBlocked()
+        if (!speedMode.isGbc() || !isCpuBusConflictActive()
                 || address < 0xc000 || address >= 0xfe00) {
             return address;
         }
@@ -181,8 +295,10 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         }
         // A cartridge-bus OAM DMA drives A12 while the CPU still has access to
         // the CGB's separate WRAM bus. Consequently, the source page chooses
-        // which $C/$D (and echoed $E/$F) half the CPU actually addresses.
-        return (address & ~0x1000) | (sourceAddress & 0x1000);
+        // which physical $C/$D half the CPU actually addresses. Normalize echo
+        // addresses first; merely toggling A12 on $E/$F can incorrectly spill the
+        // top of the echo range into $FE00-$FFFF.
+        return 0xc000 | (sourceAddress & 0x1000) | (address & 0x0fff);
     }
 
     /** Reads OAM as seen by the PPU while an OAM DMA owns its bus. */
@@ -206,10 +322,36 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         }
     }
 
+    private SourceType getSourceType() {
+        if (from < 0x8000) {
+            return SourceType.ROM;
+        } else if (from < 0xa000) {
+            return SourceType.VRAM;
+        } else if (from < 0xc000) {
+            return SourceType.SRAM;
+        } else if (!speedMode.isGbc() || from < 0xe000) {
+            // On DMG, E0-FF follow the WRAM/echo decode. CGB treats those pages as
+            // an invalid cartridge-bus source instead.
+            return SourceType.WRAM;
+        } else {
+            return SourceType.INVALID;
+        }
+    }
+
+    private enum SourceType {
+        ROM,
+        VRAM,
+        SRAM,
+        WRAM,
+        INVALID
+    }
+
     @Override
     public Memento<Dma> saveToMemento() {
         return new DmaMemento(transferInProgress, restarted, from, ticks, transferClocks,
-                cpuClockPaused, pauseEntryClocks, currentByte, regValue);
+                cpuClockPaused, pauseEntryClocks, currentByte, regValue,
+                pendingInterruptWriteByte, pendingInterruptWriteValue,
+                vramDmaBusCollisionObserved);
     }
 
     @Override
@@ -226,11 +368,18 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         this.pauseEntryClocks = mem.pauseEntryClocks;
         this.currentByte = mem.currentByte;
         this.regValue = mem.regValue;
+        this.pendingInterruptWriteByte = mem.pendingInterruptWriteByte;
+        this.pendingInterruptWriteValue = mem.pendingInterruptWriteValue;
+        this.vramDmaBusAddress = -1;
+        this.vramDmaBusCollisionObserved = mem.vramDmaBusCollisionObserved;
+        this.cpuInterruptStackWrite = false;
     }
 
     public record DmaMemento(boolean transferInProgress, boolean restarted, int from, int ticks,
                              int transferClocks, boolean cpuClockPaused, int pauseEntryClocks,
                              int currentByte,
-                             int regValue) implements Memento<Dma> {
+                             int regValue, int pendingInterruptWriteByte,
+                             int pendingInterruptWriteValue,
+                             boolean vramDmaBusCollisionObserved) implements Memento<Dma> {
     }
 }

@@ -64,4 +64,21 @@ public interface PixelFifo {
 
     /** Clears the background FIFO only, preserving the object FIFO (window activation). */
     void clearBg();
+
+    /** Number of old background pixels retained across a CGB window-start fetch. */
+    default int getClearedBgLength() {
+        return 0;
+    }
+
+    /** Emits one retained background pixel without disturbing newly fetched window pixels. */
+    default void putClearedBgToScreen() {
+    }
+
+    /** Drops one retained background pixel during the off-screen discard phase. */
+    default void dropClearedBgPixel() {
+    }
+
+    /** Discards background pixels retained by {@link #clearBg()}. */
+    default void discardClearedBg() {
+    }
 }
