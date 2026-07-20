@@ -106,6 +106,24 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private long pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
 
+    /*
+     * Mode 0 predicts its event from the preceding HBlank edge and therefore
+     * retains FF41/FF45 longer than the mode-1/mode-2 event copies above.
+     * Keep a dedicated pair so its capture window cannot shift the proven
+     * mode-2 scheduler boundaries.
+     */
+    private int mode0IrqStatLatch;
+
+    private int mode0IrqLycLatch;
+
+    private int pendingMode0IrqStat;
+
+    private int pendingMode0IrqLyc;
+
+    private long pendingMode0IrqStatClock = NO_LYC_IRQ_EVENT;
+
+    private long pendingMode0IrqLycClock = NO_LYC_IRQ_EVENT;
+
     // Mode-source FF41 writes and the CGB's line-143 mode-1 edge are captured
     // by separate latches. Retain the write's raster position so a write in the
     // final CPU slot cannot create a combinational mode edge retroactively.
@@ -138,6 +156,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private boolean pendingCgbMode0Interrupt;
 
+    // MSTAT predicts the next HBlank event when the current one fires. An SCX
+    // write after that point moves the live pixel pipeline but not the already
+    // scheduled FF41/FF45 capture boundary.
+    private boolean scxChangedSinceMode0Event;
+
     // CPU callbacks run before this dot's PPU clocks. Keep their sampled mode
     // separate from the readable latch used by direct PPU observers.
     private int cpuStatModeOverride = -1;
@@ -156,6 +179,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         nextLycIrqEvent = scheduleLycIrqEvent(lycIrqStatSource, lycIrqValueSource);
         modeIrqStatLatch = 0;
         modeIrqLycLatch = lycIrqValueSource;
+        mode0IrqStatLatch = 0;
+        mode0IrqLycLatch = lycIrqValueSource;
     }
 
     public void tick() {
@@ -169,6 +194,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             pendingCgbMode0Interrupt = false;
         }
         commitPendingModeIrqRegisters();
+        commitPendingMode0IrqRegisters();
         boolean suppressNaturalModeEdge = updateModeIrqEvents();
         if (pendingCgbMode2Interrupt && gpu.getTicksInLine() == 452) {
             publishPendingCgbMode2Event();
@@ -355,6 +381,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         nextLycIrqEvent = scheduleLycIrqEvent(lycIrqStatSource, lycIrqValueSource);
         modeIrqLycLatch = lycIrqValueSource;
         pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
+        mode0IrqLycLatch = lycIrqValueSource;
+        pendingMode0IrqLycClock = NO_LYC_IRQ_EVENT;
         mode0EventArmed = (enableBits & 0x08) != 0;
         previousMode0Window = false;
         previousMode1Window = false;
@@ -364,6 +392,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         pendingCgbMode0Interrupt = false;
         pendingCgbMode2Interrupt = false;
         retractableCgbMode2Interrupt = false;
+        scxChangedSinceMode0Event = false;
     }
 
     /** Publishes a scheduled CGB mode-2 event before a same-timestamp CPU bus read. */
@@ -386,6 +415,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         pendingCgbMode2Interrupt = false;
         retractableCgbMode2Interrupt = false;
         interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
+    }
+
+    void onScxWrite() {
+        scxChangedSinceMode0Event = true;
     }
 
     /**
@@ -445,12 +478,21 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     private boolean computeIntLine(int enable) {
         boolean line = (enable & 0b01000000) != 0 && intCoincidence;
         if (gpu.isLcdEnabled()) {
+            boolean suppressTailCgbMode0Enable = gpu.isGbc()
+                    && gpu.getLine() < 144
+                    && (lastModeIrqStatWriteOld & 0x08) == 0
+                    && (enable & 0x08) != 0
+                    && lastModeIrqStatWriteLineTick >= 0
+                    && gpu.getTicksInLine() >= lastModeIrqStatWriteLineTick
+                    && 456 - lastModeIrqStatWriteLineTick <= 6
+                    && lycIrqClock - lastModeIrqStatWriteClock <= 6
+                    && !lycComparatorSignal;
             boolean suppressLateCgbModeEnable = gpu.isGbc()
                     && gpu.getLine() == 143
                     && lastModeIrqStatWriteLineTick >= 453
                     && lycIrqClock - lastModeIrqStatWriteClock <= 2
                     && (enable & 0x28) != 0;
-            line |= !suppressLateCgbModeEnable
+            line |= !suppressLateCgbModeEnable && !suppressTailCgbMode0Enable
                     && (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
             boolean suppressLateCgbMode1Enable = gpu.isGbc()
                     && gpu.getLine() == 153
@@ -504,14 +546,19 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private void queueModeIrqStatChange(int stat) {
         commitPendingModeIrqRegisters();
+        commitPendingMode0IrqRegisters();
         lastModeIrqStatWriteClock = lycIrqClock;
         lastModeIrqStatWriteLineTick = gpu.getTicksInLine();
         lastModeIrqStatWriteOld = enableBits;
         pendingModeIrqStat = stat;
         pendingModeIrqStatClock = lycIrqClock;
+        pendingMode0IrqStat = stat;
+        pendingMode0IrqStatClock = lycIrqClock;
         if (!gpu.isGbc()) {
             modeIrqStatLatch = stat;
             pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
+            mode0IrqStatLatch = stat;
+            pendingMode0IrqStatClock = NO_LYC_IRQ_EVENT;
         }
         if (gpu.isLcdEnabled() && (stat & 0x08) != 0) {
             mode0EventArmed = true;
@@ -520,8 +567,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private void queueModeIrqLycChange(int lyc) {
         commitPendingModeIrqRegisters();
+        commitPendingMode0IrqRegisters();
         pendingModeIrqLyc = lyc;
         pendingModeIrqLycClock = lycIrqClock;
+        pendingMode0IrqLyc = lyc;
+        pendingMode0IrqLycClock = lycIrqClock;
     }
 
     private void commitPendingModeIrqRegisters() {
@@ -535,6 +585,32 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 && cpuCyclesSince(pendingModeIrqLycClock) > lycCaptureDelay) {
             modeIrqLycLatch = pendingModeIrqLyc;
             pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
+        }
+    }
+
+    private void commitPendingMode0IrqRegisters() {
+        int statCaptureDelay;
+        if (!gpu.isGbc()) {
+            statCaptureDelay = 0;
+        } else if (isDoubleSpeed()) {
+            statCaptureDelay = 6;
+        } else if ((gpu.getRegisters().get(SCX) & 7) == 0) {
+            statCaptureDelay = 6;
+        } else {
+            statCaptureDelay = scxChangedSinceMode0Event ? 4 : 8;
+        }
+        if (pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                && cpuCyclesSince(pendingMode0IrqStatClock) > statCaptureDelay) {
+            mode0IrqStatLatch = pendingMode0IrqStat;
+            pendingMode0IrqStatClock = NO_LYC_IRQ_EVENT;
+        }
+        int lycCaptureDelay = gpu.isGbc()
+                ? (isDoubleSpeed() || scxChangedSinceMode0Event ? 8 : 10)
+                : 1;
+        if (pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                && cpuCyclesSince(pendingMode0IrqLycClock) > lycCaptureDelay) {
+            mode0IrqLycLatch = pendingMode0IrqLyc;
+            pendingMode0IrqLycClock = NO_LYC_IRQ_EVENT;
         }
     }
 
@@ -625,9 +701,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             pendingCgbMode1Interrupt = false;
         }
         if (mode0Event && mode0EventArmed) {
-            boolean enabled = ((enableBits | modeIrqStatLatch) & 0x08) != 0;
-            boolean blockedByLyc = (modeIrqStatLatch & 0x40) != 0
-                    && gpu.getLine() == modeIrqLycLatch;
+            boolean enabled = ((enableBits | mode0IrqStatLatch) & 0x08) != 0;
+            boolean blockedByLyc = (mode0IrqStatLatch & 0x40) != 0
+                    && gpu.getLine() == mode0IrqLycLatch;
             if (!enabled || blockedByLyc) {
                 suppressNaturalModeEdge = true;
             } else if ((enableBits & 0x08) == 0) {
@@ -635,7 +711,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 suppressNaturalModeEdge = true;
             }
             refreshModeIrqLatches(true);
+            refreshMode0IrqLatches();
             mode0EventArmed = (enableBits & 0x08) != 0;
+        }
+        if (mode0Event) {
+            scxChangedSinceMode0Event = false;
         }
         return suppressNaturalModeEdge;
     }
@@ -706,6 +786,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             modeIrqLycLatch = lycIrqValueSource;
             pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
         }
+    }
+
+    private void refreshMode0IrqLatches() {
+        mode0IrqStatLatch = enableBits;
+        pendingMode0IrqStatClock = NO_LYC_IRQ_EVENT;
+        mode0IrqLycLatch = lycIrqValueSource;
+        pendingMode0IrqLycClock = NO_LYC_IRQ_EVENT;
     }
 
     private void requestMode0InterruptEvent() {
@@ -1109,6 +1196,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         updateLycIrqRegisters(newEnableBits, lycIrqValueSource);
         queueModeIrqStatChange(newEnableBits);
         enableBits = newEnableBits;
+        if (!gpu.isGbc()) {
+            // The transient all-enabled phase and the written value are two bus
+            // levels on one CPU edge. Settle low now so a following mode edge can
+            // create a new interrupt.
+            updateIntLine(computeIntLine(enableBits));
+        }
     }
 
     @Override
@@ -1145,13 +1238,16 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 modeIrqStatLatch, modeIrqLycLatch,
                 pendingModeIrqStat, pendingModeIrqLyc,
                 pendingModeIrqStatClock, pendingModeIrqLycClock,
+                mode0IrqStatLatch, mode0IrqLycLatch,
+                pendingMode0IrqStat, pendingMode0IrqLyc,
+                pendingMode0IrqStatClock, pendingMode0IrqLycClock,
                 lastModeIrqStatWriteClock, lastModeIrqStatWriteLineTick,
                 lastModeIrqStatWriteOld,
                 cgbMode1IfClearAtCapture, pendingCgbMode1Interrupt,
                 mode0EventArmed, previousMode0Window,
                 previousMode1Window, previousMode2Window,
                 pendingCgbMode0Interrupt, pendingCgbMode2Interrupt,
-                retractableCgbMode2Interrupt);
+                retractableCgbMode2Interrupt, scxChangedSinceMode0Event);
     }
 
     @Override
@@ -1185,6 +1281,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.pendingModeIrqLyc = mem.pendingModeIrqLyc;
         this.pendingModeIrqStatClock = mem.pendingModeIrqStatClock;
         this.pendingModeIrqLycClock = mem.pendingModeIrqLycClock;
+        this.mode0IrqStatLatch = mem.mode0IrqStatLatch;
+        this.mode0IrqLycLatch = mem.mode0IrqLycLatch;
+        this.pendingMode0IrqStat = mem.pendingMode0IrqStat;
+        this.pendingMode0IrqLyc = mem.pendingMode0IrqLyc;
+        this.pendingMode0IrqStatClock = mem.pendingMode0IrqStatClock;
+        this.pendingMode0IrqLycClock = mem.pendingMode0IrqLycClock;
         this.lastModeIrqStatWriteClock = mem.lastModeIrqStatWriteClock;
         this.lastModeIrqStatWriteLineTick = mem.lastModeIrqStatWriteLineTick;
         this.lastModeIrqStatWriteOld = mem.lastModeIrqStatWriteOld;
@@ -1197,6 +1299,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.pendingCgbMode0Interrupt = mem.pendingCgbMode0Interrupt;
         this.pendingCgbMode2Interrupt = mem.pendingCgbMode2Interrupt;
         this.retractableCgbMode2Interrupt = mem.retractableCgbMode2Interrupt;
+        this.scxChangedSinceMode0Event = mem.scxChangedSinceMode0Event;
     }
 
     private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,
@@ -1217,6 +1320,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                                        int pendingModeIrqStat, int pendingModeIrqLyc,
                                        long pendingModeIrqStatClock,
                                        long pendingModeIrqLycClock,
+                                       int mode0IrqStatLatch, int mode0IrqLycLatch,
+                                       int pendingMode0IrqStat, int pendingMode0IrqLyc,
+                                       long pendingMode0IrqStatClock,
+                                       long pendingMode0IrqLycClock,
                                        long lastModeIrqStatWriteClock,
                                        int lastModeIrqStatWriteLineTick,
                                        int lastModeIrqStatWriteOld,
@@ -1228,7 +1335,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                                        boolean previousMode2Window,
                                        boolean pendingCgbMode0Interrupt,
                                        boolean pendingCgbMode2Interrupt,
-                                       boolean retractableCgbMode2Interrupt) implements Memento<StatRegister> {
+                                       boolean retractableCgbMode2Interrupt,
+                                       boolean scxChangedSinceMode0Event) implements Memento<StatRegister> {
     }
 
     private record LycComparison(int ly, int cpuCyclesUntilNextLy) {

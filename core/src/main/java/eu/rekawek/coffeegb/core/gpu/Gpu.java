@@ -216,6 +216,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         scheduleDmgPixelWindowWrite(address, value);
         if (address == SCX.getAddress() && lcdEnabled && line < 144) {
             scxWrittenThisLine = true;
+            statRegister.onScxWrite();
         }
         if (!shouldDelayPpuWrite(address, value)) {
             cancelPendingPpuWrites(address);
