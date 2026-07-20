@@ -23,6 +23,13 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         YIELD_CPU
     }
 
+    private enum CpuRequestArbitration {
+        NONE,
+        UNRESOLVED,
+        DMA,
+        CPU
+    }
+
     private static final int HDMA1 = 0xff51;
 
     private static final int HDMA2 = 0xff52;
@@ -116,6 +123,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     private boolean interruptEntryWonArbitration;
 
+    private CpuRequestArbitration cpuRequestArbitration = CpuRequestArbitration.NONE;
+
     private boolean haltOpcodeRequestLatched;
 
     // A source-bus sample is consumed by OAM DMA later in the same scheduler tick.
@@ -172,6 +181,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         // rather than wrapping the raw counter (dma_dst_wrap_1/2).
         if (stopAfterCurrentBlock || dst == 0 || length-- == 0) {
             transferInProgress = false;
+            cpuRequestArbitration = CpuRequestArbitration.NONE;
             length = preserveLengthAfterCurrentBlock ? length : 0x7f;
             stopAfterCurrentBlock = false;
             preserveLengthAfterCurrentBlock = false;
@@ -187,6 +197,9 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
             // block is not postponed by an entire line.
             boolean overlappingRequest = nextHblankRequestTicks == 0;
             hblankRequestTicks = overlappingRequest && nextHblankRequestAge == 0 ? 0 : -1;
+            cpuRequestArbitration = hblankRequestTicks == 0
+                    ? CpuRequestArbitration.UNRESOLVED
+                    : CpuRequestArbitration.NONE;
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
@@ -292,12 +305,14 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
             hblankRequestTicks = wakeRequestArbitration == WakeRequestArbitration.REVERSE_PENDING
                     ? Math.max(1, 251 - gpuTicksInLine)
                     : 3;
+            cpuRequestArbitration = CpuRequestArbitration.NONE;
             hblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
             interruptEntryWonArbitration = false;
         } else if (newGpuMode != Mode.HBlank && hblankTransfer
                 && hblankRequestTicks > 0) {
             hblankRequestTicks = -1;
+            cpuRequestArbitration = CpuRequestArbitration.NONE;
             hblankRequestAge = 0;
             interruptEntryWonArbitration = false;
         }
@@ -334,6 +349,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
             if (--hblankRequestTicks == 0) {
                 requestOverlappedCpuWrite = cpuWriteCycleInFlight;
                 interruptEntryWonArbitration = cpuInterruptEntryInFlight;
+                cpuRequestArbitration = CpuRequestArbitration.UNRESOLVED;
                 hblankRequestAge = 0;
                 if (wakeRequestArbitration == WakeRequestArbitration.REVERSE_PENDING) {
                     // The CPU/HDMA arbiter resumes on the opposite half-cycle after
@@ -394,6 +410,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                     && !requestWasAlreadyActive;
             if (hblankTransfer) {
                 hblankRequestTicks = -1;
+                cpuRequestArbitration = CpuRequestArbitration.NONE;
                 hblankRequestAge = 0;
                 nextHblankRequestTicks = -1;
                 nextHblankRequestAge = 0;
@@ -404,6 +421,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                 && (haltHdmaState == HaltHdmaState.REQUESTED
                 || (haltHdmaState == HaltHdmaState.LOW && isCurrentHblankWakeRequestable()))) {
             hblankRequestTicks = 0;
+            cpuRequestArbitration = CpuRequestArbitration.UNRESOLVED;
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
@@ -425,6 +443,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
             // paused until the display is enabled again.
             gpuMode = Mode.HBlank;
             hblankRequestTicks = 0;
+            cpuRequestArbitration = CpuRequestArbitration.UNRESOLVED;
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
@@ -456,6 +475,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
             // STOP won before the synchronized request was stable. Lose this
             // scanline's grant but leave the programmed HBlank transfer armed.
             hblankRequestTicks = -1;
+            cpuRequestArbitration = CpuRequestArbitration.NONE;
             hblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
             interruptEntryWonArbitration = false;
@@ -476,6 +496,9 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                 // first resumed CPU edge. A wake near the end of HBlank still has
                 // to cross the ordinary three-tick hand-off.
                 hblankRequestTicks = gpuTicksInLine <= 446 ? 0 : 3;
+                cpuRequestArbitration = hblankRequestTicks == 0
+                        ? CpuRequestArbitration.UNRESOLVED
+                        : CpuRequestArbitration.NONE;
                 hblankRequestAge = 0;
                 requestOverlappedCpuWrite = false;
                 interruptEntryWonArbitration = false;
@@ -507,6 +530,32 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     public boolean yieldsToInterruptEntry() {
         return interruptEntryWonArbitration;
+    }
+
+    /** Resolves a newly active request once, then retains the winner until retirement. */
+    public boolean yieldsToFetchedCpuInstruction(boolean fetchedInstruction) {
+        if (cpuRequestArbitration == CpuRequestArbitration.UNRESOLVED) {
+            boolean frameStartDmaPhase = hblankTransfer && lcdEnabled && gpuLine == 0;
+            cpuRequestArbitration = fetchedInstruction
+                    && wakeRequestArbitration != WakeRequestArbitration.PREEMPT_CPU
+                    && !frameStartDmaPhase
+                    ? CpuRequestArbitration.CPU
+                    : CpuRequestArbitration.DMA;
+        }
+        return cpuRequestArbitration == CpuRequestArbitration.CPU;
+    }
+
+    public void onFetchedCpuInstructionFinished() {
+        if (cpuRequestArbitration == CpuRequestArbitration.CPU) {
+            cpuRequestArbitration = CpuRequestArbitration.DMA;
+        }
+    }
+
+    /** A request already asserted while STOP holds the CPU owns the wake boundary. */
+    public void onStoppedCpuRequest() {
+        if (cpuRequestArbitration == CpuRequestArbitration.UNRESOLVED) {
+            cpuRequestArbitration = CpuRequestArbitration.DMA;
+        }
     }
 
     public void onSpeedSwitchWakeCpuInstructionFinished() {
@@ -551,6 +600,9 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         nextHblankRequestAge = 0;
         tick = -startupTicks();
         hblankRequestTicks = hblankTransfer && (!isCurrentHblankRequestable()) ? -1 : 0;
+        cpuRequestArbitration = hblankRequestTicks == 0
+                ? CpuRequestArbitration.UNRESOLVED
+                : CpuRequestArbitration.NONE;
         hblankRequestAge = 0;
         if (hblankTransfer && !lcdEnabled) {
             // With the LCD off, starting HDMA copies one block immediately. There are
@@ -588,6 +640,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         } else {
             transferInProgress = false;
             hblankRequestTicks = -1;
+            cpuRequestArbitration = CpuRequestArbitration.NONE;
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
@@ -608,7 +661,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                 wakeRequestArbitration,
                 gpuLine, gpuTicksInLine, hblankStartTicksInLine, cpuHalted, haltHdmaState,
                 haltEnteredThisTick, requestOverlappedCpuWrite,
-                interruptEntryWonArbitration, haltOpcodeRequestLatched);
+                interruptEntryWonArbitration, cpuRequestArbitration,
+                haltOpcodeRequestLatched);
     }
 
     @Override
@@ -646,6 +700,13 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         this.haltEnteredThisTick = mem.haltEnteredThisTick;
         this.requestOverlappedCpuWrite = mem.requestOverlappedCpuWrite;
         this.interruptEntryWonArbitration = mem.interruptEntryWonArbitration;
+        if (mem.cpuRequestArbitration != null) {
+            this.cpuRequestArbitration = mem.cpuRequestArbitration;
+        } else if (hblankRequestTicks == 0) {
+            this.cpuRequestArbitration = CpuRequestArbitration.DMA;
+        } else {
+            this.cpuRequestArbitration = CpuRequestArbitration.NONE;
+        }
         this.haltOpcodeRequestLatched = mem.haltOpcodeRequestLatched;
     }
 
@@ -667,6 +728,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                               boolean haltEnteredThisTick,
                               boolean requestOverlappedCpuWrite,
                               boolean interruptEntryWonArbitration,
+                              CpuRequestArbitration cpuRequestArbitration,
                               boolean haltOpcodeRequestLatched) implements Memento<Hdma> {
     }
 

@@ -138,6 +138,56 @@ public class HdmaTest {
     }
 
     @Test
+    public void fetchedInstructionOwnsARequestUntilItRetires() {
+        Fixture fixture = synchronizedHblankRequest(1);
+
+        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+        var cpuOwnedRequest = fixture.hdma.saveToMemento();
+        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(false));
+
+        fixture.hdma.onFetchedCpuInstructionFinished();
+        assertFalse(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+
+        fixture.hdma.restoreFromMemento(cpuOwnedRequest);
+        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(false));
+    }
+
+    @Test
+    public void frameStartHblankRequestPreemptsAFetchedInstruction() {
+        Fixture fixture = synchronizedHblankRequest(0);
+
+        assertFalse(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+    }
+
+    @Test
+    public void generalDmaAtLineZeroStillLetsAFetchedInstructionRetire() {
+        Fixture fixture = new Fixture();
+        fixture.startTransfer(0x00);
+
+        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+    }
+
+    @Test
+    public void requestAssertedDuringStopOwnsTheWakeBoundary() {
+        Fixture fixture = synchronizedHblankRequest(1);
+
+        fixture.hdma.onStoppedCpuRequest();
+
+        assertFalse(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+    }
+
+    private Fixture synchronizedHblankRequest(int line) {
+        Fixture fixture = new Fixture();
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(line, 240);
+        fixture.hdma.onGpuUpdate(Mode.PixelTransfer);
+        fixture.startTransfer(0x80);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.advanceHblankRequest(3);
+        return fixture;
+    }
+
+    @Test
     public void haltWakeArbitrationWindowSurvivesMementoRestore() {
         Fixture fixture = new Fixture();
         fixture.hdma.onLcdSwitch(true);

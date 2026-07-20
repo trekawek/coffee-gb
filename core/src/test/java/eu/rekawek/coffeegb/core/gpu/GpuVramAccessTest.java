@@ -43,6 +43,20 @@ public class GpuVramAccessTest {
     }
 
     @Test
+    public void retiringHdmaCpuInstructionKeepsItsDoubleSpeedHblankReadSlot() {
+        Fixture fixture = new Fixture(2);
+        fixture.gpu.setByte(0x8000, 0x42);
+        fixture.advanceTo(1, 248);
+        assertEquals(0xff, fixture.gpu.getByte(0x8000));
+
+        fixture.gpu.setCpuRetiringInstructionForHdma(true);
+        assertEquals(0x42, fixture.gpu.getByte(0x8000));
+
+        fixture.gpu.setCpuRetiringInstructionForHdma(false);
+        assertEquals(0xff, fixture.gpu.getByte(0x8000));
+    }
+
+    @Test
     public void rephasedClockExposesTheModelSpecificFetchStartSlot() {
         Fixture normalSpeed = new Fixture(1);
         normalSpeed.gpu.setByte(0x8000, 0x42);

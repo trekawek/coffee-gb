@@ -541,6 +541,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 // stopped. Keep ticking the CPU so an interrupt or asserted joypad
                 // line can wake it; the HDMA request is restored according to the
                 // request level captured when HALT was entered.
+                if (cpu.getState() == Cpu.State.STOPPED) {
+                    hdma.onStoppedCpuRequest();
+                }
                 cpu.tick();
             } else if (hdma.yieldsSpeedSwitchWakeRequestToCpu()) {
                 // A mode-3-to-HBlank edge immediately after a speed switch can
@@ -558,6 +561,20 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 // the following opcode boundary. This ordering is visible when the
                 // DMA source is the top of that same stack.
                 cpu.tick();
+            } else if (hdma.yieldsToFetchedCpuInstruction(
+                    cpu.hasFetchedInstructionForHdma())) {
+                // A fetched instruction owns the CPU/HDMA arbitration slot until its
+                // next opcode boundary. Its final double-speed HBlank read also keeps
+                // the VRAM slot that was granted with the instruction.
+                gpu.setCpuRetiringInstructionForHdma(true);
+                try {
+                    cpu.tick();
+                } finally {
+                    gpu.setCpuRetiringInstructionForHdma(false);
+                }
+                if (!cpu.hasFetchedInstructionForHdma()) {
+                    hdma.onFetchedCpuInstructionFinished();
+                }
             } else {
                 // VRAM is not connected as a CGB VRAM-DMA source. Its first invalid
                 // read slots expose the instruction bus left at the CPU's next PC.
