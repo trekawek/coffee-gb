@@ -99,6 +99,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // pipeline instead of the steady-line fixed STAT release.
     private boolean scxWrittenThisLine;
 
+    // A double-speed mode-2 interrupt is accepted on an alternate CPU/PPU phase.
+    // Its handler retains the object-free mode-3 prediction later in the line.
+    private boolean doubleSpeedMode2DispatchStatTailThisLine;
+
+    // A fine-SCX write that crosses the startup comparator on that captured phase
+    // leaves the readable mode latch on the extended prediction path.
+    private boolean earlyScxStatTailThisLine;
+
     // Distinguish a delayed-WY comparator race from LCDC/WX changes that made only
     // the shifted output machine start a window on this line.
     private boolean wyWrittenThisLine;
@@ -215,6 +223,17 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     public void setByteFromCpu(int address, int value) {
         scheduleDmgPixelWindowWrite(address, value);
         if (address == SCX.getAddress() && lcdEnabled && line < 144) {
+            boolean dmgStartupEdge = !gbc
+                    && pixelTransferPhase.getPosition() == -16
+                    && pixelMachine.getPosition() == -16;
+            boolean doubleSpeedStartupEdge = gbc && speedMode.getSpeedMode() == 2
+                    && doubleSpeedMode2DispatchStatTailThisLine
+                    && pixelMachine.getPosition() == -6;
+            if (((r.get(SCX) ^ value) & 0x07) != 0
+                    && mode == Mode.PixelTransfer
+                    && (dmgStartupEdge || doubleSpeedStartupEdge)) {
+                earlyScxStatTailThisLine = true;
+            }
             scxWrittenThisLine = true;
             statRegister.onScxWrite();
         }
@@ -420,6 +439,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             hblankIntFrom = Integer.MAX_VALUE;
             mode0IntFrom = Integer.MAX_VALUE;
             scxWrittenThisLine = false;
+            doubleSpeedMode2DispatchStatTailThisLine = false;
+            earlyScxStatTailThisLine = false;
             wyWrittenThisLine = false;
             line++;
             if (line == 154) {
@@ -517,6 +538,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     /** Rephases the CGB CPU-readable STAT latch when the CPU clock mux changes. */
     public void onSpeedSwitch() {
         statModeLatchRephasedBySpeedSwitch = true;
+    }
+
+    /** Captures the CPU/PPU phase selected when a double-speed mode-2 IRQ is accepted. */
+    public void onDoubleSpeedMode2Dispatch() {
+        doubleSpeedMode2DispatchStatTailThisLine = true;
     }
 
     public boolean isStatModeLatchRephasedBySpeedSwitch() {
@@ -816,7 +842,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.isDmgCompat() && mode == Mode.HBlank
-                && ticksInLine >= 250) {
+                && ticksInLine >= 250 && lcdc.isBgAndWindowDisplay()) {
             return Mode.HBlank.ordinal();
         }
         if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
@@ -840,6 +866,26 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (gbc && speedMode.getSpeedMode() == 2
                 && ((mode == Mode.PixelTransfer && pixelTransferDone)
                 || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        // A double-speed mode-2 interrupt enters its handler on the alternate CPU
+        // phase. Gambatte's cc+2 comparison then retains the object-free X=167
+        // prediction through the final four dots, independently of the mode-0 IRQ.
+        if (gbc && speedMode.getSpeedMode() == 2
+                && doubleSpeedMode2DispatchStatTailThisLine
+                && mode == Mode.HBlank
+                && !pixelTransferPhase.hasObjectsOnLine()
+                && !pixelTransferPhase.hasActivatedWindowOnLine()
+                && ticksInLine < hblankIntFrom + 4) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        // A fine-SCX write at startup can move that captured prediction four dots
+        // farther without changing the timing skeleton's already scheduled M0 edge.
+        if (gbc && speedMode.getSpeedMode() == 2
+                && doubleSpeedMode2DispatchStatTailThisLine
+                && earlyScxStatTailThisLine
+                && mode == Mode.HBlank
+                && ticksInLine < hblankIntFrom + 8) {
             return Mode.PixelTransfer.ordinal();
         }
         // Gambatte's terminal prediction targets PPU X=167 rather than the physical
@@ -963,17 +1009,18 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && mode == Mode.PixelTransfer && pixelTransferDone) {
             return Mode.PixelTransfer.ordinal();
         }
-        // A late DMG OBJ enable/disable can make the CPU timing skeleton and the
-        // shifted LCD output pipeline take different fetch paths. Only use the output
-        // pipeline for that divergent tail: ordinary object lines retain the calibrated
-        // STAT/interrupt timing below.
+        // A late DMG OBJ enable/disable, or an SCX write caught before the timing
+        // skeleton starts, can make the CPU timing skeleton and shifted LCD output
+        // pipeline take different paths. Only use the output pipeline for that
+        // divergent tail; ordinary lines retain the calibrated timing below.
         if (!gbc
                 && (mode == Mode.PixelTransfer || mode == Mode.HBlank)
                 && pixelTransferPhase.getPosition() >= 159
                 && !pixelTransferPhase.isObjectFetchInProgress()
                 && !pixelMachine.isObjectFetchInProgress()
-                && pixelTransferPhase.getObjectTimingPenalty()
-                != pixelMachine.getObjectTimingPenalty()) {
+                && (pixelTransferPhase.getObjectTimingPenalty()
+                != pixelMachine.getObjectTimingPenalty()
+                || earlyScxStatTailThisLine)) {
             return pixelMachine.getPosition() < 158
                     ? Mode.PixelTransfer.ordinal()
                     : Mode.HBlank.ordinal();
@@ -1334,6 +1381,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.hblankIntFrom = Integer.MAX_VALUE;
         this.mode0IntFrom = Integer.MAX_VALUE;
         this.scxWrittenThisLine = false;
+        this.doubleSpeedMode2DispatchStatTailThisLine = false;
+        this.earlyScxStatTailThisLine = false;
         this.wyWrittenThisLine = false;
         this.lastCpuVramWriteTick = Integer.MIN_VALUE;
         this.mode = Mode.HBlank;
@@ -1359,6 +1408,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.hblankIntFrom = Integer.MAX_VALUE;
         this.mode0IntFrom = Integer.MAX_VALUE;
         this.scxWrittenThisLine = false;
+        this.doubleSpeedMode2DispatchStatTailThisLine = false;
+        this.earlyScxStatTailThisLine = false;
         this.wyWrittenThisLine = false;
         this.lastCpuVramWriteTick = Integer.MIN_VALUE;
         r.put(LY, 0);
@@ -1418,7 +1469,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, scxWrittenThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, earlyScxStatTailThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
@@ -1457,6 +1508,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.mode0IntFrom = mem.mode0IntFrom;
         this.statModeLatchRephasedBySpeedSwitch = mem.statModeLatchRephasedBySpeedSwitch;
         this.scxWrittenThisLine = mem.scxWrittenThisLine;
+        this.doubleSpeedMode2DispatchStatTailThisLine =
+                mem.doubleSpeedMode2DispatchStatTailThisLine;
+        this.earlyScxStatTailThisLine = mem.earlyScxStatTailThisLine;
         this.wyWrittenThisLine = mem.wyWrittenThisLine;
         this.lastCpuVramWriteTick = mem.lastCpuVramWriteTick;
         this.cpuRetiringInstructionForHdma = false;
@@ -1491,6 +1545,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                               int hblankIntFrom, int mode0IntFrom,
                               boolean statModeLatchRephasedBySpeedSwitch,
                               boolean scxWrittenThisLine,
+                              boolean doubleSpeedMode2DispatchStatTailThisLine,
+                              boolean earlyScxStatTailThisLine,
                               boolean wyWrittenThisLine,
                               int lastCpuVramWriteTick, Mode mode,
                               List<PendingPpuWrite> pendingPpuWrites,

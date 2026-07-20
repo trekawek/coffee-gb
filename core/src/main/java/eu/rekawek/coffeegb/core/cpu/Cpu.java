@@ -161,6 +161,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 if (state == State.STOPPED) {
                     display.enableLcd();
                 }
+                if (speedMode.getSpeedMode() == 2
+                        && interruptManager.isPhasedMode2InterruptRequested()
+                        && !interruptManager.isFirstLineMode2InterruptRequested()) {
+                    gpu.onDoubleSpeedMode2Dispatch();
+                }
                 boolean fastCgbPpuDispatch = speedMode.isGbc()
                         && (interruptManager.isUnphasedPpuInterruptRequested()
                         || fastPhasedPpuDispatch)
