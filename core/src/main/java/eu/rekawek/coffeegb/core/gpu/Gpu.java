@@ -205,11 +205,13 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     @Override
     public void setByte(int address, int value) {
         cancelPendingPpuWrites(address);
+        cancelDelayedPixelWindowWrite(address);
         setByteImmediately(address, value);
     }
 
     @Override
     public void setByteFromCpu(int address, int value) {
+        scheduleDmgPixelWindowWrite(address, value);
         if (address == SCX.getAddress() && lcdEnabled && line < 144) {
             scxWrittenThisLine = true;
         }
@@ -384,6 +386,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
 
         advancePendingPpuWrites();
+        pixelMachine.advanceDelayedWindowWrites();
 
         // write-conflict mixes settle and the LCD output stage advances every tick,
         // in all modes (the last pixels of a line leave the delay line during HBlank)
@@ -394,15 +397,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             pixelTransferPhase.resetWindowLineCounter();
             pixelMachine.resetWindowLineCounter();
         }
-        if (gbc) {
-            pixelTransferPhase.checkWindowY(line, ticksInLine);
-            pixelMachine.checkWindowY(line, ticksInLine);
-        } else {
-            // The DMG comparator samples continuously. CGB uses the delayed
-            // line-edge checkpoints modelled by the overload above.
-            pixelTransferPhase.checkWindowY();
-            pixelMachine.checkWindowY();
-        }
+        pixelTransferPhase.checkWindowY(line, ticksInLine);
+        pixelMachine.checkWindowY(line, ticksInLine);
         pixelMachine.outputTick();
         pixelMachine.machineTick();
 
@@ -510,11 +506,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private boolean shouldDelayPpuWrite(int address, int value) {
         if (address == LCDC_ADDRESS) {
-            // LCD enable itself controls the timing skeleton directly. LCDC.5 crosses
-            // through the delayed mode-3 comparator latch on both models; CGB has a
-            // shorter, speed-scaled synchronizer. FF40 itself remains CPU-readable
-            // through the visible queue.
-            return lcdEnabled && (gbc || line != 0) && (value & 0x80) != 0
+            // Native CGB synchronizes LCDC.5 before either PPU machine sees it. DMG's
+            // timing skeleton sees the CPU edge immediately; only the shifted pixel
+            // machine uses the separate four-dot hold scheduled above.
+            return gbc && lcdEnabled && (value & 0x80) != 0
                     && ((lcdc.get() ^ value) & 0x20) != 0;
         }
         if (gbc || !lcdEnabled || line == 0 || mode != Mode.PixelTransfer) {
@@ -530,11 +525,39 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             // actual object fetch contributes that skew itself; otherwise their enabled
             // path needs the palette latch. With both paths disabled, BGP feeds the pure
             // background scanner directly (Daid's scanline palette capture).
-            return (lcdc.isObjDisplay() || lcdc.isWindowDisplay())
+            return (lcdc.isObjDisplay() || pixelMachine.isWindowDisplayVisible())
                     && !pixelTransferPhase.hasObjectsOnLine();
         }
-        // WX is consumed by the mode-3 window comparator as a complete byte.
-        return address == WX.getAddress();
+        return false;
+    }
+
+    private void scheduleDmgPixelWindowWrite(int address, int value) {
+        if (gbc) {
+            return;
+        }
+        if (address == LCDC_ADDRESS) {
+            if (lcdEnabled && line != 0 && (value & 0x80) != 0
+                    && ((lcdc.get() ^ value) & 0x20) != 0) {
+                pixelMachine.scheduleWindowDisplayWrite(
+                        (value & 0x20) != 0, PPU_WRITE_DELAY_DOTS);
+            } else if ((value & 0x80) == 0 || line == 0) {
+                pixelMachine.cancelDelayedWindowDisplayWrite();
+            }
+        } else if (address == WX.getAddress()) {
+            if (lcdEnabled && line != 0 && mode == Mode.PixelTransfer) {
+                pixelMachine.scheduleWindowXWrite(value, PPU_WRITE_DELAY_DOTS);
+            } else {
+                pixelMachine.cancelDelayedWindowXWrite();
+            }
+        }
+    }
+
+    private void cancelDelayedPixelWindowWrite(int address) {
+        if (address == LCDC_ADDRESS) {
+            pixelMachine.cancelDelayedWindowDisplayWrite();
+        } else if (address == WX.getAddress()) {
+            pixelMachine.cancelDelayedWindowXWrite();
+        }
     }
 
     private int getPpuWriteDelayDots(int address) {
@@ -1219,7 +1242,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             if (pixelTransferPhase.isWindowBeingFetched()) {
                 pixelTransferPhase.disableWindowInsertionGlitch();
             }
-            if (pixelMachine.isWindowBeingFetched()) {
+            if (!pixelMachine.hasDelayedWindowDisplayWrite()
+                    && pixelMachine.isWindowBeingFetched()) {
                 pixelMachine.disableWindowInsertionGlitch();
             }
         }
@@ -1236,6 +1260,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return;
         }
         clearPendingPpuWrites();
+        pixelMachine.cancelDelayedWindowDisplayWrite();
+        pixelMachine.cancelDelayedWindowXWrite();
         r.put(LY, 0);
         pixelTransferPhase.resetWindowLineCounter();
         pixelMachine.resetWindowLineCounter();
@@ -1298,6 +1324,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     public GpuRegisterValues getRegisters() {
         return r;
+    }
+
+    boolean isPixelWindowDisplayVisible() {
+        return pixelMachine.isWindowDisplayVisible();
+    }
+
+    int getPixelWindowXVisible() {
+        return pixelMachine.getWindowXVisible();
     }
 
     public boolean isGbc() {

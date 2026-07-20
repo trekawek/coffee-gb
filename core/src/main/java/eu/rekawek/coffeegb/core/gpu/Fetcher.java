@@ -148,6 +148,12 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     // not create pixels on their own.
     private boolean windowYTriggered;
 
+    // PixelTransfer supplies its clock-domain view before each advance. Direct fetcher
+    // tests leave these unset and observe the shared registers as before.
+    private int windowXView = -1;
+
+    private int windowDisplayView = -1;
+
     public Fetcher(
             PixelFifo fifo,
             AddressSpace videoRam0,
@@ -194,6 +200,20 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     public void setWindowYTriggered(boolean windowYTriggered) {
         this.windowYTriggered = windowYTriggered;
+    }
+
+    public void setWindowRegisterView(int windowX, boolean windowDisplay) {
+        windowXView = windowX & 0xff;
+        windowDisplayView = windowDisplay ? 1 : 0;
+    }
+
+    private int getWindowX() {
+        return windowXView >= 0 ? windowXView : r.get(GpuRegister.WX);
+    }
+
+    private boolean isWindowDisplay() {
+        return windowDisplayView >= 0
+                ? windowDisplayView != 0 : lcdc.isWindowDisplay();
     }
 
     /**
@@ -283,12 +303,12 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                     if (!gbc
                             && !insertionGlitchDisabled
                             && windowYTriggered
-                            && !lcdc.isWindowDisplay()) {
+                            && !isWindowDisplay()) {
                         int logicalPosition = (position + 7) & 0xff;
                         if (logicalPosition > 167) {
                             logicalPosition = 0;
                         }
-                        if (r.get(GpuRegister.WX) == logicalPosition) {
+                        if (getWindowX() == logicalPosition) {
                             fifo.enqueuePixel(0);
                             break;
                         }

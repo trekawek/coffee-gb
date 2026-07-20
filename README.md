@@ -109,9 +109,8 @@ list. The test profiles exercise **5,721 cases from 13 suite families**. Every
 automated verdict is guarded: exact hardware results are required where Coffee
 GB matches them, while unresolved Gambatte outputs are pinned against regressions.
 
-> **Pixel status:** both Acid2 references are pixel-perfect. In Mealybug
-> Tearoom, 23 of 24 reference images are pixel-perfect and the remaining image
-> differs by a single pixel.
+> **Pixel status:** both Acid2 references and all 24 Mealybug Tearoom reference
+> images are pixel-perfect.
 
 | Test suite | Cases exercised | Current result |
 | --- | ---: | --- |
@@ -119,12 +118,12 @@ GB matches them, while unresolved Gambatte outputs are pinned against regression
 | [Mooneye Test Suite](https://github.com/Gekkio/mooneye-test-suite) | 130 | 130 / 130 selected cases pass |
 | [RTC3Test](https://github.com/aaaaaa123456789/rtc3test) | 3 | 3 / 3 menus pass |
 | [SameSuite](https://github.com/LIJI32/SameSuite) | 71 | 71 / 71 later-revision cases pass |
-| [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 4,674 | 4,245 match hardware; 429 current outputs are pinned exactly |
+| [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 4,674 | 4,278 match hardware; 396 current outputs are pinned exactly |
 | [BullyGB](https://github.com/Ashiepaws/BullyGB) | 2 | 2 / 2 DMG and CGB cases pass |
 | [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
 | [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 8 / 8 images have no out-of-tolerance pixels; ROM+RAM passes |
 | [DMG-ACID2](https://github.com/mattcurrie/dmg-acid2) and [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) | 2 | 2 / 2 are pixel-perfect |
-| [Mealybug Tearoom](https://github.com/mattcurrie/mealybug-tearoom-tests) | 24 | 23 / 24 are pixel-perfect; 1 differs by one pixel |
+| [Mealybug Tearoom](https://github.com/mattcurrie/mealybug-tearoom-tests) | 24 | 24 / 24 are pixel-perfect |
 | [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 513 | 482 / 482 machine-readable verdicts pass; 31 diagnostic ROMs have no verdict |
 | [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 221 / 221 hardware-capture verdicts match |
 | [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 17 / 17 pass verdicts match |
@@ -137,8 +136,7 @@ GB matches them, while unresolved Gambatte outputs are pinned against regression
 
 Every ROM with a machine-readable result must produce its documented pass value,
 match its selected raw hardware capture, or match an exact documented current
-output. The one-pixel Mealybug difference is pinned as the maximum accepted
-output. Gambatte's 429 unresolved cases are likewise pinned to their complete
+output. Gambatte's 396 unresolved cases are likewise pinned to their complete
 hexadecimal output, so any change fails CI; a hardware-correct improvement removes
 the corresponding baseline entry.
 
