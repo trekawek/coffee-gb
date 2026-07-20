@@ -488,6 +488,11 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         speedSwitchStartedWithoutRequest = false;
     }
 
+    /** Whether the retained HDMA5 mode latch selects the HBlank STOP tail. */
+    public boolean holdsHblankSpeedSwitchTail() {
+        return speedSwitchInProgress && hblankTransfer;
+    }
+
     public boolean preemptsCpuInstructionForSpeedSwitchWake() {
         return wakeRequestArbitration == WakeRequestArbitration.PREEMPT_CPU;
     }

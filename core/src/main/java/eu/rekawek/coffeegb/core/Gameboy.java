@@ -48,9 +48,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     static final int LCD_OFF_BLANK_DELAY = 4 * 456;
 
     // Once the CGB speed-switch countdown releases the CPU, the clock mux needs
-    // eight final master ticks to settle. The PPU and independently clocked
+    // two final master ticks to settle. The PPU and independently clocked
     // peripherals continue, but CPU, timer and DMA clocks remain held.
-    static final int SPEED_SWITCH_TAIL_TICKS = 8;
+    static final int SPEED_SWITCH_TAIL_TICKS = 2;
+
+    // A completed HBlank transfer leaves the VRAM-DMA mode latch set. Hardware
+    // speed-switch timing keeps that path on the original eight-tick tail until a
+    // later HDMA5 start changes the mode.
+    static final int HBLANK_SPEED_SWITCH_TAIL_TICKS = 8;
 
     // The native CGB boot ROM hands control to the cartridge before its final
     // peripheral-clock handoff has propagated. The CPU is already at $0100 while
@@ -508,7 +513,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             // the independent timer and PPU clocks continue running.
             cpu.tick();
             if (!cpu.isSpeedSwitching()) {
-                speedSwitchTailTicks = SPEED_SWITCH_TAIL_TICKS
+                speedSwitchTailTicks = (hdma.holdsHblankSpeedSwitchTail()
+                        ? HBLANK_SPEED_SWITCH_TAIL_TICKS
+                        : SPEED_SWITCH_TAIL_TICKS)
                         + (speedMode.getSpeedMode() == 2 && speedSwitchClockPhaseShifted ? 1 : 0)
                         + (hdma.hasPendingHblankTransfer()
                         ? PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS : 0);
