@@ -112,6 +112,29 @@ public class GpuDisplayEnableTimingTest {
             readableTailDots++;
         }
         assertEquals(2, readableTailDots);
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
+        fixture.tick();
+        assertEquals(Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
+    }
+
+    @Test
+    public void terminalCgbWindowStartKeepsFourExtraDoubleSpeedDots() {
+        Fixture fixture = new Fixture(2);
+        fixture.gpu.onSpeedSwitch();
+        fixture.gpu.setByte(0xff4a, 0);
+        fixture.gpu.setByte(0xff4b, 166);
+        fixture.gpu.setByte(0xff40, 0xb1);
+
+        while (!fixture.gpu.isMode0IntWindow()) {
+            fixture.tick();
+        }
+
+        int readableTailDots = 0;
+        while (fixture.gpu.getVisibleStatMode() == Mode.PixelTransfer.ordinal()) {
+            fixture.tick();
+            readableTailDots++;
+        }
+        assertEquals(5, readableTailDots);
         assertEquals(Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
     }
 
