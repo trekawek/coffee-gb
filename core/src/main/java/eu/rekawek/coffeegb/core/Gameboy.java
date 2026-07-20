@@ -52,10 +52,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     // peripherals continue, but CPU, timer and DMA clocks remain held.
     static final int SPEED_SWITCH_TAIL_TICKS = 2;
 
-    // A completed HBlank transfer leaves the VRAM-DMA mode latch set. Hardware
-    // speed-switch timing keeps that path on the original eight-tick tail until a
-    // later HDMA5 start changes the mode.
-    static final int HBLANK_SPEED_SWITCH_TAIL_TICKS = 8;
+    // Observed CGB timing uses the longer path on the other normal-speed
+    // CPU/PPU half-phase and when the HBlank VRAM-DMA mode latch is retained.
+    static final int LONG_SPEED_SWITCH_TAIL_TICKS = 8;
 
     // The native CGB boot ROM hands control to the cartridge before its final
     // peripheral-clock handoff has propagated. The CPU is already at $0100 while
@@ -513,8 +512,17 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             // the independent timer and PPU clocks continue running.
             cpu.tick();
             if (!cpu.isSpeedSwitching()) {
+                // The first normal-to-double switch can reach the mux on either
+                // observed normal-speed half-phase. The $20000-clock countdown is
+                // divisible by four, so the independently running PPU still exposes
+                // the STOP entry phase here. With LCD off there is no phase to retain.
+                boolean longClockMuxPhase = speedMode.getSpeedMode() == 2
+                        && !speedSwitchClockPhaseShifted
+                        && gpu.isLcdEnabled()
+                        && (gpu.getTicksInLine() & 3) == 0;
                 speedSwitchTailTicks = (hdma.holdsHblankSpeedSwitchTail()
-                        ? HBLANK_SPEED_SWITCH_TAIL_TICKS
+                        || longClockMuxPhase
+                        ? LONG_SPEED_SWITCH_TAIL_TICKS
                         : SPEED_SWITCH_TAIL_TICKS)
                         + (speedMode.getSpeedMode() == 2 && speedSwitchClockPhaseShifted ? 1 : 0)
                         + (hdma.hasPendingHblankTransfer()

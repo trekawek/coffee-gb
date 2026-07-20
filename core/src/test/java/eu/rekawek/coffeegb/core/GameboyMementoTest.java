@@ -71,7 +71,7 @@ public class GameboyMementoTest {
     }
 
     @Test
-    public void speedSwitchTailHoldsCpuAndTimerAndSurvivesRestore() throws IOException {
+    public void phaseZeroSpeedSwitchTailHoldsCpuAndTimerAndSurvivesRestore() throws IOException {
         byte[] romBytes = cgbSpeedSwitchRom();
         Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(new Rom(romBytes))
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
@@ -82,6 +82,7 @@ public class GameboyMementoTest {
                 gameboy.tick();
             }
             assertTrue(gameboy.isSpeedSwitchTailActive());
+            assertEquals(0, clockMuxPhaseAtTailStart(gameboy));
 
             int pcAtTailStart = gameboy.getCpu().getRegisters().getPC();
             gameboy.getAddressSpace().setByte(0xff04, 0);
@@ -94,7 +95,7 @@ public class GameboyMementoTest {
             }
             gameboy.restoreFromMemento(memento);
 
-            for (int i = 0; i < Gameboy.SPEED_SWITCH_TAIL_TICKS; i++) {
+            for (int i = 0; i < Gameboy.LONG_SPEED_SWITCH_TAIL_TICKS; i++) {
                 assertTrue(gameboy.isSpeedSwitchTailActive());
                 gameboy.tick();
             }
@@ -106,6 +107,25 @@ public class GameboyMementoTest {
                 gameboy.tick();
             }
             assertEquals(1, gameboy.getAddressSpace().getByte(0xff05));
+        }
+    }
+
+    @Test
+    public void phaseTwoSpeedSwitchUsesShortTail() throws IOException {
+        Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(
+                new Rom(cgbSpeedSwitchRom()))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setGameboyType(GameboyType.CGB)
+                .setSupportBatterySave(false);
+        try (Gameboy gameboy = configuration.build()) {
+            // Select the other CPU/PPU half-phase without changing CPU timing.
+            gameboy.getGpu().tick();
+            gameboy.getGpu().tick();
+
+            advanceToSpeedSwitchTail(gameboy);
+            assertEquals(2, clockMuxPhaseAtTailStart(gameboy));
+            assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS,
+                    drainSpeedSwitchTail(gameboy));
         }
     }
 
@@ -127,7 +147,7 @@ public class GameboyMementoTest {
             assertFalse(gameboy.getCpu().isSpeedSwitching());
             assertEquals(0, gameboy.getAddressSpace().getByte(0xff55) & 0x80);
             assertTrue(gameboy.isSpeedSwitchTailActive());
-            assertEquals(Gameboy.HBLANK_SPEED_SWITCH_TAIL_TICKS
+            assertEquals(Gameboy.LONG_SPEED_SWITCH_TAIL_TICKS
                             + Gameboy.PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS,
                     drainSpeedSwitchTail(gameboy));
         }
@@ -173,6 +193,11 @@ public class GameboyMementoTest {
             ticks++;
         }
         return ticks;
+    }
+
+    private static int clockMuxPhaseAtTailStart(Gameboy gameboy) {
+        // Gameboy.tick() advances the PPU once after selecting the tail.
+        return (gameboy.getGpu().getTicksInLine() - 1) & 3;
     }
 
     private static byte[] cgbSpeedSwitchRom() {
