@@ -488,6 +488,96 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void cgbMode0DisableWithinCaptureWindowDoesNotWithdrawEvent() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceTo(1, 244);
+        fixture.clearInterrupts();
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+        fixture.advanceToHBlank();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void cgbTailMode0EnableDoesNotCreateCombinationalInterrupt() {
+        for (boolean doubleSpeed : new boolean[] {false, true}) {
+            Fixture fixture = new Fixture(true, doubleSpeed);
+            fixture.advanceTo(1, 450);
+            fixture.clearInterrupts();
+
+            fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+            fixture.advanceTo(2, 0);
+
+            assertEquals(0, fixture.lcdInterruptFlag());
+        }
+    }
+
+    @Test
+    public void cgbTailMode0EnableUsesCoincidencePhaseWhenSourceIsDisabled() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+        fixture.advanceTo(1, 450);
+        fixture.clearInterrupts();
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceTo(2, 0);
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void cgbTailMode0SuppressionExpiresBeforeLaterScanlines() {
+        Fixture fixture = new Fixture(true);
+        fixture.advanceTo(1, 450);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceTo(2, 449);
+        fixture.clearInterrupts();
+
+        fixture.advanceTo(2, 450);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceTo(2, 452);
+
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void dmgStatWriteSettlesBeforeFollowingMode0Edge() {
+        Fixture fixture = new Fixture();
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+        fixture.advanceTo(1, 100);
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.clearInterrupts();
+        fixture.advanceToHBlank();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void cgbMode0StatCaptureSurvivesMementoRoundTrip() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceTo(1, 244);
+        fixture.clearInterrupts();
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+        var gpuMemento = fixture.gpu.saveToMemento();
+        var statMemento = fixture.stat.saveToMemento();
+        var interruptMemento = fixture.interrupts.saveToMemento();
+
+        fixture.advanceToHBlank();
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+
+        fixture.gpu.restoreFromMemento(gpuMemento);
+        fixture.stat.restoreFromMemento(statMemento);
+        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.advanceToHBlank();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
     public void modeEventRegisterLatchesSurviveMementoRoundTrip() {
         Fixture fixture = new Fixture(true);
         fixture.stat.setByte(StatRegister.ADDRESS, 0x48);
