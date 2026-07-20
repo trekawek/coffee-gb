@@ -820,13 +820,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // pixel latch. At double speed the CPU read latch retains mode 3 for the two
         // dots after the skeleton completes, including BG-only lines where object
         // display is disabled.
+        int terminalWindowReadTail = speedMode.getSpeedMode() == 2 ? 4 : 0;
         if (gbc && (mode == Mode.PixelTransfer
-                || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))
+                || (mode == Mode.HBlank
+                && ticksInLine <= hblankIntFrom + terminalWindowReadTail))
                 && pixelTransferPhase.getPosition() >= 160
                 && pixelTransferPhase.isCgbWindowStartActive()) {
             // WX=166 starts the CGB window machine after the last visible pixel. Its
-            // physical transfer tail ends first; the CPU-readable mode-3 latch retains
-            // the last two startup states without delaying the mode-0 interrupt edge.
+            // physical transfer tail ends first; the CPU-readable mode-3 latch remains
+            // through the HBlank edge at normal speed and four dots beyond it at
+            // double speed, without delaying the mode-0 interrupt edge.
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 1
@@ -881,8 +884,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         int readablePixelEnd;
         if (statModeLatchRephasedBySpeedSwitch) {
             readablePixelEnd = speedMode.getSpeedMode() == 2
+                    && !pixelTransferPhase.hasObjectsOnLine()
                     && pixelMachine.hasActivatedWindowOnLine()
-                    ? 157
+                    ? 160
                     : 158;
         } else if (speedMode.getSpeedMode() == 1
                 && pixelTransferPhase.hasObjectsOnLine()) {
@@ -900,10 +904,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && pixelMachine.isObjectFetchInProgress()))) {
             // Internal HBlank, its STAT interrupt source, and the CPU-readable mode
             // latch are separate signals. Follow the shifted pixel machine's dynamic
-            // tail; once the clock mux has been switched, the CPU latch remains
-            // rephased after returning to normal speed and releases two positions
-            // earlier. At double speed a right-edge object fetch can outlive both
-            // position counters, so its active fetch state holds the latch directly.
+            // tail. Once the clock mux has been switched, the ordinary CPU latch
+            // releases two positions early, but an object-free activated double-speed
+            // window retains it through the last output pixel. Object lines retain
+            // their separately predicted tail. A right-edge object fetch can outlive
+            // both position counters, so its active state holds the latch.
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
@@ -967,9 +972,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * settled, or {@code -1} when the ordinary readable STAT latch is visible.
      *
      * <p>This deliberately does not alter {@link #getVisibleStatMode()}: direct PPU
-     * observers see the mode-3 latch change at dot 78 and the rephased window latch
-     * release at output position 157. A CPU memory callback can still sample the old
-     * side of either transition for its current bus phase.</p>
+     * observers see the mode-3 latch change at dot 78. An object-free double-speed
+     * window follows output through position 159; other rephased tails can release
+     * earlier. A CPU memory callback can still sample the old side of either
+     * transition for its current bus phase.</p>
      */
     int getCpuStatModeOverride() {
         if (gbc && speedMode.getSpeedMode() == 1

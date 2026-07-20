@@ -223,58 +223,50 @@ public class StatRegisterTest {
     }
 
     @Test
-    public void cgbSpeedSwitchRephasesReadableMode3LatchToMode0Edge() {
-        Fixture bootPhase = new Fixture(true, true);
-        Fixture rephased = new Fixture(true, true);
-        for (Fixture fixture : new Fixture[] {bootPhase, rephased}) {
-            fixture.gpu.setByte(0xff40, 0x00);
-            fixture.gpu.setByte(GpuRegister.WY.getAddress(), 0);
-            fixture.gpu.setByte(GpuRegister.WX.getAddress(), 7);
-            fixture.gpu.setByte(0xff40, 0xb1);
+    public void cgbDoubleSpeedSelectedObjectsKeepTheirPredictedWindowTail() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.gpu.setByte(0xff40, 0x00);
+        for (int i = 0; i < 9; i++) {
+            fixture.oam.setByte(0xfe00 + 4 * i, 16);
+            fixture.oam.setByte(0xfe01 + 4 * i, 8);
         }
-        rephased.gpu.onSpeedSwitch();
+        fixture.gpu.setByte(GpuRegister.WY.getAddress(), 0);
+        fixture.gpu.setByte(GpuRegister.WX.getAddress(), 8);
+        fixture.gpu.setByte(0xff40, 0xb3);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 314);
 
-        boolean observedEarlierRelease = false;
-        boolean observedLaterRelease = false;
-        for (int i = 0; i < 912; i++) {
-            if (bootPhase.readStatMode() == Mode.PixelTransfer.ordinal()
-                    && rephased.readStatMode() == Mode.HBlank.ordinal()) {
-                observedEarlierRelease = true;
-                break;
-            }
-            if (bootPhase.readStatMode() == Mode.HBlank.ordinal()
-                    && rephased.readStatMode() == Mode.PixelTransfer.ordinal()) {
-                observedLaterRelease = true;
-            }
-            bootPhase.tick();
-            rephased.tick();
-        }
-        assertTrue("rephased latch only released later=" + observedLaterRelease,
-                observedEarlierRelease);
+        assertTrue(fixture.gpu.hasObjectsOnLine());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(315, fixture.gpu.getTicksInLine());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(316, fixture.gpu.getTicksInLine());
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+        fixture.stat.preCpuTick();
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
     }
 
     @Test
-    public void cgbDoubleSpeedCpuBusRetainsRephasedWindowMode3Tail() {
+    public void cgbDoubleSpeedWindowMode3LatchFollowsTheFullOutputTail() {
         Fixture fixture = new Fixture(true, true);
         fixture.gpu.setByte(0xff40, 0x00);
         fixture.gpu.setByte(GpuRegister.WY.getAddress(), 0);
         fixture.gpu.setByte(GpuRegister.WX.getAddress(), 7);
         fixture.gpu.setByte(0xff40, 0xb1);
         fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 258);
 
-        boolean sampledOldLatch = false;
-        for (int i = 0; i < 912; i++) {
-            if (fixture.readStatMode() == Mode.HBlank.ordinal()) {
-                fixture.stat.preCpuTick();
-                if (fixture.readStatMode() == Mode.PixelTransfer.ordinal()) {
-                    sampledOldLatch = true;
-                    break;
-                }
-            }
-            fixture.tick();
-        }
-
-        assertTrue("CPU never sampled the retained mode-3 tail", sampledOldLatch);
+        assertFalse(fixture.gpu.hasObjectsOnLine());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.stat.preCpuTick();
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(259, fixture.gpu.getTicksInLine());
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+        fixture.stat.preCpuTick();
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
     }
 
     @Test
