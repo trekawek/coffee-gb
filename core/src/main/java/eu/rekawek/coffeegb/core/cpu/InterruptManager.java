@@ -149,6 +149,14 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         }
     }
 
+    /** Withdraws a mode-2 request that has not yet crossed the CPU synchronizer. */
+    public void cancelMode2InterruptBeforeCpuAcceptance() {
+        int mask = 1 << InterruptType.LCDC.ordinal();
+        if ((cpuPhasedMode2Interrupts & cpuBlockedInterrupts & mask) != 0) {
+            clearInterruptState(InterruptType.LCDC);
+        }
+    }
+
     /**
      * Exposes an interrupt in IF before either CPU input may accept it, while
      * preserving the direct PPU-edge classification used after the block is released.
