@@ -527,7 +527,104 @@ public class StatRegisterTest {
     }
 
     @Test
-    public void cgbLycSourceKeepsM2EventOnOrdinaryPpuPublicationPhase() {
+    public void normalSpeedCgbMode2DisableAtDot450CancelsScheduledEvent() {
+        Fixture fixture = pendingNormalSpeedCgbM2Event();
+
+        fixture.stat.preCpuTick();
+        fixture.tick();
+        fixture.stat.preCpuTick();
+        fixture.tick();
+        assertEquals(450, fixture.gpu.getTicksInLine());
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+        fixture.stat.preCpuTick();
+        fixture.advanceTo(2, 0);
+
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void normalSpeedCgbMode2CapturesLycWriteAtSixClockBoundary() {
+        Fixture fixture = new Fixture(true);
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x60);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+        fixture.advanceTo(1, 444);
+
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 2);
+        fixture.clearInterrupts();
+        fixture.advanceTo(1, 448);
+        fixture.stat.preCpuTick();
+        fixture.tick();
+        fixture.stat.preCpuTick();
+        fixture.tick();
+        assertEquals(450, fixture.gpu.getTicksInLine());
+
+        fixture.stat.preCpuTick();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
+    }
+
+    @Test
+    public void cgbMode2CaptureDoesNotRetriggerWhenIfWasAlreadyHigh() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        fixture.advanceTo(1, 447);
+        fixture.interrupts.setByte(0xff0f, 1 << LCDC.ordinal());
+
+        fixture.tick();
+        assertEquals(448, fixture.gpu.getTicksInLine());
+        fixture.clearInterrupts();
+        fixture.advanceTo(2, 0);
+
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void doubleSpeedCgbMode2DisableRetractsRequestThroughDot454() {
+        Fixture fixture = publishedDoubleSpeedCgbM2Event();
+
+        fixture.advanceTo(1, 454);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+
+        assertEquals(0, fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
+    }
+
+    @Test
+    public void doubleSpeedCgbMode2DisableCannotRetractRequestAfterDot454() {
+        Fixture fixture = publishedDoubleSpeedCgbM2Event();
+
+        fixture.advanceTo(1, 455);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
+    }
+
+    @Test
+    public void retractableDoubleSpeedCgbMode2EventSurvivesMementoRoundTrip() {
+        Fixture fixture = publishedDoubleSpeedCgbM2Event();
+        var gpuMemento = fixture.gpu.saveToMemento();
+        var statMemento = fixture.stat.saveToMemento();
+        var interruptMemento = fixture.interrupts.saveToMemento();
+
+        fixture.advanceTo(1, 455);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+
+        fixture.gpu.restoreFromMemento(gpuMemento);
+        fixture.stat.restoreFromMemento(statMemento);
+        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.advanceTo(1, 454);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void normalSpeedCgbLycSourceSharesScheduledM2PublicationBoundary() {
         Fixture fixture = new Fixture(true);
         fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
         fixture.stat.setByte(StatRegister.ADDRESS, 0x60);
@@ -543,11 +640,11 @@ public class StatRegisterTest {
         assertEquals(450, fixture.gpu.getTicksInLine());
 
         fixture.stat.preCpuTick();
-        assertEquals(0, fixture.lcdInterruptFlag());
-        fixture.tick();
-        assertEquals(0, fixture.lcdInterruptFlag());
-        fixture.tick();
+        // LYC is sampled as a blocker by the shared MSTAT event. Enabling the
+        // source does not defer that event past the same-timestamp CPU callback.
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
+        assertFalse(fixture.interrupts.isInterruptRequestedForHalt());
     }
 
     @Test
@@ -673,6 +770,18 @@ public class StatRegisterTest {
         fixture.tick();
         assertEquals(448, fixture.gpu.getTicksInLine());
         assertEquals(0, fixture.lcdInterruptFlag());
+        return fixture;
+    }
+
+    private static Fixture publishedDoubleSpeedCgbM2Event() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        fixture.advanceTo(1, 447);
+        fixture.clearInterrupts();
+        fixture.advanceTo(1, 452);
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
         return fixture;
     }
 

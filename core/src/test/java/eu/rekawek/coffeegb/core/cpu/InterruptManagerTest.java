@@ -145,6 +145,44 @@ public class InterruptManagerTest {
     }
 
     @Test
+    public void blockedMode2RequestCanBeCancelledBeforeCpuAcceptance() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.requestMode2InterruptBeforeCpuAcceptance(false);
+
+        interrupts.cancelMode2InterruptBeforeCpuAcceptance();
+
+        assertFalse(interrupts.isInterruptFlagSet(LCDC));
+        assertFalse(interrupts.isInterruptRequested());
+        assertFalse(interrupts.isInterruptRequestedForHalt());
+    }
+
+    @Test
+    public void mode2CancellationDoesNotClearAnUnphasedLcdcRequest() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.requestInterrupt(LCDC);
+        interrupts.requestMode2InterruptBeforeCpuAcceptance(false);
+
+        interrupts.cancelMode2InterruptBeforeCpuAcceptance();
+
+        assertTrue(interrupts.isInterruptFlagSet(LCDC));
+        assertTrue(interrupts.isInterruptRequested());
+        assertTrue(interrupts.isUnphasedPpuInterruptRequested());
+    }
+
+    @Test
+    public void mode2CancellationDoesNotClearAnAcceptedRequest() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.requestMode2InterruptBeforeCpuAcceptance(false);
+        interrupts.releaseCpuAcceptance(LCDC);
+
+        interrupts.cancelMode2InterruptBeforeCpuAcceptance();
+
+        assertTrue(interrupts.isInterruptFlagSet(LCDC));
+        assertTrue(interrupts.isInterruptRequested());
+        assertTrue(interrupts.isPhasedMode2InterruptRequested());
+    }
+
+    @Test
     public void retiringVBlankCanBeMaskedForOneIfReadWithoutClearingTheLatch() {
         InterruptManager interrupts = new InterruptManager(false);
         interrupts.setByte(0xff0f, 1 << VBlank.ordinal());
