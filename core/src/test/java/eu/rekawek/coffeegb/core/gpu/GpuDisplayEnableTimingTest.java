@@ -255,6 +255,50 @@ public class GpuDisplayEnableTimingTest {
     }
 
     @Test
+    public void doubleSpeedMode2DispatchExtendsObjectFreeStatTailThroughHblankPlusThree() {
+        Fixture fixture = new Fixture(2);
+        fixture.advanceTo(1, 0);
+        fixture.gpu.onDoubleSpeedMode2Dispatch();
+
+        while (!fixture.gpu.isMode0IntWindow()) {
+            fixture.tick();
+        }
+        int hblankEdge = fixture.gpu.getTicksInLine();
+
+        for (int tailDot = 0; tailDot < 4; tailDot++) {
+            assertEquals(hblankEdge + tailDot, fixture.gpu.getTicksInLine());
+            assertEquals(Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
+            fixture.tick();
+        }
+        assertEquals(hblankEdge + 4, fixture.gpu.getTicksInLine());
+        assertEquals(Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
+    }
+
+    @Test
+    public void doubleSpeedBackgroundWithoutMode2DispatchHasNoExtendedStatTail() {
+        Fixture fixture = new Fixture(2);
+        fixture.advanceTo(1, 0);
+
+        while (!fixture.gpu.isMode0IntWindow()) {
+            fixture.tick();
+        }
+
+        for (int tailDot = 0; tailDot < 3; tailDot++) {
+            fixture.tick();
+        }
+        assertEquals(Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
+    }
+
+    @Test
+    public void cgbDmgCompatibilityBgDisabledDoesNotForceModeZeroAtDot250() {
+        Fixture fixture = new Fixture(1, true);
+        fixture.gpu.setByte(0xff40, 0x90);
+        fixture.advanceTo(1, 250);
+
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
+    }
+
+    @Test
     public void lcdEnableSamplesLineZeroWindowMasterBeforeLaterWyWrite() {
         Fixture fixture = new Fixture(1);
         fixture.gpu.setByte(0xff40, 0x00);
@@ -366,12 +410,17 @@ public class GpuDisplayEnableTimingTest {
         private final Gpu gpu;
 
         private Fixture(int speed) {
+            this(speed, false);
+        }
+
+        private Fixture(int speed, boolean dmgCompat) {
             SpeedMode speedMode = new SpeedMode(true) {
                 @Override
                 public int getSpeedMode() {
                     return speed;
                 }
             };
+            speedMode.setDmgCompat(dmgCompat);
             dma = new Dma(new Ram(0, 0x10000), oam, speedMode);
             gpu = new Gpu(
                     new Display(true),
