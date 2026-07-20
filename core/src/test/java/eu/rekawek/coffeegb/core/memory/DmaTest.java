@@ -48,6 +48,91 @@ public class DmaTest {
     }
 
     @Test
+    public void ppuOamOwnershipStartsWithTheFirstCopyEdge() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+
+        fixture.tick(7);
+        assertFalse(fixture.dma.ownsOamForPpu());
+        fixture.tick(1);
+        assertTrue(fixture.dma.ownsOamForPpu());
+    }
+
+    @Test
+    public void normalSpeedCgbUsesItsOamReaderClockPhase() {
+        Fixture fixture = new Fixture(true);
+        fixture.start();
+
+        fixture.tick(6);
+        assertFalse(fixture.dma.ownsOamForPpu());
+        fixture.tick(1);
+        assertTrue(fixture.dma.ownsOamForPpu());
+
+        fixture.tick(639);
+        assertTrue(fixture.dma.ownsOamForPpu());
+        fixture.tick(1);
+        assertFalse(fixture.dma.ownsOamForPpu());
+        assertTrue(fixture.dma.isTransferInProgress());
+    }
+
+    @Test
+    public void ppuOamOwnershipRoundTripsThroughMemento() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+        fixture.tick(8);
+        var state = fixture.dma.saveToMemento();
+
+        Fixture restored = new Fixture();
+        restored.dma.restoreFromMemento(state);
+
+        assertFalse(restored.dma.ownedOamForPpuBeforeTick());
+        assertTrue(restored.dma.ownsOamForPpu());
+        restored.tick(1);
+        assertTrue(restored.dma.ownedOamForPpuBeforeTick());
+        assertTrue(restored.dma.ownsOamForPpu());
+    }
+
+    @Test
+    public void restartDuringWarmupWaitsForTheNewPpuAcquisitionEdge() {
+        Fixture fixture = new Fixture(true);
+        fixture.start();
+        fixture.tick(5);
+        assertFalse(fixture.dma.ownsOamForPpu());
+
+        fixture.start();
+        fixture.tick(6);
+        assertFalse(fixture.dma.ownsOamForPpu());
+        fixture.tick(1);
+        assertTrue(fixture.dma.ownsOamForPpu());
+    }
+
+    @Test
+    public void doubleSpeedRestartKeepsAnOwnedPpuReaderConnected() {
+        Fixture fixture = new Fixture(true, 2);
+        fixture.start();
+        fixture.tick(4);
+        assertTrue(fixture.dma.ownsOamForPpu());
+
+        fixture.start();
+        fixture.tick(1);
+        assertTrue(fixture.dma.ownsOamForPpu());
+    }
+
+    @Test
+    public void restartStillUsesTheNormalCgbPpuReleaseEdge() {
+        Fixture fixture = new Fixture(true);
+        fixture.start();
+        fixture.tick(7);
+        fixture.start();
+
+        fixture.tick(646);
+        assertTrue(fixture.dma.ownsOamForPpu());
+        fixture.tick(1);
+        assertFalse(fixture.dma.ownsOamForPpu());
+        assertTrue(fixture.dma.isTransferInProgress());
+    }
+
+    @Test
     public void haltPausesAfterTwoMachineCycleEntryLatency() {
         Fixture fixture = new Fixture();
         fixture.start();
@@ -176,9 +261,23 @@ public class DmaTest {
 
         private final Ram oam = new Ram(0xfe00, 0xa0);
 
-        private final Dma dma = new Dma(memory, oam, new SpeedMode(false));
+        private final Dma dma;
 
         private Fixture() {
+            this(false);
+        }
+
+        private Fixture(boolean gbc) {
+            this(gbc, 1);
+        }
+
+        private Fixture(boolean gbc, int speed) {
+            dma = new Dma(memory, oam, new SpeedMode(gbc) {
+                @Override
+                public int getSpeedMode() {
+                    return speed;
+                }
+            });
             for (int i = 0; i < 0xa0; i++) {
                 memory.setByte(0x1200 + i, 0x40 + i);
                 oam.setByte(0xfe00 + i, 0xee);

@@ -32,6 +32,17 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     // rescale the portion that has already completed.
     private int transferClocks;
 
+    // OAM source changes are applied after the reader has sampled the current
+    // PPU tick. Record ownership before advancing the DMA clock so the reader
+    // can propagate the old source through that position first.
+    private boolean oamOwnedForPpuBeforeTick;
+
+    private boolean oamOwnedForPpu;
+
+    // Restarting an active transfer changes the CPU-visible DMA timing immediately,
+    // but it must not disconnect a PPU reader that the old transfer already owned.
+    private boolean ppuOamOwnedThroughRestart;
+
     // HALT stops the OAM-DMA clock after its two-M-cycle clock-gating latency;
     // STOP and a CGB speed switch gate it immediately.
     private boolean cpuClockPaused;
@@ -85,12 +96,14 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     public void tick(boolean cpuClockPaused, boolean haltEntryLatency) {
+        oamOwnedForPpuBeforeTick = oamOwnedForPpu;
         if (cpuClockPaused && !this.cpuClockPaused) {
             pauseEntryClocks = haltEntryLatency ? PAUSE_ENTRY_CLOCKS : 0;
         }
         this.cpuClockPaused = cpuClockPaused;
         if (transferInProgress) {
             if (cpuClockPaused && pauseEntryClocks == 0) {
+                updatePpuOamOwnership();
                 return;
             }
             ticks++;
@@ -126,6 +139,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
                 if (transferClocks >= 648) {
                     transferInProgress = false;
                     restarted = false;
+                    ppuOamOwnedThroughRestart = false;
                     ticks = 0;
                     transferClocks = 0;
                     currentByte = 0;
@@ -134,6 +148,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
                 }
             }
         }
+        updatePpuOamOwnership();
         vramDmaBusAddress = -1;
     }
 
@@ -150,6 +165,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     public void setByte(int address, int value) {
         from = value * 0x100;
         restarted = isOamBlocked();
+        ppuOamOwnedThroughRestart = oamOwnedForPpu;
         ticks = 0;
         transferClocks = 0;
         cpuClockPaused = false;
@@ -169,6 +185,26 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     public boolean isOamBlocked() {
         return restarted || (transferInProgress && ticks >= 5);
+    }
+
+    /** The source currently connected to the PPU's persistent OAM reader. */
+    public boolean ownsOamForPpu() {
+        return oamOwnedForPpu;
+    }
+
+    public boolean ownedOamForPpuBeforeTick() {
+        return oamOwnedForPpuBeforeTick;
+    }
+
+    private void updatePpuOamOwnership() {
+        boolean normalSpeedCgb = speedMode.isGbc() && speedMode.getSpeedMode() == 1;
+        int acquisitionClocks = normalSpeedCgb ? 7 : 8;
+        int releaseClocks = normalSpeedCgb ? 647 : 648;
+        boolean owned = (ppuOamOwnedThroughRestart && transferClocks < acquisitionClocks)
+                || (transferInProgress
+                && transferClocks >= acquisitionClocks
+                && transferClocks < releaseClocks);
+        oamOwnedForPpu = owned;
     }
 
     public boolean isTransferInProgress() {
@@ -359,6 +395,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     @Override
     public Memento<Dma> saveToMemento() {
         return new DmaMemento(transferInProgress, restarted, from, ticks, transferClocks,
+                oamOwnedForPpuBeforeTick, oamOwnedForPpu, ppuOamOwnedThroughRestart,
                 cpuClockPaused, pauseEntryClocks, currentByte, regValue,
                 pendingInterruptWriteByte, pendingInterruptWriteValue,
                 vramDmaBusCollisionObserved);
@@ -374,6 +411,9 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         this.from = mem.from;
         this.ticks = mem.ticks;
         this.transferClocks = mem.transferClocks;
+        this.oamOwnedForPpuBeforeTick = mem.oamOwnedForPpuBeforeTick;
+        this.oamOwnedForPpu = mem.oamOwnedForPpu;
+        this.ppuOamOwnedThroughRestart = mem.ppuOamOwnedThroughRestart;
         this.cpuClockPaused = mem.cpuClockPaused;
         this.pauseEntryClocks = mem.pauseEntryClocks;
         this.currentByte = mem.currentByte;
@@ -386,7 +426,9 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     public record DmaMemento(boolean transferInProgress, boolean restarted, int from, int ticks,
-                             int transferClocks, boolean cpuClockPaused, int pauseEntryClocks,
+                             int transferClocks, boolean oamOwnedForPpuBeforeTick,
+                             boolean oamOwnedForPpu, boolean ppuOamOwnedThroughRestart,
+                             boolean cpuClockPaused, int pauseEntryClocks,
                              int currentByte,
                              int regValue, int pendingInterruptWriteByte,
                              int pendingInterruptWriteValue,
