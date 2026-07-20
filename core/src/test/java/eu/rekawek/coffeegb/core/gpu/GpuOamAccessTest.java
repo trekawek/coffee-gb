@@ -26,17 +26,22 @@ public class GpuOamAccessTest {
     }
 
     @Test
-    public void cgbBgOnlyOamOpensAtNormalSpeedMode0Edge() {
-        assertBgOnlyMode0Edge(1);
+    public void cgbBgOnlyOamOpensAtNormalSpeedOutputHandoff() {
+        assertBgOnlyOamHandoff(1, 0, 253);
     }
 
     @Test
-    public void cgbBgOnlyOamOpensAtDoubleSpeedMode0Edge() {
-        assertBgOnlyMode0Edge(2);
+    public void cgbBgOnlyOamOpeningTracksFineScxAtNormalSpeed() {
+        assertBgOnlyOamHandoff(1, 4, 257);
     }
 
     @Test
-    public void cgbObjectLineKeepsReadLatchClosedUntilMode0Edge() {
+    public void cgbBgOnlyOamOpensAfterDoubleSpeedInternalHandoff() {
+        assertBgOnlyOamHandoff(2, 0, 253);
+    }
+
+    @Test
+    public void cgbObjectLineReadLatchOpensOneDotAfterInternalHblank() {
         Fixture fixture = new Fixture(true, 1);
         fixture.oam.setByte(0xfe00, 16);
         fixture.oam.setByte(0xfe01, 8);
@@ -47,13 +52,56 @@ public class GpuOamAccessTest {
         assertTrue(fixture.gpu.hasObjectsOnLine());
         assertFalse(fixture.gpu.isOamAvailableForCpu(false));
         assertTrue(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.tick();
+        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
+        assertTrue(fixture.gpu.isOamAvailableForCpu(true));
     }
 
     @Test
-    public void cgbNormalSpeedWriteLatchClosesAtCgbLineEdge() {
+    public void cgbNormalSpeedLatchesCloseAtDot454() {
         Fixture fixture = new Fixture(true, 1);
-        fixture.advanceTo(0, 447);
+        fixture.advanceTo(1, 453);
 
+        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
+        assertTrue(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.tick();
+        assertEquals(454, fixture.gpu.getTicksInLine());
+        assertFalse(fixture.gpu.isOamAvailableForCpu(false));
+        assertFalse(fixture.gpu.isOamAvailableForCpu(true));
+    }
+
+    @Test
+    public void cgbNormalSpeedObjectLineLatchesCloseAtDot448() {
+        Fixture fixture = new Fixture(true, 1);
+        fixture.oam.setByte(0xfe00, 16);
+        fixture.oam.setByte(0xfe01, 8);
+        fixture.gpu.setByte(0xff40, 0x93);
+        fixture.advanceTo(1, 447);
+
+        assertTrue(fixture.gpu.hasObjectsOnLine());
+        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
+        assertTrue(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.tick();
+        assertEquals(448, fixture.gpu.getTicksInLine());
+        assertFalse(fixture.gpu.isOamAvailableForCpu(false));
+        assertFalse(fixture.gpu.isOamAvailableForCpu(true));
+    }
+
+    @Test
+    public void cgbDmaOwnedScanReleasesReadAtHblankAndClosesAtDot448() {
+        Fixture fixture = new Fixture(true, 1);
+        fixture.dma.setByte(0xff46, 0x00);
+        fixture.advanceTo(1, 250);
+
+        assertFalse(fixture.dma.isTransferInProgress());
+        assertFalse(fixture.gpu.hasObjectsOnLine());
+        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
+        assertFalse(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.advanceTo(1, 447);
         assertTrue(fixture.gpu.isOamAvailableForCpu(false));
         assertTrue(fixture.gpu.isOamAvailableForCpu(true));
 
@@ -63,17 +111,30 @@ public class GpuOamAccessTest {
     }
 
     @Test
-    public void cgbDoubleSpeedKeepsBothLineEdgeLatchesClosed() {
+    public void cgbDoubleSpeedLineEdgeHasTwoDotLockAndDot0ReadOpening() {
         Fixture fixture = new Fixture(true, 2);
-        fixture.advanceTo(0, 452);
+        fixture.advanceTo(1, 451);
 
+        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
+        assertTrue(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.tick();
         assertFalse(fixture.gpu.isOamAvailableForCpu(false));
         assertFalse(fixture.gpu.isOamAvailableForCpu(true));
 
         fixture.tick();
-        fixture.tick();
-        fixture.tick();
         assertFalse(fixture.gpu.isOamAvailableForCpu(false));
+        assertFalse(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.tick();
+        assertEquals(454, fixture.gpu.getTicksInLine());
+        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
+        assertTrue(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.tick();
+        fixture.tick();
+        assertEquals(0, fixture.gpu.getTicksInLine());
+        assertTrue(fixture.gpu.isOamAvailableForCpu(false));
         assertFalse(fixture.gpu.isOamAvailableForCpu(true));
     }
 
@@ -111,14 +172,15 @@ public class GpuOamAccessTest {
         assertEquals(Mode.PixelTransfer, fixture.gpu.getMode());
     }
 
-    private static void assertBgOnlyMode0Edge(int speed) {
+    private static void assertBgOnlyOamHandoff(int speed, int scx, int closedDot) {
         Fixture fixture = new Fixture(true, speed);
-        fixture.advanceTo(1, 0);
-        fixture.advanceToInternalHBlank();
-        while (!fixture.gpu.isMode0IntWindow()) {
-            fixture.tick();
-        }
+        fixture.gpu.setByte(0xff43, scx);
+        fixture.advanceTo(1, closedDot);
 
+        assertFalse(fixture.gpu.isOamAvailableForCpu(false));
+        assertFalse(fixture.gpu.isOamAvailableForCpu(true));
+
+        fixture.tick();
         assertTrue(fixture.gpu.isOamAvailableForCpu(false));
         assertTrue(fixture.gpu.isOamAvailableForCpu(true));
     }
@@ -129,6 +191,8 @@ public class GpuOamAccessTest {
 
         private final StatRegister stat = new StatRegister(new InterruptManager(true));
 
+        private final Dma dma;
+
         private final Gpu gpu;
 
         private Fixture(boolean gbc, int speed) {
@@ -138,9 +202,10 @@ public class GpuOamAccessTest {
                     return speed;
                 }
             };
+            dma = new Dma(new Ram(0, 0x10000), oam, speedMode);
             gpu = new Gpu(
                     new Display(gbc),
-                    new Dma(new Ram(0, 0x10000), oam, speedMode),
+                    dma,
                     oam,
                     new VRamTransfer(NULL_EVENT_BUS),
                     stat,
@@ -179,6 +244,7 @@ public class GpuOamAccessTest {
         }
 
         private void tick() {
+            dma.tick();
             gpu.tick();
             stat.tick();
         }

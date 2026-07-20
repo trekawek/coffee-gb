@@ -1033,6 +1033,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (firstLine && ticksInLine < firstLineOamOpenTicks) {
             return true;
         }
+        if (gbc && speedMode.getSpeedMode() == 2
+                && !write && mode == Mode.OamSearch && ticksInLine == 0) {
+            // At double speed the read latch closes one CPU read phase after the line
+            // rolls over. The write latch is already closed on dot 0.
+            return true;
+        }
         if (mode == Mode.OamSearch) {
             // Only DMG releases the OAM write bus between the end of the scan and the
             // start of pixel transfer (lcdon_write_timing-GS).
@@ -1041,15 +1047,46 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (mode == Mode.PixelTransfer) {
             return gbc && pixelTransferDone;
         }
-        if (!write && gbc && mode == Mode.HBlank && ticksInLine < hblankIntFrom) {
-            // The CGB exposes mode 0 before the OAM read latch is released. The latch
-            // opens with the internal HBlank edge two dots later.
-            return false;
+        if (gbc && mode == Mode.HBlank) {
+            if (pixelTransferPhase.hasObjectsOnLine()) {
+                // The object fetch path releases the read latch one dot after the
+                // internal mode transition; its write latch opens at the hand-off.
+                if (!write && ticksInLine < hblankIntFrom - 1) {
+                    return false;
+                }
+            } else {
+                // BG-only lines release both CGB OAM latches with the final mode-3
+                // output stage. An OAM DMA that owned the scan leaves the read bus
+                // released at the internal edge instead. Otherwise normal-speed
+                // release is quantized by fine SCX and double speed follows the
+                // internal hand-off.
+                int handoffTick = !write && oamSearchPhase.wasDmaBlockedThisLine()
+                        ? hblankIntFrom
+                        : speedMode.getSpeedMode() == 1 && !firstLine
+                                ? 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0)
+                                : hblankIntFrom + 4;
+                if (ticksInLine < handoffTick) {
+                    return false;
+                }
+            }
         }
 
-        // DMG writes still pass during the early OAM read window
-        // (lcdon_write_timing-GS); CGB has already switched both OAM bus latches.
-        if ((!write || gbc) && ticksInLine >= getEarlyLineEdgeTick()
+        // DMG writes still pass during its early read-lock window. A normal-speed CGB
+        // scan that selected objects or was owned by OAM DMA reclaims both latches at
+        // the early edge; an idle BG-only scan holds them until dot 454. At double
+        // speed the transition occupies dots 452-453, with the separate dot-0 read
+        // release above.
+        boolean dmgEarlyReadLock = !gbc && !write
+                && ticksInLine >= getEarlyLineEdgeTick();
+        boolean cgbOamScanOwnedLine = pixelTransferPhase.hasObjectsOnLine()
+                || oamSearchPhase.wasDmaBlockedThisLine();
+        int cgbNormalSpeedLineEdgeTick = cgbOamScanOwnedLine
+                ? getEarlyLineEdgeTick() : 454;
+        boolean cgbNormalSpeedLineEdgeLock = gbc && speedMode.getSpeedMode() == 1
+                && !firstLine && ticksInLine >= cgbNormalSpeedLineEdgeTick;
+        boolean cgbDoubleSpeedLineEdgeLock = gbc && speedMode.getSpeedMode() == 2
+                && ticksInLine >= 452 && ticksInLine < 454;
+        if ((dmgEarlyReadLock || cgbNormalSpeedLineEdgeLock || cgbDoubleSpeedLineEdgeLock)
                 && (line < 143 || line == 153)) {
             return false;
         }
