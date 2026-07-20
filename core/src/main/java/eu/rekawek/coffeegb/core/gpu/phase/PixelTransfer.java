@@ -137,6 +137,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // the fetcher changes back to the background source.
     private int cgbWindowStartTicks;
 
+    // Captures the terminal CGB comparator event independently of the mutable WX,
+    // WY, and LCDC registers. The event's physical, bus, and STAT tails outlive the
+    // live window-enable condition that predicted it.
+    private boolean cgbTerminalWindowStartedThisLine;
+
     // a WX re-match while the window is already active and its fetch has settled
     // inserts one synthetic blank pixel at the FIFO's read end (SameBoy's
     // insert_bg_pixel; mealybug m3_wx_5_change rows where WX=LY re-matches)
@@ -277,6 +282,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         windowActivatedThisLine = false;
         previousWindowDisplay = isWindowDisplay();
         cgbWindowStartTicks = 0;
+        cgbTerminalWindowStartedThisLine = false;
         fifo.discardClearedBg();
         windowCatchUpPos = -1;
         insertBgPixel = false;
@@ -364,6 +370,16 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return false;
     }
 
+    /** Whether an object is selected at the X=167 readable-STAT prediction boundary. */
+    public boolean hasSpriteAtTerminalPredictionEdge() {
+        for (int i = 0; i < spriteCount; i++) {
+            if (sprites[spriteOrder[i]].getX() == 167) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean isWindowBeingFetched() {
         return windowBeingFetched;
     }
@@ -380,6 +396,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     public void resetWindowLineCounter() {
         // pre-incremented at window activation: the first activated line renders row 0
         windowLineCounter = -1;
+        cgbTerminalWindowStartedThisLine = false;
         setWindowYTriggered(false);
     }
 
@@ -555,6 +572,18 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return cgbWindowStartTicks > 0;
     }
 
+    /** Whether the live CGB comparator is about to run terminal StartWindowDraw. */
+    public boolean willStartCgbTerminalWindow() {
+        return gbc && position == 159 && !windowActivatedThisLine && !window
+                && getWindowX() == 166 && isWindowDisplay()
+                && !isNormalSpeedWindowEnableEdge() && isWindowYMatch();
+    }
+
+    /** Whether terminal StartWindowDraw has actually been captured on this scanline. */
+    public boolean hasCgbTerminalWindowStarted() {
+        return cgbTerminalWindowStartedThisLine;
+    }
+
     public boolean isWindowActive() {
         return window;
     }
@@ -572,8 +601,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     public boolean tick() {
         boolean windowDisplayRising = gbc
                 && isWindowDisplay() && !previousWindowDisplay;
-        boolean windowEnabledOnThisTick = windowDisplayRising
-                && speedMode.getSpeedMode() == 1;
+        boolean windowEnabledOnThisTick = isNormalSpeedWindowEnableEdge();
         previousWindowDisplay = isWindowDisplay();
         int currentScx = r.get(SCX);
         int fineScxAdvance = (currentScx & 7) - (previousScx & 7);
@@ -894,10 +922,16 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             // occupy the physical transfer; the final two belong to the independently
             // readable STAT latch in HBlank.
             cgbWindowStartTicks = 6;
+            cgbTerminalWindowStartedThisLine = true;
             machineStall = 4;
             return true;
         }
         return active;
+    }
+
+    private boolean isNormalSpeedWindowEnableEdge() {
+        return gbc && isWindowDisplay() && !previousWindowDisplay
+                && speedMode.getSpeedMode() == 1;
     }
 
 
@@ -1063,6 +1097,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowActivatedThisLine,
                 previousWindowDisplay,
                 cgbWindowStartTicks,
+                cgbTerminalWindowStartedThisLine,
                 insertBgPixel,
                 machineStall,
                 windowYTriggered,
@@ -1133,6 +1168,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         this.windowActivatedThisLine = mem.windowActivatedThisLine;
         this.previousWindowDisplay = mem.previousWindowDisplay;
         this.cgbWindowStartTicks = mem.cgbWindowStartTicks;
+        this.cgbTerminalWindowStartedThisLine = mem.cgbTerminalWindowStartedThisLine;
         this.insertBgPixel = mem.insertBgPixel;
         this.machineStall = mem.machineStall;
         this.windowYTriggered = mem.windowYTriggered;
@@ -1193,6 +1229,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             boolean windowActivatedThisLine,
             boolean previousWindowDisplay,
             int cgbWindowStartTicks,
+            boolean cgbTerminalWindowStartedThisLine,
             boolean insertBgPixel,
             int machineStall,
             boolean windowYTriggered,

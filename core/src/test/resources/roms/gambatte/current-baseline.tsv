@@ -257,13 +257,4 @@ hwtests/window/late_wx_1_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_wx_wx03_1_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_wx_wx0f_1_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_wy_lcdoffset1_1_cgb04c_out0.gbc [CGB]	3
-hwtests/window/m2int_wxA6_oambusyread_2_dmg08_out5_cgb04c_out0.gbc [CGB]	5
-hwtests/window/m2int_wxA6_scx2_m3stat_3_dmg08_out0_cgb04c_out3.gbc [CGB]	0
-hwtests/window/m2int_wxA6_scx3_m3stat_1_dmg08_cgb04c_out3.gbc [CGB]	0
-hwtests/window/m2int_wxA6_scx3_m3stat_3_dmg08_out0_cgb04c_out3.gbc [CGB]	0
-hwtests/window/m2int_wxA6_scx5_m3stat_ds_1_cgb04c_out3.gbc [CGB]	0
-hwtests/window/m2int_wxA6_spxA7_m0irq_1_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/window/m2int_wxA6_spxA7_m0irq_2_dmg08_cgb04c_out2.gbc [DMG]	0
-hwtests/window/m2int_wxA6_spxA7_m3stat_2_dmg08_out0_cgb04c_out3.gbc [CGB]	0
-hwtests/window/m2int_wxA6_spxA7_m3stat_4_dmg08_out0_cgb04c_out3.gbc [CGB]	0
-hwtests/window/m2int_wxA6_vrambusyread_2_dmg08_out5_cgb04c_out0.gbc [CGB]	5

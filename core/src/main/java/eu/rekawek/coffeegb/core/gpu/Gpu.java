@@ -454,7 +454,21 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         mode = Mode.HBlank;
                     } else {
                         int oldPosition = pixelTransferPhase.getPosition();
+                        boolean terminalWindowAlreadyStarted =
+                                pixelTransferPhase.hasCgbTerminalWindowStarted();
                         boolean active = phase.tick();
+                        if (!terminalWindowAlreadyStarted
+                                && pixelTransferPhase.hasCgbTerminalWindowStarted()
+                                && pixelTransferPhase.hasSpriteAtTerminalPredictionEdge()
+                                && mode0IntFrom != Integer.MAX_VALUE) {
+                            // The X=166 M0 event is independent of the later X=167
+                            // STAT/bus prediction. When both comparators collide, its
+                            // CPU-visible event crosses two dots after Coffee's early
+                            // right-edge prediction has been captured. That prediction
+                            // always crosses X=158->159 one tick before this terminal
+                            // X=159->160 commit, so mode0IntFrom is already finite.
+                            mode0IntFrom += 2;
+                        }
                         if (mode0IntFrom == Integer.MAX_VALUE
                                 && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()
                                 && oldPosition <= 158
@@ -825,22 +839,25 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
             return Mode.PixelTransfer.ordinal();
         }
-        // The CGB's readable mode-3 latch is tied to the LCD output delay rather than
-        // directly to the timing skeleton. At normal speed, a line containing objects
-        // retains mode 3 through output position 159 and releases it with the final
-        // pixel latch. At double speed the CPU read latch retains mode 3 for the two
-        // dots after the skeleton completes, including BG-only lines where object
-        // display is disabled.
-        int terminalWindowReadTail = speedMode.getSpeedMode() == 2 ? 4 : 0;
+        // Gambatte's terminal prediction targets PPU X=167 rather than the physical
+        // end of mode 3. WX=166 contributes the remaining StartWindowDraw states; an
+        // object exactly at X=167 then restarts the tile phase and contributes ten more
+        // predicted dots. Double speed has its own CPU sampling phase.
+        int terminalWindowReadTail = speedMode.getSpeedMode() == 2
+                ? 5
+                : pixelTransferPhase.hasSpriteAtTerminalPredictionEdge() ? 12 : 2;
         if (gbc && (mode == Mode.PixelTransfer
                 || (mode == Mode.HBlank
                 && ticksInLine <= hblankIntFrom + terminalWindowReadTail))
-                && pixelTransferPhase.getPosition() >= 160
-                && pixelTransferPhase.isCgbWindowStartActive()) {
+                && ((mode == Mode.PixelTransfer
+                && pixelTransferPhase.willStartCgbTerminalWindow())
+                || pixelTransferPhase.hasCgbTerminalWindowStarted()
+                || (pixelTransferPhase.getPosition() >= 160
+                && pixelTransferPhase.isCgbWindowStartActive()))) {
             // WX=166 starts the CGB window machine after the last visible pixel. Its
             // physical transfer tail ends first; the CPU-readable mode-3 latch remains
-            // through the HBlank edge at normal speed and four dots beyond it at
-            // double speed, without delaying the mode-0 interrupt edge.
+            // through the independently predicted X=167 edge. The mode-0 interrupt
+            // continues to use its separate X=166 event above.
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 1
@@ -1103,12 +1120,18 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 // output stage. An OAM DMA that owned the scan leaves the read bus
                 // released at the internal edge instead. Otherwise normal-speed
                 // release is quantized by fine SCX and double speed follows the
-                // internal hand-off.
-                int handoffTick = !write && oamSearchPhase.wasDmaBlockedThisLine()
+                // internal hand-off. Terminal StartWindowDraw retains ownership for
+                // four additional dots without extending physical mode 3.
+                boolean dmaReadHandoff = !write && oamSearchPhase.wasDmaBlockedThisLine();
+                int handoffTick = dmaReadHandoff
                         ? hblankIntFrom
                         : speedMode.getSpeedMode() == 1 && !firstLine
                                 ? 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0)
                                 : hblankIntFrom + 4;
+                if (!write && !dmaReadHandoff
+                        && pixelTransferPhase.hasCgbTerminalWindowStarted()) {
+                    handoffTick += 4;
+                }
                 if (ticksInLine < handoffTick) {
                     return false;
                 }
@@ -1231,6 +1254,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 handoffTick = 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0);
             } else {
                 handoffTick = hblankIntFrom + 4;
+            }
+            if (!pixelTransferPhase.hasObjectsOnLine()
+                    && pixelTransferPhase.hasCgbTerminalWindowStarted()) {
+                // Terminal StartWindowDraw keeps the idle CGB read arbiter occupied
+                // after the physical transfer has already entered HBlank.
+                handoffTick += 4;
             }
             return ticksInLine >= handoffTick;
         }
