@@ -136,6 +136,14 @@ public class PixelTransferWindowTriggerTest {
                 0, h.transfer.getWindowLineCounter());
         assertTrue("the final two startup states belong to the readable HBlank latch",
                 h.transfer.isCgbWindowStartActive());
+        assertTrue("the terminal comparator event remains captured through HBlank",
+                h.transfer.hasCgbTerminalWindowStarted());
+        Memento<PixelTransfer> terminalStart = h.transfer.saveToMemento();
+
+        h.registers.put(GpuRegister.WX, 167);
+        h.lcdc.set(0x91);
+        assertTrue("later register changes cannot withdraw the captured terminal event",
+                h.transfer.hasCgbTerminalWindowStarted());
 
         Harness noTerminalMatch = new Harness(true);
         noTerminalMatch.registers.put(GpuRegister.LY, 0);
@@ -154,6 +162,15 @@ public class PixelTransferWindowTriggerTest {
         h.registers.put(GpuRegister.LY, 1);
         h.transfer.start();
         assertFalse("a pending activation is scanline-local", h.transfer.isWindowActivationPending());
+        assertFalse("the captured terminal event is scanline-local",
+                h.transfer.hasCgbTerminalWindowStarted());
+
+        h.transfer.restoreFromMemento(terminalStart);
+        assertTrue("the captured terminal event must survive save-state restoration",
+                h.transfer.hasCgbTerminalWindowStarted());
+        h.transfer.resetWindowLineCounter();
+        assertFalse("LCD/frame reset clears the captured terminal event",
+                h.transfer.hasCgbTerminalWindowStarted());
     }
 
     @Test
@@ -237,6 +254,31 @@ public class PixelTransferWindowTriggerTest {
         h.transfer.tick();
         assertFalse("the inhibited edge must survive save-state restoration",
                 h.transfer.hasActivatedWindowOnLine());
+    }
+
+    @Test
+    public void normalCgbWindowEnableEdgeDoesNotPredictTerminalStart() {
+        Harness h = new Harness(true);
+        h.registers.put(GpuRegister.LY, 0);
+        h.registers.put(GpuRegister.WY, 0);
+        h.registers.put(GpuRegister.WX, 166);
+        h.lcdc.set(0x91);
+        h.transfer.checkWindowY();
+        h.transfer.start();
+
+        int remainingTicks = 1000;
+        while (h.transfer.getPosition() < 159 && remainingTicks-- > 0) {
+            h.transfer.tick();
+        }
+        assertTrue("the output machine must reach the terminal comparator",
+                remainingTicks > 0);
+
+        h.lcdc.set(0xb1);
+        assertFalse("the lookahead must see the same inhibited enable edge as tick()",
+                h.transfer.willStartCgbTerminalWindow());
+        assertFalse("the rising edge must finish the line without a terminal start",
+                h.transfer.tick());
+        assertFalse(h.transfer.hasCgbTerminalWindowStarted());
     }
 
     @Test
