@@ -806,9 +806,18 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && mode == Mode.PixelTransfer && pixelTransferDone) {
             return Mode.HBlank.ordinal();
         }
+        boolean dynamicWindowTail = pixelMachine.hasActivatedWindowOnLine()
+                || (pixelTransferPhase.hasActivatedWindowOnLine()
+                && !pixelTransferPhase.isWindowActive());
+        int mode3ReadAhead = dynamicWindowTail ? 2 : 0;
         if (gbc && speedMode.getSpeedMode() == 1
-                && mode == Mode.HBlank && ticksInLine < hblankIntFrom
+                && mode == Mode.HBlank
+                && ticksInLine + mode3ReadAhead < hblankIntFrom
                 && !pixelTransferPhase.hasObjectsOnLine()) {
+            // Gambatte's STAT mux compares cc+2 with the predicted mode-0 edge. The
+            // steady background path already bakes that lookahead into its calibrated
+            // latch; a dynamically started (or subsequently disabled) window exposes
+            // the raw HBlank prediction and therefore needs it here.
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
@@ -897,7 +906,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             // HBlank when the output machine reaches position 157.
             readablePixelEnd = 157;
         } else {
-            readablePixelEnd = 160;
+            // Before a speed switch, the normal-speed CGB mode mux still predicts the
+            // HBlank edge two dots ahead of the shifted LCD output machine when the
+            // window path owns that mux. Background-only timing retains its separately
+            // calibrated output threshold.
+            readablePixelEnd = lcdc.isWindowDisplay() ? 158 : 160;
         }
         if (gbc && mode == Mode.HBlank
                 && (pixelMachine.getPosition() < readablePixelEnd

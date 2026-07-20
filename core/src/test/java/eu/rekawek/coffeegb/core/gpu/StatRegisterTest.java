@@ -223,6 +223,35 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void cgbStartedWindowModeReadPredictsHblankTwoDotsAhead() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(GpuRegister.WX.getAddress(), 0);
+        fixture.gpu.setByte(0xff40, 0xb1);
+        fixture.advanceTo(1, 240);
+
+        while (fixture.readStatMode() == Mode.PixelTransfer.ordinal()) {
+            fixture.tick();
+        }
+        assertEquals(257, fixture.gpu.getTicksInLine());
+    }
+
+    @Test
+    public void cgbDisabledWindowModeReadUsesTwoDotM0Prediction() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 3);
+        fixture.gpu.setByte(GpuRegister.WX.getAddress(), 15);
+        fixture.gpu.setByte(0xff40, 0xb1);
+        fixture.advanceTo(1, 120);
+        fixture.gpu.setByteFromCpu(0xff40, 0x91);
+        fixture.advanceTo(1, 240);
+
+        while (fixture.readStatMode() == Mode.PixelTransfer.ordinal()) {
+            fixture.tick();
+        }
+        assertEquals(259, fixture.gpu.getTicksInLine());
+    }
+
+    @Test
     public void cgbDoubleSpeedSelectedObjectsKeepTheirPredictedWindowTail() {
         Fixture fixture = new Fixture(true, true);
         fixture.gpu.setByte(0xff40, 0x00);
