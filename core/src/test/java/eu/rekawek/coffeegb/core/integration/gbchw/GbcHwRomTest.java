@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.integration.gbchw;
 import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.integration.support.GbcHwTestRunner;
 import eu.rekawek.coffeegb.core.integration.support.GbcHwTestRunner.CompletionMode;
+import eu.rekawek.coffeegb.core.integration.support.ParallelParameterized;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -24,7 +25,7 @@ import java.util.zip.ZipInputStream;
 import static org.junit.Assert.fail;
 
 /** Evaluates every automated gbc-hw-tests ROM/model verdict against pinned upstream data. */
-@RunWith(Parameterized.class)
+@RunWith(ParallelParameterized.class)
 public class GbcHwRomTest {
 
     private static final String ARCHIVE = "/roms/gbc-hw-tests/gbc-hw-tests-631e600.zip";

@@ -148,8 +148,9 @@ the corresponding baseline entry.
 <summary>Running the exhaustive Gambatte profile</summary>
 
 The profile evaluates all 4,674 canonical hexadecimal DMG/CGB verdicts from
-3,077 ROMs in a serial test JVM capped at 1 GiB. It passes only when every case
-matches hardware or the exact current-output baseline:
+3,077 ROMs with two parameter workers by default in a test JVM capped at 1 GiB.
+It passes only when every case matches hardware or the exact current-output
+baseline:
 
 ```bash
 mvn clean test -f core/pom.xml -Ptest-gambatte-hw

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.integration.miscgb;
 
 import eu.rekawek.coffeegb.core.integration.support.MooneyeTestRunner;
+import eu.rekawek.coffeegb.core.integration.support.ParallelParameterized;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -19,7 +20,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /** Executes every ROM in alyosha-tas/Misc.-GB-Tests through its Mooneye protocol. */
-@RunWith(Parameterized.class)
+@RunWith(ParallelParameterized.class)
 public class MiscGbRomTest {
 
     private static final String ARCHIVE = "/roms/misc-gb-tests/misc-gb-tests-be3cbb8.zip";

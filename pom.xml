@@ -99,6 +99,9 @@
                 <version>3.2.5</version>
                 <configuration>
                     <argLine>-Xmx4096m</argLine>
+                    <systemPropertyVariables>
+                        <integration.test.threadCount>${integration.test.threadCount}</integration.test.threadCount>
+                    </systemPropertyVariables>
                     <excludes>
                         <exclude>**/integration/**</exclude>
                     </excludes>

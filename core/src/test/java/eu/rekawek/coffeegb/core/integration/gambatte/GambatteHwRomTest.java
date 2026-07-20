@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.integration.gambatte;
 
 import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.integration.support.GambatteHwTestRunner;
+import eu.rekawek.coffeegb.core.integration.support.ParallelParameterized;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -28,7 +29,7 @@ import java.util.zip.ZipInputStream;
 import static org.junit.Assert.assertEquals;
 
 /** Evaluates every canonical hexadecimal DMG/CGB verdict in Gambatte's HWTests archive. */
-@RunWith(Parameterized.class)
+@RunWith(ParallelParameterized.class)
 public class GambatteHwRomTest {
 
     private static final String ARCHIVE = "/roms/gambatte/gambatte-hwtests.zip";

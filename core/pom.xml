@@ -408,9 +408,6 @@
                                     <includes>
                                         <include>**/integration/mealybug/*</include>
                                     </includes>
-                                    <parallel>methods</parallel>
-                                    <threadCount>${integration.test.threadCount}</threadCount>
-                                    <perCoreThreadCount>false</perCoreThreadCount>
                                 </configuration>
                             </execution>
                         </executions>
@@ -476,9 +473,6 @@
                                     <includes>
                                         <include>**/integration/gbchw/*</include>
                                     </includes>
-                                    <parallel>methods</parallel>
-                                    <threadCount>${integration.test.threadCount}</threadCount>
-                                    <perCoreThreadCount>false</perCoreThreadCount>
                                 </configuration>
                             </execution>
                         </executions>
@@ -510,9 +504,6 @@
                                     <includes>
                                         <include>**/integration/miscgb/*</include>
                                     </includes>
-                                    <parallel>methods</parallel>
-                                    <threadCount>${integration.test.threadCount}</threadCount>
-                                    <perCoreThreadCount>false</perCoreThreadCount>
                                 </configuration>
                             </execution>
                         </executions>

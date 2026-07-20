@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.integration.support.ImageTestRunner;
+import eu.rekawek.coffeegb.core.integration.support.ParallelParameterized;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -27,7 +28,7 @@ import static org.junit.Assert.fail;
  * <p>Every reference is pixel-exact except for the one explicitly documented hardware-photo
  * discrepancy in {@code m3_lcdc_win_en_change_multiple_wx.gb}.
  */
-@RunWith(Parameterized.class)
+@RunWith(ParallelParameterized.class)
 public class MealybugRomTest {
 
     private static final int TEST_COUNT = 24;

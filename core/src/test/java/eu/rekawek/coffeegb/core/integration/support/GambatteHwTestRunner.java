@@ -53,18 +53,23 @@ public final class GambatteHwTestRunner {
         gameboy.init(new EventBusImpl(null, null, false), SerialEndpoint.NULL_ENDPOINT, null);
     }
 
-    private static synchronized Gameboy buildAtPostBoot(
+    private static Gameboy buildAtPostBoot(
             Gameboy.GameboyConfiguration configuration, String bootHeader) {
         BootStateKey key = new BootStateKey(configuration.getGameboyType(), bootHeader);
-        Memento<Gameboy> postBoot = POST_BOOT_STATES.get(key);
-        if (postBoot == null) {
-            Gameboy booted = configuration
-                    .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
-                    .build();
-            POST_BOOT_STATES.put(key, booted.saveToMemento());
-            return booted;
+        Memento<Gameboy> postBoot;
+        synchronized (POST_BOOT_STATES) {
+            postBoot = POST_BOOT_STATES.get(key);
+            if (postBoot == null) {
+                Gameboy booted = configuration
+                        .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
+                        .build();
+                POST_BOOT_STATES.put(key, booted.saveToMemento());
+                return booted;
+            }
         }
 
+        // Construction and restore are parameter-local and relatively expensive.
+        // Keep them outside the cache lock so independent ROMs can start in parallel.
         Gameboy restored = configuration.forRestore().build();
         restored.restoreFromMemento(postBoot);
         return restored;
