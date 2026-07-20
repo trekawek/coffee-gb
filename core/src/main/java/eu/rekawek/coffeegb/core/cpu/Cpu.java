@@ -547,9 +547,15 @@ public class Cpu implements Serializable, Originator<Cpu> {
      * started yet remains at the opcode boundary until the burst completes.
      */
     public boolean hasInFlightInstructionForHdma() {
+        return hasFetchedInstructionForHdma()
+                || (!hdmaOpcodePrefetched && state == State.OPCODE && clockCycle >= 2);
+    }
+
+    /** Whether HDMA arrived after the current instruction's opcode was fetched. */
+    public boolean hasFetchedInstructionForHdma() {
         return !hdmaOpcodePrefetched
-                && (state == State.EXT_OPCODE || state == State.OPERAND || state == State.RUNNING
-                || (state == State.OPCODE && clockCycle >= 2));
+                && (state == State.EXT_OPCODE || state == State.OPERAND
+                || state == State.RUNNING);
     }
 
     public boolean isInterruptEntryInFlightForHdma() {

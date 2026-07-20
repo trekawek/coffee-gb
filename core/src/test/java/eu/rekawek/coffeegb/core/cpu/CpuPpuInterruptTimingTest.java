@@ -177,6 +177,27 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
+    public void hdmaDistinguishesAnOpcodeCycleFromAFetchedInstruction() {
+        Harness h = new Harness(true);
+        h.memory.setByte(PROGRAM, 0x06);
+        h.memory.setByte(PROGRAM + 1, 0x42);
+
+        h.tickCpuTicks(2);
+        assertTrue(h.cpu.hasInFlightInstructionForHdma());
+        assertFalse(h.cpu.hasFetchedInstructionForHdma());
+
+        h.tickCpuTicks(2);
+        assertEquals(Cpu.State.OPERAND, h.cpu.getState());
+        assertTrue(h.cpu.hasFetchedInstructionForHdma());
+
+        Harness prefetched = new Harness(true);
+        prefetched.memory.setByte(PROGRAM, 0x06);
+        prefetched.cpu.prefetchOpcodeForHdma();
+        assertEquals(Cpu.State.OPERAND, prefetched.cpu.getState());
+        assertFalse(prefetched.cpu.hasFetchedInstructionForHdma());
+    }
+
+    @Test
     public void hdmaPrefetchReplaysTheHeldStopPaddingWithoutAdvancingPcAgain() {
         Harness h = new Harness(true);
         h.memory.setByte(PROGRAM, 0x10);

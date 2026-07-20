@@ -108,6 +108,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // standalone read and a write-then-read sequence see different slots.
     private int lastCpuVramWriteTick = Integer.MIN_VALUE;
 
+    private transient boolean cpuRetiringInstructionForHdma;
+
     /**
      * Coffee GB keeps a calibrated CPU-visible timing skeleton and a pixel-producing
      * dot machine four dots behind it. Selected DMG register slices cross into that
@@ -1174,6 +1176,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return true;
         }
+        if (!write && cpuRetiringInstructionForHdma && gbc
+                && speedMode.getSpeedMode() == 2 && mode == Mode.HBlank) {
+            return true;
+        }
         if (firstLine && gbc && ticksInLine < 84) {
             // The display-enable VRAM latch closes one dot earlier at double speed;
             // it is distinct from both the CPU-readable STAT and palette latches.
@@ -1232,6 +1238,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         int readDelay = speedMode.getSpeedMode() == 2 ? 4 : 8;
         return lastCpuVramWriteTick != Integer.MIN_VALUE
                 && ticksInLine - lastCpuVramWriteTick == readDelay;
+    }
+
+    /** Keeps the VRAM slot owned by a CPU instruction that won HDMA arbitration. */
+    public void setCpuRetiringInstructionForHdma(boolean retiring) {
+        cpuRetiringInstructionForHdma = retiring;
     }
 
     private void setLcdc(int value) {
@@ -1402,6 +1413,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.scxWrittenThisLine = mem.scxWrittenThisLine;
         this.wyWrittenThisLine = mem.wyWrittenThisLine;
         this.lastCpuVramWriteTick = mem.lastCpuVramWriteTick;
+        this.cpuRetiringInstructionForHdma = false;
         this.mode = mem.mode;
         pendingPpuWrites.clear();
         if (mem.pendingPpuWrites != null) {
