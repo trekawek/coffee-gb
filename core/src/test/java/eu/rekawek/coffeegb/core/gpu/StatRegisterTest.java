@@ -543,6 +543,54 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void normalSpeedCgbMode0BlocksLycEnableAfterTwentyDotSettleWindow() {
+        Fixture atBoundary = activeCgbMode0(false);
+        int mode0Tick = atBoundary.gpu.getMode0InterruptTick();
+        atBoundary.advanceTo(1, mode0Tick + 20);
+        atBoundary.clearInterrupts();
+
+        atBoundary.stat.setByte(StatRegister.ADDRESS, 0x40);
+
+        assertEquals(1 << LCDC.ordinal(), atBoundary.lcdInterruptFlag());
+
+        Fixture afterBoundary = activeCgbMode0(false);
+        mode0Tick = afterBoundary.gpu.getMode0InterruptTick();
+        afterBoundary.advanceTo(1, mode0Tick + 21);
+        afterBoundary.clearInterrupts();
+
+        afterBoundary.stat.setByte(StatRegister.ADDRESS, 0x40);
+
+        assertEquals(0, afterBoundary.lcdInterruptFlag());
+    }
+
+    @Test
+    public void doubleSpeedCgbMode0ReleasesLycEnableForFinalEightCpuClocks() {
+        Fixture beforeBoundary = activeCgbMode0(true);
+        beforeBoundary.advanceTo(1, 451);
+        beforeBoundary.clearInterrupts();
+
+        beforeBoundary.stat.setByte(StatRegister.ADDRESS, 0x40);
+
+        assertEquals(0, beforeBoundary.lcdInterruptFlag());
+
+        Fixture atBoundary = activeCgbMode0(true);
+        atBoundary.advanceTo(1, 452);
+        atBoundary.clearInterrupts();
+
+        atBoundary.stat.setByte(StatRegister.ADDRESS, 0x40);
+
+        assertEquals(1 << LCDC.ordinal(), atBoundary.lcdInterruptFlag());
+    }
+
+    @Test
+    public void normalSpeedCgbMode1LycEnableBoundaryFollowsRephasedClock() {
+        assertEquals(0, cgbMode1LycEnableFlagAt(449, true));
+        assertEquals(1 << LCDC.ordinal(), cgbMode1LycEnableFlagAt(450, true));
+        assertEquals(0, cgbMode1LycEnableFlagAt(452, false));
+        assertEquals(1 << LCDC.ordinal(), cgbMode1LycEnableFlagAt(453, false));
+    }
+
+    @Test
     public void dmgStatWriteSettlesBeforeFollowingMode0Edge() {
         Fixture fixture = new Fixture();
         fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
@@ -873,6 +921,30 @@ public class StatRegisterTest {
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
         assertFalse(fixture.interrupts.isInterruptRequested());
         return fixture;
+    }
+
+    private static Fixture activeCgbMode0(boolean doubleSpeed) {
+        Fixture fixture = new Fixture(true, doubleSpeed);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceTo(1, 100);
+        fixture.advanceToHBlank();
+        return fixture;
+    }
+
+    private static int cgbMode1LycEnableFlagAt(int tick, boolean rephased) {
+        Fixture fixture = new Fixture(true);
+        if (rephased) {
+            fixture.gpu.onSpeedSwitch();
+        }
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x10);
+        fixture.advanceTo(153, tick);
+        fixture.clearInterrupts();
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x50);
+
+        return fixture.lcdInterruptFlag();
     }
 
     private static class Fixture {

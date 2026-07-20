@@ -876,18 +876,31 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
         boolean m0LycOrM1;
         if (ly < 143 || (ly == 143 && timeToNextLy > 458 * (1 + doubleSpeed))) {
-            if (gpu.isMode0IntWindow()
+            boolean normalSpeedMode0LevelStillSettling = !isDoubleSpeed()
+                    && gpu.getTicksInLine() - gpu.getMode0InterruptTick() <= 20;
+            boolean doubleSpeedMode0LevelAlreadyRetiring = isDoubleSpeed()
+                    && timeToNextLy <= 8;
+            boolean blockedByActiveMode0 = gpu.isMode0IntWindow()
+                    && (oldStat & 0x08) != 0
+                    && (newlyEnabled & 0x40) != 0
+                    && !normalSpeedMode0LevelStillSettling
+                    && !doubleSpeedMode0LevelAlreadyRetiring;
+            if (blockedByActiveMode0) {
+                // The predictive mode-0 event reaches IF before its shared STAT
+                // level can block a newly selected LYC source. Once that level has
+                // settled, changing FF41 must not manufacture a second rising edge.
+                m0LycOrM1 = false;
+            } else if (gpu.isMode0IntWindow()
                     || timeToNextLy <= (ly < 143 ? 4 + 4 * doubleSpeed
                     : 4 + 2 * doubleSpeed)) {
                 m0LycOrM1 = lycPeriod && (newStat & 0x40) != 0;
-            } else if ((oldStat & 0x08) != 0) {
-                m0LycOrM1 = false;
             } else {
                 m0LycOrM1 = (newStat & 0x08) != 0
                         || (lycPeriod && (newStat & 0x40) != 0);
             }
         } else if ((oldStat & 0x10) != 0
-                && (ly < 153 || timeToNextLy > 3 + 3 * doubleSpeed)) {
+                && (ly < 153 || timeToNextLy > 3 + 3 * doubleSpeed
+                + 4 * getNormalSpeedClockPhase())) {
             m0LycOrM1 = false;
         } else {
             m0LycOrM1 = ((newStat & 0x10) != 0
