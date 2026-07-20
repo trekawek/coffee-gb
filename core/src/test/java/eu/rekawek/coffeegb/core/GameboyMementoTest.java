@@ -95,10 +95,8 @@ public class GameboyMementoTest {
             }
             gameboy.restoreFromMemento(memento);
 
-            for (int i = 0; i < Gameboy.LONG_SPEED_SWITCH_TAIL_TICKS; i++) {
-                assertTrue(gameboy.isSpeedSwitchTailActive());
-                gameboy.tick();
-            }
+            assertEquals(Gameboy.LONG_SPEED_SWITCH_TAIL_TICKS,
+                    drainSpeedSwitchTail(gameboy));
             assertFalse(gameboy.isSpeedSwitchTailActive());
             assertEquals(pcAtTailStart, gameboy.getCpu().getRegisters().getPC());
             assertEquals(0, gameboy.getAddressSpace().getByte(0xff05));
@@ -127,6 +125,14 @@ public class GameboyMementoTest {
             assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS,
                     drainSpeedSwitchTail(gameboy));
         }
+    }
+
+    @Test
+    public void retainedHblankLatchUsesIntermediateTailOnlyOnShortPhase() {
+        assertEquals(2, Gameboy.baseSpeedSwitchTailTicks(false, false));
+        assertEquals(7, Gameboy.baseSpeedSwitchTailTicks(false, true));
+        assertEquals(8, Gameboy.baseSpeedSwitchTailTicks(true, false));
+        assertEquals(8, Gameboy.baseSpeedSwitchTailTicks(true, true));
     }
 
     @Test
