@@ -119,7 +119,7 @@ GB matches them, while unresolved Gambatte outputs are pinned against regression
 | [Mooneye Test Suite](https://github.com/Gekkio/mooneye-test-suite) | 130 | 130 / 130 selected cases pass |
 | [RTC3Test](https://github.com/aaaaaa123456789/rtc3test) | 3 | 3 / 3 menus pass |
 | [SameSuite](https://github.com/LIJI32/SameSuite) | 71 | 71 / 71 later-revision cases pass |
-| [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 4,674 | 4,230 match hardware; 444 current outputs are pinned exactly |
+| [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 4,674 | 4,245 match hardware; 429 current outputs are pinned exactly |
 | [BullyGB](https://github.com/Ashiepaws/BullyGB) | 2 | 2 / 2 DMG and CGB cases pass |
 | [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
 | [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 8 / 8 images have no out-of-tolerance pixels; ROM+RAM passes |
@@ -138,7 +138,7 @@ GB matches them, while unresolved Gambatte outputs are pinned against regression
 Every ROM with a machine-readable result must produce its documented pass value,
 match its selected raw hardware capture, or match an exact documented current
 output. The one-pixel Mealybug difference is pinned as the maximum accepted
-output. Gambatte's 299 unresolved cases are likewise pinned to their complete
+output. Gambatte's 429 unresolved cases are likewise pinned to their complete
 hexadecimal output, so any change fails CI; a hardware-correct improvement removes
 the corresponding baseline entry.
 
