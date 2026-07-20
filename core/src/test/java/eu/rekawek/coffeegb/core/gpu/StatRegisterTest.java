@@ -720,6 +720,121 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void normalSpeedCgbFrameMode2CapturesAtDot454AndPublishesAtDot455() {
+        Fixture fixture = new Fixture(true);
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        fixture.advanceTo(153, 453);
+        fixture.clearInterrupts();
+
+        fixture.tick();
+        assertEquals(454, fixture.gpu.getTicksInLine());
+        assertEquals(0, fixture.lcdInterruptFlag());
+
+        fixture.tick();
+        assertEquals(455, fixture.gpu.getTicksInLine());
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
+    }
+
+    @Test
+    public void rephasedNormalSpeedCgbFrameMode2PublishesAfterRollover() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        fixture.advanceTo(153, 453);
+        fixture.clearInterrupts();
+
+        fixture.tick();
+        fixture.tick();
+        assertEquals(455, fixture.gpu.getTicksInLine());
+        assertEquals(0, fixture.lcdInterruptFlag());
+
+        fixture.tick();
+        assertEquals(0, fixture.gpu.getLine());
+        assertEquals(0, fixture.gpu.getTicksInLine());
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertTrue(fixture.interrupts.isInterruptRequested());
+        assertTrue(fixture.interrupts.isUnphasedPpuInterruptRequested());
+    }
+
+    @Test
+    public void normalSpeedCgbLyc153FrameMode2PublishesAtDot454() {
+        Fixture fixture = new Fixture(true);
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 153);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x60);
+        fixture.advanceTo(153, 453);
+        fixture.clearInterrupts();
+
+        fixture.tick();
+
+        assertEquals(454, fixture.gpu.getTicksInLine());
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
+    }
+
+    @Test
+    public void normalSpeedCgbFrameMode2DoesNotRetriggerAfterCapturedHighIf() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        fixture.advanceTo(153, 453);
+        fixture.interrupts.setByte(0xff0f, 1 << LCDC.ordinal());
+
+        fixture.tick();
+        fixture.clearInterrupts();
+        fixture.tick();
+
+        assertEquals(455, fixture.gpu.getTicksInLine());
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void normalSpeedCgbFrameMode2DisableCancelsCapturedEvent() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        fixture.advanceTo(153, 453);
+        fixture.clearInterrupts();
+        fixture.tick();
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
+        fixture.tick();
+
+        assertEquals(455, fixture.gpu.getTicksInLine());
+        assertEquals(0, fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void pendingNormalSpeedCgbFrameMode2SurvivesMementoRoundTrip() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        fixture.advanceTo(153, 453);
+        fixture.clearInterrupts();
+        fixture.tick();
+        var gpuMemento = fixture.gpu.saveToMemento();
+        var statMemento = fixture.stat.saveToMemento();
+        var interruptMemento = fixture.interrupts.saveToMemento();
+
+        fixture.tick();
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+
+        fixture.gpu.restoreFromMemento(gpuMemento);
+        fixture.stat.restoreFromMemento(statMemento);
+        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.tick();
+
+        assertEquals(455, fixture.gpu.getTicksInLine());
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void normalSpeedCgbMode2CapturesStatWriteAtTwoClockBoundary() {
+        assertEquals(1 << LCDC.ordinal(), cgbMode2StatCaptureFlagAt(448));
+        assertEquals(0, cgbMode2StatCaptureFlagAt(449));
+    }
+
+    @Test
     public void doubleSpeedCgbMode2DisableRetractsRequestThroughDot454() {
         Fixture fixture = publishedDoubleSpeedCgbM2Event();
 
@@ -921,6 +1036,27 @@ public class StatRegisterTest {
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
         assertFalse(fixture.interrupts.isInterruptRequested());
         return fixture;
+    }
+
+    private static int cgbMode2StatCaptureFlagAt(int writeTick) {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x60);
+        fixture.advanceTo(1, 447);
+        fixture.clearInterrupts();
+        fixture.tick();
+        if (writeTick == 449) {
+            fixture.stat.preCpuTick();
+            fixture.tick();
+        }
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x20);
+        while (fixture.gpu.getTicksInLine() < 450) {
+            fixture.stat.preCpuTick();
+            fixture.tick();
+        }
+        fixture.stat.preCpuTick();
+        return fixture.lcdInterruptFlag();
     }
 
     private static Fixture activeCgbMode0(boolean doubleSpeed) {
