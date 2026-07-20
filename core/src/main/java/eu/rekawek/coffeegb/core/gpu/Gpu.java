@@ -407,10 +407,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
         Mode oldMode = mode;
         ticksInLine++;
+        int lineLength = firstLine ? 455 : 456;
+        oamSearchPhase.trackDmaSource(ticksInLine == lineLength ? 0 : ticksInLine);
         // the line started by enabling the LCD is one tick shorter: its grid starts at
         // the LCDC write itself, while the machine-cycle-locked line grid starts one
         // tick later (lcdon_timing-GS vs the steady-state line phase)
-        if (ticksInLine == (firstLine ? 455 : 456)) {
+        if (ticksInLine == lineLength) {
             ticksInLine = 0;
             lastCpuVramWriteTick = Integer.MIN_VALUE;
             firstLine = false;
@@ -1368,6 +1370,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // OAM phase for its timing grid, but do not expose candidates to mode 3; CPU
         // OAM access remains open during this interval.
         this.mode = Mode.OamSearch;
+        oamSearchPhase.onLcdEnabled();
         this.phase = oamSearchPhase.start(false);
         this.lcdEnabled = true;
         this.displayEnabledDelay = 244;
