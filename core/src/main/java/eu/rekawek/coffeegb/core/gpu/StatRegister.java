@@ -150,6 +150,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private boolean pendingCgbMode2Interrupt;
 
+    // Normal-speed CGB captures the new-frame mode-2 event in line 153's tail,
+    // then publishes it at the phase-adjusted frame rollover.
+    private boolean pendingCgbFrameMode2Interrupt;
+
     // A double-speed FF41 write can still withdraw the just-published mode-2
     // request while it remains behind the CPU synchronizer.
     private boolean retractableCgbMode2Interrupt;
@@ -198,6 +202,22 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         boolean suppressNaturalModeEdge = updateModeIrqEvents();
         if (pendingCgbMode2Interrupt && gpu.getTicksInLine() == 452) {
             publishPendingCgbMode2Event();
+        }
+        boolean publishCgbFrameMode2 = pendingCgbFrameMode2Interrupt && !isDoubleSpeed()
+                && ((getNormalSpeedClockPhase() == 0
+                && gpu.getLine() == 153 && gpu.getTicksInLine() == 455)
+                || (getNormalSpeedClockPhase() == 1
+                && gpu.getLine() == 0 && gpu.getTicksInLine() == 0));
+        if (publishCgbFrameMode2) {
+            // The normal-speed frame mode-2 event captures FF41/FF45 at dot 454.
+            // A speed-switch clock rephase moves publication across the rollover.
+            if (getNormalSpeedClockPhase() == 1) {
+                interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
+                        InterruptType.LCDC);
+            } else {
+                interruptManager.requestMode2InterruptBeforeCpuAcceptance(false);
+            }
+            pendingCgbFrameMode2Interrupt = false;
         }
         if (retractableCgbMode2Interrupt && gpu.getTicksInLine() > 454) {
             retractableCgbMode2Interrupt = false;
@@ -391,6 +411,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         pendingCgbMode1Interrupt = false;
         pendingCgbMode0Interrupt = false;
         pendingCgbMode2Interrupt = false;
+        pendingCgbFrameMode2Interrupt = false;
         retractableCgbMode2Interrupt = false;
         scxChangedSinceMode0Event = false;
     }
@@ -413,6 +434,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         pendingCgbMode1Interrupt = false;
         pendingCgbMode0Interrupt = false;
         pendingCgbMode2Interrupt = false;
+        pendingCgbFrameMode2Interrupt = false;
         retractableCgbMode2Interrupt = false;
         interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
     }
@@ -478,6 +500,17 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     private boolean computeIntLine(int enable) {
         boolean line = (enable & 0b01000000) != 0 && intCoincidence;
         if (gpu.isLcdEnabled()) {
+            boolean holdCgbFrameLycToMode2Handoff = gpu.isGbc()
+                    && !gpu.isDmgCompatMode()
+                    && gpu.getLine() == 153
+                    && intCoincidence
+                    && lycIrqValueSource == 0
+                    && (lastModeIrqStatWriteOld & 0x40) != 0
+                    && (enable & 0x60) == 0x20
+                    && lastModeIrqStatWriteLineTick >= 0
+                    && gpu.getTicksInLine() >= lastModeIrqStatWriteLineTick
+                    && cpuCyclesSince(lastModeIrqStatWriteClock) <= 4;
+            line |= holdCgbFrameLycToMode2Handoff;
             boolean suppressTailCgbMode0Enable = gpu.isGbc()
                     && gpu.getLine() < 144
                     && (lastModeIrqStatWriteOld & 0x08) == 0
@@ -502,7 +535,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                     && (enable & 0x10) != 0;
             line |= !suppressLateCgbMode1Enable
                     && (enable & 0b00010000) != 0 && isMode1IrqLineActive();
-            line |= !suppressLateCgbModeEnable
+            boolean suppressLateDmgLine0Mode2Enable = !gpu.isGbc()
+                    && gpu.getLine() == 0 && gpu.getTicksInLine() < 4
+                    && lastModeIrqStatWriteLineTick >= 0
+                    && lastModeIrqStatWriteLineTick < 4
+                    && lycIrqClock - lastModeIrqStatWriteClock <= 4
+                    && (lastModeIrqStatWriteOld & 0x20) == 0;
+            line |= !suppressLateCgbModeEnable && !suppressLateDmgLine0Mode2Enable
                     && (enable & 0b00100000) != 0 && gpu.isMode2IntWindow();
         }
         return line;
@@ -662,6 +701,22 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                         && precedingLy == modeIrqLycLatch;
                 if (blockedByM1 || blockedByLyc) {
                     suppressNaturalModeEdge = true;
+                } else if (gpu.isGbc() && !gpu.isDmgCompatMode()
+                        && !isDoubleSpeed() && gpu.getLine() == 153
+                        && gpu.getTicksInLine() == 454) {
+                    boolean capturedRequest =
+                            !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
+                    boolean capturedLyc153Source = (modeIrqStatLatch & 0x40) != 0
+                            && modeIrqLycLatch == 153;
+                    if (capturedRequest && capturedLyc153Source) {
+                        // The outgoing LYC=153 source gives the frame event its
+                        // dot-454 IF phase. A following IF clear must be able to
+                        // consume it before rollover.
+                        interruptManager.requestMode2InterruptBeforeCpuAcceptance(false);
+                    } else {
+                        pendingCgbFrameMode2Interrupt = capturedRequest && !intLine;
+                    }
+                    suppressNaturalModeEdge = true;
                 }
                 refreshModeIrqLatches(true);
             }
@@ -746,6 +801,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private void publishPendingCgbMode2Event() {
         commitPendingModeIrqRegisters();
+        if (!isDoubleSpeed()
+                && pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                && cpuCyclesSince(pendingModeIrqStatClock) == 2) {
+            modeIrqStatLatch = pendingModeIrqStat;
+            pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
+        }
         if (!isDoubleSpeed()
                 && pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
                 && cpuCyclesSince(pendingModeIrqLycClock) == 6) {
@@ -1151,6 +1212,19 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public void setByte(int address, int value) {
+        int newEnableBits = value & 0b01111000;
+        boolean capturedDmgLycToMode2Handoff = !gpu.isGbc()
+                && gpu.isLcdEnabled()
+                && (enableBits & 0x40) != 0
+                && (newEnableBits & 0x68) == 0x20
+                && lycIrqValueSource == gpu.getLine()
+                && gpu.isMode2IntWindow()
+                && cpuCyclesToNextLy() <= 4;
+        if (capturedDmgLycToMode2Handoff) {
+            // The outgoing LYC source is still high at the final mode-2 capture.
+            // Preserve that shared level so the FF41 handoff cannot create an edge.
+            intLine = true;
+        }
         if (!gpu.isGbc()) {
             if ((value & 0b01111000) == 0
                     && gpu.isLcdEnabled()
@@ -1167,6 +1241,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             // DMG STAT write glitch: all interrupt sources are enabled for a moment
             // before the written data settles
             int glitchEnable = 0b01111000;
+            if (gpu.getLine() == 0 && gpu.getTicksInLine() < 4
+                    && (enableBits & 0x20) == 0 && (newEnableBits & 0x20) != 0) {
+                // The line-zero mode-2 event has already sampled FF41. Its transient
+                // all-enabled write phase cannot arm that event retroactively.
+                glitchEnable &= ~0x20;
+            }
             if (gpu.isLcdEnabled()
                     && gpu.getTicksInLine() == 0
                     && (enableBits & 0b00101000) == 0b00001000) {
@@ -1178,12 +1258,18 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             }
             updateIntLine(computeIntLine(glitchEnable));
         }
-        int newEnableBits = value & 0b01111000;
         if (isDoubleSpeed() && retractableCgbMode2Interrupt
                 && gpu.getTicksInLine() <= 454
                 && (newEnableBits & 0x20) == 0) {
             interruptManager.cancelMode2InterruptBeforeCpuAcceptance();
             retractableCgbMode2Interrupt = false;
+        }
+        if (pendingCgbFrameMode2Interrupt && gpu.isGbc() && !gpu.isDmgCompatMode()
+                && !isDoubleSpeed() && gpu.getLine() == 153
+                && gpu.getTicksInLine() <= 454 && (newEnableBits & 0x20) == 0) {
+            // A write in the capture dot can still withdraw the frame mode-2
+            // occurrence before it is published at rollover.
+            pendingCgbFrameMode2Interrupt = false;
         }
         if (canReschedulePendingCgbMode2Event()) {
             pendingCgbMode2Interrupt = (newEnableBits & 0x28) == 0x20;
@@ -1260,7 +1346,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 mode0EventArmed, previousMode0Window,
                 previousMode1Window, previousMode2Window,
                 pendingCgbMode0Interrupt, pendingCgbMode2Interrupt,
-                retractableCgbMode2Interrupt, scxChangedSinceMode0Event);
+                pendingCgbFrameMode2Interrupt, retractableCgbMode2Interrupt,
+                scxChangedSinceMode0Event);
     }
 
     @Override
@@ -1311,6 +1398,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.previousMode2Window = mem.previousMode2Window;
         this.pendingCgbMode0Interrupt = mem.pendingCgbMode0Interrupt;
         this.pendingCgbMode2Interrupt = mem.pendingCgbMode2Interrupt;
+        this.pendingCgbFrameMode2Interrupt = mem.pendingCgbFrameMode2Interrupt;
         this.retractableCgbMode2Interrupt = mem.retractableCgbMode2Interrupt;
         this.scxChangedSinceMode0Event = mem.scxChangedSinceMode0Event;
     }
@@ -1348,6 +1436,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                                        boolean previousMode2Window,
                                        boolean pendingCgbMode0Interrupt,
                                        boolean pendingCgbMode2Interrupt,
+                                       boolean pendingCgbFrameMode2Interrupt,
                                        boolean retractableCgbMode2Interrupt,
                                        boolean scxChangedSinceMode0Event) implements Memento<StatRegister> {
     }

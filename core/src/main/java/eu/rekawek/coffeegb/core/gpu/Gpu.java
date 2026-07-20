@@ -1076,8 +1076,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     /**
      * The mode-2 STAT source is a short pulse during the final machine cycle of the
-     * preceding line. At the frame boundary there is no visible preceding line, so the
-     * pulse is exposed during the first four ticks of line 0 instead.
+     * preceding line. At the frame boundary native CGB exposes it in line 153's tail;
+     * DMG and compatibility mode expose it during the first four ticks of line 0.
      */
     public boolean isMode2IntWindow() {
         if (!lcdEnabled) {
@@ -1085,9 +1085,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         return (line < 144 && ticksInLine >= getEarlyLineEdgeTick())
                 || (gbc && !speedMode.isDmgCompat()
-                && speedMode.getSpeedMode() == 2
                 && line == 153 && ticksInLine >= 454)
-                || (!firstLine && line == 0 && ticksInLine < 4);
+                || ((!gbc || speedMode.isDmgCompat())
+                && !firstLine && line == 0 && ticksInLine < 4);
     }
 
     /**
