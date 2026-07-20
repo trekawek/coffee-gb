@@ -1110,7 +1110,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return lcdEnabled && line < 144 && ticksInLine == getMode0InterruptTick() + 2;
     }
 
-    private int getMode0InterruptTick() {
+    int getMode0InterruptTick() {
         // The predictive edge is a CGB timing feature. DMG mode 0 follows the
         // completed pixel-transfer latch, including its sprite-fetch tail.
         return gbc ? mode0IntFrom : hblankIntFrom;
