@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.*;
 
@@ -116,6 +118,19 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // Normal-speed CGB applies an LCDC.5 rising edge after updating the PPU through
     // the edge's comparator dot, so that same tick cannot start the window.
     private boolean previousWindowDisplay;
+
+    // The timing skeleton consumes DMG window-control writes on the CPU edge, while the
+    // pixel-producing machine sees them after crossing the four-dot LCD output latch.
+    // A non-negative override preserves the old pixel-domain value until that crossing.
+    // Writes remain ordered because games can toggle LCDC.5 or rewrite WX more than once
+    // inside the crossing delay.
+    private int windowDisplayOverride = -1;
+
+    private final List<DelayedWindowWrite> pendingWindowDisplayWrites = new ArrayList<>();
+
+    private int windowXOverride = -1;
+
+    private final List<DelayedWindowWrite> pendingWindowXWrites = new ArrayList<>();
 
     // The CGB retains the old background shift register throughout StartWindowDraw's
     // six states. If LCDC.5 is cleared, the remaining states plot that register while
@@ -260,7 +275,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // any cancelled/serialized pending match from jumping the next line to X=159.
         windowPendingTicks = 0;
         windowActivatedThisLine = false;
-        previousWindowDisplay = lcdc.isWindowDisplay();
+        previousWindowDisplay = isWindowDisplay();
         cgbWindowStartTicks = 0;
         fifo.discardClearedBg();
         windowCatchUpPos = -1;
@@ -368,10 +383,91 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         setWindowYTriggered(false);
     }
 
+    public void scheduleWindowDisplayWrite(boolean windowDisplay, int delayDots) {
+        if (pendingWindowDisplayWrites.isEmpty()) {
+            windowDisplayOverride = isWindowDisplay() ? 1 : 0;
+        }
+        pendingWindowDisplayWrites.add(new DelayedWindowWrite(
+                windowDisplay ? 1 : 0, Math.max(0, delayDots)));
+    }
+
+    public void scheduleWindowXWrite(int windowX, int delayDots) {
+        if (pendingWindowXWrites.isEmpty()) {
+            windowXOverride = getWindowX();
+        }
+        pendingWindowXWrites.add(new DelayedWindowWrite(
+                windowX & 0xff, Math.max(0, delayDots)));
+    }
+
+    public void cancelDelayedWindowDisplayWrite() {
+        pendingWindowDisplayWrites.clear();
+        windowDisplayOverride = -1;
+    }
+
+    public void cancelDelayedWindowXWrite() {
+        pendingWindowXWrites.clear();
+        windowXOverride = -1;
+    }
+
+    public void advanceDelayedWindowWrites() {
+        for (int i = 0; i < pendingWindowDisplayWrites.size(); ) {
+            DelayedWindowWrite pending = pendingWindowDisplayWrites.get(i);
+            if (pending.remainingDots() == 0) {
+                boolean wasWindowDisplay = isWindowDisplay();
+                windowDisplayOverride = pending.value();
+                pendingWindowDisplayWrites.remove(i);
+                if (wasWindowDisplay && !isWindowDisplay() && windowBeingFetched) {
+                    disableWindowInsertionGlitch();
+                }
+            } else {
+                pendingWindowDisplayWrites.set(i, pending.advance());
+                i++;
+            }
+        }
+        if (pendingWindowDisplayWrites.isEmpty()) {
+            windowDisplayOverride = -1;
+        }
+
+        for (int i = 0; i < pendingWindowXWrites.size(); ) {
+            DelayedWindowWrite pending = pendingWindowXWrites.get(i);
+            if (pending.remainingDots() == 0) {
+                windowXOverride = pending.value();
+                pendingWindowXWrites.remove(i);
+            } else {
+                pendingWindowXWrites.set(i, pending.advance());
+                i++;
+            }
+        }
+        if (pendingWindowXWrites.isEmpty()) {
+            windowXOverride = -1;
+        }
+    }
+
+    public boolean hasDelayedWindowDisplayWrite() {
+        return !pendingWindowDisplayWrites.isEmpty();
+    }
+
+    boolean isWindowDisplay() {
+        return windowDisplayOverride >= 0
+                ? windowDisplayOverride != 0 : lcdc.isWindowDisplay();
+    }
+
+    public boolean isWindowDisplayVisible() {
+        return isWindowDisplay();
+    }
+
+    int getWindowX() {
+        return windowXOverride >= 0 ? windowXOverride : r.get(WX);
+    }
+
+    public int getWindowXVisible() {
+        return getWindowX();
+    }
+
     /** Legacy/direct sampler used by focused phase tests that do not own a GPU clock. */
     public void checkWindowY() {
         windowWy = r.get(WY);
-        if (!windowYTriggered && lcdc.isWindowDisplay() && r.get(LY) == r.get(WY)) {
+        if (!windowYTriggered && isWindowDisplay() && r.get(LY) == r.get(WY)) {
             setWindowYTriggered(true);
         }
     }
@@ -391,22 +487,22 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
         boolean earlyFrameCheckpoint = !gbc || speedMode.getSpeedMode() == 1;
         if (earlyFrameCheckpoint && line == 153 && ticksInLine == 454) {
-            setWindowYTriggered(lcdc.isWindowDisplay() && primaryWy == 0);
+            setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
         } else if (!earlyFrameCheckpoint && line == 0 && ticksInLine == 1) {
-            setWindowYTriggered(lcdc.isWindowDisplay() && primaryWy == 0);
+            setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
         }
         int currentLineCheckpoint = gbc
                 ? speedMode.getSpeedMode() == 1 ? 446 : 449
                 : 450;
         if (line < 143 && ticksInLine == currentLineCheckpoint
-                && lcdc.isWindowDisplay() && r.get(LY) == primaryWy) {
+                && isWindowDisplay() && r.get(LY) == primaryWy) {
             setWindowYTriggered(true);
         }
         int upcomingLineCheckpoint = gbc
                 ? speedMode.getSpeedMode() == 1 ? 450 : 453
                 : 454;
         if (line < 143 && ticksInLine == upcomingLineCheckpoint
-                && lcdc.isWindowDisplay() && r.get(LY) + 1 == primaryWy) {
+                && isWindowDisplay() && r.get(LY) + 1 == primaryWy) {
             setWindowYTriggered(true);
         }
     }
@@ -475,10 +571,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     @Override
     public boolean tick() {
         boolean windowDisplayRising = gbc
-                && lcdc.isWindowDisplay() && !previousWindowDisplay;
+                && isWindowDisplay() && !previousWindowDisplay;
         boolean windowEnabledOnThisTick = windowDisplayRising
                 && speedMode.getSpeedMode() == 1;
-        previousWindowDisplay = lcdc.isWindowDisplay();
+        previousWindowDisplay = isWindowDisplay();
         int currentScx = r.get(SCX);
         int fineScxAdvance = (currentScx & 7) - (previousScx & 7);
         if (lcdEnableFirstLine
@@ -574,7 +670,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             // hardware comparator saw the window still enabled at the match dot, but the
             // fetch never starts, so no side effects remain (wewx rows whose activation
             // dot collides with the LCDC.5-off pulse)
-            if (r.get(WX) == windowPendingWx && (gbc || lcdc.isWindowDisplay())) {
+            if (getWindowX() == windowPendingWx && (gbc || isWindowDisplay())) {
                 if (position != windowPendingPos) {
                     // roll back the pixel that popped during the pending tick: on
                     // hardware the FIFO was already cleared at the match dot
@@ -599,7 +695,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                     // the fetch restarted at the match dot on hardware: advance one
                     // state so its reads land on the original dots despite the
                     // pending tick; a re-activation's fetch starts one T-cycle later
-                    fetcher.advance(position, true, windowLineCounter, false);
+                    advanceFetcher(true, false);
                 }
                 windowActivatedThisLine = true;
             }
@@ -610,7 +706,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // plotting its retained background, while subsequent fetch states use the BG
         // source. DMG changes source at its next early tile-fetch state and retains its
         // separate restart/catch-up behaviour below.
-        if (gbc && window && !lcdc.isWindowDisplay()) {
+        if (gbc && window && !isWindowDisplay()) {
             if (speedMode.getSpeedMode() == 2 && (r.get(SCX) & 7) == 5
                     && ((entryDelay == 0 && fetcher.getState() == Fetcher.PUSH)
                     || (entryDelay == 4
@@ -625,7 +721,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             windowBeingFetched = false;
         } else if (!gbc
                 && window
-                && !lcdc.isWindowDisplay()
+                && !isWindowDisplay()
                 && objStep < 0
                 && fetcher.getState() <= Fetcher.GET_TILE_DATA_LOW_T2) {
             // the write disabling the window catches the fetch through GET_TILE_DATA_LOW_T2
@@ -645,9 +741,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // mid-line pulse: the window will "catch up" when it is re-enabled (see the
         // desync branch below). Only for regular WX>=7 positions so the discard-phase
         // WX=0..6 activation is untouched.
-        if (!gbc && !window && !lcdc.isWindowDisplay() && !windowActivatedThisLine
+        if (!gbc && !window && !isWindowDisplay() && !windowActivatedThisLine
                 && windowYTriggered) {
-            int wxNow = r.get(WX);
+            int wxNow = getWindowX();
             if (wxNow >= 7 && wxNow < 166 && !r.isWxJustChanged()
                     && wxNow == ((position + 7) & 0xff)) {
                 windowCatchUpPos = position;
@@ -659,11 +755,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // and the CGB also accepts WX=166. The window line counter increments at the
         // activation itself, once per line (mealybug m3_wx_*_change)
         if (!window
-                && lcdc.isWindowDisplay()
+                && isWindowDisplay()
                 && !windowEnabledOnThisTick
                 && (gbc || lcdc.isBgAndWindowDisplay())
                 && isWindowYMatch()) {
-            int wx = r.get(WX);
+            int wx = getWindowX();
             boolean activate;
             if (wx == 0) {
                 activate = (position >= -15 && position <= -7)
@@ -700,7 +796,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 fifo.clearBg();
                 cgbWindowStartTicks = gbc ? 6 : 0;
                 fetcher.startWindow();
-                fetcher.advance(position, true, windowLineCounter, false);
+                advanceFetcher(true, false);
                 windowActivatedThisLine = true;
             } else if (activate && windowPendingTicks == 0) {
                 windowPendingTicks = 1;
@@ -714,11 +810,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
         if (window
                 && !windowBeingFetched
-                && (!gbc || r.get(WX) == 0)
-                && lcdc.isWindowDisplay()
+                && (!gbc || getWindowX() == 0)
+                && isWindowDisplay()
                 && fetcher.getState() == Fetcher.GET_TILE_T1
                 && fifo.getLength() == 8
-                && r.get(WX) == ((position + 7) & 0xff)) {
+                && getWindowX() == ((position + 7) & 0xff)) {
             insertBgPixel = true;
         }
 
@@ -735,7 +831,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 int catchUpDots = 0;
                 for (int i = 0; i < 3 && position != 160; i++) {
                     renderPixelIfPossible();
-                    fetcher.advance(position, window, windowLineCounter, false);
+                    advanceFetcher(window, false);
                     catchUpDots++;
                 }
                 objectTimingPenalty -= catchUpDots;
@@ -766,7 +862,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 // the object fetch waits for the background fetcher's tile data; the wait
                 // already counts as "during object fetch" for the LCDC.1 conflict special
                 objWaiting = true;
-                fetcher.advance(position, window, windowLineCounter, true);
+                advanceFetcher(window, true);
                 objectTimingPenalty++;
                 return true;
             }
@@ -779,7 +875,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         objWaiting = false;
 
         renderPixelIfPossible();
-        fetcher.advance(position, window, windowLineCounter, false);
+        advanceFetcher(window, false);
         if (fetcher.takeWindowRefresh()) {
             wdwRefreshAge = 0;
             wdwRefreshPops = 0;
@@ -810,13 +906,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // match is within this many dots of the re-enable position (mealybug wewx)
     private static final int DESYNC_MAX_GAP = 3;
 
-
-
-
+    private void advanceFetcher(boolean fetchingWindow, boolean duringObjectFetch) {
+        fetcher.setWindowRegisterView(getWindowX(), isWindowDisplay());
+        fetcher.advance(position, fetchingWindow, windowLineCounter, duringObjectFetch);
+    }
 
     private void objTick() {
         if (objStep <= 1) {
-            fetcher.advance(position, window, windowLineCounter, true);
+            advanceFetcher(window, true);
         }
         if (objStep == 1) {
             SpritePosition sprite = sprites[spriteOrder[spriteHead]];
@@ -848,7 +945,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         boolean useClearedCgbBackground = gbc
                 && cgbWindowStartTicks > 0
-                && !lcdc.isWindowDisplay();
+                && !isWindowDisplay();
         if (gbc && cgbWindowStartTicks > 0 && !useClearedCgbBackground) {
             return;
         }
@@ -972,7 +1069,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowWy,
                 pendingWindowWy,
                 windowWyDelay,
-                windowWyOldOnWriteTick);
+                windowWyOldOnWriteTick,
+                windowDisplayOverride,
+                new ArrayList<>(pendingWindowDisplayWrites),
+                windowXOverride,
+                new ArrayList<>(pendingWindowXWrites));
     }
 
     @Override
@@ -1039,6 +1140,20 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         this.pendingWindowWy = mem.pendingWindowWy;
         this.windowWyDelay = mem.windowWyDelay;
         this.windowWyOldOnWriteTick = mem.windowWyOldOnWriteTick;
+        this.pendingWindowDisplayWrites.clear();
+        this.pendingWindowXWrites.clear();
+        if (mem.pendingWindowDisplayWrites != null) {
+            this.windowDisplayOverride = mem.windowDisplayOverride;
+            this.pendingWindowDisplayWrites.addAll(mem.pendingWindowDisplayWrites);
+        } else {
+            this.windowDisplayOverride = -1;
+        }
+        if (mem.pendingWindowXWrites != null) {
+            this.windowXOverride = mem.windowXOverride;
+            this.pendingWindowXWrites.addAll(mem.pendingWindowXWrites);
+        } else {
+            this.windowXOverride = -1;
+        }
         fetcher.setWindowYTriggered(windowYTriggered);
     }
 
@@ -1084,7 +1199,18 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             int windowWy,
             int pendingWindowWy,
             int windowWyDelay,
-            int windowWyOldOnWriteTick)
+            int windowWyOldOnWriteTick,
+            int windowDisplayOverride,
+            List<DelayedWindowWrite> pendingWindowDisplayWrites,
+            int windowXOverride,
+            List<DelayedWindowWrite> pendingWindowXWrites)
             implements Memento<PixelTransfer> {
+    }
+
+    private record DelayedWindowWrite(int value, int remainingDots) implements Serializable {
+
+        private DelayedWindowWrite advance() {
+            return new DelayedWindowWrite(value, remainingDots - 1);
+        }
     }
 }
