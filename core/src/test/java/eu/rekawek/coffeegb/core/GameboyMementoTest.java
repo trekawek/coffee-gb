@@ -127,7 +127,7 @@ public class GameboyMementoTest {
             assertFalse(gameboy.getCpu().isSpeedSwitching());
             assertEquals(0, gameboy.getAddressSpace().getByte(0xff55) & 0x80);
             assertTrue(gameboy.isSpeedSwitchTailActive());
-            assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS
+            assertEquals(Gameboy.HBLANK_SPEED_SWITCH_TAIL_TICKS
                             + Gameboy.PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS,
                     drainSpeedSwitchTail(gameboy));
         }
