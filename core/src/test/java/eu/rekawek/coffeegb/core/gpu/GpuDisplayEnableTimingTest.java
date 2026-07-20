@@ -255,6 +255,28 @@ public class GpuDisplayEnableTimingTest {
     }
 
     @Test
+    public void doubleSpeedDisabledWindowExposesModeZeroDuringModeZeroLookahead() {
+        Fixture fixture = new Fixture(2);
+        fixture.gpu.onSpeedSwitch();
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.gpu.setByte(0xff4a, 0);
+        fixture.gpu.setByte(0xff4b, 15);
+        fixture.gpu.setByte(0xff40, 0xb1);
+        fixture.advanceTo(1, 130);
+
+        fixture.gpu.setByte(0xff40, 0x91);
+        int modeImmediatelyBeforeModeZero = -1;
+        while (!fixture.gpu.isMode0IntWindow()) {
+            if (fixture.gpu.getMode() == Mode.HBlank) {
+                modeImmediatelyBeforeModeZero = fixture.gpu.getVisibleStatMode();
+            }
+            fixture.tick();
+        }
+
+        assertEquals(Mode.HBlank.ordinal(), modeImmediatelyBeforeModeZero);
+    }
+
+    @Test
     public void doubleSpeedMode2DispatchExtendsObjectFreeStatTailThroughHblankPlusThree() {
         Fixture fixture = new Fixture(2);
         fixture.advanceTo(1, 0);

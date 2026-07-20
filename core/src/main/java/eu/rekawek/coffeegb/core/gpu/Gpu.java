@@ -864,6 +864,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
+                && mode == Mode.HBlank
+                && ticksInLine < hblankIntFrom
+                && ticksInLine + 2 >= hblankIntFrom
+                && pixelMachine.hasActivatedWindowOnLine()
+                && !pixelMachine.isWindowActive()) {
+            // A disabled window still owns the dynamic prediction, but double-speed
+            // CPU reads release its mode-3 latch two dots before the mode-0 edge.
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 2
                 && ((mode == Mode.PixelTransfer && pixelTransferDone)
                 || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
             return Mode.PixelTransfer.ordinal();
