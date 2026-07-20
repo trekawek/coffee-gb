@@ -53,8 +53,13 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     static final int SPEED_SWITCH_TAIL_TICKS = 2;
 
     // Observed CGB timing uses the longer path on the other normal-speed
-    // CPU/PPU half-phase and when the HBlank VRAM-DMA mode latch is retained.
+    // CPU/PPU half-phase.
     static final int LONG_SPEED_SWITCH_TAIL_TICKS = 8;
+
+    // A retained HBlank VRAM-DMA mode latch takes an intermediate path on the
+    // short clock-mux half-phase. The ordinary long half-phase still wins when
+    // both conditions coincide.
+    static final int HBLANK_SPEED_SWITCH_TAIL_TICKS = 7;
 
     // The native CGB boot ROM hands control to the cartridge before its final
     // peripheral-clock handoff has propagated. The CPU is already at $0100 while
@@ -520,10 +525,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                         && !speedSwitchClockPhaseShifted
                         && gpu.isLcdEnabled()
                         && (gpu.getTicksInLine() & 3) == 0;
-                speedSwitchTailTicks = (hdma.holdsHblankSpeedSwitchTail()
-                        || longClockMuxPhase
-                        ? LONG_SPEED_SWITCH_TAIL_TICKS
-                        : SPEED_SWITCH_TAIL_TICKS)
+                speedSwitchTailTicks = baseSpeedSwitchTailTicks(longClockMuxPhase,
+                        hdma.holdsHblankSpeedSwitchTail())
                         + (speedMode.getSpeedMode() == 2 && speedSwitchClockPhaseShifted ? 1 : 0)
                         + (hdma.hasPendingHblankTransfer()
                         ? PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS : 0);
@@ -635,6 +638,15 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     boolean isSpeedSwitchTailActive() {
         return speedSwitchTailTicks > 0;
+    }
+
+    static int baseSpeedSwitchTailTicks(boolean longClockMuxPhase,
+                                        boolean hblankSpeedSwitchTail) {
+        return longClockMuxPhase
+                ? LONG_SPEED_SWITCH_TAIL_TICKS
+                : hblankSpeedSwitchTail
+                ? HBLANK_SPEED_SWITCH_TAIL_TICKS
+                : SPEED_SWITCH_TAIL_TICKS;
     }
 
     public SpeedMode getSpeedMode() {

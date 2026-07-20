@@ -16,7 +16,6 @@ hwtests/dma/hdma_late_m3halt_m2unhalt_ly_scx2_3_cgb04c_out02.gbc [CGB]	03
 hwtests/dma/hdma_late_m3speedchange_hdma5_scx2_2_cgb04c_out80.gbc [CGB]	FF
 hwtests/dma/hdma_late_m3speedchange_ly_scx1_1_cgb04c_out92.gbc [CGB]	93
 hwtests/dma/hdma_late_m3speedchange_ly_scx1_3_cgb04c_out92.gbc [CGB]	93
-hwtests/dma/hdma_late_m3speedchange_ly_scx1_5_cgb04c_out92.gbc [CGB]	93
 hwtests/dma/hdma_m0speedchange_late_m3wakeup_scx1_2_cgb04c_out00.gbc [CGB]	FF
 hwtests/dma/hdma_m0speedchange_late_m3wakeup_scx2_2_cgb04c_out00.gbc [CGB]	FF
 hwtests/dma/hdma_m3speedchange_late_m0wakeup_1_cgb04c_outFF.gbc [CGB]	00
