@@ -13,15 +13,12 @@ hwtests/dma/hdma_cycles_scx5_ds_1_cgb04c_out3.gbc [CGB]	0
 hwtests/dma/hdma_late_enable_lcdoffset3_2_cgb04c_out0.gbc [CGB]	1
 hwtests/dma/hdma_late_m3halt_m2unhalt_ly_scx1_3_cgb04c_out02.gbc [CGB]	03
 hwtests/dma/hdma_late_m3halt_m2unhalt_ly_scx2_3_cgb04c_out02.gbc [CGB]	03
-hwtests/dma/hdma_late_m3speedchange_hdma5_scx2_2_cgb04c_out80.gbc [CGB]	FF
 hwtests/dma/hdma_late_m3speedchange_ly_scx1_1_cgb04c_out92.gbc [CGB]	93
 hwtests/dma/hdma_late_m3speedchange_ly_scx1_3_cgb04c_out92.gbc [CGB]	93
 hwtests/dma/hdma_m0speedchange_late_m3wakeup_scx1_2_cgb04c_out00.gbc [CGB]	FF
 hwtests/dma/hdma_m0speedchange_late_m3wakeup_scx2_2_cgb04c_out00.gbc [CGB]	FF
 hwtests/dma/hdma_m3speedchange_late_m0wakeup_1_cgb04c_outFF.gbc [CGB]	00
 hwtests/dma/hdma_start_ly0_1_cgb04c_out0.gbc [CGB]	7
-hwtests/dma/hdma_start_scx2_1_cgb04c_out0.gbc [CGB]	1
-hwtests/dma/hdma_start_scx3_1_cgb04c_out0.gbc [CGB]	1
 hwtests/dma/hdma_transition_ei_halt_late_unhalt_ldaaimm_hdma_scx1_1_cgb04c_out00.gbc [CGB]	01
 hwtests/enable_display/frame1_ly_count_2_dmg08_cgb04c_out9A.gbc [CGB]	00
 hwtests/enable_display/frame1_m2stat_count_1_dmg08_cgb04c_out91.gbc [CGB]	01
@@ -41,7 +38,6 @@ hwtests/halt/lycirq_m2stat_1_dmg08_cgb04c_out2.gbc [CGB]	3
 hwtests/halt/m1int_ly_2_dmg08_out90_cgb04c_out91.gbc [CGB]	90
 hwtests/halt/noime_ifandie_m2int_m0stat_1_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/halt/noime_m2irq_m0stat_1_dmg08_cgb04c_out0.gbc [CGB]	2
-hwtests/irq_precedence/hdma_vs_m0_scx2_cgb04c_out0183.gbc [CGB]	1234
 hwtests/irq_precedence/late_m0irq_retrigger_2_dmg08_cgb04c_outE0.gbc [CGB]	E2
 hwtests/irq_precedence/late_m0irq_retrigger_2_dmg08_cgb04c_outE0.gbc [DMG]	E2
 hwtests/irq_precedence/late_m0irq_retrigger_ds_1_cgb04c_outE2.gbc [CGB]	E0

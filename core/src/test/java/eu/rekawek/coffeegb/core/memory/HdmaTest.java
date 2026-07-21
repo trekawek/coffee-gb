@@ -134,29 +134,54 @@ public class HdmaTest {
         fixture.hdma.advanceHblankRequest(false, false, false);
         fixture.hdma.advanceHblankRequest(false, false, true);
 
-        assertTrue(fixture.hdma.yieldsToInterruptEntry());
+        assertTrue(fixture.hdma.isInterruptEntryRequestOwner());
     }
 
     @Test
     public void fetchedInstructionOwnsARequestUntilItRetires() {
         Fixture fixture = synchronizedHblankRequest(1);
 
-        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+        fixture.hdma.resolveCpuRequest(true, false);
+        assertTrue(fixture.hdma.isCpuInstructionRequestOwner());
         var cpuOwnedRequest = fixture.hdma.saveToMemento();
-        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(false));
+        fixture.hdma.resolveCpuRequest(false, false);
+        assertTrue(fixture.hdma.isCpuInstructionRequestOwner());
 
-        fixture.hdma.onFetchedCpuInstructionFinished();
-        assertFalse(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+        fixture.hdma.onCpuRequestSlotRetired();
+        fixture.hdma.resolveCpuRequest(true, false);
+        assertFalse(fixture.hdma.isCpuInstructionRequestOwner());
 
         fixture.hdma.restoreFromMemento(cpuOwnedRequest);
-        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(false));
+        fixture.hdma.resolveCpuRequest(false, false);
+        assertTrue(fixture.hdma.isCpuInstructionRequestOwner());
+        fixture.hdma.onInterruptEntryAcceptedByCpu();
+        assertTrue(fixture.hdma.isInterruptEntryRequestOwner());
+    }
+
+    @Test
+    public void interruptPendingWhenCpuClaimsDoesNotSupersedeDma() {
+        Fixture fixture = synchronizedHblankRequest(1);
+        var unresolvedRequest = fixture.hdma.saveToMemento();
+
+        fixture.hdma.resolveCpuRequest(true, true);
+        assertTrue(fixture.hdma.isCpuInstructionRequestOwner());
+        var preexistingInterrupt = fixture.hdma.saveToMemento();
+
+        fixture.hdma.restoreFromMemento(unresolvedRequest);
+        fixture.hdma.resolveCpuRequest(true, false);
+        fixture.hdma.restoreFromMemento(preexistingInterrupt);
+        fixture.hdma.onInterruptEntryAcceptedByCpu();
+
+        assertFalse(fixture.hdma.isCpuInstructionRequestOwner());
+        assertFalse(fixture.hdma.isInterruptEntryRequestOwner());
     }
 
     @Test
     public void frameStartHblankRequestPreemptsAFetchedInstruction() {
         Fixture fixture = synchronizedHblankRequest(0);
 
-        assertFalse(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+        fixture.hdma.resolveCpuRequest(true, false);
+        assertFalse(fixture.hdma.isCpuInstructionRequestOwner());
     }
 
     @Test
@@ -164,7 +189,8 @@ public class HdmaTest {
         Fixture fixture = new Fixture();
         fixture.startTransfer(0x00);
 
-        assertTrue(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+        fixture.hdma.resolveCpuRequest(true, false);
+        assertTrue(fixture.hdma.isCpuInstructionRequestOwner());
     }
 
     @Test
@@ -173,7 +199,8 @@ public class HdmaTest {
 
         fixture.hdma.onStoppedCpuRequest();
 
-        assertFalse(fixture.hdma.yieldsToFetchedCpuInstruction(true));
+        fixture.hdma.resolveCpuRequest(true, false);
+        assertFalse(fixture.hdma.isCpuInstructionRequestOwner());
     }
 
     private Fixture synchronizedHblankRequest(int line) {
@@ -202,11 +229,11 @@ public class HdmaTest {
         var memento = fixture.hdma.saveToMemento();
 
         fixture.hdma.advanceHblankRequest(false, false, true);
-        assertTrue(fixture.hdma.yieldsToInterruptEntry());
+        assertTrue(fixture.hdma.isInterruptEntryRequestOwner());
 
         fixture.hdma.restoreFromMemento(memento);
         fixture.hdma.advanceHblankRequest(false, false, true);
-        assertTrue(fixture.hdma.yieldsToInterruptEntry());
+        assertTrue(fixture.hdma.isInterruptEntryRequestOwner());
     }
 
     @Test

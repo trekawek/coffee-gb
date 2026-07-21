@@ -553,38 +553,48 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 // rephase arbitration onto the CPU half-cycle. Let the opcode at
                 // that boundary finish before granting the pending DMA burst.
                 cpu.tick();
-                if (!cpu.hasInFlightInstructionForHdma()) {
+                if (!cpu.isCpuRequestSlotInProgressForHdma()) {
                     hdma.onSpeedSwitchWakeCpuInstructionFinished();
                 }
-            } else if (hdma.yieldsToInterruptEntry()
-                    && cpu.advancesInterruptEntryForHdma()) {
+            } else if (hdma.isInterruptEntryRequestOwner()
+                    && cpu.canAdvanceInterruptEntryForHdma()) {
                 // Once interrupt acceptance has won the arbitration slot, its stack
                 // pushes finish before HDMA takes the bus. If the request won during
                 // the retiring instruction, first advance its pending acceptance at
                 // the following opcode boundary. This ordering is visible when the
                 // DMA source is the top of that same stack.
                 cpu.tick();
-            } else if (hdma.yieldsToFetchedCpuInstruction(
-                    cpu.hasFetchedInstructionForHdma())) {
-                // A fetched instruction owns the CPU/HDMA arbitration slot until its
-                // next opcode boundary. Its final double-speed HBlank read also keeps
-                // the VRAM slot that was granted with the instruction.
-                gpu.setCpuRetiringInstructionForHdma(true);
-                try {
-                    cpu.tick();
-                } finally {
-                    gpu.setCpuRetiringInstructionForHdma(false);
-                }
-                if (!cpu.hasFetchedInstructionForHdma()) {
-                    hdma.onFetchedCpuInstructionFinished();
-                }
             } else {
-                // VRAM is not connected as a CGB VRAM-DMA source. Its first invalid
-                // read slots expose the instruction bus left at the CPU's next PC.
-                hdma.setCpuBusValue(cpu.getBusValueForHdma());
-                cpu.prefetchOpcodeForHdma();
-                if (hdma.tick() && hdma.yieldsCpuAfterBlock()) {
-                    cpu.releaseHdmaPrefetchedOpcode();
+                if (hdma.isCpuRequestUnresolved()) {
+                    boolean cpuClaimedSlot = cpu.claimCpuRequestSlotForHdma();
+                    hdma.resolveCpuRequest(cpuClaimedSlot,
+                            cpu.hasPendingInterruptForHdmaArbitration());
+                }
+                if (hdma.isCpuInstructionRequestOwner()) {
+                    // A CPU-fetched instruction owns the request slot until its next
+                    // opcode boundary. Its final double-speed HBlank read also keeps
+                    // the VRAM slot that was granted with the instruction.
+                    gpu.setCpuRetiringInstructionForHdma(true);
+                    try {
+                        cpu.tick();
+                    } finally {
+                        gpu.setCpuRetiringInstructionForHdma(false);
+                    }
+                    if (cpu.isInterruptEntryBusSequenceActiveForHdma()) {
+                        hdma.onInterruptEntryAcceptedByCpu();
+                    } else if (!cpu.isCpuRequestSlotInProgressForHdma()) {
+                        hdma.onCpuRequestSlotRetired();
+                    }
+                } else {
+                    // VRAM is not connected as a CGB VRAM-DMA source. Its first invalid
+                    // read slots expose the instruction bus left at the CPU's next PC.
+                    // A late arbitration fetch is already latched, so both operations
+                    // below reuse that sample without another opcode-bus read.
+                    hdma.setCpuBusValue(cpu.getBusValueForHdma());
+                    cpu.prefetchOpcodeForHdma();
+                    if (hdma.tick() && hdma.yieldsCpuAfterBlock()) {
+                        cpu.releaseHdmaPrefetchedOpcode();
+                    }
                 }
             }
         } else {
@@ -621,8 +631,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         // The HBlank request crosses from the PPU to the CPU arbiter while the CPU is
         // still allowed to finish the current machine cycle.
         hdma.advanceHblankRequest(cpu.hasInFlightWriteCycleForHdma(),
-                cpu.hasInFlightInstructionForHdma(),
-                cpu.winsInterruptEntryArbitrationForHdma());
+                cpu.isCpuRequestSlotInProgressForHdma(),
+                cpu.isInterruptClaimedAtHdmaSample());
         Mode mode = gpu.tick();
         statRegister.tick();
         cpu.onPeripheralsTicked();
@@ -635,6 +645,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     public Cpu getCpu() {
         return cpu;
+    }
+
+    Hdma getHdma() {
+        return hdma;
     }
 
     boolean isSpeedSwitchTailActive() {

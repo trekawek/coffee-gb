@@ -70,6 +70,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private boolean hdmaOpcodePrefetched;
 
+    private int hdmaArbitrationOpcode;
+
+    private boolean hdmaArbitrationOpcodeValid;
+
     private int haltPrefetchedOpcode;
 
     private boolean haltOpcodePrefetchValid;
@@ -163,6 +167,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (state == State.OPCODE || state == State.STOPPED) {
             if (interruptManager.isIme() && interruptManager.isInterruptRequested()) {
                 haltOpcodePrefetchValid = false;
+                hdmaArbitrationOpcodeValid = false;
                 if (state == State.STOPPED) {
                     display.enableLcd();
                 }
@@ -217,8 +222,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 case OPCODE:
                     boolean useHdmaHaltPrefetch = haltOpcodePrefetchValid;
                     boolean useSpeedSwitchPadding = speedSwitchPaddingReplayValid;
+                    boolean useHdmaArbitrationOpcode = hdmaArbitrationOpcodeValid;
                     haltOpcodePrefetchValid = false;
                     speedSwitchPaddingReplayValid = false;
+                    hdmaArbitrationOpcodeValid = false;
                     if (useHdmaHaltPrefetch) {
                         // A request acknowledged by HALT owns the bus before the held
                         // opcode may run, just like the ordinary DMA prefetch below.
@@ -229,6 +236,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
                             ? haltPrefetchedOpcode
                             : useSpeedSwitchPadding
                             ? speedSwitchPaddingOpcode
+                            : useHdmaArbitrationOpcode
+                            ? hdmaArbitrationOpcode
                             : addressSpace.getByte(pc);
                     accessedMemory = true;
                     if (opcode1 == 0xcb) {
@@ -533,6 +542,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (state == State.EXT_OPCODE || state == State.OPERAND || state == State.RUNNING) {
             return opcode1;
         }
+        if (hdmaArbitrationOpcodeValid) {
+            return hdmaArbitrationOpcode;
+        }
         return addressSpace.getByte(registers.getPC());
     }
 
@@ -547,8 +559,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
             return;
         }
         int pc = registers.getPC();
-        if (gpu != null && pc >= 0x8000 && pc < 0xa000
-                && gpu.getMode() == Mode.OamSearch && gpu.getTicksInLine() >= 79) {
+        if (isHdmaOpcodeFetchBlockedByPpu(pc)) {
             // At the closing mode-2 arbitration slot, the PPU has already claimed
             // VRAM for mode 3. A simultaneously started VRAM DMA wins before the
             // CPU can perform its speculative opcode fetch.
@@ -556,10 +567,14 @@ public class Cpu implements Serializable, Originator<Cpu> {
         }
 
         boolean useSpeedSwitchPadding = speedSwitchPaddingReplayValid;
+        boolean useHdmaArbitrationOpcode = hdmaArbitrationOpcodeValid;
         speedSwitchPaddingReplayValid = false;
+        hdmaArbitrationOpcodeValid = false;
         clearState();
         opcode1 = useSpeedSwitchPadding
                 ? speedSwitchPaddingOpcode
+                : useHdmaArbitrationOpcode
+                ? hdmaArbitrationOpcode
                 : addressSpace.getByte(pc);
         if (opcode1 == 0xcb || opcode1 == 0x10) {
             state = State.EXT_OPCODE;
@@ -578,6 +593,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
             haltBugMode = false;
         }
         hdmaOpcodePrefetched = true;
+    }
+
+    private boolean isHdmaOpcodeFetchBlockedByPpu(int pc) {
+        return gpu != null && pc >= 0x8000 && pc < 0xa000
+                && gpu.getMode() == Mode.OamSearch && gpu.getTicksInLine() >= 79;
     }
 
     /** Preserve HALT's sampled next opcode when HALT acknowledges an HDMA request. */
@@ -600,23 +620,59 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     /**
-     * Once an instruction's opcode fetch has won bus arbitration, the instruction is
-     * allowed to finish when an HBlank-DMA request arrives. An instruction that has not
-     * started yet remains at the opcode boundary until the burst completes.
+     * Whether the CPU side of an HDMA request slot is still in progress. Besides an
+     * already decoded instruction, the latter half of an opcode cycle owns the slot
+     * until the arbiter performs its one authoritative opcode fetch.
      */
-    public boolean hasInFlightInstructionForHdma() {
-        return hasFetchedInstructionForHdma()
+    public boolean isCpuRequestSlotInProgressForHdma() {
+        return isInstructionRetiringForHdma()
                 || (!hdmaOpcodePrefetched && state == State.OPCODE && clockCycle >= 2);
     }
 
-    /** Whether HDMA arrived after the current instruction's opcode was fetched. */
-    public boolean hasFetchedInstructionForHdma() {
+    /** Whether an ordinary CPU-fetched instruction is currently retiring. */
+    public boolean isInstructionRetiringForHdma() {
         return !hdmaOpcodePrefetched
                 && (state == State.EXT_OPCODE || state == State.OPERAND
                 || state == State.RUNNING);
     }
 
-    public boolean isInterruptEntryInFlightForHdma() {
+    /**
+     * Resolves the CPU side of a newly synchronized HDMA request. If the request
+     * reaches the latter half of an opcode cycle, this method samples that byte once
+     * without advancing PC or decoding it. The ordinary opcode boundary or DMA
+     * prefetch later consumes the same latch. HALT yields the slot; every other opcode
+     * keeps it. Interrupt ownership sampled before this point is resolved separately.
+     */
+    public boolean claimCpuRequestSlotForHdma() {
+        if (isInstructionRetiringForHdma()) {
+            return true;
+        }
+        if (hdmaOpcodePrefetched || state != State.OPCODE || clockCycle < 2) {
+            return false;
+        }
+        if (haltOpcodePrefetchValid) {
+            return haltPrefetchedOpcode != 0x76;
+        }
+        if (speedSwitchPaddingReplayValid) {
+            return speedSwitchPaddingOpcode != 0x76;
+        }
+        if (!hdmaArbitrationOpcodeValid) {
+            int pc = registers.getPC();
+            if (isHdmaOpcodeFetchBlockedByPpu(pc)) {
+                return false;
+            }
+            hdmaArbitrationOpcode = addressSpace.getByte(pc);
+            hdmaArbitrationOpcodeValid = true;
+        }
+        return hdmaArbitrationOpcode != 0x76;
+    }
+
+    /** Whether IE and IF already asserted a request when the HDMA slot was resolved. */
+    public boolean hasPendingInterruptForHdmaArbitration() {
+        return interruptManager.isInterruptRequested();
+    }
+
+    public boolean isInterruptEntryBusSequenceActiveForHdma() {
         return state == State.IRQ_WAIT_1 || state == State.IRQ_WAIT_2
                 || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2;
     }
@@ -627,16 +683,16 @@ public class Cpu implements Serializable, Originator<Cpu> {
      * has already been sampled even though the dispatch state is entered only when
      * that machine cycle completes.
      */
-    public boolean winsInterruptEntryArbitrationForHdma() {
-        return isInterruptEntryInFlightForHdma()
+    public boolean isInterruptClaimedAtHdmaSample() {
+        return isInterruptEntryBusSequenceActiveForHdma()
                 || ((state == State.OPCODE || state == State.RUNNING) && clockCycle == 2
                 && interruptManager.isIme() && interruptManager.isInterruptRequested());
     }
 
-    /** Continue the CPU side of a previously won interrupt/HDMA arbitration slot. */
-    public boolean advancesInterruptEntryForHdma() {
-        return isInterruptEntryInFlightForHdma()
-                || (state == State.OPCODE
+    /** Continue the CPU side of a previously sampled interrupt entry. */
+    public boolean canAdvanceInterruptEntryForHdma() {
+        return isInterruptEntryBusSequenceActiveForHdma()
+                || ((state == State.OPCODE || state == State.RUNNING)
                 && interruptManager.isIme() && interruptManager.isInterruptRequested());
     }
 
@@ -679,7 +735,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
         return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex,
                 state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
                 haltEntrySampleTicks,
-                hdmaOpcodePrefetched, haltPrefetchedOpcode, haltOpcodePrefetchValid,
+                hdmaOpcodePrefetched, hdmaArbitrationOpcode, hdmaArbitrationOpcodeValid,
+                haltPrefetchedOpcode, haltOpcodePrefetchValid,
                 speedSwitchPaddingOpcode, speedSwitchPaddingReplayValid,
                 speedSwitchTicks, phasedPpuInputHigh, fastPhasedPpuDispatch);
     }
@@ -705,6 +762,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
         this.haltBugMode = mem.haltBugMode;
         this.haltEntrySampleTicks = mem.haltEntrySampleTicks;
         this.hdmaOpcodePrefetched = mem.hdmaOpcodePrefetched;
+        this.hdmaArbitrationOpcode = mem.hdmaArbitrationOpcode;
+        this.hdmaArbitrationOpcodeValid = mem.hdmaArbitrationOpcodeValid;
         this.haltPrefetchedOpcode = mem.haltPrefetchedOpcode;
         this.haltOpcodePrefetchValid = mem.haltOpcodePrefetchValid;
         this.speedSwitchPaddingOpcode = mem.speedSwitchPaddingOpcode;
@@ -723,6 +782,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
                               int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
                               boolean haltBugMode, int haltEntrySampleTicks,
                               boolean hdmaOpcodePrefetched,
+                              int hdmaArbitrationOpcode, boolean hdmaArbitrationOpcodeValid,
                               int haltPrefetchedOpcode, boolean haltOpcodePrefetchValid,
                               int speedSwitchPaddingOpcode, boolean speedSwitchPaddingReplayValid,
                               int speedSwitchTicks, boolean phasedPpuInputHigh,

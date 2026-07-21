@@ -247,18 +247,63 @@ public class CpuPpuInterruptTimingTest {
         h.memory.setByte(PROGRAM + 1, 0x42);
 
         h.tickCpuTicks(2);
-        assertTrue(h.cpu.hasInFlightInstructionForHdma());
-        assertFalse(h.cpu.hasFetchedInstructionForHdma());
+        assertTrue(h.cpu.isCpuRequestSlotInProgressForHdma());
+        assertFalse(h.cpu.isInstructionRetiringForHdma());
 
         h.tickCpuTicks(2);
         assertEquals(Cpu.State.OPERAND, h.cpu.getState());
-        assertTrue(h.cpu.hasFetchedInstructionForHdma());
+        assertTrue(h.cpu.isInstructionRetiringForHdma());
 
         Harness prefetched = new Harness(true);
         prefetched.memory.setByte(PROGRAM, 0x06);
         prefetched.cpu.prefetchOpcodeForHdma();
         assertEquals(Cpu.State.OPERAND, prefetched.cpu.getState());
-        assertFalse(prefetched.cpu.hasFetchedInstructionForHdma());
+        assertFalse(prefetched.cpu.isInstructionRetiringForHdma());
+    }
+
+    @Test
+    public void hdmaArbitrationFetchIsTheOnlyOpcodeBusRead() {
+        for (int opcode : new int[] {0x04, 0x76}) { // INC B; HALT
+            Harness h = new Harness(true);
+            h.memory.setByte(PROGRAM, opcode);
+            h.tickCpuTicks(2);
+
+            assertEquals(opcode != 0x76, h.cpu.claimCpuRequestSlotForHdma());
+            assertEquals(Cpu.State.OPCODE, h.cpu.getState());
+            assertEquals(PROGRAM, h.cpu.getRegisters().getPC());
+            assertEquals(opcode, h.cpu.getBusValueForHdma());
+            h.cpu.prefetchOpcodeForHdma();
+
+            assertEquals(1, h.programReads);
+        }
+    }
+
+    @Test
+    public void hdmaArbitrationOpcodeLatchSurvivesMementoRestore() {
+        Harness h = new Harness(true);
+        h.memory.setByte(PROGRAM, 0xcb);
+        h.memory.setByte(PROGRAM + 1, 0x00); // RLC B
+        h.cpu.getRegisters().setB(0x80);
+        h.tickCpuTicks(2);
+
+        assertTrue(h.cpu.claimCpuRequestSlotForHdma());
+        var latched = h.cpu.saveToMemento();
+        h.cpu.tick();
+        h.cpu.restoreFromMemento(latched);
+
+        assertEquals(Cpu.State.OPCODE, h.cpu.getState());
+        assertEquals(PROGRAM, h.cpu.getRegisters().getPC());
+        assertEquals(0xcb, h.cpu.getBusValueForHdma());
+        assertEquals(1, h.programReads);
+
+        h.tickCpuTicks(2);
+        assertEquals(Cpu.State.EXT_OPCODE, h.cpu.getState());
+        assertEquals(PROGRAM + 1, h.cpu.getRegisters().getPC());
+        assertEquals(1, h.programReads);
+        h.tickMachineCycle();
+
+        assertEquals(1, h.cpu.getRegisters().getB());
+        assertEquals(PROGRAM + 2, h.cpu.getRegisters().getPC());
     }
 
     @Test
@@ -301,6 +346,8 @@ public class CpuPpuInterruptTimingTest {
 
         private final Cpu cpu;
 
+        private int programReads;
+
         private Harness(boolean gbc) {
             interrupts = new InterruptManager(gbc);
             speedMode = new SpeedMode(gbc);
@@ -321,6 +368,9 @@ public class CpuPpuInterruptTimingTest {
 
                 @Override
                 public int getByte(int address) {
+                    if (address == PROGRAM) {
+                        programReads++;
+                    }
                     return interrupts.accepts(address)
                             ? interrupts.getByte(address)
                             : memory.getByte(address);
