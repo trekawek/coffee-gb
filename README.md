@@ -105,9 +105,9 @@ btn_select=VK_SHIFT
 ## Compatibility
 
 Compatibility is treated as a continuously tested feature, not as a static game
-list. The test profiles exercise **5,721 cases from 13 suite families**. Every
+list. The test profiles exercise **5,727 cases from 16 suite families**. Every
 automated verdict is guarded: exact hardware results are required where Coffee
-GB matches them, while unresolved Gambatte outputs are pinned against regressions.
+GB matches them, while unresolved outputs are pinned against regressions.
 
 > **Pixel status:** both Acid2 references and all 24 Mealybug Tearoom reference
 > images are pixel-perfect.
@@ -123,11 +123,14 @@ GB matches them, while unresolved Gambatte outputs are pinned against regression
 | [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
 | [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 8 / 8 images have no out-of-tolerance pixels; ROM+RAM passes |
 | [DMG-ACID2](https://github.com/mattcurrie/dmg-acid2) and [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) | 2 | 2 / 2 are pixel-perfect |
+| [CGB-ACID-HELL](https://github.com/mattcurrie/cgb-acid-hell) | 1 | Current output is pinned exactly; 176 pixels differ from the reference |
+| [Strikethrough](https://github.com/Ashiepaws/strikethrough.gb) | 1 | Current output is pinned exactly; 7 pixels differ from the reference |
+| [CasualPokePlayer test ROMs](https://github.com/CasualPokePlayer/test-roms) | 4 | All four current outputs are pinned exactly; reference mismatches remain documented |
 | [Mealybug Tearoom](https://github.com/mattcurrie/mealybug-tearoom-tests) | 24 | 24 / 24 are pixel-perfect |
 | [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 513 | 482 / 482 machine-readable verdicts pass; 31 diagnostic ROMs have no verdict |
 | [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 221 / 221 hardware-capture verdicts match |
 | [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 17 / 17 pass verdicts match |
-| **Total** | **5,721** | **Every result is checked against hardware or an exact current baseline** |
+| **Total** | **5,727** | **Every result is checked against hardware or an exact current baseline** |
 
 \* Blargg's aggregate and individual checks overlap by design.
 
@@ -136,9 +139,10 @@ GB matches them, while unresolved Gambatte outputs are pinned against regression
 
 Every ROM with a machine-readable result must produce its documented pass value,
 match its selected raw hardware capture, or match an exact documented current
-output. Gambatte's 155 unresolved cases are likewise pinned to their complete
-hexadecimal output, so any change fails CI; a hardware-correct improvement removes
-the corresponding baseline entry.
+output. Gambatte's 155 unresolved cases are pinned to their complete hexadecimal
+output. The unresolved CGB-ACID-HELL, Strikethrough, and CasualPokePlayer screenshots
+are pinned pixel for pixel. Any change fails CI; a hardware-correct improvement
+removes the corresponding baseline entry.
 
 </details>
 

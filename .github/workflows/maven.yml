@@ -53,6 +53,12 @@ jobs:
             profiles: test-gambatte-hw
           - name: Acid2
             profiles: test-dmgacid2,test-cgbacid2
+          - name: CGB-ACID-HELL
+            profiles: test-cgbacidhell
+          - name: Strikethrough
+            profiles: test-strikethrough
+          - name: CasualPokePlayer
+            profiles: test-casualpokeplayer
           - name: Mealybug Tearoom
             profiles: test-mealybug
           - name: GBMicrotest
