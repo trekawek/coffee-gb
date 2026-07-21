@@ -1,10 +1,6 @@
 # Exact Coffee GB outputs for cases that do not yet match the hardware verdict.
 # Format: archive path [model]<TAB>current hexadecimal output
 # Remove an entry when the emulator is fixed to produce the filename's canonical result.
-hwtests/display_startstate/stat_1_cgb04c_out87.gbc [CGB]	84
-hwtests/display_startstate/stat_scx2_1_cgb04c_out87.gbc [CGB]	84
-hwtests/display_startstate/stat_scx3_1_cgb04c_out87.gbc [CGB]	84
-hwtests/display_startstate/stat_scx5_1_cgb04c_out87.gbc [CGB]	84
 hwtests/dma/gdma_cycles_2xshort_ds_2_cgb04c_out0.gbc [CGB]	3
 hwtests/dma/gdma_cycles_2xshort_scx5_ds_2_cgb04c_out0.gbc [CGB]	3
 hwtests/dma/gdma_cycles_long_scx3_2_cgb04c_out0.gbc [CGB]	3
@@ -18,23 +14,14 @@ hwtests/dma/hdma_late_m3speedchange_ly_scx1_3_cgb04c_out92.gbc [CGB]	93
 hwtests/dma/hdma_m0speedchange_late_m3wakeup_scx1_2_cgb04c_out00.gbc [CGB]	FF
 hwtests/dma/hdma_m0speedchange_late_m3wakeup_scx2_2_cgb04c_out00.gbc [CGB]	FF
 hwtests/dma/hdma_m3speedchange_late_m0wakeup_1_cgb04c_outFF.gbc [CGB]	00
-hwtests/dma/hdma_start_ly0_1_cgb04c_out0.gbc [CGB]	7
 hwtests/dma/hdma_transition_ei_halt_late_unhalt_ldaaimm_hdma_scx1_1_cgb04c_out00.gbc [CGB]	01
-hwtests/enable_display/frame1_ly_count_2_dmg08_cgb04c_out9A.gbc [CGB]	00
-hwtests/enable_display/frame1_m2stat_count_1_dmg08_cgb04c_out91.gbc [CGB]	01
-hwtests/enable_display/ly0_late_scx7_m3stat_scx1_2_dmg08_cgb04c_out84.gbc [CGB]	87
 hwtests/halt/ifandie_ei_halt_m2int_m0stat_1_dmg08_cgb04c_out0.gbc [CGB]	2
-hwtests/halt/late_m0int_halt_m0stat_scx2_3a_dmg08_cgb04c_out0.gbc [CGB]	2
-hwtests/halt/late_m0int_halt_m0stat_scx2_3a_dmg08_cgb04c_out0.gbc [DMG]	2
 hwtests/halt/late_m0int_halt_m0stat_scx3_2b_dmg08_cgb04c_out2.gbc [DMG]	0
-hwtests/halt/late_m0int_halt_m0stat_scx3_3a_dmg08_cgb04c_out0.gbc [DMG]	2
-hwtests/halt/late_m0int_halt_m0stat_scx3_3b_dmg08_out0_cgb04c_out2.gbc [DMG]	2
 hwtests/halt/late_m0irq_halt_m0stat_scx2_4a_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/halt/late_m0irq_halt_m0stat_scx2_4b_dmg08_cgb04c_out2.gbc [DMG]	0
 hwtests/halt/late_m0irq_halt_m0stat_scx3_2b_dmg08_cgb04c_out2.gbc [DMG]	0
 hwtests/halt/late_m0irq_halt_m0stat_scx3_3b_dmg08_cgb04c_out2.gbc [DMG]	0
 hwtests/halt/late_m0irq_halt_m0stat_scx3_4a_dmg08_cgb04c_out0.gbc [CGB]	2
-hwtests/halt/lycirq_m2stat_1_dmg08_cgb04c_out2.gbc [CGB]	3
 hwtests/halt/m1int_ly_2_dmg08_out90_cgb04c_out91.gbc [CGB]	90
 hwtests/halt/noime_ifandie_m2int_m0stat_1_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/halt/noime_m2irq_m0stat_1_dmg08_cgb04c_out0.gbc [CGB]	2
@@ -47,14 +34,11 @@ hwtests/lcd_offset/offset1_lyc99int_m2irq_count_2_cgb04c_out90.gbc [CGB]	00
 hwtests/lcd_offset/offset1_lyc99int_m3stat_count_ds_2_cgb04c_out90.gbc [CGB]	00
 hwtests/lcd_offset/offset2_lyc99int_m2irq_count_2_cgb04c_out90.gbc [CGB]	00
 hwtests/lcd_offset/offset3_lyc99int_m2irq_count_2_cgb04c_out91.gbc [CGB]	00
-hwtests/ly0/lycint152_ly153_3_dmg08_cgb04c_out00.gbc [CGB]	99
 hwtests/ly0/lycint152_lyc153flag_3_dmg08_cgb04c_outC1.gbc [CGB]	C5
-hwtests/ly0/lycint152_m2stat_1_dmg08_cgb04c_outC2.gbc [CGB]	C3
 hwtests/lyc0int_m0irq/lyc0int_m0irq_ds_2_cgb04c_out2.gbc [CGB]	0
 hwtests/lyc153int_m2irq/lyc153int_m2irq_late_retrigger_2_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/lyc153int_m2irq/lyc153int_m2irq_late_retrigger_2_dmg08_cgb04c_out0.gbc [DMG]	2
 hwtests/lyc153int_m2irq/lyc153int_m2irq_late_retrigger_ds_2_cgb04c_out0.gbc [CGB]	2
-hwtests/lycm2int/lyc0m2int_m2irq_2_dmg08_cgb04c_out2.gbc [CGB]	0
 hwtests/m0int_m0stat/m0int_m0stat_ds_2_cgb04c_out2.gbc [CGB]	0
 hwtests/m0int_m0stat/m0int_m0stat_scx3_2_dmg08_cgb04c_out2.gbc [CGB]	0
 hwtests/m0int_m0stat/m0int_m0stat_scx5_ds_2_cgb04c_out2.gbc [CGB]	0
@@ -93,7 +77,6 @@ hwtests/m2int_m2irq/m2int_m2irq_ds_1_cgb04c_out1.gbc [CGB]	3
 hwtests/m2int_m2irq/m2int_m2irq_ifw_ds_1_cgb04c_out2.gbc [CGB]	0
 hwtests/m2int_m2irq/m2int_m2irq_late_retrigger_2_dmg08_cgb04c_out0.gbc [DMG]	2
 hwtests/m2int_m2irq/m2int_m2irq_late_retrigger_ds_1_cgb04c_out2.gbc [CGB]	0
-hwtests/m2int_m2stat/m2int_m2stat_1_dmg08_cgb04c_out2.gbc [CGB]	3
 hwtests/m2int_m2stat/m2int_m2stat_ds_1_cgb04c_out2.gbc [CGB]	3
 hwtests/m2int_m2stat/m2int_scx4_m2stat_ds_1_cgb04c_out2.gbc [CGB]	3
 hwtests/miscmstatirq/lycflag_statwirq_2_dmg08_out2.gb [DMG]	0
@@ -104,24 +87,14 @@ hwtests/miscmstatirq/m2statwirq_trigger_00_df_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/miscmstatirq/m2statwirq_trigger_00_ff_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/miscmstatirq/m2statwirq_trigger_20_df_dmg08_cgb04c_out0.gbc [CGB]	2
 hwtests/miscmstatirq/m2statwirq_trigger_20_ff_dmg08_cgb04c_out0.gbc [CGB]	2
-hwtests/oamdma/late_sp39x_4_cgb04c_out3.gbc [CGB]	0
-hwtests/oamdma/oamdma_late_speedchange_stat_2_cgb04c_out3.gbc [CGB]	0
-hwtests/oamdma/oamdma_srcE000_readFE00_dmg08_out2_cgb04c_out0.gbc [CGB]	2
 hwtests/scx_during_m3/scx_m3_extend_ds_2_cgb04c_out0.gbc [CGB]	3
 hwtests/sprites/10spritesPrLine_10xposA6_m0irq_2_dmg08_cgb04c_out2.gbc [DMG]	0
 hwtests/sprites/10spritesPrLine_10xposA7_m0irq_2_dmg08_cgb04c_out2.gbc [DMG]	0
-hwtests/sprites/1spritesPrLine_scx1_offset7_m3stat_2_dmg08_cgb04c_out0.gbc [DMG]	3
-hwtests/sprites/1spritesPrLine_xpos01_scx4_m3stat_2_dmg08_cgb04c_out0.gbc [DMG]	3
-hwtests/sprites/1spritesPrLine_xpos09_scx4_m3stat_2_dmg08_cgb04c_out0.gbc [DMG]	3
 hwtests/sprites/space/10spritesPrLine_late_scx4_ds_1_cgb04c_out0.gbc [CGB]	3
 hwtests/sprites/space/10spritesPrLine_wx0_m3stat_ds_2_cgb04c_out0.gbc [CGB]	3
 hwtests/sprites/space/10spritesPrLine_wx1_m3stat_ds_2_cgb04c_out0.gbc [CGB]	3
 hwtests/sprites/space/10spritesPrLine_wx2_m3stat_ds_2_cgb04c_out0.gbc [CGB]	3
 hwtests/sprites/space/9pos8_wx08_scx5_m3stat_ds_2_cgb04c_out0.gbc [CGB]	3
-hwtests/vramw_m3end/vramw_m3end_2_dmg08_cgb04c_out7.gbc [CGB]	0
-hwtests/vramw_m3end/vramw_m3end_4_dmg08_cgb04c_out0.gbc [CGB]	1
-hwtests/vramw_m3end/vramw_m3end_scx3_2_dmg08_cgb04c_out7.gbc [CGB]	0
-hwtests/vramw_m3end/vramw_m3end_scx3_4_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/arg/late_wy_FFto2_ly2_scx5_3_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_disable_early_scx03_wx12_2_dmg08_out0_cgb04c_out3.gbc [DMG]	3
 hwtests/window/late_disable_late_scx03_wx12_1_dmg08_cgb04c_out0.gbc [DMG]	3

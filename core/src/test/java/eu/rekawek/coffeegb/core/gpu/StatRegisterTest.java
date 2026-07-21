@@ -101,6 +101,17 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void cgbLcdRestartCpuPhaseSkipsTheTransientLine153Latch() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.advanceTo(153, 0);
+
+        assertEquals(153, fixture.gpu.getVisibleLy());
+        assertEquals(0, fixture.readLy());
+    }
+
+    @Test
     public void rephasedNormalSpeedCgbCpuReadSeesLyRippleAtLineTail() {
         Fixture fixture = new Fixture(true);
         fixture.gpu.onSpeedSwitch();
@@ -325,10 +336,35 @@ public class StatRegisterTest {
         fixture.advanceTo(1, 78);
 
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
-        fixture.stat.preCpuTick();
+        fixture.stat.captureCpuStatReadPhase();
         assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
         fixture.tick();
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void cgbOamDmaObjectLineCpuReadRetainsMode3AtTheMode0Edge() {
+        Fixture fixture = new Fixture(true);
+        for (int i = 0; i < 9; i++) {
+            fixture.oam.setByte(0xfe00 + i * 4, 16);
+            fixture.oam.setByte(0xfe01 + i * 4, 160);
+        }
+        fixture.advanceTo(1, 0);
+        while (fixture.gpu.getMode() != Mode.HBlank
+                || !fixture.gpu.isMode0IntWindow()) {
+            fixture.tick();
+        }
+
+        assertEquals(Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+        fixture.dma.setByte(0xff46, 0x12);
+        for (int i = 0; i < 8; i++) {
+            fixture.dma.tick();
+        }
+        assertTrue(fixture.dma.ownsOamForPpu());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
     }
 
     @Test
@@ -356,6 +392,35 @@ public class StatRegisterTest {
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
         fixture.tick();
         assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void lcdRestartedCgbLineZeroRetainsBootPhaseMode3TailUntilRephased() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(0xff40, 0x11);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.advanceTo(1, 0);
+        fixture.advanceTo(0, 254);
+
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+
+        Fixture interruptSourceSelected = new Fixture(true);
+        interruptSourceSelected.gpu.setByte(0xff40, 0x11);
+        interruptSourceSelected.gpu.setByte(0xff40, 0x91);
+        interruptSourceSelected.stat.setByte(StatRegister.ADDRESS, 0x20);
+        interruptSourceSelected.advanceTo(1, 0);
+        interruptSourceSelected.advanceTo(0, 254);
+        assertEquals(Mode.HBlank.ordinal(), interruptSourceSelected.readStatMode());
+
+        Fixture rephased = new Fixture(true);
+        rephased.gpu.setByte(0xff40, 0x11);
+        rephased.gpu.setByte(0xff40, 0x91);
+        rephased.gpu.onSpeedSwitch();
+        rephased.advanceTo(1, 0);
+        rephased.advanceTo(0, 254);
+        assertEquals(Mode.HBlank.ordinal(), rephased.readStatMode());
     }
 
     @Test
@@ -411,6 +476,27 @@ public class StatRegisterTest {
         assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
         fixture.stat.preCpuTick();
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.stat.captureCpuStatReadPhase();
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void cgbDoubleSpeedObjectTailDoesNotUseACpuModeOverride() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.oam.setByte(0xfe00, 16);
+        fixture.oam.setByte(0xfe01, 16);
+        fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 0);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 260);
+
+        assertTrue(fixture.gpu.hasObjectsOnLine());
+        assertEquals(Mode.HBlank, fixture.gpu.getMode());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        assertEquals(-1, fixture.gpu.getCpuReadStatModeOverride());
+
+        fixture.tick();
+        assertEquals(-1, fixture.gpu.getCpuReadStatModeOverride());
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
     }
 
     @Test
@@ -532,6 +618,21 @@ public class StatRegisterTest {
         assertEquals(0x04, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
         fixture.tick();
         assertEquals(451, fixture.gpu.getTicksInLine());
+        assertEquals(0, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
+    }
+
+    @Test
+    public void cgbLcdRestartGridReleasesLaterCoincidenceAtStoredDot452() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.advanceTo(1, 0);
+        fixture.advanceTo(0, 451);
+
+        assertEquals(0x04, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
+        fixture.tick();
+        assertEquals(452, fixture.gpu.getTicksInLine());
         assertEquals(0, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
     }
 
@@ -874,6 +975,28 @@ public class StatRegisterTest {
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
         assertFalse(fixture.interrupts.isInterruptRequested());
         assertFalse(fixture.interrupts.isInterruptRequestedForHalt());
+    }
+
+    @Test
+    public void firstPostFrameLyc0M2HandoffPublishesBeforeCpuIo() {
+        Fixture fixture = pendingFrameLyc0M2Event(0x60, 0, 1);
+
+        fixture.stat.publishFrameLyc0Mode2HandoffBeforeCpu();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertFalse(fixture.interrupts.isInterruptRequested());
+        assertFalse(fixture.interrupts.isInterruptRequestedForHalt());
+    }
+
+    @Test
+    public void ordinaryM2HandoffsDoNotPublishEarlyBeforeCpuIo() {
+        Fixture m2Only = pendingFrameLyc0M2Event(0x20, 0, 1);
+        m2Only.stat.publishFrameLyc0Mode2HandoffBeforeCpu();
+        assertEquals(0, m2Only.lcdInterruptFlag());
+
+        Fixture ordinaryLine = pendingFrameLyc0M2Event(0x60, 4, 5);
+        ordinaryLine.stat.publishFrameLyc0Mode2HandoffBeforeCpu();
+        assertEquals(0, ordinaryLine.lcdInterruptFlag());
     }
 
     @Test
@@ -1238,6 +1361,21 @@ public class StatRegisterTest {
         return fixture;
     }
 
+    private static Fixture pendingFrameLyc0M2Event(int stat, int lyc, int line) {
+        Fixture fixture = new Fixture(true);
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), lyc);
+        fixture.stat.setByte(StatRegister.ADDRESS, stat);
+        fixture.advanceTo(line, 447);
+        fixture.clearInterrupts();
+        fixture.tick();
+        fixture.tick();
+        fixture.tick();
+        assertEquals(450, fixture.gpu.getTicksInLine());
+        assertEquals(0, fixture.lcdInterruptFlag());
+        return fixture;
+    }
+
     private static Fixture publishedDoubleSpeedCgbM2Event() {
         Fixture fixture = new Fixture(true, true);
         fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
@@ -1305,6 +1443,8 @@ public class StatRegisterTest {
 
         private final Ram oam = new Ram(0xfe00, 0xa0);
 
+        private final Dma dma;
+
         private final Gpu gpu;
 
         private Fixture() {
@@ -1324,9 +1464,10 @@ public class StatRegisterTest {
                     return 2;
                 }
             } : new SpeedMode(gbc);
+            dma = new Dma(new Ram(0, 0x10000), oam, speedMode);
             gpu = new Gpu(
                     new Display(gbc),
-                    new Dma(new Ram(0, 0x10000), oam, speedMode),
+                    dma,
                     oam,
                     new VRamTransfer(NULL_EVENT_BUS),
                     stat,

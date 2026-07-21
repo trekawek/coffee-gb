@@ -137,19 +137,33 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
                     currentByte++;
                 }
                 if (transferClocks >= 648) {
-                    transferInProgress = false;
-                    restarted = false;
-                    ppuOamOwnedThroughRestart = false;
-                    ticks = 0;
-                    transferClocks = 0;
-                    currentByte = 0;
-                    pendingInterruptWriteByte = -1;
+                    finishTransfer();
                     break;
                 }
             }
         }
         updatePpuOamOwnership();
         vramDmaBusAddress = -1;
+    }
+
+    private void finishTransfer() {
+        transferInProgress = false;
+        restarted = false;
+        ppuOamOwnedThroughRestart = false;
+        ticks = 0;
+        transferClocks = 0;
+        currentByte = 0;
+        pendingInterruptWriteByte = -1;
+    }
+
+    /**
+     * A speed switch disconnects an OAM-DMA transfer whose final copy edge has
+     * completed, without waiting for the ordinary four-clock release tail.
+     */
+    public void onSpeedSwitch() {
+        if (transferInProgress && currentByte >= 0xa0) {
+            finishTransfer();
+        }
     }
 
     public void setVramDmaBusSample(Hdma.SourceBusSample sample) {

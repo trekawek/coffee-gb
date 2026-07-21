@@ -159,6 +159,21 @@ public class HdmaTest {
     }
 
     @Test
+    public void reportsTheCpuEdgeImmediatelyBeforeHblankArbitration() {
+        Fixture fixture = new Fixture();
+        fixture.hdma.onLcdSwitch(true);
+        fixture.startTransfer(0x80);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+
+        fixture.advanceHblankRequest(1);
+        assertFalse(fixture.hdma.isHblankRequestArrivingAfterCpuTick());
+        fixture.advanceHblankRequest(1);
+        assertTrue(fixture.hdma.isHblankRequestArrivingAfterCpuTick());
+        fixture.advanceHblankRequest(1);
+        assertFalse(fixture.hdma.isHblankRequestArrivingAfterCpuTick());
+    }
+
+    @Test
     public void interruptPendingWhenCpuClaimsDoesNotSupersedeDma() {
         Fixture fixture = synchronizedHblankRequest(1);
         var unresolvedRequest = fixture.hdma.saveToMemento();

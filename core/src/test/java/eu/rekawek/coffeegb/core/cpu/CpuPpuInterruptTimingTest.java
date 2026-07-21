@@ -227,6 +227,31 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
+    public void imeEnabledInterruptInHaltEntryWindowPushesTheHaltAddress() {
+        for (boolean gbc : new boolean[] {false, true}) {
+            Harness h = new Harness(gbc);
+            h.enable(LCDC);
+            h.interrupts.enableInterrupts(false);
+            h.enterHalt();
+
+            h.cpu.tick();
+            h.interrupts.requestInterrupt(LCDC);
+            h.cpu.onPeripheralsTicked();
+
+            assertEquals(Cpu.State.OPCODE, h.cpu.getState());
+            assertEquals(PROGRAM, h.cpu.getRegisters().getPC());
+            h.tickCpuTicks(2);
+            assertEquals(Cpu.State.OPCODE, h.cpu.getState());
+            h.cpu.tick();
+            assertEquals(gbc ? Cpu.State.IRQ_PUSH_1 : Cpu.State.IRQ_WAIT_2,
+                    h.cpu.getState());
+            h.advanceToIrqJump();
+            assertEquals(0x01, h.memory.getByte(0xfffd));
+            assertEquals(0x00, h.memory.getByte(0xfffc));
+        }
+    }
+
+    @Test
     public void hdmaDoesNotPrefetchPastAnEnabledPendingInterrupt() {
         Harness h = new Harness(true);
         h.memory.setByte(PROGRAM, 0x00);

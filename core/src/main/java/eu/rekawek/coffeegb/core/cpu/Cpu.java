@@ -354,8 +354,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
                             return;
                         } else {
                             state = State.HALTED;
-                            haltEntrySampleTicks = interruptManager.isIme()
-                                    ? 0 : speedMode.isGbc() ? 2 : 4;
+                            haltEntrySampleTicks = speedMode.isGbc() ? 2 : 4;
                             return;
                         }
                     }
@@ -414,16 +413,21 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (haltEntrySampleTicks <= 0) {
             return;
         }
-        if (state == State.HALTED && !interruptManager.isIme()
-                && interruptManager.isInterruptRequested()) {
+        if (state == State.HALTED && interruptManager.isInterruptRequested()) {
             haltEntrySampleTicks = 0;
             state = State.OPCODE;
-            haltBugMode = true;
-            // The request reached HALT after the ordinary CPU sample. Rephase the
-            // resumed bus clock onto that asynchronous edge.
-            clockCycle++;
-            if (timer != null) {
-                timer.onHaltBug();
+            if (interruptManager.isIme()) {
+                // The enabled request is accepted, but the asynchronous edge makes
+                // interrupt entry push HALT's address so RETI executes it again.
+                registers.setPC((registers.getPC() - 1) & 0xffff);
+            } else {
+                haltBugMode = true;
+                // The disabled request resumes opcode fetch on the asynchronous
+                // edge, producing the ordinary halt-bug bus rephase.
+                clockCycle++;
+                if (timer != null) {
+                    timer.onHaltBug();
+                }
             }
         } else {
             haltEntrySampleTicks--;
