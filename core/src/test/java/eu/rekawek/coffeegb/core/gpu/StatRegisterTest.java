@@ -461,6 +461,18 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void rephasedCpuReadSeesMode3AtDot74Boundary() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 73);
+
+        assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(74, fixture.gpu.getTicksInLine());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
     public void speedSwitchCompletionRetainsOldStatPhaseUntilNextLine() {
         Fixture fixture = new Fixture(true);
         fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 2);
