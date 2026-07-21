@@ -43,19 +43,10 @@ hwtests/irq_precedence/late_m0irq_retrigger_2_dmg08_cgb04c_outE0.gbc [DMG]	E2
 hwtests/irq_precedence/late_m0irq_retrigger_ds_1_cgb04c_outE2.gbc [CGB]	E0
 hwtests/irq_precedence/late_m0irq_retrigger_scx1_2_dmg08_cgb04c_outE0.gbc [CGB]	E2
 hwtests/irq_precedence/late_m0irq_retrigger_scx1_2_dmg08_cgb04c_outE0.gbc [DMG]	E2
-hwtests/lcd_offset/offset1_lyc8fint_m1stat_ds_1_cgb04c_outC0.gbc [CGB]	C4
-hwtests/lcd_offset/offset1_lyc99int_m0stat_count_scx2_2_cgb04c_out90.gbc [CGB]	00
-hwtests/lcd_offset/offset1_lyc99int_m0stat_count_scx3_2_cgb04c_out90.gbc [CGB]	00
 hwtests/lcd_offset/offset1_lyc99int_m2irq_count_2_cgb04c_out90.gbc [CGB]	00
 hwtests/lcd_offset/offset1_lyc99int_m3stat_count_ds_2_cgb04c_out90.gbc [CGB]	00
-hwtests/lcd_offset/offset2_lyc8fint_m1irq_1_cgb04c_outE0.gbc [CGB]	E2
-hwtests/lcd_offset/offset2_lyc8fint_m1stat_1_cgb04c_outC4.gbc [CGB]	C1
 hwtests/lcd_offset/offset2_lyc99int_m2irq_count_2_cgb04c_out90.gbc [CGB]	00
-hwtests/lcd_offset/offset3_lyc8fint_m1stat_1_cgb04c_outC0.gbc [CGB]	C1
-hwtests/lcd_offset/offset3_lyc99int_m0stat_count_scx0_2_cgb04c_out90.gbc [CGB]	00
-hwtests/lcd_offset/offset3_lyc99int_m0stat_count_scx1_2_cgb04c_out90.gbc [CGB]	00
 hwtests/lcd_offset/offset3_lyc99int_m2irq_count_2_cgb04c_out91.gbc [CGB]	00
-hwtests/lcd_offset/offset3_lyc99int_m3stat_count_2_cgb04c_out90.gbc [CGB]	00
 hwtests/ly0/lycint152_ly153_3_dmg08_cgb04c_out00.gbc [CGB]	99
 hwtests/ly0/lycint152_lyc153flag_3_dmg08_cgb04c_outC1.gbc [CGB]	C5
 hwtests/ly0/lycint152_m2stat_1_dmg08_cgb04c_outC2.gbc [CGB]	C3
@@ -73,7 +64,6 @@ hwtests/m1/lyc143_late_m0enable_lycdisable_2_dmg08_cgb04c_out1.gbc [DMG]	3
 hwtests/m1/lycint143_m1irq_ifw_ds_2_cgb04c_out0.gbc [CGB]	1
 hwtests/m1/lycint143_m1irq_late_retrigger_2_dmg08_cgb04c_out1.gbc [DMG]	3
 hwtests/m1/lycint143_m1irq_late_retrigger_ds_1_cgb04c_out3.gbc [CGB]	1
-hwtests/m1/lycint_m1stat_1_dmg08_cgb04c_out0.gbc [CGB]	1
 hwtests/m1/lycint_vblankirq_late_retrigger_2_dmg08_cgb04c_out0.gbc [CGB]	1
 hwtests/m1/lycint_vblankirq_late_retrigger_2_dmg08_cgb04c_out0.gbc [DMG]	1
 hwtests/m1/lycint_vblankirq_late_retrigger_ds_2_cgb04c_out0.gbc [CGB]	1
@@ -132,7 +122,6 @@ hwtests/vramw_m3end/vramw_m3end_2_dmg08_cgb04c_out7.gbc [CGB]	0
 hwtests/vramw_m3end/vramw_m3end_4_dmg08_cgb04c_out0.gbc [CGB]	1
 hwtests/vramw_m3end/vramw_m3end_scx3_2_dmg08_cgb04c_out7.gbc [CGB]	0
 hwtests/vramw_m3end/vramw_m3end_scx3_4_dmg08_cgb04c_out0.gbc [CGB]	3
-hwtests/window/arg/late_wy_1toFF_lcdoffset1_1_cgb04c_out0.gbc [CGB]	3
 hwtests/window/arg/late_wy_FFto2_ly2_scx5_3_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_disable_early_scx03_wx12_2_dmg08_out0_cgb04c_out3.gbc [DMG]	3
 hwtests/window/late_disable_late_scx03_wx12_1_dmg08_cgb04c_out0.gbc [DMG]	3
@@ -140,9 +129,7 @@ hwtests/window/late_disable_scx2_0_dmg08_cgb04c_out0.gbc [DMG]	3
 hwtests/window/late_disable_spx10_wx0f_1_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_disable_spx10_wx0f_1_dmg08_cgb04c_out0.gbc [DMG]	3
 hwtests/window/late_enable_afterVblank_ds_lcdoffset1_2_cgb04c_out0.gbc [CGB]	3
-hwtests/window/late_enable_afterVblank_lcdoffset1_2_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_wx_1_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_wx_wx03_1_dmg08_cgb04c_out0.gbc [CGB]	3
 hwtests/window/late_wx_wx0f_1_dmg08_cgb04c_out0.gbc [CGB]	3
-hwtests/window/late_wy_lcdoffset1_1_cgb04c_out0.gbc [CGB]	3
 hwtests/window/m2int_wxA6_spxA7_m0irq_2_dmg08_cgb04c_out2.gbc [DMG]	0
