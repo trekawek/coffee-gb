@@ -511,6 +511,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             speedSwitchTailTicks--;
             if (speedSwitchTailTicks == 0) {
                 hdma.onSpeedSwitchComplete();
+                gpu.onSpeedSwitchComplete();
             }
         } else if (speedSwitching) {
             // A CGB speed switch pauses instruction execution and VRAM DMA while
@@ -535,6 +536,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 }
                 if (speedSwitchTailTicks <= 0) {
                     hdma.onSpeedSwitchComplete();
+                    gpu.onSpeedSwitchComplete();
                 }
             }
         } else if (hdma.isTransferInProgress()) {

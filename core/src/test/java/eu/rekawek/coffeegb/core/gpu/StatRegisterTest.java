@@ -352,10 +352,55 @@ public class StatRegisterTest {
     }
 
     @Test
-    public void rephasedBackgroundLineDoesNotUseBootPhaseFixedMode3Release() {
+    public void rephasedBackgroundCpuReadSettlesAtEndOfMachineCycle() {
         Fixture fixture = new Fixture(true);
         fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 2);
         fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 244);
+
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.advanceTo(1, 248);
+
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+
+        Fixture phaseThree = new Fixture(true);
+        phaseThree.gpu.setByte(GpuRegister.SCX.getAddress(), 1);
+        phaseThree.gpu.onSpeedSwitch();
+        phaseThree.advanceTo(1, 247);
+
+        assertEquals(Mode.PixelTransfer.ordinal(), phaseThree.readStatMode());
+
+        Fixture phaseTwo = new Fixture(true);
+        phaseTwo.gpu.onSpeedSwitch();
+        phaseTwo.advanceTo(1, 246);
+
+        assertEquals(Mode.HBlank.ordinal(), phaseTwo.readStatMode());
+    }
+
+    @Test
+    public void speedSwitchCompletionRetainsOldStatPhaseUntilNextLine() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 2);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 248);
+        fixture.gpu.onSpeedSwitchComplete();
+        var completionLine = fixture.gpu.saveToMemento();
+
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+
+        fixture.advanceTo(2, 248);
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+
+        fixture.gpu.restoreFromMemento(completionLine);
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void sameLineScxWriteRetainsDynamicStatPhase() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 200);
+        fixture.gpu.setByteFromCpu(GpuRegister.SCX.getAddress(), 2);
         fixture.advanceTo(1, 248);
 
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
