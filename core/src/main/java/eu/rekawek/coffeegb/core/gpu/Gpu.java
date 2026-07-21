@@ -1100,13 +1100,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // A scanline containing enabled objects, combined with fractional scroll or the
         // window, can leave the readable mode-3 tail asserted after the internal phase
         // releases the VRAM/OAM locks (Misc.-GB-Tests' NOP-shifted sprite variants).
-        // The window path retains the latch through the mode-0 edge; fractional SCX
-        // without a window releases it two dots before that edge. Keep this separate
-        // from `mode`: the lock handoff and HBlank interrupt retain their calibrated
-        // timings. Vertically inactive objects and sprite-disabled lines do not produce
-        // this tail (GBMicrotest), while selected objects beyond the right edge still do.
+        // The window and high fine-SCX phases retain the latch through the mode-0
+        // edge; fine SCX 1..4 without a window release it two dots earlier. Keep this
+        // separate from `mode`: the lock handoff and HBlank interrupt retain their
+        // calibrated timings. Vertically inactive objects and sprite-disabled lines do
+        // not produce this tail (GBMicrotest), while selected objects beyond the right
+        // edge still do.
         if (!gbc && mode == Mode.HBlank
-                && (lcdc.isWindowDisplay()
+                && (lcdc.isWindowDisplay() || (r.get(SCX) & 7) >= 5
                 ? ticksInLine <= hblankIntFrom
                 : ticksInLine < hblankIntFrom - 2)
                 && lcdc.isObjDisplayEffective()

@@ -114,7 +114,7 @@ public class GpuDisplayEnableTimingTest {
     }
 
     @Test
-    public void dmgFineScxSpriteLatchReleasesTwoDotsBeforeModeZeroEdge() {
+    public void dmgLowerFineScxSpriteLatchReleasesTwoDotsBeforeModeZeroEdge() {
         Fixture fixture = new Fixture(1, false, false);
         fixture.gpu.setByte(0xff40, 0x00);
         fixture.gpu.setByte(0xff43, 4);
@@ -136,6 +136,29 @@ public class GpuDisplayEnableTimingTest {
         assertEquals(Mode.PixelTransfer.ordinal(), threeDotsBefore);
         assertEquals(Mode.HBlank.ordinal(), twoDotsBefore);
         assertEquals(Mode.HBlank.ordinal(), oneDotBefore);
+    }
+
+    @Test
+    public void dmgHighFineScxSpriteLatchPersistsThroughModeZeroEdge() {
+        for (int fineScx = 5; fineScx <= 7; fineScx++) {
+            Fixture fixture = new Fixture(1, false, false);
+            fixture.gpu.setByte(0xff40, 0x00);
+            fixture.gpu.setByte(0xff43, fineScx);
+            fixture.oam.setByte(0xfe00, 16);
+            fixture.oam.setByte(0xfe01, 9);
+            fixture.gpu.setByte(0xff40, 0x93);
+            fixture.advanceTo(1, 0);
+
+            while (!fixture.gpu.isMode0IntWindow()) {
+                fixture.tick();
+            }
+
+            assertEquals("SCX=" + fineScx,
+                    Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
+            fixture.tick();
+            assertEquals("SCX=" + fineScx,
+                    Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
+        }
     }
 
     @Test
