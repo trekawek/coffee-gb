@@ -1,0 +1,5 @@
+# case	pixels-different-from-reference	current-baseline
+RTC invalid banks	1920	current-baseline/rtc-invalid-banks-test.png
+RTC latch	2270	current-baseline/latch-rtc-test.png
+MBC3 RAM gate	3120	current-baseline/ramg-mbc3-test.png
+SGB extended packet protocol	9956	current-baseline/sgb-ext-test.png

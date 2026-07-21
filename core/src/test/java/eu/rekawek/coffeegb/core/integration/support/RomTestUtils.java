@@ -44,6 +44,34 @@ public final class RomTestUtils {
         resultFile.delete();
     }
 
+    public static void testRomWithScreenshotBaseline(Path romPath, Path expectedPath,
+                                                     Path currentBaselinePath,
+                                                     GameboyType gameboyType,
+                                                     int runtimeMillis) throws Exception {
+        System.out.println("\n### Running screenshot test ROM " + romPath.getFileName() + " ###");
+        ScreenshotTestRunner runner = new ScreenshotTestRunner(
+                romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis);
+        ScreenshotTestRunner.TestResult result = runner.runTest();
+        if (result.getMismatchedPixels() == 0) {
+            return;
+        }
+
+        ScreenshotTestRunner.TestResult baselineResult =
+                result.compareAgainst(currentBaselinePath.toFile());
+        if (baselineResult.getMismatchedPixels() != 0) {
+            File resultFile = File.createTempFile("screenshot-test-", "-result.png");
+            result.writeResultToFile(resultFile);
+            fail(romPath.getFileName() + " matches neither its upstream reference nor the pinned "
+                    + "Coffee GB output; final frame differs from upstream in "
+                    + result.getMismatchedPixels() + " pixels (maximum channel delta "
+                    + result.getMaxChannelDelta() + ") and from the current baseline in "
+                    + baselineResult.getMismatchedPixels() + " pixels (maximum channel delta "
+                    + baselineResult.getMaxChannelDelta() + "); actual image: " + resultFile);
+        }
+        System.out.println(romPath.getFileName() + ": upstream mismatch is pinned exactly ("
+                + result.getMismatchedPixels() + " pixels)");
+    }
+
     public static void testMooneyeRom(Path romPath) throws IOException {
         System.out.println("\n### Running test rom " + romPath.getFileName() + " ###");
         MooneyeTestRunner runner = new MooneyeTestRunner(romPath.toFile(), System.out);
