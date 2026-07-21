@@ -1332,7 +1332,16 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             // use their independently captured mode-2 path.
             visibleMode = Mode.HBlank.ordinal();
         }
-        return 0b10000000 | enableBits | (coincidence ? 0b100 : 0) | visibleMode;
+        boolean visibleCoincidence = coincidence;
+        if (gpu.isGbc() && !gpu.isDmgCompatMode() && isDoubleSpeed()
+                && gpu.isStatModeLatchRephasedBySpeedSwitch()
+                && gpu.getLine() == 143 && gpu.getTicksInLine() == 453) {
+            // On the rephased double-speed CPU bus, the final line-143 read slot
+            // samples the comparison release ahead of the direct readable latch.
+            // The following CPU slot lands after the ordinary release at dot 454.
+            visibleCoincidence = false;
+        }
+        return 0b10000000 | enableBits | (visibleCoincidence ? 0b100 : 0) | visibleMode;
     }
 
     @Override

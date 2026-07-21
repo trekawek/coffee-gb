@@ -486,6 +486,25 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void rephasedDoubleSpeedCgbReleasesCoincidenceInFinalVblankBusSlot() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 143);
+        fixture.advanceTo(143, 452);
+
+        assertEquals(0x04, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
+        fixture.tick();
+        assertEquals(0, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
+        fixture.tick();
+        assertEquals(0, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
+
+        Fixture unrephased = new Fixture(true, true);
+        unrephased.gpu.setByte(GpuRegister.LYC.getAddress(), 143);
+        unrephased.advanceTo(143, 453);
+        assertEquals(0x04, unrephased.stat.getByte(StatRegister.ADDRESS) & 0x04);
+    }
+
+    @Test
     public void cgbDoubleSpeedTailLycEdgeIsReadableBeforeCpuAcceptance() {
         Fixture fixture = new Fixture(true, true);
         fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
