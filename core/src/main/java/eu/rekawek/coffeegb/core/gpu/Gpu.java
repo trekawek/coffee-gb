@@ -99,6 +99,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // on which a speed-switch tail completes.
     private boolean speedSwitchCompletedThisLine;
 
+    // The CPU-facing LY bus is rephased by the clock mux too, but restarting the
+    // LCD realigns this latch with the new line grid while the STAT phase persists.
+    private boolean lyReadLatchRephasedBySpeedSwitch;
+
     // A line-scoped SCX write makes a no-window line follow the dynamic shifted
     // pipeline instead of the steady-line fixed STAT release.
     private boolean scxWrittenThisLine;
@@ -335,7 +339,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             }
         }
         if (address == LY.getAddress()) {
-            return getVisibleLy();
+            return getCpuVisibleLy();
         }
         if (!gbc && oamRam.accepts(address)) {
             int accessedRow = getDirectOamReadRow();
@@ -549,9 +553,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
     }
 
-    /** Rephases the CGB CPU-readable STAT latch when the CPU clock mux changes. */
+    /** Rephases the CGB CPU-readable PPU latches when the CPU clock mux changes. */
     public void onSpeedSwitch() {
         statModeLatchRephasedBySpeedSwitch = true;
+        lyReadLatchRephasedBySpeedSwitch = lcdEnabled;
     }
 
     /** Retains the old CPU-readable STAT phase until the current scanline ends. */
@@ -800,6 +805,29 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return line + 1;
         }
         return line;
+    }
+
+    /**
+     * LY as sampled by a native-CGB CPU bus read after the clock mux has been
+     * rephased. The PPU's registered LY value and its LYC comparator keep using
+     * {@link #getVisibleLy()}; only the CPU bus can observe the ripple-counter
+     * hand-off between consecutive LY values.
+     */
+    private int getCpuVisibleLy() {
+        int visibleLy = getVisibleLy();
+        if (!gbc || speedMode.isDmgCompat() || !lyReadLatchRephasedBySpeedSwitch) {
+            return visibleLy;
+        }
+        if (line == 153) {
+            int resetTransitionTick = speedMode.getSpeedMode() == 2 ? 1 : 2;
+            if (ticksInLine == resetTransitionTick) {
+                return 0;
+            }
+        } else if ((speedMode.getSpeedMode() == 1 && ticksInLine == 455)
+                || (speedMode.getSpeedMode() == 2 && ticksInLine == 451)) {
+            return line & (line + 1);
+        }
+        return visibleLy;
     }
 
     /**
@@ -1455,6 +1483,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.ticksInLine = -1;
         this.firstLine = true;
         this.lcdEnableClockPhase = true;
+        this.lyReadLatchRephasedBySpeedSwitch = false;
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
         this.mode0IntFrom = Integer.MAX_VALUE;
@@ -1521,7 +1550,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, earlyScxStatTailThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, earlyScxStatTailThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
@@ -1560,6 +1589,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.mode0IntFrom = mem.mode0IntFrom;
         this.statModeLatchRephasedBySpeedSwitch = mem.statModeLatchRephasedBySpeedSwitch;
         this.speedSwitchCompletedThisLine = mem.speedSwitchCompletedThisLine;
+        this.lyReadLatchRephasedBySpeedSwitch = mem.lyReadLatchRephasedBySpeedSwitch;
         this.scxWrittenThisLine = mem.scxWrittenThisLine;
         this.doubleSpeedMode2DispatchStatTailThisLine =
                 mem.doubleSpeedMode2DispatchStatTailThisLine;
@@ -1598,6 +1628,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                               int hblankIntFrom, int mode0IntFrom,
                               boolean statModeLatchRephasedBySpeedSwitch,
                               boolean speedSwitchCompletedThisLine,
+                              boolean lyReadLatchRephasedBySpeedSwitch,
                               boolean scxWrittenThisLine,
                               boolean doubleSpeedMode2DispatchStatTailThisLine,
                               boolean earlyScxStatTailThisLine,
