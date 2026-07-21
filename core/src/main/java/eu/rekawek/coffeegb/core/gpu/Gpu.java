@@ -95,6 +95,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // STAT mode latch. Until that happens, the boot-time latch has its five-dot tail.
     private boolean statModeLatchRephasedBySpeedSwitch;
 
+    // The clock mux retains its old STAT read phase for the remainder of the scanline
+    // on which a speed-switch tail completes.
+    private boolean speedSwitchCompletedThisLine;
+
     // A line-scoped SCX write makes a no-window line follow the dynamic shifted
     // pipeline instead of the steady-line fixed STAT release.
     private boolean scxWrittenThisLine;
@@ -447,6 +451,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             pixelTransferDone = false;
             hblankIntFrom = Integer.MAX_VALUE;
             mode0IntFrom = Integer.MAX_VALUE;
+            speedSwitchCompletedThisLine = false;
             scxWrittenThisLine = false;
             doubleSpeedMode2DispatchStatTailThisLine = false;
             earlyScxStatTailThisLine = false;
@@ -547,6 +552,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     /** Rephases the CGB CPU-readable STAT latch when the CPU clock mux changes. */
     public void onSpeedSwitch() {
         statModeLatchRephasedBySpeedSwitch = true;
+    }
+
+    /** Retains the old CPU-readable STAT phase until the current scanline ends. */
+    public void onSpeedSwitchComplete() {
+        speedSwitchCompletedThisLine = true;
     }
 
     /** Captures the CPU/PPU phase selected when a double-speed mode-2 IRQ is accepted. */
@@ -1068,6 +1078,27 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return mode.ordinal();
     }
 
+    /** Returns the normal-speed STAT mode sampled at the end of a rephased CPU read. */
+    int getCpuVisibleStatMode() {
+        int visibleMode = getVisibleStatMode();
+        if (!gbc || speedMode.isDmgCompat() || !statModeLatchRephasedBySpeedSwitch
+                || speedSwitchCompletedThisLine || speedMode.getSpeedMode() != 1
+                || scxWrittenThisLine
+                || firstLine || line >= 144) {
+            return visibleMode;
+        }
+        if (mode == Mode.OamSearch && ticksInLine >= 74) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        int readAhead = 4 - (ticksInLine & 3);
+        if ((mode == Mode.PixelTransfer || mode == Mode.HBlank)
+                && pixelTransferPhase.getPosition() + readAhead
+                >= 160 + (r.get(SCX) & 7)) {
+            return Mode.HBlank.ordinal();
+        }
+        return visibleMode;
+    }
+
     /**
      * Returns the mode sampled by the CGB CPU bus before this dot's PPU clocks have
      * settled, or {@code -1} when the ordinary readable STAT latch is visible.
@@ -1399,6 +1430,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
         this.mode0IntFrom = Integer.MAX_VALUE;
+        this.speedSwitchCompletedThisLine = false;
         this.scxWrittenThisLine = false;
         this.doubleSpeedMode2DispatchStatTailThisLine = false;
         this.earlyScxStatTailThisLine = false;
@@ -1426,6 +1458,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
         this.mode0IntFrom = Integer.MAX_VALUE;
+        this.speedSwitchCompletedThisLine = false;
         this.scxWrittenThisLine = false;
         this.doubleSpeedMode2DispatchStatTailThisLine = false;
         this.earlyScxStatTailThisLine = false;
@@ -1488,7 +1521,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, earlyScxStatTailThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, earlyScxStatTailThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
@@ -1526,6 +1559,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.hblankIntFrom = mem.hblankIntFrom;
         this.mode0IntFrom = mem.mode0IntFrom;
         this.statModeLatchRephasedBySpeedSwitch = mem.statModeLatchRephasedBySpeedSwitch;
+        this.speedSwitchCompletedThisLine = mem.speedSwitchCompletedThisLine;
         this.scxWrittenThisLine = mem.scxWrittenThisLine;
         this.doubleSpeedMode2DispatchStatTailThisLine =
                 mem.doubleSpeedMode2DispatchStatTailThisLine;
@@ -1563,6 +1597,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                               boolean lcdEnableClockPhase, boolean pixelTransferDone,
                               int hblankIntFrom, int mode0IntFrom,
                               boolean statModeLatchRephasedBySpeedSwitch,
+                              boolean speedSwitchCompletedThisLine,
                               boolean scxWrittenThisLine,
                               boolean doubleSpeedMode2DispatchStatTailThisLine,
                               boolean earlyScxStatTailThisLine,

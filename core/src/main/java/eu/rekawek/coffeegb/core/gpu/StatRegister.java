@@ -1307,7 +1307,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     public int getByte(int address) {
         int visibleMode = cpuStatModeOverride >= 0
                 ? cpuStatModeOverride
-                : gpu.getVisibleStatMode();
+                : gpu.getCpuVisibleStatMode();
         // A speed switch rephases the native CGB's CPU-facing STAT mux. Its last
         // bus slot of an active scanline (and of line 153) already exposes the next
         // line's mode 2. The LYC source shares this tail mux and keeps the current
