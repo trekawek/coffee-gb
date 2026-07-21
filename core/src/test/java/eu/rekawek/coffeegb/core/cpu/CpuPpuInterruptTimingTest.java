@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.cpu;
 
+import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
@@ -163,6 +164,44 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
+    public void lateHigherPriorityInterruptRedirectsTheFinalVectorCycle() {
+        for (boolean gbc : new boolean[] {false, true}) {
+            Harness h = new Harness(gbc);
+            h.memory.setByte(PROGRAM, 0x00);
+            h.enable(LCDC, Timer);
+            h.interrupts.enableInterrupts(false);
+            h.interrupts.requestInterrupt(Timer);
+            h.advanceToIrqJump();
+
+            h.interrupts.requestInterrupt(LCDC);
+            h.tickMachineCycle();
+
+            assertEquals(LCDC.getHandler(), h.cpu.getRegisters().getPC());
+            assertFalse(h.interrupts.isInterruptFlagSet(LCDC));
+            assertTrue(h.interrupts.isInterruptFlagSet(Timer));
+        }
+    }
+
+    @Test
+    public void lateLowerPriorityInterruptCannotRedirectTheFinalVectorCycle() {
+        for (boolean gbc : new boolean[] {false, true}) {
+            Harness h = new Harness(gbc);
+            h.memory.setByte(PROGRAM, 0x00);
+            h.enable(LCDC, Timer);
+            h.interrupts.enableInterrupts(false);
+            h.interrupts.requestInterrupt(LCDC);
+            h.advanceToIrqJump();
+
+            h.interrupts.requestInterrupt(Timer);
+            h.tickMachineCycle();
+
+            assertEquals(LCDC.getHandler(), h.cpu.getRegisters().getPC());
+            assertFalse(h.interrupts.isInterruptFlagSet(LCDC));
+            assertTrue(h.interrupts.isInterruptFlagSet(Timer));
+        }
+    }
+
+    @Test
     public void interruptInHaltEntryWindowRephasesTheHaltBug() {
         for (boolean gbc : new boolean[] {false, true}) {
             Harness h = new Harness(gbc);
@@ -265,8 +304,31 @@ public class CpuPpuInterruptTimingTest {
         private Harness(boolean gbc) {
             interrupts = new InterruptManager(gbc);
             speedMode = new SpeedMode(gbc);
-            cpu = new Cpu(memory, interrupts, null, speedMode, new Display(gbc));
+            AddressSpace bus = new AddressSpace() {
+                @Override
+                public boolean accepts(int address) {
+                    return true;
+                }
+
+                @Override
+                public void setByte(int address, int value) {
+                    if (interrupts.accepts(address)) {
+                        interrupts.setByte(address, value);
+                    } else {
+                        memory.setByte(address, value);
+                    }
+                }
+
+                @Override
+                public int getByte(int address) {
+                    return interrupts.accepts(address)
+                            ? interrupts.getByte(address)
+                            : memory.getByte(address);
+                }
+            };
+            cpu = new Cpu(bus, interrupts, null, speedMode, new Display(gbc));
             cpu.getRegisters().setPC(PROGRAM);
+            cpu.getRegisters().setSP(0xfffe);
             memory.setByte(PROGRAM, 0x76);
             interrupts.setByte(0xff0f, 0);
         }
@@ -291,6 +353,13 @@ public class CpuPpuInterruptTimingTest {
 
         private void tickMachineCycle() {
             tickCpuTicks(4 / speedMode.getSpeedMode());
+        }
+
+        private void advanceToIrqJump() {
+            for (int i = 0; i < 6 && cpu.getState() != Cpu.State.IRQ_JUMP; i++) {
+                tickMachineCycle();
+            }
+            assertEquals(Cpu.State.IRQ_JUMP, cpu.getState());
         }
 
         private void tickCpuTicks(int ticks) {

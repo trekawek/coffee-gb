@@ -457,6 +457,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 break;
 
             case IRQ_JUMP:
+                applyLateInterruptPriority();
                 if (requestedIrq != null) {
                     registers.setPC(requestedIrq.getHandler());
                 } else {
@@ -465,6 +466,30 @@ public class Cpu implements Serializable, Originator<Cpu> {
                 requestedIrq = null;
                 state = State.OPCODE;
                 break;
+        }
+    }
+
+    /**
+     * The interrupt priority gate remains live through the final vector cycle. If a
+     * higher-priority source arrives after the stack pushes selected and acknowledged
+     * a lower source, vector to the new source and leave the old one pending.
+     */
+    private void applyLateInterruptPriority() {
+        if (requestedIrq == null) {
+            return;
+        }
+        for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.VALUES) {
+            if (irq.ordinal() >= requestedIrq.ordinal()) {
+                return;
+            }
+            int mask = 1 << irq.ordinal();
+            if ((interruptEnabled & mask) != 0
+                    && interruptManager.isInterruptFlagSet(irq)) {
+                interruptManager.requestInterrupt(requestedIrq);
+                interruptManager.clearInterrupt(irq);
+                requestedIrq = irq;
+                return;
+            }
         }
     }
 
