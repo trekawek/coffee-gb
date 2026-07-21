@@ -413,10 +413,14 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (haltEntrySampleTicks <= 0) {
             return;
         }
-        if (state == State.HALTED && interruptManager.isInterruptRequested()) {
+        boolean ime = interruptManager.isIme();
+        boolean asynchronousRequest = ime
+                ? interruptManager.isInterruptRequestedWhileHaltWakeBlocked()
+                : interruptManager.isInterruptRequested();
+        if (state == State.HALTED && asynchronousRequest) {
             haltEntrySampleTicks = 0;
             state = State.OPCODE;
-            if (interruptManager.isIme()) {
+            if (ime) {
                 // The enabled request is accepted, but the asynchronous edge makes
                 // interrupt entry push HALT's address so RETI executes it again.
                 registers.setPC((registers.getPC() - 1) & 0xffff);

@@ -61,6 +61,16 @@ public class DmaCpuAddressSpaceTest {
     }
 
     @Test
+    public void cgbHighSourceSeparatesOpenCopyDataFromAliasedCartridgeBusData() {
+        for (int sourceHigh : new int[]{0xe0, 0xff}) {
+            Fixture fixture = new Fixture(true, sourceHigh);
+
+            assertEquals(0xff, fixture.oam.getByte(0xfe00));
+            assertEquals(0x42, fixture.cpu.getByte(0x0100));
+        }
+    }
+
+    @Test
     public void cgbCanUseTheCartridgeBusDuringWramDma() {
         Fixture fixture = new Fixture(true, 0xc0);
 

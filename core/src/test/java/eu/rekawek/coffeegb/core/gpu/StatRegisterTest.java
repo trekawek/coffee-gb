@@ -112,6 +112,22 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void cgbLcdRestartLyDotZeroExceptionExpiresAfterTheFirstFrame() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.advanceTo(153, 0);
+        assertEquals(0, fixture.readLy());
+
+        fixture.advanceTo(0, 0);
+        fixture.advanceTo(153, 0);
+        assertEquals(153, fixture.readLy());
+
+        fixture.advanceTo(153, 2);
+        assertEquals(0, fixture.readLy());
+    }
+
+    @Test
     public void rephasedNormalSpeedCgbCpuReadSeesLyRippleAtLineTail() {
         Fixture fixture = new Fixture(true);
         fixture.gpu.onSpeedSwitch();
@@ -331,13 +347,13 @@ public class StatRegisterTest {
     }
 
     @Test
-    public void cgbCpuBusStillSamplesOamModeAtDot78() {
+    public void cgbCpuBusUsesSettledPixelTransferModeAtDot78() {
         Fixture fixture = new Fixture(true);
         fixture.advanceTo(1, 78);
 
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
         fixture.stat.captureCpuStatReadPhase();
-        assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
         fixture.tick();
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
     }

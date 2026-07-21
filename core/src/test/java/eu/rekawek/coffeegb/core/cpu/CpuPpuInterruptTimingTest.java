@@ -227,7 +227,7 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
-    public void imeEnabledInterruptInHaltEntryWindowPushesTheHaltAddress() {
+    public void imeEnabledHaltBlockedInterruptInEntryWindowPushesTheHaltAddress() {
         for (boolean gbc : new boolean[] {false, true}) {
             Harness h = new Harness(gbc);
             h.enable(LCDC);
@@ -235,7 +235,7 @@ public class CpuPpuInterruptTimingTest {
             h.enterHalt();
 
             h.cpu.tick();
-            h.interrupts.requestInterrupt(LCDC);
+            h.interrupts.requestInterruptBeforeHaltWake(LCDC);
             h.cpu.onPeripheralsTicked();
 
             assertEquals(Cpu.State.OPCODE, h.cpu.getState());
@@ -248,6 +248,25 @@ public class CpuPpuInterruptTimingTest {
             h.advanceToIrqJump();
             assertEquals(0x01, h.memory.getByte(0xfffd));
             assertEquals(0x00, h.memory.getByte(0xfffc));
+        }
+    }
+
+    @Test
+    public void imeEnabledOrdinaryInterruptInEntryWindowPushesTheFollowingAddress() {
+        for (boolean gbc : new boolean[] {false, true}) {
+            Harness h = new Harness(gbc);
+            h.enable(LCDC);
+            h.interrupts.enableInterrupts(false);
+            h.enterHalt();
+
+            h.cpu.tick();
+            h.interrupts.requestInterrupt(LCDC);
+            h.cpu.onPeripheralsTicked();
+
+            assertEquals(Cpu.State.HALTED, h.cpu.getState());
+            h.advanceToIrqJump();
+            assertEquals(0x01, h.memory.getByte(0xfffd));
+            assertEquals(0x01, h.memory.getByte(0xfffc));
         }
     }
 

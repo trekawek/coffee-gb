@@ -20,7 +20,7 @@ dumper entries do not encode a hexadecimal tile verdict and remain in the
 complete archive. Optional deterministic batches partition the sorted manifest;
 the default profile still selects every verdict.
 
-`current-baseline.tsv` pins the exact hexadecimal output for the 105 cases that
+`current-baseline.tsv` pins the exact hexadecimal output for the 108 cases that
 do not yet match the hardware verdict encoded in the ROM filename. Green cases
 continue to assert hardware directly. Any output change fails the profile; when
 an emulation fix reaches the hardware result, remove that case from the baseline.

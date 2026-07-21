@@ -32,6 +32,10 @@ public class DmaAddressSpace implements AddressSpace, Serializable {
             // purposes, but the OAM-DMA copy data pins themselves remain open.
             return 0xff;
         }
+        return getCpuBusByte(address);
+    }
+
+    int getCpuBusByte(int address) {
         return addressSpace.getByte(mapAddress(address, gbc));
     }
 

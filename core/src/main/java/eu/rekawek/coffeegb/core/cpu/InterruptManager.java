@@ -262,6 +262,11 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                 & ~haltBlockedInterrupts & 0x1f) != 0;
     }
 
+    public boolean isInterruptRequestedWhileHaltWakeBlocked() {
+        return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
+                & haltBlockedInterrupts & 0x1f) != 0;
+    }
+
     public boolean isUnphasedPpuInterruptRequested() {
         return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
                 & ~cpuPhasedPpuInterrupts & PPU_INTERRUPT_MASK) != 0;
