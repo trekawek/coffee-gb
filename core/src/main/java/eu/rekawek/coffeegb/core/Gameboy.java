@@ -625,6 +625,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 cpu.winsInterruptEntryArbitrationForHdma());
         Mode mode = gpu.tick();
         statRegister.tick();
+        cpu.onPeripheralsTicked();
         return mode;
     }
 

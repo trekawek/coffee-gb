@@ -163,6 +163,31 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
+    public void interruptInHaltEntryWindowRephasesTheHaltBug() {
+        for (boolean gbc : new boolean[] {false, true}) {
+            Harness h = new Harness(gbc);
+            h.memory.setByte(PROGRAM + 1, 0x3d); // DEC A
+            h.cpu.getRegisters().setA(8);
+            h.enable(LCDC);
+            h.enterHalt();
+            var entryWindow = h.cpu.saveToMemento();
+            h.tickMachineCycle();
+            h.cpu.restoreFromMemento(entryWindow);
+
+            h.cpu.tick();
+            h.interrupts.requestInterrupt(LCDC);
+            h.cpu.onPeripheralsTicked();
+
+            assertEquals(Cpu.State.OPCODE, h.cpu.getState());
+            h.tickCpuTicks(2);
+            assertEquals(7, h.cpu.getRegisters().getA());
+            h.tickCpuTicks(4);
+            assertEquals(6, h.cpu.getRegisters().getA());
+            assertEquals(PROGRAM + 2, h.cpu.getRegisters().getPC());
+        }
+    }
+
+    @Test
     public void hdmaDoesNotPrefetchPastAnEnabledPendingInterrupt() {
         Harness h = new Harness(true);
         h.memory.setByte(PROGRAM, 0x00);

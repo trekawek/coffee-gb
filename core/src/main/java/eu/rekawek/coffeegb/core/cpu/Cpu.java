@@ -66,6 +66,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private boolean haltBugMode;
 
+    private int haltEntrySampleTicks;
+
     private boolean hdmaOpcodePrefetched;
 
     private int haltPrefetchedOpcode;
@@ -136,6 +138,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (state == State.LOCKED) {
             return;
         }
+
+        // HALT's asynchronous entry window closes at the next CPU boundary.
+        haltEntrySampleTicks = 0;
 
         boolean wokeFromHalt = false;
         if (state == State.HALTED && interruptManager.isInterruptRequestedForHalt()) {
@@ -340,6 +345,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
                             return;
                         } else {
                             state = State.HALTED;
+                            haltEntrySampleTicks = interruptManager.isIme()
+                                    ? 0 : speedMode.isGbc() ? 2 : 4;
                             return;
                         }
                     }
@@ -391,6 +398,27 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private boolean isJoypadLineLow() {
         return (addressSpace.getByte(0xff00) & 0x0f) != 0x0f;
+    }
+
+    /** Completes HALT's entry sample after this tick's peripheral edges settle. */
+    public void onPeripheralsTicked() {
+        if (haltEntrySampleTicks <= 0) {
+            return;
+        }
+        if (state == State.HALTED && !interruptManager.isIme()
+                && interruptManager.isInterruptRequested()) {
+            haltEntrySampleTicks = 0;
+            state = State.OPCODE;
+            haltBugMode = true;
+            // The request reached HALT after the ordinary CPU sample. Rephase the
+            // resumed bus clock onto that asynchronous edge.
+            clockCycle++;
+            if (timer != null) {
+                timer.onHaltBug();
+            }
+        } else {
+            haltEntrySampleTicks--;
+        }
     }
 
     private void handleInterrupt() {
@@ -625,6 +653,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
         operand[1] = this.operand[1];
         return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex,
                 state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
+                haltEntrySampleTicks,
                 hdmaOpcodePrefetched, haltPrefetchedOpcode, haltOpcodePrefetchValid,
                 speedSwitchPaddingOpcode, speedSwitchPaddingReplayValid,
                 speedSwitchTicks, phasedPpuInputHigh, fastPhasedPpuDispatch);
@@ -649,6 +678,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
         this.requestedIrq = mem.requestedIrq;
         this.clockCycle = mem.clockCycle;
         this.haltBugMode = mem.haltBugMode;
+        this.haltEntrySampleTicks = mem.haltEntrySampleTicks;
         this.hdmaOpcodePrefetched = mem.hdmaOpcodePrefetched;
         this.haltPrefetchedOpcode = mem.haltPrefetchedOpcode;
         this.haltOpcodePrefetchValid = mem.haltOpcodePrefetchValid;
@@ -666,7 +696,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
     private record CpuMemento(Memento<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
                               int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
                               int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
-                              boolean haltBugMode, boolean hdmaOpcodePrefetched,
+                              boolean haltBugMode, int haltEntrySampleTicks,
+                              boolean hdmaOpcodePrefetched,
                               int haltPrefetchedOpcode, boolean haltOpcodePrefetchValid,
                               int speedSwitchPaddingOpcode, boolean speedSwitchPaddingReplayValid,
                               int speedSwitchTicks, boolean phasedPpuInputHigh,
