@@ -165,6 +165,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private int objTileId;
 
+    private OamSearch oamReaderBus;
+
     private TileAttributes objAttributes = TileAttributes.EMPTY;
 
     private int objData0;
@@ -258,7 +260,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         } else {
             this.fifo = new DmgPixelFifo(display, lcdc, r, vRamTransfer);
         }
-        this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
+        this.fetcher = new Fetcher(
+                fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc, entryDelay);
         this.sprites = sprites;
     }
 
@@ -345,6 +348,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     public boolean isObjectFetchInProgress() {
         return objStep >= 0 || objWaiting;
+    }
+
+    public void setOamReaderBus(OamSearch oamReaderBus) {
+        this.oamReaderBus = oamReaderBus;
     }
 
     public int getObjectTimingPenalty() {
@@ -952,6 +959,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (objStep == 1) {
             SpritePosition sprite = sprites[spriteOrder[spriteHead]];
             objTileId = fetcher.readSpriteTileId(sprite);
+            if (oamReaderBus != null) {
+                oamReaderBus.latchObjectTileId(objTileId);
+            }
             objAttributes = fetcher.readSpriteAttributes(sprite);
             objTileLine = r.get(LY) + 16 - sprite.getY();
         }

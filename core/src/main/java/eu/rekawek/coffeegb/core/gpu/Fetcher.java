@@ -79,6 +79,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     private final boolean gbc;
 
+    private final int registerViewDelay;
+
     private final int[] pixelLine = new int[8];
 
     private int state;
@@ -162,7 +164,20 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             Lcdc lcdc,
             GpuRegisterValues registers,
             boolean gbc) {
+        this(fifo, videoRam0, videoRam1, oemRam, lcdc, registers, gbc, 0);
+    }
+
+    public Fetcher(
+            PixelFifo fifo,
+            AddressSpace videoRam0,
+            AddressSpace videoRam1,
+            AddressSpace oemRam,
+            Lcdc lcdc,
+            GpuRegisterValues registers,
+            boolean gbc,
+            int registerViewDelay) {
         this.gbc = gbc;
+        this.registerViewDelay = registerViewDelay;
         this.fifo = fifo;
         this.videoRam0 = videoRam0;
         this.videoRam1 = videoRam1;
@@ -230,13 +245,30 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
 
     private int data2Delay;
 
+    // The high bitplane read may be deferred while the FIFO drains. If LCDC.4 falls
+    // on its physical read dot, early CGB revisions drive the tile index onto the VRAM
+    // data bus. Preserve that collision until the deferred read is committed.
+    private boolean data2TileSelectGlitch;
+
+    private boolean isTileSelectGlitch() {
+        return lcdc.isTileSelectGlitch(registerViewDelay);
+    }
+
     private void readData2(boolean window, int windowY) {
-        tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
-                lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+        if (data2TileSelectGlitch && tileId < 0x80) {
+            tileData2 = tileId;
+        } else {
+            tileData2 = getTileData(tileId, effectiveY(window, windowY) & 7, 1,
+                    lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+        }
         data2Pending = false;
+        data2TileSelectGlitch = false;
     }
 
     public void advance(int position, boolean window, int windowY, boolean duringObjectFetch) {
+        if (data2Pending && gbc && isTileSelectGlitch()) {
+            data2TileSelectGlitch = true;
+        }
         if (data2Pending && state == PUSH && --data2Delay <= 0) {
             readData2(window, windowY);
         }
@@ -286,9 +318,14 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 // like the map read, the data reads sit one T-cycle later than the state
                 // names suggest: the low byte here, the high byte at the tick of the push
                 // itself (mealybug m3_scy_change / m3_lcdc_tile_sel_change)
-                tileData1 = getTileData(tileId, effectiveY(window, windowY) & 7, 0,
-                        lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+                if (gbc && isTileSelectGlitch() && tileId < 0x80) {
+                    tileData1 = tileId;
+                } else {
+                    tileData1 = getTileData(tileId, effectiveY(window, windowY) & 7, 0,
+                            lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(), tileAttributes, 8);
+                }
                 data2Pending = true;
+                data2TileSelectGlitch = false;
                 // when the push must wait, the hardware fetch still reads the high byte
                 // on its own schedule two dots later - even while an object fetch pauses
                 // the pipeline; register writes during the wait must not affect it
@@ -435,7 +472,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 tileData2,
                 insertionGlitchDisabled,
                 data2Pending,
-                data2Delay);
+                data2Delay,
+                data2TileSelectGlitch);
     }
 
     @Override
@@ -460,6 +498,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         this.insertionGlitchDisabled = mem.insertionGlitchDisabled;
         this.data2Pending = mem.data2Pending;
         this.data2Delay = mem.data2Delay;
+        this.data2TileSelectGlitch = mem.data2TileSelectGlitch;
     }
 
     private record FetcherMemento(
@@ -474,7 +513,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
             int tileData2,
             boolean insertionGlitchDisabled,
             boolean data2Pending,
-            int data2Delay)
+            int data2Delay,
+            boolean data2TileSelectGlitch)
             implements Memento<Fetcher> {
     }
 }

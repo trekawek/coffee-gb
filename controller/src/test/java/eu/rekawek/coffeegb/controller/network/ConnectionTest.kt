@@ -164,7 +164,15 @@ class ConnectionTest {
 
     senderBus.post(
         LinkedController.LocalRomLoadedEvent(
-            rom, battery, snapshot, GameboyType.CGB, Gameboy.BootstrapMode.FAST_FORWARD, 7))
+            rom,
+            battery,
+            snapshot,
+            GameboyType.CGB,
+            Gameboy.BootstrapMode.FAST_FORWARD,
+            7,
+            cgb0Revision = true,
+        )
+    )
 
     val event = received.poll(10, TimeUnit.SECONDS)
     assertNotNull(event)
@@ -173,6 +181,7 @@ class ConnectionTest {
     assertContentEquals(snapshot, event.snapshot)
     assertEquals(GameboyType.CGB, event.gameboyType)
     assertEquals(Gameboy.BootstrapMode.FAST_FORWARD, event.bootstrapMode)
+    assertTrue(event.cgb0Revision)
     assertEquals(7, event.frame)
   }
 

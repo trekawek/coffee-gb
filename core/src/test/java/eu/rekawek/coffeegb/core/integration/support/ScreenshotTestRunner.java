@@ -32,12 +32,18 @@ public class ScreenshotTestRunner {
 
     public ScreenshotTestRunner(File romFile, File expectedFile, GameboyType gameboyType,
                                 int runtimeMillis) throws IOException {
+        this(romFile, expectedFile, gameboyType, runtimeMillis, false);
+    }
+
+    public ScreenshotTestRunner(File romFile, File expectedFile, GameboyType gameboyType,
+                                int runtimeMillis, boolean cgb0Revision) throws IOException {
         expected = readImage(expectedFile);
         maxTicks = (long) Gameboy.TICKS_PER_SEC * runtimeMillis / 1000;
 
         gameboy = new GameboyConfiguration(romFile)
                 .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
                 .setGameboyType(gameboyType)
+                .setCgb0Revision(cgb0Revision)
                 .setSupportBatterySave(false)
                 .build();
 

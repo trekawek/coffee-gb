@@ -106,6 +106,10 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     private boolean oamReaderInitialized;
 
+    private int oamReaderBusY = 0xff;
+
+    private int oamReaderBusX = 0xff;
+
     private boolean oamReaderDmaSource;
 
     private int oamReaderSourceChangeTicks;
@@ -209,10 +213,23 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
                 boolean acquisitionCopyEdge = sourceChanged && !sourceBeforeTick;
                 if (!acquisitionCopyEdge
                         && (oamReaderSourceChangeTicks > 0 || !oamReaderDmaSource)) {
-                    oamReaderY[entry] = oamReaderDmaSource
-                            ? 0xff : oemRam.getByte(address);
-                    oamReaderX[entry] = oamReaderDmaSource
-                            ? 0xff : oemRam.getByte(address + 1);
+                    if (oamReaderDmaSource) {
+                        if (registers.isGbc()) {
+                            oamReaderY[entry] = 0xff;
+                            oamReaderX[entry] = 0xff;
+                        } else {
+                            // DMG disconnects the OAM reader without discharging its
+                            // Y/X bus. Every search slot keeps seeing the last word the
+                            // reader sampled before DMA acquired OAM.
+                            oamReaderY[entry] = oamReaderBusY;
+                            oamReaderX[entry] = oamReaderBusX;
+                        }
+                    } else {
+                        oamReaderBusY = oemRam.getByte(address);
+                        oamReaderBusX = oemRam.getByte(address + 1);
+                        oamReaderY[entry] = oamReaderBusY;
+                        oamReaderX[entry] = oamReaderBusX;
+                    }
                 }
             }
             if (oamReaderSourceChangeTicks > 0) {
@@ -248,6 +265,12 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         return sprites;
     }
 
+    /** Object tile-ID reads in mode 3 share the mode-2 reader's Y-data bus. */
+    void latchObjectTileId(int tileId) {
+        initializeOamReader();
+        oamReaderBusY = tileId & 0xff;
+    }
+
     public boolean hadSpriteHeightTransition() {
         return spriteHeightTransitionThisLine;
     }
@@ -279,7 +302,8 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         return new OamSearchMemento(
                 spriteMementos, Arrays.copyOf(oamReaderY, oamReaderY.length),
                 Arrays.copyOf(oamReaderX, oamReaderX.length),
-                oamReaderInitialized, oamReaderDmaSource, oamReaderSourceChangeTicks,
+                oamReaderInitialized, oamReaderBusY, oamReaderBusX,
+                oamReaderDmaSource, oamReaderSourceChangeTicks,
                 spritePosIndex, state, spriteY, spriteHeight,
                 previousOamSpriteHeight,
                 spriteHeightTransitionThisLine, spriteX,
@@ -301,6 +325,8 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         System.arraycopy(mem.oamReaderY, 0, oamReaderY, 0, oamReaderY.length);
         System.arraycopy(mem.oamReaderX, 0, oamReaderX, 0, oamReaderX.length);
         this.oamReaderInitialized = mem.oamReaderInitialized;
+        this.oamReaderBusY = mem.oamReaderBusY;
+        this.oamReaderBusX = mem.oamReaderBusX;
         this.oamReaderDmaSource = mem.oamReaderDmaSource;
         this.oamReaderSourceChangeTicks = mem.oamReaderSourceChangeTicks;
         this.spritePosIndex = mem.spritePosIndex;
@@ -318,7 +344,8 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     private record OamSearchMemento(
             Memento<?>[] sprites, int[] oamReaderY, int[] oamReaderX,
-            boolean oamReaderInitialized, boolean oamReaderDmaSource,
+            boolean oamReaderInitialized, int oamReaderBusY, int oamReaderBusX,
+            boolean oamReaderDmaSource,
             int oamReaderSourceChangeTicks,
             int spritePosIndex, State state, int spriteY, int spriteHeight,
             int previousOamSpriteHeight,

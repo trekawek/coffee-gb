@@ -14,12 +14,19 @@ final class OamEchoRam implements AddressSpace, Serializable, Originator<OamEcho
 
     private final boolean gbc;
 
+    private final boolean cgb0Revision;
+
     private final int[] ram = new int[0x60];
 
     private Gpu gpu;
 
     OamEchoRam(boolean gbc) {
+        this(gbc, false);
+    }
+
+    OamEchoRam(boolean gbc, boolean cgb0Revision) {
         this.gbc = gbc;
+        this.cgb0Revision = cgb0Revision;
     }
 
     void setGpu(Gpu gpu) {
@@ -49,8 +56,12 @@ final class OamEchoRam implements AddressSpace, Serializable, Originator<OamEcho
         return gbc ? ram[translate(address)] : 0x00;
     }
 
-    private static int translate(int address) {
-        // CGB decodes FEA0-FEBF normally. In FEC0-FEFF address bits 5
+    private int translate(int address) {
+        if (cgb0Revision) {
+            // CGB-0 does not decode address bits 3 and 4 in this area.
+            return ((address & 0xff) & ~0x18) - (OFFSET & 0xff);
+        }
+        // CGB-D decodes FEA0-FEBF normally. In FEC0-FEFF address bits 5
         // and 4 are not decoded, so each 16-byte window aliases FEF0-FEFF.
         return address < 0xfec0 ? address - OFFSET : 0x20 + (address & 0x0f);
     }

@@ -168,7 +168,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         speedMode = new SpeedMode(gbc, legacySpeedSwitchRequired);
         interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
-        mmu = new Mmu(gbc);
+        mmu = new Mmu(gbc, configuration.cgb0Revision);
         display = new Display(gbc);
         gameGenie = new Genie(mmu, gbc);
 
@@ -817,8 +817,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
 
         /**
-         * Emulates the CGB revision 0 boot timing instead of revisions A-E
-         * (mooneye boot_div-cgb0).
+         * Emulates CGB revision 0 behavior where it differs from the default CGB-D
+         * model, including boot timing (mooneye boot_div-cgb0) and prohibited-area
+         * decoding.
          */
         public GameboyConfiguration setCgb0Revision(boolean cgb0Revision) {
             this.cgb0Revision = cgb0Revision;
@@ -827,6 +828,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public GameboyType getGameboyType() {
             return gameboyType;
+        }
+
+        public boolean isCgb0Revision() {
+            return cgb0Revision;
         }
 
         public GameboyConfiguration setDisplaySgbBorder(boolean displaySgbBorder) {

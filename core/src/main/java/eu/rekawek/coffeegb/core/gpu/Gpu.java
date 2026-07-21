@@ -167,6 +167,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
         this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
+        this.pixelMachine.setOamReaderBus(oamSearchPhase);
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
@@ -222,6 +223,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     @Override
     public void setByteFromCpu(int address, int value) {
         scheduleDmgPixelWindowWrite(address, value);
+        if (address == LCDC_ADDRESS && gbc && lcdEnabled && mode == Mode.PixelTransfer) {
+            int changedTileSelect = (lcdc.get() ^ value) & 0x10;
+            boolean fallingEdge = (lcdc.get() & 0x10) != 0 && (value & 0x10) == 0;
+            if ((speedMode.getSpeedMode() == 1 && fallingEdge)
+                    || (speedMode.getSpeedMode() == 2 && changedTileSelect != 0)) {
+                lcdc.triggerTileSelectGlitch();
+            }
+        }
         if (address == SCX.getAddress() && lcdEnabled && line < 144) {
             boolean dmgStartupEdge = !gbc
                     && pixelTransferPhase.getPosition() == -16

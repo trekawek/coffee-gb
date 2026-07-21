@@ -66,6 +66,67 @@ public class OamSearchTest {
     }
 
     @Test
+    public void runningDmaKeepsLastOamWordOnReaderBus() {
+        Fixture fixture = new Fixture();
+        for (int i = 0; i < 40; i++) {
+            fixture.oam.setByte(0xfe00 + 4 * i, 16);
+            fixture.oam.setByte(0xfe01 + 4 * i, 8 + i);
+        }
+        fixture.runSearch();
+        fixture.dma.setByte(0xff46, 0x12);
+        fixture.advanceDma(8, 100);
+
+        fixture.runSearch();
+
+        assertTrue(fixture.search.getSprites()[0].isEnabled());
+        assertTrue(fixture.search.getSprites()[9].isEnabled());
+        assertEquals(47, fixture.search.getSprites()[0].getX());
+        assertEquals(47, fixture.search.getSprites()[9].getX());
+    }
+
+    @Test
+    public void objectTileIdReadReplacesHeldYBus() {
+        Fixture fixture = new Fixture();
+        fixture.fillOamPositions(16, 24);
+        fixture.runSearch();
+        fixture.search.latchObjectTileId(0xa0);
+        fixture.dma.setByte(0xff46, 0x12);
+        fixture.advanceDma(8, 100);
+
+        fixture.runSearch();
+
+        assertFalse(fixture.search.getSprites()[0].isEnabled());
+    }
+
+    @Test
+    public void objectTileIdReadKeepsHeldXBus() {
+        Fixture fixture = new Fixture();
+        fixture.fillOamPositions(0xa0, 24);
+        fixture.runSearch();
+        fixture.search.latchObjectTileId(16);
+        fixture.dma.setByte(0xff46, 0x12);
+        fixture.advanceDma(8, 100);
+
+        fixture.runSearch();
+
+        assertTrue(fixture.search.getSprites()[0].isEnabled());
+        assertEquals(24, fixture.search.getSprites()[0].getX());
+    }
+
+    @Test
+    public void cgbDmaDisconnectsAndPrechargesTheReaderBus() {
+        Fixture fixture = new Fixture(true);
+        fixture.fillOamPositions(16, 24);
+        fixture.runSearch();
+        fixture.dma.setByte(0xff46, 0x12);
+        fixture.advanceDma(8, 100);
+
+        fixture.runSearch();
+
+        assertFalse(fixture.search.getSprites()[0].isEnabled());
+    }
+
+    @Test
     public void dmaAcquisitionFinishesTheCachedOamWord() {
         Fixture fixture = new Fixture();
         fixture.runSearch();
@@ -332,6 +393,13 @@ public class OamSearchTest {
             beginSearchLine();
             while (tickSearch()) {
                 // Complete the 80-dot OAM scan.
+            }
+        }
+
+        private void fillOamPositions(int y, int x) {
+            for (int entry = 0; entry < 40; entry++) {
+                oam.setByte(0xfe00 + 4 * entry, y);
+                oam.setByte(0xfe01 + 4 * entry, x);
             }
         }
 

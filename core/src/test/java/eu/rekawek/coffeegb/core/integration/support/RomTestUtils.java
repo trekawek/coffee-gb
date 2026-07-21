@@ -44,32 +44,28 @@ public final class RomTestUtils {
         resultFile.delete();
     }
 
-    public static void testRomWithScreenshotBaseline(Path romPath, Path expectedPath,
-                                                     Path currentBaselinePath,
-                                                     GameboyType gameboyType,
-                                                     int runtimeMillis) throws Exception {
+    public static void testRomWithScreenshot(Path romPath, Path expectedPath,
+                                             GameboyType gameboyType,
+                                             int runtimeMillis) throws Exception {
+        testRomWithScreenshot(romPath, expectedPath, gameboyType, runtimeMillis, false);
+    }
+
+    public static void testRomWithScreenshot(Path romPath, Path expectedPath,
+                                             GameboyType gameboyType,
+                                             int runtimeMillis,
+                                             boolean cgb0Revision) throws Exception {
         System.out.println("\n### Running screenshot test ROM " + romPath.getFileName() + " ###");
         ScreenshotTestRunner runner = new ScreenshotTestRunner(
-                romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis);
+                romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis,
+                cgb0Revision);
         ScreenshotTestRunner.TestResult result = runner.runTest();
-        if (result.getMismatchedPixels() == 0) {
-            return;
-        }
-
-        ScreenshotTestRunner.TestResult baselineResult =
-                result.compareAgainst(currentBaselinePath.toFile());
-        if (baselineResult.getMismatchedPixels() != 0) {
+        if (result.getMismatchedPixels() != 0) {
             File resultFile = File.createTempFile("screenshot-test-", "-result.png");
             result.writeResultToFile(resultFile);
-            fail(romPath.getFileName() + " matches neither its upstream reference nor the pinned "
-                    + "Coffee GB output; final frame differs from upstream in "
+            fail(romPath.getFileName() + " differs from its upstream reference in "
                     + result.getMismatchedPixels() + " pixels (maximum channel delta "
-                    + result.getMaxChannelDelta() + ") and from the current baseline in "
-                    + baselineResult.getMismatchedPixels() + " pixels (maximum channel delta "
-                    + baselineResult.getMaxChannelDelta() + "); actual image: " + resultFile);
+                    + result.getMaxChannelDelta() + "); actual image: " + resultFile);
         }
-        System.out.println(romPath.getFileName() + ": upstream mismatch is pinned exactly ("
-                + result.getMismatchedPixels() + " pixels)");
     }
 
     public static void testMooneyeRom(Path romPath) throws IOException {

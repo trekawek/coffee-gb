@@ -6,7 +6,7 @@ import org.junit.Test;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.testRomWithScreenshotBaseline;
+import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.testRomWithScreenshot;
 
 public class StrikethroughRomTest {
 
@@ -14,10 +14,9 @@ public class StrikethroughRomTest {
 
     @Test(timeout = 30_000)
     public void testStrikethrough() throws Exception {
-        testRomWithScreenshotBaseline(
+        testRomWithScreenshot(
                 SUITE_DIR.resolve("strikethrough.gb"),
                 SUITE_DIR.resolve("strikethrough.png"),
-                SUITE_DIR.resolve("current-baseline.png"),
                 GameboyType.DMG, 500);
     }
 }
