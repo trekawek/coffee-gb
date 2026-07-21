@@ -149,6 +149,59 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void rephasedNormalSpeedCgbStatProjectsMode2InFinalCpuBusSlot() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 449);
+
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void rephasedDoubleSpeedCgbStatProjectsMode2InFinalCpuBusSlot() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 452);
+
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void rephasedNormalSpeedCgbStatProjectsMode2AtFrameTail() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(153, 449);
+
+        assertEquals(Mode.VBlank.ordinal(), fixture.readStatMode());
+        fixture.tick();
+        assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void rephasedCgbDmgCompatibilityKeepsOrdinaryTailMux() {
+        Fixture fixture = new Fixture(true);
+        fixture.speedMode.setDmgCompat(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(1, 450);
+
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void rephasedCgbLycSourceKeepsCurrentModeInTailMux() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.advanceTo(1, 450);
+
+        assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
     public void cgbLycStatReadRetainsHblankThroughDot454OnObjectFreeLine() {
         Fixture fixture = new Fixture(true);
         fixture.stat.setByte(StatRegister.ADDRESS, 0x40);

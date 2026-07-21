@@ -1308,6 +1308,17 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         int visibleMode = cpuStatModeOverride >= 0
                 ? cpuStatModeOverride
                 : gpu.getVisibleStatMode();
+        // A speed switch rephases the native CGB's CPU-facing STAT mux. Its last
+        // bus slot of an active scanline (and of line 153) already exposes the next
+        // line's mode 2. The LYC source shares this tail mux and keeps the current
+        // mode visible in that rephased slot when selected.
+        if (gpu.isGbc() && !gpu.isDmgCompatMode()
+                && gpu.isLcdEnabled() && gpu.isStatModeLatchRephasedBySpeedSwitch()
+                && (gpu.getLine() < 143 || gpu.getLine() == 153)
+                && gpu.getTicksInLine() >= (isDoubleSpeed() ? 453 : 450)
+                && (enableBits & 0x40) == 0) {
+            visibleMode = Mode.OamSearch.ordinal();
+        }
         if (gpu.isGbc() && !isDoubleSpeed() && gpu.isLcdEnabled()
                 && gpu.getLine() < 143 && gpu.getTicksInLine() == 454
                 && !gpu.hasObjectsOnLine() && (enableBits & 0x40) != 0
