@@ -189,6 +189,36 @@ public class JoypadSgbPacketTest {
         assertEquals(0x1234, command.get().getPalette0()[0]);
     }
 
+    @Test
+    public void undocumentedMltReqTwoKeepsItsSpecialPlayerIdState() {
+        postMltReq(3);
+        selectNextPlayer();
+        assertEquals(0xfe, joypad.getByte(0xff00));
+
+        postMltReq(2);
+        assertEquals(0xfd, joypad.getByte(0xff00));
+        selectNextPlayer();
+        assertEquals(0xfd, joypad.getByte(0xff00));
+
+        postMltReq(3);
+        selectNextPlayer();
+        assertEquals(0xfc, joypad.getByte(0xff00));
+        postMltReq(2);
+        assertEquals(0xff, joypad.getByte(0xff00));
+    }
+
+    private void postMltReq(int multiplayerControl) {
+        int[] packet = new int[16];
+        packet[0] = 0x11 * 8 + 1;
+        packet[1] = multiplayerControl;
+        sgbBus.post(Commands.toCommand(packet));
+    }
+
+    private void selectNextPlayer() {
+        writeSelector(0x10);
+        writeSelector(0x30);
+    }
+
     private void sendPacket(int[] packet) {
         startPacket();
         writeDataBits(packet, 0, 128, false);

@@ -63,9 +63,14 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         transferInProgress = isSgb;
         transferReadyForData = false;
         sgbBus.register(event -> {
-            int multiplayerControl = event.getMultiplayerControl() & 0x03;
-            players = (multiplayerControl & 1) == 0 ? 0 : multiplayerControl;
-            currentPlayer &= players;
+            players = event.getMultiplayerControl() & 0x03;
+            if (players == 2) {
+                // Undocumented MLT_REQ value 2 keeps the ICD2 in a distinct state:
+                // player IDs 1 and 2 read as 2, while IDs 0 and 3 read as 0.
+                currentPlayer = currentPlayer == 1 || currentPlayer == 2 ? 2 : 0;
+            } else {
+                currentPlayer &= players;
+            }
             LOG.atDebug().log("Players: {}, current player: {}", players, currentPlayer);
         }, Commands.MltReqCmd.class);
     }
@@ -158,7 +163,8 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
                 receiveSgbPacketPulse(input);
             }
         }
-        if (players > 0 && !BitUtils.getBit(p1, 5) && BitUtils.getBit(value, 5)) {
+        if (players > 0 && players != 2
+                && !BitUtils.getBit(p1, 5) && BitUtils.getBit(value, 5)) {
             currentPlayer++;
             if (currentPlayer > players) {
                 currentPlayer = 0;
