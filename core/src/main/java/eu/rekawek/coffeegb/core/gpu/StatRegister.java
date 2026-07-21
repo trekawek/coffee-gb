@@ -188,6 +188,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     public void tick() {
+        interruptManager.finishLcdcReadMaskWindow();
         lycIrqClock++;
         cpuStatModeOverride = -1;
         if (interruptManager.consumeLcdcInterruptAcknowledge()) {
@@ -752,7 +753,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         }
         if (gpu.isGbc() && !isDoubleSpeed() && gpu.getLine() == 143
                 && gpu.getTicksInLine() == 455 && pendingCgbMode1Interrupt) {
+            boolean newlyAsserted =
+                    !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
             interruptManager.requestInterrupt(InterruptType.LCDC);
+            if (newlyAsserted && gpu.isStatModeLatchRephasedBySpeedSwitch()) {
+                interruptManager.maskLcdcUntilNextPeripheralTick();
+            }
             pendingCgbMode1Interrupt = false;
         }
         if (mode0Event && mode0EventArmed) {
@@ -1320,7 +1326,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             visibleMode = Mode.OamSearch.ordinal();
         }
         if (gpu.isGbc() && !isDoubleSpeed() && gpu.isLcdEnabled()
-                && gpu.getLine() < 143 && gpu.getTicksInLine() == 454
+                && (gpu.getLine() < 143 && gpu.getTicksInLine() == 454
+                || gpu.getLine() == 143 && gpu.getTicksInLine() >= 454)
                 && !gpu.hasObjectsOnLine() && (enableBits & 0x40) != 0
                 && (lycIrqValueSource != registeredLy
                 || lycIrqClock - lastLycIrqRegisterChangeClock
@@ -1341,7 +1348,14 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             // The following CPU slot lands after the ordinary release at dot 454.
             visibleCoincidence = false;
         }
-        return 0b10000000 | enableBits | (visibleCoincidence ? 0b100 : 0) | visibleMode;
+        if (gpu.isGbc() && !gpu.isDmgCompatMode() && !isDoubleSpeed()
+                && gpu.isStatModeLatchRephasedBySpeedSwitch()
+                && gpu.getLine() == 143 && gpu.getTicksInLine() == 455
+                && registeredLy == lycIrqValueSource) {
+            visibleCoincidence = true;
+        }
+        return 0b10000000 | enableBits
+                | (visibleCoincidence ? 0b100 : 0) | visibleMode;
     }
 
     @Override
