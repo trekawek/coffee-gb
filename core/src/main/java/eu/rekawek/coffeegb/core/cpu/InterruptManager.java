@@ -59,6 +59,11 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     // asserted, but that one bus read sees VBlank low.
     private boolean maskVBlankOnNextRead;
 
+    // A rephased normal-speed CGB CPU can begin its final line-143 IF read before
+    // the captured mode-1 request reaches the bus. Keep the stored request intact;
+    // only that CPU slot sees LCDC low.
+    private boolean maskLcdcUntilNextPeripheralTick;
+
     // The CPU acknowledges an interrupt near the middle of its final dispatch
     // machine cycle. Serial events in the remaining part of that cycle are
     // evaluated before the acknowledge clears IF.
@@ -205,6 +210,9 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         cpuPhasedPpuInterrupts &= ~(1 << type.ordinal());
         cpuPhasedMode2Interrupts &= ~(1 << type.ordinal());
         cpuFirstLineMode2Interrupts &= ~(1 << type.ordinal());
+        if (type == InterruptType.LCDC) {
+            maskLcdcUntilNextPeripheralTick = false;
+        }
     }
 
     public boolean consumeSerialInterruptAcknowledge() {
@@ -281,6 +289,14 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         maskVBlankOnNextRead = true;
     }
 
+    public void maskLcdcUntilNextPeripheralTick() {
+        maskLcdcUntilNextPeripheralTick = true;
+    }
+
+    public void finishLcdcReadMaskWindow() {
+        maskLcdcUntilNextPeripheralTick = false;
+    }
+
     @Override
     public boolean accepts(int address) {
         return address == 0xff0f || address == 0xffff;
@@ -297,6 +313,7 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                 cpuPhasedMode2Interrupts = 0;
                 cpuFirstLineMode2Interrupts = 0;
                 maskVBlankOnNextRead = false;
+                maskLcdcUntilNextPeripheralTick = false;
                 break;
 
             case 0xffff:
@@ -309,11 +326,16 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     public int getByte(int address) {
         switch (address) {
             case 0xff0f:
+                int value = interruptFlag;
                 if (maskVBlankOnNextRead) {
                     maskVBlankOnNextRead = false;
-                    return interruptFlag & ~(1 << InterruptType.VBlank.ordinal());
+                    value &= ~(1 << InterruptType.VBlank.ordinal());
                 }
-                return interruptFlag;
+                if (maskLcdcUntilNextPeripheralTick) {
+                    maskLcdcUntilNextPeripheralTick = false;
+                    value &= ~(1 << InterruptType.LCDC.ordinal());
+                }
+                return value;
 
             case 0xffff:
                 return interruptEnabled;
@@ -328,7 +350,8 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         return new InterruptManagerMemento(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts,
                 haltBlockedInterrupts, cpuBlockedInterrupts, cpuPhasedPpuInterrupts,
                 cpuPhasedMode2Interrupts, cpuFirstLineMode2Interrupts,
-                maskVBlankOnNextRead, serialInterruptAcknowledge,
+                maskVBlankOnNextRead, maskLcdcUntilNextPeripheralTick,
+                serialInterruptAcknowledge,
                 timerInterruptAcknowledge, lcdcInterruptAcknowledge);
     }
 
@@ -347,6 +370,7 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         this.cpuPhasedMode2Interrupts = mem.cpuPhasedMode2Interrupts;
         this.cpuFirstLineMode2Interrupts = mem.cpuFirstLineMode2Interrupts;
         this.maskVBlankOnNextRead = mem.maskVBlankOnNextRead;
+        this.maskLcdcUntilNextPeripheralTick = mem.maskLcdcUntilNextPeripheralTick;
         this.serialInterruptAcknowledge = mem.serialInterruptAcknowledge;
         this.timerInterruptAcknowledge = mem.timerInterruptAcknowledge;
         this.lcdcInterruptAcknowledge = mem.lcdcInterruptAcknowledge;
@@ -360,6 +384,7 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                                            int cpuPhasedMode2Interrupts,
                                            int cpuFirstLineMode2Interrupts,
                                            boolean maskVBlankOnNextRead,
+                                           boolean maskLcdcUntilNextPeripheralTick,
                                            boolean serialInterruptAcknowledge,
                                            boolean timerInterruptAcknowledge,
                                            boolean lcdcInterruptAcknowledge) implements Memento<InterruptManager> {

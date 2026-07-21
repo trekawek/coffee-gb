@@ -195,6 +195,21 @@ public class InterruptManagerTest {
     }
 
     @Test
+    public void lcdcBusMaskExpiresAtTheNextPeripheralTick() {
+        InterruptManager interrupts = new InterruptManager(true);
+        interrupts.setByte(0xff0f, 1 << LCDC.ordinal());
+        interrupts.maskLcdcUntilNextPeripheralTick();
+        var memento = interrupts.saveToMemento();
+
+        assertEquals(0xe0, interrupts.getByte(0xff0f));
+        assertTrue(interrupts.isInterruptFlagSet(LCDC));
+
+        interrupts.restoreFromMemento(memento);
+        interrupts.finishLcdcReadMaskWindow();
+        assertEquals(0xe2, interrupts.getByte(0xff0f));
+    }
+
+    @Test
     public void eiEnablesImeAfterTheFollowingInstruction() {
         InterruptManager interrupts = new InterruptManager(true);
 

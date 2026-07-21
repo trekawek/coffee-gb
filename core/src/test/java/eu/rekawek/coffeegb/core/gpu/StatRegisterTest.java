@@ -202,6 +202,38 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void rephasedCgbLycTailReadsOutgoingStateAtVblankBoundary() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 143);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.advanceTo(143, 454);
+
+        assertEquals(0xc0, fixture.stat.getByte(StatRegister.ADDRESS));
+        fixture.tick();
+        assertEquals(0xc4, fixture.stat.getByte(StatRegister.ADDRESS));
+        fixture.tick();
+        assertEquals(0xc1, fixture.stat.getByte(StatRegister.ADDRESS));
+    }
+
+    @Test
+    public void rephasedCgbMode1RequestIsHiddenInFinalLine143IfBusSlot() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x10);
+        fixture.advanceTo(143, 447);
+        fixture.clearInterrupts();
+        fixture.advanceTo(143, 454);
+
+        fixture.tick();
+
+        assertTrue(fixture.interrupts.isInterruptFlagSet(LCDC));
+        assertEquals(0, fixture.lcdInterruptFlag());
+        fixture.tick();
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
     public void cgbLycStatReadRetainsHblankThroughDot454OnObjectFreeLine() {
         Fixture fixture = new Fixture(true);
         fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
