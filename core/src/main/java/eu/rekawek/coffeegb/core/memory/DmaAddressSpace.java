@@ -27,6 +27,15 @@ public class DmaAddressSpace implements AddressSpace, Serializable {
 
     @Override
     public int getByte(int address) {
+        if (gbc && address >= 0xe000) {
+            // Native CGB decodes these pages onto the cartridge bus for conflict
+            // purposes, but the OAM-DMA copy data pins themselves remain open.
+            return 0xff;
+        }
+        return getCpuBusByte(address);
+    }
+
+    int getCpuBusByte(int address) {
         return addressSpace.getByte(mapAddress(address, gbc));
     }
 
@@ -35,8 +44,9 @@ public class DmaAddressSpace implements AddressSpace, Serializable {
             return address;
         }
         // The DMG copy engine follows the normal echo mapping for the high
-        // source range. CGB instead decodes those source pages onto cartridge
-        // RAM, including while running in monochrome compatibility mode.
+        // source range. CGB instead classifies those source pages as cartridge
+        // RAM for bus-conflict purposes, including in compatibility mode; its
+        // copy-data decoder handles this invalid range separately in getByte().
         return gbc ? address & 0xbfff : address - 0x2000;
     }
 }

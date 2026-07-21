@@ -219,6 +219,29 @@ public class DmaTest {
     }
 
     @Test
+    public void speedSwitchReleasesOnlyAnOamDmaWhoseFinalByteWasCopied() {
+        Fixture pendingFinalByte = new Fixture(true);
+        pendingFinalByte.start();
+        pendingFinalByte.tick(640);
+        pendingFinalByte.dma.onSpeedSwitch();
+        pendingFinalByte.dma.tick(true, false);
+
+        assertTrue(pendingFinalByte.dma.isTransferInProgress());
+        assertEquals(0xee, pendingFinalByte.oam.getByte(0xfe9f));
+
+        Fixture copiedFinalByte = new Fixture(true);
+        copiedFinalByte.start();
+        copiedFinalByte.tick(644);
+        copiedFinalByte.dma.onSpeedSwitch();
+
+        assertFalse(copiedFinalByte.dma.isTransferInProgress());
+        assertEquals(0xdf, copiedFinalByte.oam.getByte(0xfe9f));
+        copiedFinalByte.dma.tick(true, false);
+        assertTrue(copiedFinalByte.dma.ownedOamForPpuBeforeTick());
+        assertFalse(copiedFinalByte.dma.ownsOamForPpu());
+    }
+
+    @Test
     public void dmaRegisterPowersUpAsZeroOnCgb() {
         assertEquals(0x00, createDma(true).getByte(0xff46));
     }
@@ -241,14 +264,14 @@ public class DmaTest {
     }
 
     @Test
-    public void cgbHighSourceCopyAliasesCartridgeRam() {
+    public void cgbHighSourceCopyReturnsOpenBusData() {
         Ram memory = new Ram(0, 0x10000);
         memory.setByte(0xa000, 0x42);
 
         DmaAddressSpace dmaMemory = new DmaAddressSpace(memory, true);
 
-        assertEquals(0x42, dmaMemory.getByte(0xe000));
-        assertEquals(0x00, dmaMemory.getByte(0xff9f));
+        assertEquals(0xff, dmaMemory.getByte(0xe000));
+        assertEquals(0xff, dmaMemory.getByte(0xff9f));
     }
 
     private static Dma createDma(boolean gbc) {

@@ -430,6 +430,23 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         }
     }
 
+    /** Captures the PPU mux phase before this tick's CPU memory callback. */
+    public void captureCpuStatReadPhase() {
+        cpuStatModeOverride = gpu.getCpuReadStatModeOverride();
+    }
+
+    /** Publishes line 1's LYC=0-blocked normal-speed mode-2 handoff before CPU I/O. */
+    public void publishFrameLyc0Mode2HandoffBeforeCpu() {
+        if (pendingCgbMode2Interrupt && !isDoubleSpeed()
+                && isDeferredCgbMode2Phase()
+                && gpu.getLine() == 1
+                && (enableBits & 0x60) == 0x60
+                && modeIrqLycLatch == 0
+                && gpu.getTicksInLine() == 450) {
+            publishPendingCgbMode2Event();
+        }
+    }
+
     public void onLcdDisabled() {
         cpuStatModeOverride = -1;
         pendingCgbMode1Interrupt = false;
@@ -1314,6 +1331,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         int visibleMode = cpuStatModeOverride >= 0
                 ? cpuStatModeOverride
                 : gpu.getCpuVisibleStatMode();
+        if (enableBits == 0 && gpu.isUnrephasedLineZeroStatTail()) {
+            // With no STAT source selected, the LCD-restart clock phase exposes
+            // line zero's mode-3 latch for the five-dot mode-0 hand-off. Selecting
+            // any interrupt source moves the CPU read onto the ordinary MSTAT path.
+            visibleMode = Mode.PixelTransfer.ordinal();
+        }
         // A speed switch rephases the native CGB's CPU-facing STAT mux. Its last
         // bus slot of an active scanline (and of line 153) already exposes the next
         // line's mode 2. The LYC source shares this tail mux and keeps the current

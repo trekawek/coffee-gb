@@ -73,6 +73,26 @@ public class GpuDisplayEnableTimingTest {
     }
 
     @Test
+    public void normalSpeedCpuReadSamplesFirstLineModeZeroOneDotEarly() {
+        Fixture fixture = new Fixture(1);
+        fixture.gpu.setByte(0xff43, 1);
+        fixture.gpu.setByte(0xff40, 0x11);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.advanceTo(88);
+        fixture.gpu.setByte(0xff43, 7);
+        fixture.advanceTo(251);
+
+        assertEquals(Mode.HBlank, fixture.gpu.getMode());
+        assertFalse(fixture.gpu.hasObjectsOnLine());
+        assertFalse(fixture.gpu.isMode0IntWindow());
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
+
+        fixture.stat.captureCpuStatReadPhase();
+        assertEquals(Mode.HBlank.ordinal(),
+                fixture.stat.getByte(StatRegister.ADDRESS) & 0x03);
+    }
+
+    @Test
     public void firstLineSpriteCandidateHoldsCgbReadableModeThroughPhysicalHandoff() {
         Fixture fixture = new Fixture(1);
         fixture.gpu.setByte(0xff40, 0x00);
@@ -91,6 +111,54 @@ public class GpuDisplayEnableTimingTest {
             fixture.tick();
         }
         assertEquals(Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
+    }
+
+    @Test
+    public void dmgLowerFineScxSpriteLatchReleasesTwoDotsBeforeModeZeroEdge() {
+        Fixture fixture = new Fixture(1, false, false);
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.gpu.setByte(0xff43, 4);
+        fixture.oam.setByte(0xfe00, 16);
+        fixture.oam.setByte(0xfe01, 9);
+        fixture.gpu.setByte(0xff40, 0x93);
+        fixture.advanceTo(1, 0);
+
+        int threeDotsBefore = -1;
+        int twoDotsBefore = -1;
+        int oneDotBefore = -1;
+        while (!fixture.gpu.isMode0IntWindow()) {
+            threeDotsBefore = twoDotsBefore;
+            twoDotsBefore = oneDotBefore;
+            oneDotBefore = fixture.gpu.getVisibleStatMode();
+            fixture.tick();
+        }
+
+        assertEquals(Mode.PixelTransfer.ordinal(), threeDotsBefore);
+        assertEquals(Mode.HBlank.ordinal(), twoDotsBefore);
+        assertEquals(Mode.HBlank.ordinal(), oneDotBefore);
+    }
+
+    @Test
+    public void dmgHighFineScxSpriteLatchPersistsThroughModeZeroEdge() {
+        for (int fineScx = 5; fineScx <= 7; fineScx++) {
+            Fixture fixture = new Fixture(1, false, false);
+            fixture.gpu.setByte(0xff40, 0x00);
+            fixture.gpu.setByte(0xff43, fineScx);
+            fixture.oam.setByte(0xfe00, 16);
+            fixture.oam.setByte(0xfe01, 9);
+            fixture.gpu.setByte(0xff40, 0x93);
+            fixture.advanceTo(1, 0);
+
+            while (!fixture.gpu.isMode0IntWindow()) {
+                fixture.tick();
+            }
+
+            assertEquals("SCX=" + fineScx,
+                    Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
+            fixture.tick();
+            assertEquals("SCX=" + fineScx,
+                    Mode.HBlank.ordinal(), fixture.gpu.getVisibleStatMode());
+        }
     }
 
     @Test
@@ -436,7 +504,11 @@ public class GpuDisplayEnableTimingTest {
         }
 
         private Fixture(int speed, boolean dmgCompat) {
-            SpeedMode speedMode = new SpeedMode(true) {
+            this(speed, dmgCompat, true);
+        }
+
+        private Fixture(int speed, boolean dmgCompat, boolean gbc) {
+            SpeedMode speedMode = new SpeedMode(gbc) {
                 @Override
                 public int getSpeedMode() {
                     return speed;
@@ -445,12 +517,12 @@ public class GpuDisplayEnableTimingTest {
             speedMode.setDmgCompat(dmgCompat);
             dma = new Dma(new Ram(0, 0x10000), oam, speedMode);
             gpu = new Gpu(
-                    new Display(true),
+                    new Display(gbc),
                     dma,
                     oam,
                     new VRamTransfer(NULL_EVENT_BUS),
                     stat,
-                    true,
+                    gbc,
                     speedMode);
             stat.init(gpu);
         }

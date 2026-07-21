@@ -567,6 +567,15 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         return cpuRequestArbitration == CpuRequestArbitration.CPU;
     }
 
+    /**
+     * Whether the HBlank request will reach the CPU arbiter after this tick's CPU
+     * callback. A retiring instruction still owns its read phase on that edge.
+     */
+    public boolean isHblankRequestArrivingAfterCpuTick() {
+        return transferInProgress && hblankTransfer && !cpuHalted
+                && hblankRequestTicks == 1;
+    }
+
     public void onCpuRequestSlotRetired() {
         if (cpuRequestArbitration == CpuRequestArbitration.CPU) {
             setCpuRequestArbitration(CpuRequestArbitration.DMA);

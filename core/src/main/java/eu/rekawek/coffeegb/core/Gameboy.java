@@ -493,6 +493,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     private Mode tickSubsystems() {
+        statRegister.captureCpuStatReadPhase();
+        statRegister.publishFrameLyc0Mode2HandoffBeforeCpu();
         boolean speedSwitching = cpu.isSpeedSwitching();
         boolean speedSwitchTail = speedSwitchTailTicks > 0;
         dma.setCpuInterruptStackWrite(cpu.getState() == Cpu.State.IRQ_PUSH_1
@@ -574,8 +576,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 }
                 if (hdma.isCpuInstructionRequestOwner()) {
                     // A CPU-fetched instruction owns the request slot until its next
-                    // opcode boundary. Its final double-speed HBlank read also keeps
-                    // the VRAM slot that was granted with the instruction.
+                    // opcode boundary. Its final HBlank read also keeps the VRAM slot
+                    // that was granted with the instruction.
                     gpu.setCpuRetiringInstructionForHdma(true);
                     try {
                         cpu.tick();
@@ -600,11 +602,21 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 }
             }
         } else {
-            cpu.tick();
+            // A retiring instruction can issue its final VRAM read on the CPU half
+            // of the edge immediately before an HBlank request reaches arbitration.
+            boolean retiringIntoHdmaRequest = cpu.isInstructionRetiringForHdma()
+                    && hdma.isHblankRequestArrivingAfterCpuTick();
+            gpu.setCpuRetiringInstructionForHdma(retiringIntoHdmaRequest);
+            try {
+                cpu.tick();
+            } finally {
+                gpu.setCpuRetiringInstructionForHdma(false);
+            }
         }
         if (!speedSwitching && cpu.isSpeedSwitching()) {
             sound.onSpeedSwitch();
             gpu.onSpeedSwitch();
+            dma.onSpeedSwitch();
             if (hdma.onSpeedSwitch()) {
                 cpu.replaySpeedSwitchPaddingByte();
             }

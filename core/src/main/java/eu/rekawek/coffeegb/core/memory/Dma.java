@@ -13,7 +13,7 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
 
     private static final int DMG_SOURCE_BUS_RELEASE_CLOCKS = 636;
 
-    private final AddressSpace addressSpace;
+    private final DmaAddressSpace addressSpace;
 
     private final AddressSpace oam;
 
@@ -137,19 +137,33 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
                     currentByte++;
                 }
                 if (transferClocks >= 648) {
-                    transferInProgress = false;
-                    restarted = false;
-                    ppuOamOwnedThroughRestart = false;
-                    ticks = 0;
-                    transferClocks = 0;
-                    currentByte = 0;
-                    pendingInterruptWriteByte = -1;
+                    finishTransfer();
                     break;
                 }
             }
         }
         updatePpuOamOwnership();
         vramDmaBusAddress = -1;
+    }
+
+    private void finishTransfer() {
+        transferInProgress = false;
+        restarted = false;
+        ppuOamOwnedThroughRestart = false;
+        ticks = 0;
+        transferClocks = 0;
+        currentByte = 0;
+        pendingInterruptWriteByte = -1;
+    }
+
+    /**
+     * A speed switch disconnects an OAM-DMA transfer whose final copy edge has
+     * completed, without waiting for the ordinary four-clock release tail.
+     */
+    public void onSpeedSwitch() {
+        if (transferInProgress && currentByte >= 0xa0) {
+            finishTransfer();
+        }
     }
 
     public void setVramDmaBusSample(Hdma.SourceBusSample sample) {
@@ -250,6 +264,13 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
             return ((from + byteIndex) >> 8) & 0x9f;
         }
         int oamAddress = getActiveOamAddress();
+        if (speedMode.isGbc() && from >= 0xe000) {
+            // The invalid high source leaves the OAM copy-data pins open, but its
+            // partially decoded cartridge-bus request still reads the A000-BF9F
+            // SRAM alias. CPU accesses contending on that bus see the SRAM byte,
+            // independently of the FF byte written into OAM.
+            return addressSpace.getCpuBusByte(from + oamAddress - 0xfe00);
+        }
         int value = oam.getByte(oamAddress);
         if (speedMode.isGbc() && getSourceType() == SourceType.VRAM) {
             // A CGB read collision on the VRAM bus returns the byte currently driven

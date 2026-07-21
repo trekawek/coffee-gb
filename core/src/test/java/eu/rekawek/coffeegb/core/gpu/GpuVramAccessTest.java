@@ -13,7 +13,7 @@ import static org.junit.Assert.assertEquals;
 public class GpuVramAccessTest {
 
     @Test
-    public void normalSpeedFinalReadSlotRequiresTheImmediatelyPrecedingWriteRequest() {
+    public void normalSpeedFinalMode3SlotsRemainBlocked() {
         Fixture standaloneRead = new Fixture(1);
         standaloneRead.gpu.setByte(0x8000, 0x42);
         standaloneRead.advanceTo(1, 246);
@@ -24,7 +24,33 @@ public class GpuVramAccessTest {
         writeThenRead.advanceTo(1, 238);
         writeThenRead.gpu.setByte(0x8000, 0x99);
         writeThenRead.advanceTo(1, 246);
-        assertEquals(0x42, writeThenRead.gpu.getByte(0x8000));
+        assertEquals(0xff, writeThenRead.gpu.getByte(0x8000));
+
+        Fixture finalWrite = new Fixture(1);
+        finalWrite.gpu.setByte(0x8000, 0x42);
+        finalWrite.advanceTo(1, 246);
+        finalWrite.gpu.setByte(0x8000, 0x99);
+        finalWrite.advanceTo(1, 254);
+        assertEquals(0x42, finalWrite.gpu.getByte(0x8000));
+    }
+
+    @Test
+    public void fineScxMovesTheFinalSlotWithoutMovingItsXComparator() {
+        Fixture finalRead = new Fixture(1);
+        finalRead.gpu.setByte(0x8000, 0x42);
+        finalRead.gpu.setByte(GpuRegister.SCX.getAddress(), 3);
+        finalRead.advanceTo(1, 242);
+        finalRead.gpu.setByte(0x8000, 0x99);
+        finalRead.advanceTo(1, 250);
+        assertEquals(0x42, finalRead.gpu.getByte(0x8000));
+
+        Fixture finalWrite = new Fixture(1);
+        finalWrite.gpu.setByte(0x8000, 0x42);
+        finalWrite.gpu.setByte(GpuRegister.SCX.getAddress(), 3);
+        finalWrite.advanceTo(1, 250);
+        finalWrite.gpu.setByte(0x8000, 0x99);
+        finalWrite.advanceTo(1, 258);
+        assertEquals(0x99, finalWrite.gpu.getByte(0x8000));
     }
 
     @Test
@@ -43,17 +69,19 @@ public class GpuVramAccessTest {
     }
 
     @Test
-    public void retiringHdmaCpuInstructionKeepsItsDoubleSpeedHblankReadSlot() {
-        Fixture fixture = new Fixture(2);
-        fixture.gpu.setByte(0x8000, 0x42);
-        fixture.advanceTo(1, 248);
-        assertEquals(0xff, fixture.gpu.getByte(0x8000));
+    public void retiringHdmaCpuInstructionKeepsItsHblankReadSlotAtBothSpeeds() {
+        for (int[] timing : new int[][] {{1, 250}, {2, 248}}) {
+            Fixture fixture = new Fixture(timing[0]);
+            fixture.gpu.setByte(0x8000, 0x42);
+            fixture.advanceTo(1, timing[1]);
+            assertEquals(0xff, fixture.gpu.getByte(0x8000));
 
-        fixture.gpu.setCpuRetiringInstructionForHdma(true);
-        assertEquals(0x42, fixture.gpu.getByte(0x8000));
+            fixture.gpu.setCpuRetiringInstructionForHdma(true);
+            assertEquals(0x42, fixture.gpu.getByte(0x8000));
 
-        fixture.gpu.setCpuRetiringInstructionForHdma(false);
-        assertEquals(0xff, fixture.gpu.getByte(0x8000));
+            fixture.gpu.setCpuRetiringInstructionForHdma(false);
+            assertEquals(0xff, fixture.gpu.getByte(0x8000));
+        }
     }
 
     @Test
@@ -79,15 +107,17 @@ public class GpuVramAccessTest {
     public void pendingWriteRequestIsPreservedByMemento() {
         Fixture fixture = new Fixture(1);
         fixture.gpu.setByte(0x8000, 0x42);
-        fixture.advanceTo(1, 238);
+        fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 3);
+        fixture.advanceTo(1, 242);
         fixture.gpu.setByte(0x8000, 0x99);
         Memento<Gpu> memento = fixture.gpu.saveToMemento();
 
-        fixture.advanceTo(1, 246);
+        fixture.advanceTo(1, 250);
         assertEquals(0x42, fixture.gpu.getByte(0x8000));
+        fixture.advanceTo(2, 0);
 
         fixture.gpu.restoreFromMemento(memento);
-        fixture.advanceTo(1, 246);
+        fixture.advanceTo(1, 250);
         assertEquals(0x42, fixture.gpu.getByte(0x8000));
     }
 
