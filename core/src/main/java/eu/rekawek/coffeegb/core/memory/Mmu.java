@@ -63,7 +63,11 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     }
 
     public Mmu(boolean gbc) {
-        oamEchoRam = new OamEchoRam(gbc);
+        this(gbc, false);
+    }
+
+    public Mmu(boolean gbc, boolean cgb0Revision) {
+        oamEchoRam = new OamEchoRam(gbc, cgb0Revision);
         // WRAM powers up with garbage, and neither boot ROM clears it. Games with
         // lazily-seeded random generators rely on that: Minesweeper for 'Windows'
         // spins forever placing mines when its LFSR seed area reads all zeros

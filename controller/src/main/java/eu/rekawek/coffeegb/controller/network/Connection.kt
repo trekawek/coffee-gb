@@ -56,11 +56,19 @@ class Connection(
       val battery = it.batteryFile?.let(::deflate)
       val snapshot = it.snapshot?.let(::deflate)
 
-      val buf = ByteBuffer.allocate(1 + 22 + 3 * 4 + rom.size + (battery?.size ?: 0) + (snapshot?.size ?: 0))
+      val buf =
+          ByteBuffer.allocate(
+              1 +
+                  23 +
+                  3 * 4 +
+                  rom.size +
+                  (battery?.size ?: 0) +
+                  (snapshot?.size ?: 0))
       buf.put(0x01)
       buf.putLong(it.frame)
       buf.put(it.gameboyType.ordinal.toByte())
       buf.put(it.bootstrapMode.ordinal.toByte())
+      buf.put(if (it.cgb0Revision) 1.toByte() else 0.toByte())
       buf.putInt(it.romFile.size)
       buf.putInt(it.batteryFile?.size ?: 0)
       buf.putInt(it.snapshot?.size ?: 0)
@@ -131,13 +139,14 @@ class Connection(
           when (command) {
             // peer loaded game
             0x01 -> {
-              val header = ByteArray(22 + 3 * 4)
+              val header = ByteArray(23 + 3 * 4)
               input.readFully(header)
               val buf = ByteBuffer.wrap(header)
 
               val frame = buf.getLong()
               val gameboyType = GameboyType.entries[buf.get().toInt()]
               val bootstrapMode = BootstrapMode.entries[buf.get().toInt()]
+              val cgb0Revision = buf.get().toInt() != 0
               val romSize = buf.getInt()
               val batterySize = buf.getInt()
               val snapshotSize = buf.getInt()
@@ -149,7 +158,8 @@ class Connection(
               val battery = inflate(readPayload(batteryCompressed), batterySize)
               val snapshot = inflate(readPayload(snapshotCompressed), snapshotSize)
 
-              PeerLoadedGameEvent(rom, battery, snapshot, gameboyType, bootstrapMode, frame)
+              PeerLoadedGameEvent(
+                  rom, battery, snapshot, gameboyType, bootstrapMode, frame, cgb0Revision)
             }
             // sync
             0x03 -> {
@@ -261,6 +271,7 @@ class Connection(
       val gameboyType: GameboyType,
       val bootstrapMode: BootstrapMode,
       val frame: Long,
+      val cgb0Revision: Boolean = false,
   ) : Event
 
   data class RequestResetEvent(val frame: Long) : Event
@@ -274,7 +285,7 @@ class Connection(
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
     private const val PROTOCOL_NAME: String = "CoffeeGB NETPLAY"
-    private const val PROTOCOL_VERSION: Byte = 0x03
+    private const val PROTOCOL_VERSION: Byte = 0x04
 
     fun deflate(data: ByteArray): ByteArray {
       val deflater = Deflater(Deflater.BEST_SPEED)

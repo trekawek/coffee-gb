@@ -120,6 +120,7 @@ class LinkedController(
           createGameboyConfig(properties, Rom(e.rom))
               .setGameboyType(e.gameboyType)
               .setBootstrapMode(e.bootstrapMode)
+              .setCgb0Revision(e.cgb0Revision)
               .setBatteryData(e.battery)
       initPeerSession(e.frame, e.snapshot?.deserializeToGameboyMemento())
     }
@@ -277,6 +278,7 @@ class LinkedController(
             mainConfig.gameboyType,
             mainConfig.bootstrapMode,
             frame,
+            cgb0Revision = mainConfig.isCgb0Revision,
         )
     )
   }
@@ -338,6 +340,7 @@ class LinkedController(
       val gameboyType: GameboyType,
       val bootstrapMode: Gameboy.BootstrapMode,
       val frame: Long,
+      val cgb0Revision: Boolean = false,
   ) : Event
 
   data class LocalButtonStateEvent(

@@ -47,9 +47,17 @@ public final class RomTestUtils {
     public static void testRomWithScreenshot(Path romPath, Path expectedPath,
                                              GameboyType gameboyType,
                                              int runtimeMillis) throws Exception {
+        testRomWithScreenshot(romPath, expectedPath, gameboyType, runtimeMillis, false);
+    }
+
+    public static void testRomWithScreenshot(Path romPath, Path expectedPath,
+                                             GameboyType gameboyType,
+                                             int runtimeMillis,
+                                             boolean cgb0Revision) throws Exception {
         System.out.println("\n### Running screenshot test ROM " + romPath.getFileName() + " ###");
         ScreenshotTestRunner runner = new ScreenshotTestRunner(
-                romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis);
+                romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis,
+                cgb0Revision);
         ScreenshotTestRunner.TestResult result = runner.runTest();
         if (result.getMismatchedPixels() != 0) {
             File resultFile = File.createTempFile("screenshot-test-", "-result.png");

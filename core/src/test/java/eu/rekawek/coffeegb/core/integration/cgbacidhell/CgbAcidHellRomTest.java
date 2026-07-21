@@ -17,6 +17,6 @@ public class CgbAcidHellRomTest {
         testRomWithScreenshot(
                 SUITE_DIR.resolve("cgb-acid-hell.gbc"),
                 SUITE_DIR.resolve("cgb-acid-hell.png"),
-                GameboyType.CGB, 1500);
+                GameboyType.CGB, 1500, true);
     }
 }

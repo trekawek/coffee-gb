@@ -167,6 +167,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
         this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
+        this.pixelMachine.setOamReaderBus(oamSearchPhase);
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();

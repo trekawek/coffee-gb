@@ -214,11 +214,16 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
                 if (!acquisitionCopyEdge
                         && (oamReaderSourceChangeTicks > 0 || !oamReaderDmaSource)) {
                     if (oamReaderDmaSource) {
-                        // A running DMA disconnects the OAM reader without discharging
-                        // its Y/X bus. Every search slot keeps seeing the last word the
-                        // reader sampled before DMA acquired OAM.
-                        oamReaderY[entry] = oamReaderBusY;
-                        oamReaderX[entry] = oamReaderBusX;
+                        if (registers.isGbc()) {
+                            oamReaderY[entry] = 0xff;
+                            oamReaderX[entry] = 0xff;
+                        } else {
+                            // DMG disconnects the OAM reader without discharging its
+                            // Y/X bus. Every search slot keeps seeing the last word the
+                            // reader sampled before DMA acquired OAM.
+                            oamReaderY[entry] = oamReaderBusY;
+                            oamReaderX[entry] = oamReaderBusX;
+                        }
                     } else {
                         oamReaderBusY = oemRam.getByte(address);
                         oamReaderBusX = oemRam.getByte(address + 1);
@@ -258,6 +263,12 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     public SpritePosition[] getSprites() {
         return sprites;
+    }
+
+    /** Object tile-ID reads in mode 3 share the mode-2 reader's Y-data bus. */
+    void latchObjectTileId(int tileId) {
+        initializeOamReader();
+        oamReaderBusY = tileId & 0xff;
     }
 
     public boolean hadSpriteHeightTransition() {
