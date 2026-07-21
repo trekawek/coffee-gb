@@ -11,7 +11,7 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collection;
 
-import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.testRomWithScreenshotBaseline;
+import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.testRomWithScreenshot;
 
 @RunWith(ParallelParameterized.class)
 public class CasualPokePlayerRomTest {
@@ -23,28 +23,31 @@ public class CasualPokePlayerRomTest {
 
     private final GameboyType gameboyType;
 
-    public CasualPokePlayerRomTest(String name, String romName, GameboyType gameboyType) {
+    private final int runtimeMillis;
+
+    public CasualPokePlayerRomTest(String name, String romName, GameboyType gameboyType,
+                                   int runtimeMillis) {
         this.romName = romName;
         this.gameboyType = gameboyType;
+        this.runtimeMillis = runtimeMillis;
     }
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<Object[]> data() {
         return Arrays.asList(new Object[][]{
-                {"RTC invalid banks", "rtc-invalid-banks-test.gb", GameboyType.DMG},
-                {"RTC latch", "latch-rtc-test.gb", GameboyType.DMG},
-                {"MBC3 RAM gate", "ramg-mbc3-test.gb", GameboyType.DMG},
-                {"SGB extended packet protocol", "sgb-ext-test.gb", GameboyType.SGB},
+                {"RTC invalid banks", "rtc-invalid-banks-test.gb", GameboyType.DMG, 500},
+                {"RTC latch", "latch-rtc-test.gb", GameboyType.DMG, 500},
+                {"MBC3 RAM gate", "ramg-mbc3-test.gb", GameboyType.DMG, 500},
+                {"SGB extended packet protocol", "sgb-ext-test.gb", GameboyType.SGB, 4_000},
         });
     }
 
-    @Test(timeout = 30_000)
+    @Test(timeout = 120_000)
     public void test() throws Exception {
         String imageName = romName.replaceFirst("\\.gb$", ".png");
-        testRomWithScreenshotBaseline(
+        testRomWithScreenshot(
                 SUITE_DIR.resolve(romName),
                 SUITE_DIR.resolve(imageName),
-                SUITE_DIR.resolve("current-baseline").resolve(imageName),
-                gameboyType, 500);
+                gameboyType, runtimeMillis);
     }
 }

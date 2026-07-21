@@ -24,6 +24,16 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     private int pendingMixValue = -1;
 
+    // A CGB LCDC.4 write can collide with a background tile-data read. The CPU write
+    // is processed before the PPU in Coffee GB's tick, so keep a short pulse for the
+    // fetcher rather than trying to infer the write from the settled register value.
+    // The conflict lasts for one PPU dot in either CPU speed mode.
+    private int tileSelectGlitchTicks;
+
+    private int pendingTileSelectGlitchTicks;
+
+    private final boolean[] tileSelectGlitchHistory = new boolean[8];
+
     // LCDC.2 reaches the OAM reader through its own clock-domain latch. Keep this
     // history running for the complete scanline, including HBlank, because writes at
     // the end of one line can still be pending when entry 0 is read on the next line.
@@ -55,9 +65,31 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     void tickConflicts() {
         mixValue = pendingMixValue;
         pendingMixValue = -1;
+        if (pendingTileSelectGlitchTicks > 0) {
+            tileSelectGlitchTicks = pendingTileSelectGlitchTicks;
+            pendingTileSelectGlitchTicks = 0;
+        } else if (tileSelectGlitchTicks > 0) {
+            tileSelectGlitchTicks--;
+        }
+        System.arraycopy(tileSelectGlitchHistory, 0, tileSelectGlitchHistory, 1,
+                tileSelectGlitchHistory.length - 1);
+        tileSelectGlitchHistory[0] = tileSelectGlitchTicks > 0;
         System.arraycopy(oamSizeHistory, 0, oamSizeHistory, 1,
                 oamSizeHistory.length - 1);
         oamSizeHistory[0] = value;
+    }
+
+    void triggerTileSelectGlitch() {
+        pendingTileSelectGlitchTicks = 1;
+    }
+
+    public boolean isTileSelectGlitch() {
+        return isTileSelectGlitch(0);
+    }
+
+    public boolean isTileSelectGlitch(int dotsAgo) {
+        checkArgument(dotsAgo >= 0 && dotsAgo < tileSelectGlitchHistory.length);
+        return tileSelectGlitchHistory[dotsAgo];
     }
 
     public int getSpriteHeight() {
@@ -123,6 +155,9 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         if (gbc) {
             // the CGB applies LCDC writes cleanly, without the DMG's conflict mix
             this.value = value;
+            if (!isLcdEnabled()) {
+                clearTileSelectGlitch();
+            }
             return;
         }
         int mix = this.value | (value & 0x01);
@@ -131,6 +166,12 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         }
         pendingMixValue = mix;
         this.value = value;
+    }
+
+    private void clearTileSelectGlitch() {
+        tileSelectGlitchTicks = 0;
+        pendingTileSelectGlitchTicks = 0;
+        Arrays.fill(tileSelectGlitchHistory, false);
     }
 
 
@@ -144,7 +185,10 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     @Override
     public Memento<Lcdc> saveToMemento() {
-        return new LcdcMemento(value, mixValue, pendingMixValue, oamSizeHistory.clone());
+        return new LcdcMemento(value, mixValue, pendingMixValue,
+                tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
+                tileSelectGlitchHistory.clone(),
+                oamSizeHistory.clone());
     }
 
     @Override
@@ -155,6 +199,13 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         this.value = mem.value;
         this.mixValue = mem.mixValue;
         this.pendingMixValue = mem.pendingMixValue;
+        this.tileSelectGlitchTicks = mem.tileSelectGlitchTicks;
+        this.pendingTileSelectGlitchTicks = mem.pendingTileSelectGlitchTicks;
+        if (mem.tileSelectGlitchHistory.length != tileSelectGlitchHistory.length) {
+            throw new IllegalArgumentException("Memento tile-select history length doesn't match");
+        }
+        System.arraycopy(mem.tileSelectGlitchHistory, 0, this.tileSelectGlitchHistory,
+                0, this.tileSelectGlitchHistory.length);
         if (mem.oamSizeHistory.length != oamSizeHistory.length) {
             throw new IllegalArgumentException("Memento OAM-size history length doesn't match");
         }
@@ -162,7 +213,10 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     }
 
     private record LcdcMemento(
-            int value, int mixValue, int pendingMixValue, int[] oamSizeHistory)
+            int value, int mixValue, int pendingMixValue,
+            int tileSelectGlitchTicks, int pendingTileSelectGlitchTicks,
+            boolean[] tileSelectGlitchHistory,
+            int[] oamSizeHistory)
             implements Memento<Lcdc> {
     }
 }

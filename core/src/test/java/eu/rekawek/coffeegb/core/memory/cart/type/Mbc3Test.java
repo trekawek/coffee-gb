@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -11,12 +13,16 @@ import static org.junit.Assert.assertEquals;
 public class Mbc3Test {
 
     private static Mbc3 buildMbc3() throws IOException {
+        return buildMbc3(new VirtualTimeSource());
+    }
+
+    private static Mbc3 buildMbc3(TimeSource timeSource) throws IOException {
         byte[] data = new byte[0x200000];
         data[0x147] = 0x13; // MBC3 + RAM + battery
         data[0x148] = 0x06; // 2 MiB / 128 ROM banks
         data[0x149] = 0x03; // 32 KiB / four RAM banks
         data[0x4000] = 0x24;
-        return new Mbc3(new Rom(data), Battery.NULL_BATTERY);
+        return new Mbc3(new Rom(data), Battery.NULL_BATTERY, timeSource);
     }
 
     private static Mbc3 buildMbc30() throws IOException {
@@ -57,5 +63,51 @@ public class Mbc3Test {
         assertEquals(0xff, mbc30.getByte(0xa000));
         mbc30.setByte(0x4000, 7);
         assertEquals(0x42, mbc30.getByte(0xa000));
+    }
+
+    @Test
+    public void ramGateDecodesOnlyLowNibbleValueA() throws IOException {
+        Mbc3 mbc3 = buildMbc3();
+        mbc3.setByte(0x4000, 0);
+        mbc3.setByte(0x0000, 0x0a);
+        mbc3.setByte(0xa000, 0x42);
+
+        for (int value = 0; value <= 0xff; value++) {
+            mbc3.setByte(0x0000, value);
+            assertEquals("RAM gate value " + value,
+                    (value & 0x0f) == 0x0a ? 0x42 : 0xff, mbc3.getByte(0xa000));
+        }
+
+        mbc3.setByte(0x0000, 0x00);
+        mbc3.setByte(0xa000, 0x99);
+        mbc3.setByte(0x0000, 0x0a);
+        assertEquals(0x42, mbc3.getByte(0xa000));
+    }
+
+    @Test
+    public void ramBankRegisterUsesOnlyLowNibble() throws IOException {
+        Mbc3 mbc3 = buildMbc3();
+        mbc3.setByte(0x0000, 0x0a);
+
+        mbc3.setByte(0x4000, 0x00);
+        mbc3.setByte(0xa000, 0x42);
+        mbc3.setByte(0x4000, 0xf0);
+
+        assertEquals(0x42, mbc3.getByte(0xa000));
+    }
+
+    @Test
+    public void everyRtcLatchRegisterWriteRefreshesSnapshot() throws IOException {
+        Mbc3 mbc3 = buildMbc3();
+        mbc3.setByte(0x0000, 0x0a);
+        mbc3.setByte(0x4000, 0x08);
+        mbc3.setByte(0xa000, 0x12);
+
+        mbc3.setByte(0x6000, 0xff);
+        mbc3.setByte(0xa000, 0x34);
+        assertEquals(0x12, mbc3.getByte(0xa000));
+
+        mbc3.setByte(0x6000, 0x80);
+        assertEquals(0x34, mbc3.getByte(0xa000));
     }
 }

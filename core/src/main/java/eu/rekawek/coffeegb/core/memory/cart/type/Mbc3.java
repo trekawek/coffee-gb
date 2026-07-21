@@ -26,11 +26,7 @@ public class Mbc3 implements MemoryController {
 
     private int selectedRomBank = 1;
 
-    private boolean ramWriteEnabled;
-
-    private int latchClockReg = 0xff;
-
-    private boolean clockLatched;
+    private boolean ramEnabled;
 
     public Mbc3(Rom rom, Battery battery) {
         this(rom, battery, new SystemTimeSource());
@@ -57,24 +53,20 @@ public class Mbc3 implements MemoryController {
     @Override
     public void setByte(int address, int value) {
         if (address >= 0x0000 && address < 0x2000) {
-            ramWriteEnabled = (value & 0b1010) != 0;
+            ramEnabled = (value & 0x0f) == 0x0a;
         } else if (address >= 0x2000 && address < 0x4000) {
             int bank = value & (mbc30 ? 0xff : 0x7f);
             selectRomBank(bank);
         } else if (address >= 0x4000 && address < 0x6000) {
-            selectedRamBank = value;
+            selectedRamBank = value & 0x0f;
         } else if (address >= 0x6000 && address < 0x8000) {
-            if (value == 0x01 && latchClockReg == 0x00) {
-                clock.latch();
-                clockLatched = true;
-            }
-            latchClockReg = value;
-        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled && isRamBankSelected()) {
+            clock.latch();
+        } else if (address >= 0xa000 && address < 0xc000 && ramEnabled && isRamBankSelected()) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
                 ram[ramAddress] = value;
             }
-        } else if (address >= 0xa000 && address < 0xc000 && ramWriteEnabled) {
+        } else if (address >= 0xa000 && address < 0xc000 && ramEnabled) {
             setTimer(value);
         }
     }
@@ -98,6 +90,8 @@ public class Mbc3 implements MemoryController {
             return getRomByte(0, address);
         } else if (address >= 0x4000 && address < 0x8000) {
             return getRomByte(selectedRomBank, address - 0x4000);
+        } else if (address >= 0xa000 && address < 0xc000 && !ramEnabled) {
+            return 0xff;
         } else if (address >= 0xa000 && address < 0xc000 && isRamBankSelected()) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
@@ -180,7 +174,8 @@ public class Mbc3 implements MemoryController {
 
     @Override
     public Memento<MemoryController> saveToMemento() {
-        return new Mbc3Memento(ram.clone(), clock.saveToMemento(), battery.saveToMemento(), selectedRamBank, selectedRomBank, ramWriteEnabled, latchClockReg, clockLatched);
+        return new Mbc3Memento(ram.clone(), clock.saveToMemento(), battery.saveToMemento(), selectedRamBank,
+                selectedRomBank, ramEnabled);
     }
 
     @Override
@@ -196,14 +191,11 @@ public class Mbc3 implements MemoryController {
         System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
         this.selectedRamBank = mem.selectedRamBank;
         this.selectedRomBank = mem.selectedRomBank;
-        this.ramWriteEnabled = mem.ramWriteEnabled;
-        this.latchClockReg = mem.latchClockReg;
-        this.clockLatched = mem.clockLatched;
+        this.ramEnabled = mem.ramEnabled;
     }
 
     private record Mbc3Memento(int[] ram, Memento<RealTimeClock> clockMemento, Memento<Battery> batteryMemento,
                                int selectedRamBank, int selectedRomBank,
-                               boolean ramWriteEnabled, int latchClockReg,
-                               boolean clockLatched) implements Memento<MemoryController> {
+                               boolean ramEnabled) implements Memento<MemoryController> {
     }
 }

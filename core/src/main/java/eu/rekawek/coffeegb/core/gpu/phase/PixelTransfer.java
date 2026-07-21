@@ -258,7 +258,8 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         } else {
             this.fifo = new DmgPixelFifo(display, lcdc, r, vRamTransfer);
         }
-        this.fetcher = new Fetcher(fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc);
+        this.fetcher = new Fetcher(
+                fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc, entryDelay);
         this.sprites = sprites;
     }
 

@@ -66,6 +66,25 @@ public class OamSearchTest {
     }
 
     @Test
+    public void runningDmaKeepsLastOamWordOnReaderBus() {
+        Fixture fixture = new Fixture();
+        for (int i = 0; i < 40; i++) {
+            fixture.oam.setByte(0xfe00 + 4 * i, 16);
+            fixture.oam.setByte(0xfe01 + 4 * i, 8 + i);
+        }
+        fixture.runSearch();
+        fixture.dma.setByte(0xff46, 0x12);
+        fixture.advanceDma(8, 100);
+
+        fixture.runSearch();
+
+        assertTrue(fixture.search.getSprites()[0].isEnabled());
+        assertTrue(fixture.search.getSprites()[9].isEnabled());
+        assertEquals(47, fixture.search.getSprites()[0].getX());
+        assertEquals(47, fixture.search.getSprites()[9].getX());
+    }
+
+    @Test
     public void dmaAcquisitionFinishesTheCachedOamWord() {
         Fixture fixture = new Fixture();
         fixture.runSearch();

@@ -46,7 +46,8 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     private int currentPlayer;
 
     private boolean transferInProgress;
-    private boolean transferWaitForHigh;
+    private boolean transferReadyForData;
+    private int pendingTransferBit = -1;
     private int currentByte;
     private final int[] currentPacket = new int[16];
     private int currentByteIndex;
@@ -60,14 +61,11 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         // reset the ICD2 receiver, so the first transition to idle-high may release the
         // start pulse without software having to create another falling edge first.
         transferInProgress = isSgb;
-        transferWaitForHigh = isSgb;
+        transferReadyForData = false;
         sgbBus.register(event -> {
-            players = event.getMultiplayerControl();
-            if (players == 2) {
-                currentPlayer = currentPlayer == 1 || currentPlayer == 2 ? 2 : 0;
-            } else {
-                currentPlayer = currentPlayer & players;
-            }
+            int multiplayerControl = event.getMultiplayerControl() & 0x03;
+            players = (multiplayerControl & 1) == 0 ? 0 : multiplayerControl;
+            currentPlayer &= players;
             LOG.atDebug().log("Players: {}, current player: {}", players, currentPlayer);
         }, Commands.MltReqCmd.class);
     }
@@ -160,7 +158,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
                 receiveSgbPacketPulse(input);
             }
         }
-        if (players > 0 && players != 2 && !BitUtils.getBit(p1, 5) && BitUtils.getBit(value, 5)) {
+        if (players > 0 && !BitUtils.getBit(p1, 5) && BitUtils.getBit(value, 5)) {
             currentPlayer++;
             if (currentPlayer > players) {
                 currentPlayer = 0;
@@ -177,7 +175,8 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         if (input == 0x00) {
             // Both lines low reset the receiver and start a fresh 16-byte packet.
             transferInProgress = true;
-            transferWaitForHigh = true;
+            transferReadyForData = false;
+            pendingTransferBit = -1;
             currentByte = 0;
             currentByteIndex = 0;
             currentPacketIndex = 0;
@@ -187,46 +186,46 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         if (!transferInProgress) {
             return;
         }
-        if (transferWaitForHigh) {
+        if (!transferReadyForData) {
             if (input == 0x30) {
-                transferWaitForHigh = false;
-            } else {
-                abortSgbPacket();
+                transferReadyForData = true;
             }
             return;
         }
-        if (input == 0x30) {
-            // Licensed software commonly leaves both lines high much longer than the
-            // receiver requires. Additional writes during that idle period are harmless.
+
+        if (input == 0x10 || input == 0x20) {
+            // ICD2 samples a pulse when both selector lines return high. If software
+            // switches directly between the two low levels, the last level wins.
+            pendingTransferBit = input == 0x10 ? 1 : 0;
+            return;
+        }
+        if (input != 0x30 || pendingTransferBit < 0) {
             return;
         }
 
         if (currentPacketIndex == currentPacket.length) {
-            // A packet is complete only after its mandatory 129th, zero-valued stop bit.
-            if (input == 0x20) {
-                sgbBus.post(new SuperGameboy.PacketReceivedEvent(currentPacket.clone()));
-            }
+            // The 129th pulse terminates a packet. Hardware ignores its bit value.
+            sgbBus.post(new SuperGameboy.PacketReceivedEvent(currentPacket.clone()));
             abortSgbPacket();
             return;
         }
 
-        // P14 low ($20) transmits zero; P15 low ($10) transmits one, least-significant
-        // bit first. No next pulse is accepted until both lines return high.
-        if (input == 0x10) {
+        if (pendingTransferBit != 0) {
             currentByte |= 1 << currentByteIndex;
         }
+        pendingTransferBit = -1;
         currentByteIndex++;
         if (currentByteIndex == 8) {
             currentPacket[currentPacketIndex++] = currentByte;
             currentByteIndex = 0;
             currentByte = 0;
         }
-        transferWaitForHigh = true;
     }
 
     private void abortSgbPacket() {
         transferInProgress = false;
-        transferWaitForHigh = false;
+        transferReadyForData = false;
+        pendingTransferBit = -1;
     }
 
     @Override
@@ -264,8 +263,8 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         // replays past button presses).
         return new JoypadMemento(p1, tick, inputHistory, filteredInputLines,
                 inputChangedSinceLastTick, players, currentPlayer, transferInProgress,
-                transferWaitForHigh, currentByte, currentPacket.clone(), currentByteIndex,
-                currentPacketIndex);
+                transferReadyForData, pendingTransferBit, currentByte, currentPacket.clone(),
+                currentByteIndex, currentPacketIndex);
     }
 
     @Override
@@ -281,7 +280,8 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         this.players = mem.players;
         this.currentPlayer = mem.currentPlayer;
         this.transferInProgress = mem.transferInProgress;
-        this.transferWaitForHigh = mem.transferWaitForHigh;
+        this.transferReadyForData = mem.transferReadyForData;
+        this.pendingTransferBit = mem.pendingTransferBit;
         this.currentByte = mem.currentByte;
         if (mem.currentPacket.length != this.currentPacket.length) {
             throw new IllegalArgumentException("Invalid memento length");
@@ -296,9 +296,9 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
                                 int filteredInputLines,
                                 boolean inputChangedSinceLastTick,
                                 int players, int currentPlayer,
-                                boolean transferInProgress, boolean transferWaitForHigh,
-                                int currentByte, int[] currentPacket, int currentByteIndex,
-                                int currentPacketIndex) implements Memento<Joypad> {
+                                boolean transferInProgress, boolean transferReadyForData,
+                                int pendingTransferBit, int currentByte, int[] currentPacket,
+                                int currentByteIndex, int currentPacketIndex) implements Memento<Joypad> {
     }
 
     public record JoypadPressEvent(Button button, long tick) implements Event {

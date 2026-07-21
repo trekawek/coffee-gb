@@ -12,7 +12,4 @@ The built ROMs and cropped LCD reference screenshots are copied from
 [GBEmulatorShootout](https://github.com/gbdev/GBEmulatorShootout) at commit
 `38b926bdbc26993d1b4c43e97979ecc66287bf02` (2026-07-13).
 
-None currently matches its reference. Exact Coffee GB outputs are stored under
-`current-baseline/` and the strict pixel differences are recorded in
-`known-failures.tsv`. A reference-perfect result passes automatically; any other
-output change fails for review. See `LICENSE` for the source repository's MIT license.
+See `LICENSE` for the source repository's MIT license.

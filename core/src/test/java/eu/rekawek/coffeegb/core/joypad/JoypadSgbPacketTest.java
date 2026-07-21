@@ -33,13 +33,15 @@ public class JoypadSgbPacketTest {
     }
 
     @Test
-    public void completePacketIsPostedOnlyAfterZeroStopBit() {
+    public void completePacketIsPostedWhenStopPulseReturnsHigh() {
         int[] packet = patternedPacket();
         startPacket();
         writeDataBits(packet, 0, 128, false);
 
         assertTrue(receivedPackets.isEmpty());
-        writeSelector(0x20); // required zero stop bit
+        writeSelector(0x20);
+        assertTrue(receivedPackets.isEmpty());
+        writeSelector(0x30);
 
         assertEquals(1, receivedPackets.size());
         assertArrayEquals(packet, receivedPackets.get(0));
@@ -52,19 +54,22 @@ public class JoypadSgbPacketTest {
         writeSelector(0x30);
         writeDataBits(packet, 0, 128, false);
         writeSelector(0x20);
+        writeSelector(0x30);
 
         assertEquals(1, receivedPackets.size());
         assertArrayEquals(packet, receivedPackets.get(0));
     }
 
     @Test
-    public void oneStopBitRejectsPacket() {
+    public void stopPulseValueIsIgnored() {
         int[] packet = patternedPacket();
         startPacket();
         writeDataBits(packet, 0, 128, false);
-        writeSelector(0x10); // invalid one stop bit
+        writeSelector(0x10);
+        writeSelector(0x30);
 
-        assertTrue(receivedPackets.isEmpty());
+        assertEquals(1, receivedPackets.size());
+        assertArrayEquals(packet, receivedPackets.get(0));
     }
 
     @Test
@@ -99,6 +104,8 @@ public class JoypadSgbPacketTest {
         writeDataBits(packet, 0, 128, true);
         writeSelector(0x20);
         writeSelector(0x20);
+        writeSelector(0x30);
+        writeSelector(0x30);
 
         assertEquals(1, receivedPackets.size());
         assertArrayEquals(packet, receivedPackets.get(0));
@@ -119,6 +126,7 @@ public class JoypadSgbPacketTest {
 
         writeDataBits(packet, 37, 128, false);
         writeSelector(0x20);
+        writeSelector(0x30);
 
         assertEquals(1, receivedPackets.size());
         assertArrayEquals(packet, receivedPackets.get(0));
@@ -137,6 +145,7 @@ public class JoypadSgbPacketTest {
         writeSelector(0x30);
         writeDataBits(packet, 38, 128, false);
         writeSelector(0x20);
+        writeSelector(0x30);
 
         assertEquals(1, receivedPackets.size());
         assertArrayEquals(packet, receivedPackets.get(0));
@@ -152,6 +161,7 @@ public class JoypadSgbPacketTest {
         startPacket();
         joypad.restoreFromMemento(memento);
         writeSelector(0x20);
+        writeSelector(0x30);
 
         assertEquals(1, receivedPackets.size());
         assertArrayEquals(packet, receivedPackets.get(0));
@@ -183,6 +193,7 @@ public class JoypadSgbPacketTest {
         startPacket();
         writeDataBits(packet, 0, 128, false);
         writeSelector(0x20);
+        writeSelector(0x30);
     }
 
     private void startPacket() {

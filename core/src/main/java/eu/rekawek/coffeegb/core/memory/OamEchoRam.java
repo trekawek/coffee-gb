@@ -50,9 +50,8 @@ final class OamEchoRam implements AddressSpace, Serializable, Originator<OamEcho
     }
 
     private static int translate(int address) {
-        // CGB decodes FEA0-FEBF normally. In FEC0-FEFF address bits 5
-        // and 4 are not decoded, so each 16-byte window aliases FEF0-FEFF.
-        return address < 0xfec0 ? address - OFFSET : 0x20 + (address & 0x0f);
+        // CGB revisions 0-C do not decode address bits 3 and 4 in this area.
+        return ((address & 0xff) & ~0x18) - (OFFSET & 0xff);
     }
 
     @Override

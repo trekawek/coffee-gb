@@ -6,7 +6,7 @@ import org.junit.Test;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.testRomWithScreenshotBaseline;
+import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.testRomWithScreenshot;
 
 public class CgbAcidHellRomTest {
 
@@ -14,10 +14,9 @@ public class CgbAcidHellRomTest {
 
     @Test(timeout = 30_000)
     public void testCgbAcidHell() throws Exception {
-        testRomWithScreenshotBaseline(
+        testRomWithScreenshot(
                 SUITE_DIR.resolve("cgb-acid-hell.gbc"),
                 SUITE_DIR.resolve("cgb-acid-hell.png"),
-                SUITE_DIR.resolve("current-baseline.png"),
                 GameboyType.CGB, 1500);
     }
 }
