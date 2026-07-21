@@ -101,6 +101,57 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void rephasedNormalSpeedCgbCpuReadSeesLyRippleAtLineTail() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(5, 455);
+
+        assertEquals(6, fixture.gpu.getVisibleLy());
+        assertEquals(4, fixture.readLy());
+    }
+
+    @Test
+    public void rephasedDoubleSpeedCgbCpuReadSeesLyRippleBeforeLineTail() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.advanceTo(5, 451);
+
+        assertEquals(5, fixture.gpu.getVisibleLy());
+        assertEquals(4, fixture.readLy());
+    }
+
+    @Test
+    public void cgbLcdRestartRealignsCpuVisibleLyLatch() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.gpu.onSpeedSwitch();
+        fixture.gpu.setByte(0xff40, 0x11);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.advanceTo(5, 451);
+
+        assertEquals(5, fixture.gpu.getVisibleLy());
+        assertEquals(5, fixture.readLy());
+    }
+
+    @Test
+    public void rephasedCgbCpuReadSeesLyResetRippleWithoutMovingComparatorLatch() {
+        Fixture normalSpeed = new Fixture(true);
+        normalSpeed.gpu.onSpeedSwitch();
+        normalSpeed.advanceTo(153, 2);
+
+        assertEquals(153, normalSpeed.gpu.getVisibleLy());
+        assertEquals(0, normalSpeed.readLy());
+        normalSpeed.tick();
+        assertEquals(153, normalSpeed.readLy());
+
+        Fixture doubleSpeed = new Fixture(true, true);
+        doubleSpeed.gpu.onSpeedSwitch();
+        doubleSpeed.advanceTo(153, 1);
+
+        assertEquals(153, doubleSpeed.gpu.getVisibleLy());
+        assertEquals(0, doubleSpeed.readLy());
+    }
+
+    @Test
     public void cgbDoubleSpeedTailLycEdgeDuringVblankIsReleasedAtLineStart() {
         Fixture fixture = new Fixture(true, true);
         fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
