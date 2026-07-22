@@ -706,6 +706,15 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
      * Game Boy console map. Returns -1 when an extended bank does not exist.
      */
     public int readMemoryForAchievements(int address) {
+        if (address >= 0xa000 && address <= 0xbfff) {
+            int value = cartridge.getRamByte(0, address - 0xa000);
+            if (value >= 0) {
+                return value;
+            }
+        }
+        if (gbc && address >= 0xd000 && address <= 0xdfff) {
+            return mmu.getGbcRamBankByte(1, address - 0xd000);
+        }
         if (address >= 0 && address <= 0xffff) {
             return getAddressSpace().getByte(address);
         }

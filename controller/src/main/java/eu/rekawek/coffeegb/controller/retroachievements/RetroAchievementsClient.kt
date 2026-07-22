@@ -25,7 +25,7 @@ internal class RetroAchievementsClient(
     private val eventBus: EventBus,
     private val properties: EmulatorProperties,
     private val httpClient: HttpClient =
-        HttpClient.newBuilder().connectTimeout(HTTP_TIMEOUT).followRedirects(HttpClient.Redirect.NORMAL).build(),
+        HttpClient.newBuilder().connectTimeout(HTTP_TIMEOUT).followRedirects(HttpClient.Redirect.NEVER).build(),
     nativeFactory: () -> RetroAchievementsNative = { RetroAchievementsNative.load() },
 ) : AutoCloseable {
 
@@ -197,7 +197,9 @@ internal class RetroAchievementsClient(
     publishStatus()
   }
 
-  fun reset() {
+  fun reset(gameboy: Gameboy, rom: Rom) {
+    this.gameboy = gameboy
+    pendingRom = rom
     synchronized(nativeLock) { client?.let { native?.coffee_ra_reset(it) } }
   }
 

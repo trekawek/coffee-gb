@@ -9,6 +9,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.*
 
 class EmulatorProperties() {
@@ -40,16 +41,19 @@ class EmulatorProperties() {
 
   internal fun saveProperties() {
     try {
+      val path = PROPERTIES_FILE.toPath()
+      val supportsPosix =
+          Files.getFileAttributeView(path, PosixFileAttributeView::class.java) != null
+      if (supportsPosix) {
+        if (!Files.exists(path)) {
+          Files.createFile(path, PosixFilePermissions.asFileAttribute(OWNER_ONLY_PERMISSIONS))
+        }
+        // Tighten an existing properties file before a token can be written to it.
+        Files.setPosixFilePermissions(path, OWNER_ONLY_PERMISSIONS)
+      }
       FileWriter(PROPERTIES_FILE).use { writer -> properties.store(writer, "") }
-      // This file may contain a RetroAchievements login token. Keep it owner-only where
-      // the host filesystem supports Java's permission APIs.
-      if (
-          Files.getFileAttributeView(PROPERTIES_FILE.toPath(), PosixFileAttributeView::class.java) !=
-              null) {
-        Files.setPosixFilePermissions(
-            PROPERTIES_FILE.toPath(),
-            EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-        )
+      if (supportsPosix) {
+        Files.setPosixFilePermissions(path, OWNER_ONLY_PERMISSIONS)
       }
     } catch (e: IOException) {
       LOG.error("Can't store properties", e)
@@ -76,6 +80,8 @@ class EmulatorProperties() {
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(EmulatorProperties::class.java)
     val PROPERTIES_FILE = File(File(System.getProperty("user.home")), ".coffeegb.properties")
+    val OWNER_ONLY_PERMISSIONS: Set<PosixFilePermission> =
+        EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
 
     fun loadProperties(): Properties {
       val props = Properties()

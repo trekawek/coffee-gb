@@ -217,7 +217,7 @@ class BasicController(
     session.setSerialEndpoint(createLinkDevice(session.eventBus))
   }
 
-  private fun start() {
+  private fun start(attachRetroAchievements: Boolean = true) {
     val session = session ?: return
 
     isPaused = false
@@ -228,12 +228,16 @@ class BasicController(
     session.eventBus.post(Controller.SessionPauseSupportEvent(true))
     session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
     session.eventBus.post(Controller.EmulationStartedEvent(session.config.rom.title))
-    retroAchievements.attach(session.gameboy, session.config.rom)
+    if (attachRetroAchievements) {
+      retroAchievements.attach(session.gameboy, session.config.rom)
+    }
   }
 
-  private fun stop() {
+  private fun stop(detachRetroAchievements: Boolean = true) {
     val session = session ?: return
-    retroAchievements.detach()
+    if (detachRetroAchievements) {
+      retroAchievements.detach()
+    }
     session.eventBus.post(Controller.EmulationStoppedEvent())
     session.close()
     this.session = null
@@ -242,10 +246,12 @@ class BasicController(
   private fun reset() {
     val session = session ?: return
     val config = session.config
-    stop()
+    stop(detachRetroAchievements = false)
     rewindManager.clear()
-    this.session = createSession(config)
-    start()
+    val nextSession = createSession(config)
+    this.session = nextSession
+    start(attachRetroAchievements = false)
+    retroAchievements.reset(nextSession.gameboy, config.rom)
   }
 
   private fun saveSnapshot(slot: Int) {
