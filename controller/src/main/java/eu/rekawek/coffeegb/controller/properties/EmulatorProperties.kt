@@ -41,6 +41,7 @@ class EmulatorProperties() {
   enum class Key(val propertyName: String) {
     DmgGamesType("system.dmgGames"),
     CgbGamesType("system.cgbGames"),
+    BootstrapMode("system.bootstrapMode"),
     DisplayScale("display.scale"),
     DisplayGrayscale("display.grayscale"),
     DisplayBlending("display.blending"),

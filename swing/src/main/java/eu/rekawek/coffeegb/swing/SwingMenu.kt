@@ -25,8 +25,12 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.StartServerEv
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.BootstrapMode
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.CgbGamesType
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGamesType
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.FAST_FORWARD
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.NORMAL
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.SKIP
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
@@ -690,6 +694,23 @@ class SwingMenu(
           uncheckAllBut(menu, item)
           eventBus.post(Controller.UpdatedSystemMappingEvent())
         }
+      }
+    }
+
+    val bootstrapMenu = JMenu("Bootstrap")
+    systemMenu.add(bootstrapMenu)
+    for ((mode, title) in
+        listOf(
+            SKIP to "Skip",
+            FAST_FORWARD to "Fast-forward",
+            NORMAL to "Full",
+        )) {
+      val item = JCheckBoxMenuItem(title, mode == properties.system.bootstrapMode)
+      bootstrapMenu.add(item)
+      item.addActionListener {
+        properties.setProperty(BootstrapMode, mode.name)
+        uncheckAllBut(bootstrapMenu, item)
+        eventBus.post(Controller.UpdatedSystemMappingEvent())
       }
     }
 
