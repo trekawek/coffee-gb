@@ -160,12 +160,21 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private boolean suppressNextDirectOamWriteCorruption;
 
-    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer, StatRegister statRegister, boolean gbc, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
+    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer,
+               StatRegister statRegister, boolean gbc,
+               eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
+        this(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode, false);
+    }
+
+    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer,
+               StatRegister statRegister, boolean gbc,
+               eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
+               boolean mealybugDmgBlob) {
         this.statRegister = statRegister;
         Arrays.fill(cpuVisiblePpuRegisters, -1);
         this.display = display;
         this.r = new GpuRegisterValues();
-        this.lcdc = new Lcdc();
+        this.lcdc = new Lcdc(mealybugDmgBlob);
         this.gbc = gbc;
         this.speedMode = speedMode;
         this.r.setGbc(gbc);

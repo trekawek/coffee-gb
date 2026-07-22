@@ -827,10 +827,19 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 window = true;
                 windowBeingFetched = true;
                 windowLineCounter++;
-                for (int p = windowCatchUpPos; p < position; p++) {
+                int catchUpTarget = windowCatchUpPos;
+                if (lcdc.isMealybugDmgBlob()
+                        && position - windowCatchUpPos == DESYNC_MAX_GAP) {
+                    // Shootout's Mealybug DMG-blob target is on the other side of the
+                    // longest LCD/PPU horizontal-desync boundary: it retains one more
+                    // LCD pixel before catching the PPU up. Shorter gaps match the CPU B
+                    // photo.
+                    catchUpTarget++;
+                }
+                for (int p = catchUpTarget; p < position; p++) {
                     fifo.rewindOnePixel();
                 }
-                position = windowCatchUpPos;
+                position = catchUpTarget;
                 windowCatchUpPos = -1;
                 fifo.clearBg();
                 cgbWindowStartTicks = gbc ? 6 : 0;

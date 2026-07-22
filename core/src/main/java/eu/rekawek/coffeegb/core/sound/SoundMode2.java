@@ -96,9 +96,7 @@ public class SoundMode2 extends AbstractSoundMode {
             return 0;
         }
 
-        // FF04 writes are handled before this post-CPU channel tick. The APU phase
-        // still advances, but charging this edge again would double-count it.
-        if (clock2Mhz && !divReset && freqDivider-- == 0) {
+        if (clock2Mhz && freqDivider-- == 0) {
             resetFreqDivider();
             i = (i + 1) % 8;
             lastOutput = ((getDuty() & (1 << i)) >> i);

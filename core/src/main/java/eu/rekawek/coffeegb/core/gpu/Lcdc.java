@@ -15,6 +15,8 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     private boolean gbc;
 
+    private final boolean mealybugDmgBlob;
+
     private int value = 0x91;
 
     // DMG write conflict (mealybug m3_lcdc_*_change): during the T-cycle in which a CPU
@@ -23,6 +25,13 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     private int mixValue = -1;
 
     private int pendingMixValue = -1;
+
+    // Shootout's Mealybug DMG-blob reference observes LCDC.0 one dot later than the
+    // CPU B photo. Keep that narrow, measured timing difference separate from the
+    // conflict mix used by the rest of LCDC.
+    private boolean dmgBlobBackgroundEnable = true;
+
+    private boolean pendingDmgBlobBackgroundEnable = true;
 
     // A CGB LCDC.4 write can collide with a background tile-data read. The CPU write
     // is processed before the PPU in Coffee GB's tick, so keep a short pulse for the
@@ -40,6 +49,11 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     private final int[] oamSizeHistory = new int[OAM_SIZE_HISTORY_LENGTH];
 
     public Lcdc() {
+        this(false);
+    }
+
+    public Lcdc(boolean mealybugDmgBlob) {
+        this.mealybugDmgBlob = mealybugDmgBlob;
         Arrays.fill(oamSizeHistory, value);
     }
 
@@ -53,6 +67,9 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     /** BG/window enable as seen by the LCD output stage (with the write-conflict mix). */
     public boolean isBgAndWindowDisplayEffective() {
+        if (!gbc && mealybugDmgBlob) {
+            return dmgBlobBackgroundEnable;
+        }
         return ((mixValue >= 0 ? mixValue : value) & 0x01) != 0;
     }
 
@@ -63,6 +80,8 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     /** Called once per GPU tick: the mix value lives for the single tick after the write. */
     void tickConflicts() {
+        dmgBlobBackgroundEnable = pendingDmgBlobBackgroundEnable;
+        pendingDmgBlobBackgroundEnable = (value & 0x01) != 0;
         mixValue = pendingMixValue;
         pendingMixValue = -1;
         if (pendingTileSelectGlitchTicks > 0) {
@@ -183,9 +202,14 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         return value;
     }
 
+    public boolean isMealybugDmgBlob() {
+        return !gbc && mealybugDmgBlob;
+    }
+
     @Override
     public Memento<Lcdc> saveToMemento() {
         return new LcdcMemento(value, mixValue, pendingMixValue,
+                dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
                 tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
                 tileSelectGlitchHistory.clone(),
                 oamSizeHistory.clone());
@@ -199,6 +223,8 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         this.value = mem.value;
         this.mixValue = mem.mixValue;
         this.pendingMixValue = mem.pendingMixValue;
+        this.dmgBlobBackgroundEnable = mem.dmgBlobBackgroundEnable;
+        this.pendingDmgBlobBackgroundEnable = mem.pendingDmgBlobBackgroundEnable;
         this.tileSelectGlitchTicks = mem.tileSelectGlitchTicks;
         this.pendingTileSelectGlitchTicks = mem.pendingTileSelectGlitchTicks;
         if (mem.tileSelectGlitchHistory.length != tileSelectGlitchHistory.length) {
@@ -214,6 +240,7 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     private record LcdcMemento(
             int value, int mixValue, int pendingMixValue,
+            boolean dmgBlobBackgroundEnable, boolean pendingDmgBlobBackgroundEnable,
             int tileSelectGlitchTicks, int pendingTileSelectGlitchTicks,
             boolean[] tileSelectGlitchHistory,
             int[] oamSizeHistory)

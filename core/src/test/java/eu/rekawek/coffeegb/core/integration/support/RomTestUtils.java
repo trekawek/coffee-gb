@@ -47,7 +47,9 @@ public final class RomTestUtils {
     public static void testRomWithScreenshot(Path romPath, Path expectedPath,
                                              GameboyType gameboyType,
                                              int runtimeMillis) throws Exception {
-        testRomWithScreenshot(romPath, expectedPath, gameboyType, runtimeMillis, false);
+        System.out.println("\n### Running screenshot test ROM " + romPath.getFileName() + " ###");
+        assertScreenshotMatches(romPath, new ScreenshotTestRunner(
+                romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis), 0);
     }
 
     public static void testRomWithScreenshot(Path romPath, Path expectedPath,
@@ -55,16 +57,34 @@ public final class RomTestUtils {
                                              int runtimeMillis,
                                              boolean cgb0Revision) throws Exception {
         System.out.println("\n### Running screenshot test ROM " + romPath.getFileName() + " ###");
-        ScreenshotTestRunner runner = new ScreenshotTestRunner(
+        assertScreenshotMatches(romPath, new ScreenshotTestRunner(
                 romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis,
-                cgb0Revision);
+                cgb0Revision), 0);
+    }
+
+    public static void testRomWithScreenshot(Path romPath, Path expectedPath,
+                                             GameboyType gameboyType, int runtimeMillis,
+                                             int allowedGrayscaleDelta) throws Exception {
+        System.out.println("\n### Running screenshot test ROM " + romPath.getFileName() + " ###");
+        assertScreenshotMatches(romPath, new ScreenshotTestRunner(
+                romPath.toFile(), expectedPath.toFile(), gameboyType, runtimeMillis,
+                allowedGrayscaleDelta), allowedGrayscaleDelta);
+    }
+
+    private static void assertScreenshotMatches(Path romPath, ScreenshotTestRunner runner,
+                                                int allowedGrayscaleDelta)
+            throws Exception {
         ScreenshotTestRunner.TestResult result = runner.runTest();
-        if (result.getMismatchedPixels() != 0) {
+        boolean differs = allowedGrayscaleDelta == 0
+                ? result.getMismatchedPixels() != 0
+                : result.getMaxGrayscaleDelta() > allowedGrayscaleDelta;
+        if (differs) {
             File resultFile = File.createTempFile("screenshot-test-", "-result.png");
             result.writeResultToFile(resultFile);
             fail(romPath.getFileName() + " differs from its upstream reference in "
                     + result.getMismatchedPixels() + " pixels (maximum channel delta "
-                    + result.getMaxChannelDelta() + "); actual image: " + resultFile);
+                    + result.getMaxChannelDelta() + ", maximum grayscale delta "
+                    + result.getMaxGrayscaleDelta() + "); actual image: " + resultFile);
         }
     }
 

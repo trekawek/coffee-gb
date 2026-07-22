@@ -116,6 +116,16 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         addressSpace.flushRam();
     }
 
+    /** Advances cartridge hardware clocked from the Game Boy master clock. */
+    public void tick() {
+        addressSpace.tick();
+    }
+
+    /** Notifies independent cartridge clocks that emulation has paused or resumed. */
+    public void setClockPaused(boolean paused) {
+        addressSpace.setClockPaused(paused);
+    }
+
     /** The Sachen MMC2 needs to observe reads on the upper half of the bus (see Mmu). */
     public SachenMmc getSachenMmc() {
         return addressSpace instanceof SachenMmc s ? s : null;
