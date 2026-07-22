@@ -100,8 +100,9 @@ class BasicController private constructor(
     eventQueue.register<Controller.ResumeEmulationEvent> {
       if (pauseStateBeforeLoading != null) {
         pauseStateBeforeLoading = false
+      } else {
+        setPaused(false)
       }
-      setPaused(false)
     }
     eventQueue.register<Controller.RewindEvent> { isRewinding = it.active }
     eventQueue.register<Controller.ResetEmulationEvent> {
@@ -206,11 +207,15 @@ class BasicController private constructor(
     }
     cancelLoadJob()
 
+    // Keep the last completed frame on screen, but stop the old game immediately. Continuing to
+    // animate while the window says that another ROM is loading makes it look as though the load
+    // request was ignored and also allows the old game to consume input meant for the new one.
+    setPaused(true)
+
     // A fallback preparation for an exotic/RTC cartridge may use the real save file. When
-    // reloading that exact file, freeze and flush the old cartridge first so the worker cannot
-    // observe stale RAM. Ordinary cartridges use battery-free boot templates and keep running.
+    // reloading that exact file, flush the old cartridge first so the worker cannot observe stale
+    // RAM. Ordinary cartridges use battery-free boot templates and don't need this extra flush.
     if (isCurrentRom(event.rom)) {
-      setPaused(true)
       session?.gameboy?.flushCartridge()
     }
 
@@ -241,8 +246,8 @@ class BasicController private constructor(
   private fun activatePreparedLoad(job: LoadJob, prepared: PreparedSession) {
     var nextGameboy: Gameboy? = null
     try {
-      // The expensive BIOS run is complete. Pause only for the short save flush + SKIP/restore
-      // materialization so the old game remains live while the background preparation runs.
+      // The expensive BIOS run is complete. The old game has remained frozen during preparation;
+      // now flush its save and atomically replace the session.
       setPaused(true)
       session?.gameboy?.flushCartridge()
       nextGameboy = prepared.materialize()

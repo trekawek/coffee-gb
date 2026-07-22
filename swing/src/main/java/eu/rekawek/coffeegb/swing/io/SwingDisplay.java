@@ -69,6 +69,8 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private volatile long notificationExpiresAt;
 
+    private volatile String persistentNotificationText;
+
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
         super();
         this.eventBus = eventBus;
@@ -88,6 +90,14 @@ public class SwingDisplay extends JPanel implements Runnable {
                 Controller.SnapshotSavedEvent.class, callerId);
         eventBus.register(e -> showNotification("State loaded (slot " + e.getSlot() + ")"),
                 Controller.SnapshotRestoredEvent.class, callerId);
+        eventBus.register(e -> showPersistentNotification("Loading…"),
+                Controller.RomLoadingEvent.class);
+        eventBus.register(e -> clearPersistentNotification(),
+                Controller.LoadRomFailedEvent.class);
+        eventBus.register(e -> clearPersistentNotification(),
+                Controller.RomLoadingCancelledEvent.class);
+        eventBus.register(e -> clearPersistentNotification(),
+                Controller.EmulationStartedEvent.class, callerId);
         this.grayscale = properties.getGrayscale();
         this.rotation = normalizeRotation(properties.getRotation());
         setBlending(properties.getBlending());
@@ -227,17 +237,37 @@ public class SwingDisplay extends JPanel implements Runnable {
         notificationText = text;
         notificationExpiresAt = System.nanoTime()
                 + TimeUnit.MILLISECONDS.toNanos(NOTIFICATION_DURATION_MS);
+        repaintNotification(NOTIFICATION_DURATION_MS);
+    }
+
+    private void showPersistentNotification(String text) {
+        persistentNotificationText = text;
+        repaintNotification(0);
+    }
+
+    private void clearPersistentNotification() {
+        if (persistentNotificationText == null) {
+            return;
+        }
+        persistentNotificationText = null;
+        repaintNotification(0);
+    }
+
+    private void repaintNotification(int repaintAfterMs) {
         SwingUtilities.invokeLater(() -> {
             repaint();
-            Timer timer = new Timer(NOTIFICATION_DURATION_MS, e -> repaint());
-            timer.setRepeats(false);
-            timer.start();
+            if (repaintAfterMs > 0) {
+                Timer timer = new Timer(repaintAfterMs, e -> repaint());
+                timer.setRepeats(false);
+                timer.start();
+            }
         });
     }
 
     private void paintNotification(Graphics2D g, int width, int height, int localScale) {
-        String text = notificationText;
-        if (text == null || System.nanoTime() >= notificationExpiresAt) {
+        String persistentText = persistentNotificationText;
+        String text = persistentText != null ? persistentText : notificationText;
+        if (text == null || (persistentText == null && System.nanoTime() >= notificationExpiresAt)) {
             return;
         }
 
