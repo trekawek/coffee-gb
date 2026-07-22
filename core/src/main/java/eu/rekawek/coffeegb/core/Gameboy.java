@@ -241,6 +241,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             mmu.addAddressSpace(infraredPort);
         }
         mmu.indexSpaces();
+        if (cartridgeProperties.has(
+                CartridgeProperties.Feature.CLEAR_DUNGEON_WARRIOR_RENDERER_COUNT)) {
+            // This prototype assumes emulator-style zeroed WRAM for its renderer-record
+            // count at C0BC. With real power-on garbage its record walker mutates stale
+            // entries and adjacent renderer work data, producing persistent wall/floor
+            // seams. Keep the hardware-like WRAM pattern everywhere else.
+            mmu.setByte(0xc0bc, 0);
+        }
         mmu.setBusListener(cartridge.getSachenMmc());
 
         cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc,
