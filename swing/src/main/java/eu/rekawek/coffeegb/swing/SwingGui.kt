@@ -105,8 +105,16 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
   private fun updateLoadingUi(title: String, loading: Boolean) {
     SwingUtilities.invokeLater {
       mainWindow.title = title
-      mainWindow.cursor =
+      val cursor =
           Cursor.getPredefinedCursor(if (loading) Cursor.WAIT_CURSOR else Cursor.DEFAULT_CURSOR)
+      mainWindow.cursor = cursor
+      mainWindow.rootPane.cursor = cursor
+      mainWindow.contentPane.cursor = cursor
+      // A child's explicitly configured cursor can override the frame cursor. The transparent
+      // glass pane sits above every child, so making it visible during loading both guarantees the
+      // wait pointer and prevents mouse interaction with the frozen game.
+      mainWindow.glassPane.cursor = cursor
+      mainWindow.glassPane.isVisible = loading
     }
   }
 

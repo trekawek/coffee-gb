@@ -9,6 +9,7 @@ import org.junit.Test;
 
 import java.awt.Graphics;
 import java.awt.image.BufferedImage;
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.concurrent.CountDownLatch;
@@ -18,6 +19,31 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.*;
 
 public class SwingDisplayTest {
+
+    @Test
+    public void romLoadingShowsPersistentNotificationUntilLoadingFinishes() throws Exception {
+        EventBusImpl root = new EventBusImpl(null, null, false);
+        EventBus session = root.fork("test");
+        SwingDisplay display = new SwingDisplay(
+                new EmulatorProperties().getDisplay(), root, "test");
+        Field textField = SwingDisplay.class.getDeclaredField("persistentNotificationText");
+        textField.setAccessible(true);
+
+        session.post(new Controller.RomLoadingEvent(new File("next.gb")));
+        assertEquals("Loading…", textField.get(display));
+
+        session.post(new Controller.EmulationStartedEvent("NEXT"));
+        assertNull(textField.get(display));
+
+        session.post(new Controller.RomLoadingEvent(new File("broken.gb")));
+        session.post(new Controller.LoadRomFailedEvent(new File("broken.gb"), "broken"));
+        assertNull(textField.get(display));
+
+        session.post(new Controller.RomLoadingEvent(new File("cancelled.gb")));
+        session.post(new Controller.RomLoadingCancelledEvent(new File("cancelled.gb")));
+        assertNull(textField.get(display));
+        root.close();
+    }
 
     @Test
     public void snapshotCompletionEventsShowAnOnScreenNotification() throws Exception {

@@ -62,7 +62,7 @@ class BasicControllerTest {
   }
 
   @Test
-  fun keepsCurrentSessionRunningWhileNextRomIsPrepared() {
+  fun pausesCurrentSessionWhileNextRomIsPrepared() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
     val stopped = LinkedBlockingQueue<EmulationStoppedEvent>()
@@ -104,7 +104,13 @@ class BasicControllerTest {
       assertTrue(preparing.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertEquals(nextRom, loading.poll(1, TimeUnit.SECONDS)?.rom)
       assertNull(stopped.poll(250, TimeUnit.MILLISECONDS), "the old session must stay active")
-      assertNotNull(frames.poll(1, TimeUnit.SECONDS), "the old session should keep producing frames")
+      frames.clear()
+      assertNull(frames.poll(250, TimeUnit.MILLISECONDS), "the old session must be frozen")
+      eventBus.post(Controller.ResumeEmulationEvent())
+      assertNull(
+          frames.poll(250, TimeUnit.MILLISECONDS),
+          "resume during loading must apply to the new session, not restart the old game",
+      )
 
       release.countDown()
       assertEquals("NEXT_GAME", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
