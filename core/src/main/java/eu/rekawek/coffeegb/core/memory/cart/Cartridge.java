@@ -141,10 +141,6 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         return addressSpace;
     }
 
-    public int getRamByte(int bank, int offset) {
-        return addressSpace.getRamByte(bank, offset);
-    }
-
     private static Battery createBattery(Rom rom) {
         if (rom.getType().isBattery()) {
             // Existing MBC implementations expose RAM in 8 KiB banks. Plain ROM+RAM

@@ -184,11 +184,6 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         return addressToSpace[address];
     }
 
-    /** Reads a physical CGB WRAM bank without disturbing the emulated bank register. */
-    public int getGbcRamBankByte(int bank, int offset) {
-        return gbcRam.getBankByte(bank, offset);
-    }
-
     private static class Void implements AddressSpace, Serializable {
         @Override
         public boolean accepts(int address) {

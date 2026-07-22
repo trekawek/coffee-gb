@@ -1,183 +1,144 @@
 package eu.rekawek.coffeegb.controller.retroachievements
 
-import com.sun.jna.Pointer
+import com.haroldadmin.cnradapter.NetworkResponse
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
-import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.memory.cart.Rom
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
+import org.retroachivements.api.RetroClient
+import org.retroachivements.api.core.RequiresCache
+import org.retroachivements.api.data.RetroCredentials
+import org.retroachivements.api.data.pojo.ErrorResponse
 import org.slf4j.LoggerFactory
 
 /**
- * Owns the official rcheevos client for a single-player controller. HTTP completions arrive on
- * HttpClient workers, are queued, and are delivered to the native runtime by the emulation
- * thread so memory validation cannot race CPU execution.
+ * Connects Coffee GB to the RetroAchievements Web API. API calls run away from the emulation
+ * thread; stale responses are discarded when the user signs out or loads another ROM.
  */
 internal class RetroAchievementsClient(
     private val eventBus: EventBus,
-    private val properties: EmulatorProperties,
-    private val httpClient: HttpClient =
-        HttpClient.newBuilder().connectTimeout(HTTP_TIMEOUT).followRedirects(HttpClient.Redirect.NEVER).build(),
-    nativeFactory: () -> RetroAchievementsNative = { RetroAchievementsNative.load() },
+    properties: EmulatorProperties,
+    private val apiFactory: (String, String) -> RetroAchievementsApi =
+        { username, apiKey -> OfficialRetroAchievementsApi(username, apiKey) },
+    private val executor: ExecutorService =
+        Executors.newSingleThreadExecutor {
+          Thread(it, "retroachievements-api").apply { isDaemon = true }
+        },
+    private val credentialsStore: RetroAchievementsCredentialsStore =
+        EmulatorPropertiesRetroAchievementsCredentialsStore(properties),
 ) : AutoCloseable {
 
-  private val nativeLock = Any()
-  private val requestIds = AtomicInteger()
-  private val operations = ConcurrentHashMap<Int, Operation>()
-  private val serverResponses = ConcurrentLinkedQueue<ServerResponse>()
+  private val authGeneration = AtomicInteger()
+  private val loadGeneration = AtomicInteger()
+  private val gamesByConsole = ConcurrentHashMap<Long, List<RetroApiGame>>()
 
-  @Volatile private var gameboy: Gameboy? = null
-  @Volatile private var pendingRom: Rom? = null
+  @Volatile private var api: RetroAchievementsApi? = null
   @Volatile private var username: String? = null
+  @Volatile private var pendingRom: Rom? = null
   @Volatile private var gameTitle: String? = null
-  @Volatile private var unlockedAchievements = 0
-  @Volatile private var totalAchievements = 0
-  @Volatile private var statusMessage: String? = null
+  @Volatile private var achievements = emptyList<RetroAchievements.Achievement>()
+  @Volatile private var statusMessage: String? = "Not connected"
   @Volatile private var closed = false
-  @Volatile private var activeLoginRequestId = 0
-  @Volatile private var activeLoadRequestId = 0
-
-  private val native: RetroAchievementsNative?
-  private var client: Pointer? = null
-
-  // Native code retains these function pointers for the lifetime of the client.
-  private val readMemoryCallback =
-      RetroAchievementsNative.ReadMemoryCallback { address, buffer, numBytes, _ ->
-        readMemory(address, buffer, numBytes)
-      }
-  private val serverCallCallback =
-      RetroAchievementsNative.ServerCallCallback { url, postData, contentType, context, _ ->
-        sendServerCall(url, postData, contentType, context)
-      }
-  private val operationCallback =
-      RetroAchievementsNative.OperationCallback {
-          requestId,
-          result,
-          error,
-          responseUsername,
-          _,
-          token,
-          gameId,
-          responseGameTitle,
-          unlocked,
-          total,
-          _ ->
-        onOperationComplete(
-            requestId,
-            result,
-            error,
-            responseUsername,
-            token,
-            gameId,
-            responseGameTitle,
-            unlocked,
-            total,
-        )
-      }
-  private val eventCallback =
-      RetroAchievementsNative.EventCallback { type, id, title, description, detail, value, _ ->
-        onRuntimeEvent(type, id, title, description, detail, value)
-      }
 
   init {
-    var loadedNative: RetroAchievementsNative? = null
-    try {
-      loadedNative = nativeFactory()
-      client =
-          loadedNative.coffee_ra_create(
-              readMemoryCallback,
-              serverCallCallback,
-              operationCallback,
-              eventCallback,
-              null,
-          ) ?: throw IllegalStateException("rcheevos could not create a client")
-      statusMessage = "Not signed in"
-    } catch (e: Throwable) {
-      LOG.warn("RetroAchievements is unavailable", e)
-      statusMessage = "Native runtime unavailable on this platform"
-    }
-    native = loadedNative
-
-    val savedUsername =
-        properties.getProperty(EmulatorProperties.Key.RetroAchievementsUsername, "")
-            ?.takeIf { it.isNotBlank() }
-    val savedToken =
-        properties.getProperty(EmulatorProperties.Key.RetroAchievementsToken, "")
-            ?.takeIf { it.isNotBlank() }
-    if (savedUsername != null && savedToken != null && isAvailable) {
-      loginWithToken(savedUsername, savedToken)
+    credentialsStore.load()?.let {
+      authenticate(it.username, it.apiKey.toCharArray(), restoring = true)
     }
   }
 
   val isAvailable: Boolean
-    get() = native != null && client != null && !closed
+    get() = !closed
 
-  fun login(username: String, password: CharArray) {
-    if (!isAvailable) {
-      publishStatus()
-      password.fill('\u0000')
+  fun login(username: String, apiKey: CharArray) {
+    authenticate(username, apiKey, restoring = false)
+  }
+
+  private fun authenticate(username: String, apiKey: CharArray, restoring: Boolean) {
+    if (closed) {
+      apiKey.fill('\u0000')
       return
     }
     val cleanUsername = username.trim()
-    if (cleanUsername.isEmpty() || password.isEmpty()) {
-      statusMessage = "Username and password are required"
+    if (cleanUsername.isEmpty() || apiKey.isEmpty()) {
+      statusMessage = "Username and Web API key are required"
       publishStatus()
-      password.fill('\u0000')
+      apiKey.fill('\u0000')
       return
     }
 
-    val requestId = beginOperation(Operation.LOGIN_PASSWORD)
-    activeLoginRequestId = requestId
-    statusMessage = "Signing in…"
+    val key = apiKey.concatToString()
+    apiKey.fill('\u0000')
+    val generation = authGeneration.incrementAndGet()
+    loadGeneration.incrementAndGet()
+    api = null
+    this.username = null
+    gamesByConsole.clear()
+    clearGame()
+    statusMessage = if (restoring) "Restoring connection…" else "Connecting…"
     publishStatus()
-    try {
-      val passwordString = password.concatToString()
-      synchronized(nativeLock) {
-        native?.coffee_ra_begin_login_password(client ?: return, cleanUsername, passwordString, requestId)
-      }
-    } finally {
-      password.fill('\u0000')
-    }
-  }
 
-  private fun loginWithToken(savedUsername: String, token: String) {
-    val requestId = beginOperation(Operation.LOGIN_TOKEN)
-    activeLoginRequestId = requestId
-    statusMessage = "Restoring sign-in…"
-    synchronized(nativeLock) {
-      native?.coffee_ra_begin_login_token(client ?: return, savedUsername, token, requestId)
+    executor.execute {
+      val candidate = runCatching { apiFactory(cleanUsername, key) }
+      val result =
+          candidate.fold(
+              onSuccess = { it.getUser(cleanUsername) },
+              onFailure = {
+                LOG.warn("Can't create RetroAchievements API client", it)
+                RetroApiResult.Failure(readableRetroAchievementsMessage(it))
+              },
+          )
+      if (closed || generation != authGeneration.get()) return@execute
+
+      when (result) {
+        is RetroApiResult.Success -> {
+          val canonicalUsername = result.value
+          api = candidate.getOrNull()
+          this.username = canonicalUsername
+          credentialsStore.save(RetroAchievementsCredentials(canonicalUsername, key))
+          statusMessage = "Connected as $canonicalUsername"
+          eventBus.post(Controller.NotificationEvent(statusMessage!!, NOTIFICATION_DURATION_MS))
+          publishStatus()
+          pendingRom?.let(::beginLoadGame)
+        }
+        is RetroApiResult.Failure -> {
+          statusMessage = result.message
+          if (restoring) {
+            credentialsStore.clear()
+          }
+          publishStatus()
+        }
+      }
     }
   }
 
   fun logout() {
-    activeLoginRequestId = 0
-    activeLoadRequestId = 0
-    operations.clear()
-    synchronized(nativeLock) {
-      client?.let { native?.coffee_ra_logout(it) }
-    }
+    authGeneration.incrementAndGet()
+    loadGeneration.incrementAndGet()
+    api = null
     username = null
-    gameTitle = null
-    unlockedAchievements = 0
-    totalAchievements = 0
-    statusMessage = "Not signed in"
-    properties.removeProperty(EmulatorProperties.Key.RetroAchievementsUsername)
-    properties.removeProperty(EmulatorProperties.Key.RetroAchievementsToken)
+    gamesByConsole.clear()
+    clearGame()
+    statusMessage = "Not connected"
+    credentialsStore.clear()
     publishStatus()
   }
 
-  fun attach(gameboy: Gameboy, rom: Rom) {
-    this.gameboy = gameboy
+  fun attach(rom: Rom) {
     pendingRom = rom
-    if (username != null) {
+    clearGame()
+    val currentApi = api
+    val currentUsername = username
+    if (currentApi != null && currentUsername != null) {
       beginLoadGame(rom)
     } else {
       publishStatus()
@@ -185,390 +146,288 @@ internal class RetroAchievementsClient(
   }
 
   fun detach() {
-    activeLoadRequestId = 0
-    synchronized(nativeLock) {
-      client?.let { native?.coffee_ra_unload_game(it) }
-    }
-    gameboy = null
+    loadGeneration.incrementAndGet()
     pendingRom = null
-    gameTitle = null
-    unlockedAchievements = 0
-    totalAchievements = 0
+    clearGame()
+    statusMessage = if (username == null) "Not connected" else "Connected as $username"
     publishStatus()
   }
 
-  fun reset(gameboy: Gameboy, rom: Rom) {
-    this.gameboy = gameboy
+  /** A reset keeps the same read-only game progress; only the active ROM reference changes. */
+  fun reset(rom: Rom) {
     pendingRom = rom
-    synchronized(nativeLock) { client?.let { native?.coffee_ra_reset(it) } }
-  }
-
-  fun doFrame() {
-    synchronized(nativeLock) {
-      drainServerResponses()
-      val handle = client ?: return
-      val runtime = native ?: return
-      if (runtime.coffee_ra_is_game_loaded(handle) != 0) {
-        runtime.coffee_ra_do_frame(handle)
-      } else {
-        runtime.coffee_ra_idle(handle)
-      }
-    }
-  }
-
-  fun idle() {
-    synchronized(nativeLock) {
-      drainServerResponses()
-      client?.let { native?.coffee_ra_idle(it) }
-    }
-  }
-
-  fun saveProgress(): ByteArray? {
-    synchronized(nativeLock) {
-      val handle = client ?: return null
-      val runtime = native ?: return null
-      if (runtime.coffee_ra_is_game_loaded(handle) == 0) return null
-      val size = runtime.coffee_ra_progress_size(handle)
-      if (size <= 0 || size > MAX_PROGRESS_SIZE) return null
-      val buffer = ByteArray(size.toInt())
-      return if (runtime.coffee_ra_serialize_progress(handle, buffer, size) == RC_OK) buffer else null
-    }
-  }
-
-  fun restoreProgress(progress: ByteArray?) {
-    synchronized(nativeLock) {
-      val handle = client ?: return
-      val runtime = native ?: return
-      if (progress == null || runtime.coffee_ra_is_game_loaded(handle) == 0) {
-        runtime.coffee_ra_reset(handle)
-      } else if (
-          runtime.coffee_ra_deserialize_progress(handle, progress, progress.size.toLong()) != RC_OK) {
-        runtime.coffee_ra_reset(handle)
-      }
-    }
   }
 
   fun publishStatus() {
+    val currentAchievements = achievements
     eventBus.post(
         RetroAchievements.StatusEvent(
             isAvailable,
             username != null,
             username,
             gameTitle,
-            unlockedAchievements,
-            totalAchievements,
+            currentAchievements.count { it.unlocked },
+            currentAchievements.size,
             statusMessage,
         ))
   }
 
   fun publishAchievements() {
-    val handle = client
-    val runtime = native
-    if (handle == null || runtime == null || gameTitle == null) {
+    val title = gameTitle
+    if (title == null) {
       eventBus.post(
           RetroAchievements.AchievementListEvent(
-              gameTitle,
+              null,
               emptyList(),
-              if (username == null) "Sign in and load a supported game first" else "No supported game is loaded",
+              if (username == null) {
+                "Connect and load a supported game first"
+              } else {
+                "No supported game is loaded"
+              },
           ))
       return
     }
-
-    val achievements = mutableListOf<RetroAchievements.Achievement>()
-    val callback =
-        RetroAchievementsNative.AchievementCallback {
-            id,
-            title,
-            description,
-            progress,
-            points,
-            _,
-            unlocked,
-            _ ->
-          achievements +=
-              RetroAchievements.Achievement(
-                  id,
-                  title.orEmpty(),
-                  description.orEmpty(),
-                  progress.orEmpty(),
-                  points,
-                  unlocked.toInt() != 0,
-              )
-        }
-    synchronized(nativeLock) { runtime.coffee_ra_iterate_achievements(handle, callback, null) }
-    eventBus.post(RetroAchievements.AchievementListEvent(gameTitle, achievements))
+    eventBus.post(RetroAchievements.AchievementListEvent(title, achievements))
   }
 
   private fun beginLoadGame(rom: Rom) {
-    val handle = client ?: return
-    val runtime = native ?: return
-    val data = rom.sourceData
+    val currentApi = api ?: return
+    val currentUsername = username ?: return
+    val generation = loadGeneration.incrementAndGet()
     val consoleId =
         if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB) CONSOLE_GAME_BOY
         else CONSOLE_GAME_BOY_COLOR
-    val requestId = beginOperation(Operation.LOAD_GAME)
-    activeLoadRequestId = requestId
+    val hash = retroAchievementsMd5(rom.sourceData)
+    clearGame()
     statusMessage = "Identifying game…"
     publishStatus()
-    synchronized(nativeLock) {
-      runtime.coffee_ra_begin_load_game(
-          handle,
-          consoleId,
-          rom.file?.absolutePath ?: rom.title,
-          data,
-          data.size.toLong(),
-          requestId,
-      )
-    }
-  }
 
-  private fun beginOperation(operation: Operation): Int {
-    val requestId = requestIds.incrementAndGet()
-    operations[requestId] = operation
-    return requestId
-  }
-
-  private fun onOperationComplete(
-      requestId: Int,
-      result: Int,
-      error: String?,
-      responseUsername: String?,
-      token: String?,
-      gameId: Int,
-      responseGameTitle: String?,
-      unlocked: Int,
-      total: Int,
-  ) {
-    if (closed) return
-    val operation = operations.remove(requestId) ?: return
-    if (
-        (operation == Operation.LOAD_GAME && requestId != activeLoadRequestId) ||
-            (operation != Operation.LOAD_GAME && requestId != activeLoginRequestId)) {
-      return
-    }
-    if (result != RC_OK) {
-      if (operation == Operation.LOAD_GAME) activeLoadRequestId = 0 else activeLoginRequestId = 0
-      statusMessage = error?.takeIf { it.isNotBlank() } ?: "RetroAchievements error $result"
-      if (operation == Operation.LOGIN_TOKEN) {
-        properties.removeProperty(EmulatorProperties.Key.RetroAchievementsToken)
-      }
-      publishStatus()
-      return
-    }
-
-    when (operation) {
-      Operation.LOGIN_PASSWORD,
-      Operation.LOGIN_TOKEN -> {
-        activeLoginRequestId = 0
-        username = responseUsername
-        if (responseUsername != null && token != null) {
-          properties.setProperty(EmulatorProperties.Key.RetroAchievementsUsername, responseUsername)
-          properties.setProperty(EmulatorProperties.Key.RetroAchievementsToken, token)
-        }
-        statusMessage = "Signed in as ${responseUsername ?: "RetroAchievements user"} (softcore)"
-        eventBus.post(Controller.NotificationEvent(statusMessage!!, NOTIFICATION_DURATION_MS))
-        pendingRom?.let(::beginLoadGame)
-      }
-      Operation.LOAD_GAME -> {
-        activeLoadRequestId = 0
-        gameTitle = responseGameTitle?.takeIf { gameId != 0 }
-        unlockedAchievements = unlocked
-        totalAchievements = total
-        statusMessage =
-            if (gameTitle == null) {
-              "No RetroAchievements set found for this ROM"
-            } else {
-              "$gameTitle: $unlocked of $total achievements unlocked"
-            }
-        eventBus.post(Controller.NotificationEvent(statusMessage!!, NOTIFICATION_DURATION_MS))
-      }
-    }
-    publishStatus()
-  }
-
-  private fun onRuntimeEvent(
-      type: Int,
-      id: Int,
-      title: String?,
-      description: String?,
-      detail: String?,
-      value: Int,
-  ) {
-    val message =
-        when (type) {
-          EVENT_ACHIEVEMENT_TRIGGERED -> {
-            unlockedAchievements = (unlockedAchievements + 1).coerceAtMost(totalAchievements)
-            "Achievement unlocked: ${title.orEmpty()} (+$value)"
-          }
-          EVENT_LEADERBOARD_STARTED -> "Leaderboard started: ${title.orEmpty()}"
-          EVENT_LEADERBOARD_FAILED -> "Leaderboard attempt failed: ${title.orEmpty()}"
-          EVENT_LEADERBOARD_SUBMITTED -> "Leaderboard submitted: ${title.orEmpty()}"
-          EVENT_GAME_COMPLETED -> "All achievements completed!"
-          EVENT_SERVER_ERROR -> "RetroAchievements error: ${description ?: title ?: id}"
-          EVENT_DISCONNECTED -> "RetroAchievements disconnected; unlocks are queued"
-          EVENT_RECONNECTED -> "RetroAchievements reconnected"
-          else -> null
-        }
-    if (message != null) {
-      eventBus.post(Controller.NotificationEvent(message, NOTIFICATION_DURATION_MS))
-      publishStatus()
-    }
-    if (type == EVENT_ACHIEVEMENT_PROGRESS_UPDATE && !detail.isNullOrBlank()) {
-      LOG.debug("Achievement {} progress: {}", id, detail)
-    }
-  }
-
-  private fun readMemory(address: Int, buffer: Pointer, numBytes: Int): Int {
-    val machine = gameboy ?: return 0
-    var read = 0
-    while (read < numBytes) {
-      val value = machine.readMemoryForAchievements(address + read)
-      if (value < 0) break
-      buffer.setByte(read.toLong(), value.toByte())
-      read++
-    }
-    return read
-  }
-
-  private fun sendServerCall(
-      url: String,
-      postData: String?,
-      contentType: String?,
-      context: Pointer,
-  ) {
-    val runtime = native ?: return
-    val uri = runCatching { URI(url) }.getOrNull()
-    if (uri == null || uri.scheme != "https" || !isRetroAchievementsHost(uri.host)) {
-      completeServerCall(runtime, context, ByteArray(0), CLIENT_ERROR)
-      return
-    }
-
-    try {
-      val builder =
-          HttpRequest.newBuilder(uri)
-              .timeout(HTTP_TIMEOUT)
-              .header("User-Agent", userAgent())
-              .header("Accept", "application/json")
-      if (postData == null) {
-        builder.GET()
-      } else {
-        builder.header("Content-Type", contentType ?: "application/x-www-form-urlencoded")
-        builder.POST(HttpRequest.BodyPublishers.ofString(postData))
-      }
-
-      httpClient
-          .sendAsync(builder.build(), HttpResponse.BodyHandlers.ofByteArray())
-          .whenComplete { response, failure ->
-            val completed =
-                if (failure != null || response == null) {
-                  ServerResponse(context, ByteArray(0), RETRYABLE_CLIENT_ERROR)
-                } else {
-                  ServerResponse(context, response.body(), response.statusCode())
-                }
-            synchronized(nativeLock) {
-              if (closed) {
-                completeServerCall(runtime, completed.context, completed.body, completed.status)
-              } else {
-                serverResponses.add(completed)
+    executor.execute {
+      val gamesResult =
+          gamesByConsole[consoleId]?.let { RetroApiResult.Success(it) }
+              ?: currentApi.getGames(consoleId).also {
+                if (it is RetroApiResult.Success) gamesByConsole[consoleId] = it.value
               }
+      if (!isCurrentLoad(generation, rom)) return@execute
+      val games =
+          when (gamesResult) {
+            is RetroApiResult.Success -> gamesResult.value
+            is RetroApiResult.Failure -> {
+              statusMessage = gamesResult.message
+              publishStatus()
+              return@execute
             }
           }
-    } catch (e: Exception) {
-      LOG.warn("Can't send RetroAchievements request", e)
-      completeServerCall(runtime, context, ByteArray(0), CLIENT_ERROR)
-    }
-  }
+      val game = games.firstOrNull { candidate -> candidate.hashes.any { it.equals(hash, true) } }
+      if (game == null) {
+        statusMessage = "No RetroAchievements set found for this ROM"
+        publishStatus()
+        return@execute
+      }
 
-  private fun completeServerCall(
-      runtime: RetroAchievementsNative,
-      context: Pointer,
-      body: ByteArray,
-      status: Int,
-  ) {
-    synchronized(nativeLock) {
-      runtime.coffee_ra_complete_server_call(context, body, body.size.toLong(), status)
-    }
-  }
-
-  /** Must be called while holding [nativeLock], from the emulation thread. */
-  private fun drainServerResponses() {
-    val runtime = native ?: return
-    while (true) {
-      val response = serverResponses.poll() ?: return
-      runtime.coffee_ra_complete_server_call(
-          response.context,
-          response.body,
-          response.body.size.toLong(),
-          response.status,
-      )
-    }
-  }
-
-  private fun userAgent(): String {
-    val handle = client ?: return "coffee-gb/0.0.0"
-    val runtime = native ?: return "coffee-gb/0.0.0"
-    val buffer = ByteArray(128)
-    val clause =
-        synchronized(nativeLock) {
-          runtime.coffee_ra_get_user_agent(handle, buffer, buffer.size.toLong())
+      when (val progress = currentApi.getGameProgress(currentUsername, game.id)) {
+        is RetroApiResult.Success -> {
+          if (!isCurrentLoad(generation, rom)) return@execute
+          gameTitle = progress.value.title
+          achievements =
+              progress.value.achievements
+                  .sortedWith(compareBy<RetroApiAchievement> { it.displayOrder }.thenBy { it.id })
+                  .map {
+                    RetroAchievements.Achievement(
+                        it.id,
+                        it.title,
+                        it.description,
+                        it.points,
+                        it.unlocked,
+                    )
+                  }
+          val unlocked = achievements.count { it.unlocked }
+          statusMessage = "$gameTitle: $unlocked of ${achievements.size} achievements unlocked"
+          eventBus.post(Controller.NotificationEvent(statusMessage!!, NOTIFICATION_DURATION_MS))
+          publishStatus()
         }
-    val runtimeClause =
-        if (clause > 0) buffer.decodeToString(0, buffer.indexOf(0).let { if (it < 0) buffer.size else it })
-        else ""
-    val version =
-        javaClass.`package`.implementationVersion
-            ?.substringBefore('-')
-            ?.takeIf { it.matches(Regex("[0-9]+(?:\\.[0-9]+)*")) }
-            ?: "0.0.0"
-    return "coffee-gb/$version (${System.getProperty("os.name")}) $runtimeClause".trim()
+        is RetroApiResult.Failure -> {
+          if (!isCurrentLoad(generation, rom)) return@execute
+          statusMessage = progress.message
+          publishStatus()
+        }
+      }
+    }
+  }
+
+  private fun isCurrentLoad(generation: Int, rom: Rom): Boolean =
+      !closed && generation == loadGeneration.get() && pendingRom === rom
+
+  private fun clearGame() {
+    gameTitle = null
+    achievements = emptyList()
   }
 
   override fun close() {
-    synchronized(nativeLock) {
-      closed = true
-      drainServerResponses()
-      val handle = client
-      client = null
-      if (handle != null) native?.coffee_ra_destroy(handle)
-    }
-    gameboy = null
+    closed = true
+    authGeneration.incrementAndGet()
+    loadGeneration.incrementAndGet()
+    api = null
     pendingRom = null
-    operations.clear()
+    executor.shutdownNow()
   }
-
-  private enum class Operation {
-    LOGIN_PASSWORD,
-    LOGIN_TOKEN,
-    LOAD_GAME,
-  }
-
-  private data class ServerResponse(
-      val context: Pointer,
-      val body: ByteArray,
-      val status: Int,
-  )
 
   private companion object {
     val LOG = LoggerFactory.getLogger(RetroAchievementsClient::class.java)
-    val HTTP_TIMEOUT: Duration = Duration.ofSeconds(30)
-    const val MAX_PROGRESS_SIZE = 16L * 1024 * 1024
     const val NOTIFICATION_DURATION_MS = 5000
-    const val RC_OK = 0
-    const val CLIENT_ERROR = -1
-    const val RETRYABLE_CLIENT_ERROR = -2
-    const val CONSOLE_GAME_BOY = 4
-    const val CONSOLE_GAME_BOY_COLOR = 6
-    const val EVENT_ACHIEVEMENT_TRIGGERED = 1
-    const val EVENT_LEADERBOARD_STARTED = 2
-    const val EVENT_LEADERBOARD_FAILED = 3
-    const val EVENT_LEADERBOARD_SUBMITTED = 4
-    const val EVENT_ACHIEVEMENT_PROGRESS_UPDATE = 9
-    const val EVENT_GAME_COMPLETED = 15
-    const val EVENT_SERVER_ERROR = 16
-    const val EVENT_DISCONNECTED = 17
-    const val EVENT_RECONNECTED = 18
+    const val CONSOLE_GAME_BOY = 4L
+    const val CONSOLE_GAME_BOY_COLOR = 6L
 
-    fun isRetroAchievementsHost(host: String?): Boolean =
-        host == "retroachievements.org" || host?.endsWith(".retroachievements.org") == true
   }
 }
+
+internal interface RetroAchievementsApi {
+  fun getUser(username: String): RetroApiResult<String>
+
+  fun getGames(consoleId: Long): RetroApiResult<List<RetroApiGame>>
+
+  fun getGameProgress(username: String, gameId: Long): RetroApiResult<RetroApiGameProgress>
+}
+
+internal class OfficialRetroAchievementsApi(username: String, apiKey: String) :
+    RetroAchievementsApi {
+  private val api = RetroClient(RetroCredentials(username, apiKey)).api
+
+  override fun getUser(username: String): RetroApiResult<String> =
+      request { api.getUserProfile(username) }.map { it.user }
+
+  // The controller caches this large response once per console for the application lifetime.
+  @OptIn(RequiresCache::class)
+  override fun getGames(consoleId: Long): RetroApiResult<List<RetroApiGame>> =
+      request { api.getGameList(consoleId, 1, 1) }.map { response ->
+        response.map { RetroApiGame(it.id, it.title, it.hashes) }
+      }
+
+  override fun getGameProgress(
+      username: String,
+      gameId: Long,
+  ): RetroApiResult<RetroApiGameProgress> =
+      request { api.getGameInfoAndUserProgress(username, gameId) }.map { response ->
+        RetroApiGameProgress(
+            response.title,
+            response.achievements.map { (key, achievement) ->
+              RetroApiAchievement(
+                  achievement.id.toIntOrNull() ?: key.toInt(),
+                  achievement.title,
+                  achievement.description,
+                  achievement.points.toInt(),
+                  achievement.dateEarned != null || achievement.dateEarnedHardcore != null,
+                  achievement.displayOrder,
+              )
+            },
+        )
+      }
+
+  private fun <T> request(block: suspend () -> NetworkResponse<T, ErrorResponse>): RetroApiResult<T> =
+      try {
+        when (val response = await(block)) {
+          is NetworkResponse.Success -> RetroApiResult.Success(response.body)
+          is NetworkResponse.ServerError ->
+              RetroApiResult.Failure(
+                  response.body?.message?.takeIf { it.isNotBlank() }
+                      ?: "RetroAchievements returned HTTP ${response.code ?: "error"}")
+          is NetworkResponse.NetworkError ->
+              RetroApiResult.Failure(
+                  response.error.message?.takeIf { it.isNotBlank() }
+                      ?: "Can't reach RetroAchievements")
+          is NetworkResponse.UnknownError ->
+              RetroApiResult.Failure(readableRetroAchievementsMessage(response.error))
+        }
+      } catch (e: Exception) {
+        RetroApiResult.Failure(readableRetroAchievementsMessage(e))
+      }
+
+  private fun <T> await(block: suspend () -> T): T {
+    val completed = CountDownLatch(1)
+    val resultRef = AtomicReference<Result<T>>()
+    block.startCoroutine(
+        object : Continuation<T> {
+          override val context = EmptyCoroutineContext
+
+          override fun resumeWith(result: Result<T>) {
+            resultRef.set(result)
+            completed.countDown()
+          }
+        })
+    completed.await()
+    return resultRef.get().getOrThrow()
+  }
+}
+
+internal sealed interface RetroApiResult<out T> {
+  data class Success<T>(val value: T) : RetroApiResult<T>
+
+  data class Failure(val message: String) : RetroApiResult<Nothing>
+}
+
+internal inline fun <T, R> RetroApiResult<T>.map(transform: (T) -> R): RetroApiResult<R> =
+    when (this) {
+      is RetroApiResult.Success -> RetroApiResult.Success(transform(value))
+      is RetroApiResult.Failure -> this
+    }
+
+internal data class RetroApiGame(val id: Long, val title: String, val hashes: List<String>)
+
+internal data class RetroApiGameProgress(
+    val title: String,
+    val achievements: List<RetroApiAchievement>,
+)
+
+internal data class RetroApiAchievement(
+    val id: Int,
+    val title: String,
+    val description: String,
+    val points: Int,
+    val unlocked: Boolean,
+    val displayOrder: Int,
+)
+
+internal data class RetroAchievementsCredentials(val username: String, val apiKey: String)
+
+internal interface RetroAchievementsCredentialsStore {
+  fun load(): RetroAchievementsCredentials?
+
+  fun save(credentials: RetroAchievementsCredentials)
+
+  fun clear()
+}
+
+private class EmulatorPropertiesRetroAchievementsCredentialsStore(
+    private val properties: EmulatorProperties,
+) : RetroAchievementsCredentialsStore {
+  override fun load(): RetroAchievementsCredentials? {
+    val username =
+        properties.getProperty(EmulatorProperties.Key.RetroAchievementsUsername, "")
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+    val apiKey =
+        properties.getProperty(EmulatorProperties.Key.RetroAchievementsApiKey, "")
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+    return RetroAchievementsCredentials(username, apiKey)
+  }
+
+  override fun save(credentials: RetroAchievementsCredentials) {
+    properties.setProperty(
+        EmulatorProperties.Key.RetroAchievementsUsername,
+        credentials.username,
+    )
+    properties.setProperty(EmulatorProperties.Key.RetroAchievementsApiKey, credentials.apiKey)
+  }
+
+  override fun clear() {
+    properties.removeProperty(EmulatorProperties.Key.RetroAchievementsUsername)
+    properties.removeProperty(EmulatorProperties.Key.RetroAchievementsApiKey)
+  }
+}
+
+internal fun retroAchievementsMd5(bytes: ByteArray): String =
+    MessageDigest.getInstance("MD5").digest(bytes).joinToString("") { "%02x".format(it) }
+
+private fun readableRetroAchievementsMessage(error: Throwable): String =
+    error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName

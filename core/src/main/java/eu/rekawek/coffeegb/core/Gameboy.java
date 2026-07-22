@@ -700,35 +700,6 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         return gameGenie;
     }
 
-    /**
-     * Reads the linear memory map used by RetroAchievements. The native 64 KiB address space
-     * is followed by CGB WRAM banks 2-7 and cartridge RAM banks 1-15, matching rcheevos'
-     * Game Boy console map. Returns -1 when an extended bank does not exist.
-     */
-    public int readMemoryForAchievements(int address) {
-        if (address >= 0xa000 && address <= 0xbfff) {
-            int value = cartridge.getRamByte(0, address - 0xa000);
-            if (value >= 0) {
-                return value;
-            }
-        }
-        if (gbc && address >= 0xd000 && address <= 0xdfff) {
-            return mmu.getGbcRamBankByte(1, address - 0xd000);
-        }
-        if (address >= 0 && address <= 0xffff) {
-            return getAddressSpace().getByte(address);
-        }
-        if (gbc && address >= 0x10000 && address <= 0x15fff) {
-            int offset = address - 0x10000;
-            return mmu.getGbcRamBankByte(2 + offset / 0x1000, offset & 0xfff);
-        }
-        if (address >= 0x16000 && address <= 0x33fff) {
-            int offset = address - 0x16000;
-            return cartridge.getRamByte(1 + offset / 0x2000, offset & 0x1fff);
-        }
-        return -1;
-    }
-
     public Cpu getCpu() {
         return cpu;
     }

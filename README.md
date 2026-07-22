@@ -101,22 +101,19 @@ btn_select=VK_SHIFT
   rotation, grayscale, CGB color correction, LCD ghosting, and an SGB-border toggle.
 - **Cheats:** Game Genie and GameShark codes, plus a bundled searchable
   [libretro cheat database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy).
-- **RetroAchievements:** optional softcore achievements, leaderboards, rich-presence
-  processing, and on-screen unlock notifications through the official rcheevos runtime.
+- **RetroAchievements:** optional account, game, and achievement-progress lookup through
+  the official [RetroAchievements Kotlin API](https://github.com/RetroAchievements/api-kotlin).
 
 ### RetroAchievements
 
-Choose **RetroAchievements > Sign in** and enter your RetroAchievements account
-credentials. Coffee GB exchanges the password for a login token, stores only that token
-in `~/.coffeegb.properties`, and uses it for later sessions. Loading a recognized ROM
-starts a softcore session; **RetroAchievements > Achievements** shows the current set.
-Achievement runtime state is kept in Coffee GB save states and rewind history.
+Choose **RetroAchievements > Sign in** and enter your username and Web API key from your
+[RetroAchievements settings](https://retroachievements.org/settings). Coffee GB stores
+these in the owner-readable `~/.coffeegb.properties` file and restores the connection in
+later sessions. Loading a recognized ROM fetches the account's existing progress;
+**RetroAchievements > Achievements** shows the current set and earned status.
 
-The downloadable JAR includes the official rcheevos runtime for 64-bit Linux (x86-64
-and ARM64), Windows (x86-64), and macOS (Intel and Apple Silicon). Network requests are
-restricted to HTTPS hosts under `retroachievements.org`. Hardcore mode is not offered:
-Coffee GB's save states, rewind, cheats, and debugging features intentionally remain
-available in softcore sessions.
+The public Web API exposes account progress but not emulator runtime services, so this
+integration does not evaluate or submit new achievement unlocks while playing.
 
 ## Compatibility
 

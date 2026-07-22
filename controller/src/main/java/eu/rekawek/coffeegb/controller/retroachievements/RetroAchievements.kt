@@ -6,7 +6,7 @@ object RetroAchievements {
 
   class RequestStatusEvent : Event
 
-  data class LoginEvent(val username: String, val password: CharArray) : Event
+  data class LoginEvent(val username: String, val apiKey: CharArray) : Event
 
   class LogoutEvent : Event
 
@@ -26,7 +26,6 @@ object RetroAchievements {
       val id: Int,
       val title: String,
       val description: String,
-      val measuredProgress: String,
       val points: Int,
       val unlocked: Boolean,
   )

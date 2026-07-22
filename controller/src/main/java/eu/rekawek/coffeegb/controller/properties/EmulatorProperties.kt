@@ -48,7 +48,7 @@ class EmulatorProperties() {
         if (!Files.exists(path)) {
           Files.createFile(path, PosixFilePermissions.asFileAttribute(OWNER_ONLY_PERMISSIONS))
         }
-        // Tighten an existing properties file before a token can be written to it.
+        // Tighten an existing properties file before an API key can be written to it.
         Files.setPosixFilePermissions(path, OWNER_ONLY_PERMISSIONS)
       }
       FileWriter(PROPERTIES_FILE).use { writer -> properties.store(writer, "") }
@@ -74,7 +74,7 @@ class EmulatorProperties() {
     DatelSlotRom("datel.slot.rom"),
     FullChangerCharacter("fullchanger.character"),
     RetroAchievementsUsername("retroachievements.username"),
-    RetroAchievementsToken("retroachievements.token"),
+    RetroAchievementsApiKey("retroachievements.apiKey"),
   }
 
   private companion object {

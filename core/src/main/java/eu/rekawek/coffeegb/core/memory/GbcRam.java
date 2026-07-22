@@ -69,14 +69,6 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
         return result;
     }
 
-    /** Reads a physical WRAM bank without changing SVBK (used by debugger-style clients). */
-    public int getBankByte(int bank, int offset) {
-        if (bank < 1 || bank > 7 || offset < 0 || offset >= 0x1000) {
-            return -1;
-        }
-        return ram[(bank - 1) * 0x1000 + offset];
-    }
-
     @Override
     public Memento<GbcRam> saveToMemento() {
         return new GbcRamMemento(ram.clone(), svbk);

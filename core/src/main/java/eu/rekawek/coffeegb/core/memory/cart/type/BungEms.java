@@ -114,12 +114,6 @@ public class BungEms implements MemoryController {
     }
 
     @Override
-    public int getRamByte(int bank, int offset) {
-        int index = bank * 0x2000 + offset;
-        return bank >= 0 && offset >= 0 && offset < 0x2000 && index < ram.length ? ram[index] : -1;
-    }
-
-    @Override
     public Memento<MemoryController> saveToMemento() {
         return new BungEmsMemento(battery.saveToMemento(), ram.clone(), romBankLow, romBankHigh,
                 romBankMask, romBankLatch, selectedRamBank, configureMode, ramEnabled, ramUpdated);

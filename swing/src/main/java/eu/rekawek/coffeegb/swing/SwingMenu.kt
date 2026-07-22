@@ -190,7 +190,7 @@ class SwingMenu(
       SwingUtilities.invokeLater { showRetroAchievements(event) }
     }
 
-    // The controller may have restored a token before this menu was constructed.
+    // The controller may have restored an API key before this menu was constructed.
     eventBus.post(RetroAchievements.RequestStatusEvent())
     return menu
   }
@@ -201,12 +201,12 @@ class SwingMenu(
             properties.getProperty(EmulatorProperties.Key.RetroAchievementsUsername, ""),
             24,
         )
-    val password = JPasswordField(24)
+    val apiKey = JPasswordField(24)
     val panel = JPanel(java.awt.GridLayout(0, 2, 8, 8))
     panel.add(JLabel("Username:"))
     panel.add(username)
-    panel.add(JLabel("Password:"))
-    panel.add(password)
+    panel.add(JLabel("Web API key:"))
+    panel.add(apiKey)
 
     val result =
         JOptionPane.showConfirmDialog(
@@ -217,9 +217,9 @@ class SwingMenu(
             JOptionPane.PLAIN_MESSAGE,
         )
     if (result == JOptionPane.OK_OPTION) {
-      val passwordValue = password.password
-      password.text = ""
-      eventBus.post(RetroAchievements.LoginEvent(username.text, passwordValue))
+      val apiKeyValue = apiKey.password
+      apiKey.text = ""
+      eventBus.post(RetroAchievements.LoginEvent(username.text, apiKeyValue))
     }
   }
 
@@ -250,8 +250,7 @@ class SwingMenu(
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
             if (component is JLabel && value is RetroAchievements.Achievement) {
               val mark = if (value.unlocked) "✓" else "○"
-              val progress = value.measuredProgress.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""
-              component.text = "$mark ${value.title} (${value.points})$progress"
+              component.text = "$mark ${value.title} (${value.points})"
               component.toolTipText = value.description
             }
             return component

@@ -104,12 +104,6 @@ public class Huc1 implements MemoryController {
     }
 
     @Override
-    public int getRamByte(int bank, int offset) {
-        int index = bank * 0x2000 + offset;
-        return bank >= 0 && offset >= 0 && offset < 0x2000 && index < ram.length ? ram[index] : -1;
-    }
-
-    @Override
     public Memento<MemoryController> saveToMemento() {
         return new Huc1Memento(battery.saveToMemento(), ram.clone(), romBank, ramBank, irMode, ramUpdated);
     }

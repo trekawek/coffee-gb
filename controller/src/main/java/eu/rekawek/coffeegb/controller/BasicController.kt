@@ -104,7 +104,7 @@ class BasicController(
     }
     eventQueue.register<RetroAchievements.RequestStatusEvent> { retroAchievements.publishStatus() }
     eventQueue.register<RetroAchievements.LoginEvent> {
-      retroAchievements.login(it.username, it.password)
+      retroAchievements.login(it.username, it.apiKey)
     }
     eventQueue.register<RetroAchievements.LogoutEvent> { retroAchievements.logout() }
     eventQueue.register<RetroAchievements.RequestAchievementListEvent> {
@@ -129,11 +129,7 @@ class BasicController(
 
     // rewinding restores one recorded state and then emulates a single frame from it,
     // so the display and audio play backwards at RewindManager.RECORD_INTERVAL speed
-    val rewound =
-        isRewinding &&
-            session?.gameboy?.let {
-              rewindManager.rewindOneStep(it, retroAchievements::restoreProgress)
-            } == true
+    val rewound = isRewinding && session?.gameboy?.let { rewindManager.rewindOneStep(it) } == true
 
     var emulated = false
     repeat(TICKS_PER_FRAME) {
@@ -143,13 +139,8 @@ class BasicController(
       }
       timingTicker.run()
     }
-    if (emulated) {
-      retroAchievements.doFrame()
-      if (!rewound) {
-        session?.gameboy?.let { rewindManager.record(it, retroAchievements::saveProgress) }
-      }
-    } else {
-      retroAchievements.idle()
+    if (emulated && !rewound) {
+      session?.gameboy?.let { rewindManager.record(it) }
     }
   }
 
@@ -229,7 +220,7 @@ class BasicController(
     session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
     session.eventBus.post(Controller.EmulationStartedEvent(session.config.rom.title))
     if (attachRetroAchievements) {
-      retroAchievements.attach(session.gameboy, session.config.rom)
+      retroAchievements.attach(session.config.rom)
     }
   }
 
@@ -251,25 +242,20 @@ class BasicController(
     val nextSession = createSession(config)
     this.session = nextSession
     start(attachRetroAchievements = false)
-    retroAchievements.reset(nextSession.gameboy, config.rom)
+    retroAchievements.reset(config.rom)
   }
 
   private fun saveSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
-    manager.saveSnapshot(slot, currentSession.gameboy, retroAchievements.saveProgress())
+    manager.saveSnapshot(slot, currentSession.gameboy)
     currentSession.eventBus.post(Controller.SnapshotSavedEvent(slot))
   }
 
   private fun loadSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
-    if (
-        manager.loadSnapshot(
-            slot,
-            currentSession.gameboy,
-            retroAchievements::restoreProgress,
-        )) {
+    if (manager.loadSnapshot(slot, currentSession.gameboy)) {
       rewindManager.clear()
       currentSession.eventBus.post(Controller.SnapshotRestoredEvent(slot))
     }
