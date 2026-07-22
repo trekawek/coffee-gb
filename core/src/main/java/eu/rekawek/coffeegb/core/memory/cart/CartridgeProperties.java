@@ -31,7 +31,8 @@ public final class CartridgeProperties {
         SACHEN_COOKED,
         DATEL,
         WISDOM_TREE,
-        MBC1
+        MBC1,
+        MBC5
     }
 
     public enum Feature {
@@ -110,6 +111,8 @@ public final class CartridgeProperties {
                     Feature.DATEL_CGB_HEADER),
             mapper("Wisdom Tree 32 KiB banking", CartridgeProperties::isWisdomTree,
                     Mapper.WISDOM_TREE),
+            mapper("Xin Shuma Baobei Huang MBC5 wiring",
+                    CartridgeProperties::isXinShumaBaobeiHuang, Mapper.MBC5),
             mapper("oversized ROM-only image", CartridgeProperties::isOversizedRomOnly,
                     Mapper.MBC1),
             features("Crazy Castle 3 trainer", CartridgeProperties::isCrazyCastleTrainer,
@@ -377,6 +380,27 @@ public final class CartridgeProperties {
         return info.data.length >= 0x20000
                 && isPlainRomType(info.rawType())
                 && info.hasValidLogo();
+    }
+
+    private static boolean isXinShumaBaobeiHuang(RomInfo info) {
+        // This 16 Mbit Chinese Pokemon Yellow bootleg advertises a tiny MBC1 cart, but
+        // its software uses an MBC5-style ROM register and treats 4000-5FFF solely as
+        // the RAM-bank register. Standard MBC1 handling therefore replaces ROM-bank
+        // bits whenever the game selects save RAM and immediately jumps into garbage.
+        return info.data.length == 0x200000
+                && "POKEMON YELLOW".equals(info.title())
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0144) == 0x30
+                && info.byteAt(0x0145) == 0x31
+                && info.byteAt(0x0146) == 0x03
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x01
+                && info.byteAt(0x0149) == 0x01
+                && info.byteAt(0x014a) == 0x00
+                && info.byteAt(0x014b) == 0x33
+                && info.byteAt(0x014c) == 0x00
+                && info.byteAt(0x014e) == 0x33
+                && info.byteAt(0x014f) == 0xcd;
     }
 
     private static boolean isOversizedRomOnly(RomInfo info) {
