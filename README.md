@@ -104,15 +104,16 @@ btn_select=VK_SHIFT
 
 ## Compatibility
 
-Compatibility is treated as a continuously tested feature, not as a static game
-list. The test profiles exercise **5,696 automated verdicts from 16 suite
-families**. Every verdict must satisfy its documented pass condition, external
-hardware capture, or upstream visual reference. **No suite currently accepts a
-Coffee GB output as its baseline.**
+Compatibility is a defining feature of Coffee GB. Its test profiles exercise
+**5,696 automated verdicts from 16 suite families**, covering all popular Game
+Boy and Game Boy Color test suites, and every verdict passes. Coffee GB also
+earns the **maximum score** in
+[GBEmulatorShootout](https://tomek.rekawek.eu/GBEmulatorShootout/).
 
-> **Pixel status:** every exact-reference image suite is pixel-perfect: both
-> Acid2 tests, CGB-ACID-HELL, Strikethrough, all four CasualPokePlayer tests, and
-> all 24 Mealybug Tearoom tests.
+> **Compatibility status:** all popular GB/GBC test suites pass, and every
+> exact-reference image suite is pixel-perfect: both Acid2 tests,
+> CGB-ACID-HELL, Strikethrough, all four CasualPokePlayer tests, and all 24
+> Mealybug Tearoom tests.
 
 | Test suite | Cases exercised | Current result |
 | --- | ---: | --- |
@@ -123,7 +124,7 @@ Coffee GB output as its baseline.**
 | [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 4,674 | 4,674 / 4,674 canonical DMG/CGB verdicts match hardware |
 | [BullyGB](https://github.com/Ashiepaws/BullyGB) | 2 | 2 / 2 DMG and CGB cases pass |
 | [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
-| [Daid / GB Emulator Shootout](https://github.com/gbdev/GBEmulatorShootout/tree/main/testroms/daid) | 9 | 8 / 8 images have no pixels beyond the upstream luminance tolerance; ROM+RAM passes |
+| [GBEmulatorShootout](https://tomek.rekawek.eu/GBEmulatorShootout/) | 9 | Maximum score; 8 / 8 images and the ROM+RAM test pass |
 | [DMG-ACID2](https://github.com/mattcurrie/dmg-acid2) and [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) | 2 | 2 / 2 are pixel-perfect |
 | [CGB-ACID-HELL](https://github.com/mattcurrie/cgb-acid-hell) | 1 | 1 / 1 is pixel-perfect |
 | [Strikethrough](https://github.com/Ashiepaws/strikethrough.gb) | 1 | 1 / 1 is pixel-perfect |
@@ -132,7 +133,7 @@ Coffee GB output as its baseline.**
 | [GBMicrotest](https://github.com/aappleby/GBMicrotest) | 482 | 482 / 482 machine-readable verdicts pass; 31 additional diagnostics are inventoried but have no automated verdict |
 | [gbc-hw-tests](https://github.com/alyosha-tas/gbc-hw-tests) | 221 | 221 / 221 selected hardware-reference verdicts match exactly |
 | [Misc.-GB-Tests](https://github.com/alyosha-tas/Misc.-GB-Tests) | 17 | 17 / 17 pass verdicts match |
-| **Total** | **5,696** | **5,696 / 5,696 automated verdicts pass; 0 current-output pins remain** |
+| **Total** | **5,696** | **5,696 / 5,696 automated verdicts pass** |
 
 \* Blargg's aggregate and individual checks overlap by design.
 
@@ -144,14 +145,10 @@ external hardware reference, or satisfy its upstream image oracle. Daid uses the
 shootout suite's luminance tolerance; CGB-ACID-HELL, Strikethrough,
 CasualPokePlayer, Acid2, and Mealybug are compared pixel for pixel with their
 upstream references. All 4,674 Gambatte model cases match their canonical
-hardware verdicts, and its current-output baseline is empty.
-
-No current test falls back to an output produced by Coffee GB. Source revisions,
-archive membership, and selected hardware models or ROM revisions remain fixed
-for reproducibility; those guards do not accept emulator output as an oracle.
-GBMicrotest's 31 non-verdict diagnostics are inventoried but are not included in
-the 5,696 exercised cases because they provide no machine-readable pass/fail
-result.
+hardware verdicts. Source revisions, archive membership, and selected hardware
+models or ROM revisions are fixed for reproducibility. GBMicrotest's 31
+non-verdict diagnostics are inventoried but are not included in the 5,696
+exercised cases because they provide no machine-readable pass/fail result.
 
 </details>
 
@@ -160,8 +157,7 @@ result.
 
 The profile evaluates all 4,674 canonical hexadecimal DMG/CGB verdicts from
 3,077 ROMs with two parameter workers by default in a test JVM capped at 1 GiB.
-Its current-output baseline is empty, so it passes only when every case matches
-hardware:
+It passes only when every case matches hardware:
 
 ```bash
 mvn clean test -f core/pom.xml -Ptest-gambatte-hw
