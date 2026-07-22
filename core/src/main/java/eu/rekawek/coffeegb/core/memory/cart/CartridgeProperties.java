@@ -32,6 +32,7 @@ public final class CartridgeProperties {
         DATEL,
         WISDOM_TREE,
         MBC1,
+        POCKET_CAMERA
         MBC5
     }
 
@@ -78,6 +79,8 @@ public final class CartridgeProperties {
     private static final List<Profile> PROFILES = List.of(
             features("Pocket Voice V2.0", CartridgeProperties::isPocketVoice,
                     Feature.POCKET_VOICE),
+            mapper("Pocket Camera debug tester", CartridgeProperties::isPocketCameraDebugTester,
+                    Mapper.POCKET_CAMERA),
             mapper("Bung/EMS flash cartridge", CartridgeProperties::isBungEms,
                     Mapper.BUNG_EMS),
             mapper("hidden MMM01 multicart", CartridgeProperties::isHiddenMmm01,
@@ -223,6 +226,35 @@ public final class CartridgeProperties {
 
     private static boolean isPocketVoice(RomInfo info) {
         return info.rawType() == 0xbe && info.title().startsWith("Pocket Voice");
+    }
+
+    private static boolean isPocketCameraDebugTester(RomInfo info) {
+        int[] entryStub = {
+                0xf3, 0xaf, 0xe0, 0x42, 0xe0, 0x43, 0xe0, 0xa0,
+                0xe0, 0x41, 0xe0, 0x01, 0xe0, 0x02, 0xe0, 0x4a,
+                0xe0, 0x4b, 0xe0, 0x06, 0x31, 0xff, 0xdf, 0xaf,
+                0x21, 0x00, 0x80, 0x01, 0x00, 0x20, 0x22, 0x0d
+        };
+        return info.data.length == 0x100000
+                && info.title().isEmpty()
+                && info.hasValidLogo()
+                && info.byteAt(0x0100) == 0x00
+                && info.byteAt(0x0101) == 0xc3
+                && info.byteAt(0x0102) == 0x50
+                && info.byteAt(0x0103) == 0x01
+                && info.byteAt(0x0144) == 0x30
+                && info.byteAt(0x0145) == 0x31
+                && info.byteAt(0x0146) == 0x03
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x03
+                && info.byteAt(0x0149) == 0x00
+                && info.byteAt(0x014a) == 0x00
+                && info.byteAt(0x014b) == 0x33
+                && info.byteAt(0x014c) == 0x00
+                && info.byteAt(0x014d) == 0x4c
+                && info.byteAt(0x014e) == 0x00
+                && info.byteAt(0x014f) == 0x00
+                && matches(info.data, 0x0150, entryStub);
     }
 
     private static boolean isBungEms(RomInfo info) {
