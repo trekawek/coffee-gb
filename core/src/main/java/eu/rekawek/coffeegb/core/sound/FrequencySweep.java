@@ -35,11 +35,14 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
 
     private int restartHold;
 
+    private boolean frequencyUpdatePending;
+
     public void start() {
         counterEnabled = false;
         calculationDelay = 0;
         unshiftedCalculation = false;
         restartHold = 0;
+        frequencyUpdatePending = false;
     }
 
     public void trigger(boolean wasActive, boolean lowFrequencyPhase, boolean gbc) {
@@ -57,6 +60,7 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         } else {
             scheduleCalculation(shift + (wasActive ? 2 : 3), false);
         }
+        frequencyUpdatePending = false;
     }
 
     public void setNr10(int value) {
@@ -103,6 +107,7 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
                         shadowFreq = newFreq;
                         nr13 = shadowFreq & 0xff;
                         nr14 = (shadowFreq & 0x700) >> 8;
+                        frequencyUpdatePending = true;
                         scheduleCalculation(shift + 1, false);
                     }
                 }
@@ -153,10 +158,17 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         return !overflow;
     }
 
+    boolean consumeFrequencyUpdate() {
+        boolean result = frequencyUpdatePending;
+        frequencyUpdatePending = false;
+        return result;
+    }
+
     @Override
     public Memento<FrequencySweep> saveToMemento() {
         return new FrequencySweepMemento(period, negate, shift, timer, shadowFreq, nr13, nr14, overflow,
-                counterEnabled, negging, calculationDelay, unshiftedCalculation, restartHold);
+                counterEnabled, negging, calculationDelay, unshiftedCalculation, restartHold,
+                frequencyUpdatePending);
     }
 
     @Override
@@ -177,11 +189,13 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         this.calculationDelay = mem.calculationDelay;
         this.unshiftedCalculation = mem.unshiftedCalculation;
         this.restartHold = mem.restartHold;
+        this.frequencyUpdatePending = mem.frequencyUpdatePending;
     }
 
     private record FrequencySweepMemento(int period, boolean negate, int shift, int timer, int shadowFreq, int nr13,
                                          int nr14, boolean overflow, boolean counterEnabled,
                                          boolean negging, int calculationDelay,
-                                         boolean unshiftedCalculation, int restartHold) implements Memento<FrequencySweep> {
+                                         boolean unshiftedCalculation, int restartHold,
+                                         boolean frequencyUpdatePending) implements Memento<FrequencySweep> {
     }
 }

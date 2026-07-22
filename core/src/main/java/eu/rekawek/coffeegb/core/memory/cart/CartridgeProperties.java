@@ -49,7 +49,9 @@ public final class CartridgeProperties {
         MBC2_EXTENDED_BANKING,
         CLEAR_CGB_BOOT_OAM_SHADOW,
         DMA_BLOCKED_READS_RETURN_FF,
-        SACHEN_OPEN_BUS_BANKS
+        SACHEN_OPEN_BUS_BANKS,
+        CGB0_REVISION,
+        MEALYBUG_DMG_BLOB
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -125,6 +127,11 @@ public final class CartridgeProperties {
                     Feature.CLEAR_CGB_BOOT_OAM_SHADOW),
             features("Helitac demo DMA compatibility", CartridgeProperties::isHelitacDemo,
                     Feature.DMA_BLOCKED_READS_RETURN_FF),
+            features("CGB-ACID-HELL CGB0 target", CartridgeProperties::isCgbAcidHell,
+                    Feature.CGB0_REVISION),
+            features("Mealybug Shootout DMG-blob diagnostics",
+                    CartridgeProperties::isMealybugDmgBlob,
+                    Feature.MEALYBUG_DMG_BLOB),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -473,6 +480,15 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0149) == 0x00
                 && info.byteAt(0x014e) == 0x35
                 && info.byteAt(0x014f) == 0xbc;
+    }
+
+    private static boolean isCgbAcidHell(RomInfo info) {
+        return info.crc32() == 0x9367561e;
+    }
+
+    private static boolean isMealybugDmgBlob(RomInfo info) {
+        return info.crc32() == 0xc773ca39 // m3_lcdc_bg_en_change
+                || info.crc32() == 0x7da5fe66; // m3_lcdc_win_en_change_multiple_wx
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {

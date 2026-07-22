@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.rtc;
 
+import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -25,9 +26,11 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
 
     private boolean counterOverflow;
 
-    private long lastUpdateMillis;
+    private long subSecondTicks;
 
-    private int subSecondMillis;
+    private transient boolean emulationPaused;
+
+    private transient long pauseStartedMillis;
 
     private boolean latched;
 
@@ -45,11 +48,9 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
 
     public RealTimeClock(TimeSource timeSource) {
         this.timeSource = timeSource;
-        this.lastUpdateMillis = timeSource.currentTimeMillis();
     }
 
     public void latch() {
-        updateClock();
         latchedSeconds = seconds;
         latchedMinutes = minutes;
         latchedHours = hours;
@@ -64,73 +65,59 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
     }
 
     public int getSeconds() {
-        updateClock();
         return latched ? latchedSeconds : seconds;
     }
 
     public int getMinutes() {
-        updateClock();
         return latched ? latchedMinutes : minutes;
     }
 
     public int getHours() {
-        updateClock();
         return latched ? latchedHours : hours;
     }
 
     public int getDayCounter() {
-        updateClock();
         return latched ? latchedDays : days;
     }
 
     public boolean isHalt() {
-        updateClock();
         return latched ? latchedHalt : halt;
     }
 
     public boolean isCounterOverflow() {
-        updateClock();
         return latched ? latchedCounterOverflow : counterOverflow;
     }
 
     public void setSeconds(int seconds) {
-        updateClock();
         this.seconds = seconds & 0x3f;
-        subSecondMillis = 0;
+        subSecondTicks = 0;
     }
 
     public void setMinutes(int minutes) {
-        updateClock();
         this.minutes = minutes & 0x3f;
     }
 
     public void setHours(int hours) {
-        updateClock();
         this.hours = hours & 0x1f;
     }
 
     public void setDayCounter(int dayCounter) {
-        updateClock();
         this.days = dayCounter & 0x1ff;
     }
 
     public void setDayCounterLow(int value) {
-        updateClock();
         days = (days & 0x100) | (value & 0xff);
     }
 
     public void setDayCounterHigh(int value) {
-        updateClock();
         days = (days & 0xff) | ((value & 1) << 8);
     }
 
     public void setHalt(boolean halt) {
-        updateClock();
         this.halt = halt;
     }
 
     public void setCounterOverflow(boolean counterOverflow) {
-        updateClock();
         this.counterOverflow = counterOverflow;
     }
 
@@ -138,17 +125,50 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
         setCounterOverflow(false);
     }
 
-    private void updateClock() {
+    /** Advances the independent MBC3 oscillator by one Game Boy master-clock tick. */
+    public void tick() {
+        if (halt || emulationPaused) {
+            return;
+        }
+        if (++subSecondTicks == Gameboy.TICKS_PER_SEC) {
+            subSecondTicks = 0;
+            advanceSeconds(1);
+        }
+    }
+
+    /**
+     * Uses wall time while the emulator is explicitly paused. Active emulation remains
+     * tick-driven so RTC diagnostics are independent of host speed.
+     */
+    public void setEmulationPaused(boolean paused) {
+        if (emulationPaused == paused) {
+            return;
+        }
+        if (paused) {
+            emulationPaused = true;
+            pauseStartedMillis = timeSource.currentTimeMillis();
+        } else {
+            catchUpPausedTime();
+            emulationPaused = false;
+        }
+    }
+
+    private void catchUpPausedTime() {
+        if (!emulationPaused) {
+            return;
+        }
         long now = timeSource.currentTimeMillis();
-        long elapsedMillis = Math.max(0, now - lastUpdateMillis);
-        lastUpdateMillis = now;
+        long elapsedMillis = Math.max(0, now - pauseStartedMillis);
+        pauseStartedMillis = now;
         if (halt || elapsedMillis == 0) {
             return;
         }
 
-        long elapsedWithRemainder = elapsedMillis + subSecondMillis;
-        subSecondMillis = (int) (elapsedWithRemainder % 1000);
-        advanceSeconds(elapsedWithRemainder / 1000);
+        advanceSeconds(elapsedMillis / 1000);
+        long elapsedTicks = (elapsedMillis % 1000) * Gameboy.TICKS_PER_SEC / 1000;
+        long ticks = subSecondTicks + elapsedTicks;
+        advanceSeconds(ticks / Gameboy.TICKS_PER_SEC);
+        subSecondTicks = ticks % Gameboy.TICKS_PER_SEC;
     }
 
     private void advanceSeconds(long count) {
@@ -218,10 +238,11 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
         halt = (control & 0x40) != 0;
         counterOverflow = (control & 0x80) != 0;
         latched = false;
-        subSecondMillis = 0;
+        subSecondTicks = 0;
+        emulationPaused = false;
+        pauseStartedMillis = 0;
 
         long now = timeSource.currentTimeMillis();
-        lastUpdateMillis = now;
         long timestampMillis = clockData[10] * 1000;
         if (!halt && timestampMillis > 0 && now > timestampMillis) {
             advanceSeconds((now - timestampMillis) / 1000);
@@ -229,7 +250,7 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
     }
 
     public long[] serialize() {
-        updateClock();
+        catchUpPausedTime();
         long control = ((days >> 8) & 1) | (halt ? 0x40 : 0) | (counterOverflow ? 0x80 : 0);
         long[] clockData = new long[11];
         clockData[0] = clockData[5] = seconds;
@@ -243,9 +264,9 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
 
     @Override
     public Memento<RealTimeClock> saveToMemento() {
-        updateClock();
-        return new RealTimeClockMemento(seconds, minutes, hours, days, halt, counterOverflow, lastUpdateMillis,
-                subSecondMillis, latched, latchedSeconds, latchedMinutes, latchedHours, latchedDays, latchedHalt,
+        catchUpPausedTime();
+        return new RealTimeClockMemento(seconds, minutes, hours, days, halt, counterOverflow,
+                subSecondTicks, latched, latchedSeconds, latchedMinutes, latchedHours, latchedDays, latchedHalt,
                 latchedCounterOverflow);
     }
 
@@ -260,8 +281,7 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
         days = mem.days;
         halt = mem.halt;
         counterOverflow = mem.counterOverflow;
-        lastUpdateMillis = mem.lastUpdateMillis;
-        subSecondMillis = mem.subSecondMillis;
+        subSecondTicks = mem.subSecondTicks;
         latched = mem.latched;
         latchedSeconds = mem.latchedSeconds;
         latchedMinutes = mem.latchedMinutes;
@@ -269,10 +289,13 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
         latchedDays = mem.latchedDays;
         latchedHalt = mem.latchedHalt;
         latchedCounterOverflow = mem.latchedCounterOverflow;
+        if (emulationPaused) {
+            pauseStartedMillis = timeSource.currentTimeMillis();
+        }
     }
 
     private record RealTimeClockMemento(int seconds, int minutes, int hours, int days, boolean halt,
-                                        boolean counterOverflow, long lastUpdateMillis, int subSecondMillis,
+                                        boolean counterOverflow, long subSecondTicks,
                                         boolean latched, int latchedSeconds, int latchedMinutes, int latchedHours,
                                         int latchedDays, boolean latchedHalt,
                                         boolean latchedCounterOverflow) implements Memento<RealTimeClock> {

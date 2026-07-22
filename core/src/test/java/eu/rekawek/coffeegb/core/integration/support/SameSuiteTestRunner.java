@@ -25,9 +25,14 @@ public class SameSuiteTestRunner {
     private final Registers registers;
 
     public SameSuiteTestRunner(File romFile, GameboyType gameboyType) throws IOException {
+        this(romFile, gameboyType, Gameboy.BootstrapMode.SKIP);
+    }
+
+    public SameSuiteTestRunner(File romFile, GameboyType gameboyType,
+                               Gameboy.BootstrapMode bootstrapMode) throws IOException {
         EventBus eventBus = new EventBusImpl();
         Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(romFile)
-                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setBootstrapMode(bootstrapMode)
                 .setSupportBatterySave(false);
         if (gameboyType != null) {
             configuration.setGameboyType(gameboyType);

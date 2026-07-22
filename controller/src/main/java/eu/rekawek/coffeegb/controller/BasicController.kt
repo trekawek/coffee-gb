@@ -63,8 +63,18 @@ class BasicController(
     eventQueue.register<Controller.LoadRomEvent> { loadRom(properties, it) }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
-    eventQueue.register<Controller.PauseEmulationEvent> { isPaused = true }
-    eventQueue.register<Controller.ResumeEmulationEvent> { isPaused = false }
+    eventQueue.register<Controller.PauseEmulationEvent> {
+      if (!isPaused) {
+        session?.gameboy?.setCartridgeClockPaused(true)
+        isPaused = true
+      }
+    }
+    eventQueue.register<Controller.ResumeEmulationEvent> {
+      if (isPaused) {
+        session?.gameboy?.setCartridgeClockPaused(false)
+        isPaused = false
+      }
+    }
     eventQueue.register<Controller.RewindEvent> { isRewinding = it.active }
     eventQueue.register<Controller.ResetEmulationEvent> { reset() }
     eventQueue.register<Controller.StopEmulationEvent> { stop() }

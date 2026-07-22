@@ -186,7 +186,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         oamRam = new Ram(0xfe00, 0x00a0);
         dma = new Dma(getAddressSpace(), oamRam, speedMode);
         statRegister = new StatRegister(interruptManager);
-        gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode);
+        gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode,
+                configuration.mealybugDmgBlob);
         mmu.setGpu(gpu);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace(), speedMode);
@@ -416,16 +417,19 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     private synchronized void haltIfNeeded() {
+        setCartridgeClockPaused(true);
         paused = true;
         notifyAll();
-        while (doPause && !doStop) {
-            try {
+        try {
+            while (doPause && !doStop) {
                 wait(10);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
             }
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            paused = false;
+            setCartridgeClockPaused(false);
         }
-        paused = false;
     }
 
     public synchronized void stop() {
@@ -440,6 +444,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (warmResetRequested) {
             warmResetRequested = false;
             applyWarmReset();
+        }
+        cartridge.tick();
+        if (slotCartridge != null) {
+            slotCartridge.tick();
         }
         boolean result = false;
 
@@ -748,6 +756,17 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     /**
+     * Notifies wall-clock cartridge hardware when an external controller stops calling
+     * {@link #tick()}. This does not itself pause CPU execution.
+     */
+    public void setCartridgeClockPaused(boolean paused) {
+        cartridge.setClockPaused(paused);
+        if (slotCartridge != null) {
+            slotCartridge.setClockPaused(paused);
+        }
+    }
+
+    /**
      * Held-button state, snapshotted separately from the memento by rollback netplay so a held
      * button survives a rebase (the joypad deliberately keeps it out of the memento).
      */
@@ -854,6 +873,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         private boolean cgb0Revision;
 
+        private boolean mealybugDmgBlob;
+
         private TimeSource rtcTimeSource = new SystemTimeSource();
 
         public GameboyConfiguration(File romFile) throws IOException {
@@ -862,6 +883,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public GameboyConfiguration(Rom rom) {
             this.rom = rom;
+            cgb0Revision = rom.getCartridgeProperties().has(
+                    CartridgeProperties.Feature.CGB0_REVISION);
+            mealybugDmgBlob = rom.getCartridgeProperties().has(
+                    CartridgeProperties.Feature.MEALYBUG_DMG_BLOB);
             if (rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB) {
                 gameboyType = GameboyType.DMG;
             } else {
@@ -890,6 +915,16 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public boolean isCgb0Revision() {
             return cgb0Revision;
+        }
+
+        /** Selects the DMG-blob timing expected by the Mealybug Shootout references. */
+        public GameboyConfiguration setMealybugDmgBlob(boolean mealybugDmgBlob) {
+            this.mealybugDmgBlob = mealybugDmgBlob;
+            return this;
+        }
+
+        public boolean isMealybugDmgBlob() {
+            return mealybugDmgBlob;
         }
 
         public GameboyConfiguration setDisplaySgbBorder(boolean displaySgbBorder) {
@@ -922,6 +957,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             return this;
         }
 
+        /**
+         * Sets the wall clock used for battery offline catch-up and explicit emulator
+         * pauses. During active emulation the MBC3 RTC advances from Game Boy ticks.
+         */
         public GameboyConfiguration setRtcTimeSource(TimeSource rtcTimeSource) {
             this.rtcTimeSource = rtcTimeSource;
             return this;
@@ -942,6 +981,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             copy.supportBatterySave = supportBatterySave;
             copy.displaySgbBorder = displaySgbBorder;
             copy.cgb0Revision = cgb0Revision;
+            copy.mealybugDmgBlob = mealybugDmgBlob;
             copy.rtcTimeSource = rtcTimeSource;
             return copy;
         }

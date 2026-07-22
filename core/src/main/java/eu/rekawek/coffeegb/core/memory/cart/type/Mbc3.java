@@ -77,6 +77,16 @@ public class Mbc3 implements MemoryController {
         battery.flush();
     }
 
+    @Override
+    public void tick() {
+        clock.tick();
+    }
+
+    @Override
+    public void setClockPaused(boolean paused) {
+        clock.setEmulationPaused(paused);
+    }
+
     private void selectRomBank(int bank) {
         if (bank == 0) {
             bank = 1;

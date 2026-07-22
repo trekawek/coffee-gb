@@ -33,10 +33,25 @@ public class ImageTestRunner {
     }
 
     public ImageTestRunner(File romFile, GameboyType gameboyType, Gameboy.BootstrapMode bootstrapMode) throws IOException {
+        this(romFile,
+                new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png")),
+                gameboyType, bootstrapMode, null);
+    }
+
+    public ImageTestRunner(File romFile, File imageFile, GameboyType gameboyType,
+                           Gameboy.BootstrapMode bootstrapMode,
+                           Boolean mealybugDmgBlob) throws IOException {
         EventBus eventBus = new EventBusImpl();
-        gb = new GameboyConfiguration(romFile).setBootstrapMode(bootstrapMode).setGameboyType(gameboyType).setSupportBatterySave(false).build();
+        GameboyConfiguration configuration = new GameboyConfiguration(romFile)
+                .setBootstrapMode(bootstrapMode)
+                .setGameboyType(gameboyType)
+                .setSupportBatterySave(false);
+        if (mealybugDmgBlob != null) {
+            configuration.setMealybugDmgBlob(mealybugDmgBlob);
+        }
+        gb = configuration.build();
         gb.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
-        imageFile = new File(romFile.getParentFile(), romFile.getName().replace(".gb", ".png"));
+        this.imageFile = imageFile;
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class);
     }

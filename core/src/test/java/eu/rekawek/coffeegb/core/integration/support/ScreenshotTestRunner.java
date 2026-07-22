@@ -26,26 +26,47 @@ public class ScreenshotTestRunner {
 
     private final int[] expected;
 
+    private final int allowedGrayscaleDelta;
+
     private TestResult currentResult;
 
     private int frames;
 
     public ScreenshotTestRunner(File romFile, File expectedFile, GameboyType gameboyType,
                                 int runtimeMillis) throws IOException {
-        this(romFile, expectedFile, gameboyType, runtimeMillis, false);
+        this(romFile, expectedFile, gameboyType, runtimeMillis, null, 0);
     }
 
     public ScreenshotTestRunner(File romFile, File expectedFile, GameboyType gameboyType,
                                 int runtimeMillis, boolean cgb0Revision) throws IOException {
+        this(romFile, expectedFile, gameboyType, runtimeMillis,
+                Boolean.valueOf(cgb0Revision), 0);
+    }
+
+    /** Uses the same per-pixel grayscale tolerance as screenshot-based test harnesses. */
+    public ScreenshotTestRunner(File romFile, File expectedFile, GameboyType gameboyType,
+                                int runtimeMillis, int allowedGrayscaleDelta) throws IOException {
+        this(romFile, expectedFile, gameboyType, runtimeMillis, null, allowedGrayscaleDelta);
+    }
+
+    private ScreenshotTestRunner(File romFile, File expectedFile, GameboyType gameboyType,
+                                 int runtimeMillis, Boolean cgb0Revision,
+                                 int allowedGrayscaleDelta) throws IOException {
+        if (allowedGrayscaleDelta < 0) {
+            throw new IllegalArgumentException("Grayscale delta must not be negative");
+        }
         expected = readImage(expectedFile);
         maxTicks = (long) Gameboy.TICKS_PER_SEC * runtimeMillis / 1000;
+        this.allowedGrayscaleDelta = allowedGrayscaleDelta;
 
-        gameboy = new GameboyConfiguration(romFile)
+        GameboyConfiguration configuration = new GameboyConfiguration(romFile)
                 .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
                 .setGameboyType(gameboyType)
-                .setCgb0Revision(cgb0Revision)
-                .setSupportBatterySave(false)
-                .build();
+                .setSupportBatterySave(false);
+        if (cgb0Revision != null) {
+            configuration.setCgb0Revision(cgb0Revision);
+        }
+        gameboy = configuration.build();
 
         EventBus eventBus = new EventBusImpl();
         gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
@@ -85,7 +106,9 @@ public class ScreenshotTestRunner {
     public TestResult runTest() {
         for (long ticks = 0; ticks < maxTicks; ticks++) {
             gameboy.tick();
-            if (currentResult != null && currentResult.getMismatchedPixels() == 0) {
+            if (currentResult != null && (allowedGrayscaleDelta == 0
+                    ? currentResult.getMismatchedPixels() == 0
+                    : currentResult.getMaxGrayscaleDelta() <= allowedGrayscaleDelta)) {
                 return currentResult;
             }
         }
@@ -98,6 +121,7 @@ public class ScreenshotTestRunner {
     private static TestResult compare(int[] actual, int[] expected) {
         int mismatchedPixels = 0;
         int maxChannelDelta = 0;
+        int maxGrayscaleDelta = 0;
         for (int i = 0; i < PIXELS; i++) {
             int actualColor = actual[i];
             int expectedColor = expected[i];
@@ -109,8 +133,18 @@ public class ScreenshotTestRunner {
                         - ((expectedColor >> shift) & 0xff));
                 maxChannelDelta = Math.max(maxChannelDelta, delta);
             }
+            maxGrayscaleDelta = Math.max(maxGrayscaleDelta,
+                    Math.abs(grayscale(actualColor) - grayscale(expectedColor)));
         }
-        return new TestResult(actual.clone(), mismatchedPixels, maxChannelDelta);
+        return new TestResult(actual.clone(), mismatchedPixels, maxChannelDelta,
+                maxGrayscaleDelta);
+    }
+
+    private static int grayscale(int rgb) {
+        int red = (rgb >> 16) & 0xff;
+        int green = (rgb >> 8) & 0xff;
+        int blue = rgb & 0xff;
+        return (299 * red + 587 * green + 114 * blue + 500) / 1000;
     }
 
     private static int[] readImage(File file) throws IOException {
@@ -138,10 +172,14 @@ public class ScreenshotTestRunner {
 
         private final int maxChannelDelta;
 
-        private TestResult(int[] actual, int mismatchedPixels, int maxChannelDelta) {
+        private final int maxGrayscaleDelta;
+
+        private TestResult(int[] actual, int mismatchedPixels, int maxChannelDelta,
+                           int maxGrayscaleDelta) {
             this.actual = actual;
             this.mismatchedPixels = mismatchedPixels;
             this.maxChannelDelta = maxChannelDelta;
+            this.maxGrayscaleDelta = maxGrayscaleDelta;
         }
 
         public TestResult compareAgainst(File expectedFile) throws IOException {
@@ -154,6 +192,10 @@ public class ScreenshotTestRunner {
 
         public int getMaxChannelDelta() {
             return maxChannelDelta;
+        }
+
+        public int getMaxGrayscaleDelta() {
+            return maxGrayscaleDelta;
         }
 
         public void writeResultToFile(File file) throws IOException {
