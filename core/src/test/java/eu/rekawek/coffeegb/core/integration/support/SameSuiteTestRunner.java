@@ -6,10 +6,14 @@ import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.cpu.Registers;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 import static eu.rekawek.coffeegb.core.integration.support.RomTestUtils.isByteSequenceAtPc;
 
@@ -24,6 +28,8 @@ public class SameSuiteTestRunner {
 
     private final Registers registers;
 
+    private final List<Boolean> rumbleEvents = new ArrayList<>();
+
     public SameSuiteTestRunner(File romFile, GameboyType gameboyType) throws IOException {
         this(romFile, gameboyType, Gameboy.BootstrapMode.SKIP);
     }
@@ -31,6 +37,7 @@ public class SameSuiteTestRunner {
     public SameSuiteTestRunner(File romFile, GameboyType gameboyType,
                                Gameboy.BootstrapMode bootstrapMode) throws IOException {
         EventBus eventBus = new EventBusImpl();
+        eventBus.register(event -> rumbleEvents.add(event.on()), RumbleEvent.class);
         Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(romFile)
                 .setBootstrapMode(bootstrapMode)
                 .setSupportBatterySave(false);
@@ -47,7 +54,7 @@ public class SameSuiteTestRunner {
         long ticks = 0;
         while (!isByteSequenceAtPc(gb, 0x40, 0x76, 0x00)) { // ld b,b; halt; nop
             if (++ticks > MAX_TICKS) {
-                return new TestResult(false, true, dumpState());
+                return new TestResult(false, true, dumpState(), rumbleEvents);
             }
             gb.tick();
         }
@@ -59,7 +66,7 @@ public class SameSuiteTestRunner {
                 && registers.getE() == 13
                 && registers.getH() == 21
                 && registers.getL() == 34;
-        return new TestResult(passed, false, dumpState());
+        return new TestResult(passed, false, dumpState(), rumbleEvents);
     }
 
     private String dumpState() {
@@ -77,10 +84,14 @@ public class SameSuiteTestRunner {
 
         private final String output;
 
-        public TestResult(boolean passed, boolean timedOut, String output) {
+        private final List<Boolean> rumbleEvents;
+
+        public TestResult(boolean passed, boolean timedOut, String output,
+                          List<Boolean> rumbleEvents) {
             this.passed = passed;
             this.timedOut = timedOut;
             this.output = output;
+            this.rumbleEvents = Collections.unmodifiableList(new ArrayList<>(rumbleEvents));
         }
 
         public boolean isPassed() {
@@ -93,6 +104,10 @@ public class SameSuiteTestRunner {
 
         public String getOutput() {
             return output;
+        }
+
+        public List<Boolean> getRumbleEvents() {
+            return rumbleEvents;
         }
     }
 }

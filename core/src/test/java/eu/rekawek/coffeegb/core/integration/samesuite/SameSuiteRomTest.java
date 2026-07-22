@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -75,5 +76,7 @@ public class SameSuiteRomTest {
                 new SameSuiteTestRunner(romPath.toFile(), gameboyType, bootstrapMode).runTest();
         assertFalse(result.getOutput(), result.isTimedOut());
         assertTrue(result.getOutput(), result.isPassed());
+        assertEquals("Ordinary SameSuite HRAM writes must not drive an unattached accessory",
+                List.of(), result.getRumbleEvents());
     }
 }
