@@ -138,7 +138,8 @@ class BasicController private constructor(
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
         val newType = Controller.getGameboyType(properties.system, config.rom)
-        if (newType != config.gameboyType) {
+        val newBootstrapMode = properties.system.bootstrapMode
+        if (newType != config.gameboyType || newBootstrapMode != config.bootstrapMode) {
           eventBus.post(Controller.LoadRomEvent(config.rom.file))
         }
       }

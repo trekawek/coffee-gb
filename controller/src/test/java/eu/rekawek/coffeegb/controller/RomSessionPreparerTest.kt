@@ -17,9 +17,12 @@ class RomSessionPreparerTest {
     val cache = BootStateCache(2)
     val preparer = RomSessionPreparer(cache)
 
-    val first = assertIs<PreparedSession.FromBootState>(preparer.prepare(PROPERTIES, LoadRomEvent(ROM)))
+    val first =
+        assertIs<PreparedSession.FromBootState>(
+            preparer.prepare(FAST_FORWARD_PROPERTIES, LoadRomEvent(ROM)))
     val second =
-        assertIs<PreparedSession.FromBootState>(preparer.prepare(PROPERTIES, LoadRomEvent(ROM)))
+        assertIs<PreparedSession.FromBootState>(
+            preparer.prepare(FAST_FORWARD_PROPERTIES, LoadRomEvent(ROM)))
 
     assertSame(first.bootState, second.bootState)
     assertEquals(1, cache.size)
@@ -59,5 +62,11 @@ class RomSessionPreparerTest {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
 
     val PROPERTIES = EmulatorProperties()
+
+    val FAST_FORWARD_PROPERTIES =
+        EmulatorProperties().also {
+          it.properties[EmulatorProperties.Key.BootstrapMode.propertyName] =
+              BootstrapMode.FAST_FORWARD.name
+        }
   }
 }

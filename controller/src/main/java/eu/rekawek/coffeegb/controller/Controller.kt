@@ -101,17 +101,7 @@ interface Controller : AutoCloseable {
       }
       val gameboyType = getGameboyType(properties.system, rom)
       config.setGameboyType(gameboyType)
-      if (rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB &&
-          gameboyType == GameboyType.CGB &&
-          !isDatel) {
-        // (Datel carts ship a deliberately bad logo; the visible boot ROM would hang on
-        // it forever - FAST_FORWARD times out and falls back to the post-boot presets)
-        config.setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
-      } else {
-        // run the boot ROM invisibly: the post-boot timer/PPU phase relationships are
-        // hardware-exact, which cycle-synced programs rely on (issue #37)
-        config.setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
-      }
+      config.setBootstrapMode(properties.system.bootstrapMode)
       if (config.gameboyType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
         config.setDisplaySgbBorder(false)
       } else {

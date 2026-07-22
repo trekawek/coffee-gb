@@ -167,7 +167,8 @@ class LinkedController(
     eventBus.register<UpdatedSystemMappingEvent> {
       mainSession?.config?.let { config ->
         val newType = Controller.getGameboyType(properties.system, config.rom)
-        if (newType != config.gameboyType) {
+        val newBootstrapMode = properties.system.bootstrapMode
+        if (newType != config.gameboyType || newBootstrapMode != config.bootstrapMode) {
           eventBus.post(LoadRomEvent(config.rom.file))
         }
       }
