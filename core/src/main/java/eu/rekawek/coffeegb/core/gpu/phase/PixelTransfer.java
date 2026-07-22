@@ -362,6 +362,10 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return spriteCount > 0;
     }
 
+    public int getObjectCountOnLine() {
+        return spriteCount;
+    }
+
     /**
      * Whether a selected object can extend the physical transfer beyond the independently
      * predicted mode-0 STAT edge at PPU X=166. Objects at X=166 are included in that

@@ -41,15 +41,20 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     private static final int HDMA5 = 0xff55;
 
     // VRAM DMA's request hand-off is distinct from the 32-tick data burst. HBlank
-    // arbitration takes four scheduler ticks at normal speed and three at double
-    // speed; general-purpose DMA has its own startup timing.
+    // arbitration takes four scheduler ticks at normal speed and two or three at
+    // double speed, depending on the retained PPU half-dot phase. General-purpose
+    // DMA has its own startup timing.
     private static final int NORMAL_SPEED_GDMA_STARTUP_TICKS = 6;
 
     private static final int NORMAL_SPEED_HBLANK_STARTUP_TICKS = 4;
 
     private static final int DOUBLE_SPEED_GDMA_STARTUP_TICKS = 2;
 
-    private static final int DOUBLE_SPEED_HBLANK_STARTUP_TICKS = 3;
+    private static final int DOUBLE_SPEED_HBLANK_MIN_STARTUP_TICKS = 2;
+
+    // A latched HBlank request restored in the latter half of mode 2 retains one
+    // synchronizer tick that elapsed before HALT gated the CPU clock.
+    private static final int LATCHED_HALT_MODE2_STARTUP_HANDOFF_TICK = 64;
 
     private final AddressSpace addressSpace;
 
@@ -110,6 +115,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     private int gpuLine;
 
     private int gpuTicksInLine;
+
+    private boolean gpuCpuClockRephased;
 
     private int hblankStartTicksInLine;
 
@@ -181,7 +188,11 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         for (int j = 0; j < 0x10; j++) {
             addressSpace.setByte(0x8000 | ((dst + j) & 0x1fff), blockData[j]);
         }
-        pauseOamDmaForSpeedSwitchBurst = false;
+        // Preserve the grant through a speed switch so Gameboy can account for a
+        // burst that completed while the CPU clock was stopped.
+        if (!speedSwitchInProgress) {
+            pauseOamDmaForSpeedSwitchBurst = false;
+        }
         src = (src + 0x10) & 0xffff;
         dst = (dst + 0x10) & 0xffff;
         tick = hblankTransfer ? -startupTicks() : 0;
@@ -272,7 +283,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     private int startupTicks() {
         if (hblankTransfer && lcdEnabled) {
             return speedMode.getSpeedMode() == 2
-                    ? DOUBLE_SPEED_HBLANK_STARTUP_TICKS
+                    ? DOUBLE_SPEED_HBLANK_MIN_STARTUP_TICKS
+                    + ((hblankStartTicksInLine & 1) == 0 ? 1 : 0)
                     : NORMAL_SPEED_HBLANK_STARTUP_TICKS;
         }
         return speedMode.getSpeedMode() == 2
@@ -332,8 +344,13 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     }
 
     public void onGpuTiming(int line, int ticksInLine) {
+        onGpuTiming(line, ticksInLine, false);
+    }
+
+    public void onGpuTiming(int line, int ticksInLine, boolean cpuClockRephased) {
         this.gpuLine = line;
         this.gpuTicksInLine = ticksInLine;
+        this.gpuCpuClockRephased = cpuClockRephased;
         haltEnteredThisTick = false;
     }
 
@@ -431,6 +448,12 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         } else if (transferInProgress && hblankTransfer
                 && (haltHdmaState == HaltHdmaState.REQUESTED
                 || (haltHdmaState == HaltHdmaState.LOW && isCurrentHblankWakeRequestable()))) {
+            if (haltHdmaState == HaltHdmaState.REQUESTED
+                    && gpuMode == Mode.OamSearch
+                    && gpuTicksInLine >= LATCHED_HALT_MODE2_STARTUP_HANDOFF_TICK
+                    && tick < 0) {
+                tick++;
+            }
             hblankRequestTicks = 0;
             setCpuRequestArbitration(CpuRequestArbitration.UNRESOLVED);
             hblankRequestAge = 0;
@@ -500,6 +523,9 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     public void onSpeedSwitchComplete() {
         speedSwitchInProgress = false;
+        if (!transferInProgress) {
+            pauseOamDmaForSpeedSwitchBurst = false;
+        }
         if (speedSwitchStartedWithoutRequest && transferInProgress && hblankTransfer
                 && hblankRequestTicks < 0) {
             if (isCurrentHblankRequestable()) {
@@ -510,6 +536,16 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                 setCpuRequestArbitration(hblankRequestTicks == 0
                         ? CpuRequestArbitration.UNRESOLVED
                         : CpuRequestArbitration.NONE);
+                if (hblankRequestTicks == 0
+                        && gpuTicksInLine <= hblankStartTicksInLine + 1) {
+                    // If the mux releases directly onto the first HBlank arbiter
+                    // slot, the CPU wins that scanline and HDMA waits for the next.
+                    wakeRequestArbitration = WakeRequestArbitration.YIELD_CPU;
+                } else if (hblankRequestTicks > 0) {
+                    // A late current-HBlank request has not yet crossed the
+                    // synchronizer, but its retained phase owns the upcoming slot.
+                    wakeRequestArbitration = WakeRequestArbitration.PREEMPT_CPU;
+                }
                 hblankRequestAge = 0;
                 requestOverlappedCpuWrite = false;
                 interruptEntryWonArbitration = false;
@@ -533,6 +569,16 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     public boolean pausesOamDmaForSpeedSwitchBurst() {
         return pauseOamDmaForSpeedSwitchBurst;
+    }
+
+    public boolean completedHblankSpeedSwitchBurst() {
+        return pauseOamDmaForSpeedSwitchBurst && !transferInProgress;
+    }
+
+    /** Whether an armed transfer still contributes an HBlank clock-mux phase. */
+    public boolean alignsPendingHblankSpeedSwitchTail() {
+        return speedSwitchInProgress && hasPendingHblankTransfer()
+                && (gpuMode != Mode.VBlank || !speedSwitchStartedWithoutRequest);
     }
 
     public boolean yieldsSpeedSwitchWakeRequestToCpu() {
@@ -601,7 +647,12 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     public void onSpeedSwitchWakeCpuInstructionFinished() {
         if (wakeRequestArbitration == WakeRequestArbitration.YIELD_CPU) {
+            // Winning the rephased slot rejects this scanline's request rather than
+            // merely delaying it until the instruction boundary.
             wakeRequestArbitration = WakeRequestArbitration.NONE;
+            hblankRequestTicks = -1;
+            setCpuRequestArbitration(CpuRequestArbitration.NONE);
+            hblankRequestAge = 0;
         }
     }
 
@@ -628,6 +679,11 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     }
 
     private void startTransfer(int reg) {
+        // A back-to-back double-speed GDMA grant retains the source sequencer's
+        // two-tick hand-off instead of taking the phase of a fresh source setup.
+        boolean resumedDoubleSpeedGdma = speedMode.getSpeedMode() == 2
+                && (reg & (1 << 7)) == 0
+                && sourceBytesTransferred > 0;
         hblankTransfer = (reg & (1 << 7)) != 0;
         length = reg & 0x7f;
         transferInProgress = true;
@@ -639,7 +695,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         interruptEntryWonArbitration = false;
         nextHblankRequestTicks = -1;
         nextHblankRequestAge = 0;
-        tick = -startupTicks();
+        tick = -startupTicks() - (resumedDoubleSpeedGdma ? 2 : 0);
         hblankRequestTicks = hblankTransfer && (!isCurrentHblankRequestable()) ? -1 : 0;
         setCpuRequestArbitration(hblankRequestTicks == 0
                 ? CpuRequestArbitration.UNRESOLVED
@@ -655,8 +711,11 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     }
 
     private boolean isCurrentHblankRequestable() {
+        // A normal-speed clock that has passed through KEY1 closes the final HBlank
+        // request slot one dot earlier than the power-on CPU/PPU phase.
+        int cutoff = speedMode.getSpeedMode() == 1 && gpuCpuClockRephased ? 449 : 450;
         return !lcdEnabled || (gpuMode == Mode.HBlank
-                && gpuLine < 144 && gpuTicksInLine <= 450);
+                && gpuLine < 144 && gpuTicksInLine <= cutoff);
     }
 
     private boolean isCurrentHblankWakeRequestable() {
@@ -700,7 +759,8 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                 stopAfterCurrentBlock, preserveLengthAfterCurrentBlock, speedSwitchInProgress,
                 speedSwitchStartedWithoutRequest, pauseOamDmaForSpeedSwitchBurst,
                 wakeRequestArbitration,
-                gpuLine, gpuTicksInLine, hblankStartTicksInLine, cpuHalted, haltHdmaState,
+                gpuLine, gpuTicksInLine, gpuCpuClockRephased,
+                hblankStartTicksInLine, cpuHalted, haltHdmaState,
                 haltEnteredThisTick, requestOverlappedCpuWrite,
                 interruptEntryWonArbitration, cpuRequestArbitration,
                 cpuRequestAllowsLateInterrupt,
@@ -736,6 +796,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         this.wakeRequestArbitration = mem.wakeRequestArbitration;
         this.gpuLine = mem.gpuLine;
         this.gpuTicksInLine = mem.gpuTicksInLine;
+        this.gpuCpuClockRephased = mem.gpuCpuClockRephased;
         this.hblankStartTicksInLine = mem.hblankStartTicksInLine;
         this.cpuHalted = mem.cpuHalted;
         this.haltHdmaState = mem.haltHdmaState;
@@ -767,6 +828,7 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
                               boolean pauseOamDmaForSpeedSwitchBurst,
                               WakeRequestArbitration wakeRequestArbitration,
                               int gpuLine, int gpuTicksInLine,
+                              boolean gpuCpuClockRephased,
                               int hblankStartTicksInLine, boolean cpuHalted,
                               HaltHdmaState haltHdmaState,
                               boolean haltEnteredThisTick,

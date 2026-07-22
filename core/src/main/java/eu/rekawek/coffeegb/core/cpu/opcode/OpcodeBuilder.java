@@ -60,6 +60,20 @@ public class OpcodeBuilder implements Serializable {
                     }
 
                     @Override
+                    public Integer resolveMemoryAddress(
+                            Registers registers, int[] args, int context) {
+                        return arg.isMemory()
+                                ? arg.resolveMemoryAddress(registers, args)
+                                : null;
+                    }
+
+                    @Override
+                    public Integer previewContext(
+                            Registers registers, int[] args, int context) {
+                        return arg.isMemory() ? null : arg.read(registers, null, args);
+                    }
+
+                    @Override
                     public int execute(
                             Registers registers, AddressSpace addressSpace, int[] args, int context) {
                         return arg.read(registers, addressSpace, args);
@@ -88,6 +102,12 @@ public class OpcodeBuilder implements Serializable {
                     }
 
                     @Override
+                    public Integer previewContext(
+                            Registers registers, int[] args, int context) {
+                        return value;
+                    }
+
+                    @Override
                     public String toString() {
                         return String.format("0x%02X → [__]", value);
                     }
@@ -108,6 +128,17 @@ public class OpcodeBuilder implements Serializable {
                         @Override
                         public int operandLength() {
                             return arg.getOperandLength();
+                        }
+
+                        @Override
+                        public Integer resolveMemoryAddress(
+                                Registers registers, int[] args, int context) {
+                            return toWord(args);
+                        }
+
+                        @Override
+                        public Integer resolveMemoryWriteValue(int context) {
+                            return context & 0x00ff;
                         }
 
                         @Override
@@ -135,6 +166,17 @@ public class OpcodeBuilder implements Serializable {
                         }
 
                         @Override
+                        public Integer resolveMemoryAddress(
+                                Registers registers, int[] args, int context) {
+                            return (toWord(args) + 1) & 0xffff;
+                        }
+
+                        @Override
+                        public Integer resolveMemoryWriteValue(int context) {
+                            return (context & 0xff00) >> 8;
+                        }
+
+                        @Override
                         public int execute(
                                 Registers registers, AddressSpace addressSpace, int[] args, int context) {
                             addressSpace.setByte((toWord(args) + 1) & 0xffff, (context & 0xff00) >> 8);
@@ -157,6 +199,19 @@ public class OpcodeBuilder implements Serializable {
                         @Override
                         public int operandLength() {
                             return arg.getOperandLength();
+                        }
+
+                        @Override
+                        public Integer resolveMemoryAddress(
+                                Registers registers, int[] args, int context) {
+                            return arg.isMemory()
+                                    ? arg.resolveMemoryAddress(registers, args)
+                                    : null;
+                        }
+
+                        @Override
+                        public Integer resolveMemoryWriteValue(int context) {
+                            return arg.isMemory() ? context & 0xff : null;
                         }
 
                         @Override
@@ -285,6 +340,12 @@ public class OpcodeBuilder implements Serializable {
                     }
 
                     @Override
+                    public Integer resolveMemoryAddress(
+                            Registers registers, int[] args, int context) {
+                        return registers.getSP();
+                    }
+
+                    @Override
                     public SpriteBug.CorruptionType causesOemBug(Registers registers, int context) {
                         return inOamArea(registers.getSP()) ? SpriteBug.CorruptionType.POP_1 : null;
                     }
@@ -307,6 +368,12 @@ public class OpcodeBuilder implements Serializable {
                         int msb = addressSpace.getByte(registers.getSP());
                         registers.setSP(inc.apply(registers.getFlags(), registers.getSP()));
                         return context | (msb << 8);
+                    }
+
+                    @Override
+                    public Integer resolveMemoryAddress(
+                            Registers registers, int[] args, int context) {
+                        return registers.getSP();
                     }
 
                     @Override
@@ -336,6 +403,14 @@ public class OpcodeBuilder implements Serializable {
                     @Override
                     public int operandLength() {
                         return arg2.getOperandLength();
+                    }
+
+                    @Override
+                    public Integer resolveMemoryAddress(
+                            Registers registers, int[] args, int context) {
+                        return arg2.isMemory()
+                                ? arg2.resolveMemoryAddress(registers, args)
+                                : null;
                     }
 
                     @Override
@@ -457,6 +532,12 @@ public class OpcodeBuilder implements Serializable {
                             flags.setZ(!BitUtils.getBit(value, bit));
                         }
                         return context;
+                    }
+
+                    @Override
+                    public Integer resolveMemoryAddress(
+                            Registers registers, int[] args, int context) {
+                        return registers.getHL();
                     }
 
                     @Override

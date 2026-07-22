@@ -52,6 +52,10 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
 
     private int cpuFirstLineMode2Interrupts;
 
+    // A prefetched instruction can retire before a newly stored PPU request is
+    // presented to the CPU acceptance gate (notably DI and writes to IE).
+    private int cpuInstructionBlockedInterrupts;
+
     private int pendingEnableInterrupts = -1;
 
     // At the first visible-line latch the DMG's retiring VBlank request and a
@@ -64,6 +68,15 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     // only that CPU slot sees LCDC low.
     private boolean maskLcdcUntilNextPeripheralTick;
 
+    // A mode-0 edge can land after an FF0F read machine cycle has already
+    // sampled its request gate. Keep the stored IF latch intact while hiding
+    // LCDC from that in-flight bus cycle only.
+    private int maskMode0LcdcReadTicks;
+
+    // Peripheral events can already be visible to the current CPU read phase
+    // before their IF latch and interrupt-acceptance paths settle.
+    private int cpuReadInterruptPreview;
+
     // The CPU acknowledges an interrupt near the middle of its final dispatch
     // machine cycle. Serial events in the remaining part of that cycle are
     // evaluated before the acknowledge clears IF.
@@ -74,6 +87,12 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     private boolean timerInterruptAcknowledge;
 
     private boolean lcdcInterruptAcknowledge;
+
+    private boolean vBlankInterruptAcknowledge;
+
+    // Records an explicit FF0F write that drove LCDC low during this CPU slot.
+    // The PPU resolves same-slot set/clear precedence on its following tick.
+    private boolean lcdcInterruptFlagWriteClear;
 
     public InterruptManager(boolean gbc) {
     }
@@ -128,6 +147,15 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         if ((interruptFlag & mask) == 0) {
             haltBlockedInterrupts |= mask;
             cpuPhasedPpuInterrupts |= mask & PPU_INTERRUPT_MASK;
+        }
+        interruptFlag |= mask;
+    }
+
+    public void requestPhasedInterruptAfterInstruction(InterruptType type) {
+        int mask = 1 << type.ordinal();
+        if ((interruptFlag & mask) == 0) {
+            cpuPhasedPpuInterrupts |= mask & PPU_INTERRUPT_MASK;
+            cpuInstructionBlockedInterrupts |= mask;
         }
         interruptFlag |= mask;
     }
@@ -190,7 +218,9 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     }
 
     public void clearInterrupt(InterruptType type) {
-        if (type == InterruptType.Serial) {
+        if (type == InterruptType.VBlank) {
+            vBlankInterruptAcknowledge = true;
+        } else if (type == InterruptType.Serial) {
             serialInterruptAcknowledge = true;
         } else if (type == InterruptType.Timer) {
             timerInterruptAcknowledge = true;
@@ -210,6 +240,7 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         cpuPhasedPpuInterrupts &= ~(1 << type.ordinal());
         cpuPhasedMode2Interrupts &= ~(1 << type.ordinal());
         cpuFirstLineMode2Interrupts &= ~(1 << type.ordinal());
+        cpuInstructionBlockedInterrupts &= ~(1 << type.ordinal());
         if (type == InterruptType.LCDC) {
             maskLcdcUntilNextPeripheralTick = false;
         }
@@ -237,6 +268,18 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         return result;
     }
 
+    public boolean consumeVBlankInterruptAcknowledge() {
+        boolean result = vBlankInterruptAcknowledge;
+        vBlankInterruptAcknowledge = false;
+        return result;
+    }
+
+    public boolean consumeLcdcInterruptFlagWriteClear() {
+        boolean result = lcdcInterruptFlagWriteClear;
+        lcdcInterruptFlagWriteClear = false;
+        return result;
+    }
+
     public void finishTimerInterruptAcknowledge() {
         clearInterruptState(InterruptType.Timer);
     }
@@ -247,6 +290,11 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                 enableInterrupts(false);
             }
         }
+        cpuInstructionBlockedInterrupts = 0;
+    }
+
+    public boolean isInterruptEnablePending() {
+        return pendingEnableInterrupts != -1;
     }
 
     public boolean isIme() {
@@ -254,16 +302,19 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     }
 
     public boolean isInterruptRequested() {
-        return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts & 0x1f) != 0;
+        return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
+                & ~cpuInstructionBlockedInterrupts & 0x1f) != 0;
     }
 
     public boolean isInterruptRequestedForHalt() {
         return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
+                & ~cpuInstructionBlockedInterrupts
                 & ~haltBlockedInterrupts & 0x1f) != 0;
     }
 
     public boolean isInterruptRequestedWhileHaltWakeBlocked() {
         return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
+                & ~cpuInstructionBlockedInterrupts
                 & haltBlockedInterrupts & 0x1f) != 0;
     }
 
@@ -298,8 +349,28 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         maskLcdcUntilNextPeripheralTick = true;
     }
 
+    public void maskMode0LcdcReadForTicks(int ticks) {
+        maskMode0LcdcReadTicks = Math.max(maskMode0LcdcReadTicks, ticks);
+    }
+
     public void finishLcdcReadMaskWindow() {
         maskLcdcUntilNextPeripheralTick = false;
+        if (maskMode0LcdcReadTicks > 0) {
+            maskMode0LcdcReadTicks--;
+        }
+    }
+
+    public void setCpuReadInterruptPreview(InterruptType type, boolean active) {
+        int mask = 1 << type.ordinal();
+        if (active) {
+            cpuReadInterruptPreview |= mask;
+        } else {
+            cpuReadInterruptPreview &= ~mask;
+        }
+    }
+
+    public void clearCpuReadInterruptPreview() {
+        cpuReadInterruptPreview = 0;
     }
 
     @Override
@@ -311,14 +382,17 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     public void setByte(int address, int value) {
         switch (address) {
             case 0xff0f:
+                lcdcInterruptFlagWriteClear = false;
                 interruptFlag = value | 0xe0;
                 haltBlockedInterrupts = 0;
                 cpuBlockedInterrupts = 0;
                 cpuPhasedPpuInterrupts = interruptFlag & PPU_INTERRUPT_MASK;
                 cpuPhasedMode2Interrupts = 0;
                 cpuFirstLineMode2Interrupts = 0;
+                cpuInstructionBlockedInterrupts = 0;
                 maskVBlankOnNextRead = false;
                 maskLcdcUntilNextPeripheralTick = false;
+                maskMode0LcdcReadTicks = 0;
                 break;
 
             case 0xffff:
@@ -328,16 +402,26 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     }
 
     @Override
+    public void setByteFromCpu(int address, int value) {
+        setByte(address, value);
+        if (address == 0xff0f) {
+            lcdcInterruptFlagWriteClear =
+                    (value & (1 << InterruptType.LCDC.ordinal())) == 0;
+        }
+    }
+
+    @Override
     public int getByte(int address) {
         switch (address) {
             case 0xff0f:
-                int value = interruptFlag;
+                int value = interruptFlag | cpuReadInterruptPreview;
                 if (maskVBlankOnNextRead) {
                     maskVBlankOnNextRead = false;
                     value &= ~(1 << InterruptType.VBlank.ordinal());
                 }
-                if (maskLcdcUntilNextPeripheralTick) {
+                if (maskLcdcUntilNextPeripheralTick || maskMode0LcdcReadTicks > 0) {
                     maskLcdcUntilNextPeripheralTick = false;
+                    maskMode0LcdcReadTicks = 0;
                     value &= ~(1 << InterruptType.LCDC.ordinal());
                 }
                 return value;
@@ -355,9 +439,12 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         return new InterruptManagerMemento(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts,
                 haltBlockedInterrupts, cpuBlockedInterrupts, cpuPhasedPpuInterrupts,
                 cpuPhasedMode2Interrupts, cpuFirstLineMode2Interrupts,
+                cpuInstructionBlockedInterrupts,
                 maskVBlankOnNextRead, maskLcdcUntilNextPeripheralTick,
+                maskMode0LcdcReadTicks, cpuReadInterruptPreview,
                 serialInterruptAcknowledge,
-                timerInterruptAcknowledge, lcdcInterruptAcknowledge);
+                timerInterruptAcknowledge, lcdcInterruptAcknowledge,
+                vBlankInterruptAcknowledge, lcdcInterruptFlagWriteClear);
     }
 
     @Override
@@ -374,11 +461,16 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         this.cpuPhasedPpuInterrupts = mem.cpuPhasedPpuInterrupts;
         this.cpuPhasedMode2Interrupts = mem.cpuPhasedMode2Interrupts;
         this.cpuFirstLineMode2Interrupts = mem.cpuFirstLineMode2Interrupts;
+        this.cpuInstructionBlockedInterrupts = mem.cpuInstructionBlockedInterrupts;
         this.maskVBlankOnNextRead = mem.maskVBlankOnNextRead;
         this.maskLcdcUntilNextPeripheralTick = mem.maskLcdcUntilNextPeripheralTick;
+        this.maskMode0LcdcReadTicks = mem.maskMode0LcdcReadTicks;
+        this.cpuReadInterruptPreview = mem.cpuReadInterruptPreview;
         this.serialInterruptAcknowledge = mem.serialInterruptAcknowledge;
         this.timerInterruptAcknowledge = mem.timerInterruptAcknowledge;
         this.lcdcInterruptAcknowledge = mem.lcdcInterruptAcknowledge;
+        this.vBlankInterruptAcknowledge = mem.vBlankInterruptAcknowledge;
+        this.lcdcInterruptFlagWriteClear = mem.lcdcInterruptFlagWriteClear;
     }
 
     private record InterruptManagerMemento(boolean ime, int interruptFlag, int interruptEnabled,
@@ -388,11 +480,16 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                                            int cpuPhasedPpuInterrupts,
                                            int cpuPhasedMode2Interrupts,
                                            int cpuFirstLineMode2Interrupts,
+                                           int cpuInstructionBlockedInterrupts,
                                            boolean maskVBlankOnNextRead,
                                            boolean maskLcdcUntilNextPeripheralTick,
+                                           int maskMode0LcdcReadTicks,
+                                           int cpuReadInterruptPreview,
                                            boolean serialInterruptAcknowledge,
                                            boolean timerInterruptAcknowledge,
-                                           boolean lcdcInterruptAcknowledge) implements Memento<InterruptManager> {
+                                           boolean lcdcInterruptAcknowledge,
+                                           boolean vBlankInterruptAcknowledge,
+                                           boolean lcdcInterruptFlagWriteClear) implements Memento<InterruptManager> {
     }
 
 }

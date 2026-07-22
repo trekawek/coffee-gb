@@ -43,6 +43,22 @@ public class HdmaTest {
     }
 
     @Test
+    public void backToBackDoubleSpeedGeneralDmaRetainsTwoSequencerTicks() {
+        Fixture fixture = new Fixture(2);
+        fixture.startTransfer(0x00);
+        fixture.tick(34);
+        assertEquals(0xa0, fixture.memory.getByte(0x8000));
+
+        fixture.startTransfer(0x00);
+        fixture.tick(35);
+        assertEquals(0, fixture.memory.getByte(0x8010));
+
+        fixture.tick(1);
+        assertEquals(0xb0, fixture.memory.getByte(0x8010));
+        assertEquals(0xbf, fixture.memory.getByte(0x801f));
+    }
+
+    @Test
     public void sourceBusSlotsAndSampledBlockSurviveMementoRestore() {
         Fixture fixture = new Fixture();
         fixture.startTransfer(0x00);
@@ -252,14 +268,40 @@ public class HdmaTest {
     }
 
     @Test
-    public void doubleSpeedHblankDmaUsesThreeSchedulerStartupTicks() {
+    public void doubleSpeedHblankDmaUsesThreeStartupTicksAfterAnEvenHblankEdge() {
         Fixture fixture = new Fixture(2);
         fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(1, 200);
+        fixture.hdma.onGpuUpdate(Mode.PixelTransfer);
         fixture.startTransfer(0x80);
+        fixture.hdma.onGpuTiming(1, 247);
         fixture.hdma.onGpuUpdate(Mode.HBlank);
         fixture.advanceHblankRequest(4);
 
         fixture.tick(34);
+        assertEquals(0, fixture.memory.getByte(0x8000));
+
+        fixture.tick(1);
+        assertEquals(0xa0, fixture.memory.getByte(0x8000));
+        assertEquals(0xaf, fixture.memory.getByte(0x800f));
+    }
+
+    @Test
+    public void doubleSpeedHblankDmaUsesTwoStartupTicksAfterAnOddHblankEdge() {
+        Fixture fixture = new Fixture(2);
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(0, 252);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.hdma.onGpuTiming(1, 0);
+        fixture.hdma.onGpuUpdate(Mode.OamSearch);
+        fixture.hdma.onGpuTiming(1, 200);
+        fixture.hdma.onGpuUpdate(Mode.PixelTransfer);
+        fixture.startTransfer(0x80);
+        fixture.hdma.onGpuTiming(1, 252);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.advanceHblankRequest(4);
+
+        fixture.tick(33);
         assertEquals(0, fixture.memory.getByte(0x8000));
 
         fixture.tick(1);
@@ -305,6 +347,25 @@ public class HdmaTest {
     }
 
     @Test
+    public void lateMode2WakeRetainsOneLatchedHblankStartupTick() {
+        Fixture fixture = new Fixture();
+        fixture.hdma.onLcdSwitch(true);
+        fixture.startTransfer(0x80);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.advanceHblankRequest(3);
+        fixture.hdma.onCpuHaltState(true);
+        fixture.hdma.onGpuUpdate(Mode.OamSearch);
+        fixture.hdma.onGpuTiming(1, 64);
+        fixture.hdma.onCpuHaltState(false);
+
+        fixture.tick(34);
+        assertEquals(0, fixture.memory.getByte(0x8000));
+
+        fixture.tick(1);
+        assertEquals(0xa0, fixture.memory.getByte(0x8000));
+    }
+
+    @Test
     public void haltPreservesRequestCrossingOnTheSameTick() {
         Fixture fixture = new Fixture();
         fixture.hdma.onLcdSwitch(true);
@@ -346,6 +407,26 @@ public class HdmaTest {
     public void doubleSpeedHaltSamplesTheLaterHblankRequestLevel() {
         assertFalse(blockRestartsAfterLateHblankHalt(2, 451));
         assertTrue(blockRestartsAfterLateHblankHalt(2, 452));
+    }
+
+    @Test
+    public void rephasedNormalSpeedClosesTheLastHblankSlotOneDotEarlier() {
+        Fixture unrephased = new Fixture();
+        unrephased.hdma.onLcdSwitch(true);
+        unrephased.hdma.onGpuTiming(1, 450, false);
+        unrephased.hdma.onGpuUpdate(Mode.HBlank);
+        unrephased.startTransfer(0x80);
+        unrephased.tick(36);
+        assertEquals(0xa0, unrephased.memory.getByte(0x8000));
+
+        Fixture rephased = new Fixture();
+        rephased.hdma.onLcdSwitch(true);
+        rephased.hdma.onGpuTiming(1, 450, true);
+        rephased.hdma.onGpuUpdate(Mode.HBlank);
+        rephased.startTransfer(0x80);
+        rephased.tick(40);
+        assertEquals(0, rephased.memory.getByte(0x8000));
+        assertTrue(rephased.hdma.hasPendingHblankTransfer());
     }
 
     private boolean blockRestartsAfterLateHblankHalt(int speed, int haltTick) {
@@ -452,6 +533,11 @@ public class HdmaTest {
         }
 
         assertTrue(fixture.hdma.tick());
+        assertTrue(fixture.hdma.completedHblankSpeedSwitchBurst());
+        assertTrue(fixture.hdma.pausesOamDmaForSpeedSwitchBurst());
+
+        fixture.hdma.onSpeedSwitchComplete();
+        assertFalse(fixture.hdma.completedHblankSpeedSwitchBurst());
         assertFalse(fixture.hdma.pausesOamDmaForSpeedSwitchBurst());
     }
 
@@ -501,6 +587,34 @@ public class HdmaTest {
     }
 
     @Test
+    public void dormantVblankTransferDoesNotAlignTheSpeedSwitchTail() {
+        Fixture fixture = new Fixture(2);
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(144, 120);
+        fixture.hdma.onGpuUpdate(Mode.VBlank);
+        fixture.startTransfer(0x80);
+
+        fixture.hdma.onSpeedSwitch();
+
+        assertTrue(fixture.hdma.hasPendingHblankTransfer());
+        assertFalse(fixture.hdma.alignsPendingHblankSpeedSwitchTail());
+    }
+
+    @Test
+    public void retainedVisibleRequestStillAlignsTheTailAfterEnteringVblank() {
+        Fixture fixture = new Fixture(2);
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(2, 250);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.startTransfer(0x80);
+
+        fixture.hdma.onSpeedSwitch();
+        fixture.hdma.onGpuUpdate(Mode.VBlank);
+
+        assertTrue(fixture.hdma.alignsPendingHblankSpeedSwitchTail());
+    }
+
+    @Test
     public void firstHblankAfterSpeedSwitchUsesTheRephasedArbiter() {
         Fixture preempted = speedSwitchWaitingForNextHblank();
         preempted.hdma.advanceHblankRequest(false, true);
@@ -517,6 +631,8 @@ public class HdmaTest {
         assertTrue(yielded.hdma.yieldsSpeedSwitchWakeRequestToCpu());
         yielded.hdma.onSpeedSwitchWakeCpuInstructionFinished();
         assertFalse(yielded.hdma.yieldsSpeedSwitchWakeRequestToCpu());
+        assertFalse(yielded.hdma.isTransferInProgress());
+        assertTrue(yielded.hdma.hasPendingHblankTransfer());
     }
 
     private Fixture speedSwitchWaitingForNextHblank() {
