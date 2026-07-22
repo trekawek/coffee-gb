@@ -260,10 +260,7 @@ rising edge) — see `StatRegister`.
 ## Mealybug Tearoom status (mid-mode-3 register writes, DMG)
 
 `mvn -pl core test -Ptest-mealybug` — 24 DMG tests compared strictly with the
-hardware references, with only the single documented pixel exception below.
-**Status (machine-retiming branch, 2026-07-10): 23/24 pixel-perfect, 1 diff
-pixel total** (m3_lcdc_win_en_change_multiple_wx row 39 — an LCD-PPU desync
-boundary case SameBoy documents as present on "most but not all" DMG units).
+hardware references. **Status: 24/24 pixel-perfect.**
 
 **The architecture** — dual machine + the +3 write skew:
 - The GPU runs TWO PixelTransfer instances: an unshifted skeleton driving
@@ -290,9 +287,11 @@ boundary case SameBoy documents as present on "most but not all" DMG units).
   moving any calibrated read dot.
 - Other landed semantics: live SCY everywhere (no line-start latch); the WX=0
   activation stall only with SCX&7!=0; the insertion-glitch blank still pops
-  the object FIFO; the line's first pixel resolves its LCDC mux one dot later
-  than its palettes (two-phase resolution); a pending window activation
-  cancels if LCDC.5 went off during the pending tick.
+  the object FIFO; a background-source insertion comparator sees a live
+  LCDC.5 disable while an in-flight window fetch retains the delayed view; the
+  line's first pixel resolves its LCDC mux one dot later than its palettes
+  (two-phase resolution); a pending window activation cancels if LCDC.5 went
+  off during the pending tick.
 - CGB legs (compat palettes, WRITE_CPU WX class, *2 variants) unchanged — see
   the memory notes; the CGB board is separate territory.
 
