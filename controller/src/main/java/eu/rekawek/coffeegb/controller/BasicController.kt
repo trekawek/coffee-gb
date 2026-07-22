@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.retroachievements.RetroAchievements
+import eu.rekawek.coffeegb.controller.retroachievements.RetroAchievementsClient
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.debug.Console
@@ -27,6 +29,8 @@ class BasicController(
   private val eventBus: EventBus = parentEventBus.fork("session")
 
   private val eventQueue = EventQueue(eventBus)
+
+  private val retroAchievements = RetroAchievementsClient(eventBus, properties)
 
   private var session: Session? = null
 
@@ -98,6 +102,14 @@ class BasicController(
         reconnectLinkDevice()
       }
     }
+    eventQueue.register<RetroAchievements.RequestStatusEvent> { retroAchievements.publishStatus() }
+    eventQueue.register<RetroAchievements.LoginEvent> {
+      retroAchievements.login(it.username, it.password)
+    }
+    eventQueue.register<RetroAchievements.LogoutEvent> { retroAchievements.logout() }
+    eventQueue.register<RetroAchievements.RequestAchievementListEvent> {
+      retroAchievements.publishAchievements()
+    }
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
         val newType = Controller.getGameboyType(properties.system, config.rom)
@@ -117,7 +129,11 @@ class BasicController(
 
     // rewinding restores one recorded state and then emulates a single frame from it,
     // so the display and audio play backwards at RewindManager.RECORD_INTERVAL speed
-    val rewound = isRewinding && session?.gameboy?.let { rewindManager.rewindOneStep(it) } == true
+    val rewound =
+        isRewinding &&
+            session?.gameboy?.let {
+              rewindManager.rewindOneStep(it, retroAchievements::restoreProgress)
+            } == true
 
     var emulated = false
     repeat(TICKS_PER_FRAME) {
@@ -127,8 +143,13 @@ class BasicController(
       }
       timingTicker.run()
     }
-    if (emulated && !rewound) {
-      session?.gameboy?.let { rewindManager.record(it) }
+    if (emulated) {
+      retroAchievements.doFrame()
+      if (!rewound) {
+        session?.gameboy?.let { rewindManager.record(it, retroAchievements::saveProgress) }
+      }
+    } else {
+      retroAchievements.idle()
     }
   }
 
@@ -207,10 +228,12 @@ class BasicController(
     session.eventBus.post(Controller.SessionPauseSupportEvent(true))
     session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
     session.eventBus.post(Controller.EmulationStartedEvent(session.config.rom.title))
+    retroAchievements.attach(session.gameboy, session.config.rom)
   }
 
   private fun stop() {
     val session = session ?: return
+    retroAchievements.detach()
     session.eventBus.post(Controller.EmulationStoppedEvent())
     session.close()
     this.session = null
@@ -228,14 +251,19 @@ class BasicController(
   private fun saveSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
-    manager.saveSnapshot(slot, currentSession.gameboy)
+    manager.saveSnapshot(slot, currentSession.gameboy, retroAchievements.saveProgress())
     currentSession.eventBus.post(Controller.SnapshotSavedEvent(slot))
   }
 
   private fun loadSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
-    if (manager.loadSnapshot(slot, currentSession.gameboy)) {
+    if (
+        manager.loadSnapshot(
+            slot,
+            currentSession.gameboy,
+            retroAchievements::restoreProgress,
+        )) {
       rewindManager.clear()
       currentSession.eventBus.post(Controller.SnapshotRestoredEvent(slot))
     }
@@ -257,6 +285,7 @@ class BasicController(
         session?.let { Controller.ControllerState(it.gameboy.saveToMemento(), it.config.rom) }
 
     stop()
+    retroAchievements.close()
     eventBus.close()
 
     return state

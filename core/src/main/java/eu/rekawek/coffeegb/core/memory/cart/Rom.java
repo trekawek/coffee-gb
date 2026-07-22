@@ -31,6 +31,9 @@ public class Rom {
 
     private final int[] rom;
 
+    /** Exact bytes loaded from disk, before compatibility fixes are applied to the emulated copy. */
+    private final byte[] sourceData;
+
     private final GameboyColorFlag gameboyColorFlag;
 
     private final boolean superGameboyFlag;
@@ -46,6 +49,7 @@ public class Rom {
     }
 
     public Rom(byte[] romByteArray, File romFile) throws IOException {
+        sourceData = romByteArray.clone();
         rom = new int[romByteArray.length];
         for (int i = 0; i < romByteArray.length; i++) {
             rom[i] = romByteArray[i] & 0xFF;
@@ -148,6 +152,10 @@ public class Rom {
 
     public int[] getRom() {
         return rom;
+    }
+
+    public byte[] getSourceData() {
+        return sourceData.clone();
     }
 
     public GameboyColorFlag getGameboyColorFlag() {

@@ -42,6 +42,9 @@ interface Controller : AutoCloseable {
   /** Emitted after a snapshot has been restored successfully. */
   data class SnapshotRestoredEvent(val slot: Int) : Event
 
+  /** A transient message rendered over the emulated display. */
+  data class NotificationEvent(val message: String, val durationMillis: Int = 1500) : Event
+
   data class SessionPauseSupportEvent(val enabled: Boolean) : Event
 
   data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event

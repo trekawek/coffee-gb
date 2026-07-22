@@ -27,6 +27,7 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEve
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.CgbGamesType
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGamesType
+import eu.rekawek.coffeegb.controller.retroachievements.RetroAchievements
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
@@ -65,6 +66,7 @@ import javax.swing.JMenuBar
 import javax.swing.JMenuItem
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.JPasswordField
 import javax.swing.JScrollPane
 import javax.swing.JTextField
 import javax.swing.KeyStroke
@@ -136,12 +138,133 @@ class SwingMenu(
 
     menuBar.add(createFileMenu())
     menuBar.add(createGameMenu())
+    menuBar.add(createRetroAchievementsMenu())
     menuBar.add(createSystemMenu())
     menuBar.add(createScreenMenu())
     menuBar.add(createAudioMenu())
     menuBar.add(createPeripheralsMenu())
     menuBar.add(createLinkMenu())
     window.jMenuBar = menuBar
+  }
+
+  private fun createRetroAchievementsMenu(): JMenu {
+    val menu = JMenu("RetroAchievements")
+    val status = JMenuItem("Checking availability…")
+    status.isEnabled = false
+    menu.add(status)
+
+    val login = JMenuItem("Sign in…")
+    menu.add(login)
+    login.addActionListener { showRetroAchievementsLogin() }
+
+    val logout = JMenuItem("Sign out")
+    logout.isEnabled = false
+    menu.add(logout)
+    logout.addActionListener { eventBus.post(RetroAchievements.LogoutEvent()) }
+
+    menu.addSeparator()
+    val achievements = JMenuItem("Achievements…")
+    achievements.isEnabled = false
+    menu.add(achievements)
+    achievements.addActionListener {
+      eventBus.post(RetroAchievements.RequestAchievementListEvent())
+    }
+
+    eventBus.register<RetroAchievements.StatusEvent> { event ->
+      SwingUtilities.invokeLater {
+        status.text =
+            when {
+              !event.available -> event.message ?: "Unavailable"
+              !event.loggedIn -> event.message ?: "Not signed in"
+              event.gameTitle != null ->
+                  "${event.username}: ${event.gameTitle} " +
+                      "(${event.unlockedAchievements}/${event.totalAchievements})"
+              else -> event.message ?: "Signed in as ${event.username}"
+            }
+        login.isEnabled = event.available && !event.loggedIn
+        logout.isEnabled = event.available && event.loggedIn
+        achievements.isEnabled = event.available && event.gameTitle != null
+      }
+    }
+    eventBus.register<RetroAchievements.AchievementListEvent> { event ->
+      SwingUtilities.invokeLater { showRetroAchievements(event) }
+    }
+
+    // The controller may have restored a token before this menu was constructed.
+    eventBus.post(RetroAchievements.RequestStatusEvent())
+    return menu
+  }
+
+  private fun showRetroAchievementsLogin() {
+    val username =
+        JTextField(
+            properties.getProperty(EmulatorProperties.Key.RetroAchievementsUsername, ""),
+            24,
+        )
+    val password = JPasswordField(24)
+    val panel = JPanel(java.awt.GridLayout(0, 2, 8, 8))
+    panel.add(JLabel("Username:"))
+    panel.add(username)
+    panel.add(JLabel("Password:"))
+    panel.add(password)
+
+    val result =
+        JOptionPane.showConfirmDialog(
+            window,
+            panel,
+            "Sign in to RetroAchievements",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+        )
+    if (result == JOptionPane.OK_OPTION) {
+      val passwordValue = password.password
+      password.text = ""
+      eventBus.post(RetroAchievements.LoginEvent(username.text, passwordValue))
+    }
+  }
+
+  private fun showRetroAchievements(event: RetroAchievements.AchievementListEvent) {
+    if (event.error != null) {
+      JOptionPane.showMessageDialog(
+          window,
+          event.error,
+          "RetroAchievements",
+          JOptionPane.INFORMATION_MESSAGE,
+      )
+      return
+    }
+
+    val list = JList(event.achievements.toTypedArray())
+    list.visibleRowCount = minOf(14, maxOf(4, event.achievements.size))
+    list.selectionMode = ListSelectionModel.SINGLE_SELECTION
+    list.cellRenderer =
+        object : DefaultListCellRenderer() {
+          override fun getListCellRendererComponent(
+              list: JList<*>?,
+              value: Any?,
+              index: Int,
+              isSelected: Boolean,
+              cellHasFocus: Boolean,
+          ): Component {
+            val component =
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+            if (component is JLabel && value is RetroAchievements.Achievement) {
+              val mark = if (value.unlocked) "✓" else "○"
+              val progress = value.measuredProgress.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""
+              component.text = "$mark ${value.title} (${value.points})$progress"
+              component.toolTipText = value.description
+            }
+            return component
+          }
+        }
+    val pane = JScrollPane(list)
+    pane.preferredSize = Dimension(560, 320)
+    JOptionPane.showMessageDialog(
+        window,
+        pane,
+        event.gameTitle ?: "RetroAchievements",
+        JOptionPane.PLAIN_MESSAGE,
+    )
   }
 
   private fun createFileMenu(): JMenu {

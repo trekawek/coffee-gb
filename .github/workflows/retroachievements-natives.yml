@@ -1,0 +1,53 @@
+name: Build RetroAchievements natives
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "controller/src/main/native/**"
+      - ".github/workflows/retroachievements-natives.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.resource-prefix }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            resource-prefix: linux-x86-64
+          - runner: ubuntu-24.04-arm
+            resource-prefix: linux-aarch64
+          - runner: windows-latest
+            resource-prefix: win32-x86-64
+          - runner: macos-13
+            resource-prefix: darwin-x86-64
+          - runner: macos-14
+            resource-prefix: darwin-aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure rcheevos wrapper
+        run: >-
+          cmake -S controller/src/main/native -B native-build
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build rcheevos wrapper
+        run: cmake --build native-build --config Release --parallel
+
+      - name: Stage native library
+        shell: bash
+        run: >-
+          cmake --install native-build --config Release
+          --prefix "native-artifact/${{ matrix.resource-prefix }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coffee-rcheevos-${{ matrix.resource-prefix }}
+          path: native-artifact/
+          if-no-files-found: error

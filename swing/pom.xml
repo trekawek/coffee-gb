@@ -24,6 +24,7 @@
                     <archive>
                         <manifest>
                             <mainClass>eu.rekawek.coffeegb.swing.MainKt</mainClass>
+                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
                         </manifest>
                     </archive>
                     <descriptorRefs>

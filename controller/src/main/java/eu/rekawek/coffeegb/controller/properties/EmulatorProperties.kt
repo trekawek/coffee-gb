@@ -6,6 +6,9 @@ import java.io.File
 import java.io.FileReader
 import java.io.FileWriter
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 import java.util.*
 
 class EmulatorProperties() {
@@ -30,9 +33,24 @@ class EmulatorProperties() {
     saveProperties()
   }
 
+  fun removeProperty(key: Key) {
+    properties.remove(key.propertyName)
+    saveProperties()
+  }
+
   internal fun saveProperties() {
     try {
       FileWriter(PROPERTIES_FILE).use { writer -> properties.store(writer, "") }
+      // This file may contain a RetroAchievements login token. Keep it owner-only where
+      // the host filesystem supports Java's permission APIs.
+      if (
+          Files.getFileAttributeView(PROPERTIES_FILE.toPath(), PosixFileAttributeView::class.java) !=
+              null) {
+        Files.setPosixFilePermissions(
+            PROPERTIES_FILE.toPath(),
+            EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+        )
+      }
     } catch (e: IOException) {
       LOG.error("Can't store properties", e)
     }
@@ -51,6 +69,8 @@ class EmulatorProperties() {
     RomDirectory("rom.directory"),
     DatelSlotRom("datel.slot.rom"),
     FullChangerCharacter("fullchanger.character"),
+    RetroAchievementsUsername("retroachievements.username"),
+    RetroAchievementsToken("retroachievements.token"),
   }
 
   private companion object {

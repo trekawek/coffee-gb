@@ -88,6 +88,8 @@ public class SwingDisplay extends JPanel implements Runnable {
                 Controller.SnapshotSavedEvent.class, callerId);
         eventBus.register(e -> showNotification("State loaded (slot " + e.getSlot() + ")"),
                 Controller.SnapshotRestoredEvent.class, callerId);
+        eventBus.register(e -> showNotification(e.getMessage(), e.getDurationMillis()),
+                Controller.NotificationEvent.class, callerId);
         this.grayscale = properties.getGrayscale();
         this.rotation = normalizeRotation(properties.getRotation());
         setBlending(properties.getBlending());
@@ -224,12 +226,18 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private void showNotification(String text) {
+        showNotification(text, NOTIFICATION_DURATION_MS);
+    }
+
+    private void showNotification(String text, int durationMillis) {
+        durationMillis = Math.max(250, durationMillis);
         notificationText = text;
         notificationExpiresAt = System.nanoTime()
-                + TimeUnit.MILLISECONDS.toNanos(NOTIFICATION_DURATION_MS);
+                + TimeUnit.MILLISECONDS.toNanos(durationMillis);
+        int timerDuration = durationMillis;
         SwingUtilities.invokeLater(() -> {
             repaint();
-            Timer timer = new Timer(NOTIFICATION_DURATION_MS, e -> repaint());
+            Timer timer = new Timer(timerDuration, e -> repaint());
             timer.setRepeats(false);
             timer.start();
         });

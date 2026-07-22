@@ -11,24 +11,28 @@ import eu.rekawek.coffeegb.core.memento.Memento
  */
 class RewindManager {
 
-  private val states = ArrayDeque<Memento<Gameboy>>()
+  private val states = ArrayDeque<State>()
 
   private var frameCounter = 0
 
-  fun record(gameboy: Gameboy) {
+  fun record(gameboy: Gameboy, achievementProgress: () -> ByteArray? = { null }) {
     if (frameCounter++ % RECORD_INTERVAL != 0) {
       return
     }
     if (states.size == CAPACITY) {
       states.removeFirst()
     }
-    states.addLast(gameboy.saveToMemento())
+    states.addLast(State(gameboy.saveToMemento(), achievementProgress()))
   }
 
   /** Restores the most recent recorded state; returns false when the history is empty. */
-  fun rewindOneStep(gameboy: Gameboy): Boolean {
+  fun rewindOneStep(
+      gameboy: Gameboy,
+      restoreAchievementProgress: (ByteArray?) -> Unit = {},
+  ): Boolean {
     val state = states.removeLastOrNull() ?: return false
-    gameboy.restoreFromMemento(state)
+    gameboy.restoreFromMemento(state.gameboy)
+    restoreAchievementProgress(state.achievementProgress)
     return true
   }
 
@@ -36,6 +40,11 @@ class RewindManager {
     states.clear()
     frameCounter = 0
   }
+
+  private data class State(
+      val gameboy: Memento<Gameboy>,
+      val achievementProgress: ByteArray?,
+  )
 
   companion object {
     const val RECORD_INTERVAL = 6
