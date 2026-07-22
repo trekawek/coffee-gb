@@ -33,6 +33,8 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Closeable {
 
@@ -267,8 +269,17 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             // tricks the boot ROM, corrupt dumps) lock the boot ROM up forever, and
             // then we fall back to the SKIP presets like a flashcart menu would
             long limit = 40_000_000L;
+            if (configuration.bootCancellation.getAsBoolean()) {
+                throw new CancellationException("Boot cancelled");
+            }
             while (cpu.getRegisters().getPC() != 0x100 && limit-- > 0) {
                 tick();
+                // Controller ROM preparation may be superseded by a newer load request.
+                // Poll sparsely so cancellation is prompt without adding a branch to every
+                // one of the 13-24 million boot ticks.
+                if ((limit & 0x3fff) == 0 && configuration.bootCancellation.getAsBoolean()) {
+                    throw new CancellationException("Boot cancelled");
+                }
             }
             if (gbc && !configuration.cgb0Revision && cpu.getRegisters().getPC() == 0x100) {
                 for (int i = 0; i < CGB_BOOT_HANDOFF_TICKS; i++) {
@@ -771,6 +782,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
     }
 
+    /** Flushes persistent cartridge state without closing the running machine. */
+    public void flushCartridge() {
+        cartridge.flushBattery();
+        if (slotCartridge != null) {
+            slotCartridge.flushBattery();
+        }
+    }
+
     /**
      * Held-button state, snapshotted separately from the memento by rollback netplay so a held
      * button survives a rebase (the joypad deliberately keeps it out of the memento).
@@ -793,8 +812,31 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (!(memento instanceof GameboyMemento mem)) {
             throw new IllegalArgumentException();
         }
+        restoreMachineState(mem, true);
+    }
+
+    /**
+     * Captures the authentic boot-ROM handoff for reuse by another machine with the same ROM
+     * and hardware configuration. Production boot templates are created without file-backed
+     * battery data; restoring one deliberately keeps the receiving cartridge's freshly loaded
+     * RAM, RTC and mapper state.
+     */
+    public BootState saveBootState() {
+        return new BootState((GameboyMemento) saveToMemento());
+    }
+
+    public void restoreBootState(BootState bootState) {
+        if (bootState == null) {
+            throw new IllegalArgumentException("Boot state is required");
+        }
+        restoreMachineState(bootState.memento, false);
+    }
+
+    private void restoreMachineState(GameboyMemento mem, boolean restoreCartridge) {
         biosShadow.restoreFromMemento(mem.biosShadowMemento());
-        cartridge.restoreFromMemento(mem.cartridgeMemento());
+        if (restoreCartridge) {
+            cartridge.restoreFromMemento(mem.cartridgeMemento());
+        }
         gpu.restoreFromMemento(mem.gpuMemento());
         statRegister.restoreFromMemento(mem.statRegisterMemento());
         mmu.restoreFromMemento(mem.mmuMemento());
@@ -826,15 +868,28 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         clearCgbBootOamShadowPending = mem.clearCgbBootOamShadowPending();
     }
 
+    /** Releases an asynchronously prepared machine that was never attached to a session. */
+    public void discardUnstarted() {
+        codeBreakerRumble.close();
+        infraredPort.close();
+        sgbBus.close();
+    }
+
     @Override
     public void close() {
         codeBreakerRumble.close();
         infraredPort.close();
-        cartridge.flushBattery();
-        if (slotCartridge != null) {
-            slotCartridge.flushBattery();
-        }
+        flushCartridge();
         sgbBus.close();
+    }
+
+    public static final class BootState {
+
+        private final GameboyMemento memento;
+
+        private BootState(GameboyMemento memento) {
+            this.memento = memento;
+        }
     }
 
     private record GameboyMemento(Memento<BiosShadow> biosShadowMemento, Memento<Cartridge> cartridgeMemento,
@@ -883,6 +938,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         private boolean codeBreakerRumble;
 
         private TimeSource rtcTimeSource = new SystemTimeSource();
+
+        private BooleanSupplier bootCancellation = () -> false;
 
         public GameboyConfiguration(File romFile) throws IOException {
             this(new Rom(romFile));
@@ -951,6 +1008,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             return this;
         }
 
+        public boolean isDisplaySgbBorder() {
+            return displaySgbBorder;
+        }
+
         public GameboyConfiguration setBootstrapMode(BootstrapMode bootstrapMode) {
             this.bootstrapMode = bootstrapMode;
             return this;
@@ -960,6 +1021,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         public GameboyConfiguration setSlotRom(Rom slotRom) {
             this.slotRom = slotRom;
             return this;
+        }
+
+        public Rom getSlotRom() {
+            return slotRom;
         }
 
         public BootstrapMode getBootstrapMode() {
@@ -973,6 +1038,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public GameboyConfiguration setSupportBatterySave(boolean supportBatterySave) {
             this.supportBatterySave = supportBatterySave;
+            return this;
+        }
+
+        public GameboyConfiguration setBootCancellation(BooleanSupplier bootCancellation) {
+            this.bootCancellation = bootCancellation == null ? () -> false : bootCancellation;
             return this;
         }
 
@@ -993,9 +1063,24 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
          * discarded by the restore.
          */
         public GameboyConfiguration forRestore() {
+            GameboyConfiguration copy = copy();
+            copy.bootstrapMode = BootstrapMode.SKIP;
+            return copy;
+        }
+
+        /** A boot-equivalent copy that cannot read or write a user's battery save. */
+        public GameboyConfiguration forBootTemplate() {
+            GameboyConfiguration copy = copy();
+            copy.batteryData = null;
+            copy.supportBatterySave = false;
+            return copy;
+        }
+
+        private GameboyConfiguration copy() {
             GameboyConfiguration copy = new GameboyConfiguration(rom);
             copy.gameboyType = gameboyType;
-            copy.bootstrapMode = BootstrapMode.SKIP;
+            copy.bootstrapMode = bootstrapMode;
+            copy.slotRom = slotRom;
             copy.batteryData = batteryData;
             copy.supportBatterySave = supportBatterySave;
             copy.displaySgbBorder = displaySgbBorder;
@@ -1003,6 +1088,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             copy.mealybugDmgBlob = mealybugDmgBlob;
             copy.codeBreakerRumble = codeBreakerRumble;
             copy.rtcTimeSource = rtcTimeSource;
+            copy.bootCancellation = bootCancellation;
             return copy;
         }
 

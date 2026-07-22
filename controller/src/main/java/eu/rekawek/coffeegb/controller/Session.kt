@@ -15,9 +15,10 @@ class Session(
     private val console: Console?,
     serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
     infraredEndpoint: InfraredEndpoint = InfraredEndpoint.NULL_ENDPOINT,
+    prebuiltGameboy: Gameboy? = null,
 ) : AutoCloseable, Originator<Session> {
 
-  internal val gameboy: Gameboy = config.build()
+  internal val gameboy: Gameboy = prebuiltGameboy ?: config.build()
 
   internal var serialEndpoint: SerialEndpoint = serialEndpoint
     private set
