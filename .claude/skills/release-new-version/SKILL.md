@@ -16,7 +16,8 @@ Publish from the repository default branch and leave a verified GitHub release w
    - release version: the current root Maven version without `-SNAPSHOT`;
    - development version: increment the final numeric component and append `-SNAPSHOT`;
    - tag: `coffee-gb-<release_version>`;
-   - title: `Coffee GB <release_version>.`
+   - title: `Coffee GB <release_version>` (exact capitalization and spacing, with no
+     trailing punctuation);
 5. Stop if the current version is not a numeric Maven snapshot, the tag or release already exists unexpectedly, or the default branch is not synchronized.
 
 ## 2. Run Maven release
@@ -61,11 +62,12 @@ Inspect fixed issues and their linked PRs for an existing screenshot that demons
 
 ## 5. Finalize and verify the GitHub release
 
-Because the workflow creates the initial release, edit that release rather than creating a duplicate. Set its exact title to `Coffee GB <release_version>.` and replace its body with the curated notes. If the executable JAR is missing after a successful run, stop and investigate the workflow inconsistency instead of silently substituting an unrelated local build.
+Because the workflow creates the initial release, edit that release rather than creating a duplicate. Set its exact title to `Coffee GB <release_version>` and replace its body with the curated notes. Do not use the lowercase/hyphenated tag form as the title, and do not append a period or other punctuation. If the executable JAR is missing after a successful run, stop and investigate the workflow inconsistency instead of silently substituting an unrelated local build.
 
 Verify with `gh release view <tag> --json name,tagName,url,assets,body` that:
 
-- `name` exactly matches the required title, including capitalization and final period;
+- `name` exactly matches `Coffee GB <release_version>`, including capitalization and spacing,
+  with no trailing punctuation;
 - `tagName` matches the new tag;
 - the executable `coffee-gb-<release_version>.jar` is present exactly once;
 - the body covers commits, merged PRs, and fixed issues;

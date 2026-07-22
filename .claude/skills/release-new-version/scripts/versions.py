@@ -55,7 +55,7 @@ def main() -> int:
     print(f"release_version={release}")
     print(f"development_version={development}")
     print(f"tag=coffee-gb-{release}")
-    print(f"title=Coffee GB {release}.")
+    print(f"title=Coffee GB {release}")
     return 0
 
 
