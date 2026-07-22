@@ -24,7 +24,7 @@ jobs:
             resource-prefix: linux-aarch64
           - runner: windows-latest
             resource-prefix: win32-x86-64
-          - runner: macos-13
+          - runner: macos-15-intel
             resource-prefix: darwin-x86-64
           - runner: macos-14
             resource-prefix: darwin-aarch64
@@ -45,6 +45,22 @@ jobs:
         run: >-
           cmake --install native-build --config Release
           --prefix "native-artifact/${{ matrix.resource-prefix }}"
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+          cache: maven
+
+      - name: Install staged native for the ABI smoke test
+        shell: bash
+        run: cp -R native-artifact/* controller/src/main/resources/
+
+      - name: Run native ABI smoke test
+        run: >-
+          mvn -B -pl controller -am test
+          -Dtest=RetroAchievementsNativeTest
+          -Dsurefire.failIfNoSpecifiedTests=false
 
       - uses: actions/upload-artifact@v4
         with:

@@ -17,9 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import org.slf4j.LoggerFactory
 
 /**
- * Owns the official rcheevos client for a single-player controller. All calls into the native
- * runtime are serialized because HTTP completions arrive on HttpClient worker threads while
- * frame processing runs on the emulation thread.
+ * Owns the official rcheevos client for a single-player controller. HTTP completions arrive on
+ * HttpClient workers, are queued, and are delivered to the native runtime by the emulation
+ * thread so memory validation cannot race CPU execution.
  */
 internal class RetroAchievementsClient(
     private val eventBus: EventBus,

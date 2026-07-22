@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.retroachievements.RetroAchievements
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
@@ -67,6 +68,7 @@ class SwingEmulator(
     if (state != null) {
       eventBus.post(Controller.LoadRomEvent(state.rom.file, state.memento))
     }
+    eventBus.post(RetroAchievements.RequestStatusEvent())
   }
 
   private fun startLinkedController() {
@@ -75,6 +77,12 @@ class SwingEmulator(
     if (state != null) {
       eventBus.post(Controller.LoadRomEvent(state.rom.file, state.memento))
     }
+    eventBus.post(
+        RetroAchievements.StatusEvent(
+            available = false,
+            loggedIn = false,
+            message = "Disabled during netplay",
+        ))
   }
 
   fun stop() {
