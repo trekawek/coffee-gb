@@ -59,6 +59,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
             case WISDOM_TREE -> new WisdomTree(rom);
             case MBC1 -> new Mbc1(rom, battery);
             case POCKET_CAMERA -> new PocketCamera(rom, battery);
+            case MBC5 -> new Mbc5(rom, battery);
             case STANDARD -> createStandardMemoryController(rom, battery, rtcTimeSource);
         };
     }

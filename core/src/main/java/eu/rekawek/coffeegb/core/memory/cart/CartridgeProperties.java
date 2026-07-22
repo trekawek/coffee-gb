@@ -33,6 +33,7 @@ public final class CartridgeProperties {
         WISDOM_TREE,
         MBC1,
         POCKET_CAMERA
+        MBC5
     }
 
     public enum Feature {
@@ -41,6 +42,7 @@ public final class CartridgeProperties {
         LEGACY_SPEED_SWITCH,
         BLANK_CGB_BOOT_TILE,
         CLEAR_BOOT_TILEMAP,
+        CLEAR_DUNGEON_WARRIOR_RENDERER_COUNT,
         DATEL_CGB_HEADER,
         SCRAMBLED_SACHEN_HEADER,
         MBC1_MULTICART,
@@ -113,6 +115,8 @@ public final class CartridgeProperties {
                     Feature.DATEL_CGB_HEADER),
             mapper("Wisdom Tree 32 KiB banking", CartridgeProperties::isWisdomTree,
                     Mapper.WISDOM_TREE),
+            mapper("Xin Shuma Baobei Huang MBC5 wiring",
+                    CartridgeProperties::isXinShumaBaobeiHuang, Mapper.MBC5),
             mapper("oversized ROM-only image", CartridgeProperties::isOversizedRomOnly,
                     Mapper.MBC1),
             features("Crazy Castle 3 trainer", CartridgeProperties::isCrazyCastleTrainer,
@@ -125,6 +129,9 @@ public final class CartridgeProperties {
                     Feature.BLANK_CGB_BOOT_TILE),
             features("AudioArts Gameboy Music V1", CartridgeProperties::isAudioArtsMusicV1,
                     Feature.CLEAR_BOOT_TILEMAP),
+            features("Dungeon Warrior prototype renderer state",
+                    CartridgeProperties::isDungeonWarriorPrototype,
+                    Feature.CLEAR_DUNGEON_WARRIOR_RENDERER_COUNT),
             features("FreeArt Intro V2", CartridgeProperties::isFreeArtIntroV2,
                     Feature.MBC1_RAM_ENABLED_AT_POWER_ON),
             features("Helitac V0.01 boot WRAM", CartridgeProperties::isHelitacV001,
@@ -411,6 +418,27 @@ public final class CartridgeProperties {
                 && info.hasValidLogo();
     }
 
+    private static boolean isXinShumaBaobeiHuang(RomInfo info) {
+        // This 16 Mbit Chinese Pokemon Yellow bootleg advertises a tiny MBC1 cart, but
+        // its software uses an MBC5-style ROM register and treats 4000-5FFF solely as
+        // the RAM-bank register. Standard MBC1 handling therefore replaces ROM-bank
+        // bits whenever the game selects save RAM and immediately jumps into garbage.
+        return info.data.length == 0x200000
+                && "POKEMON YELLOW".equals(info.title())
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0144) == 0x30
+                && info.byteAt(0x0145) == 0x31
+                && info.byteAt(0x0146) == 0x03
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x01
+                && info.byteAt(0x0149) == 0x01
+                && info.byteAt(0x014a) == 0x00
+                && info.byteAt(0x014b) == 0x33
+                && info.byteAt(0x014c) == 0x00
+                && info.byteAt(0x014e) == 0x33
+                && info.byteAt(0x014f) == 0xcd;
+    }
+
     private static boolean isOversizedRomOnly(RomInfo info) {
         return info.data.length > 0x8000
                 && info.data.length < 0x20000
@@ -494,6 +522,22 @@ public final class CartridgeProperties {
                 && info.byteAt(0x014e) == 0xc1
                 && info.byteAt(0x014f) == 0x1d
                 && matches(info.data, 0x0150, entryStub);
+    }
+
+    private static boolean isDungeonWarriorPrototype(RomInfo info) {
+        int[] rendererRecordSetup = {
+                0xfa, 0xbc, 0xc0, 0xfe, 0x08, 0xd0, 0xc5, 0x4f,
+                0x87, 0x81, 0x01, 0xa0, 0xc2, 0x81, 0x4f
+        };
+        return info.data.length == 0x10000
+                && info.hasNullTerminatedTitle("DUNGEON WARRIOR ")
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x01
+                && info.byteAt(0x0149) == 0x00
+                && info.byteAt(0x014e) == 0x6b
+                && info.byteAt(0x014f) == 0x86
+                && matches(info.data, 0x1be1, rendererRecordSetup)
+                && info.crc32() == 0x2910429c;
     }
 
     private static boolean isHelitacV001(RomInfo info) {
