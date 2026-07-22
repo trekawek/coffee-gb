@@ -14,6 +14,7 @@ import eu.rekawek.coffeegb.controller.Controller.SessionSnapshotSupportEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.SnapshotSupport
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ClientConnectedToServerEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerGotConnectionEvent
@@ -802,8 +803,30 @@ class SwingMenu(
     linkMenu.add(startServer)
     startServer.addActionListener {
       if (startServer.state) {
-        disconnectOtherLinkPeripherals(startServer)
-        eventBus.post(StartServerEvent())
+        val choices = arrayOf("Normal link (2 players)", "Four-player adapter (4 players)")
+        val selected =
+            JOptionPane.showOptionDialog(
+                window,
+                "Select the link hardware to emulate",
+                "Start link server",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                choices,
+                choices[0],
+            )
+        val mode =
+            when (selected) {
+              0 -> LinkMode.NORMAL
+              1 -> LinkMode.FOUR_PLAYER_ADAPTER
+              else -> null
+            }
+        if (mode != null) {
+          disconnectOtherLinkPeripherals(startServer)
+          eventBus.post(StartServerEvent(mode))
+        } else {
+          startServer.state = false
+        }
       } else {
         eventBus.post(StopServerEvent())
       }
@@ -828,30 +851,45 @@ class SwingMenu(
     }
 
     val connected = JCheckBoxMenuItem()
-    val setConnected =
-        fun(state: Boolean) {
-          if (state) {
-            connected.text = "\uD83D\uDFE2  Connected"
-          } else {
-            connected.text = "\uD83D\uDD34  Disconnected"
-          }
+    val setStatus =
+        fun(text: String, active: Boolean) {
+          connected.text = if (active) "\uD83D\uDFE2  $text" else "\uD83D\uDD34  $text"
         }
     connected.isEnabled = false
-    setConnected(false)
+    setStatus("Disconnected", false)
     linkMenu.add(connected)
 
-    eventBus.register<ClientConnectedToServerEvent> { setConnected(true) }
+    eventBus.register<ConnectionController.ClientHandshakeCompletedEvent> {
+      val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
+      setStatus("Waiting as Player ${it.player + 1} ($mode)", false)
+    }
+    eventBus.register<ClientConnectedToServerEvent> {
+      val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
+      setStatus("Connected as Player ${it.player + 1} ($mode)", true)
+    }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      setConnected(false)
+      setStatus("Disconnected", false)
       connectToServer.state = false
     }
-    eventBus.register<ServerStartedEvent> { connectToServer.isEnabled = false }
+    eventBus.register<ServerStartedEvent> {
+      connectToServer.isEnabled = false
+      setStatus("Waiting for players (0/${it.mode.playerCount - 1})", false)
+    }
     eventBus.register<ServerStoppedEvent> {
       startServer.state = false
       connectToServer.isEnabled = true
+      setStatus("Disconnected", false)
     }
-    eventBus.register<ServerGotConnectionEvent> { setConnected(true) }
-    eventBus.register<ServerLostConnectionEvent> { setConnected(false) }
+    eventBus.register<ConnectionController.ServerPlayerCountEvent> {
+      if (it.connected < it.required) {
+        setStatus("Waiting for players (${it.connected}/${it.required})", false)
+      }
+    }
+    eventBus.register<ServerGotConnectionEvent> {
+      val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
+      setStatus("Connected as Player 1 ($mode)", true)
+    }
+    eventBus.register<ServerLostConnectionEvent> { setStatus("Disconnected", false) }
     return linkMenu
   }
 

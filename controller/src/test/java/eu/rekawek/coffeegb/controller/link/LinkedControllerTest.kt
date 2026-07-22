@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy
@@ -15,10 +16,72 @@ import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import org.junit.Test
 import java.nio.file.Paths
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class LinkedControllerTest {
+
+  @Test
+  fun fourPlayerControllerRunsAllConsolesAndLabelsLocalAndRemoteInput() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 2,
+        )
+    sut.timingTicker.disabled = true
+    val replayed = mutableListOf<GameboyJoypadPressEvent>()
+    sut.stateHistory.debugEventBus =
+        EventBusImpl().also { debug -> debug.register<GameboyJoypadPressEvent> { replayed += it } }
+    val localInputs = LinkedBlockingQueue<LinkedController.LocalButtonStateEvent>()
+    eventBus.register<LinkedController.LocalButtonStateEvent> { localInputs.add(it) }
+
+    eventBus.post(LoadRomEvent(ROM))
+    for (player in listOf(0, 1, 3)) {
+      eventBus.post(
+          PeerLoadedGameEvent(
+              ROM_BYTES,
+              null,
+              null,
+              GAMEBOY_TYPE,
+              BOOTSTRAP_MODE,
+              0,
+              player = player,
+          ))
+    }
+    sut.runFrame()
+    assertEquals(4, sut.activeSessionCount())
+    eventBus.drainAsyncEvents()
+    localInputs.clear()
+
+    eventBus.post(ButtonPressEvent(Button.B))
+    sut.runFrame()
+    eventBus.drainAsyncEvents()
+    val local = localInputs.poll(5, TimeUnit.SECONDS)
+    assertEquals(2, local.player)
+    assertEquals(listOf(Button.B), local.input.pressedButtons)
+
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(0, Input(listOf(Button.A), emptyList()), 0))
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(0, Input(listOf(Button.START), emptyList()), 3))
+    sut.runFrame()
+
+    assertTrue(replayed.any { it.gameboy == 0 && it.button == Button.A })
+    assertTrue(replayed.any { it.gameboy == 3 && it.button == Button.START })
+
+    val previousFrame = sut.stateHistory.getHead().frame
+    eventBus.post(ReceivedRemoteStopEvent(previousFrame, player = 3))
+    sut.runFrame()
+    assertEquals(3, sut.activeSessionCount())
+    assertTrue(sut.stateHistory.getHead().frame > previousFrame)
+    eventBus.close()
+  }
 
   @Test
   fun localChangesAreReplayedOnRewind() {

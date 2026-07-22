@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.BasicController
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
@@ -53,8 +54,12 @@ class SwingEmulator(
 
     controller = BasicController(eventBus, properties, console).also { it.startController() }
 
-    eventBus.register<ConnectionController.ServerGotConnectionEvent> { startLinkedController() }
-    eventBus.register<ConnectionController.ClientConnectedToServerEvent> { startLinkedController() }
+    eventBus.register<ConnectionController.ServerGotConnectionEvent> {
+      startLinkedController(it.mode, it.player)
+    }
+    eventBus.register<ConnectionController.ClientConnectedToServerEvent> {
+      startLinkedController(it.mode, it.player)
+    }
     eventBus.register<ConnectionController.ServerLostConnectionEvent> { startBasicController() }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       startBasicController()
@@ -69,9 +74,10 @@ class SwingEmulator(
     }
   }
 
-  private fun startLinkedController() {
+  private fun startLinkedController(mode: LinkMode, player: Int) {
     val state = controller.closeWithState()
-    controller = LinkedController(eventBus, properties, console).also { it.startController() }
+    controller =
+        LinkedController(eventBus, properties, console, mode, player).also { it.startController() }
     if (state != null) {
       eventBus.post(Controller.LoadRomEvent(state.rom.file, state.memento))
     }

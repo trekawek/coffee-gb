@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
@@ -103,7 +104,7 @@ class ConnectionTest {
 
   private val threads = mutableListOf<Thread>()
 
-  private fun connect() {
+  private fun connect(startSession: Boolean = true) {
     val senderToReceiver = Pipe()
     val receiverToSender = Pipe()
 
@@ -115,6 +116,7 @@ class ConnectionTest {
     // run() performs the handshake and then reads; both sides need it running
     threads += Thread { sender.run() }.also { it.start() }
     threads += Thread { receiver.run() }.also { it.start() }
+    if (startSession) sender.startSession()
   }
 
   @After
@@ -186,6 +188,30 @@ class ConnectionTest {
   }
 
   @Test
+  fun messagesReceivedBeforeStartAreDeliveredAfterControllerTransition() {
+    val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
+    connect(startSession = false)
+
+    senderBus.post(
+        LinkedController.LocalRomLoadedEvent(
+            byteArrayOf(1, 2, 3),
+            null,
+            null,
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            0,
+        ))
+    assertEquals(null, received.poll(200, TimeUnit.MILLISECONDS))
+
+    sender!!.startSession()
+    assertContentEquals(
+        byteArrayOf(1, 2, 3),
+        assertNotNull(received.poll(5, TimeUnit.SECONDS)).rom,
+    )
+  }
+
+  @Test
   fun resetAndStopRoundTrip() {
     val resets = LinkedBlockingQueue<Connection.ReceivedRemoteResetEvent>()
     val stops = LinkedBlockingQueue<Connection.ReceivedRemoteStopEvent>()
@@ -238,7 +264,9 @@ class ConnectionTest {
     val toSender = Pipe()
 
     // the client-side handshake happens during construction
-    toReceiver.sink.write("CoffeeGB WRONG!!".toByteArray() + byteArrayOf(0x02))
+    toReceiver.sink.write(
+        "CoffeeGB WRONG!!".toByteArray() +
+            byteArrayOf(0x05, LinkMode.NORMAL.ordinal.toByte(), 0x01))
     assertFailsWith<IOException> {
       Connection(toReceiver.source, toSender.sink, receiverBus, false)
     }
@@ -249,7 +277,9 @@ class ConnectionTest {
     val toReceiver = Pipe()
     val toSender = Pipe()
 
-    toReceiver.sink.write("CoffeeGB NETPLAY".toByteArray() + byteArrayOf(0x7f))
+    toReceiver.sink.write(
+        "CoffeeGB NETPLAY".toByteArray() +
+            byteArrayOf(0x7f, LinkMode.NORMAL.ordinal.toByte(), 0x01))
     assertFailsWith<IOException> {
       Connection(toReceiver.source, toSender.sink, receiverBus, false)
     }
