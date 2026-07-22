@@ -53,7 +53,6 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
-import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.JCheckBoxMenuItem
 import javax.swing.JFileChooser
@@ -359,35 +358,14 @@ class SwingMenu(
         return
       }
 
-      val cheatChoices = JList(supportedCheats.toTypedArray())
-      cheatChoices.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+      val cheatChoices =
+          CheckBoxList(
+              supportedCheats,
+              ::cheatLabel,
+              { cheat -> "${cheat.description()} (${cheat.code()})" },
+          )
       cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
       cheatChoices.selectedIndex = 0
-      installDoubleClickConfirm(cheatChoices)
-      cheatChoices.cellRenderer =
-          object : DefaultListCellRenderer() {
-            override fun getListCellRendererComponent(
-                list: JList<*>?,
-                value: Any?,
-                index: Int,
-                isSelected: Boolean,
-                cellHasFocus: Boolean,
-            ): Component {
-              val component =
-                  super.getListCellRendererComponent(
-                      list,
-                      value,
-                      index,
-                      isSelected,
-                      cellHasFocus,
-                  )
-              if (component is JLabel && value is CheatDatabase.Cheat) {
-                component.text = cheatLabel(value)
-                component.toolTipText = "${value.description()} (${value.code()})"
-              }
-              return component
-            }
-          }
       val scrollPane = JScrollPane(cheatChoices)
       scrollPane.preferredSize =
           Dimension(
@@ -493,6 +471,10 @@ class SwingMenu(
   }
 
   private fun moveListSelection(list: JList<*>, offset: Int) {
+    if (list is CheckBoxList<*>) {
+      list.moveActiveIndex(offset)
+      return
+    }
     if (list.model.size == 0) {
       return
     }
