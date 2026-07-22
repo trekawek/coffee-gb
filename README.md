@@ -106,7 +106,7 @@ btn_select=VK_SHIFT
 
 ### RetroAchievements
 
-Choose **RetroAchievements > Sign in** and enter your username and Web API key from your
+Choose **RetroAchievements > Connect** and enter your username and Web API key from your
 [RetroAchievements settings](https://retroachievements.org/settings). Coffee GB stores
 these in the owner-readable `~/.coffeegb.properties` file and restores the connection in
 later sessions. Loading a recognized ROM fetches the account's existing progress;

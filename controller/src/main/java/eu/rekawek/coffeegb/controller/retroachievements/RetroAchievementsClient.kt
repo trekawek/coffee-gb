@@ -310,9 +310,10 @@ internal class OfficialRetroAchievementsApi(username: String, apiKey: String) :
       request { api.getGameInfoAndUserProgress(username, gameId) }.map { response ->
         RetroApiGameProgress(
             response.title,
-            response.achievements.map { (key, achievement) ->
+            response.achievements.mapNotNull { (key, achievement) ->
+              val id = achievement.id.toIntOrNull() ?: key.toIntOrNull() ?: return@mapNotNull null
               RetroApiAchievement(
-                  achievement.id.toIntOrNull() ?: key.toInt(),
+                  id,
                   achievement.title,
                   achievement.description,
                   achievement.points.toInt(),

@@ -153,11 +153,11 @@ class SwingMenu(
     status.isEnabled = false
     menu.add(status)
 
-    val login = JMenuItem("Sign in…")
+    val login = JMenuItem("Connect…")
     menu.add(login)
     login.addActionListener { showRetroAchievementsLogin() }
 
-    val logout = JMenuItem("Sign out")
+    val logout = JMenuItem("Disconnect")
     logout.isEnabled = false
     menu.add(logout)
     logout.addActionListener { eventBus.post(RetroAchievements.LogoutEvent()) }
@@ -175,11 +175,11 @@ class SwingMenu(
         status.text =
             when {
               !event.available -> event.message ?: "Unavailable"
-              !event.loggedIn -> event.message ?: "Not signed in"
+              !event.loggedIn -> event.message ?: "Not connected"
               event.gameTitle != null ->
                   "${event.username}: ${event.gameTitle} " +
                       "(${event.unlockedAchievements}/${event.totalAchievements})"
-              else -> event.message ?: "Signed in as ${event.username}"
+              else -> event.message ?: "Connected as ${event.username}"
             }
         login.isEnabled = event.available && !event.loggedIn
         logout.isEnabled = event.available && event.loggedIn
@@ -212,7 +212,7 @@ class SwingMenu(
         JOptionPane.showConfirmDialog(
             window,
             panel,
-            "Sign in to RetroAchievements",
+            "Connect to RetroAchievements",
             JOptionPane.OK_CANCEL_OPTION,
             JOptionPane.PLAIN_MESSAGE,
         )
