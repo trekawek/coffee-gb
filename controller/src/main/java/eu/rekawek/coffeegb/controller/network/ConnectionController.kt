@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.network
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkMode
 
 class ConnectionController(private val eventBus: EventBus) {
 
@@ -10,16 +11,16 @@ class ConnectionController(private val eventBus: EventBus) {
   private var server: TcpServer? = null
 
   init {
-    eventBus.register<StartServerEvent> { startServer() }
+    eventBus.register<StartServerEvent> { startServer(it.mode) }
     eventBus.register<StopServerEvent> { stopServer() }
     eventBus.register<StartClientEvent> { startClient(it.host) }
     eventBus.register<StopClientEvent> { stopClient() }
   }
 
-  private fun startServer() {
+  private fun startServer(mode: LinkMode) {
     stopClient()
     stopServer()
-    server = TcpServer(eventBus)
+    server = TcpServer(eventBus, mode = mode)
     Thread(server).start()
   }
 
@@ -40,7 +41,7 @@ class ConnectionController(private val eventBus: EventBus) {
     server = null
   }
 
-  class StartServerEvent : Event
+  data class StartServerEvent(val mode: LinkMode = LinkMode.NORMAL) : Event
 
   class StopServerEvent : Event
 
@@ -48,15 +49,30 @@ class ConnectionController(private val eventBus: EventBus) {
 
   class StopClientEvent : Event
 
-  class ServerStartedEvent : Event
+  data class ServerStartedEvent(val mode: LinkMode = LinkMode.NORMAL) : Event
 
   class ServerStoppedEvent : Event
 
-  data class ServerGotConnectionEvent(val host: String) : Event
+  data class ServerGotConnectionEvent(
+      val host: String,
+      val mode: LinkMode = LinkMode.NORMAL,
+      val player: Int = 0,
+  ) : Event
 
   class ServerLostConnectionEvent : Event
 
-  class ClientConnectedToServerEvent : Event
+  data class ClientHandshakeCompletedEvent(val mode: LinkMode, val player: Int) : Event
+
+  data class ClientConnectedToServerEvent(
+      val mode: LinkMode = LinkMode.NORMAL,
+      val player: Int = 1,
+  ) : Event
+
+  data class ServerPlayerCountEvent(
+      val connected: Int,
+      val required: Int,
+      val mode: LinkMode,
+  ) : Event
 
   class ClientDisconnectedFromServerEvent : Event
 }

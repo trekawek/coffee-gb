@@ -9,18 +9,21 @@ import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.ir.Peer2PeerInfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.serial.FourPlayerAdapter
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
-import java.util.*
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import java.util.LinkedList
 import kotlin.math.max
 import kotlin.math.min
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
-class StateHistory() {
+class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
   private val states = LinkedList<State>()
 
   private val patches = mutableListOf<Patch>()
@@ -30,13 +33,14 @@ class StateHistory() {
   @Synchronized
   fun addState(
       frame: Long,
-      mainInput: Input,
-      mainMemento: Memento<Session>?,
-      peerMemento: Memento<Session>?,
-      mainButtons: Set<Button>,
-      peerButtons: Set<Button>,
+      inputs: List<Input>,
+      mementos: List<Memento<Session>?>,
+      buttons: List<Set<Button>>,
   ) {
-    states.add(State(frame, mainInput, mainMemento, peerMemento, mainButtons, peerButtons))
+    require(inputs.size == mode.playerCount)
+    require(mementos.size == mode.playerCount)
+    require(buttons.size == mode.playerCount)
+    states.add(State(frame, inputs, mementos, buttons))
     LOG.atDebug().log("Adding state on frame {}; state size {}", frame, states.size)
     while (states.size > 60 * 5) {
       states.removeFirst()
@@ -44,25 +48,33 @@ class StateHistory() {
   }
 
   @Synchronized
-  fun addSecondaryInput(
-      frame: Long,
-      secondaryInput: Input,
-  ) {
-    patches.add(Patch(frame, secondaryInput))
-    LOG.atDebug().log("Adding patch on frame {}, patches size {}", frame, patches.size)
+  fun addSecondaryInput(player: Int, frame: Long, input: Input) {
+    require(player in 0 until mode.playerCount)
+    patches.add(Patch(player, frame, input))
+    LOG.atDebug().log(
+        "Adding player {} patch on frame {}, patches size {}", player + 1, frame, patches.size)
   }
 
   @Synchronized
-  fun merge(mainConfig: GameboyConfiguration?, peerConfig: GameboyConfiguration?): Boolean {
+  fun merge(configs: List<GameboyConfiguration?>): Boolean {
+    require(configs.size == mode.playerCount)
     if (patches.isEmpty() || states.isEmpty()) {
       return false
     }
-    val baseFrame = min(patches.first().frame, states.last().frame)
-    val toFrame = max(states.last().frame, patches.last().frame)
+    val baseFrame = min(patches.minOf { it.frame }, states.last().frame)
+    val toFrame = max(states.last().frame, patches.maxOf { it.frame })
     LOG.atDebug().log("Rebasing from $baseFrame to $toFrame")
 
-    val mainInputs = states.groupBy { it.frame }.mapValues { it.value.first().mainInput }
-    val peerInputs = patches.groupBy { it.frame }.mapValues { it.value.first().secondaryInput }
+    // Keep every player's already-applied input. A later packet can arrive out of order and force
+    // a rebase before an earlier remote patch; retaining all inputs prevents that earlier patch
+    // from disappearing during the second replay.
+    val inputsByFrame =
+        states.associate { state -> state.frame to state.inputs.toMutableList() }.toMutableMap()
+    for (patch in patches) {
+      val frameInputs =
+          inputsByFrame.getOrPut(patch.frame) { emptyInputs().toMutableList() }
+      frameInputs[patch.player] = patch.input
+    }
 
     if (baseFrame < states.first().frame) {
       throw IllegalStateException("No frame $baseFrame")
@@ -71,87 +83,55 @@ class StateHistory() {
         states.firstOrNull { it.frame == baseFrame }
             ?: throw IllegalStateException("No frame $baseFrame")
 
-    val mainLink = Peer2PeerSerialEndpoint()
-    val peerLink = Peer2PeerSerialEndpoint()
-    mainLink.init(peerLink)
-    val mainIrLink = Peer2PeerInfraredEndpoint()
-    val peerIrLink = Peer2PeerInfraredEndpoint()
-    mainIrLink.init(peerIrLink)
-
-    val mainEventBus = EventBusImpl(null, null, false)
-    val peerEventBus = EventBusImpl(null, null, false)
-    mainEventBus.register<Joypad.JoypadPressEvent> {
-      debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, 0))
-    }
-    peerEventBus.register<Joypad.JoypadPressEvent> {
-      debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, 1))
-    }
-
-    // the sessions are rebuilt only to be restored from mementos right away: skip the
-    // boot sequence, which FAST_FORWARD would otherwise emulate on every rebase
-    val mainSession =
-        mainConfig?.let {
-          Session(
-              if (baseState.mainMemento != null) it.forRestore() else it,
-              mainEventBus,
-              null,
-              mainLink,
-              mainIrLink,
-          )
+    val links = createLinks(mode)
+    val sessions =
+        configs.mapIndexed { player, config ->
+          val eventBus = EventBusImpl(null, null, false)
+          eventBus.register<Joypad.JoypadPressEvent> {
+            debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, player))
+          }
+          config?.let {
+            Session(
+                if (baseState.mementos[player] != null) it.forRestore() else it,
+                eventBus,
+                null,
+                links.serial[player],
+                links.infrared[player],
+            )
+          }
         }
-    val peerSession =
-        peerConfig?.let {
-          Session(
-              if (baseState.peerMemento != null) it.forRestore() else it,
-              peerEventBus,
-              null,
-              peerLink,
-              peerIrLink,
-          )
-        }
-    if (mainSession != null && baseState.mainMemento != null) {
-      mainSession.restoreFromMemento(baseState.mainMemento)
-      // the joypad's held-button set is not in the memento; restore it explicitly or a button
-      // held before the base frame would be lost for the whole rebase (issue #79 desync)
-      mainSession.heldButtons = baseState.mainButtons
-    }
-    if (peerSession != null && baseState.peerMemento != null) {
-      peerSession.restoreFromMemento(baseState.peerMemento)
-      peerSession.heldButtons = baseState.peerButtons
+
+    for (player in sessions.indices) {
+      val session = sessions[player]
+      val memento = baseState.mementos[player]
+      if (session != null && memento != null) {
+        session.restoreFromMemento(memento)
+        session.heldButtons = baseState.buttons[player]
+      }
     }
 
     states.clear()
     patches.clear()
 
-    for (i in (baseFrame..toFrame + 1)) {
-      val mainInput = mainInputs[i] ?: Input(emptyList(), emptyList())
+    for (frame in baseFrame..toFrame + 1) {
+      val inputs = inputsByFrame[frame]?.toList() ?: emptyInputs()
       states.add(
           State(
-              i,
-              mainInput,
-              mainSession?.saveToMemento(),
-              peerSession?.saveToMemento(),
-              mainSession?.heldButtons ?: emptySet(),
-              peerSession?.heldButtons ?: emptySet(),
+              frame,
+              inputs,
+              sessions.map { it?.saveToMemento() },
+              sessions.map { it?.heldButtons ?: emptySet() },
           ))
 
-      if (i <= toFrame) {
-        mainInput.send(mainEventBus)
-        val peerInput = peerInputs[i]
-        if (peerInput != null) {
-          LOG.atDebug().log("Sending secondary input {} on frame {}", peerInput, i)
-          peerInput.send(peerEventBus)
+      if (frame <= toFrame) {
+        for (player in sessions.indices) {
+          inputs[player].send(sessions[player]?.eventBus ?: continue)
         }
-
-        repeat(TICKS_PER_FRAME) {
-          mainSession?.gameboy?.tick()
-          peerSession?.gameboy?.tick()
-        }
+        repeat(TICKS_PER_FRAME) { sessions.forEach { it?.gameboy?.tick() } }
       }
     }
 
-    mainSession?.close()
-    peerSession?.close()
+    sessions.forEach { it?.close() }
 
     LOG.atDebug().log("Rebase from $baseFrame to $toFrame completed.")
     return true
@@ -159,27 +139,31 @@ class StateHistory() {
 
   fun getHead() = states.last()
 
-  fun setPeerState(peerFrame: Long, peerState: Memento<Session>, peerButtons: Set<Button>) {
-    val index = states.indexOfFirst { it.frame == peerFrame }
+  fun setPlayerState(
+      player: Int,
+      frame: Long,
+      state: Memento<Session>,
+      buttons: Set<Button>,
+  ) {
+    val index = states.indexOfFirst { it.frame == frame }
     if (index == -1) {
       return
     }
-    states[index] = states[index].copy(peerMemento = peerState, peerButtons = peerButtons)
+    val mementos = states[index].mementos.toMutableList().also { it[player] = state }
+    val heldButtons = states[index].buttons.toMutableList().also { it[player] = buttons }
+    states[index] = states[index].copy(mementos = mementos, buttons = heldButtons)
   }
+
+  private fun emptyInputs() = List(mode.playerCount) { Input(emptyList(), emptyList()) }
 
   data class State(
       val frame: Long,
-      val mainInput: Input,
-      val mainMemento: Memento<Session>?,
-      val peerMemento: Memento<Session>?,
-      val mainButtons: Set<Button> = emptySet(),
-      val peerButtons: Set<Button> = emptySet(),
+      val inputs: List<Input>,
+      val mementos: List<Memento<Session>?>,
+      val buttons: List<Set<Button>>,
   )
 
-  private data class Patch(
-      val frame: Long,
-      val secondaryInput: Input,
-  )
+  private data class Patch(val player: Int, val frame: Long, val input: Input)
 
   @VisibleForTesting
   internal data class GameboyJoypadPressEvent(
@@ -190,5 +174,28 @@ class StateHistory() {
 
   companion object {
     val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)
+
+    internal fun createLinks(mode: LinkMode): Links {
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+        val adapter = FourPlayerAdapter()
+        return Links(
+            List(mode.playerCount) { adapter.endpoint(it) },
+            List(mode.playerCount) { InfraredEndpoint.NULL_ENDPOINT },
+        )
+      }
+
+      val firstSerial = Peer2PeerSerialEndpoint()
+      val secondSerial = Peer2PeerSerialEndpoint()
+      firstSerial.init(secondSerial)
+      val firstInfrared = Peer2PeerInfraredEndpoint()
+      val secondInfrared = Peer2PeerInfraredEndpoint()
+      firstInfrared.init(secondInfrared)
+      return Links(listOf(firstSerial, secondSerial), listOf(firstInfrared, secondInfrared))
+    }
   }
+
+  internal data class Links(
+      val serial: List<SerialEndpoint>,
+      val infrared: List<InfraredEndpoint>,
+  )
 }

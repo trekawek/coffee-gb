@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
@@ -23,105 +24,137 @@ import kotlin.concurrent.Volatile
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
-/**
- * The wire protocol of the netplay link. Messages are assembled in memory and written with
- * a single write+flush, so every message leaves as one TCP segment (the sockets run with
- * TCP_NODELAY; unbuffered byte-wise writes would emit a segment per byte). Reads go through
- * a buffered stream and use readFully - a plain read() may return a partial header on a
- * fragmented connection, which would desynchronize the protocol. Large payloads (ROM,
- * battery save, snapshot) are deflate-compressed.
- */
+/** One netplay socket. On a four-player host, three instances share the root event bus. */
 class Connection(
     inputStream: InputStream,
     outputStream: OutputStream,
     mainEventBus: EventBus,
     private val server: Boolean,
+    requestedMode: LinkMode = LinkMode.NORMAL,
+    assignedPlayer: Int = 1,
 ) : Runnable, AutoCloseable {
 
   private val input = DataInputStream(BufferedInputStream(inputStream))
 
   private val output = DataOutputStream(BufferedOutputStream(outputStream))
 
-  private val eventBus: EventBus = mainEventBus.fork("connection")
+  private val eventBus: EventBus = mainEventBus.fork("connection-$assignedPlayer")
+
+  val mode: LinkMode
+
+  /** The player at the remote end when hosting, or this application's player when connected. */
+  val player: Int
 
   @Volatile private var doStop = false
 
-  init {
-    // the handshake must be on the wire before any registered handler can write a
-    // message, otherwise an event arriving between construction and run() would put
-    // its bytes in front of the handshake and desynchronize the peer
-    handshake()
-    eventBus.register<LinkedController.LocalRomLoadedEvent> {
-      val rom = deflate(it.romFile)
-      val battery = it.batteryFile?.let(::deflate)
-      val snapshot = it.snapshot?.let(::deflate)
+  private var sessionActive = server
 
-      val buf =
-          ByteBuffer.allocate(
-              1 +
-                  23 +
-                  3 * 4 +
-                  rom.size +
-                  (battery?.size ?: 0) +
-                  (snapshot?.size ?: 0))
-      buf.put(0x01)
-      buf.putLong(it.frame)
-      buf.put(it.gameboyType.ordinal.toByte())
-      buf.put(it.bootstrapMode.ordinal.toByte())
-      buf.put(if (it.cgb0Revision) 1.toByte() else 0.toByte())
-      buf.putInt(it.romFile.size)
-      buf.putInt(it.batteryFile?.size ?: 0)
-      buf.putInt(it.snapshot?.size ?: 0)
-      buf.putInt(rom.size)
-      buf.putInt(battery?.size ?: 0)
-      buf.putInt(snapshot?.size ?: 0)
-      buf.put(rom)
-      battery?.let(buf::put)
-      snapshot?.let(buf::put)
-      sendMessage(buf)
-      LOG.atInfo().log(
-          "Sent rom ({} -> {} bytes compressed)", it.romFile.size, rom.size)
+  private val pendingEvents = mutableListOf<Event>()
+
+  init {
+    val handshake = handshake(requestedMode, assignedPlayer)
+    mode = handshake.mode
+    player = handshake.player
+
+    eventBus.register<LinkedController.LocalRomLoadedEvent> {
+      if (shouldSendLocal(it.player)) sendRom(it)
     }
     eventBus.register<LinkedController.LocalButtonStateEvent> {
-      val buf = ByteBuffer.allocate(
-          1 + 10 + it.input.pressedButtons.size + it.input.releasedButtons.size)
-      buf.put(0x03)
-      buf.putLong(it.frame)
-      buf.put(it.input.pressedButtons.size.toByte())
-      buf.put(it.input.releasedButtons.size.toByte())
-      for (button in it.input.pressedButtons) {
-        buf.put(button.ordinal.toByte())
-      }
-      for (button in it.input.releasedButtons) {
-        buf.put(button.ordinal.toByte())
-      }
-      sendMessage(buf)
-      LOG.atDebug().log("Sent {}", it)
+      if (shouldSendLocal(it.player)) sendButtons(it)
     }
     eventBus.register<RequestResetEvent> {
-      val buf = ByteBuffer.allocate(9)
-      buf.put(0x06)
-      buf.putLong(it.frame)
-      sendMessage(buf)
-      LOG.atInfo().log("Sent {}", it)
+      if (shouldSendLocal(it.player)) sendFrameCommand(RESET, it.frame, it.player)
     }
     eventBus.register<RequestStopEvent> {
-      val buf = ByteBuffer.allocate(9)
-      buf.put(0x07)
-      buf.putLong(it.frame)
-      sendMessage(buf)
-      LOG.atInfo().log("Sent {}", it)
+      if (shouldSendLocal(it.player)) sendFrameCommand(STOP, it.frame, it.player)
+    }
+
+    // Only host-side connections see relay events. The originating player's connection is
+    // skipped; every other client receives the exact same player-labelled message.
+    eventBus.register<RelayRomEvent> {
+      if (server && player != it.sourcePlayer) sendRom(it.event)
+    }
+    eventBus.register<RelayButtonsEvent> {
+      if (server && player != it.sourcePlayer) sendButtons(it.event)
+    }
+    eventBus.register<RelayResetEvent> {
+      if (server && player != it.sourcePlayer) {
+        sendFrameCommand(RESET, it.event.frame, it.event.player)
+      }
+    }
+    eventBus.register<RelayStopEvent> {
+      if (server && player != it.sourcePlayer) {
+        sendFrameCommand(STOP, it.event.frame, it.event.player)
+      }
     }
   }
 
-  /**
-   * Event handlers run on different event-bus threads; the whole message goes out
-   * atomically and in one flush.
-   */
+  private fun shouldSendLocal(eventPlayer: Int): Boolean =
+      if (server) eventPlayer == 0 else eventPlayer == player
+
+  private fun sendRom(event: LinkedController.LocalRomLoadedEvent) {
+    val rom = deflate(event.romFile)
+    val battery = event.batteryFile?.let(::deflate)
+    val snapshot = event.snapshot?.let(::deflate)
+    val buf =
+        ByteBuffer.allocate(
+            1 + 24 + 3 * 4 + rom.size + (battery?.size ?: 0) + (snapshot?.size ?: 0))
+    buf.put(ROM)
+    buf.put(event.player.toByte())
+    buf.putLong(event.frame)
+    buf.put(event.gameboyType.ordinal.toByte())
+    buf.put(event.bootstrapMode.ordinal.toByte())
+    buf.put(if (event.cgb0Revision) 1.toByte() else 0.toByte())
+    buf.putInt(event.romFile.size)
+    buf.putInt(event.batteryFile?.size ?: 0)
+    buf.putInt(event.snapshot?.size ?: 0)
+    buf.putInt(rom.size)
+    buf.putInt(battery?.size ?: 0)
+    buf.putInt(snapshot?.size ?: 0)
+    buf.put(rom)
+    battery?.let(buf::put)
+    snapshot?.let(buf::put)
+    sendMessage(buf)
+    LOG.atInfo().log("Sent player {} ROM ({} -> {} bytes compressed)", event.player + 1,
+        event.romFile.size, rom.size)
+  }
+
+  private fun sendButtons(event: LinkedController.LocalButtonStateEvent) {
+    val buf =
+        ByteBuffer.allocate(
+            1 + 11 + event.input.pressedButtons.size + event.input.releasedButtons.size)
+    buf.put(INPUT)
+    buf.put(event.player.toByte())
+    buf.putLong(event.frame)
+    buf.put(event.input.pressedButtons.size.toByte())
+    buf.put(event.input.releasedButtons.size.toByte())
+    event.input.pressedButtons.forEach { buf.put(it.ordinal.toByte()) }
+    event.input.releasedButtons.forEach { buf.put(it.ordinal.toByte()) }
+    sendMessage(buf)
+    LOG.atDebug().log("Sent {}", event)
+  }
+
+  private fun sendFrameCommand(command: Byte, frame: Long, eventPlayer: Int) {
+    val buf = ByteBuffer.allocate(10)
+    buf.put(command)
+    buf.put(eventPlayer.toByte())
+    buf.putLong(frame)
+    sendMessage(buf)
+  }
+
   @Synchronized
   private fun sendMessage(buf: ByteBuffer) {
+    if (doStop) return
     output.write(buf.array(), 0, buf.position())
     output.flush()
+  }
+
+  /** Releases a client after every required player has connected to the host. */
+  fun startSession() {
+    check(server)
+    val buf = ByteBuffer.allocate(1)
+    buf.put(START)
+    sendMessage(buf)
   }
 
   override fun run() {
@@ -132,95 +165,149 @@ class Connection(
           } catch (e: IOException) {
             if (doStop) -1 else throw e
           }
-      if (command == -1) {
-        return
-      }
-      val event: Event? =
-          when (command) {
-            // peer loaded game
-            0x01 -> {
-              val header = ByteArray(23 + 3 * 4)
-              input.readFully(header)
-              val buf = ByteBuffer.wrap(header)
+      if (command == -1) return
 
-              val frame = buf.getLong()
-              val gameboyType = GameboyType.entries[buf.get().toInt()]
-              val bootstrapMode = BootstrapMode.entries[buf.get().toInt()]
-              val cgb0Revision = buf.get().toInt() != 0
-              val romSize = buf.getInt()
-              val batterySize = buf.getInt()
-              val snapshotSize = buf.getInt()
-              val romCompressed = buf.getInt()
-              val batteryCompressed = buf.getInt()
-              val snapshotCompressed = buf.getInt()
-
-              val rom = inflate(readPayload(romCompressed), romSize)!!
-              val battery = inflate(readPayload(batteryCompressed), batterySize)
-              val snapshot = inflate(readPayload(snapshotCompressed), snapshotSize)
-
-              PeerLoadedGameEvent(
-                  rom, battery, snapshot, gameboyType, bootstrapMode, frame, cgb0Revision)
-            }
-            // sync
-            0x03 -> {
-              val header = ByteArray(10)
-              input.readFully(header)
-              val buf = ByteBuffer.wrap(header)
-
-              val frame = buf.getLong()
-              val pressedCount = buf.get().toInt()
-              val releasedCount = buf.get().toInt()
-              val buttons = ByteArray(pressedCount + releasedCount)
-              input.readFully(buttons)
-              val pressed = (0 until pressedCount).map { Button.entries[buttons[it].toInt()] }
-              val released =
-                  (0 until releasedCount).map { Button.entries[buttons[pressedCount + it].toInt()] }
-              LinkedController.RemoteButtonStateEvent(frame, Input(pressed, released))
-            }
-
-            // reset
-            0x06 -> {
-              ReceivedRemoteResetEvent(readFrame())
-            }
-
-            // stop
-            0x07 -> {
-              ReceivedRemoteStopEvent(readFrame())
-            }
-
-            else -> {
-              LOG.atWarn().log("Received remote unknown command $command")
-              null
-            }
+      when (command.toByte()) {
+        ROM -> receiveRom()
+        INPUT -> receiveButtons()
+        RESET -> receiveReset()
+        STOP -> receiveStop()
+        START -> {
+          if (!server) {
+            sessionActive = true
+            eventBus.post(ConnectionController.ClientConnectedToServerEvent(mode, player))
+            // The host may have sent its ROM before START. The connection is already listening at
+            // that point, but the LinkedController is created by the event above; deliver cached
+            // state only after that synchronous transition has completed.
+            pendingEvents.forEach(eventBus::post)
+            pendingEvents.clear()
           }
-      if (event != null) {
-        when (event) {
-          is PeerLoadedGameEvent ->
-              LOG.atInfo()
-                  .log("Received remote command $command, posting event: ${event.javaClass}")
-          is LinkedController.RemoteButtonStateEvent ->
-              LOG.atDebug().log("Received remote command $command, posting event: $event")
-          else -> LOG.atInfo().log("Received remote command $command, posting event: $event")
         }
-
-        eventBus.post(event)
+        else -> LOG.atWarn().log("Received remote unknown command $command")
       }
     }
   }
 
-  private fun readFrame(): Long {
-    val buf = ByteArray(8)
-    input.readFully(buf)
-    return ByteBuffer.wrap(buf).getLong()
+  private fun receiveRom() {
+    val header = ByteArray(24 + 3 * 4)
+    input.readFully(header)
+    val buf = ByteBuffer.wrap(header)
+    val wirePlayer = buf.get().toInt()
+    val eventPlayer = receivedPlayer(wirePlayer)
+    val frame = buf.getLong()
+    val gameboyType = GameboyType.entries[buf.get().toInt()]
+    val bootstrapMode = BootstrapMode.entries[buf.get().toInt()]
+    val cgb0Revision = buf.get().toInt() != 0
+    val romSize = buf.getInt()
+    val batterySize = buf.getInt()
+    val snapshotSize = buf.getInt()
+    val romCompressed = buf.getInt()
+    val batteryCompressed = buf.getInt()
+    val snapshotCompressed = buf.getInt()
+    val event =
+        PeerLoadedGameEvent(
+            inflate(readPayload(romCompressed), romSize)!!,
+            inflate(readPayload(batteryCompressed), batterySize),
+            inflate(readPayload(snapshotCompressed), snapshotSize),
+            gameboyType,
+            bootstrapMode,
+            frame,
+            cgb0Revision,
+            eventPlayer,
+        )
+    deliver(event)
+    if (server) {
+      eventBus.post(
+          RelayRomEvent(
+              eventPlayer,
+              LinkedController.LocalRomLoadedEvent(
+                  event.rom,
+                  event.battery,
+                  event.snapshot,
+                  event.gameboyType,
+                  event.bootstrapMode,
+                  event.frame,
+                  event.cgb0Revision,
+                  event.player,
+              )))
+    }
+    LOG.atInfo().log("Received player {} ROM", eventPlayer + 1)
+  }
+
+  private fun receiveButtons() {
+    val header = ByteArray(11)
+    input.readFully(header)
+    val buf = ByteBuffer.wrap(header)
+    val eventPlayer = receivedPlayer(buf.get().toInt())
+    val frame = buf.getLong()
+    val pressedCount = buf.get().toInt()
+    val releasedCount = buf.get().toInt()
+    val buttons = ByteArray(pressedCount + releasedCount)
+    input.readFully(buttons)
+    val pressed = (0 until pressedCount).map { Button.entries[buttons[it].toInt()] }
+    val released =
+        (0 until releasedCount).map { Button.entries[buttons[pressedCount + it].toInt()] }
+    val event = LinkedController.RemoteButtonStateEvent(frame, Input(pressed, released), eventPlayer)
+    deliver(event)
+    if (server) {
+      eventBus.post(
+          RelayButtonsEvent(
+              eventPlayer,
+              LinkedController.LocalButtonStateEvent(event.frame, event.input, event.player),
+          ))
+    }
+  }
+
+  private fun receiveReset() {
+    receiveFrameEvent(RESET)
+  }
+
+  private fun receiveStop() {
+    receiveFrameEvent(STOP)
+  }
+
+  private fun receiveFrameEvent(command: Byte) {
+    val (eventPlayer, frame) = readPlayerAndFrame()
+    if (command == RESET) {
+      val event = ReceivedRemoteResetEvent(frame, eventPlayer)
+      deliver(event)
+      if (server) eventBus.post(RelayResetEvent(eventPlayer, event))
+    } else {
+      val event = ReceivedRemoteStopEvent(frame, eventPlayer)
+      deliver(event)
+      if (server) eventBus.post(RelayStopEvent(eventPlayer, event))
+    }
+  }
+
+  private fun readPlayerAndFrame(): Pair<Int, Long> {
+    val payload = ByteArray(9)
+    input.readFully(payload)
+    val buf = ByteBuffer.wrap(payload)
+    return receivedPlayer(buf.get().toInt()) to buf.getLong()
+  }
+
+  private fun receivedPlayer(wirePlayer: Int): Int {
+    if (server) return player
+    if (wirePlayer !in 0 until mode.playerCount) {
+      throw IOException("Invalid player $wirePlayer for $mode")
+    }
+    return wirePlayer
+  }
+
+  private fun deliver(event: Event) {
+    if (sessionActive) {
+      eventBus.post(event)
+    } else {
+      pendingEvents += event
+    }
   }
 
   private fun readPayload(size: Int): ByteArray? {
-    if (size == 0) {
-      return null
+    if (size == 0) return null
+    if (size < 0 || size > MAX_COMPRESSED_PAYLOAD) {
+      throw IOException("Invalid compressed payload size: $size")
     }
-    val payload = ByteArray(size)
-    input.readFully(payload)
-    return payload
+    return ByteArray(size).also(input::readFully)
   }
 
   fun stop() {
@@ -228,41 +315,46 @@ class Connection(
   }
 
   override fun close() {
+    doStop = true
     eventBus.close()
     input.close()
     output.close()
   }
 
-  private fun handshake() {
-    val buf = ByteArray(PROTOCOL_NAME.length + 1)
+  private fun handshake(requestedMode: LinkMode, assignedPlayer: Int): Handshake {
+    val buf = ByteArray(PROTOCOL_NAME.length + 3)
     if (server) {
+      require(assignedPlayer in 1 until requestedMode.playerCount)
       PROTOCOL_NAME.toByteArray().copyInto(buf)
       buf[PROTOCOL_NAME.length] = PROTOCOL_VERSION
+      buf[PROTOCOL_NAME.length + 1] = requestedMode.ordinal.toByte()
+      buf[PROTOCOL_NAME.length + 2] = assignedPlayer.toByte()
       output.write(buf)
       output.flush()
-      LOG.atInfo().log("Sent protocol name {} and version {}", PROTOCOL_NAME, PROTOCOL_VERSION)
-    } else {
-      input.readFully(buf)
-      val receivedProtocolName = String(buf, 0, PROTOCOL_NAME.length)
-      if (receivedProtocolName != PROTOCOL_NAME) {
-        throw IOException(
-            "Protocol mismatch: expected $PROTOCOL_NAME, received $receivedProtocolName"
-        )
-      }
-      val receivedProtocolVersion = buf[PROTOCOL_NAME.length]
-      if (receivedProtocolVersion != PROTOCOL_VERSION) {
-        throw IOException(
-            "Protocol mismatch: expected $PROTOCOL_VERSION, received $receivedProtocolVersion"
-        )
-      }
-      LOG.atInfo()
-          .log(
-              "Received protocol name {} and version {}",
-              receivedProtocolName,
-              receivedProtocolVersion,
-          )
+      return Handshake(requestedMode, assignedPlayer)
     }
+
+    input.readFully(buf)
+    val receivedProtocolName = String(buf, 0, PROTOCOL_NAME.length)
+    if (receivedProtocolName != PROTOCOL_NAME) {
+      throw IOException("Protocol mismatch: expected $PROTOCOL_NAME, received $receivedProtocolName")
+    }
+    val receivedVersion = buf[PROTOCOL_NAME.length]
+    if (receivedVersion != PROTOCOL_VERSION) {
+      throw IOException("Protocol mismatch: expected $PROTOCOL_VERSION, received $receivedVersion")
+    }
+    val modeOrdinal = buf[PROTOCOL_NAME.length + 1].toInt()
+    if (modeOrdinal !in LinkMode.entries.indices) throw IOException("Invalid link mode $modeOrdinal")
+    val receivedMode = LinkMode.entries[modeOrdinal]
+    val receivedPlayer = buf[PROTOCOL_NAME.length + 2].toInt()
+    if (receivedPlayer !in 1 until receivedMode.playerCount) {
+      throw IOException("Invalid assigned player $receivedPlayer for $receivedMode")
+    }
+    LOG.atInfo().log("Connected as player {} in {} mode", receivedPlayer + 1, receivedMode)
+    return Handshake(receivedMode, receivedPlayer)
   }
+
+  private data class Handshake(val mode: LinkMode, val player: Int)
 
   data class PeerLoadedGameEvent(
       val rom: ByteArray,
@@ -272,20 +364,47 @@ class Connection(
       val bootstrapMode: BootstrapMode,
       val frame: Long,
       val cgb0Revision: Boolean = false,
+      val player: Int = 1,
   ) : Event
 
-  data class RequestResetEvent(val frame: Long) : Event
+  data class RequestResetEvent(val frame: Long, val player: Int = 0) : Event
 
-  data class RequestStopEvent(val frame: Long) : Event
+  data class RequestStopEvent(val frame: Long, val player: Int = 0) : Event
 
-  data class ReceivedRemoteResetEvent(val frame: Long) : Event
+  data class ReceivedRemoteResetEvent(val frame: Long, val player: Int = 1) : Event
 
-  data class ReceivedRemoteStopEvent(val frame: Long) : Event
+  data class ReceivedRemoteStopEvent(val frame: Long, val player: Int = 1) : Event
+
+  private data class RelayRomEvent(
+      val sourcePlayer: Int,
+      val event: LinkedController.LocalRomLoadedEvent,
+  ) : Event
+
+  private data class RelayButtonsEvent(
+      val sourcePlayer: Int,
+      val event: LinkedController.LocalButtonStateEvent,
+  ) : Event
+
+  private data class RelayResetEvent(
+      val sourcePlayer: Int,
+      val event: ReceivedRemoteResetEvent,
+  ) : Event
+
+  private data class RelayStopEvent(
+      val sourcePlayer: Int,
+      val event: ReceivedRemoteStopEvent,
+  ) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
-    private const val PROTOCOL_NAME: String = "CoffeeGB NETPLAY"
-    private const val PROTOCOL_VERSION: Byte = 0x04
+    private const val PROTOCOL_NAME = "CoffeeGB NETPLAY"
+    private const val PROTOCOL_VERSION: Byte = 0x05
+    private const val MAX_COMPRESSED_PAYLOAD = 64 * 1024 * 1024
+    private const val ROM: Byte = 0x01
+    private const val INPUT: Byte = 0x03
+    private const val RESET: Byte = 0x06
+    private const val STOP: Byte = 0x07
+    private const val START: Byte = 0x08
 
     fun deflate(data: ByteArray): ByteArray {
       val deflater = Deflater(Deflater.BEST_SPEED)
@@ -294,27 +413,26 @@ class Connection(
       val out = ByteArrayOutputStream(data.size / 2 + 64)
       val buffer = ByteArray(64 * 1024)
       while (!deflater.finished()) {
-        val n = deflater.deflate(buffer)
-        out.write(buffer, 0, n)
+        val count = deflater.deflate(buffer)
+        out.write(buffer, 0, count)
       }
       deflater.end()
       return out.toByteArray()
     }
 
     fun inflate(data: ByteArray?, originalSize: Int): ByteArray? {
-      if (data == null) {
-        return null
+      if (data == null) return null
+      if (originalSize < 0 || originalSize > MAX_COMPRESSED_PAYLOAD * 4) {
+        throw IOException("Invalid uncompressed payload size: $originalSize")
       }
       val inflater = Inflater()
       inflater.setInput(data)
       val result = ByteArray(originalSize)
       var offset = 0
       while (offset < originalSize && !inflater.finished()) {
-        val n = inflater.inflate(result, offset, originalSize - offset)
-        if (n == 0 && inflater.needsInput()) {
-          throw IOException("Truncated compressed payload")
-        }
-        offset += n
+        val count = inflater.inflate(result, offset, originalSize - offset)
+        if (count == 0 && inflater.needsInput()) throw IOException("Truncated compressed payload")
+        offset += count
       }
       inflater.end()
       if (offset != originalSize) {
