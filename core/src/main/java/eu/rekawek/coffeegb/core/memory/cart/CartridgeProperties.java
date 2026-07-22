@@ -32,7 +32,7 @@ public final class CartridgeProperties {
         DATEL,
         WISDOM_TREE,
         MBC1,
-        POCKET_CAMERA
+        POCKET_CAMERA,
         MBC5
     }
 
