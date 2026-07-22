@@ -51,7 +51,8 @@ public final class CartridgeProperties {
         DMA_BLOCKED_READS_RETURN_FF,
         SACHEN_OPEN_BUS_BANKS,
         CGB0_REVISION,
-        MEALYBUG_DMG_BLOB
+        MEALYBUG_DMG_BLOB,
+        CODEBREAKER_RUMBLE
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -132,6 +133,9 @@ public final class CartridgeProperties {
             features("Mealybug Shootout DMG-blob diagnostics",
                     CartridgeProperties::isMealybugDmgBlob,
                     Feature.MEALYBUG_DMG_BLOB),
+            features("CodeBreaker in-game rumble demo",
+                    CartridgeProperties::isCodeBreakerRumbleDemo,
+                    Feature.CODEBREAKER_RUMBLE),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -489,6 +493,10 @@ public final class CartridgeProperties {
     private static boolean isMealybugDmgBlob(RomInfo info) {
         return info.crc32() == 0xc773ca39 // m3_lcdc_bg_en_change
                 || info.crc32() == 0x7da5fe66; // m3_lcdc_win_en_change_multiple_wx
+    }
+
+    private static boolean isCodeBreakerRumbleDemo(RomInfo info) {
+        return info.crc32() == 0xfd096905;
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {

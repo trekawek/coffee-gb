@@ -196,7 +196,12 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
         infraredPort = new InfraredPort(gbc, speedMode);
         codeBreakerRumble = new CodeBreakerRumble();
-        mmu.setCodeBreakerRumble(codeBreakerRumble);
+        if (configuration.codeBreakerRumble) {
+            // The CodeBreaker is an external pass-through accessory, not part of every
+            // cartridge. Watching FFFE globally makes ordinary HRAM initialization look
+            // like a motor request and causes false host rumble.
+            mmu.setCodeBreakerRumble(codeBreakerRumble);
+        }
 
         if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
@@ -875,6 +880,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         private boolean mealybugDmgBlob;
 
+        private boolean codeBreakerRumble;
+
         private TimeSource rtcTimeSource = new SystemTimeSource();
 
         public GameboyConfiguration(File romFile) throws IOException {
@@ -887,6 +894,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                     CartridgeProperties.Feature.CGB0_REVISION);
             mealybugDmgBlob = rom.getCartridgeProperties().has(
                     CartridgeProperties.Feature.MEALYBUG_DMG_BLOB);
+            codeBreakerRumble = rom.getCartridgeProperties().has(
+                    CartridgeProperties.Feature.CODEBREAKER_RUMBLE);
             if (rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB) {
                 gameboyType = GameboyType.DMG;
             } else {
@@ -925,6 +934,16 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         public boolean isMealybugDmgBlob() {
             return mealybugDmgBlob;
+        }
+
+        /** Selects the optional CodeBreaker pass-through rumble accessory. */
+        public GameboyConfiguration setCodeBreakerRumble(boolean codeBreakerRumble) {
+            this.codeBreakerRumble = codeBreakerRumble;
+            return this;
+        }
+
+        public boolean isCodeBreakerRumble() {
+            return codeBreakerRumble;
         }
 
         public GameboyConfiguration setDisplaySgbBorder(boolean displaySgbBorder) {
@@ -982,6 +1001,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
             copy.displaySgbBorder = displaySgbBorder;
             copy.cgb0Revision = cgb0Revision;
             copy.mealybugDmgBlob = mealybugDmgBlob;
+            copy.codeBreakerRumble = codeBreakerRumble;
             copy.rtcTimeSource = rtcTimeSource;
             return copy;
         }

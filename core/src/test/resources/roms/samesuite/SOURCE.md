@@ -33,3 +33,9 @@ SHA-256 checksums:
 - `dma/gdma_addr_mask-shootout.gb` — `44919ce25c2d049d1abbbcec84c89c3acecb82d7c68b4d5551ef4868a4d9655a`
 - `dma/hdma_lcd_off-shootout.gb` — `d49e67a7e176832909790e9bd6356490d2937dd1d907ac319b66cacb420605a2`
 - `dma/hdma_mode0-shootout.gb` — `2c5e448d091b2c774ebbb1dac74936abf16f6b4e39a011aff087d9cbc4b28d58`
+
+The matching historical DMA reference images are retained with the same suffix:
+
+- `dma/gdma_addr_mask-shootout.png` — `a6df85e956d2194c7cc729fa07f73b343eba5c82d8980977064476b77309f8b2`
+- `dma/hdma_lcd_off-shootout.png` — `1305a0a7fb752e550e89bdfa332b2cda8805dbe83d748aea1a4fb99b8f02678c`
+- `dma/hdma_mode0-shootout.png` — `7a4739b29b958552bd6e90876bdf6e61c458700884f6a1363f153b21bc3fe406`
