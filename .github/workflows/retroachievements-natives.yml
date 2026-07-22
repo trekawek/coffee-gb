@@ -18,16 +18,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-22.04
             resource-prefix: linux-x86-64
-          - runner: ubuntu-24.04-arm
+            cmake_options: ""
+          - runner: ubuntu-22.04-arm
             resource-prefix: linux-aarch64
+            cmake_options: ""
           - runner: windows-latest
             resource-prefix: win32-x86-64
+            cmake_options: ""
           - runner: macos-15-intel
             resource-prefix: darwin-x86-64
+            cmake_options: -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           - runner: macos-14
             resource-prefix: darwin-aarch64
+            cmake_options: -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +41,7 @@ jobs:
         run: >-
           cmake -S controller/src/main/native -B native-build
           -DCMAKE_BUILD_TYPE=Release
+          ${{ matrix.cmake_options }}
 
       - name: Build rcheevos wrapper
         run: cmake --build native-build --config Release --parallel
