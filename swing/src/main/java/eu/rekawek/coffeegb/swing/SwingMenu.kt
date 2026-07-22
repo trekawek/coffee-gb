@@ -481,11 +481,10 @@ class SwingMenu(
         return
       }
 
-      val cheatChoices = JList(supportedCheats.toTypedArray())
-      cheatChoices.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+      val cheatChoices =
+          ToggleSelectionList(supportedCheats)
       cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
       cheatChoices.selectedIndex = 0
-      installDoubleClickConfirm(cheatChoices)
       cheatChoices.cellRenderer =
           object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
