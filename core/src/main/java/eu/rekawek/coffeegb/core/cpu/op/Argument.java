@@ -196,6 +196,11 @@ public enum Argument {
     },
     _BC("(BC)", 0, true, DataType.D8) {
         @Override
+        public int resolveMemoryAddress(Registers registers, int[] args) {
+            return registers.getBC();
+        }
+
+        @Override
         public int read(Registers registers, AddressSpace addressSpace, int[] args) {
             return addressSpace.getByte(registers.getBC());
         }
@@ -206,6 +211,11 @@ public enum Argument {
         }
     },
     _DE("(DE)", 0, true, DataType.D8) {
+        @Override
+        public int resolveMemoryAddress(Registers registers, int[] args) {
+            return registers.getDE();
+        }
+
         @Override
         public int read(Registers registers, AddressSpace addressSpace, int[] args) {
             return addressSpace.getByte(registers.getDE());
@@ -218,6 +228,11 @@ public enum Argument {
     },
     _HL("(HL)", 0, true, DataType.D8) {
         @Override
+        public int resolveMemoryAddress(Registers registers, int[] args) {
+            return registers.getHL();
+        }
+
+        @Override
         public int read(Registers registers, AddressSpace addressSpace, int[] args) {
             return addressSpace.getByte(registers.getHL());
         }
@@ -228,6 +243,11 @@ public enum Argument {
         }
     },
     _a8("(a8)", 1, true, DataType.D8) {
+        @Override
+        public int resolveMemoryAddress(Registers registers, int[] args) {
+            return 0xff00 | args[0];
+        }
+
         @Override
         public int read(Registers registers, AddressSpace addressSpace, int[] args) {
             return addressSpace.getByte(0xff00 | args[0]);
@@ -240,6 +260,11 @@ public enum Argument {
     },
     _a16("(a16)", 2, true, DataType.D8) {
         @Override
+        public int resolveMemoryAddress(Registers registers, int[] args) {
+            return BitUtils.toWord(args);
+        }
+
+        @Override
         public int read(Registers registers, AddressSpace addressSpace, int[] args) {
             return addressSpace.getByte(BitUtils.toWord(args));
         }
@@ -250,6 +275,11 @@ public enum Argument {
         }
     },
     _C("(C)", 0, true, DataType.D8) {
+        @Override
+        public int resolveMemoryAddress(Registers registers, int[] args) {
+            return 0xff00 | registers.getC();
+        }
+
         @Override
         public int read(Registers registers, AddressSpace addressSpace, int[] args) {
             return addressSpace.getByte(0xff00 | registers.getC());
@@ -286,6 +316,10 @@ public enum Argument {
 
     public boolean isMemory() {
         return memory;
+    }
+
+    public int resolveMemoryAddress(Registers registers, int[] args) {
+        throw new IllegalStateException(label + " isn't a memory argument");
     }
 
     public abstract int read(Registers registers, AddressSpace addressSpace, int[] args);

@@ -66,10 +66,16 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     // the serial port and PPU finish these independently clocked ticks.
     static final int CGB_BOOT_HANDOFF_TICKS = 12;
 
-    // A pending HBlank DMA request retains the prefetched STOP pipeline slot across
-    // a speed switch. Its arbiter releases the CPU two master ticks after the normal
-    // clock-mux tail, keeping the resumed instruction phase aligned with the PPU.
-    static final int PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS = 2;
+    // A pending HBlank request advances the resumed CPU phase when no OAM transfer
+    // owns the shared DMA clock. An active OAM transfer instead retains the delayed
+    // clock-mux hand-off used before the switch.
+    static final int PENDING_HBLANK_SPEED_SWITCH_ADVANCE_TICKS = 4;
+
+    static final int OAM_DMA_HBLANK_SPEED_SWITCH_DELAY_TICKS = 2;
+
+    // A granted HBlank burst can finish while the CPU speed-switch countdown is still
+    // running. Its completed bus hand-off removes five ticks from the retained tail.
+    static final int COMPLETED_HBLANK_SPEED_SWITCH_ADVANCE_TICKS = 5;
 
     private final Cartridge cartridge;
 
@@ -442,7 +448,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (newMode != null) {
             hdma.onGpuUpdate(newMode);
         }
-        hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine());
+        hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                gpu.isStatModeLatchRephasedBySpeedSwitch());
         cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
 
         boolean stopFrameBlanked = cpu.consumeStopFrameBlankRequest();
@@ -493,7 +500,17 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     private Mode tickSubsystems() {
-        statRegister.captureCpuStatReadPhase();
+        statRegister.captureCpuStatReadPhase(cpu.isSynchronousHaltEntryStatPhase(),
+                cpu.isAsynchronousHaltEntryStatPhase(),
+                cpu.isOrdinaryHaltWakeStatPhase(),
+                cpu.isOneCycleOrdinaryHaltWakeStatPhase());
+        boolean mode0InterruptEdgeNextTick =
+                statRegister.isMode0InterruptEdgeNextTick();
+        statRegister.captureCpuInterruptReadPhase(
+                cpu.getInterruptFlagReadMaskTicks(mode0InterruptEdgeNextTick),
+                cpu.isMode0InterruptDispatchPhased(mode0InterruptEdgeNextTick),
+                cpu.doesMode0InstructionWinInterruptAcceptance(
+                        mode0InterruptEdgeNextTick));
         statRegister.publishFrameLyc0Mode2HandoffBeforeCpu();
         boolean speedSwitching = cpu.isSpeedSwitching();
         boolean speedSwitchTail = speedSwitchTailTicks > 0;
@@ -516,9 +533,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 gpu.onSpeedSwitchComplete();
             }
         } else if (speedSwitching) {
-            // A CGB speed switch pauses instruction execution and VRAM DMA while
-            // the independent timer and PPU clocks continue running.
+            // A CGB speed switch pauses instruction execution while the independent
+            // timer and PPU clocks continue running. A granted HBlank burst also
+            // advances unless an active OAM transfer owns the shared DMA clock.
             cpu.tick();
+            if (hdma.pausesOamDmaForSpeedSwitchBurst()
+                    && !dma.isTransferInProgress()) {
+                hdma.tick();
+            }
             if (!cpu.isSpeedSwitching()) {
                 // The first normal-to-double switch can reach the mux on either
                 // observed normal-speed half-phase. The $20000-clock countdown is
@@ -528,11 +550,19 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                         && !speedSwitchClockPhaseShifted
                         && gpu.isLcdEnabled()
                         && (gpu.getTicksInLine() & 3) == 0;
+                int completedHblankBurstAdvance = hdma.completedHblankSpeedSwitchBurst()
+                        ? COMPLETED_HBLANK_SPEED_SWITCH_ADVANCE_TICKS : 0;
+                int pendingHblankAlignment = 0;
+                if (hdma.alignsPendingHblankSpeedSwitchTail()) {
+                    pendingHblankAlignment = dma.isTransferInProgress()
+                            ? OAM_DMA_HBLANK_SPEED_SWITCH_DELAY_TICKS
+                            : -PENDING_HBLANK_SPEED_SWITCH_ADVANCE_TICKS;
+                }
                 speedSwitchTailTicks = baseSpeedSwitchTailTicks(longClockMuxPhase,
                         hdma.holdsHblankSpeedSwitchTail())
+                        - completedHblankBurstAdvance
                         + (speedMode.getSpeedMode() == 2 && speedSwitchClockPhaseShifted ? 1 : 0)
-                        + (hdma.hasPendingHblankTransfer()
-                        ? PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS : 0);
+                        + pendingHblankAlignment;
                 if (speedMode.getSpeedMode() == 1) {
                     speedSwitchClockPhaseShifted = true;
                 }

@@ -68,6 +68,16 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     private int haltEntrySampleTicks;
 
+    private boolean synchronousHaltEntryStatPhase;
+
+    private boolean asynchronousHaltEntryStatPhase;
+
+    private boolean ordinaryHaltWakeStatPhase;
+
+    // Number of complete idle machine cycles between HALT entry and an ordinary
+    // interrupt wake. The first post-entry slot has a distinct DMG STAT bus phase.
+    private int haltedCpuCycles;
+
     private boolean hdmaOpcodePrefetched;
 
     private int hdmaArbitrationOpcode;
@@ -154,6 +164,7 @@ public class Cpu implements Serializable, Originator<Cpu> {
             // the interrupt request (halt_ime1_timing2-GS, halt_ime0_nointr_timing)
             state = State.OPCODE;
             wokeFromHalt = true;
+            ordinaryHaltWakeStatPhase = true;
         }
 
         if (state == State.STOPPED && isJoypadLineLow()) {
@@ -165,7 +176,13 @@ public class Cpu implements Serializable, Originator<Cpu> {
         }
 
         if (state == State.OPCODE || state == State.STOPPED) {
-            if (interruptManager.isIme() && interruptManager.isInterruptRequested()) {
+            // A request restored while mode 3 owns the shared VRAM-DMA arbitration
+            // slot before interrupt dispatch. Retire HALT's sampled opcode first;
+            // mode-2 wake-up still lets interrupt acceptance preempt that sample.
+            boolean heldHdmaOpcodeOwnsWakeSlot = wokeFromHalt && haltOpcodePrefetchValid
+                    && gpu != null && gpu.getMode() == Mode.PixelTransfer;
+            if (interruptManager.isIme() && interruptManager.isInterruptRequested()
+                    && !heldHdmaOpcodeOwnsWakeSlot) {
                 haltOpcodePrefetchValid = false;
                 hdmaArbitrationOpcodeValid = false;
                 if (state == State.STOPPED) {
@@ -212,6 +229,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
         }
 
         if (state == State.HALTED || state == State.STOPPED) {
+            if (state == State.HALTED) {
+                haltedCpuCycles = Math.min(2, haltedCpuCycles + 1);
+            }
             return;
         }
 
@@ -342,6 +362,9 @@ public class Cpu implements Serializable, Originator<Cpu> {
                             // The interrupt is accepted at instruction completion, but hardware
                             // pushes HALT's address so RETI executes it again.
                             registers.setPC((registers.getPC() - 1) & 0xffff);
+                            synchronousHaltEntryStatPhase = true;
+                            asynchronousHaltEntryStatPhase = false;
+                            ordinaryHaltWakeStatPhase = false;
                             state = State.OPCODE;
                             return;
                         }
@@ -351,9 +374,16 @@ public class Cpu implements Serializable, Originator<Cpu> {
                             }
                             state = State.OPCODE;
                             haltBugMode = true;
+                            synchronousHaltEntryStatPhase = true;
+                            asynchronousHaltEntryStatPhase = false;
+                            ordinaryHaltWakeStatPhase = false;
                             return;
                         } else {
                             state = State.HALTED;
+                            synchronousHaltEntryStatPhase = false;
+                            asynchronousHaltEntryStatPhase = false;
+                            ordinaryHaltWakeStatPhase = false;
+                            haltedCpuCycles = 0;
                             haltEntrySampleTicks = speedMode.isGbc() ? 2 : 4;
                             return;
                         }
@@ -420,6 +450,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
         if (state == State.HALTED && asynchronousRequest) {
             haltEntrySampleTicks = 0;
             state = State.OPCODE;
+            asynchronousHaltEntryStatPhase = true;
+            ordinaryHaltWakeStatPhase = false;
             if (ime) {
                 // The enabled request is accepted, but the asynchronous edge makes
                 // interrupt entry push HALT's address so RETI executes it again.
@@ -538,6 +570,210 @@ public class Cpu implements Serializable, Originator<Cpu> {
 
     public State getState() {
         return state;
+    }
+
+    public boolean isSynchronousHaltEntryStatPhase() {
+        return synchronousHaltEntryStatPhase;
+    }
+
+    public boolean isAsynchronousHaltEntryStatPhase() {
+        return asynchronousHaltEntryStatPhase;
+    }
+
+    public boolean isOrdinaryHaltWakeStatPhase() {
+        return ordinaryHaltWakeStatPhase;
+    }
+
+    public boolean isOneCycleOrdinaryHaltWakeStatPhase() {
+        return ordinaryHaltWakeStatPhase && haltedCpuCycles == 1;
+    }
+
+    /**
+     * Returns whether an FF0F read has already sampled the LCDC request input but
+     * has not yet completed its data phase. Mode-0 can set the stored IF latch in
+     * that interval without changing the value returned by this one bus cycle.
+     */
+    public int getInterruptFlagReadMaskTicks(boolean mode0EdgeNextTick) {
+        if (!mode0EdgeNextTick) {
+            return 0;
+        }
+        DecodedMemoryAccess pendingAccess = state == State.RUNNING
+                ? resolveFirstMemoryAccess(ops, opIndex, operand, opContext)
+                : null;
+        if (isReadFrom(pendingAccess, 0xff0f)) {
+            if (speedMode.getSpeedMode() == 1) {
+                return clockCycle == 1 ? 2 : clockCycle == 2 ? 1 : 0;
+            }
+            // At double speed, a read which will retire after this tick has
+            // already sampled the peripheral request gate. A read retiring in
+            // this tick completes before the later PPU edge and needs no mask.
+            return clockCycle == 0 ? 1 : 0;
+        }
+        if (speedMode.getSpeedMode() != 2 || state != State.OPCODE
+                || gpu == null || !gpu.isGbc() || gpu.isDmgCompatMode()) {
+            return 0;
+        }
+        int pc = registers.getPC();
+        DecodedInstruction nextInstruction = decodeInstructionAt(pc);
+        if (readsAddressFirst(nextInstruction, 0xff0f)) {
+            return clockCycle == 0 ? 3 : 2;
+        }
+        int followingPc = (pc + 1) & 0xffff;
+        if (clockCycle == 1 && nextInstruction != null
+                && nextInstruction.opcode.getOpcode() == 0x00
+                && readsAddressFirst(decodeInstructionAt(followingPc), 0xff0f)) {
+            // The current one-cycle NOP retires before the PPU edge. The next
+            // FF0F read still belongs to the four-dot synchronizer window.
+            return 4;
+        }
+        return 0;
+    }
+
+    private static boolean isSafeInstructionAddress(int address) {
+        return address < 0x8000
+                || address >= 0xc000 && address < 0xfe00
+                || address >= 0xff80 && address < 0xffff;
+    }
+
+    /** A request crossing EI/RETI's enable window uses ordinary IRQ entry. */
+    public boolean isMode0InterruptDispatchPhased(boolean mode0EdgeNextTick) {
+        return mode0EdgeNextTick && speedMode.isGbc()
+                && speedMode.getSpeedMode() == 1
+                && clockCycle == 0
+                && (interruptManager.isInterruptEnablePending()
+                || state == State.RUNNING && opcode1 == 0xd9);
+    }
+
+    /**
+     * The opcode fetch at this normal-speed phase has priority over a later
+     * mode-0 edge. DI or an IE write can therefore withdraw acceptance before
+     * the stored request reaches the CPU input.
+     */
+    public boolean doesMode0InstructionWinInterruptAcceptance(
+            boolean mode0EdgeNextTick) {
+        if (!mode0EdgeNextTick || !speedMode.isGbc()
+                || speedMode.getSpeedMode() != 1
+                || state != State.OPCODE || clockCycle != 1) {
+            return false;
+        }
+        int pc = registers.getPC();
+        DecodedInstruction nextInstruction = decodeInstructionAt(pc);
+        if (nextInstruction == null) {
+            return false;
+        }
+        if (nextInstruction.opcode.getOpcode() == 0xf3) {
+            return true;
+        }
+        return writesDisabledInterruptEnable(nextInstruction);
+    }
+
+    private DecodedInstruction decodeInstructionAt(int pc) {
+        if (!isSafeInstructionAddress(pc)) {
+            return null;
+        }
+        Opcode decodedOpcode = Opcodes.COMMANDS.get(addressSpace.getByte(pc));
+        if (decodedOpcode == null) {
+            return null;
+        }
+        int[] decodedOperand = new int[2];
+        for (int i = 0; i < decodedOpcode.getOperandLength(); i++) {
+            int operandAddress = (pc + i + 1) & 0xffff;
+            // Speculation is limited to executable ROM/RAM. In particular, do
+            // not inspect cartridge RAM, VRAM, OAM, or memory-mapped I/O while
+            // classifying an upcoming CPU bus access.
+            if (!isSafeInstructionAddress(operandAddress)) {
+                return null;
+            }
+            decodedOperand[i] = addressSpace.getByte(operandAddress);
+        }
+        return new DecodedInstruction(decodedOpcode, decodedOperand);
+    }
+
+    private DecodedMemoryAccess resolveFirstMemoryAccess(
+            List<Op> decodedOps, int firstOp, int[] decodedOperand, int context) {
+        if (decodedOps == null) {
+            return null;
+        }
+        for (int i = firstOp; i < decodedOps.size(); i++) {
+            Op op = decodedOps.get(i);
+            if (!op.readsMemory() && !op.writesMemory()) {
+                continue;
+            }
+            Integer address = op.resolveMemoryAddress(registers, decodedOperand, context);
+            if (address == null) {
+                // Internal wait cycles deliberately have no effective address.
+                return null;
+            }
+            return new DecodedMemoryAccess(address, op.readsMemory());
+        }
+        return null;
+    }
+
+    private boolean readsAddressFirst(DecodedInstruction instruction, int address) {
+        if (instruction == null || instruction.opcode.getOperandLength() != 0) {
+            return false;
+        }
+        return isReadFrom(resolveFirstMemoryAccess(
+                instruction.opcode.getOps(), 0, instruction.operand, 0), address);
+    }
+
+    private static boolean isReadFrom(DecodedMemoryAccess access, int address) {
+        return access != null && access.read && access.address == address;
+    }
+
+    private boolean writesDisabledInterruptEnable(DecodedInstruction instruction) {
+        int context = 0;
+        for (Op op : instruction.opcode.getOps()) {
+            if (op.readsMemory()) {
+                // Determining a later write would require speculatively reading
+                // data memory. Leave read-modify-write instructions alone.
+                return false;
+            }
+            if (op.writesMemory()) {
+                Integer address = op.resolveMemoryAddress(
+                        registers, instruction.operand, context);
+                Integer value = op.resolveMemoryWriteValue(context);
+                if (address == null || value == null) {
+                    return false;
+                }
+                if (address == 0xffff
+                        && (value & (1 << InterruptManager.InterruptType.LCDC.ordinal())) == 0) {
+                    return true;
+                }
+                continue;
+            }
+            Integer previewContext = op.previewContext(
+                    registers, instruction.operand, context);
+            if (previewContext == null) {
+                return false;
+            }
+            context = previewContext;
+        }
+        return false;
+    }
+
+    private static class DecodedInstruction {
+
+        private final Opcode opcode;
+
+        private final int[] operand;
+
+        private DecodedInstruction(Opcode opcode, int[] operand) {
+            this.opcode = opcode;
+            this.operand = operand;
+        }
+    }
+
+    private static class DecodedMemoryAccess {
+
+        private final int address;
+
+        private final boolean read;
+
+        private DecodedMemoryAccess(int address, boolean read) {
+            this.address = address;
+            this.read = read;
+        }
     }
 
     /**
@@ -742,7 +978,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
         operand[1] = this.operand[1];
         return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex,
                 state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
-                haltEntrySampleTicks,
+                haltEntrySampleTicks, synchronousHaltEntryStatPhase, asynchronousHaltEntryStatPhase,
+                ordinaryHaltWakeStatPhase, haltedCpuCycles,
                 hdmaOpcodePrefetched, hdmaArbitrationOpcode, hdmaArbitrationOpcodeValid,
                 haltPrefetchedOpcode, haltOpcodePrefetchValid,
                 speedSwitchPaddingOpcode, speedSwitchPaddingReplayValid,
@@ -769,6 +1006,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
         this.clockCycle = mem.clockCycle;
         this.haltBugMode = mem.haltBugMode;
         this.haltEntrySampleTicks = mem.haltEntrySampleTicks;
+        this.synchronousHaltEntryStatPhase = mem.synchronousHaltEntryStatPhase;
+        this.asynchronousHaltEntryStatPhase = mem.asynchronousHaltEntryStatPhase;
+        this.ordinaryHaltWakeStatPhase = mem.ordinaryHaltWakeStatPhase;
+        this.haltedCpuCycles = mem.haltedCpuCycles;
         this.hdmaOpcodePrefetched = mem.hdmaOpcodePrefetched;
         this.hdmaArbitrationOpcode = mem.hdmaArbitrationOpcode;
         this.hdmaArbitrationOpcodeValid = mem.hdmaArbitrationOpcodeValid;
@@ -789,6 +1030,10 @@ public class Cpu implements Serializable, Originator<Cpu> {
                               int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
                               int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
                               boolean haltBugMode, int haltEntrySampleTicks,
+                              boolean synchronousHaltEntryStatPhase,
+                              boolean asynchronousHaltEntryStatPhase,
+                              boolean ordinaryHaltWakeStatPhase,
+                              int haltedCpuCycles,
                               boolean hdmaOpcodePrefetched,
                               int hdmaArbitrationOpcode, boolean hdmaArbitrationOpcodeValid,
                               int haltPrefetchedOpcode, boolean haltOpcodePrefetchValid,

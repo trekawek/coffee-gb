@@ -87,7 +87,7 @@ public class GpuDisplayEnableTimingTest {
         assertFalse(fixture.gpu.isMode0IntWindow());
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.gpu.getVisibleStatMode());
 
-        fixture.stat.captureCpuStatReadPhase();
+        fixture.stat.captureCpuStatReadPhase(false, false, false);
         assertEquals(Mode.HBlank.ordinal(),
                 fixture.stat.getByte(StatRegister.ADDRESS) & 0x03);
     }
@@ -323,6 +323,22 @@ public class GpuDisplayEnableTimingTest {
     }
 
     @Test
+    public void lateLineZeroWindowEnableSelectsTheNextLinesEarlyModeZeroRead() {
+        Fixture early = lineZeroWindowEnableAt(447);
+        Fixture late = lineZeroWindowEnableAt(449);
+
+        while (early.gpu.getMode() != Mode.HBlank) {
+            early.tick();
+        }
+        while (late.gpu.getMode() != Mode.HBlank) {
+            late.tick();
+        }
+
+        assertEquals(Mode.PixelTransfer.ordinal(), early.gpu.getVisibleStatMode());
+        assertEquals(Mode.HBlank.ordinal(), late.gpu.getVisibleStatMode());
+    }
+
+    @Test
     public void doubleSpeedDisabledWindowExposesModeZeroDuringModeZeroLookahead() {
         Fixture fixture = new Fixture(2);
         fixture.gpu.onSpeedSwitch();
@@ -408,6 +424,19 @@ public class GpuDisplayEnableTimingTest {
             fixture.tick();
         }
         return fixture.gpu.getTicksInLine();
+    }
+
+    private static Fixture lineZeroWindowEnableAt(int dot) {
+        Fixture fixture = new Fixture(2);
+        fixture.gpu.onSpeedSwitch();
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.gpu.setByte(0xff4a, 0);
+        fixture.gpu.setByte(0xff4b, 7);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.advanceTo(0, dot);
+        fixture.gpu.setByte(0xff40, 0xb1);
+        fixture.advanceTo(1, 0);
+        return fixture;
     }
 
     private static Fixture fixtureWithX167Object(boolean terminalWindow) {

@@ -136,7 +136,7 @@ public class GameboyMementoTest {
     }
 
     @Test
-    public void pendingHblankTransferExtendsDoubleSpeedTailForArbitration()
+    public void pendingHblankTransferAdvancesDoubleSpeedTailForArbitration()
             throws IOException {
         byte[] romBytes = cgbSpeedSwitchWithPendingHdmaRom();
         Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(new Rom(romBytes))
@@ -154,7 +154,7 @@ public class GameboyMementoTest {
             assertEquals(0, gameboy.getAddressSpace().getByte(0xff55) & 0x80);
             assertTrue(gameboy.isSpeedSwitchTailActive());
             assertEquals(Gameboy.LONG_SPEED_SWITCH_TAIL_TICKS
-                            + Gameboy.PENDING_HBLANK_SPEED_SWITCH_ALIGNMENT_TICKS,
+                            - Gameboy.PENDING_HBLANK_SPEED_SWITCH_ADVANCE_TICKS,
                     drainSpeedSwitchTail(gameboy));
         }
     }

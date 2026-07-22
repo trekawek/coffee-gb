@@ -139,7 +139,7 @@ public class GpuOamAccessTest {
     }
 
     @Test
-    public void cgbMode0PredictionCountsX166SpritesWhileDmgUsesCompletedTransfer() {
+    public void mode0PredictionCountsX166SpritesOnBothModels() {
         for (boolean gbc : new boolean[] {false, true}) {
             Fixture atPredictionEdge = new Fixture(gbc, 1);
             atPredictionEdge.putTenSpritesAt(166);
@@ -149,7 +149,7 @@ public class GpuOamAccessTest {
             afterPredictionEdge.putTenSpritesAt(167);
             int x167Edge = afterPredictionEdge.advanceToMode0InterruptEdge();
 
-            assertEquals(gbc ? 10 * 6 : 0, x166Edge - x167Edge);
+            assertEquals(10 * 6, x166Edge - x167Edge);
         }
     }
 

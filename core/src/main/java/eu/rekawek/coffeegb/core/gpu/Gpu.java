@@ -115,6 +115,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // Its handler retains the object-free mode-3 prediction later in the line.
     private boolean doubleSpeedMode2DispatchStatTailThisLine;
 
+    // Preserve that handler phase for the first CPU slot after line rollover.
+    private boolean doubleSpeedMode2DispatchCrossedLineEdge;
+
     // A fine-SCX write that crosses the startup comparator on that captured phase
     // leaves the readable mode latch on the extended prediction path.
     private boolean earlyScxStatTailThisLine;
@@ -123,12 +126,20 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // the shifted output machine start a window on this line.
     private boolean wyWrittenThisLine;
 
+    // A native double-speed LCDC.5 edge in the final line-zero CPU slot changes
+    // which side of the following line's mode-3/mode-0 read mux is sampled.
+    private boolean lateDoubleSpeedLineZeroWindowEnable;
+
     // A CPU VRAM write holds its arbitration request through the immediately
     // following read cycle. This matters at the mode-3/mode-0 hand-off, where a
     // standalone read and a write-then-read sequence see different slots.
     private int lastCpuVramWriteTick = Integer.MIN_VALUE;
 
     private transient boolean cpuRetiringInstructionForHdma;
+
+    // CPU callbacks run before this dot's PPU clocks. An ordinary HALT wake can
+    // sample the next native-CGB LY value at the end of that callback's bus cycle.
+    private transient boolean cpuLyReadAcrossLineEdge;
 
     /**
      * Coffee GB keeps a calibrated CPU-visible timing skeleton and a pixel-producing
@@ -416,6 +427,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     public Mode tick() {
+        cpuLyReadAcrossLineEdge = false;
         directOamReadCorruptionThisTick = false;
         suppressNextDirectOamReadCorruption = false;
         directOamWriteCorruptionThisTick = false;
@@ -461,6 +473,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             mode0IntFrom = Integer.MAX_VALUE;
             speedSwitchCompletedThisLine = false;
             scxWrittenThisLine = false;
+            doubleSpeedMode2DispatchCrossedLineEdge =
+                    doubleSpeedMode2DispatchStatTailThisLine;
             doubleSpeedMode2DispatchStatTailThisLine = false;
             earlyScxStatTailThisLine = false;
             wyWrittenThisLine = false;
@@ -468,6 +482,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             if (line == 154) {
                 line = 0;
                 firstFrameAfterLcdEnable = false;
+                lateDoubleSpeedLineZeroWindowEnable = false;
                 if (!earlyWindowFrameEdge) {
                     pixelTransferPhase.resetWindowLineCounter();
                     pixelMachine.resetWindowLineCounter();
@@ -819,6 +834,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * hand-off between consecutive LY values.
      */
     private int getCpuVisibleLy() {
+        if (cpuLyReadAcrossLineEdge) {
+            return line + 1;
+        }
         int visibleLy = getVisibleLy();
         if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
                 && lcdEnableClockPhase && !lyReadLatchRephasedBySpeedSwitch
@@ -842,6 +860,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return line & (line + 1);
         }
         return visibleLy;
+    }
+
+    /** Captures the native-CGB LY mux at the end of an ordinary HALT-wake read. */
+    void captureCpuLyReadPhase(boolean ordinaryHaltWakePhase) {
+        cpuLyReadAcrossLineEdge = gbc && !speedMode.isDmgCompat()
+                && speedMode.getSpeedMode() == 1
+                && ordinaryHaltWakePhase && mode == Mode.VBlank
+                && line >= 144 && line < 153
+                && ticksInLine < getVisibleLyLineEdgeTick()
+                && ticksInLine + getCpuMachineCycleDots() >= getVisibleLyLineEdgeTick();
     }
 
     /**
@@ -899,6 +927,61 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (gbc && mode == Mode.PixelTransfer && ticksInLine < 250) {
             return Mode.PixelTransfer.ordinal();
         }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+                && mode == Mode.HBlank
+                && pixelTransferPhase.hasFineScxRephaseOnLine()
+                && !pixelTransferPhase.hasObjectsOnLine()
+                && !pixelTransferPhase.hasActivatedWindowOnLine()
+                && pixelTransferPhase.getPosition() >= 160
+                && pixelMachine.getPosition() >= 158) {
+            // Repeated fine-SCX rewinds can leave the predicted mode-0 interrupt two
+            // dots behind the physical transfer handoff. Once the shifted pipeline
+            // reaches its terminal pair, the readable latch has entered mode 0.
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+                && mode == Mode.PixelTransfer
+                && pixelTransferPhase.isWindowActive()
+                && pixelTransferPhase.hasActivatedWindowOnLine()
+                && !pixelMachine.isWindowActive()
+                && !pixelMachine.hasActivatedWindowOnLine()
+                && pixelTransferPhase.getPosition() >= 159
+                && pixelMachine.getPosition() >= 160
+                && r.get(WX) >= 167) {
+            // A late WX write can land after the timing skeleton has captured
+            // StartWindowDraw but before the shifted CPU-visible pipeline does. In
+            // that split state the CGB mode latch follows the pipeline that rejected
+            // the stale comparator match, rather than retaining mode 3 for the
+            // skeleton's otherwise unobservable startup tail.
+            return Mode.HBlank.ordinal();
+        }
+        if (!gbc && mode == Mode.PixelTransfer
+                && pixelTransferPhase.hasActivatedWindowOnLine()
+                && !pixelTransferPhase.isWindowActive()
+                && (pixelTransferPhase.getPosition()
+                == (pixelTransferPhase.hasObjectsOnLine()
+                ? 155 : 156 - (r.get(SCX) & 0x07))
+                || pixelTransferPhase.getPosition()
+                == (pixelTransferPhase.hasObjectsOnLine()
+                ? 159 : 160 - (r.get(SCX) & 0x07)))) {
+            // Clearing LCDC.5 exposes a one-dot DMG mode-0 pulse when the cancelled
+            // window tile hands back to the background fetcher. CPU reads sample
+            // that pulse on either adjacent machine-cycle boundary; intermediate
+            // half-phases still see mode 3 while the fetcher drains its tail. Fine
+            // SCX selects the pulse phase; an object fetch owns the X=155 hand-off.
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+                && mode == Mode.PixelTransfer
+                && pixelTransferPhase.hasActivatedWindowOnLine()
+                && !pixelTransferPhase.isWindowActive()
+                && !pixelMachine.hasActivatedWindowOnLine()
+                && pixelTransferPhase.hasObjectsOnLine()
+                && pixelMachine.getPosition() >= 155) {
+            // When an object fetch and a cancelled window start diverge, native
+            // CGB's CPU latch follows the shifted machine at its X=155 hand-off.
+            return Mode.HBlank.ordinal();
+        }
         if (gbc && speedMode.isDmgCompat() && mode == Mode.PixelTransfer) {
             return Mode.PixelTransfer.ordinal();
         }
@@ -910,18 +993,43 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && mode == Mode.PixelTransfer && pixelTransferDone) {
             return Mode.HBlank.ordinal();
         }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+                && mode == Mode.HBlank
+                && line > 0
+                && wyWrittenThisLine
+                && !pixelTransferPhase.hasActivatedWindowOnLine()
+                && !pixelMachine.hasActivatedWindowOnLine()
+                && ticksInLine + 2 >= hblankIntFrom) {
+            // A WY write that misses both window comparators leaves the normal-speed
+            // CPU mux on the retiring mode-0 side once the timing skeleton has ended,
+            // even though the ordinary fixed-background read-ahead still says mode 3.
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+                && lateDoubleSpeedLineZeroWindowEnable
+                && line == 1 && mode == Mode.HBlank
+                && pixelMachine.isWindowActive()
+                && ticksInLine + 2 >= hblankIntFrom) {
+            // Enabling LCDC.5 in line zero's final double-speed bus slot selects the
+            // following line's early mode-0 read phase. The adjacent earlier slot
+            // retains mode 3 through the same physical HBlank hand-off.
+            return Mode.HBlank.ordinal();
+        }
         boolean dynamicWindowTail = pixelMachine.hasActivatedWindowOnLine()
                 || (pixelTransferPhase.hasActivatedWindowOnLine()
                 && !pixelTransferPhase.isWindowActive());
-        int mode3ReadAhead = dynamicWindowTail ? 2 : 0;
+        int mode3ReadAhead = dynamicWindowTail
+                || (!statModeLatchRephasedBySpeedSwitch
+                && !firstLine && !lcdc.isWindowDisplay()
+                && (r.get(SCX) & 7) != 0) ? 2 : 0;
         if (gbc && speedMode.getSpeedMode() == 1
                 && mode == Mode.HBlank
                 && ticksInLine + mode3ReadAhead < hblankIntFrom
                 && !pixelTransferPhase.hasObjectsOnLine()) {
             // Gambatte's STAT mux compares cc+2 with the predicted mode-0 edge. The
-            // steady background path already bakes that lookahead into its calibrated
-            // latch; a dynamically started (or subsequently disabled) window exposes
-            // the raw HBlank prediction and therefore needs it here.
+            // SCX=0 background path and the fixed first-line/window latch already bake
+            // that lookahead into their calibration. A dynamic window or unrephased
+            // fractional background line exposes the raw HBlank prediction here.
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
@@ -932,6 +1040,34 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && !pixelMachine.isWindowActive()) {
             // A disabled window still owns the dynamic prediction, but double-speed
             // CPU reads release its mode-3 latch two dots before the mode-0 edge.
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+                && mode == Mode.HBlank
+                && pixelTransferPhase.hasObjectsOnLine()
+                && pixelMachine.isWindowActive()
+                && pixelMachine.getPosition() >= 157
+                && (ticksInLine >= hblankIntFrom
+                || (pixelTransferPhase.getObjectCountOnLine() == 10
+                && ticksInLine + 1 >= hblankIntFrom))) {
+            // Once an object-heavy window line reaches the shifted pipeline's final
+            // pixel pair, the double-speed CPU latch follows the physical HBlank edge;
+            // a full ten-object scan reaches that latch one dot before the predicted
+            // mode-0 interrupt.
+            return Mode.HBlank.ordinal();
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+                && mode == Mode.HBlank
+                && scxWrittenThisLine
+                && pixelTransferPhase.hasObjectsOnLine()
+                && !pixelTransferPhase.hasActivatedWindowOnLine()
+                && pixelTransferPhase.getPosition() >= 160
+                && pixelMachine.getPosition() >= 160
+                && pixelTransferPhase.getObjectTimingPenalty()
+                != pixelMachine.getObjectTimingPenalty()) {
+            // A late SCX write can make the timing and shifted output pipelines see
+            // different object-fetch schedules. At double speed the CPU mode latch
+            // follows the output pipeline once it has completed the line.
             return Mode.HBlank.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
@@ -1204,7 +1340,126 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * Returns the mode captured immediately before this tick's CPU memory callback,
      * or {@code -1} when that callback uses the ordinary readable STAT latch.
      */
-    int getCpuReadStatModeOverride() {
+    int getCpuReadStatModeOverride(boolean synchronousHaltEntryPhase,
+                                   boolean asynchronousHaltEntryPhase,
+                                   boolean ordinaryHaltWakePhase) {
+        return getCpuReadStatModeOverride(synchronousHaltEntryPhase,
+                asynchronousHaltEntryPhase, ordinaryHaltWakePhase, false);
+    }
+
+    int getCpuReadStatModeOverride(boolean synchronousHaltEntryPhase,
+                                   boolean asynchronousHaltEntryPhase,
+                                   boolean ordinaryHaltWakePhase,
+                                   boolean oneCycleOrdinaryHaltWakePhase) {
+        return getCpuReadStatModeOverride(synchronousHaltEntryPhase,
+                asynchronousHaltEntryPhase, ordinaryHaltWakePhase,
+                oneCycleOrdinaryHaltWakePhase, ordinaryHaltWakePhase);
+    }
+
+    int getCpuReadStatModeOverride(boolean synchronousHaltEntryPhase,
+                                   boolean asynchronousHaltEntryPhase,
+                                   boolean ordinaryHaltWakePhase,
+                                   boolean oneCycleOrdinaryHaltWakePhase,
+                                   boolean recentOrdinaryHaltWakePhase) {
+        if (gbc && !speedMode.isDmgCompat()
+                && statRegister.isMode2InterruptSourceOnly()) {
+            if (speedMode.getSpeedMode() == 1
+                    && (!ordinaryHaltWakePhase || recentOrdinaryHaltWakePhase)
+                    && !firstLine
+                    && mode == Mode.OamSearch && ticksInLine == 78) {
+                // A mode-2 handler reading on the hand-off bus cycle retains the
+                // source latch even though the ordinary FF41 mux has entered mode 3.
+                return Mode.OamSearch.ordinal();
+            }
+            if (speedMode.getSpeedMode() == 2
+                    && doubleSpeedMode2DispatchStatTailThisLine
+                    && mode == Mode.PixelTransfer && ticksInLine == 80) {
+                // Double speed accepts the mode-2 IRQ on the alternate CPU phase;
+                // its matching handler read keeps mode 2 for the first mode-3 slot.
+                return Mode.OamSearch.ordinal();
+            }
+            if (mode == Mode.HBlank && line < 143 && !firstLine
+                    && (!ordinaryHaltWakePhase || recentOrdinaryHaltWakePhase)
+                    && ticksInLine == 454) {
+                // The final normal-speed handler read still sees retiring mode 0,
+                // before the mode-2 source selects the next-line projection.
+                return Mode.HBlank.ordinal();
+            }
+            if (speedMode.getSpeedMode() == 2
+                    && doubleSpeedMode2DispatchCrossedLineEdge
+                    && mode == Mode.OamSearch && ticksInLine == 0) {
+                // A double-speed read split by rollover completes on line dot zero,
+                // but its bus sample belongs to the previous line's mode-0 slot.
+                return Mode.HBlank.ordinal();
+            }
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+                && !firstLine && (line == 0
+                || recentOrdinaryHaltWakePhase)
+                && mode == Mode.OamSearch
+                && ticksInLine == 78) {
+            // The CPU-facing mux retains the frame-start mode-2 latch for the bus
+            // callback at dot 78. The ordinary per-line latch has already moved to
+            // mode 3 by this phase; frame rollover and an ordinary HALT wake retain
+            // the old side of the mux for this bus slot.
+            return Mode.OamSearch.ordinal();
+        }
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+                && statModeLatchRephasedBySpeedSwitch
+                && lyReadLatchRephasedBySpeedSwitch
+                && !ordinaryHaltWakePhase
+                && !firstLine && line < 144
+                && mode == Mode.OamSearch
+                && ticksInLine < 78
+                && ticksInLine + getCpuMachineCycleDots() >= 78) {
+            // A rephased double-speed CPU read samples the mode latch at the end
+            // of its two-dot bus cycle. Direct PPU observers still see mode 2 at
+            // stored dot 76; the CPU callback already sees the dot-78 mode-3 side.
+            return Mode.PixelTransfer.ordinal();
+        }
+        if (mode == Mode.HBlank && line < 143 && !firstLine) {
+            if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+                    && synchronousHaltEntryPhase && ticksInLine == 454) {
+                return Mode.HBlank.ordinal();
+            }
+            if (!gbc && oneCycleOrdinaryHaltWakePhase
+                    && statRegister.isMode0InterruptSourceOnly()
+                    && (r.get(GpuRegister.SCX) & 0x07) == 3
+                    && ticksInLine == 452) {
+                return Mode.OamSearch.ordinal();
+            }
+            if (!gbc && asynchronousHaltEntryPhase && ticksInLine >= 455) {
+                return Mode.OamSearch.ordinal();
+            }
+            if (gbc && !speedMode.isDmgCompat()
+                    && statRegister.isMode0InterruptSourceOnly()
+                    && !synchronousHaltEntryPhase
+                    && !asynchronousHaltEntryPhase
+                    && !ordinaryHaltWakePhase
+                    && (speedMode.getSpeedMode() == 2
+                    || (r.get(GpuRegister.SCX) & 0x07) == 3)
+                    && ticksInLine + getCpuMachineCycleDots() == 454) {
+                // The final STAT read cycle on an active line samples the upcoming
+                // mode-2 latch. At normal speed this bus phase occurs with fine
+                // scroll phase 3; double speed exposes it for every fine-scroll
+                // phase. Direct PPU observers retain mode 0 until dot 454.
+                return Mode.OamSearch.ordinal();
+            }
+        }
+        if (gbc && !speedMode.isDmgCompat()
+                && statRegister.isMode0InterruptSourceOnly()
+                && mode == Mode.HBlank
+                && !pixelTransferPhase.hasObjectsOnLine()
+                && !pixelTransferPhase.hasActivatedWindowOnLine()
+                && !scxWrittenThisLine
+                && ticksInLine + (speedMode.getSpeedMode() == 2 ? 2 : 0)
+                == hblankIntFrom) {
+            // The mode-0 source samples its own CPU-facing mode latch when the
+            // predicted event is accepted. A double-speed read starts two PPU dots
+            // before its bus sample; at normal speed the callback already lands on
+            // the event dot. The direct PPU latch can still expose mode 3 there.
+            return Mode.HBlank.ordinal();
+        }
         if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
                 && firstLine && mode == Mode.HBlank
                 && !pixelTransferPhase.hasObjectsOnLine()
@@ -1253,9 +1508,29 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     int getMode0InterruptTick() {
-        // The predictive edge is a CGB timing feature. DMG mode 0 follows the
-        // completed pixel-transfer latch, including its sprite-fetch tail.
-        return gbc ? mode0IntFrom : hblankIntFrom;
+        // DMG normally follows the completed transfer latch. A selected object on
+        // the X=166/167 prediction boundary keeps its physical fetch tail separate
+        // from the already captured mode-0 interrupt edge, just as on CGB.
+        return gbc || (!lcdc.isWindowDisplay()
+                && pixelTransferPhase.hasSpriteAtMode0PredictionEdge())
+                ? mode0IntFrom : hblankIntFrom;
+    }
+
+    /**
+     * The DMG's terminal WX=166 comparator and an X=167 object leave the mode-0
+     * prediction and physical HBlank latches eight dots apart. In that collision,
+     * the final CPU IF read phase samples the already scheduled edge two dots before
+     * the stored IF latch changes.
+     */
+    boolean isDmgTerminalWindowMode0ReadPreviewPhase() {
+        return !gbc && lcdEnabled && line < 144
+                && ticksInLine + 2 == getMode0InterruptTick()
+                && lcdc.isBgAndWindowDisplay()
+                && lcdc.isWindowDisplay()
+                && lcdc.isObjDisplay()
+                && r.get(WX) == 166
+                && pixelTransferPhase.hasSpriteAtTerminalPredictionEdge()
+                && mode0IntFrom < hblankIntFrom;
     }
 
     /**
@@ -1487,6 +1762,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     private void setLcdc(int value) {
+        int previousLcdc = lcdc.get();
+        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+                && lcdEnabled && line == 0 && mode == Mode.HBlank
+                && (previousLcdc & 0x20) == 0 && (value & 0x20) != 0) {
+            lateDoubleSpeedLineZeroWindowEnable = ticksInLine >= 449;
+        }
         // SameBoy's DMG_LCDC position_in_line == 0 special: hardware's position at the
         // write sits 3 dots behind our +4-shifted machine's, so the gate is position 3
         boolean dropObjEnInMix = !gbc
@@ -1533,8 +1814,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.speedSwitchCompletedThisLine = false;
         this.scxWrittenThisLine = false;
         this.doubleSpeedMode2DispatchStatTailThisLine = false;
+        this.doubleSpeedMode2DispatchCrossedLineEdge = false;
         this.earlyScxStatTailThisLine = false;
         this.wyWrittenThisLine = false;
+        this.lateDoubleSpeedLineZeroWindowEnable = false;
         this.lastCpuVramWriteTick = Integer.MIN_VALUE;
         this.mode = Mode.HBlank;
         this.lcdEnabled = false;
@@ -1563,8 +1846,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.speedSwitchCompletedThisLine = false;
         this.scxWrittenThisLine = false;
         this.doubleSpeedMode2DispatchStatTailThisLine = false;
+        this.doubleSpeedMode2DispatchCrossedLineEdge = false;
         this.earlyScxStatTailThisLine = false;
         this.wyWrittenThisLine = false;
+        this.lateDoubleSpeedLineZeroWindowEnable = false;
         this.lastCpuVramWriteTick = Integer.MIN_VALUE;
         r.put(LY, 0);
         // Enabling the LCD samples the line-zero window master immediately. Later
@@ -1623,7 +1908,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, earlyScxStatTailThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
@@ -1667,10 +1952,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.scxWrittenThisLine = mem.scxWrittenThisLine;
         this.doubleSpeedMode2DispatchStatTailThisLine =
                 mem.doubleSpeedMode2DispatchStatTailThisLine;
+        this.doubleSpeedMode2DispatchCrossedLineEdge =
+                mem.doubleSpeedMode2DispatchCrossedLineEdge;
         this.earlyScxStatTailThisLine = mem.earlyScxStatTailThisLine;
         this.wyWrittenThisLine = mem.wyWrittenThisLine;
+        this.lateDoubleSpeedLineZeroWindowEnable =
+                mem.lateDoubleSpeedLineZeroWindowEnable;
         this.lastCpuVramWriteTick = mem.lastCpuVramWriteTick;
         this.cpuRetiringInstructionForHdma = false;
+        this.cpuLyReadAcrossLineEdge = false;
         this.mode = mem.mode;
         pendingPpuWrites.clear();
         if (mem.pendingPpuWrites != null) {
@@ -1706,8 +1996,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                               boolean lyReadLatchRephasedBySpeedSwitch,
                               boolean scxWrittenThisLine,
                               boolean doubleSpeedMode2DispatchStatTailThisLine,
+                              boolean doubleSpeedMode2DispatchCrossedLineEdge,
                               boolean earlyScxStatTailThisLine,
                               boolean wyWrittenThisLine,
+                              boolean lateDoubleSpeedLineZeroWindowEnable,
                               int lastCpuVramWriteTick, Mode mode,
                               List<PendingPpuWrite> pendingPpuWrites,
                               int[] cpuVisiblePpuRegisters) implements Memento<Gpu> {

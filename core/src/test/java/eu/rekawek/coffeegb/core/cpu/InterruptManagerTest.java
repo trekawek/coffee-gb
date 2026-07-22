@@ -12,6 +12,64 @@ import static org.junit.Assert.assertTrue;
 public class InterruptManagerTest {
 
     @Test
+    public void lcdcFlagWriteClearCaptureSurvivesMementoRestore() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.setByteFromCpu(0xff0f, 0);
+        var memento = interrupts.saveToMemento();
+
+        assertTrue(interrupts.consumeLcdcInterruptFlagWriteClear());
+        assertFalse(interrupts.consumeLcdcInterruptFlagWriteClear());
+
+        interrupts.restoreFromMemento(memento);
+        assertTrue(interrupts.consumeLcdcInterruptFlagWriteClear());
+        assertFalse(interrupts.consumeLcdcInterruptFlagWriteClear());
+    }
+
+    @Test
+    public void nonCpuFlagWriteDoesNotCaptureLcdcClearCollision() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+
+        interrupts.setByte(0xff0f, 0);
+
+        assertFalse(interrupts.consumeLcdcInterruptFlagWriteClear());
+    }
+
+    @Test
+    public void cpuReadPreviewDoesNotSetOrEnableTheInterruptLatch() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+
+        interrupts.setCpuReadInterruptPreview(LCDC, true);
+        var memento = interrupts.saveToMemento();
+
+        assertEquals(1 << LCDC.ordinal(), interrupts.getByte(0xff0f) & 0x1f);
+        assertFalse(interrupts.isInterruptFlagSet(LCDC));
+        assertFalse(interrupts.isInterruptRequested());
+        assertFalse(interrupts.isInterruptRequestedForHalt());
+
+        interrupts.clearCpuReadInterruptPreview();
+        assertEquals(0, interrupts.getByte(0xff0f) & 0x1f);
+
+        interrupts.restoreFromMemento(memento);
+        assertEquals(1 << LCDC.ordinal(), interrupts.getByte(0xff0f) & 0x1f);
+        assertFalse(interrupts.isInterruptFlagSet(LCDC));
+    }
+
+    @Test
+    public void vblankAcknowledgeCaptureSurvivesMementoRestore() {
+        InterruptManager interrupts = enabledInterrupt(VBlank);
+        interrupts.requestInterrupt(VBlank);
+        interrupts.clearInterrupt(VBlank);
+        var memento = interrupts.saveToMemento();
+
+        assertTrue(interrupts.consumeVBlankInterruptAcknowledge());
+        assertFalse(interrupts.consumeVBlankInterruptAcknowledge());
+
+        interrupts.restoreFromMemento(memento);
+        assertTrue(interrupts.consumeVBlankInterruptAcknowledge());
+        assertFalse(interrupts.consumeVBlankInterruptAcknowledge());
+    }
+
+    @Test
     public void earlyMode2EdgeIsReadableBeforeCpuCanAcceptIt() {
         InterruptManager interrupts = enabledInterrupt(LCDC);
 
@@ -207,6 +265,57 @@ public class InterruptManagerTest {
         interrupts.restoreFromMemento(memento);
         interrupts.finishLcdcReadMaskWindow();
         assertEquals(0xe2, interrupts.getByte(0xff0f));
+    }
+
+    @Test
+    public void mode0ReadMaskSurvivesItsCountdownAndMemento() {
+        InterruptManager interrupts = new InterruptManager(true);
+        interrupts.setByte(0xff0f, 1 << LCDC.ordinal());
+        interrupts.maskMode0LcdcReadForTicks(3);
+        var memento = interrupts.saveToMemento();
+
+        interrupts.finishLcdcReadMaskWindow();
+        interrupts.finishLcdcReadMaskWindow();
+        assertEquals(0xe0, interrupts.getByte(0xff0f));
+        assertTrue(interrupts.isInterruptFlagSet(LCDC));
+
+        interrupts.restoreFromMemento(memento);
+        interrupts.finishLcdcReadMaskWindow();
+        interrupts.finishLcdcReadMaskWindow();
+        interrupts.finishLcdcReadMaskWindow();
+        assertEquals(0xe2, interrupts.getByte(0xff0f));
+    }
+
+    @Test
+    public void phasedPpuRequestCanWaitForThePrefetchedInstruction() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.enableInterrupts(false);
+        interrupts.requestPhasedInterruptAfterInstruction(LCDC);
+        var memento = interrupts.saveToMemento();
+
+        assertTrue(interrupts.isInterruptFlagSet(LCDC));
+        assertFalse(interrupts.isInterruptRequested());
+        assertFalse(interrupts.isUnphasedPpuInterruptRequested());
+
+        interrupts.onInstructionFinished();
+        assertTrue(interrupts.isInterruptRequested());
+
+        interrupts.restoreFromMemento(memento);
+        assertFalse(interrupts.isInterruptRequested());
+        interrupts.onInstructionFinished();
+        assertTrue(interrupts.isInterruptRequested());
+    }
+
+    @Test
+    public void prefetchedInstructionCannotDelayAnOlderPpuRequest() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.enableInterrupts(false);
+        interrupts.requestInterrupt(LCDC);
+
+        interrupts.requestPhasedInterruptAfterInstruction(LCDC);
+
+        assertTrue(interrupts.isInterruptRequested());
+        assertTrue(interrupts.isUnphasedPpuInterruptRequested());
     }
 
     @Test
