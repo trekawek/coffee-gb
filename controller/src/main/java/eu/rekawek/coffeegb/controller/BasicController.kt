@@ -8,19 +8,42 @@ import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.Patch
-import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import java.io.File
+import java.util.concurrent.Callable
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
-class BasicController(
+class BasicController private constructor(
     parentEventBus: EventBus,
     properties: EmulatorProperties,
     private val console: Console?,
+    private val sessionPreparer: SessionPreparer,
+    private val loadExecutor: ExecutorService,
 ) : Controller, SnapshotSupport {
+
+  constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+  ) : this(parentEventBus, properties, console, RomSessionPreparer(), createLoadExecutor())
+
+  internal constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      sessionPreparer: SessionPreparer,
+  ) : this(parentEventBus, properties, console, sessionPreparer, createLoadExecutor())
 
   private val timingTicker = TimingTicker()
 
@@ -42,6 +65,11 @@ class BasicController(
 
   private val patches = mutableListOf<Patch>()
 
+  private var loadJob: LoadJob? = null
+
+  /** The user's pause state before the current chain of coalesced load requests. */
+  private var pauseStateBeforeLoading: Boolean? = null
+
   // when the Barcode Boy is connected the session uses a BarcodeBoySerialEndpoint instead
   // of the netplay peer endpoint; scans are routed to it
   private var barcodeBoyEnabled = false
@@ -60,24 +88,32 @@ class BasicController(
 
   init {
     eventQueue.register<AddPatches> { patches.addAll(it.patches) }
-    eventQueue.register<Controller.LoadRomEvent> { loadRom(properties, it) }
+    eventQueue.register<Controller.LoadRomEvent> { requestLoad(properties, it) }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventQueue.register<Controller.PauseEmulationEvent> {
-      if (!isPaused) {
-        session?.gameboy?.setCartridgeClockPaused(true)
-        isPaused = true
+      if (pauseStateBeforeLoading != null) {
+        pauseStateBeforeLoading = true
       }
+      setPaused(true)
     }
     eventQueue.register<Controller.ResumeEmulationEvent> {
-      if (isPaused) {
-        session?.gameboy?.setCartridgeClockPaused(false)
-        isPaused = false
+      if (pauseStateBeforeLoading != null) {
+        pauseStateBeforeLoading = false
       }
+      setPaused(false)
     }
     eventQueue.register<Controller.RewindEvent> { isRewinding = it.active }
-    eventQueue.register<Controller.ResetEmulationEvent> { reset() }
-    eventQueue.register<Controller.StopEmulationEvent> { stop() }
+    eventQueue.register<Controller.ResetEmulationEvent> {
+      session?.config?.rom?.file?.let {
+        requestLoad(properties, Controller.LoadRomEvent(it), clearPatches = false)
+      }
+    }
+    eventQueue.register<Controller.StopEmulationEvent> {
+      cancelLoadJob()
+      restorePauseStateAfterLoading()
+      stop()
+    }
     eventQueue.register<Controller.SetBarcodeBoyEvent> {
       if (barcodeBoyEnabled != it.enabled) {
         barcodeBoyEnabled = it.enabled
@@ -114,6 +150,7 @@ class BasicController(
 
   private fun runFrame() {
     eventQueue.dispatch()
+    finishPreparedLoad()
 
     // rewinding restores one recorded state and then emulates a single frame from it,
     // so the display and audio play backwards at RewindManager.RECORD_INTERVAL speed
@@ -132,10 +169,19 @@ class BasicController(
     }
   }
 
-  private fun createSession(config: Gameboy.GameboyConfiguration): Session {
+  private fun createSession(
+      config: Gameboy.GameboyConfiguration,
+      prebuiltGameboy: Gameboy? = null,
+  ): Session {
     val sessionBus = eventBus.fork("main")
     try {
-      return Session(config, sessionBus, console, createLinkDevice(sessionBus))
+      return Session(
+          config,
+          sessionBus,
+          console,
+          createLinkDevice(sessionBus),
+          prebuiltGameboy = prebuiltGameboy,
+      )
     } catch (e: Exception) {
       try {
         sessionBus.close()
@@ -146,32 +192,117 @@ class BasicController(
     }
   }
 
-  private fun loadRom(properties: EmulatorProperties, event: Controller.LoadRomEvent) {
-    var nextSession: Session? = null
+  private fun requestLoad(
+      properties: EmulatorProperties,
+      event: Controller.LoadRomEvent,
+      clearPatches: Boolean = true,
+  ) {
+    if (doStop) {
+      return
+    }
+
+    if (pauseStateBeforeLoading == null) {
+      pauseStateBeforeLoading = isPaused
+    }
+    cancelLoadJob()
+
+    // A fallback preparation for an exotic/RTC cartridge may use the real save file. When
+    // reloading that exact file, freeze and flush the old cartridge first so the worker cannot
+    // observe stale RAM. Ordinary cartridges use battery-free boot templates and keep running.
+    if (isCurrentRom(event.rom)) {
+      setPaused(true)
+      session?.gameboy?.flushCartridge()
+    }
+
+    eventBus.post(Controller.RomLoadingEvent(event.rom))
+    val task = PreparedLoadTask { sessionPreparer.prepare(properties, event) }
+    loadJob = LoadJob(event, clearPatches, task)
+    loadExecutor.execute(task)
+  }
+
+  private fun finishPreparedLoad() {
+    val job = loadJob ?: return
+    if (!job.task.isDone) {
+      return
+    }
+    loadJob = null
+
     try {
-      // Validate the ROM before closing the running game. A bad file selected in the picker
-      // should not interrupt the current session, and must never kill the controller thread.
-      val config = Controller.createGameboyConfig(properties, Rom(event.rom))
+      activatePreparedLoad(job, job.task.take())
+    } catch (_: CancellationException) {
+      restorePauseStateAfterLoading()
+    } catch (e: ExecutionException) {
+      reportLoadFailure(job.event, e.cause ?: e)
+    } catch (e: Exception) {
+      reportLoadFailure(job.event, e)
+    }
+  }
+
+  private fun activatePreparedLoad(job: LoadJob, prepared: PreparedSession) {
+    var nextGameboy: Gameboy? = null
+    try {
+      // The expensive BIOS run is complete. Pause only for the short save flush + SKIP/restore
+      // materialization so the old game remains live while the background preparation runs.
+      setPaused(true)
+      session?.gameboy?.flushCartridge()
+      nextGameboy = prepared.materialize()
 
       stop()
-      patches.clear()
+      if (job.clearPatches) {
+        patches.clear()
+      }
       rewindManager.clear()
 
-      nextSession = createSession(config)
-      event.memento?.let { nextSession.gameboy.restoreFromMemento(it) }
-      session = nextSession
-      nextSession = null
+      session = createSession(prepared.config, nextGameboy)
+      nextGameboy = null
+      val pauseNewSession = pauseStateBeforeLoading == true
+      pauseStateBeforeLoading = null
       start()
+      setPaused(pauseNewSession)
     } catch (e: Exception) {
-      try {
-        nextSession?.close()
-      } catch (cleanupException: Exception) {
-        e.addSuppressed(cleanupException)
-      }
-      LOG.error("Can't load ROM ${event.rom}", e)
-      val message = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-      eventBus.post(Controller.LoadRomFailedEvent(event.rom, message))
+      nextGameboy?.discardUnstarted()
+      reportLoadFailure(job.event, e)
     }
+  }
+
+  private fun reportLoadFailure(event: Controller.LoadRomEvent, error: Throwable) {
+    LOG.error("Can't load ROM ${event.rom}", error)
+    val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+    eventBus.post(Controller.LoadRomFailedEvent(event.rom, message))
+    restorePauseStateAfterLoading()
+  }
+
+  private fun cancelLoadJob() {
+    val job = loadJob ?: return
+    loadJob = null
+    job.task.cancelAndDiscard()
+    eventBus.post(Controller.RomLoadingCancelledEvent(job.event.rom))
+  }
+
+  private fun isCurrentRom(file: File): Boolean {
+    val current = session?.config?.rom?.file ?: return false
+    return canonicalFile(current) == canonicalFile(file)
+  }
+
+  private fun canonicalFile(file: File): File =
+      try {
+        file.canonicalFile
+      } catch (_: Exception) {
+        file.absoluteFile
+      }
+
+  private fun setPaused(paused: Boolean) {
+    if (isPaused == paused) {
+      return
+    }
+    session?.gameboy?.setCartridgeClockPaused(paused)
+    isPaused = paused
+  }
+
+  private fun restorePauseStateAfterLoading() {
+    val restorePaused = pauseStateBeforeLoading ?: return
+    pauseStateBeforeLoading = null
+    setPaused(restorePaused)
   }
 
   private fun createLinkDevice(sessionBus: EventBus): SerialEndpoint =
@@ -216,15 +347,6 @@ class BasicController(
     this.session = null
   }
 
-  private fun reset() {
-    val session = session ?: return
-    val config = session.config
-    stop()
-    rewindManager.clear()
-    this.session = createSession(config)
-    start()
-  }
-
   private fun saveSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
@@ -253,6 +375,18 @@ class BasicController(
     doStop = true
     thread.join()
 
+    cancelLoadJob()
+    loadExecutor.shutdownNow()
+    try {
+      if (!loadExecutor.awaitTermination(LOAD_EXECUTOR_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+        LOG.warn("ROM loader did not terminate promptly")
+      }
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+      LOG.warn("Interrupted while waiting for the ROM loader to terminate")
+    }
+    restorePauseStateAfterLoading()
+
     val state =
         session?.let { Controller.ControllerState(it.gameboy.saveToMemento(), it.config.rom) }
 
@@ -264,5 +398,56 @@ class BasicController(
 
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(BasicController::class.java)
+
+    const val LOAD_EXECUTOR_SHUTDOWN_SECONDS = 5L
+
+    fun createLoadExecutor(): ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+          Thread(runnable, "coffee-gb-rom-loader").apply { isDaemon = true }
+        }
+  }
+
+  private data class LoadJob(
+      val event: Controller.LoadRomEvent,
+      val clearPatches: Boolean,
+      val task: PreparedLoadTask,
+  )
+
+  /** Owns a prepared fallback machine until the controller takes it, even across cancel races. */
+  private class PreparedLoadTask(callable: Callable<PreparedSession>) :
+      FutureTask<PreparedSession>(callable) {
+
+    private val prepared = AtomicReference<PreparedSession>()
+
+    override fun set(value: PreparedSession) {
+      prepared.set(value)
+      super.set(value)
+      if (isCancelled) {
+        prepared.getAndSet(null)?.discard()
+      }
+    }
+
+    override fun done() {
+      if (isCancelled) {
+        prepared.getAndSet(null)?.discard()
+      }
+    }
+
+    fun take(): PreparedSession {
+      val value = get()
+      prepared.compareAndSet(value, null)
+      return value
+    }
+
+    fun cancelAndDiscard() {
+      if (cancel(true)) {
+        return
+      }
+      try {
+        take().discard()
+      } catch (_: Exception) {
+        // A failed/cancelled preparation owns no live session resources.
+      }
+    }
   }
 }

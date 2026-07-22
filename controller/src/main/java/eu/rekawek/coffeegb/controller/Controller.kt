@@ -22,6 +22,10 @@ interface Controller : AutoCloseable {
 
   data class LoadRomEvent(val rom: File, val memento: Memento<Gameboy>? = null) : Event
 
+  data class RomLoadingEvent(val rom: File) : Event
+
+  data class RomLoadingCancelledEvent(val rom: File) : Event
+
   data class LoadRomFailedEvent(val rom: File, val message: String) : Event
 
   class PauseEmulationEvent : Event

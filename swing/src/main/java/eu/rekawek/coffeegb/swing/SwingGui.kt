@@ -3,6 +3,9 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
+import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
+import eu.rekawek.coffeegb.controller.Controller.RomLoadingCancelledEvent
+import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
@@ -11,6 +14,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import java.awt.Cursor
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
@@ -30,6 +34,10 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
 
   private lateinit var mainWindow: JFrame
 
+  private var activeWindowTitle = "Coffee GB"
+
+  private var romLoading = false
+
   init {
     eventBus = EventBusImpl()
     emulator = SwingEmulator(eventBus, console, properties)
@@ -39,8 +47,29 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
     mainWindow = JFrame("Coffee GB")
 
     SwingMenu(properties, mainWindow, eventBus).addMenu()
-    eventBus.register<EmulationStartedEvent> { mainWindow.title = "Coffee GB: ${it.romName}" }
-    eventBus.register<EmulationStoppedEvent> { mainWindow.title = "Coffee GB" }
+    eventBus.register<RomLoadingEvent> {
+      romLoading = true
+      updateLoadingUi("Coffee GB: Loading ${it.rom.name}…", true)
+    }
+    eventBus.register<EmulationStartedEvent> {
+      activeWindowTitle = "Coffee GB: ${it.romName}"
+      romLoading = false
+      updateLoadingUi(activeWindowTitle, false)
+    }
+    eventBus.register<LoadRomFailedEvent> {
+      romLoading = false
+      updateLoadingUi(activeWindowTitle, false)
+    }
+    eventBus.register<RomLoadingCancelledEvent> {
+      romLoading = false
+      updateLoadingUi(activeWindowTitle, false)
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      activeWindowTitle = "Coffee GB"
+      if (!romLoading) {
+        updateLoadingUi(activeWindowTitle, false)
+      }
+    }
 
     mainWindow.defaultCloseOperation = JFrame.DISPOSE_ON_CLOSE
     mainWindow.addWindowListener(
@@ -71,6 +100,14 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
     console?.stop()
     emulator.stop()
     exitProcess(0)
+  }
+
+  private fun updateLoadingUi(title: String, loading: Boolean) {
+    SwingUtilities.invokeLater {
+      mainWindow.title = title
+      mainWindow.cursor =
+          Cursor.getPredefinedCursor(if (loading) Cursor.WAIT_CURSOR else Cursor.DEFAULT_CURSOR)
+    }
   }
 
   companion object {
