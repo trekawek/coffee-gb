@@ -231,6 +231,13 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                 ? windowDisplayView != 0 : lcdc.isWindowDisplay();
     }
 
+    private boolean isWindowDisabledForInsertion(boolean fetchingWindow) {
+        // The shifted pixel machine normally uses its delayed LCDC.5 view. Once it has
+        // already selected the background source, the insertion comparator sees a live
+        // disable edge; an in-flight window fetch retains the delayed view.
+        return !isWindowDisplay() || (!fetchingWindow && !lcdc.isWindowDisplay());
+    }
+
     /**
      * Advances the fetcher by one T-cycle. The tile map, the scroll registers and the tile
      * data area are read live at the respective fetch states (like on hardware), so
@@ -340,7 +347,7 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
                     if (!gbc
                             && !insertionGlitchDisabled
                             && windowYTriggered
-                            && !isWindowDisplay()) {
+                            && isWindowDisabledForInsertion(window)) {
                         int logicalPosition = (position + 7) & 0xff;
                         if (logicalPosition > 167) {
                             logicalPosition = 0;

@@ -23,7 +23,30 @@ public class FetcherWindowInsertionTest {
         assertEquals(0, fifo.tilePushes);
     }
 
+    @Test
+    public void backgroundInsertionComparatorSeesLiveWindowDisable() {
+        RecordingFifo fifo = runFetch(true, false, true);
+
+        assertEquals(1, fifo.singlePixelPushes);
+        assertEquals(0, fifo.tilePushes);
+    }
+
+    @Test
+    public void activeWindowFetchKeepsDelayedWindowEnable() {
+        RecordingFifo fifo = runFetch(true, true, true);
+
+        assertEquals(0, fifo.singlePixelPushes);
+        assertEquals(1, fifo.tilePushes);
+    }
+
     private static RecordingFifo runFetch(boolean windowYTriggered) {
+        return runFetch(windowYTriggered, false, false);
+    }
+
+    private static RecordingFifo runFetch(
+            boolean windowYTriggered,
+            boolean fetchingWindow,
+            boolean delayedWindowEnabled) {
         RecordingFifo fifo = new RecordingFifo();
         GpuRegisterValues registers = new GpuRegisterValues();
         registers.put(GpuRegister.LY, 128);
@@ -41,9 +64,10 @@ public class FetcherWindowInsertionTest {
                 false);
         fetcher.startLine();
         fetcher.setWindowYTriggered(windowYTriggered);
+        fetcher.setWindowRegisterView(151, delayedWindowEnabled);
 
         while (fifo.singlePixelPushes == 0 && fifo.tilePushes == 0) {
-            fetcher.advance(144, false, -1, false);
+            fetcher.advance(144, fetchingWindow, -1, false);
         }
         return fifo;
     }

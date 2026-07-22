@@ -24,24 +24,11 @@ import static org.junit.Assert.fail;
  * against photos of a real DMG-CPU B (DMG-blob where no CPU B photo exists). The tests run
  * with the FAST_FORWARD boot because they reuse the boot ROM's VRAM leftovers (the (r) logo
  * tile) as sprite data.
- *
- * <p>Every reference is pixel-exact except for the one explicitly documented hardware-photo
- * discrepancy in {@code m3_lcdc_win_en_change_multiple_wx.gb}.
  */
 @RunWith(ParallelParameterized.class)
 public class MealybugRomTest {
 
     private static final int TEST_COUNT = 24;
-
-    private static final String PIXEL_EXCEPTION_ROM = "m3_lcdc_win_en_change_multiple_wx.gb";
-
-    private static final int PIXEL_EXCEPTION_X = 32;
-
-    private static final int PIXEL_EXCEPTION_Y = 39;
-
-    private static final int PIXEL_EXCEPTION_EXPECTED = 0xffffff;
-
-    private static final int PIXEL_EXCEPTION_ACTUAL = 0xaaaaaa;
 
     private final File rom;
 
@@ -85,14 +72,8 @@ public class MealybugRomTest {
             if (actual[i] != expected[i]) {
                 int x = i % Display.DISPLAY_WIDTH;
                 int y = i / Display.DISPLAY_WIDTH;
-                boolean allowedPixel = rom.getName().equals(PIXEL_EXCEPTION_ROM)
-                        && x == PIXEL_EXCEPTION_X && y == PIXEL_EXCEPTION_Y;
-                if (!allowedPixel) {
-                    fail(String.format("%s differs at (%d,%d): expected #%06x, actual #%06x",
-                            rom.getName(), x, y, expected[i], actual[i]));
-                }
-                assertEquals("exception expected color", PIXEL_EXCEPTION_EXPECTED, expected[i]);
-                assertEquals("exception actual color", PIXEL_EXCEPTION_ACTUAL, actual[i]);
+                fail(String.format("%s differs at (%d,%d): expected #%06x, actual #%06x",
+                        rom.getName(), x, y, expected[i], actual[i]));
             }
         }
     }
