@@ -124,7 +124,7 @@ earns the **maximum score** in
 | [Gambatte HWTests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test) | 4,674 | 4,674 / 4,674 canonical DMG/CGB verdicts match hardware |
 | [BullyGB](https://github.com/Ashiepaws/BullyGB) | 2 | 2 / 2 DMG and CGB cases pass |
 | [MBC30Test](https://github.com/ZoomTen/mbc30test) | 1 | 1 / 1 ROM banking and SRAM case passes |
-| [GBEmulatorShootout](https://tomek.rekawek.eu/GBEmulatorShootout/) | 9 | Maximum score; 8 / 8 images and the ROM+RAM test pass |
+| [GBEmulatorShootout](https://tomek.rekawek.eu/GBEmulatorShootout/) | 264 | Maximum score; 264/264 |
 | [DMG-ACID2](https://github.com/mattcurrie/dmg-acid2) and [CGB-ACID2](https://github.com/mattcurrie/cgb-acid2) | 2 | 2 / 2 are pixel-perfect |
 | [CGB-ACID-HELL](https://github.com/mattcurrie/cgb-acid-hell) | 1 | 1 / 1 is pixel-perfect |
 | [Strikethrough](https://github.com/Ashiepaws/strikethrough.gb) | 1 | 1 / 1 is pixel-perfect |
