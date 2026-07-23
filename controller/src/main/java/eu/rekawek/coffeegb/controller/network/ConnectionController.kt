@@ -63,6 +63,8 @@ class ConnectionController(private val eventBus: EventBus) {
 
   data class ClientHandshakeCompletedEvent(val mode: LinkMode, val player: Int) : Event
 
+  data class ClientConnectionRejectedEvent(val message: String) : Event
+
   data class ClientConnectedToServerEvent(
       val mode: LinkMode = LinkMode.NORMAL,
       val player: Int = 1,

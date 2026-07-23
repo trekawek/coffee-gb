@@ -23,6 +23,9 @@ class TcpClient(
             it.run()
           }
       LOG.info("Disconnected from {}", clientSocket!!.inetAddress)
+    } catch (e: Connection.ConnectionRejectedException) {
+      LOG.info("Connection rejected: {}", e.reason.userMessage)
+      eventBus.post(ConnectionController.ClientConnectionRejectedEvent(e.reason.userMessage))
     } catch (e: SocketException) {
       if (e.message == "Socket closed") {
         LOG.atInfo().log("Disconnected from server")

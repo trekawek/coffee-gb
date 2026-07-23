@@ -178,4 +178,41 @@ class TcpConnectionTest {
       assertEquals(56, relayed.frame)
     }
   }
+
+  @Test
+  fun fourPlayerServerRejectsAnExtraClientWithAClearReason() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+
+    val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS), "server did not start")
+
+    repeat(3) {
+      val bus = EventBusImpl().also(extraBuses::add)
+      val ready = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+      bus.register<ConnectionController.ClientConnectedToServerEvent> { ready.add(it) }
+      val client = TcpClient("localhost:$port", bus)
+      extraClients += client
+      threads += Thread(client).also { it.start() }
+      if (it == 2) {
+        assertNotNull(ready.poll(5, TimeUnit.SECONDS), "full roster did not start")
+      }
+    }
+
+    val rejectedBus = EventBusImpl().also(extraBuses::add)
+    val rejected = LinkedBlockingQueue<ConnectionController.ClientConnectionRejectedEvent>()
+    val handshake = LinkedBlockingQueue<ConnectionController.ClientHandshakeCompletedEvent>()
+    rejectedBus.register<ConnectionController.ClientConnectionRejectedEvent> { rejected.add(it) }
+    rejectedBus.register<ConnectionController.ClientHandshakeCompletedEvent> { handshake.add(it) }
+    val extraClient = TcpClient("localhost:$port", rejectedBus)
+    extraClients += extraClient
+    threads += Thread(extraClient).also { it.start() }
+
+    val event = assertNotNull(rejected.poll(5, TimeUnit.SECONDS), "rejection reason not received")
+    assertEquals("The netplay server is already full.", event.message)
+    assertEquals(null, handshake.poll(200, TimeUnit.MILLISECONDS))
+  }
 }

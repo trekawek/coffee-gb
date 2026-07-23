@@ -58,7 +58,11 @@ class TcpServer(
     val player = synchronized(lock) { firstAvailablePlayer() }
     if (player == null) {
       LOG.info("Rejecting extra connection from {}: {} session is full", socket.inetAddress, mode)
-      socket.close()
+      try {
+        Connection.reject(socket.getOutputStream(), Connection.RejectionReason.SERVER_FULL)
+      } finally {
+        socket.close()
+      }
       return
     }
 
