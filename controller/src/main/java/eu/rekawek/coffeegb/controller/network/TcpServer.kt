@@ -35,6 +35,10 @@ class TcpServer(
       serverSocket = listener
       listener.soTimeout = 100
       eventBus.post(ConnectionController.ServerStartedEvent(mode))
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+        // The adapter belongs to the host and is live even with no clients attached.
+        eventBus.post(ConnectionController.ServerGotConnectionEvent("localhost", mode, 0))
+      }
       while (!doStop) {
         try {
           accept(listener)
@@ -75,7 +79,11 @@ class TcpServer(
       eventBus.post(
           ConnectionController.ServerPlayerCountEvent(clients.size, mode.playerCount - 1, mode))
       Thread({ runClient(handle) }, "netplay-player-${player + 1}").start()
-      startSessionIfFull(socket.inetAddress.hostAddress)
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+        connection.startSession()
+      } else {
+        startSessionIfFull(socket.inetAddress.hostAddress)
+      }
     } catch (e: IOException) {
       socket.close()
       throw e
@@ -108,6 +116,27 @@ class TcpServer(
   }
 
   private fun onDisconnected(handle: ClientHandle) {
+    if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+      val removed =
+          synchronized(lock) {
+            if (!clients.remove(handle.player, handle)) {
+              false
+            } else {
+              // Queue removal before the slot becomes visible to accept(), so a fast replacement
+              // cannot be attached and then removed by this stale disconnect.
+              if (!doStop) {
+                eventBus.post(ConnectionController.ServerPlayerDisconnectedEvent(handle.player))
+              }
+              true
+            }
+          }
+      if (!removed) {
+        return
+      }
+      eventBus.post(
+          ConnectionController.ServerPlayerCountEvent(clients.size, mode.playerCount - 1, mode))
+      return
+    }
     if (!clients.remove(handle.player, handle)) return
     val endSession =
         synchronized(lock) {

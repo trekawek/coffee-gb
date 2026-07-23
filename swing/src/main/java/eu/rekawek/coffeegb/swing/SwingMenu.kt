@@ -862,7 +862,11 @@ class SwingMenu(
     }
     eventBus.register<ServerStartedEvent> {
       connectToServer.isEnabled = false
-      setStatus("Waiting for players (0/${it.mode.playerCount - 1})", false)
+      if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+        setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
+      } else {
+        setStatus("Waiting for players (0/${it.mode.playerCount - 1})", false)
+      }
     }
     eventBus.register<ServerStoppedEvent> {
       startServer.state = false
@@ -870,13 +874,19 @@ class SwingMenu(
       setStatus("Disconnected", false)
     }
     eventBus.register<ConnectionController.ServerPlayerCountEvent> {
-      if (it.connected < it.required) {
+      if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+        setStatus(
+            "Active as Player 1 (four-player adapter; ${it.connected + 1}/4 players)", true)
+      } else if (it.connected < it.required) {
         setStatus("Waiting for players (${it.connected}/${it.required})", false)
       }
     }
     eventBus.register<ServerGotConnectionEvent> {
-      val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
-      setStatus("Connected as Player 1 ($mode)", true)
+      if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+        setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
+      } else {
+        setStatus("Connected as Player 1 (normal link)", true)
+      }
     }
     eventBus.register<ServerLostConnectionEvent> { setStatus("Disconnected", false) }
     return linkMenu

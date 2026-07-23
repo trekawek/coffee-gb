@@ -61,6 +61,7 @@ class SwingEmulator(
       startLinkedController(it.mode, it.player)
     }
     eventBus.register<ConnectionController.ServerLostConnectionEvent> { startBasicController() }
+    eventBus.register<ConnectionController.StopServerEvent> { startBasicController() }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       startBasicController()
     }
