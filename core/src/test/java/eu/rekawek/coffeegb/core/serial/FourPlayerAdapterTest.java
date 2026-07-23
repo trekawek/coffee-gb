@@ -38,12 +38,17 @@ public class FourPlayerAdapterTest {
         rig.transfer(0, 0, 0, 0);
         rig.transfer(0, 0, 0, 0);
 
-        // The physical reply stream leads the logical packet by one byte. The Game Boy receive
-        // ring wraps the last reply back to byte zero, reconstructing 11, 22, 33, 44.
-        for (int expected : new int[]{0x22, 0x33, 0x44, 0x11}) {
-            assertArrayEquals(new int[]{expected, expected, expected, expected},
-                    rig.transfer(0, 0, 0, 0));
-        }
+        // The physical reply stream leads the logical packet by one byte. Its final transfer is
+        // the first byte of the packet currently being captured, not the stale first byte of the
+        // packet being sent. The receive ring therefore sees a continuous stream across packets.
+        assertArrayEquals(new int[]{0x22, 0x22, 0x22, 0x22},
+                rig.transfer(0x55, 0x66, 0x77, 0x88));
+        assertArrayEquals(new int[]{0x33, 0x33, 0x33, 0x33},
+                rig.transfer(0, 0, 0, 0));
+        assertArrayEquals(new int[]{0x44, 0x44, 0x44, 0x44},
+                rig.transfer(0, 0, 0, 0));
+        assertArrayEquals(new int[]{0x55, 0x55, 0x55, 0x55},
+                rig.transfer(0, 0, 0, 0));
     }
 
     @Test
@@ -67,11 +72,13 @@ public class FourPlayerAdapterTest {
                 0x20, 0x21, 0x22, 0x23,
                 0x30, 0x31, 0x32, 0x33,
                 0x40, 0x41, 0x42, 0x43,
-                0x10
+                0x50
         };
-        for (int expected : physicalReplyStream) {
+        for (int i = 0; i < physicalReplyStream.length; i++) {
+            int expected = physicalReplyStream[i];
+            int firstPlayerReply = i == 0 ? 0x50 : 0;
             assertArrayEquals(new int[]{expected, expected, expected, expected},
-                    rig.transfer(0, 0, 0, 0));
+                    rig.transfer(firstPlayerReply, 0, 0, 0));
         }
     }
 

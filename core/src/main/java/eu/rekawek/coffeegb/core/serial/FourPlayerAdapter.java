@@ -77,10 +77,12 @@ public final class FourPlayerAdapter {
             case PING -> packetByte == 0 ? 0xfe : statusMask();
             case TRANSMISSION_INDICATOR -> 0xcc;
             case PING_INDICATOR -> 0xff;
-            // The adapter's transmit register leads its reply-capture counter by one byte. The
-            // last byte wraps to the start of the stream; software's receive ring restores the
-            // logical player/byte order. F-1 Race depends on this physical byte phase.
-            case TRANSMISSION -> transmissionBuffer[(packetByte + 1) % packetLength()];
+            // The transmitted stream leads the capture counter by one byte. At the packet
+            // boundary, continue with the first reply already captured for the next packet
+            // instead of wrapping to stale data from the old packet.
+            case TRANSMISSION -> packetByte + 1 < packetLength()
+                    ? transmissionBuffer[packetByte + 1]
+                    : replies[0][0];
         };
     }
 
