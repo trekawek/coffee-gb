@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 
 import java.io.Serializable;
 
@@ -29,6 +30,8 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
 
     private transient InfraredEndpoint endpoint = InfraredEndpoint.NULL_ENDPOINT;
 
+    private transient SerialEndpoint serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
+
     // the written bits of RP: bit 0 (own LED) and bits 6-7 (read enable)
     private int rp;
 
@@ -48,9 +51,17 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
         eventBus.register(e -> fullChanger.transform(e.characterId()), FullChanger.TransformEvent.class);
     }
 
+    /** Connects RP bit 4 to the CGB link port's serial-input pin. */
+    public void setSerialEndpoint(SerialEndpoint serialEndpoint) {
+        this.serialEndpoint = serialEndpoint == null
+                ? SerialEndpoint.NULL_ENDPOINT
+                : serialEndpoint;
+    }
+
     public void close() {
         endpoint.setLightOn(false);
         endpoint = InfraredEndpoint.NULL_ENDPOINT;
+        serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
     }
 
     public void tick() {
@@ -78,7 +89,12 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
         // an armed device starts transmitting at a poll of the register, so the polling
         // loop observes the first pulse from its beginning
         fullChanger.onRpRead();
-        int result = rp | 0x3c | 0x02;
+        // Bits 2, 3 and 5 are pulled high. Bit 4 is not unused on CGB hardware: it
+        // exposes link-port pin 4 as a raw digital input for software UARTs.
+        int result = rp | 0x2c | 0x02;
+        if (serialEndpoint.isSerialInputHigh()) {
+            result |= 0x10;
+        }
         int readMode = rp & 0xc0;
         // The intermediate $80 mode pulls the sensor bit low even without a
         // light source. In the normal $C0 receive mode it is active-low only

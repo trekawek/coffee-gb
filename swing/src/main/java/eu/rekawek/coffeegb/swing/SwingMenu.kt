@@ -100,11 +100,13 @@ class SwingMenu(
 
   private val cheatDatabase: CheatDatabase by lazy { CheatDatabase.loadBundled() }
 
-  // the link port carries one device at a time: the netplay cable, the Barcode Boy or the
-  // printer. These are the menu toggles for each; enabling one disconnects the rest.
+  // the link port carries one device at a time: netplay, Barcode Boy, printer or GPS.
+  // These are the menu toggles for each; enabling one disconnects the rest.
   private lateinit var barcodeBoyItem: JCheckBoxMenuItem
 
   private lateinit var printerItem: JCheckBoxMenuItem
+
+  private lateinit var gpsReceiverItem: JCheckBoxMenuItem
 
   private lateinit var startServerItem: JCheckBoxMenuItem
 
@@ -515,7 +517,7 @@ class SwingMenu(
     val peripheralsMenu = JMenu("Peripherals")
 
     // the Game Boy Camera's webcam source is a cartridge sensor, not a link-port device, so
-    // it is independent of the netplay/Barcode Boy/printer group below
+    // it is independent of the netplay/Barcode Boy/printer/GPS group below
     val camera = JCheckBoxMenuItem("Enable Game Boy Camera", false)
     peripheralsMenu.add(camera)
     camera.addActionListener {
@@ -547,6 +549,16 @@ class SwingMenu(
       eventBus.post(Controller.SetPrinterEvent(printer.state))
       if (printer.state) {
         disconnectOtherLinkPeripherals(printer)
+      }
+    }
+
+    val gpsReceiver = JCheckBoxMenuItem("Enable GPS Receiver (GPS Boy)", false)
+    gpsReceiverItem = gpsReceiver
+    peripheralsMenu.add(gpsReceiver)
+    gpsReceiver.addActionListener {
+      eventBus.post(Controller.SetGpsReceiverEvent(gpsReceiver.state))
+      if (gpsReceiver.state) {
+        disconnectOtherLinkPeripherals(gpsReceiver)
       }
     }
 
@@ -652,7 +664,7 @@ class SwingMenu(
 
   /**
    * Only one device can sit on the link port at a time, so turning one on unplugs the others:
-   * the netplay cable (server/client), the Barcode Boy and the printer.
+   * the netplay cable (server/client), the Barcode Boy, the printer and the GPS receiver.
    */
   private fun disconnectOtherLinkPeripherals(keep: JCheckBoxMenuItem) {
     if (barcodeBoyItem !== keep && barcodeBoyItem.state) {
@@ -662,6 +674,10 @@ class SwingMenu(
     if (printerItem !== keep && printerItem.state) {
       printerItem.state = false
       eventBus.post(Controller.SetPrinterEvent(false))
+    }
+    if (gpsReceiverItem !== keep && gpsReceiverItem.state) {
+      gpsReceiverItem.state = false
+      eventBus.post(Controller.SetGpsReceiverEvent(false))
     }
     if (startServerItem !== keep && startServerItem.state) {
       startServerItem.state = false

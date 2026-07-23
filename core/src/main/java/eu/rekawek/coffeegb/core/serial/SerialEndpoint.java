@@ -4,6 +4,20 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
 public interface SerialEndpoint extends Originator<SerialEndpoint> {
+    /** Advances external-device wall-clock state by one Game Boy master tick. */
+    default void tick() {
+    }
+
+    /**
+     * Returns the electrical level on the CGB link port's serial-input pin.
+     *
+     * <p>The CGB also exposes this pin through the undocumented bit 4 of RP (FF56),
+     * which software UARTs such as GPS Boy use without arming a hardware transfer.
+     */
+    default boolean isSerialInputHigh() {
+        return true;
+    }
+
     /**
      * Listener waiting for any updates of the SB byte, so it can be shared with the other side.
      */

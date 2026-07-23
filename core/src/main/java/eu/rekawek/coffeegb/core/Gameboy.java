@@ -408,6 +408,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         display.init(eventBus);
         sound.init(eventBus);
         serialPort.init(serialEndpoint);
+        infraredPort.setSerialEndpoint(serialEndpoint);
         infraredPort.init(eventBus, infraredEndpoint);
         codeBreakerRumble.init(eventBus);
         background.init(eventBus);
@@ -428,6 +429,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
      */
     public void setSerialEndpoint(SerialEndpoint serialEndpoint) {
         serialPort.init(serialEndpoint);
+        infraredPort.setSerialEndpoint(serialEndpoint);
     }
 
     public void run() {

@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.Patch
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
+import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.File
@@ -80,6 +81,9 @@ class BasicController private constructor(
   // finished bands are forwarded to the UI as PrinterPrintEvents
   private var printerEnabled = false
 
+  // GPS Boy uses a Trimble receiver connected to the same link port through a software UART.
+  private var gpsReceiverEnabled = false
+
   private val thread = Thread {
     while (!doStop) {
       runFrame()
@@ -121,6 +125,7 @@ class BasicController private constructor(
         // the Barcode Boy and the printer share the link port, so only one at a time
         if (barcodeBoyEnabled) {
           printerEnabled = false
+          gpsReceiverEnabled = false
         }
         reconnectLinkDevice()
       }
@@ -131,6 +136,17 @@ class BasicController private constructor(
         printerEnabled = it.enabled
         if (printerEnabled) {
           barcodeBoyEnabled = false
+          gpsReceiverEnabled = false
+        }
+        reconnectLinkDevice()
+      }
+    }
+    eventQueue.register<Controller.SetGpsReceiverEvent> {
+      if (gpsReceiverEnabled != it.enabled) {
+        gpsReceiverEnabled = it.enabled
+        if (gpsReceiverEnabled) {
+          barcodeBoyEnabled = false
+          printerEnabled = false
         }
         reconnectLinkDevice()
       }
@@ -319,6 +335,9 @@ class BasicController private constructor(
         }
       } else if (barcodeBoyEnabled) {
         BarcodeBoySerialEndpoint().also { barcodeBoy = it }
+      } else if (gpsReceiverEnabled) {
+        barcodeBoy = null
+        GpsReceiverSerialEndpoint()
       } else {
         barcodeBoy = null
         Peer2PeerSerialEndpoint()
@@ -326,7 +345,7 @@ class BasicController private constructor(
 
   /**
    * Plug the currently selected link-port device into the running session without a reset, so
-   * connecting the printer or Barcode Boy doesn't restart the game.
+   * connecting the printer, Barcode Boy or GPS receiver doesn't restart the game.
    */
   private fun reconnectLinkDevice() {
     val session = session ?: return
