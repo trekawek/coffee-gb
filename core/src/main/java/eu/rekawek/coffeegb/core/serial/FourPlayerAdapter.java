@@ -36,8 +36,6 @@ public final class FourPlayerAdapter {
 
     private final boolean[] connected = new boolean[PLAYER_COUNT];
 
-    private final int[] consecutiveAa = new int[PLAYER_COUNT];
-
     private final int[] consecutiveFf = new int[PLAYER_COUNT];
 
     private final int[][] replies = new int[PLAYER_COUNT][16];
@@ -55,6 +53,8 @@ public final class FourPlayerAdapter {
     private int size = 1;
 
     private Phase phase = Phase.PING;
+
+    private boolean transmissionRequested;
 
     private boolean restartPingRequested;
 
@@ -77,12 +77,7 @@ public final class FourPlayerAdapter {
             case PING -> packetByte == 0 ? 0xfe : statusMask();
             case TRANSMISSION_INDICATOR -> 0xcc;
             case PING_INDICATOR -> 0xff;
-            // The transmitted stream leads the capture counter by one byte. At the packet
-            // boundary, continue with the first reply already captured for the next packet
-            // instead of wrapping to stale data from the old packet.
-            case TRANSMISSION -> packetByte + 1 < packetLength()
-                    ? transmissionBuffer[packetByte + 1]
-                    : replies[0][0];
+            case TRANSMISSION -> transmissionBuffer[packetByte];
         };
     }
 
@@ -145,6 +140,15 @@ public final class FourPlayerAdapter {
     }
 
     private void finishPingPacket() {
+        // The master requests transmission while replying to a ping. The adapter finishes that
+        // four-byte ping before returning the CC indicator packet; bytes from the partial command
+        // are not a new ACK/rate/size packet.
+        if (transmissionRequested) {
+            phase = Phase.TRANSMISSION_INDICATOR;
+            transmissionRequested = false;
+            return;
+        }
+
         for (int player = 0; player < PLAYER_COUNT; player++) {
             // Replies are one byte behind what the Game Boy receives: FE causes software to load
             // ACK1, which is sent alongside STAT1; ACK2 is then sent alongside STAT2.
@@ -153,11 +157,7 @@ public final class FourPlayerAdapter {
 
         int newSize = replies[0][0];
         int newRate = replies[0][3];
-        // A correctly aligned switch command starts after the ping header: its first three AA
-        // replies therefore occupy this packet's ACK1, ACK2 and RATE positions, and the fourth
-        // arrives with the next header. The RATE slot is command data in that case, not a new
-        // adapter rate; retain the last complete ping's rate as the hardware does.
-        if (newRate != 0 && consecutiveAa[0] < 3) {
+        if (newRate != 0) {
             rate = newRate;
         }
         if (newSize >= 1 && newSize <= 4) {
@@ -168,9 +168,9 @@ public final class FourPlayerAdapter {
     private void finishTransmissionPacket() {
         int[] nextBuffer = new int[16];
         for (int player = 0; player < PLAYER_COUNT; player++) {
-            // Each Game Boy loads its packet data before the first transfer. Only its first SIZE
-            // replies enter the DMG-07 buffer; replies during the other players' slots are ignored.
-            System.arraycopy(replies[player], 0, nextBuffer, player * size, size);
+            // Games load byte 1 after receiving byte 0, so the first SIZE replies are physically
+            // transferred in slots 1..SIZE. The other players' outgoing slots are ignored.
+            System.arraycopy(replies[player], 1, nextBuffer, player * size, size);
         }
         transmissionBuffer = nextBuffer;
         if (restartPingRequested) {
@@ -179,15 +179,15 @@ public final class FourPlayerAdapter {
         }
     }
 
-    private boolean observeReplyByte() {
+    private void observeReplyByte() {
         for (int player = 0; player < PLAYER_COUNT; player++) {
             int reply = replies[player][packetByte];
             if (phase == Phase.PING) {
-                consecutiveAa[player] = reply == 0xaa ? consecutiveAa[player] + 1 : 0;
-                if (consecutiveAa[player] >= 4) {
-                    Arrays.fill(consecutiveAa, 0);
-                    phase = Phase.TRANSMISSION_INDICATOR;
-                    return true;
+                // Player 1 is the protocol master. Once it starts the AA command, complete the
+                // current ping packet before switching phases. Only three AA replies fit after
+                // the FE header; games may send the fourth alongside the first CC response.
+                if (player == 0 && reply == 0xaa) {
+                    transmissionRequested = true;
                 }
             } else if (phase == Phase.TRANSMISSION) {
                 consecutiveFf[player] = reply == 0xff ? consecutiveFf[player] + 1 : 0;
@@ -196,7 +196,6 @@ public final class FourPlayerAdapter {
                 }
             }
         }
-        return false;
     }
 
     private AdapterMemento saveState() {
@@ -205,9 +204,9 @@ public final class FourPlayerAdapter {
             repliesCopy[i] = replies[i].clone();
         }
         return new AdapterMemento(sb.clone(), transferArmed.clone(), pendingBits.clone(),
-                connected.clone(), consecutiveAa.clone(), consecutiveFf.clone(), repliesCopy,
+                connected.clone(), consecutiveFf.clone(), repliesCopy,
                 transmissionBuffer.clone(), packetByte, bit, ticksUntilBit, rate, size, phase,
-                restartPingRequested);
+                transmissionRequested, restartPingRequested);
     }
 
     private void restoreState(AdapterMemento state) {
@@ -215,7 +214,6 @@ public final class FourPlayerAdapter {
         System.arraycopy(state.transferArmed, 0, transferArmed, 0, PLAYER_COUNT);
         System.arraycopy(state.pendingBits, 0, pendingBits, 0, PLAYER_COUNT);
         System.arraycopy(state.connected, 0, connected, 0, PLAYER_COUNT);
-        System.arraycopy(state.consecutiveAa, 0, consecutiveAa, 0, PLAYER_COUNT);
         System.arraycopy(state.consecutiveFf, 0, consecutiveFf, 0, PLAYER_COUNT);
         for (int i = 0; i < PLAYER_COUNT; i++) {
             System.arraycopy(state.replies[i], 0, replies[i], 0, replies[i].length);
@@ -227,6 +225,7 @@ public final class FourPlayerAdapter {
         rate = state.rate;
         size = state.size;
         phase = state.phase;
+        transmissionRequested = state.transmissionRequested;
         restartPingRequested = state.restartPingRequested;
     }
 
@@ -238,11 +237,10 @@ public final class FourPlayerAdapter {
     }
 
     private record AdapterMemento(int[] sb, boolean[] transferArmed, int[] pendingBits,
-                                  boolean[] connected, int[] consecutiveAa, int[] consecutiveFf,
-                                  int[][] replies,
+                                  boolean[] connected, int[] consecutiveFf, int[][] replies,
                                   int[] transmissionBuffer, int packetByte, int bit,
                                   int ticksUntilBit, int rate, int size, Phase phase,
-                                  boolean restartPingRequested)
+                                  boolean transmissionRequested, boolean restartPingRequested)
             implements Memento<SerialEndpoint> {
     }
 
@@ -285,11 +283,7 @@ public final class FourPlayerAdapter {
             ticksUntilBit = CLOCK_TICKS_PER_BIT - 1;
             if (--bit < 0) {
                 bit = 7;
-                if (observeReplyByte()) {
-                    packetByte = 0;
-                    ticksUntilBit += PING_BYTE_GAP_TICKS;
-                    return;
-                }
+                observeReplyByte();
                 packetByte++;
                 int packetLength = packetLength();
                 if (packetByte < packetLength) {

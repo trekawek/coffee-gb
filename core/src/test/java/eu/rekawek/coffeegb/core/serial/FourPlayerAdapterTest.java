@@ -5,7 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 
 public class FourPlayerAdapterTest {
 
@@ -26,29 +26,22 @@ public class FourPlayerAdapterTest {
     }
 
     @Test
-    public void transmissionReplyStreamLeadsCaptureByOneByte() {
+    public void transmissionBroadcastsPreviousPacketWithoutCrossPacketSplicing() {
         Rig rig = new Rig();
 
         enterTransmission(rig, 1);
 
-        // Packet 1 fills the adapter's next buffer from its first transfer; packet 2 broadcasts
-        // it to everyone. Later replies in packet 1 are outside every player's SIZE=1 slot.
+        // Games load their first data byte after receiving byte 0. Packet 1 captures that reply
+        // during byte 1, and packet 2 broadcasts it without substituting a byte from packet 2.
+        rig.transfer(0, 0, 0, 0);
         rig.transfer(0x11, 0x22, 0x33, 0x44);
         rig.transfer(0, 0, 0, 0);
         rig.transfer(0, 0, 0, 0);
-        rig.transfer(0, 0, 0, 0);
 
-        // The physical reply stream leads the logical packet by one byte. Its final transfer is
-        // the first byte of the packet currently being captured, not the stale first byte of the
-        // packet being sent. The receive ring therefore sees a continuous stream across packets.
-        assertArrayEquals(new int[]{0x22, 0x22, 0x22, 0x22},
-                rig.transfer(0x55, 0x66, 0x77, 0x88));
-        assertArrayEquals(new int[]{0x33, 0x33, 0x33, 0x33},
-                rig.transfer(0, 0, 0, 0));
-        assertArrayEquals(new int[]{0x44, 0x44, 0x44, 0x44},
-                rig.transfer(0, 0, 0, 0));
-        assertArrayEquals(new int[]{0x55, 0x55, 0x55, 0x55},
-                rig.transfer(0, 0, 0, 0));
+        for (int expected : new int[]{0x11, 0x22, 0x33, 0x44}) {
+            assertArrayEquals(new int[]{expected, expected, expected, expected},
+                    rig.transfer(0, 0, 0, 0));
+        }
     }
 
     @Test
@@ -57,28 +50,27 @@ public class FourPlayerAdapterTest {
 
         enterTransmission(rig, 4);
 
+        // Byte 0 is the pipeline slot in which software receives old data and loads byte 1.
+        rig.transfer(0, 0, 0, 0);
         for (int dataByte = 0; dataByte < 4; dataByte++) {
             rig.transfer(0x10 + dataByte, 0x20 + dataByte,
                     0x30 + dataByte, 0x40 + dataByte);
         }
-        // The remaining twelve transfers belong to the other players' outgoing slots. Their
+        // The remaining eleven transfers belong to the other players' outgoing slots. Their
         // replies must not displace or overwrite the four bytes each player submitted above.
-        for (int i = 4; i < 16; i++) {
+        for (int i = 5; i < 16; i++) {
             rig.transfer(0xee, 0xee, 0xee, 0xee);
         }
 
         int[] physicalReplyStream = {
-                0x11, 0x12, 0x13,
+                0x10, 0x11, 0x12, 0x13,
                 0x20, 0x21, 0x22, 0x23,
                 0x30, 0x31, 0x32, 0x33,
-                0x40, 0x41, 0x42, 0x43,
-                0x50
+                0x40, 0x41, 0x42, 0x43
         };
-        for (int i = 0; i < physicalReplyStream.length; i++) {
-            int expected = physicalReplyStream[i];
-            int firstPlayerReply = i == 0 ? 0x50 : 0;
+        for (int expected : physicalReplyStream) {
             assertArrayEquals(new int[]{expected, expected, expected, expected},
-                    rig.transfer(firstPlayerReply, 0, 0, 0));
+                    rig.transfer(0, 0, 0, 0));
         }
     }
 
@@ -100,30 +92,18 @@ public class FourPlayerAdapterTest {
     }
 
     @Test
-    public void boundaryAlignedTransmissionCommandDoesNotReplaceRateWithAa() {
-        Rig reference = new Rig();
-        enterTransmission(reference, 4, 0x28);
+    public void transmissionCommandFinishesCurrentPingAndKeepsConfiguredRate() {
+        Rig rate28 = new Rig();
+        enterTransmission(rate28, 4, 0x28);
+        Rig rate38 = new Rig();
+        enterTransmission(rate38, 4, 0x38);
 
-        Rig boundaryAligned = new Rig();
-        configurePing(boundaryAligned, 4, 0x28);
-        // Software loads the first AA after receiving the header. It is sent alongside STAT1,
-        // so three command bytes finish this ping packet and the fourth crosses into the next.
-        boundaryAligned.transfer(4, 4, 4, 4);
-        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
-        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
-        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
-        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
-        for (int i = 0; i < 4; i++) {
-            assertArrayEquals(new int[]{0xcc, 0xcc, 0xcc, 0xcc},
-                    boundaryAligned.transfer(0, 0, 0, 0));
-        }
-
-        // RATE affects both inter-byte and inter-packet timing. Matching a command that began on
-        // a packet boundary proves the crossed command retained 0x28 instead of latching 0xAA.
+        // RATE affects inter-byte timing. Distinct configured rates must remain distinct after the
+        // crossed AA command instead of both latching its final 0xAA as a new rate.
         for (int i = 0; i < 32; i++) {
-            assertArrayEquals(reference.transfer(0, 0, 0, 0),
-                    boundaryAligned.transfer(0, 0, 0, 0));
-            assertEquals(reference.lastTransferTicks, boundaryAligned.lastTransferTicks);
+            assertArrayEquals(rate28.transfer(0, 0, 0, 0),
+                    rate38.transfer(0, 0, 0, 0));
+            assertNotEquals(rate28.lastTransferTicks, rate38.lastTransferTicks);
         }
     }
 
@@ -134,13 +114,15 @@ public class FourPlayerAdapterTest {
     private static void enterTransmission(Rig rig, int size, int rate) {
         configurePing(rig, size, rate);
 
-        rig.transfer(0xaa, 0xaa, 0xaa, 0xaa);
+        // The previous SIZE reply is still in SB for the next FE header. Three command bytes then
+        // complete that ping packet; the fourth AA is transferred alongside the first CC.
+        rig.transfer(size, size, size, size);
         rig.transfer(0xaa, 0xaa, 0xaa, 0xaa);
         rig.transfer(0xaa, 0xaa, 0xaa, 0xaa);
         rig.transfer(0xaa, 0xaa, 0xaa, 0xaa);
         for (int i = 0; i < 4; i++) {
             assertArrayEquals(new int[]{0xcc, 0xcc, 0xcc, 0xcc},
-                    rig.transfer(0, 0, 0, 0));
+                    rig.transfer(i == 0 ? 0xaa : 0, 0, 0, 0));
         }
     }
 
