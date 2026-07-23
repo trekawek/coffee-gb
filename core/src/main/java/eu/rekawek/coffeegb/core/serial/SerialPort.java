@@ -54,6 +54,9 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
     }
 
     public void tick() {
+        // Link-port peripherals such as GPS receivers have their own wall clock and keep
+        // driving the input pin even when no hardware serial transfer is armed.
+        serialEndpoint.tick();
         acknowledgeInterruptIfNeeded();
         for (int i = 0; i < speedMode.getSpeedMode(); i++) {
             tickCpuClock();

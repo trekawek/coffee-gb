@@ -66,6 +66,9 @@ interface Controller : AutoCloseable {
   /** Connects or disconnects the Game Boy Printer on the link port (resets the game). */
   data class SetPrinterEvent(val enabled: Boolean) : Event
 
+  /** Connects or disconnects a simulated Trimble GPS receiver on the CGB link port. */
+  data class SetGpsReceiverEvent(val enabled: Boolean) : Event
+
   /**
    * Emitted each time the game prints a band on the Game Boy Printer. [argb] holds
    * [width]×[height] ARGB pixels (top row first, [width] is always 160). [topMargin] and
