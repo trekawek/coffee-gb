@@ -6,10 +6,11 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery.FileBatteryMemen
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 
 public class MemoryBattery implements Battery, Originator<Battery> {
 
-    private final byte[] buffer;
+    private byte[] buffer;
 
     public MemoryBattery(byte[] buffer) {
         this.buffer = buffer.clone();
@@ -17,6 +18,7 @@ public class MemoryBattery implements Battery, Originator<Battery> {
 
     @Override
     public void loadRam(int[] ram) {
+        ensureCapacity(ram.length);
         for (int i = 0; i < ram.length; i++) {
             ram[i] = buffer[i] & 0xff;
         }
@@ -24,6 +26,7 @@ public class MemoryBattery implements Battery, Originator<Battery> {
 
     @Override
     public void saveRam(int[] ram) {
+        ensureCapacity(ram.length);
         for (int i = 0; i < ram.length; i++) {
             buffer[i] = (byte) (ram[i]);
         }
@@ -31,10 +34,11 @@ public class MemoryBattery implements Battery, Originator<Battery> {
 
     @Override
     public void loadRamWithClock(int[] ram, long[] clockData) {
+        ensureCapacity(ram.length + clockSize(clockData));
         loadRam(ram);
 
         if (clockData != null) {
-            ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, buffer.length - ram.length);
+            ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, clockSize(clockData));
             buff.order(ByteOrder.LITTLE_ENDIAN);
             int i = 0;
             while (buff.hasRemaining()) {
@@ -45,15 +49,13 @@ public class MemoryBattery implements Battery, Originator<Battery> {
 
     @Override
     public void saveRamWithClock(int[] ram, long[] clockData) {
+        ensureCapacity(ram.length + clockSize(clockData));
         saveRam(ram);
 
         if (clockData != null) {
-            ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, buffer.length - ram.length);
+            ByteBuffer buff = ByteBuffer.wrap(buffer, ram.length, clockSize(clockData));
             buff.order(ByteOrder.LITTLE_ENDIAN);
             for (long d : clockData) {
-                if (buff.limit() - buff.position() < 4) {
-                    break;
-                }
                 buff.putInt((int) d);
             }
         }
@@ -61,6 +63,18 @@ public class MemoryBattery implements Battery, Originator<Battery> {
 
     @Override
     public void flush() {
+    }
+
+    private void ensureCapacity(int capacity) {
+        // Netplay mirrors the save file byte-for-byte, including an existing zero-length or
+        // truncated file. Match FileBattery by treating bytes missing from that file as zeroes.
+        if (buffer.length < capacity) {
+            buffer = Arrays.copyOf(buffer, capacity);
+        }
+    }
+
+    private static int clockSize(long[] clockData) {
+        return clockData == null ? 0 : clockData.length * Integer.BYTES;
     }
 
     @Override

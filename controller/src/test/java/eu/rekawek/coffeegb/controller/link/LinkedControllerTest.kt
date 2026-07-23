@@ -24,6 +24,28 @@ import kotlin.test.assertTrue
 class LinkedControllerTest {
 
   @Test
+  fun peerWithEmptyMbc2SaveStartsSession() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            mbc2Rom(),
+            ByteArray(0),
+            null,
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            0,
+        ))
+
+    sut.runFrame()
+    assertEquals(2, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
   fun fourPlayerControllerRunsAllConsolesAndLabelsLocalAndRemoteInput() {
     val eventBus = EventBusImpl()
     val sut =
@@ -278,6 +300,12 @@ class LinkedControllerTest {
     val GAMEBOY_TYPE: GameboyType = MAIN_CONFIG.getGameboyType()
 
     val BOOTSTRAP_MODE: Gameboy.BootstrapMode = MAIN_CONFIG.getBootstrapMode()
+
+    fun mbc2Rom() =
+        ByteArray(0x8000).also {
+          it[0x0147] = 0x06
+          it[0x0148] = 0x00
+        }
 
     fun assertJoypadEventsEqual(
         expectedButtons: List<Joypad.JoypadPressEvent>,
