@@ -159,10 +159,9 @@ public final class FourPlayerAdapter {
     private void finishTransmissionPacket() {
         int[] nextBuffer = new int[16];
         for (int player = 0; player < PLAYER_COUNT; player++) {
-            // Like ping replies, transmitted data is physically one transfer behind the byte it
-            // answers. Games receive byte 0, load their first data byte in the serial ISR, and the
-            // adapter samples it during byte 1.
-            System.arraycopy(replies[player], 1, nextBuffer, player * size, size);
+            // Each Game Boy loads its packet data before the first transfer. Only its first SIZE
+            // replies enter the DMG-07 buffer; replies during the other players' slots are ignored.
+            System.arraycopy(replies[player], 0, nextBuffer, player * size, size);
         }
         transmissionBuffer = nextBuffer;
         if (restartPingRequested) {
