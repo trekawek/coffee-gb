@@ -77,7 +77,10 @@ public final class FourPlayerAdapter {
             case PING -> packetByte == 0 ? 0xfe : statusMask();
             case TRANSMISSION_INDICATOR -> 0xcc;
             case PING_INDICATOR -> 0xff;
-            case TRANSMISSION -> transmissionBuffer[packetByte];
+            // The adapter's transmit register leads its reply-capture counter by one byte. The
+            // last byte wraps to the start of the stream; software's receive ring restores the
+            // logical player/byte order. F-1 Race depends on this physical byte phase.
+            case TRANSMISSION -> transmissionBuffer[(packetByte + 1) % packetLength()];
         };
     }
 
@@ -148,7 +151,11 @@ public final class FourPlayerAdapter {
 
         int newSize = replies[0][0];
         int newRate = replies[0][3];
-        if (newRate != 0) {
+        // A correctly aligned switch command starts after the ping header: its first three AA
+        // replies therefore occupy this packet's ACK1, ACK2 and RATE positions, and the fourth
+        // arrives with the next header. The RATE slot is command data in that case, not a new
+        // adapter rate; retain the last complete ping's rate as the hardware does.
+        if (newRate != 0 && consecutiveAa[0] < 3) {
             rate = newRate;
         }
         if (newSize >= 1 && newSize <= 4) {

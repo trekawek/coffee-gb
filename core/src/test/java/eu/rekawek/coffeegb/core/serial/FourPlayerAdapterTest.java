@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 
 public class FourPlayerAdapterTest {
 
@@ -25,7 +26,7 @@ public class FourPlayerAdapterTest {
     }
 
     @Test
-    public void transmissionBroadcastsPreviousPacketInPlayerOrder() {
+    public void transmissionReplyStreamLeadsCaptureByOneByte() {
         Rig rig = new Rig();
 
         enterTransmission(rig, 1);
@@ -37,7 +38,9 @@ public class FourPlayerAdapterTest {
         rig.transfer(0, 0, 0, 0);
         rig.transfer(0, 0, 0, 0);
 
-        for (int expected : new int[]{0x11, 0x22, 0x33, 0x44}) {
+        // The physical reply stream leads the logical packet by one byte. The Game Boy receive
+        // ring wraps the last reply back to byte zero, reconstructing 11, 22, 33, 44.
+        for (int expected : new int[]{0x22, 0x33, 0x44, 0x11}) {
             assertArrayEquals(new int[]{expected, expected, expected, expected},
                     rig.transfer(0, 0, 0, 0));
         }
@@ -59,12 +62,16 @@ public class FourPlayerAdapterTest {
             rig.transfer(0xee, 0xee, 0xee, 0xee);
         }
 
-        for (int player = 1; player <= 4; player++) {
-            for (int dataByte = 0; dataByte < 4; dataByte++) {
-                int expected = player * 0x10 + dataByte;
-                assertArrayEquals(new int[]{expected, expected, expected, expected},
-                        rig.transfer(0, 0, 0, 0));
-            }
+        int[] physicalReplyStream = {
+                0x11, 0x12, 0x13,
+                0x20, 0x21, 0x22, 0x23,
+                0x30, 0x31, 0x32, 0x33,
+                0x40, 0x41, 0x42, 0x43,
+                0x10
+        };
+        for (int expected : physicalReplyStream) {
+            assertArrayEquals(new int[]{expected, expected, expected, expected},
+                    rig.transfer(0, 0, 0, 0));
         }
     }
 
@@ -85,14 +92,41 @@ public class FourPlayerAdapterTest {
                 rig.transfer(0, 0, 0, 0));
     }
 
-    private static void enterTransmission(Rig rig, int size) {
-        rig.transfer(size, size, size, size);
-        rig.transfer(0x88, 0x88, 0x88, 0x88);
-        rig.transfer(0x88, 0x88, 0x88, 0x88);
-        rig.transfer(0x10, 0x10, 0x10, 0x10);
+    @Test
+    public void boundaryAlignedTransmissionCommandDoesNotReplaceRateWithAa() {
+        Rig reference = new Rig();
+        enterTransmission(reference, 4, 0x28);
 
-        // Enter transmission mode with the command spanning the ping packet boundary, as real
-        // software does after receiving FE and loading the first AA reply.
+        Rig boundaryAligned = new Rig();
+        configurePing(boundaryAligned, 4, 0x28);
+        // Software loads the first AA after receiving the header. It is sent alongside STAT1,
+        // so three command bytes finish this ping packet and the fourth crosses into the next.
+        boundaryAligned.transfer(4, 4, 4, 4);
+        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
+        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
+        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
+        boundaryAligned.transfer(0xaa, 0xaa, 0xaa, 0xaa);
+        for (int i = 0; i < 4; i++) {
+            assertArrayEquals(new int[]{0xcc, 0xcc, 0xcc, 0xcc},
+                    boundaryAligned.transfer(0, 0, 0, 0));
+        }
+
+        // RATE affects both inter-byte and inter-packet timing. Matching a command that began on
+        // a packet boundary proves the crossed command retained 0x28 instead of latching 0xAA.
+        for (int i = 0; i < 32; i++) {
+            assertArrayEquals(reference.transfer(0, 0, 0, 0),
+                    boundaryAligned.transfer(0, 0, 0, 0));
+            assertEquals(reference.lastTransferTicks, boundaryAligned.lastTransferTicks);
+        }
+    }
+
+    private static void enterTransmission(Rig rig, int size) {
+        enterTransmission(rig, size, 0x10);
+    }
+
+    private static void enterTransmission(Rig rig, int size, int rate) {
+        configurePing(rig, size, rate);
+
         rig.transfer(0xaa, 0xaa, 0xaa, 0xaa);
         rig.transfer(0xaa, 0xaa, 0xaa, 0xaa);
         rig.transfer(0xaa, 0xaa, 0xaa, 0xaa);
@@ -103,8 +137,17 @@ public class FourPlayerAdapterTest {
         }
     }
 
+    private static void configurePing(Rig rig, int size, int rate) {
+        rig.transfer(size, size, size, size);
+        rig.transfer(0x88, 0x88, 0x88, 0x88);
+        rig.transfer(0x88, 0x88, 0x88, 0x88);
+        rig.transfer(rate, rate, rate, rate);
+    }
+
     private static final class Rig {
         private final SerialPort[] ports = new SerialPort[FourPlayerAdapter.PLAYER_COUNT];
+
+        private int lastTransferTicks;
 
         private Rig() {
             FourPlayerAdapter adapter = new FourPlayerAdapter();
@@ -128,6 +171,7 @@ public class FourPlayerAdapterTest {
             if (timeout == 0) {
                 throw new AssertionError("DMG-07 transfer timed out");
             }
+            lastTransferTicks = 100_000 - timeout;
             int[] result = new int[ports.length];
             for (int i = 0; i < ports.length; i++) {
                 result[i] = ports[i].getByte(0xff01);
