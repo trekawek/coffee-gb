@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry;
+import org.apache.commons.compress.archivers.sevenz.SevenZFile;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
@@ -176,14 +178,23 @@ public class Rom {
 
     private static byte[] loadFile(File file) throws IOException {
         String ext = FilenameUtils.getExtension(file.getName());
+        if ("7z".equalsIgnoreCase(ext)) {
+            try (SevenZFile sevenZFile = SevenZFile.builder().setFile(file).get()) {
+                SevenZArchiveEntry entry;
+                while ((entry = sevenZFile.getNextEntry()) != null) {
+                    if (!entry.isDirectory() && isRomFile(entry.getName())) {
+                        return IOUtils.toByteArray(sevenZFile.getInputStream(entry));
+                    }
+                }
+            }
+            throw new IllegalArgumentException("Can't find ROM file inside the 7z.");
+        }
         try (InputStream is = Files.newInputStream(file.toPath())) {
             if ("zip".equalsIgnoreCase(ext)) {
                 try (ZipInputStream zis = new ZipInputStream(is)) {
                     ZipEntry entry;
                     while ((entry = zis.getNextEntry()) != null) {
-                        String name = entry.getName();
-                        String entryExt = FilenameUtils.getExtension(name);
-                        if (Stream.of("gb", "gbc", "rom").anyMatch(e -> e.equalsIgnoreCase(entryExt))) {
+                        if (!entry.isDirectory() && isRomFile(entry.getName())) {
                             return IOUtils.toByteArray(zis, (int) entry.getSize());
                         }
                         zis.closeEntry();
@@ -194,6 +205,11 @@ public class Rom {
                 return IOUtils.toByteArray(is, (int) file.length());
             }
         }
+    }
+
+    private static boolean isRomFile(String name) {
+        String ext = FilenameUtils.getExtension(name);
+        return Stream.of("gb", "gbc", "rom").anyMatch(e -> e.equalsIgnoreCase(ext));
     }
 
     private static int getRomBanks(int id, int romLength) {

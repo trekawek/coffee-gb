@@ -40,8 +40,8 @@ is recommended and is the version used by CI and release builds.
    ```
 
 ROMs are not included. Coffee GB accepts `.gb`, `.gbc`, and `.rom` files, as
-well as ZIP archives containing a ROM. On macOS, game-controller support also
-requires SDL2 (`brew install sdl2`); keyboard input works without it.
+well as ZIP and 7z archives containing a ROM. On macOS, game-controller support
+also requires SDL2 (`brew install sdl2`); keyboard input works without it.
 
 For netplay, one player chooses **Link > Start server** and the other chooses
 **Link > Connect to server**.
@@ -88,7 +88,7 @@ btn_select=VK_SHIFT
 - **Hardware-focused accuracy:** a cycle-stepped CPU and high-accuracy PPU, APU,
   timer, DMA, serial, and infrared behavior.
 - **Everyday play:** battery-backed saves, ten save-state slots, pause/reset,
-  hold-to-rewind, recent ROMs, and ZIP archive loading.
+  hold-to-rewind, recent ROMs, and ZIP/7z archive loading.
 - **Rollback netplay:** TCP multiplayer for link-cable games, with local rollback
   hiding normal network latency and synchronized infrared communication.
 - **Broad cartridge support:** MBC1/1M, MBC2, MBC3 with RTC and MBC30, MBC5,
