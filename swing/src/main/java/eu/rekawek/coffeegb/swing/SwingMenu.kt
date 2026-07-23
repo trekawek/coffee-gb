@@ -867,6 +867,16 @@ class SwingMenu(
       val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
       setStatus("Connected as Player ${it.player + 1} ($mode)", true)
     }
+    eventBus.register<ConnectionController.ClientConnectionRejectedEvent> {
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            it.message,
+            "Netplay connection rejected",
+            JOptionPane.ERROR_MESSAGE,
+        )
+      }
+    }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       setStatus("Disconnected", false)
       connectToServer.state = false

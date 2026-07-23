@@ -343,7 +343,14 @@ class Connection(
     if (receivedVersion != PROTOCOL_VERSION) {
       throw IOException("Protocol mismatch: expected $PROTOCOL_VERSION, received $receivedVersion")
     }
-    val modeOrdinal = buf[PROTOCOL_NAME.length + 1].toInt()
+    val modeOrdinal = buf[PROTOCOL_NAME.length + 1].toInt() and 0xff
+    if (modeOrdinal == REJECTION_MARKER) {
+      val reasonCode = buf[PROTOCOL_NAME.length + 2].toInt() and 0xff
+      val reason =
+          RejectionReason.entries.firstOrNull { it.wireCode == reasonCode }
+              ?: throw IOException("Server rejected the connection with unknown reason $reasonCode")
+      throw ConnectionRejectedException(reason)
+    }
     if (modeOrdinal !in LinkMode.entries.indices) throw IOException("Invalid link mode $modeOrdinal")
     val receivedMode = LinkMode.entries[modeOrdinal]
     val receivedPlayer = buf[PROTOCOL_NAME.length + 2].toInt()
@@ -355,6 +362,16 @@ class Connection(
   }
 
   private data class Handshake(val mode: LinkMode, val player: Int)
+
+  internal enum class RejectionReason(
+      val wireCode: Int,
+      val userMessage: String,
+  ) {
+    SERVER_FULL(1, "The netplay server is already full."),
+  }
+
+  internal class ConnectionRejectedException(val reason: RejectionReason) :
+      IOException(reason.userMessage)
 
   data class PeerLoadedGameEvent(
       val rom: ByteArray,
@@ -399,12 +416,24 @@ class Connection(
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
     private const val PROTOCOL_NAME = "CoffeeGB NETPLAY"
     private const val PROTOCOL_VERSION: Byte = 0x05
+    private const val REJECTION_MARKER = 0xff
     private const val MAX_COMPRESSED_PAYLOAD = 64 * 1024 * 1024
     private const val ROM: Byte = 0x01
     private const val INPUT: Byte = 0x03
     private const val RESET: Byte = 0x06
     private const val STOP: Byte = 0x07
     private const val START: Byte = 0x08
+
+    internal fun reject(outputStream: OutputStream, reason: RejectionReason) {
+      val output = DataOutputStream(BufferedOutputStream(outputStream))
+      val buf = ByteArray(PROTOCOL_NAME.length + 3)
+      PROTOCOL_NAME.toByteArray().copyInto(buf)
+      buf[PROTOCOL_NAME.length] = PROTOCOL_VERSION
+      buf[PROTOCOL_NAME.length + 1] = REJECTION_MARKER.toByte()
+      buf[PROTOCOL_NAME.length + 2] = reason.wireCode.toByte()
+      output.write(buf)
+      output.flush()
+    }
 
     fun deflate(data: ByteArray): ByteArray {
       val deflater = Deflater(Deflater.BEST_SPEED)

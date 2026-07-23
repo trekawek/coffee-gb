@@ -42,9 +42,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
     require(buttons.size == mode.playerCount)
     states.add(State(frame, inputs, mementos, buttons))
     LOG.atDebug().log("Adding state on frame {}; state size {}", frame, states.size)
-    while (states.size > 60 * 5) {
-      states.removeFirst()
-    }
+    trimHistory()
   }
 
   @Synchronized
@@ -110,7 +108,13 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
       }
     }
 
+    // A four-player session receives input over three independent TCP streams. One player's
+    // frame N packet can therefore be merged before another player's frame N-1 packet arrives.
+    // Keep the states before this rebase point: they are unchanged by the replay and remain the
+    // only valid base for that later, earlier packet.
+    val retainedStates = states.takeWhile { it.frame < baseFrame }
     states.clear()
+    states.addAll(retainedStates)
     patches.clear()
 
     for (frame in baseFrame..toFrame + 1) {
@@ -130,6 +134,8 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
         repeat(TICKS_PER_FRAME) { sessions.forEach { it?.gameboy?.tick() } }
       }
     }
+
+    trimHistory()
 
     sessions.forEach { it?.close() }
 
@@ -156,6 +162,12 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
 
   private fun emptyInputs() = List(mode.playerCount) { Input(emptyList(), emptyList()) }
 
+  private fun trimHistory() {
+    while (states.size > MAX_HISTORY_STATES) {
+      states.removeFirst()
+    }
+  }
+
   data class State(
       val frame: Long,
       val inputs: List<Input>,
@@ -174,6 +186,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
 
   companion object {
     val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)
+    private const val MAX_HISTORY_STATES = 60 * 5
 
     internal fun createLinks(mode: LinkMode): Links {
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
