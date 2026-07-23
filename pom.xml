@@ -29,7 +29,8 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <kotlin.version>2.4.0</kotlin.version>
-        <skip.unit.tests>false</skip.unit.tests>
+        <skipTests>false</skipTests>
+        <skip.unit.tests>${skipTests}</skip.unit.tests>
         <integration.test.threadCount>2</integration.test.threadCount>
     </properties>
     <build>
