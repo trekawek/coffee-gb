@@ -19,6 +19,16 @@ public class MemoryBatteryTest {
     }
 
     @Test
+    public void truncatedSaveDataPreservesAvailableBytesAndZeroFillsTheRest() {
+        MemoryBattery battery = new MemoryBattery(new byte[]{1, 2});
+        int[] ram = {0xff, 0xff, 0xff, 0xff};
+
+        battery.loadRam(ram);
+
+        assertArrayEquals(new int[]{1, 2, 0, 0}, ram);
+    }
+
+    @Test
     public void emptySaveDataIsExpandedToMapperRamAndClockSize() {
         MemoryBattery battery = new MemoryBattery(new byte[0]);
         int[] ram = {0xff, 0xff};
