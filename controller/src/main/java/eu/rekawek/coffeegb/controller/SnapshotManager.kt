@@ -43,3 +43,14 @@ fun Memento<Gameboy>.serialize(): ByteArray {
 fun ByteArray.deserializeToGameboyMemento(): Memento<Gameboy> {
   return ObjectInputStream(inputStream()).use { it.readObject() as Memento<Gameboy> }
 }
+
+fun Memento<Session>.serializeSessionMemento(): ByteArray {
+  val baos = ByteArrayOutputStream()
+  ObjectOutputStream(baos).use { it.writeObject(this) }
+  return baos.toByteArray()
+}
+
+fun ByteArray.deserializeToSessionMemento(): Memento<Session> {
+  @Suppress("UNCHECKED_CAST")
+  return ObjectInputStream(inputStream()).use { it.readObject() as Memento<Session> }
+}

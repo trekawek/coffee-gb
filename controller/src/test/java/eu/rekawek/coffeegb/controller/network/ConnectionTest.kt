@@ -104,11 +104,15 @@ class ConnectionTest {
 
   private val threads = mutableListOf<Thread>()
 
-  private fun connect(startSession: Boolean = true) {
+  private fun connect(
+      startSession: Boolean = true,
+      mode: LinkMode = LinkMode.NORMAL,
+  ) {
     val senderToReceiver = Pipe()
     val receiverToSender = Pipe()
 
-    val sender = Connection(receiverToSender.source, senderToReceiver.sink, senderBus, true)
+    val sender =
+        Connection(receiverToSender.source, senderToReceiver.sink, senderBus, true, mode)
     val receiver =
         Connection(TrickleInputStream(senderToReceiver.source), receiverToSender.sink, receiverBus, false)
     this.sender = sender
@@ -163,6 +167,7 @@ class ConnectionTest {
     Random(0).nextBytes(rom, 0, 32 * 1024)
     val battery = ByteArray(8 * 1024) { (it % 7).toByte() }
     val snapshot = ByteArray(64 * 1024)
+    val sessionSnapshot = ByteArray(32 * 1024) { (it % 11).toByte() }
 
     senderBus.post(
         LinkedController.LocalRomLoadedEvent(
@@ -173,6 +178,8 @@ class ConnectionTest {
             Gameboy.BootstrapMode.FAST_FORWARD,
             7,
             cgb0Revision = true,
+            sessionSnapshot = sessionSnapshot,
+            heldButtons = setOf(Button.A, Button.LEFT),
         )
     )
 
@@ -181,10 +188,43 @@ class ConnectionTest {
     assertContentEquals(rom, event.rom)
     assertContentEquals(battery, event.battery)
     assertContentEquals(snapshot, event.snapshot)
+    assertContentEquals(sessionSnapshot, event.sessionSnapshot)
     assertEquals(GameboyType.CGB, event.gameboyType)
     assertEquals(Gameboy.BootstrapMode.FAST_FORWARD, event.bootstrapMode)
     assertTrue(event.cgb0Revision)
+    assertEquals(setOf(Button.A, Button.LEFT), event.heldButtons)
     assertEquals(7, event.frame)
+  }
+
+  @Test
+  fun fourPlayerCheckpointEndsWithSynchronizationFrame() {
+    val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    val synchronized = LinkedBlockingQueue<Connection.SessionCheckpointEvent>()
+    receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
+    receiverBus.register<Connection.SessionCheckpointEvent> { synchronized.add(it) }
+    connect(mode = LinkMode.FOUR_PLAYER_ADAPTER)
+
+    val state =
+        LinkedController.LocalRomLoadedEvent(
+            romFile = byteArrayOf(1, 2, 3),
+            batteryFile = null,
+            snapshot = null,
+            gameboyType = GameboyType.DMG,
+            bootstrapMode = Gameboy.BootstrapMode.SKIP,
+            frame = 73,
+            player = 0,
+            sessionSnapshot = byteArrayOf(4, 5, 6),
+            heldButtons = setOf(Button.START),
+        )
+    senderBus.post(LinkedController.SessionStateReadyEvent(73, listOf(state)))
+
+    assertEquals(null, received.poll(200, TimeUnit.MILLISECONDS))
+    val checkpoint = assertNotNull(synchronized.poll(5, TimeUnit.SECONDS))
+    assertEquals(1, checkpoint.states.size)
+    val game = checkpoint.states.single()
+    assertContentEquals(byteArrayOf(4, 5, 6), game.sessionSnapshot)
+    assertEquals(setOf(Button.START), game.heldButtons)
+    assertEquals(73, checkpoint.frame)
   }
 
   @Test

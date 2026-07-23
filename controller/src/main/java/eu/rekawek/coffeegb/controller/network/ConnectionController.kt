@@ -76,5 +76,7 @@ class ConnectionController(private val eventBus: EventBus) {
       val mode: LinkMode,
   ) : Event
 
+  data class ServerPlayerDisconnectedEvent(val player: Int) : Event
+
   class ClientDisconnectedFromServerEvent : Event
 }

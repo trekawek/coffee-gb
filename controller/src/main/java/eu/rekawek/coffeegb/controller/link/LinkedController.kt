@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.TimingTicker
 import eu.rekawek.coffeegb.controller.deserializeToGameboyMemento
+import eu.rekawek.coffeegb.controller.deserializeToSessionMemento
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
@@ -19,8 +20,11 @@ import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteResetEven
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestStopEvent
+import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.serialize
+import eu.rekawek.coffeegb.controller.serializeSessionMemento
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
@@ -30,6 +34,7 @@ import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
+import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
@@ -64,6 +69,10 @@ class LinkedController(
 
   private val configs = MutableList<GameboyConfiguration?>(mode.playerCount) { null }
 
+  private val romBuffers = MutableList<ByteArray?>(mode.playerCount) { null }
+
+  private val batteryBuffers = MutableList<ByteArray?>(mode.playerCount) { null }
+
   private val links = StateHistory.createLinks(mode)
 
   @VisibleForTesting internal val stateHistory: StateHistory = StateHistory(mode)
@@ -73,6 +82,8 @@ class LinkedController(
 
   @VisibleForTesting internal fun activeSessionCount() = sessions.count { it != null }
 
+  @VisibleForTesting internal fun currentFrame() = frame
+
   @Volatile private var doStop = false
 
   private var frame = 0L
@@ -81,7 +92,8 @@ class LinkedController(
 
   private var lastInput: Input? = null
 
-  private var initialRosterReady = false
+  private var initialStateSynchronized =
+      mode != LinkMode.FOUR_PLAYER_ADAPTER || localPlayer == 0
 
   private var lastSync: TimeSource.Monotonic.ValueTimeMark = TimeSource.Monotonic.markNow()
 
@@ -98,36 +110,67 @@ class LinkedController(
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       configs[localPlayer] = e.config
-      initSession(localPlayer, frame, e.snapshot?.deserializeToGameboyMemento())
+      initSession(localPlayer, frame, e.snapshot?.deserializeToGameboyMemento(), null)
       sendLocalRom(e.snapshot)
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
+        broadcastCurrentState()
+      }
     }
 
     eventQueue.register<StopEmulationEvent> {
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
-      eventBus.postAsync(RequestStopEvent(frame, localPlayer))
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
+        broadcastCurrentState()
+      } else {
+        eventBus.postAsync(RequestStopEvent(frame, localPlayer))
+      }
     }
 
     eventQueue.register<ResetEmulationEvent> {
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
-      initSession(localPlayer, frame, null)
+      initSession(localPlayer, frame, null, null)
       eventBus.postAsync(RequestResetEvent(frame, localPlayer))
     }
 
     eventQueue.register<PeerLoadedGameEvent> { e ->
-      if (e.player == localPlayer || e.player !in sessions.indices) {
-        return@register
+      if (!loadPeerState(e)) return@register
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+          localPlayer == 0 &&
+          e.sessionSnapshot == null) {
+        // The new physical port is now attached at this frame. Publish one checkpoint containing
+        // every active console plus the shared adapter so old and new clients resume together.
+        broadcastCurrentState()
       }
-      configs[e.player] =
-          createGameboyConfig(properties, Rom(e.rom))
-              .setGameboyType(e.gameboyType)
-              .setBootstrapMode(e.bootstrapMode)
-              .setCgb0Revision(e.cgb0Revision)
-              .setBatteryData(e.battery)
-      sessions[e.player]?.close()
-      sessions[e.player] = null
-      initSession(e.player, e.frame, e.snapshot?.deserializeToGameboyMemento())
+    }
+
+    eventQueue.register<SessionCheckpointEvent> { e ->
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer != 0) {
+        val activePlayers = e.states.mapTo(mutableSetOf()) { it.player }
+        sessions.indices.filterNot(activePlayers::contains).forEach { player ->
+          sessions[player]?.close()
+          sessions[player] = null
+          configs[player] = null
+          romBuffers[player] = null
+          batteryBuffers[player] = null
+        }
+        e.states.forEach(::loadPeerState)
+        stateHistory.clear()
+        frame = e.frame
+        initialStateSynchronized = true
+      }
+    }
+
+    eventQueue.register<ServerPlayerDisconnectedEvent> { e ->
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0 && e.player in sessions.indices) {
+        sessions[e.player]?.close()
+        sessions[e.player] = null
+        configs[e.player] = null
+        romBuffers[e.player] = null
+        batteryBuffers[e.player] = null
+        broadcastCurrentState()
+      }
     }
 
     eventQueue.register<RemoteButtonStateEvent> { e ->
@@ -140,7 +183,7 @@ class LinkedController(
       if (e.player != localPlayer && e.player in sessions.indices) {
         sessions[e.player]?.close()
         sessions[e.player] = null
-        initSession(e.player, e.frame, null)
+        initSession(e.player, e.frame, null, null)
       }
     }
 
@@ -148,6 +191,9 @@ class LinkedController(
       if (e.player != localPlayer && e.player in sessions.indices) {
         sessions[e.player]?.close()
         sessions[e.player] = null
+        if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
+          broadcastCurrentState()
+        }
       }
     }
 
@@ -197,16 +243,18 @@ class LinkedController(
   fun runFrame() {
     eventQueue.dispatch()
 
-    // All peers begin on the same frame. In particular, the four-player server waits for all
-    // three client ROM states instead of letting player 1 advance and making late clients catch
-    // up without the adapter traffic they missed.
-    if (!initialRosterReady && sessions.any { it == null }) {
+    // A DMG-07 host runs with any number of attached ports. A client waits only for the coherent
+    // group checkpoint sent after the host hot-plugs it; normal two-player link keeps its original
+    // both-ROM startup behavior.
+    val waitingForInitialState =
+        if (mode == LinkMode.FOUR_PLAYER_ADAPTER) !initialStateSynchronized
+        else sessions.any { it == null }
+    if (waitingForInitialState) {
       if (!timingTicker.disabled) {
         Thread.sleep(1)
       }
       return
     }
-    initialRosterReady = true
 
     if (stateHistory.merge(configs)) {
       val head = stateHistory.getHead()
@@ -236,7 +284,7 @@ class LinkedController(
         sessions.map { it?.heldButtons ?: emptySet() },
     )
 
-    effectiveInput.send(sessions[localPlayer]!!.eventBus)
+    sessions[localPlayer]?.let { effectiveInput.send(it.eventBus) }
 
     if (!effectiveInput.isEmpty() || lastSync.elapsedNow() > 5.seconds) {
       eventBus.postAsync(LocalButtonStateEvent(frame, effectiveInput, localPlayer))
@@ -251,7 +299,13 @@ class LinkedController(
     frame++
   }
 
-  private fun initSession(player: Int, sessionFrame: Long, state: Memento<Gameboy>?) {
+  private fun initSession(
+      player: Int,
+      sessionFrame: Long,
+      state: Memento<Gameboy>?,
+      sessionState: Memento<Session>?,
+      heldButtons: Set<Button> = emptySet(),
+  ) {
     val config = configs[player] ?: return
     val sessionEventBus = EventBusImpl(null, null, false)
     if (player == localPlayer) {
@@ -270,20 +324,27 @@ class LinkedController(
     }
     val session =
         Session(
-            if (state != null) config.forRestore() else config,
+            if (state != null || sessionState != null) config.forRestore() else config,
             sessionEventBus,
             if (player == localPlayer) console else null,
             links.serial[player],
             links.infrared[player],
         )
-    if (state != null) {
+    if (sessionState != null) {
+      session.restoreFromMemento(sessionState)
+      session.heldButtons = heldButtons
+    } else if (state != null) {
       session.gameboy.restoreFromMemento(state)
     }
 
-    // This is primarily for a ROM reload/reset arriving a few frames late. Initial four-player
-    // startup is held at frame zero until every session exists.
+    // A four-player ROM arriving at the host is a hot-plug at the current adapter phase. Session
+    // checkpoints are already at their advertised frame. Other late reset/reload events retain
+    // the historical catch-up path.
     var current = sessionFrame
-    while (current < frame) {
+    val hotPlug =
+        mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+            (sessionState != null || (localPlayer == 0 && player != localPlayer))
+    while (!hotPlug && current < frame) {
       stateHistory.setPlayerState(player, current, session.saveToMemento(), session.heldButtons)
       repeat(TICKS_PER_FRAME) { session.gameboy.tick() }
       current++
@@ -291,11 +352,38 @@ class LinkedController(
     sessions[player] = session
   }
 
+  private fun loadPeerState(e: PeerLoadedGameEvent): Boolean {
+    if (e.player !in sessions.indices ||
+        (e.player == localPlayer && e.sessionSnapshot == null)) {
+      return false
+    }
+    configs[e.player] =
+        createGameboyConfig(properties, Rom(e.rom))
+            .setGameboyType(e.gameboyType)
+            .setBootstrapMode(e.bootstrapMode)
+            .setCgb0Revision(e.cgb0Revision)
+            .setBatteryData(e.battery)
+    romBuffers[e.player] = e.rom
+    batteryBuffers[e.player] = e.battery
+    sessions[e.player]?.close()
+    sessions[e.player] = null
+    initSession(
+        e.player,
+        e.frame,
+        e.snapshot?.deserializeToGameboyMemento(),
+        e.sessionSnapshot?.deserializeToSessionMemento(),
+        e.heldButtons,
+    )
+    return true
+  }
+
   private fun sendLocalRom(snapshot: ByteArray?) {
     val config = configs[localPlayer] ?: return
     val romBuffer = config.rom.file.toPath().readBytes()
     val saveFile = Cartridge.getSaveName(config.rom.file)
     val batteryBuffer = if (saveFile.exists()) saveFile.toPath().readBytes() else null
+    romBuffers[localPlayer] = romBuffer
+    batteryBuffers[localPlayer] = batteryBuffer
 
     eventBus.post(
         LocalRomLoadedEvent(
@@ -308,6 +396,28 @@ class LinkedController(
             cgb0Revision = config.isCgb0Revision,
             player = localPlayer,
         ))
+  }
+
+  private fun broadcastCurrentState() {
+    val states =
+        sessions.mapIndexedNotNull { player, session ->
+          val config = configs[player] ?: return@mapIndexedNotNull null
+          session ?: return@mapIndexedNotNull null
+          val romBuffer = romBuffers[player] ?: return@mapIndexedNotNull null
+          LocalRomLoadedEvent(
+              romFile = romBuffer,
+              batteryFile = batteryBuffers[player],
+              snapshot = null,
+              gameboyType = config.gameboyType,
+              bootstrapMode = config.bootstrapMode,
+              frame = frame,
+              cgb0Revision = config.isCgb0Revision,
+              player = player,
+              sessionSnapshot = session.saveToMemento().serializeSessionMemento(),
+              heldButtons = session.heldButtons,
+          )
+        }
+    eventBus.post(SessionStateReadyEvent(frame, states))
   }
 
   override fun close() {}
@@ -336,7 +446,11 @@ class LinkedController(
       val frame: Long,
       val cgb0Revision: Boolean = false,
       val player: Int = 0,
+      val sessionSnapshot: ByteArray? = null,
+      val heldButtons: Set<Button> = emptySet(),
   ) : Event
+
+  data class SessionStateReadyEvent(val frame: Long, val states: List<LocalRomLoadedEvent>) : Event
 
   data class LocalButtonStateEvent(
       val frame: Long,

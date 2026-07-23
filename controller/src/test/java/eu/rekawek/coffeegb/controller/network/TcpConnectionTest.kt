@@ -105,7 +105,7 @@ class TcpConnectionTest {
   }
 
   @Test
-  fun fourPlayerServerAssignsSlotsWaitsForAllPlayersAndRelaysInput() {
+  fun fourPlayerServerStartsImmediatelyAssignsSlotsAndRelaysInput() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
     val sessionStarted = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
@@ -116,6 +116,9 @@ class TcpConnectionTest {
     this.server = server
     threads += Thread(server).also { it.start() }
     assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS), "server did not start")
+    val active = assertNotNull(sessionStarted.poll(5, TimeUnit.SECONDS), "adapter did not start")
+    assertEquals(LinkMode.FOUR_PLAYER_ADAPTER, active.mode)
+    assertEquals(0, active.player)
 
     val buses = List(3) { EventBusImpl().also(extraBuses::add) }
     val handshakes = buses.map { LinkedBlockingQueue<ConnectionController.ClientHandshakeCompletedEvent>() }
@@ -129,14 +132,7 @@ class TcpConnectionTest {
       val handshake = assertNotNull(handshakes[index].poll(5, TimeUnit.SECONDS))
       assertEquals(LinkMode.FOUR_PLAYER_ADAPTER, handshake.mode)
       assertEquals(index + 1, handshake.player)
-      if (index < 2) {
-        assertEquals(null, ready[index].poll(200, TimeUnit.MILLISECONDS))
-      }
-    }
-
-    assertNotNull(sessionStarted.poll(5, TimeUnit.SECONDS), "server did not release session")
-    ready.forEachIndexed { index, queue ->
-      val event = assertNotNull(queue.poll(5, TimeUnit.SECONDS), "player ${index + 2} not released")
+      val event = assertNotNull(ready[index].poll(5, TimeUnit.SECONDS))
       assertEquals(LinkMode.FOUR_PLAYER_ADAPTER, event.mode)
       assertEquals(index + 1, event.player)
     }
@@ -180,6 +176,51 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun disconnectedFourPlayerSlotCanBeReusedWithoutStoppingServer() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val disconnected = LinkedBlockingQueue<ConnectionController.ServerPlayerDisconnectedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    serverBus.register<ConnectionController.ServerPlayerDisconnectedEvent> { disconnected.add(it) }
+
+    val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+
+    val firstBus = EventBusImpl().also(extraBuses::add)
+    val firstHandshake = LinkedBlockingQueue<ConnectionController.ClientHandshakeCompletedEvent>()
+    val firstReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    firstBus.register<ConnectionController.ClientHandshakeCompletedEvent> { firstHandshake.add(it) }
+    firstBus.register<ConnectionController.ClientConnectedToServerEvent> { firstReady.add(it) }
+    val first = TcpClient("localhost:$port", firstBus)
+    extraClients += first
+    threads += Thread(first).also { it.start() }
+    assertEquals(1, assertNotNull(firstHandshake.poll(5, TimeUnit.SECONDS)).player)
+    assertNotNull(firstReady.poll(5, TimeUnit.SECONDS))
+
+    first.stop()
+    assertEquals(1, assertNotNull(disconnected.poll(5, TimeUnit.SECONDS)).player)
+
+    val replacementBus = EventBusImpl().also(extraBuses::add)
+    val replacementHandshake =
+        LinkedBlockingQueue<ConnectionController.ClientHandshakeCompletedEvent>()
+    val replacementReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    replacementBus.register<ConnectionController.ClientHandshakeCompletedEvent> {
+      replacementHandshake.add(it)
+    }
+    replacementBus.register<ConnectionController.ClientConnectedToServerEvent> {
+      replacementReady.add(it)
+    }
+    val replacement = TcpClient("localhost:$port", replacementBus)
+    extraClients += replacement
+    threads += Thread(replacement).also { it.start() }
+
+    assertEquals(1, assertNotNull(replacementHandshake.poll(5, TimeUnit.SECONDS)).player)
+    assertNotNull(replacementReady.poll(5, TimeUnit.SECONDS))
+  }
+
+  @Test
   fun fourPlayerServerRejectsAnExtraClientWithAClearReason() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
@@ -197,9 +238,7 @@ class TcpConnectionTest {
       val client = TcpClient("localhost:$port", bus)
       extraClients += client
       threads += Thread(client).also { it.start() }
-      if (it == 2) {
-        assertNotNull(ready.poll(5, TimeUnit.SECONDS), "full roster did not start")
-      }
+      assertNotNull(ready.poll(5, TimeUnit.SECONDS), "client ${it + 2} did not start")
     }
 
     val rejectedBus = EventBusImpl().also(extraBuses::add)

@@ -160,6 +160,12 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
     states[index] = states[index].copy(mementos = mementos, buttons = heldButtons)
   }
 
+  @Synchronized
+  fun clear() {
+    states.clear()
+    patches.clear()
+  }
+
   private fun emptyInputs() = List(mode.playerCount) { Input(emptyList(), emptyList()) }
 
   private fun trimHistory() {

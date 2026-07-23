@@ -6,6 +6,8 @@ import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
+import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy
@@ -19,9 +21,148 @@ import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class LinkedControllerTest {
+
+  @Test
+  fun fourPlayerHostRunsImmediatelyWithEmptyAdapterPorts() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 0,
+        )
+    sut.timingTicker.disabled = true
+
+    eventBus.post(LoadRomEvent(ROM))
+    repeat(3) { sut.runFrame() }
+
+    assertEquals(1, sut.activeSessionCount())
+    assertEquals(3, sut.currentFrame())
+    assertEquals(2, sut.stateHistory.getHead().frame)
+    eventBus.close()
+  }
+
+  @Test
+  fun lateFourPlayerClientRestoresCoherentHostCheckpoint() {
+    val hostBus = EventBusImpl()
+    val host =
+        LinkedController(
+            hostBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 0,
+        )
+    host.timingTicker.disabled = true
+    val checkpoints = LinkedBlockingQueue<LinkedController.SessionStateReadyEvent>()
+    hostBus.register<LinkedController.SessionStateReadyEvent> { checkpoints.add(it) }
+
+    hostBus.post(LoadRomEvent(ROM))
+    repeat(3) { host.runFrame() }
+    checkpoints.clear()
+
+    // Player 2 joins after the host has already advanced. Its existing Game Boy is hot-plugged at
+    // the current adapter phase; the host then publishes both complete Session mementos.
+    hostBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            player = 1,
+        ))
+    host.runFrame()
+    val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+    assertEquals(3, checkpoint.frame)
+    assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
+    assertTrue(checkpoint.states.all { it.sessionSnapshot != null })
+
+    val clientBus = EventBusImpl()
+    val client =
+        LinkedController(
+            clientBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        )
+    client.timingTicker.disabled = true
+    clientBus.post(LoadRomEvent(ROM))
+    client.runFrame()
+    assertEquals(0, client.currentFrame(), "client must wait for the host checkpoint")
+
+    fun deliverCheckpoint(value: LinkedController.SessionStateReadyEvent) {
+      clientBus.post(
+          SessionCheckpointEvent(
+              value.frame,
+              value.states.map { state ->
+                PeerLoadedGameEvent(
+                    rom = state.romFile,
+                    battery = state.batteryFile,
+                    snapshot = state.snapshot,
+                    gameboyType = state.gameboyType,
+                    bootstrapMode = state.bootstrapMode,
+                    frame = state.frame,
+                    cgb0Revision = state.cgb0Revision,
+                    player = state.player,
+                    sessionSnapshot = state.sessionSnapshot,
+                    heldButtons = state.heldButtons,
+                )
+              },
+          ))
+    }
+
+    deliverCheckpoint(checkpoint)
+    client.runFrame()
+
+    assertEquals(2, client.activeSessionCount())
+    assertEquals(host.currentFrame(), client.currentFrame())
+    assertEquals(host.stateHistory.getHead().frame, client.stateHistory.getHead().frame)
+
+    // Another physical port can hot-plug while the original client is already running.
+    hostBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            player = 2,
+        ))
+    host.runFrame()
+    val expandedCheckpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+    assertEquals(listOf(0, 1, 2), expandedCheckpoint.states.map { it.player })
+    deliverCheckpoint(expandedCheckpoint)
+    client.runFrame()
+    assertEquals(3, host.activeSessionCount())
+    assertEquals(3, client.activeSessionCount())
+    assertEquals(host.currentFrame(), client.currentFrame())
+
+    // Removing Player 3 leaves the other consoles and adapter running from an authoritative
+    // checkpoint, and frees that physical slot for a replacement.
+    hostBus.post(ServerPlayerDisconnectedEvent(2))
+    host.runFrame()
+    val disconnectCheckpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+    assertEquals(listOf(0, 1), disconnectCheckpoint.states.map { it.player })
+    deliverCheckpoint(disconnectCheckpoint)
+    client.runFrame()
+    assertEquals(2, host.activeSessionCount())
+    assertEquals(2, client.activeSessionCount())
+    assertEquals(host.currentFrame(), client.currentFrame())
+    assertEquals(6, host.currentFrame())
+
+    clientBus.close()
+    hostBus.close()
+  }
 
   @Test
   fun peerWithEmptyMbc2SaveStartsSession() {
@@ -54,7 +195,7 @@ class LinkedControllerTest {
             EmulatorProperties(),
             null,
             LinkMode.FOUR_PLAYER_ADAPTER,
-            localPlayer = 2,
+            localPlayer = 0,
         )
     sut.timingTicker.disabled = true
     val replayed = mutableListOf<GameboyJoypadPressEvent>()
@@ -64,7 +205,7 @@ class LinkedControllerTest {
     eventBus.register<LinkedController.LocalButtonStateEvent> { localInputs.add(it) }
 
     eventBus.post(LoadRomEvent(ROM))
-    for (player in listOf(0, 1, 3)) {
+    for (player in listOf(1, 2, 3)) {
       eventBus.post(
           PeerLoadedGameEvent(
               ROM_BYTES,
@@ -85,16 +226,16 @@ class LinkedControllerTest {
     sut.runFrame()
     eventBus.drainAsyncEvents()
     val local = localInputs.poll(5, TimeUnit.SECONDS)
-    assertEquals(2, local.player)
+    assertEquals(0, local.player)
     assertEquals(listOf(Button.B), local.input.pressedButtons)
 
     eventBus.post(
-        LinkedController.RemoteButtonStateEvent(0, Input(listOf(Button.A), emptyList()), 0))
+        LinkedController.RemoteButtonStateEvent(0, Input(listOf(Button.A), emptyList()), 1))
     eventBus.post(
         LinkedController.RemoteButtonStateEvent(0, Input(listOf(Button.START), emptyList()), 3))
     sut.runFrame()
 
-    assertTrue(replayed.any { it.gameboy == 0 && it.button == Button.A })
+    assertTrue(replayed.any { it.gameboy == 1 && it.button == Button.A })
     assertTrue(replayed.any { it.gameboy == 3 && it.button == Button.START })
 
     val previousFrame = sut.stateHistory.getHead().frame
