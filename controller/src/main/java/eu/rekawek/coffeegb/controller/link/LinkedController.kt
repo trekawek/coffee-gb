@@ -12,6 +12,9 @@ import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
+import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
+import eu.rekawek.coffeegb.controller.state.LinkedSessionState
+import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
@@ -112,6 +115,18 @@ class LinkedController(
 
   @VisibleForTesting
   internal fun heldButtonStates(): List<Set<Button>?> = sessions.map { it?.heldButtons }
+
+  /** Captures controller-owned frame, topology, session machines, endpoints, and held input. */
+  internal fun captureDetachedState(): LinkedSessionState =
+      LinkedSessionState(
+          frame,
+          localPlayer,
+          if (mode == LinkMode.NORMAL) LinkedTopologyState.NORMAL
+          else LinkedTopologyState.FOUR_PLAYER_ADAPTER,
+          sessions.mapIndexed { player, session ->
+            LinkedPlayerState(player, session?.captureDetachedState())
+          },
+      )
 
   @Volatile private var doStop = false
 

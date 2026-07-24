@@ -87,6 +87,34 @@ public class BarcodeBoySerialEndpoint implements SerialEndpoint {
         return pending != null || state == State.SENDING;
     }
 
+    /** Controller-owned state kept outside the pinned legacy memento record. */
+    public RuntimeState captureRuntimeState() {
+        return new RuntimeState(transferArmed, pending);
+    }
+
+    public void restoreRuntimeState(RuntimeState runtimeState) {
+        transferArmed = runtimeState.transferArmed;
+        pending = runtimeState.copyPending();
+    }
+
+    public static final class RuntimeState {
+        private final boolean transferArmed;
+        private final int[] pending;
+
+        public RuntimeState(boolean transferArmed, int[] pending) {
+            this.transferArmed = transferArmed;
+            this.pending = pending == null ? null : pending.clone();
+        }
+
+        public boolean transferArmed() {
+            return transferArmed;
+        }
+
+        public int[] copyPending() {
+            return pending == null ? null : pending.clone();
+        }
+    }
+
     @Override
     public void setSb(int sb) {
     }

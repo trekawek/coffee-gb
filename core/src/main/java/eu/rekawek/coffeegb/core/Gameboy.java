@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
@@ -792,6 +793,14 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
     }
 
+    public RealTimeClock.RuntimeState captureRtcRuntimeState() {
+        return cartridge.captureRtcRuntimeState();
+    }
+
+    public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
+        cartridge.restoreRtcRuntimeState(state);
+    }
+
     /** Flushes persistent cartridge state without closing the running machine. */
     public void flushCartridge() {
         cartridge.flushBattery();
@@ -814,7 +823,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     @Override
     public Memento<Gameboy> saveToMemento() {
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), display.saveToMemento(), sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, speedSwitchTailTicks, speedSwitchClockPhaseShifted, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
+        // Gpu owns the sole display snapshot. Keep the nullable root component in the legacy
+        // record shape so Phase-0 fixtures still decode, but do not clone the two 160x144 buffers
+        // a second time for new captures.
+        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), null, sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, speedSwitchTailTicks, speedSwitchClockPhaseShifted, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
     }
 
     @Override
@@ -856,7 +868,11 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         timer.restoreFromMemento(mem.timerMemento());
         dma.restoreFromMemento(mem.dmaMemento());
         hdma.restoreFromMemento(mem.hdmaMemento());
-        display.restoreFromMemento(mem.displayMemento());
+        // Older snapshots contain the former duplicate. Gpu has already restored the same
+        // display state; applying this copy preserves byte-for-byte legacy behavior.
+        if (mem.displayMemento() != null) {
+            display.restoreFromMemento(mem.displayMemento());
+        }
         sound.restoreFromMemento(mem.soundMemento());
         serialPort.restoreFromMemento(mem.serialPortMemento());
         infraredPort.restoreFromMemento(mem.infraredPortMemento());

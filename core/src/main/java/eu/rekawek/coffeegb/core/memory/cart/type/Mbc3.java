@@ -87,6 +87,14 @@ public class Mbc3 implements MemoryController {
         clock.setEmulationPaused(paused);
     }
 
+    public RealTimeClock.RuntimeState captureRtcRuntimeState() {
+        return clock.captureRuntimeState();
+    }
+
+    public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
+        clock.restoreRuntimeState(state);
+    }
+
     private void selectRomBank(int bank) {
         if (bank == 0) {
             bank = 1;

@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 
 /**
  * Bandai TAMA5 mapper (Game de Hakken!! Tamagotchi - Osutchi to Mesutchi). The cartridge is
@@ -69,6 +71,8 @@ public class Tama5 implements MemoryController {
 
     private final Battery battery;
 
+    private final TimeSource timeSource;
+
     private int selectedReg;
 
     private final int[] registers = new int[MAX_REG];
@@ -83,14 +87,20 @@ public class Tama5 implements MemoryController {
 
     private boolean rtcDisabled;
 
-    private long lastRtcSecond = System.currentTimeMillis() / 1000;
+    private long lastRtcSecond;
 
     private boolean ramUpdated;
 
     public Tama5(Rom rom, Battery battery) {
+        this(rom, battery, new SystemTimeSource());
+    }
+
+    public Tama5(Rom rom, Battery battery, TimeSource timeSource) {
         this.cartridge = rom.getRom();
         this.romBanks = rom.getRomBanks();
         this.battery = battery;
+        this.timeSource = timeSource;
+        this.lastRtcSecond = timeSource.currentTimeMillis() / 1000;
 
         rtcAlarmPage[RTC_PAGE] = 1;
         rtcFreePage0[RTC_PAGE] = 2;
@@ -310,7 +320,7 @@ public class Tama5 implements MemoryController {
      * last latch.
      */
     private void latchRtc() {
-        long now = System.currentTimeMillis() / 1000;
+        long now = timeSource.currentTimeMillis() / 1000;
         long t = now - lastRtcSecond;
         lastRtcSecond = now;
         if (t <= 0 || rtcDisabled) {
