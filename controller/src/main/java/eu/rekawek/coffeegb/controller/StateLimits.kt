@@ -34,6 +34,8 @@ internal object StateLimits {
   const val NETPLAY_DECODED_MESSAGE_BYTES = 128 * MIB
   const val NETPLAY_ROLLBACK_FRAMES = 60L * 5
   const val NETPLAY_REPLAY_WORK_FRAMES = NETPLAY_ROLLBACK_FRAMES
+  const val NETPLAY_STATE_CHANGE_FIXED_WORK = 60L
+  const val NETPLAY_STATE_CHANGE_REFILL_PER_FRAME = 1L
   const val NETPLAY_FUTURE_FRAMES = 60L * 2
   const val NETPLAY_MAX_FRAME = Int.MAX_VALUE.toLong()
   const val NETPLAY_MAX_REBASE_FRAME = NETPLAY_MAX_FRAME - NETPLAY_FUTURE_FRAMES
@@ -42,10 +44,21 @@ internal object StateLimits {
   const val NETPLAY_HANDSHAKE_PENDING_BYTES = NETPLAY_ENCODED_MESSAGE_BYTES.toLong()
   const val NETPLAY_PENDING_HANDSHAKES = 8
   const val NETPLAY_HANDSHAKE_WORKERS = 4
+  // Enough count headroom for an ordinary input burst; the byte limit remains the primary bound
+  // for large state records sent to a non-reader.
+  const val NETPLAY_OUTBOUND_MESSAGES = 512
+  const val NETPLAY_OUTBOUND_BYTES = NETPLAY_ENCODED_MESSAGE_BYTES.toLong() * 2
+  const val NETPLAY_WRITER_CLOSE_MILLIS = 250L
   const val NETPLAY_EVENT_QUEUE_EVENTS = 512
   const val NETPLAY_EVENT_QUEUE_BYTES = NETPLAY_DECODED_MESSAGE_BYTES.toLong() * 3
-  const val NETPLAY_EVENT_QUEUE_SOURCE_EVENTS = NETPLAY_EVENT_QUEUE_EVENTS / 2
-  const val NETPLAY_EVENT_QUEUE_SOURCE_BYTES = NETPLAY_DECODED_MESSAGE_BYTES.toLong() * 2
+  // Four-player hosting has one local producer and three remote connections. Reserve one equal
+  // share for each so saturated peers cannot make the next honest producer trip the global cap.
+  const val NETPLAY_EVENT_QUEUE_SOURCES = 4
+  const val NETPLAY_EVENT_QUEUE_SOURCE_EVENTS =
+      NETPLAY_EVENT_QUEUE_EVENTS / NETPLAY_EVENT_QUEUE_SOURCES
+  const val NETPLAY_EVENT_QUEUE_SOURCE_BYTES =
+      NETPLAY_EVENT_QUEUE_BYTES / NETPLAY_EVENT_QUEUE_SOURCES
+  const val NETPLAY_EVENT_DISPATCH_EVENTS = 64
 
   // JEP 290 graph limits for the local-only legacy migration reader.
   const val LEGACY_MAX_DEPTH = 96L

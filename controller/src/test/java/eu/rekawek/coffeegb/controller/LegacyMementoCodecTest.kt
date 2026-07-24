@@ -9,7 +9,6 @@ import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery
-import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
@@ -51,20 +50,6 @@ class LegacyMementoCodecTest {
       gameboy.stop()
       gameboy.close()
       eventBus.close()
-    }
-  }
-
-  @Test
-  fun knownSessionMementoRoundTripsThroughAllowlist() {
-    val eventBus = EventBusImpl()
-    val session = Session(configuration(), eventBus, null, GpsReceiverSerialEndpoint())
-    try {
-      val serialized = session.saveToMemento().serializeSessionMemento()
-      val restored = serialized.deserializeToSessionMemento()
-
-      session.restoreFromMemento(restored)
-    } finally {
-      session.close()
     }
   }
 
@@ -119,15 +104,9 @@ class LegacyMementoCodecTest {
 
   @Test
   fun wrongMementoRootTypeIsRejected() {
-    val eventBus = EventBusImpl()
-    val session = Session(configuration(), eventBus, null)
-    try {
-      val serialized = session.saveToMemento().serializeSessionMemento()
+    val serialized = rawSerialize(ArrayList<Any>())
 
-      assertFailsWith<InvalidObjectException> { serialized.deserializeToGameboyMemento() }
-    } finally {
-      session.close()
-    }
+    assertFailsWith<InvalidObjectException> { serialized.deserializeToGameboyMemento() }
   }
 
   @Test
@@ -189,16 +168,27 @@ class LegacyMementoCodecTest {
   }
 
   @Test
-  fun preflightRejectsDeepContentAndCumulativeHandlesAcrossResets() {
-    var nested: Any? = null
-    repeat(StateLimits.LEGACY_MAX_DEPTH.toInt() + 1) { nested = arrayOf(nested) }
+  fun preflightAcceptsExactContentDepthAndRejectsBoundaryPlusOne() {
+    fun nestedArrays(depth: Int): Any {
+      var nested: Any = emptyArray<Any?>()
+      repeat(depth - 1) { nested = arrayOf(nested) }
+      return nested
+    }
+
+    LegacySerializationPreflight.validate(
+        rawSerialize(nestedArrays(StateLimits.LEGACY_MAX_DEPTH.toInt())),
+        StateLimits.GAME_SNAPSHOT.decodedBytes,
+    )
     assertFailsWith<InvalidObjectException> {
       LegacySerializationPreflight.validate(
-          rawSerialize(nested!!),
+          rawSerialize(nestedArrays(StateLimits.LEGACY_MAX_DEPTH.toInt() + 1)),
           StateLimits.GAME_SNAPSHOT.decodedBytes,
       )
     }
+  }
 
+  @Test
+  fun preflightCountsCumulativeHandlesAcrossResets() {
     val excessiveHandles =
         rawStream {
           repeat(StateLimits.LEGACY_MAX_REFERENCES.toInt() + 1) { index ->
@@ -311,6 +301,26 @@ class LegacyMementoCodecTest {
           (StateLimits.LEGACY_MAX_ARRAY_BYTES / Long.SIZE_BYTES + 1).toInt(),
       )
     }
+
+    val boundary = cumulativeByteArrayStream(StateLimits.LEGACY_MAX_ARRAY_BYTES)
+    LegacySerializationPreflight.validate(boundary, Int.MAX_VALUE)
+
+    val boundaryPlusOne =
+        ByteArrayOutputStream(boundary.size + 16).also { output ->
+          output.write(boundary)
+          DataOutputStream(output).use { stream ->
+            stream.writeByte(ObjectStreamConstants.TC_ARRAY.toInt())
+            stream.writeByte(ObjectStreamConstants.TC_REFERENCE.toInt())
+            stream.writeInt(ObjectStreamConstants.baseWireHandle)
+            stream.writeInt(1)
+            stream.writeByte(0)
+          }
+        }.toByteArray()
+    val error =
+        assertFailsWith<InvalidObjectException> {
+          LegacySerializationPreflight.validate(boundaryPlusOne, Int.MAX_VALUE)
+        }
+    assertTrue(error.message!!.contains("allocation bytes"))
     assertFailsWith<InvalidClassException> {
       rawSerialize(DoubleArray(0)).deserializeToGameboyMemento()
     }
@@ -394,22 +404,22 @@ class LegacyMementoCodecTest {
 
   @Test
   fun legacyStringLimitAcceptsBoundaryAndRejectsBoundaryPlusOne() {
-    val eventBus = EventBusImpl()
-    val gps = GpsReceiverSerialEndpoint()
-    val command =
-        GpsReceiverSerialEndpoint::class.java.getDeclaredField("taipCommand").also {
-          it.isAccessible = true
-        }.get(gps) as StringBuilder
-    val session = Session(configuration(), eventBus, null, gps)
-    try {
-      command.append("x".repeat(StateLimits.LEGACY_MAX_STRING_CHARS))
-      session.saveToMemento().serializeSessionMemento().deserializeToSessionMemento()
+    fun longString(length: Int) =
+        rawStream {
+          writeByte(ObjectStreamConstants.TC_LONGSTRING.toInt())
+          writeLong(length.toLong())
+          repeat(length) { writeByte('x'.code) }
+        }
 
-      command.append('x')
-      val oversized = session.saveToMemento().serializeSessionMemento()
-      assertFailsWith<InvalidObjectException> { oversized.deserializeToSessionMemento() }
-    } finally {
-      session.close()
+    LegacySerializationPreflight.validate(
+        longString(StateLimits.LEGACY_MAX_STRING_CHARS),
+        StateLimits.GAME_SNAPSHOT.decodedBytes,
+    )
+    assertFailsWith<InvalidObjectException> {
+      LegacySerializationPreflight.validate(
+          longString(StateLimits.LEGACY_MAX_STRING_CHARS + 1),
+          StateLimits.GAME_SNAPSHOT.decodedBytes,
+      )
     }
   }
 
@@ -439,6 +449,30 @@ class LegacyMementoCodecTest {
     val output = ByteArrayOutputStream()
     ObjectOutputStream(output).use { it.writeObject(value) }
     return output.toByteArray()
+  }
+
+  private fun cumulativeByteArrayStream(totalBytes: Long): ByteArray {
+    require(totalBytes % 2L == 0L)
+    val half = (totalBytes / 2L).toInt()
+    val byteArrayUid = ObjectStreamClass.lookup(ByteArray::class.java).serialVersionUID
+    return rawStream {
+      writeByte(ObjectStreamConstants.TC_ARRAY.toInt())
+      writeByte(ObjectStreamConstants.TC_CLASSDESC.toInt())
+      writeUTF("[B")
+      writeLong(byteArrayUid)
+      writeByte(ObjectStreamConstants.SC_SERIALIZABLE.toInt())
+      writeShort(0)
+      writeByte(ObjectStreamConstants.TC_ENDBLOCKDATA.toInt())
+      writeByte(ObjectStreamConstants.TC_NULL.toInt())
+      writeInt(half)
+      write(ByteArray(half))
+
+      writeByte(ObjectStreamConstants.TC_ARRAY.toInt())
+      writeByte(ObjectStreamConstants.TC_REFERENCE.toInt())
+      writeInt(ObjectStreamConstants.baseWireHandle)
+      writeInt(half)
+      write(ByteArray(half))
+    }
   }
 
   private fun rawStream(block: DataOutputStream.() -> Unit): ByteArray {

@@ -25,6 +25,7 @@ import eu.rekawek.coffeegb.controller.network.Connection.RequestResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerButtonStateEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStateEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
@@ -50,6 +51,7 @@ import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
 import java.io.IOException
 import java.util.IdentityHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -76,6 +78,7 @@ class LinkedController(
           ::eventSource,
           StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_EVENTS,
           StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_BYTES,
+          StateLimits.NETPLAY_EVENT_DISPATCH_EVENTS,
       )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
@@ -99,6 +102,13 @@ class LinkedController(
 
   @VisibleForTesting internal fun currentFrame() = frame
 
+  @VisibleForTesting
+  internal fun encodedSessionStates(): List<ByteArray?> =
+      sessions.map { session -> session?.let { NetplayMementoCodec.encodeSession(it.saveToMemento()) } }
+
+  @VisibleForTesting
+  internal fun heldButtonStates(): List<Set<Button>?> = sessions.map { it?.heldButtons }
+
   @Volatile private var doStop = false
 
   private var frame = 0L
@@ -106,7 +116,9 @@ class LinkedController(
   /** Runtime records older than the latest authoritative checkpoint belong to an old generation. */
   private var runtimeFrameFloor = 0L
 
-  private val replayWorkBySource = IdentityHashMap<PeerEventSource, Long>()
+  private val replayWorkBySource = IdentityHashMap<PeerEventSource, StateChangeBudget>()
+
+  private val disconnectedSources = ConcurrentLinkedQueue<PeerEventSource>()
 
   @VisibleForTesting internal var lastDispatchReplayFrames = 0L
     private set
@@ -130,21 +142,23 @@ class LinkedController(
     require(localPlayer in 0 until mode.playerCount)
 
     eventQueue.register<LoadedLocalConfigEvent> { e ->
+      val checkpoint = isFourPlayerHost()
+      if (checkpoint) reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       configs[localPlayer] = e.config
       initSession(localPlayer, frame, e.snapshot?.let(NetplayMementoCodec::decodeGameboy), null)
       sendLocalRom(e.snapshot)
-      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
-        broadcastCurrentState()
-      }
+      if (checkpoint) commitHostCheckpoint()
     }
 
     eventQueue.register<StopEmulationEvent> {
+      val checkpoint = isFourPlayerHost()
+      if (checkpoint) reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
-      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
-        broadcastCurrentState()
+      if (checkpoint) {
+        commitHostCheckpoint()
       } else {
         eventBus.postAsync(RequestStopEvent(frame, localPlayer))
       }
@@ -160,13 +174,14 @@ class LinkedController(
     eventQueue.register<PeerLoadedGameEvent> { e ->
       val validated = validatePeerStateFrame(e) ?: return@register
       if (!consumeReplayWork(validated.frame, validated.source)) return@register
+      val checkpoint = isFourPlayerHost() && validated.sessionSnapshot == null
+      if (checkpoint) reconcileHistory()
       if (!loadPeerState(validated)) return@register
-      if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
-          localPlayer == 0 &&
-          validated.sessionSnapshot == null) {
+      eventBus.post(ValidatedPeerStateEvent(validated))
+      if (checkpoint) {
         // The new physical port is now attached at this frame. Publish one checkpoint containing
         // every active console plus the shared adapter so old and new clients resume together.
-        broadcastCurrentState()
+        commitHostCheckpoint()
       }
     }
 
@@ -190,20 +205,21 @@ class LinkedController(
           batteryBuffers[player] = null
         }
         e.states.forEach(::loadPeerState)
-        stateHistory.clear()
         frame = e.frame
+        rebaseHistoryToLiveState()
         initialStateSynchronized = true
       }
     }
 
     eventQueue.register<ServerPlayerDisconnectedEvent> { e ->
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0 && e.player in sessions.indices) {
+        reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
         configs[e.player] = null
         romBuffers[e.player] = null
         batteryBuffers[e.player] = null
-        broadcastCurrentState()
+        commitHostCheckpoint()
       }
     }
 
@@ -232,11 +248,11 @@ class LinkedController(
       if (e.player != localPlayer &&
           e.player in sessions.indices &&
           validateRuntimeFrame(e.frame, e.source)) {
+        val checkpoint = isFourPlayerHost()
+        if (checkpoint) reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
-        if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
-          broadcastCurrentState()
-        }
+        if (checkpoint) commitHostCheckpoint()
       }
     }
 
@@ -286,7 +302,7 @@ class LinkedController(
     // be able to release the exact old connection's retained budget even when that queue is full.
     eventBus.register<PeerEventSourceDisconnectedEvent> {
       eventQueue.discardSource(it.source)
-      replayWorkBySource.remove(it.source)
+      disconnectedSources += it.source
     }
   }
 
@@ -295,7 +311,9 @@ class LinkedController(
   }
 
   fun runFrame() {
-    replayWorkBySource.clear()
+    while (true) {
+      replayWorkBySource.remove(disconnectedSources.poll() ?: break)
+    }
     lastDispatchReplayFrames = 0
     eventQueue.dispatch()
 
@@ -312,19 +330,7 @@ class LinkedController(
       return
     }
 
-    if (stateHistory.merge(configs)) {
-      val head = stateHistory.getHead()
-      for (player in sessions.indices) {
-        val session = sessions[player]
-        val memento = head.mementos[player]
-        if (session != null && memento != null) {
-          session.restoreFromMemento(memento)
-          session.heldButtons = head.buttons[player]
-        }
-      }
-      frame = head.frame
-      LOG.atDebug().log("State merged to {}", frame)
-    }
+    reconcileHistory()
 
     val input = currentInput ?: Input(emptyList(), emptyList())
     val effectiveInput = if (input != lastInput) input else Input(emptyList(), emptyList())
@@ -473,9 +479,33 @@ class LinkedController(
 
   private fun consumeReplayWork(peerFrame: Long, source: PeerEventSource?): Boolean {
     source ?: return true
-    val requested = (frame - peerFrame).coerceAtLeast(0)
-    val used = replayWorkBySource[source] ?: 0L
-    if (requested > StateLimits.NETPLAY_REPLAY_WORK_FRAMES - used) {
+    val budget =
+        replayWorkBySource.getOrPut(source) {
+          StateChangeBudget(StateLimits.NETPLAY_REPLAY_WORK_FRAMES, frame)
+        }
+    val elapsedFrames = (frame - budget.lastFrame).coerceAtLeast(0)
+    val refill =
+        try {
+          Math.multiplyExact(elapsedFrames, StateLimits.NETPLAY_STATE_CHANGE_REFILL_PER_FRAME)
+        } catch (_: ArithmeticException) {
+          Long.MAX_VALUE
+        }
+    budget.available =
+        minOf(
+            StateLimits.NETPLAY_REPLAY_WORK_FRAMES,
+            if (refill > StateLimits.NETPLAY_REPLAY_WORK_FRAMES - budget.available) {
+              StateLimits.NETPLAY_REPLAY_WORK_FRAMES
+            } else {
+              budget.available + refill
+            },
+        )
+    budget.lastFrame = frame
+    val requested =
+        maxOf(
+            (frame - peerFrame).coerceAtLeast(0),
+            StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
+        )
+    if (requested > budget.available) {
       val failure =
           IOException(
               "Player ${source.player + 1} exceeded the " +
@@ -484,7 +514,7 @@ class LinkedController(
       source.reject(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK, failure)
       return false
     }
-    replayWorkBySource[source] = used + requested
+    budget.available -= requested
     lastDispatchReplayFrames += requested
     return true
   }
@@ -542,6 +572,42 @@ class LinkedController(
           )
         }
     eventBus.post(SessionStateReadyEvent(frame, states))
+  }
+
+  private fun isFourPlayerHost(): Boolean =
+      mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0
+
+  /** Applies every accepted old-generation patch before a topology snapshot is captured. */
+  private fun reconcileHistory() {
+    if (!stateHistory.merge(configs)) return
+    val head = stateHistory.getHead()
+    for (player in sessions.indices) {
+      val session = sessions[player]
+      val memento = head.mementos[player]
+      if (session != null && memento != null) {
+        session.restoreFromMemento(memento)
+        session.heldButtons = head.buttons[player]
+      }
+    }
+    frame = head.frame
+    LOG.atDebug().log("State merged to {}", frame)
+  }
+
+  /** Publishes and installs the same exact generation boundary used by remote clients. */
+  private fun commitHostCheckpoint() {
+    runtimeFrameFloor = frame
+    rebaseHistoryToLiveState()
+    broadcastCurrentState()
+  }
+
+  private fun rebaseHistoryToLiveState() {
+    stateHistory.clear()
+    stateHistory.addState(
+        frame,
+        List(mode.playerCount) { Input(emptyList(), emptyList()) },
+        sessions.map { it?.saveToMemento() },
+        sessions.map { it?.heldButtons ?: emptySet() },
+    )
   }
 
   override fun close() {}
@@ -620,6 +686,8 @@ class LinkedController(
 
   data class LoadedLocalConfigEvent(val config: GameboyConfiguration, val snapshot: ByteArray?) :
       Event
+
+  private data class StateChangeBudget(var available: Long, var lastFrame: Long)
 
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(LinkedController::class.java)

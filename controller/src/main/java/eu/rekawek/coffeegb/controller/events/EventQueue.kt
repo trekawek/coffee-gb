@@ -15,6 +15,7 @@ class EventQueue(
     private val eventSource: (Event) -> Any? = { null },
     private val maxSourceEvents: Int = maxEvents,
     private val maxSourceBytes: Long = maxBytes,
+    private val maxDispatchEvents: Int = maxEvents,
 ) {
 
   private val queue = ArrayDeque<WeightedEvent>()
@@ -37,7 +38,8 @@ class EventQueue(
   }
 
   fun dispatch() {
-    while (true) {
+    val dispatchEvents = synchronized(queue) { minOf(queue.size, maxDispatchEvents) }
+    repeat(dispatchEvents) {
       val e =
           synchronized(queue) {
             val weighted = queue.pollFirst() ?: return

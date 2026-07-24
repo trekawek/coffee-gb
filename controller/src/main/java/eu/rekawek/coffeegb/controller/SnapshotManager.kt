@@ -75,11 +75,3 @@ fun Memento<Gameboy>.serialize(): ByteArray {
 fun ByteArray.deserializeToGameboyMemento(): Memento<Gameboy> {
   return LegacyMementoCodec.deserializeGameboy(this)
 }
-
-fun Memento<Session>.serializeSessionMemento(): ByteArray {
-  return LegacyMementoCodec.serializeSession(this)
-}
-
-fun ByteArray.deserializeToSessionMemento(): Memento<Session> {
-  return LegacyMementoCodec.deserializeSession(this)
-}

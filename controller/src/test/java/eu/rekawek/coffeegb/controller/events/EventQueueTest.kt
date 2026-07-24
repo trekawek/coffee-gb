@@ -80,36 +80,58 @@ class EventQueueTest {
   }
 
   @Test
-  fun globalLimitKeepsAlreadyAcceptedEventsFromEverySource() {
+  fun saturatedSourcesCannotConsumeAThirdSourcesReservedShare() {
     val bus = EventBusImpl()
     val received = mutableListOf<WeightedEvent>()
     val queue =
         EventQueue(
             bus,
-            maxEvents = 4,
-            maxBytes = 12,
+            maxEvents = 6,
+            maxBytes = 60,
             eventWeight = { (it as WeightedEvent).bytes },
             eventSource = { (it as WeightedEvent).source },
-            maxSourceEvents = 3,
-            maxSourceBytes = 9,
+            maxSourceEvents = 2,
+            maxSourceBytes = 20,
         )
     queue.register<WeightedEvent> { received += it }
     val first = Source("first")
     val second = Source("second")
-    val overflow = Source("overflow")
+    val third = Source("third")
     try {
-      bus.post(WeightedEvent(3, first))
-      bus.post(WeightedEvent(3, second))
-      bus.post(WeightedEvent(3, first))
-      bus.post(WeightedEvent(3, second))
+      repeat(2) { bus.post(WeightedEvent(10, first)) }
+      repeat(2) { bus.post(WeightedEvent(10, second)) }
+      bus.post(WeightedEvent(10, third))
       val error =
           assertFailsWith<EventQueue.EventQueueFullException> {
-            bus.post(WeightedEvent(1, overflow))
+            bus.post(WeightedEvent(1, first))
           }
-      assertEquals(true, error.global)
+      assertEquals(first, error.source)
+      assertEquals(false, error.global)
 
       queue.dispatch()
-      assertEquals(listOf(first, second, first, second), received.map { it.source })
+      assertEquals(listOf(second, second, third), received.map { it.source })
+    } finally {
+      bus.close()
+    }
+  }
+
+  @Test
+  fun dispatchOnlyProcessesTheEventsPresentAtItsStart() {
+    val bus = EventBusImpl()
+    val received = mutableListOf<Long>()
+    val queue = EventQueue(bus, maxEvents = 10, maxBytes = 100, eventWeight = { 1 })
+    queue.register<WeightedEvent> {
+      received += it.bytes
+      if (it.bytes == 1L) bus.post(WeightedEvent(2))
+    }
+    try {
+      bus.post(WeightedEvent(1))
+
+      queue.dispatch()
+      assertEquals(listOf(1L), received)
+
+      queue.dispatch()
+      assertEquals(listOf(1L, 2L), received)
     } finally {
       bus.close()
     }

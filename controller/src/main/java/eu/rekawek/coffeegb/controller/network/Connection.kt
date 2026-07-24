@@ -51,7 +51,21 @@ class Connection(
 
   private val output = DataOutputStream(BufferedOutputStream(outputStream))
 
-  private val outputLock = Any()
+  private val outputLock = Object()
+
+  private val outboundMessages = ArrayDeque<ByteArray>()
+
+  private var outboundMessageCount = 0
+
+  private var outboundBytes = 0L
+
+  private var writerClosing = false
+
+  private var stopInputWhenDrained = false
+
+  @Volatile private var writerFailure: IOException? = null
+
+  private val writerThread: Thread
 
   private val eventBus: EventBus = mainEventBus.fork("connection-$assignedPlayer")
 
@@ -166,6 +180,11 @@ class Connection(
         }
       }
     }
+    writerThread =
+        Thread(::writeOutbound, "netplay-writer-$assignedPlayer").also {
+          it.isDaemon = true
+          it.start()
+        }
   }
 
   private fun shouldSendLocal(eventPlayer: Int): Boolean =
@@ -178,16 +197,7 @@ class Connection(
       LOG.info("Closing player {} connection after destination write failure: {}", player + 1,
           e.message)
       doStop = true
-      try {
-        input.close()
-      } catch (closeFailure: IOException) {
-        e.addSuppressed(closeFailure)
-      }
-      try {
-        output.close()
-      } catch (closeFailure: IOException) {
-        e.addSuppressed(closeFailure)
-      }
+      abortWriter(e)
     }
   }
 
@@ -270,12 +280,12 @@ class Connection(
   }
 
   private fun sendMessage(buf: ByteBuffer, kind: OutboundMessage = OutboundMessage.RUNTIME) {
+    val message = buf.array().copyOf(buf.position())
     synchronized(outputLock) {
       if (doStop) return
       if (server &&
           (outboundPhase == OutboundPhase.HANDSHAKE ||
               (outboundPhase == OutboundPhase.BOOTSTRAP && kind == OutboundMessage.RUNTIME))) {
-        val message = buf.array().copyOf(buf.position())
         val pendingCount = pendingBootstrapMessages.size + pendingRuntimeMessages.size
         if (pendingCount >= StateLimits.NETPLAY_HANDSHAKE_PENDING_MESSAGES ||
             message.size > StateLimits.NETPLAY_HANDSHAKE_PENDING_BYTES - pendingOutboundBytes) {
@@ -289,8 +299,84 @@ class Connection(
         pendingOutboundBytes += message.size
         return
       }
-      output.write(buf.array(), 0, buf.position())
-      output.flush()
+      enqueueOutboundLocked(message)
+    }
+  }
+
+  /** The controller only enqueues; this one bounded writer owns every blocking socket write. */
+  private fun writeOutbound() {
+    while (true) {
+      val message =
+          synchronized(outputLock) {
+            while (outboundMessages.isEmpty() && !writerClosing) {
+              try {
+                outputLock.wait()
+              } catch (_: InterruptedException) {
+                writerClosing = true
+              }
+            }
+            if (outboundMessages.isEmpty()) {
+              if (stopInputWhenDrained) {
+                try {
+                  input.close()
+                } catch (_: IOException) {
+                  // The peer may already have closed.
+                }
+              }
+              return
+            }
+            outboundMessages.removeFirst()
+          }
+      try {
+        output.write(message)
+        output.flush()
+        synchronized(outputLock) {
+          outboundMessageCount--
+          outboundBytes -= message.size
+        }
+      } catch (e: IOException) {
+        writerFailure = e
+        doStop = true
+        synchronized(outputLock) {
+          outboundMessages.clear()
+          outboundMessageCount = 0
+          outboundBytes = 0
+          writerClosing = true
+          outputLock.notifyAll()
+        }
+        try {
+          input.close()
+        } catch (closeFailure: IOException) {
+          e.addSuppressed(closeFailure)
+        }
+        return
+      }
+    }
+  }
+
+  private fun enqueueOutboundLocked(message: ByteArray) {
+    if (writerClosing) throw IOException("Netplay writer is closing")
+    if (outboundMessageCount >= StateLimits.NETPLAY_OUTBOUND_MESSAGES ||
+        message.size > StateLimits.NETPLAY_OUTBOUND_BYTES - outboundBytes) {
+      throw IOException("Netplay outbound queue limit exceeded")
+    }
+    outboundMessages += message
+    outboundMessageCount++
+    outboundBytes += message.size
+    outputLock.notifyAll()
+  }
+
+  private fun abortWriter(cause: IOException) {
+    synchronized(outputLock) {
+      outboundMessages.clear()
+      // An in-flight record remains included until the writer observes the closed stream.
+      writerClosing = true
+      outputLock.notifyAll()
+    }
+    try {
+      input.close()
+    } catch (closeFailure: IOException) {
+      cause.addSuppressed(closeFailure)
     }
   }
 
@@ -315,6 +401,7 @@ class Connection(
             input.read()
           } catch (e: IOException) {
             controllerFailure?.let { throw it }
+            writerFailure?.let { throw it }
             if (doStop) -1 else throw e
           }
       controllerFailure?.let { throw it }
@@ -744,26 +831,24 @@ class Connection(
     synchronized(outputLock) {
       if (controllerFailure != null || doStop) return
       try {
-        val buf = ByteBuffer.allocate(2)
-        buf.put(PROTOCOL_ERROR)
-        buf.put(reason.wireCode.toByte())
-        output.write(buf.array(), 0, buf.position())
-        output.flush()
+        enqueueOutboundLocked(byteArrayOf(PROTOCOL_ERROR, reason.wireCode.toByte()))
       } catch (sendFailure: IOException) {
         failure.addSuppressed(sendFailure)
       }
       controllerFailure = failure
       doStop = true
-    }
-    try {
-      input.close()
-    } catch (closeFailure: IOException) {
-      failure.addSuppressed(closeFailure)
+      stopInputWhenDrained = true
+      writerClosing = true
+      outputLock.notifyAll()
     }
   }
 
   fun stop() {
     doStop = true
+    synchronized(outputLock) {
+      writerClosing = true
+      outputLock.notifyAll()
+    }
   }
 
   override fun close() {
@@ -778,6 +863,15 @@ class Connection(
     }
     eventBus.close()
     var failure: IOException? = null
+    synchronized(outputLock) {
+      writerClosing = true
+      outputLock.notifyAll()
+    }
+    try {
+      writerThread.join(StateLimits.NETPLAY_WRITER_CLOSE_MILLIS)
+    } catch (e: InterruptedException) {
+      Thread.currentThread().interrupt()
+    }
     try {
       input.close()
     } catch (e: IOException) {
@@ -787,6 +881,13 @@ class Connection(
       output.close()
     } catch (e: IOException) {
       failure?.addSuppressed(e) ?: run { failure = e }
+    }
+    if (writerThread !== Thread.currentThread()) {
+      try {
+        writerThread.join(StateLimits.NETPLAY_WRITER_CLOSE_MILLIS)
+      } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+      }
     }
     failure?.let { throw it }
   }
@@ -854,29 +955,26 @@ class Connection(
       if (outboundPhase != OutboundPhase.HANDSHAKE) return
       outboundPhase = OutboundPhase.BOOTSTRAP
       pendingBootstrapMessages.forEach { message ->
-        output.write(message)
+        enqueueOutboundLocked(message)
         pendingOutboundBytes -= message.size
       }
       pendingBootstrapMessages.clear()
       if (startRequested) {
         finishStartLocked()
-      } else {
-        output.flush()
       }
     }
   }
 
   /** Must be called with [outputLock] held. START and queued runtime traffic are one commit. */
   private fun finishStartLocked() {
-    output.writeByte(START.toInt())
+    enqueueOutboundLocked(byteArrayOf(START))
     outboundPhase = OutboundPhase.ACTIVE
     startRequested = false
     pendingRuntimeMessages.forEach { message ->
-      output.write(message)
+      enqueueOutboundLocked(message)
       pendingOutboundBytes -= message.size
     }
     pendingRuntimeMessages.clear()
-    output.flush()
   }
 
   private enum class OutboundPhase {
@@ -995,6 +1093,8 @@ class Connection(
   ) : Event
 
   internal data class ValidatedPeerResetEvent(val event: ReceivedRemoteResetEvent) : Event
+
+  internal data class ValidatedPeerStateEvent(val event: PeerLoadedGameEvent) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
