@@ -120,7 +120,9 @@ class LinkedController(
 
   private var hostCheckpointPending = false
 
-  private val replayWorkBySource = IdentityHashMap<PeerEventSource, StateChangeBudget>()
+  private var localCheckpointCreditFrame: Long? = null
+
+  private val peerWorkBySource = IdentityHashMap<PeerEventSource, PeerWorkBudget>()
 
   private val disconnectedSources = ConcurrentLinkedQueue<PeerEventSource>()
 
@@ -177,6 +179,7 @@ class LinkedController(
         commitHostCheckpoint()
       } else {
         commitStateBoundary()
+        if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditFrame = frame
       }
       eventBus.postAsync(RequestResetEvent(frame, localPlayer))
     }
@@ -205,11 +208,7 @@ class LinkedController(
             }) {
           return@register
         }
-        if (!consumeReplayWork(
-            e.frame,
-            e.source,
-            StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK * maxOf(1, e.states.size),
-        )) {
+        if (!consumeCheckpointWork(e.frame, e.source, e.states.size)) {
           return@register
         }
         runtimeFrameFloor = e.frame
@@ -263,6 +262,7 @@ class LinkedController(
           commitHostCheckpoint()
         } else {
           commitStateBoundary()
+          grantCheckpointCredit(e.frame, e.source)
         }
         eventBus.post(ValidatedPeerResetEvent(e))
       }
@@ -344,7 +344,7 @@ class LinkedController(
 
   fun runFrame() {
     while (true) {
-      replayWorkBySource.remove(disconnectedSources.poll() ?: break)
+      peerWorkBySource.remove(disconnectedSources.poll() ?: break)
     }
     lastDispatchReplayFrames = 0
     eventQueue.dispatch()
@@ -516,9 +516,59 @@ class LinkedController(
       fixedWork: Long = StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
   ): Boolean {
     source ?: return true
+    val budget = peerWorkBudget(source)
+    val requested = maxOf((frame - peerFrame).coerceAtLeast(0), fixedWork)
+    if (requested > budget.replayAvailable) {
+      rejectExcessiveWork(source, StateLimits.NETPLAY_REPLAY_WORK_FRAMES, "replay")
+      return false
+    }
+    budget.replayAvailable -= requested
+    lastDispatchReplayFrames += requested
+    return true
+  }
+
+  private fun consumeCheckpointWork(
+      peerFrame: Long,
+      source: PeerEventSource?,
+      stateCount: Int,
+  ): Boolean {
+    source ?: return true
+    val budget = peerWorkBudget(source)
+    val credited =
+        budget.checkpointCreditFrame == peerFrame || localCheckpointCreditFrame == peerFrame
+    budget.checkpointCreditFrame = null
+    localCheckpointCreditFrame = null
+    if (credited) return true
+
+    val fixedWork =
+        Math.multiplyExact(
+            StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
+            maxOf(1, stateCount).toLong(),
+        )
+    val requested = maxOf((frame - peerFrame).coerceAtLeast(0), fixedWork)
+    if (requested > budget.checkpointAvailable) {
+      rejectExcessiveWork(source, StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES, "checkpoint")
+      return false
+    }
+    budget.checkpointAvailable -= requested
+    lastDispatchReplayFrames += requested
+    return true
+  }
+
+  /** A relayed RESET and its same-frame authoritative checkpoint are one state transition. */
+  private fun grantCheckpointCredit(peerFrame: Long, source: PeerEventSource?) {
+    source ?: return
+    peerWorkBudget(source).checkpointCreditFrame = peerFrame
+  }
+
+  private fun peerWorkBudget(source: PeerEventSource): PeerWorkBudget {
     val budget =
-        replayWorkBySource.getOrPut(source) {
-          StateChangeBudget(StateLimits.NETPLAY_REPLAY_WORK_FRAMES, frame)
+        peerWorkBySource.getOrPut(source) {
+          PeerWorkBudget(
+              StateLimits.NETPLAY_REPLAY_WORK_FRAMES,
+              StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES,
+              frame,
+          )
         }
     val elapsedFrames = (frame - budget.lastFrame).coerceAtLeast(0)
     val refill =
@@ -527,33 +577,27 @@ class LinkedController(
         } catch (_: ArithmeticException) {
           Long.MAX_VALUE
         }
-    budget.available =
-        minOf(
-            StateLimits.NETPLAY_REPLAY_WORK_FRAMES,
-            if (refill > StateLimits.NETPLAY_REPLAY_WORK_FRAMES - budget.available) {
-              StateLimits.NETPLAY_REPLAY_WORK_FRAMES
-            } else {
-              budget.available + refill
-            },
+    budget.replayAvailable =
+        refillWork(budget.replayAvailable, StateLimits.NETPLAY_REPLAY_WORK_FRAMES, refill)
+    budget.checkpointAvailable =
+        refillWork(
+            budget.checkpointAvailable,
+            StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES,
+            refill,
         )
     budget.lastFrame = frame
-    val requested =
-        maxOf(
-            (frame - peerFrame).coerceAtLeast(0),
-            fixedWork,
-        )
-    if (requested > budget.available) {
-      val failure =
-          IOException(
-              "Player ${source.player + 1} exceeded the " +
-                  "${StateLimits.NETPLAY_REPLAY_WORK_FRAMES}-frame replay budget")
-      eventQueue.discardSource(source)
-      source.reject(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK, failure)
-      return false
-    }
-    budget.available -= requested
-    lastDispatchReplayFrames += requested
-    return true
+    return budget
+  }
+
+  private fun refillWork(available: Long, limit: Long, refill: Long): Long =
+      if (refill > limit - available) limit else available + refill
+
+  private fun rejectExcessiveWork(source: PeerEventSource, limit: Long, kind: String) {
+    val failure =
+        IOException(
+            "Player ${source.player + 1} exceeded the $limit-frame $kind work budget")
+    eventQueue.discardSource(source)
+    source.reject(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK, failure)
   }
 
   private inline fun validatePeer(source: PeerEventSource?, validation: () -> Unit): Boolean =
@@ -734,7 +778,12 @@ class LinkedController(
   data class LoadedLocalConfigEvent(val config: GameboyConfiguration, val snapshot: ByteArray?) :
       Event
 
-  private data class StateChangeBudget(var available: Long, var lastFrame: Long)
+  private data class PeerWorkBudget(
+      var replayAvailable: Long,
+      var checkpointAvailable: Long,
+      var lastFrame: Long,
+      var checkpointCreditFrame: Long? = null,
+  )
 
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(LinkedController::class.java)

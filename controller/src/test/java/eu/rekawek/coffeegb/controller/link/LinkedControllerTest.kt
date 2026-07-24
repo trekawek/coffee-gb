@@ -115,26 +115,11 @@ class LinkedControllerTest {
     clientBus.post(LoadRomEvent(ROM))
     client.runFrame()
     assertEquals(0, client.currentFrame(), "client must wait for the host checkpoint")
+    val clientFailures = mutableListOf<ProtocolErrorReason>()
+    val serverSource = PeerEventSource(0) { reason, _ -> clientFailures += reason }
 
     fun deliverCheckpoint(value: LinkedController.SessionStateReadyEvent) {
-      clientBus.post(
-          SessionCheckpointEvent(
-              value.frame,
-              value.states.map { state ->
-                PeerLoadedGameEvent(
-                    rom = state.romFile,
-                    battery = state.batteryFile,
-                    snapshot = state.snapshot,
-                    gameboyType = state.gameboyType,
-                    bootstrapMode = state.bootstrapMode,
-                    frame = state.frame,
-                    cgb0Revision = state.cgb0Revision,
-                    player = state.player,
-                    sessionSnapshot = state.sessionSnapshot,
-                    heldButtons = state.heldButtons,
-                )
-              },
-          ))
+      clientBus.post(checkpointEvent(value, serverSource))
     }
 
     deliverCheckpoint(checkpoint)
@@ -235,7 +220,88 @@ class LinkedControllerTest {
       client.runFrame()
     }
     assertCompleteStateEquals(host, client)
+    assertTrue(clientFailures.isEmpty(), "healthy host checkpoints exhausted the client budget")
 
+    clientBus.close()
+    hostBus.close()
+  }
+
+  @Test
+  fun fourPlayerFormationAndRelayedResetFitPersistentCheckpointBudget() {
+    val hostBus = EventBusImpl()
+    val host =
+        LinkedController(
+            hostBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 0,
+        )
+    host.timingTicker.disabled = true
+    val checkpoints = LinkedBlockingQueue<LinkedController.SessionStateReadyEvent>()
+    hostBus.register<LinkedController.SessionStateReadyEvent> { checkpoints.add(it) }
+
+    val clientBus = EventBusImpl()
+    val client =
+        LinkedController(
+            clientBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        )
+    client.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val serverSource = PeerEventSource(0) { reason, _ -> failures += reason }
+
+    fun deliverCheckpoint(expectedPlayers: List<Int>) {
+      val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+      assertEquals(expectedPlayers, checkpoint.states.map { it.player })
+      clientBus.post(checkpointEvent(checkpoint, serverSource))
+      client.runFrame()
+      assertTrue(failures.isEmpty(), "normal topology formation exhausted the checkpoint budget")
+      assertCompleteStateEquals(host, client)
+    }
+
+    hostBus.post(LoadRomEvent(ROM))
+    hostBus.post(peerState(0, PeerEventSource(1) { _, _ -> }))
+    clientBus.post(LoadRomEvent(ROM))
+    client.runFrame()
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1))
+
+    // A host RESET is relayed before the same-frame authoritative checkpoint. It consumes one
+    // replay/state-change token, while the checkpoint uses the transition credit instead of being
+    // charged a second time.
+    val resetFrame = host.currentFrame()
+    hostBus.post(Controller.ResetEmulationEvent())
+    host.runFrame()
+    clientBus.post(ReceivedRemoteResetEvent(resetFrame, player = 0, source = serverSource))
+    deliverCheckpoint(listOf(0, 1))
+
+    hostBus.post(peerState(0, PeerEventSource(2) { _, _ -> }).copy(player = 2))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2))
+
+    hostBus.post(peerState(0, PeerEventSource(3) { _, _ -> }).copy(player = 3))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2, 3))
+
+    // The reset origin does not receive its own relayed RESET. Its trusted local transition grants
+    // the equivalent one-use credit, so the checkpoint is still accepted after the exact 2+3+4
+    // formation allowance has been consumed.
+    val originResetFrame = host.currentFrame()
+    clientBus.post(Controller.ResetEmulationEvent())
+    hostBus.post(
+        ReceivedRemoteResetEvent(
+            originResetFrame,
+            player = 1,
+            source = PeerEventSource(1) { _, _ -> },
+        ))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2, 3))
+
+    assertTrue(failures.isEmpty())
     clientBus.close()
     hostBus.close()
   }
@@ -673,7 +739,7 @@ class LinkedControllerTest {
       }
     }
     eventBus.post(SessionCheckpointEvent(0, emptyList(), offender))
-    repeat(12) {
+    repeat(20) {
       if (failures.isEmpty()) sut.runFrame()
     }
 
@@ -1083,6 +1149,30 @@ class LinkedControllerTest {
             BOOTSTRAP_MODE,
             frame,
             source = source,
+        )
+
+    fun checkpointEvent(
+        value: LinkedController.SessionStateReadyEvent,
+        source: PeerEventSource,
+    ) =
+        SessionCheckpointEvent(
+            value.frame,
+            value.states.map { state ->
+              PeerLoadedGameEvent(
+                  rom = state.romFile,
+                  battery = state.batteryFile,
+                  snapshot = state.snapshot,
+                  gameboyType = state.gameboyType,
+                  bootstrapMode = state.bootstrapMode,
+                  frame = state.frame,
+                  cgb0Revision = state.cgb0Revision,
+                  player = state.player,
+                  sessionSnapshot = state.sessionSnapshot,
+                  heldButtons = state.heldButtons,
+                  source = source,
+              )
+            },
+            source,
         )
 
     fun assertCompleteStateEquals(expected: LinkedController, actual: LinkedController) {
