@@ -62,6 +62,45 @@ class BasicControllerTest {
   }
 
   @Test
+  fun rejectedSnapshotIsReportedAndControllerKeepsProcessingEvents() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val failures = LinkedBlockingQueue<Controller.SnapshotLoadFailedEvent>()
+    val saved = LinkedBlockingQueue<Controller.SnapshotSavedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<Controller.SnapshotLoadFailedEvent> { failures.add(it) }
+    eventBus.register<Controller.SnapshotSavedEvent> { saved.add(it) }
+    val directory = Files.createTempDirectory("coffee-gb-controller-state")
+    val rom = directory.resolve("state-test.gb").toFile().also { it.writeBytes(ROM.readBytes()) }
+    directory.resolve("state-test.sn0").toFile().writeBytes(byteArrayOf(1, 2, 3, 4))
+    val controller = BasicController(eventBus, EmulatorProperties(), null)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      eventBus.post(Controller.RestoreSnapshotEvent(0))
+      assertEquals(0, assertNotNull(failures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot)
+
+      eventBus.post(Controller.SaveSnapshotEvent(1))
+      assertEquals(
+          1,
+          assertNotNull(
+                  saved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                  "the controller thread should remain alive after a rejected snapshot",
+              )
+              .slot,
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
   fun pausesCurrentSessionWhileNextRomIsPrepared() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()

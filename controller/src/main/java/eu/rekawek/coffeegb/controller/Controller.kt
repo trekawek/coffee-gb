@@ -46,6 +46,9 @@ interface Controller : AutoCloseable {
   /** Emitted after a snapshot has been restored successfully. */
   data class SnapshotRestoredEvent(val slot: Int) : Event
 
+  /** Emitted when a snapshot is rejected or cannot be applied without changing the session. */
+  data class SnapshotLoadFailedEvent(val slot: Int, val message: String) : Event
+
   data class SessionPauseSupportEvent(val enabled: Boolean) : Event
 
   data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event

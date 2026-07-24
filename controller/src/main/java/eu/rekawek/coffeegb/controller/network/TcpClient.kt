@@ -29,6 +29,9 @@ class TcpClient(
     } catch (e: Connection.ProtocolException) {
       LOG.info("Netplay protocol error: {}", e.reason.userMessage)
       eventBus.post(ConnectionController.ClientProtocolErrorEvent(e.reason.userMessage))
+    } catch (e: Connection.CompatibilityException) {
+      LOG.info("Netplay compatibility error: {}", e.message)
+      eventBus.post(ConnectionController.ClientProtocolErrorEvent(e.message ?: "Incompatible peer"))
     } catch (e: SocketException) {
       if (e.message == "Socket closed") {
         LOG.atInfo().log("Disconnected from server")

@@ -73,6 +73,8 @@ class TcpServer(
     try {
       val connection =
           Connection(socket.getInputStream(), socket.getOutputStream(), eventBus, true, mode, player)
+      // Do not announce or start a session until both peers have selected portable state v1.
+      connection.completeServerHandshake()
       val handle = ClientHandle(player, socket, connection)
       clients[player] = handle
       LOG.info("Player {} connected from {}", player + 1, socket.inetAddress.hostAddress)
@@ -84,6 +86,13 @@ class TcpServer(
       } else {
         startSessionIfFull(socket.inetAddress.hostAddress)
       }
+    } catch (e: Connection.CompatibilityException) {
+      eventBus.post(
+          ConnectionController.ServerProtocolErrorEvent(
+              player,
+              e.message ?: "Incompatible netplay peer",
+          ))
+      socket.close()
     } catch (e: IOException) {
       socket.close()
       throw e
@@ -107,6 +116,24 @@ class TcpServer(
   private fun runClient(handle: ClientHandle) {
     try {
       handle.connection.use { it.run() }
+    } catch (e: Connection.ProtocolException) {
+      if (!doStop) {
+        LOG.info("Player {} protocol error: {}", handle.player + 1, e.reason.userMessage)
+        eventBus.post(
+            ConnectionController.ServerProtocolErrorEvent(
+                handle.player,
+                e.reason.userMessage,
+          ))
+      }
+    } catch (e: Connection.CompatibilityException) {
+      if (!doStop) {
+        LOG.info("Player {} compatibility error: {}", handle.player + 1, e.message)
+        eventBus.post(
+            ConnectionController.ServerProtocolErrorEvent(
+                handle.player,
+                e.message ?: "Incompatible netplay peer",
+            ))
+      }
     } catch (e: IOException) {
       if (!doStop) LOG.info("Player {} disconnected: {}", handle.player + 1, e.message)
     } finally {

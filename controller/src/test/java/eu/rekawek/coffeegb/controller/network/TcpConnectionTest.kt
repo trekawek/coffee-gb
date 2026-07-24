@@ -1,22 +1,32 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import org.junit.After
 import org.junit.Test
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.net.ServerSocket
+import java.net.Socket
+import java.nio.ByteBuffer
+import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /** End-to-end exchange over real TCP sockets on the loopback interface. */
 class TcpConnectionTest {
@@ -35,12 +45,15 @@ class TcpConnectionTest {
 
   private val threads = mutableListOf<Thread>()
 
+  private val controllers = mutableListOf<LinkedController>()
+
   @After
   fun tearDown() {
     client?.stop()
     extraClients.forEach { it.stop() }
     server?.stop()
     threads.forEach { it.join(3000) }
+    controllers.forEach { it.closeWithState() }
     serverBus.close()
     clientBus.close()
     extraBuses.forEach { it.close() }
@@ -72,8 +85,7 @@ class TcpConnectionTest {
 
     // server -> client: game load with compressed payloads; the Connection registers
     // its handlers shortly after the accept, so retry until the message goes through
-    val rom = ByteArray(128 * 1024)
-    Random(2).nextBytes(rom, 0, 16 * 1024)
+    val rom = ROM.readBytes()
     var game: Connection.PeerLoadedGameEvent? = null
     for (attempt in 0 until 20) {
       serverBus.post(
@@ -145,6 +157,22 @@ class TcpConnectionTest {
             bus.register<LinkedController.RemoteButtonStateEvent> { queue.add(it) }
           }
         }
+
+    val initialStates = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    serverBus.register<Connection.PeerLoadedGameEvent> { initialStates.add(it) }
+    buses.forEachIndexed { index, bus ->
+      bus.post(
+          LinkedController.LocalRomLoadedEvent(
+              ROM.readBytes(),
+              null,
+              null,
+              GameboyType.DMG,
+              Gameboy.BootstrapMode.SKIP,
+              0,
+              player = index + 1,
+          ))
+    }
+    repeat(3) { assertNotNull(initialStates.poll(5, TimeUnit.SECONDS)) }
 
     buses[1].post(
         LinkedController.LocalButtonStateEvent(
@@ -291,5 +319,178 @@ class TcpConnectionTest {
             "Network state transfer requires the portable state format.",
         error.message,
     )
+  }
+
+  @Test
+  fun linkedControllersExchangePortableRunningStateOverTcp() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val serverReady = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
+    val clientReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    serverBus.register<ConnectionController.ServerGotConnectionEvent> { serverReady.add(it) }
+    clientBus.register<ConnectionController.ClientConnectedToServerEvent> { clientReady.add(it) }
+    val hostController = linkedController(serverBus, LinkMode.NORMAL, 0)
+    val clientController = linkedController(clientBus, LinkMode.NORMAL, 1)
+
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+    val client = TcpClient("localhost:$port", clientBus)
+    this.client = client
+    threads += Thread(client).also { it.start() }
+    assertNotNull(serverReady.poll(5, TimeUnit.SECONDS))
+    assertNotNull(clientReady.poll(5, TimeUnit.SECONDS))
+
+    // Both sides are already running when the controller transition supplies their detached
+    // mementos. LinkedController must encode those states portably before Connection sees them.
+    serverBus.post(LoadRomEvent(ROM, runningMemento(1_000)))
+    clientBus.post(LoadRomEvent(ROM, runningMemento(2_000)))
+    driveControllers(hostController, clientController) {
+      hostController.activeSessionCount() == 2 && clientController.activeSessionCount() == 2
+    }
+
+    assertEquals(2, hostController.activeSessionCount())
+    assertEquals(2, clientController.activeSessionCount())
+  }
+
+  @Test
+  fun linkedFourPlayerClientStartsFromPortableCheckpointOverTcp() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val clientReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    val checkpoints = LinkedBlockingQueue<Connection.SessionCheckpointEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    clientBus.register<ConnectionController.ClientConnectedToServerEvent> { clientReady.add(it) }
+    clientBus.register<Connection.SessionCheckpointEvent> { checkpoints.add(it) }
+    val hostController = linkedController(serverBus, LinkMode.FOUR_PLAYER_ADAPTER, 0)
+    val clientController = linkedController(clientBus, LinkMode.FOUR_PLAYER_ADAPTER, 1)
+
+    val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+    serverBus.post(LoadRomEvent(ROM))
+    repeat(3) { hostController.runFrame() }
+    assertEquals(1, hostController.activeSessionCount())
+
+    val client = TcpClient("localhost:$port", clientBus)
+    this.client = client
+    threads += Thread(client).also { it.start() }
+    assertNotNull(clientReady.poll(5, TimeUnit.SECONDS))
+    clientBus.post(LoadRomEvent(ROM))
+    driveControllers(hostController, clientController) {
+      hostController.activeSessionCount() == 2 && clientController.activeSessionCount() == 2
+    }
+
+    val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+    assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
+    assertTrue(
+        checkpoint.states.all { state ->
+          state.sessionSnapshot?.copyOfRange(0, 4)?.contentEquals("CGBS".toByteArray()) == true
+        })
+    assertEquals(2, hostController.activeSessionCount())
+    assertEquals(2, clientController.activeSessionCount())
+  }
+
+  @Test
+  fun clientToServerLegacySnapshotRaisesServerProtocolEventBeforeDelivery() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val protocolErrors = LinkedBlockingQueue<ConnectionController.ServerProtocolErrorEvent>()
+    val delivered = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    serverBus.register<ConnectionController.ServerProtocolErrorEvent> { protocolErrors.add(it) }
+    serverBus.register<Connection.PeerLoadedGameEvent> { delivered.add(it) }
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+
+    Socket("localhost", port).use { socket ->
+      TcpClient.configure(socket)
+      val input = DataInputStream(socket.getInputStream())
+      val output = DataOutputStream(socket.getOutputStream())
+      val handshake = ByteArray("CoffeeGB NETPLAY".length + 4)
+      input.readFully(handshake)
+      assertEquals(0x07, handshake["CoffeeGB NETPLAY".length].toInt())
+      assertEquals(0x01, handshake.last().toInt())
+      output.writeByte(0x01)
+      output.flush()
+      assertEquals(0x08, input.readUnsignedByte())
+
+      val rom = Connection.deflate(byteArrayOf(1))
+      val legacy = byteArrayOf(0xac.toByte(), 0xed.toByte(), 0x00, 0x05)
+      val snapshot = Connection.deflate(legacy)
+      val header = ByteBuffer.allocate(45)
+      header.put(1)
+      header.putLong(0)
+      header.put(GameboyType.DMG.ordinal.toByte())
+      header.put(Gameboy.BootstrapMode.SKIP.ordinal.toByte())
+      header.put(0)
+      header.put(0)
+      intArrayOf(1, 0, legacy.size, 0).forEach(header::putInt)
+      intArrayOf(rom.size, 0, snapshot.size, 0).forEach(header::putInt)
+      output.writeByte(0x01)
+      output.write(header.array())
+      output.write(rom)
+      output.write(snapshot)
+      output.flush()
+
+      val error = assertNotNull(protocolErrors.poll(5, TimeUnit.SECONDS))
+      assertEquals(1, error.player)
+      assertEquals(
+          "The peer sent an unsafe legacy Java save state. " +
+              "Network state transfer requires the portable state format.",
+          error.message,
+      )
+      assertEquals(null, delivered.poll(200, TimeUnit.MILLISECONDS))
+    }
+  }
+
+  private fun linkedController(
+      bus: EventBusImpl,
+      mode: LinkMode,
+      player: Int,
+  ): LinkedController =
+      LinkedController(bus, EmulatorProperties(), null, mode, player).also {
+        it.timingTicker.disabled = true
+        controllers += it
+      }
+
+  private fun driveControllers(
+      host: LinkedController,
+      client: LinkedController,
+      complete: () -> Boolean,
+  ) {
+    repeat(100) {
+      host.runFrame()
+      client.runFrame()
+      if (complete()) return
+      Thread.sleep(10)
+    }
+    assertTrue(complete(), "linked controllers did not synchronize within the test timeout")
+  }
+
+  private fun runningMemento(ticks: Int): eu.rekawek.coffeegb.core.memento.Memento<Gameboy> {
+    val bus = EventBusImpl()
+    val gameboy =
+        Gameboy.GameboyConfiguration(Rom(ROM))
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .build()
+    gameboy.init(bus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    return try {
+      repeat(ticks) { gameboy.tick() }
+      gameboy.saveToMemento()
+    } finally {
+      gameboy.stop()
+      gameboy.close()
+      bus.close()
+    }
+  }
+
+  private companion object {
+    val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
   }
 }

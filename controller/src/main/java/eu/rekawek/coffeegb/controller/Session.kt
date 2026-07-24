@@ -60,7 +60,7 @@ class Session(
     serialEndpoint.restoreFromMemento(memento.serialEndpointMemento)
   }
 
-  private data class SessionMemento(
+  internal data class SessionMemento(
       val gameboyMemento: Memento<Gameboy>,
       val serialEndpointMemento: Memento<SerialEndpoint>?
   ) : Memento<Session>

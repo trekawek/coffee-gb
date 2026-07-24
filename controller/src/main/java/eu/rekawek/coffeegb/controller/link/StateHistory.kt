@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.link
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
@@ -117,7 +118,8 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
     states.addAll(retainedStates)
     patches.clear()
 
-    for (frame in baseFrame..toFrame + 1) {
+    val replayEnd = Math.addExact(toFrame, 1)
+    for (frame in baseFrame..replayEnd) {
       val inputs = inputsByFrame[frame]?.toList() ?: emptyInputs()
       states.add(
           State(
@@ -192,7 +194,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
 
   companion object {
     val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)
-    private const val MAX_HISTORY_STATES = 60 * 5
+    private val MAX_HISTORY_STATES = StateLimits.NETPLAY_ROLLBACK_FRAMES.toInt()
 
     internal fun createLinks(mode: LinkMode): Links {
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
