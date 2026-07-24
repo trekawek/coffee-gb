@@ -24,6 +24,20 @@ internal object StateSemantics {
     visit(value, "state", IdentityHashMap())
   }
 
+  fun validateBarcodeRuntime(state: BarcodeBoyRuntimeState) {
+    state.copyPending()?.let { pending ->
+      if (pending.size != BARCODE_FRAME_SIZE) {
+        throw StateApplyException(
+            "Barcode runtime has pending frame length ${pending.size}, expected $BARCODE_FRAME_SIZE")
+      }
+      pending.forEachIndexed { index, value ->
+        if (value !in 0..0xff) {
+          throw StateApplyException("Barcode runtime has invalid pending[$index]=$value")
+        }
+      }
+    }
+  }
+
   private fun visit(value: Any?, path: String, visited: IdentityHashMap<Any, Boolean>) {
     if (value == null || value.javaClass.isPrimitive || value is String || value is Enum<*>) return
     if (visited.put(value, true) != null) return
@@ -76,6 +90,7 @@ internal object StateSemantics {
     fun longArray(name: String): LongArray = value(name) as LongArray
     fun objectArray(name: String): Array<*> = value(name) as Array<*>
     fun list(name: String): List<*> = value(name) as List<*>
+    fun map(name: String): Map<*, *> = value(name) as Map<*, *>
 
     fun require(condition: Boolean, message: String) {
       if (!condition) throw StateApplyException("$path $message")
@@ -150,9 +165,9 @@ internal object StateSemantics {
       put("eu.rekawek.coffeegb.core.sound.Lfsr\$LfsrMemento",
           constrained("The noise LFSR is a 15-bit register.") { it.range("lfsr", 0, 0x7fff) })
       put("eu.rekawek.coffeegb.core.sound.PolynomialCounter\$PolynomialCounterMemento",
-          constrained("Noise register/counter widths and countdowns are bounded.") {
+          constrained("Noise register/counter widths, reload alignment, and countdowns are bounded.") {
             it.range("nr43", 0, 0xff); it.range("counter", 0, 0x3fff)
-            it.nonNegative("counterCountdown")
+            it.nonNegative("counterCountdown"); it.range("alignment", 0, 3)
           })
       put("eu.rekawek.coffeegb.core.sound.VolumeEnvelope\$VolumeEnvelopeMemento",
           constrained("Envelope volume, direction, sweep, and reload timer have hardware bounds.") {
@@ -168,8 +183,11 @@ internal object StateSemantics {
             it.range("i", 0, 7); it.nonNegative("freqDivider"); it.nonNegative("justReloadedTicks")
           })
       put("eu.rekawek.coffeegb.core.sound.SoundMode3\$SoundMode3Memento",
-          constrained("Wave-channel sample index and read address are bounded; -1 is the no-read sentinel.") {
-            it.range("i", 0, 31); it.nonNegative("freqDivider"); it.range("lastReadAddr", -1, 15)
+          constrained("Wave-channel sample index and last physical wave-RAM read address are bounded.") {
+            it.range("i", 0, 31); it.nonNegative("freqDivider")
+            val lastReadAddress = it.int("lastReadAddr")
+            it.require(lastReadAddress == 0 || lastReadAddress in 0xff30..0xff3f,
+                "has invalid lastReadAddr=$lastReadAddress")
           })
       put("eu.rekawek.coffeegb.core.sound.LengthCounter\$LengthCounterMemento",
           constrained("All channel length counters are in the shared 0..256 envelope.") {
@@ -270,9 +288,12 @@ internal object StateSemantics {
             it.recordType("waitingTransferCommandMemento", TRANSFER_COMMAND_MEMENTO)
           })
       put("eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento",
-          constrained("Nullable SGB palette rows retain their fixed row widths and fade phase.") {
-            checkRows(it, "palettes", 4); checkRows(it, "systemPalettes", 4)
-            checkRows(it, "attributeFiles", 20 * 18); it.range("borderFade", 0, 32)
+          constrained("SGB palette rows, palette IDs, attribute rows, and fade phase are bounded.") {
+            checkRows(it, "palettes", 4, nullable = false)
+            checkRows(it, "systemPalettes", 4, nullable = true)
+            checkRows(it, "attributeFiles", 20 * 18, nullable = false, values = 0..3)
+            it.intValues("paletteMap", 0, 3)
+            it.range("borderFade", 0, 32)
           })
       put("eu.rekawek.coffeegb.core.sgb.Background\$BackgroundMemento",
           constrained("The 105-frame border animation and optional picture-command type are validated.") {
@@ -288,11 +309,25 @@ internal object StateSemantics {
           constrained("Pulse schedule index/remaining duration are coherent with armed/running state.") {
             val schedule = it.intArray("schedule")
             it.require(schedule.all { duration -> duration > 0 }, "contains a non-positive pulse duration")
+            it.require(schedule.isEmpty() || schedule.size == FULL_CHANGER_SCHEDULE_SIZE,
+                "has invalid pulse schedule length ${schedule.size}")
+            val armed = it.value("armed") as Boolean
+            val running = it.value("running") as Boolean
+            it.require(!(armed && running), "cannot be both armed and running")
             val index = it.int("index")
-            it.require(index >= 0 && (schedule.isNotEmpty() || index == 0) &&
-                (schedule.isEmpty() || index < schedule.size), "has invalid pulse index $index")
-            if (it.value("running") as Boolean) it.require(schedule.isNotEmpty(), "is running without a schedule")
-            it.nonNegative("remaining")
+            if (schedule.isEmpty()) {
+              it.require(!armed && !running && index == 0 && it.int("remaining") == 0,
+                  "has non-idle state without a pulse schedule")
+            } else {
+              it.range("index", 0, schedule.size)
+              if (running) {
+                it.require(index < schedule.size && it.int("remaining") > 0,
+                    "has an invalid running pulse position")
+              } else if (!armed) {
+                it.require(index == schedule.size && it.int("remaining") <= 0,
+                    "has an invalid completed pulse position")
+              }
+            }
           })
 
       // DMA/PPU queues, phase indices, and delayed-write collections.
@@ -307,7 +342,8 @@ internal object StateSemantics {
           constrained("HDMA block length, source progress, request ages, and line phases are bounded.") {
             it.range("length", 0, 0x7f); it.range("tick", -8, 31)
             it.range("src", 0, 0xffff); it.range("dst", 0, 0xffff)
-            it.range("sourceBytesTransferred", 0, it.intArray("blockData").size)
+            // This is cumulative from the most recent source-register write, not per-block.
+            it.nonNegative("sourceBytesTransferred")
             listOf("hblankRequestAge", "nextHblankRequestAge").forEach { name -> it.nonNegative(name) }
             it.range("gpuLine", 0, 153); it.range("gpuTicksInLine", 0, 455)
           })
@@ -352,7 +388,7 @@ internal object StateSemantics {
           constrained("The CGB palette byte-address register is six bits.") { it.range("index", 0, 63) })
       put("eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento",
           constrained("LCD line/dot and delayed-write phases are bounded.") {
-            it.nonNegative("displayEnabledDelay"); it.range("line", 0, 153); it.range("ticksInLine", 0, 455)
+            it.nonNegative("displayEnabledDelay"); it.range("line", 0, 153); it.range("ticksInLine", -1, 455)
             val lastWrite = it.int("lastCpuVramWriteTick")
             it.require(lastWrite == Int.MIN_VALUE || lastWrite in -1..455,
                 "has invalid lastCpuVramWriteTick=$lastWrite")
@@ -448,8 +484,8 @@ internal object StateSemantics {
       // RTC and mapper command-state indices.
       put("eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockMemento",
           constrained("Live and latched RTC registers plus subsecond phase are hardware-bounded.") {
-            listOf("seconds", "minutes", "latchedSeconds", "latchedMinutes").forEach { name -> it.range(name, 0, 59) }
-            listOf("hours", "latchedHours").forEach { name -> it.range(name, 0, 23) }
+            listOf("seconds", "minutes", "latchedSeconds", "latchedMinutes").forEach { name -> it.range(name, 0, 0x3f) }
+            listOf("hours", "latchedHours").forEach { name -> it.range(name, 0, 0x1f) }
             listOf("days", "latchedDays").forEach { name -> it.range(name, 0, 511) }
             it.range("subSecondTicks", 0L, RTC_TICKS_PER_SECOND - 1L)
           })
@@ -522,6 +558,19 @@ internal object StateSemantics {
       addMapperPolicies(this)
 
       // Serial parser/framing indices.
+      put("eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento",
+          constrained("Cheat map values and elements are non-null registered patch records.") {
+            it.map("patches").forEach { (key, value) ->
+              it.require(key is Int && key in 0..0xffff, "has invalid patch-map key $key")
+              val patches = value as? List<*>
+              it.require(patches != null, "has null or non-list patch-map value at $key")
+              checkNotNull(patches).forEachIndexed { index, patch ->
+                it.require(
+                    patch != null && patch.javaClass.name in REGISTERED_PATCH_TYPES,
+                    "has invalid patch at $key[$index]")
+              }
+            }
+          })
       put("eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointMemento",
           constrained("Link-cable shift index and pending-bit count cannot underflow.") {
             it.range("sb", 0, 0xff); it.nonNegative("bitsReceived"); it.range("bitIndex", 0, 7)
@@ -531,13 +580,16 @@ internal object StateSemantics {
             it.range("sb", 0, 0xff); it.range("bits", 0, 7)
           })
       put("eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento",
-          constrained("Barcode handshake and optional scan payload cursors are validated together.") {
+          constrained("Barcode protocol phase and exact scan-frame cursors are validated together.") {
             it.range("handshakeByte", 0, 3); it.range("sendBitIndex", 0, 7)
             it.range("recvBitIndex", 0, 7); it.range("clockDivider", 0, 511)
             val data = it.value("data") as IntArray?
+            val sending = it.enumName("state") == "SENDING"
+            it.require(sending == (data != null), "has scan data inconsistent with protocol state")
             if (data == null) it.require(it.int("dataByte") == 0, "has a data cursor without scan data")
             else {
-              it.require(data.size == 30, "has barcode frame length ${data.size}, expected 30")
+              it.require(data.size == BARCODE_FRAME_SIZE,
+                  "has barcode frame length ${data.size}, expected $BARCODE_FRAME_SIZE")
               it.intValues("data", 0, 0xff); it.range("dataByte", 0, data.lastIndex)
             }
           })
@@ -578,7 +630,7 @@ internal object StateSemantics {
                 "transferArmed must have four entries")
             it.require((it.value("connected") as BooleanArray).size == players,
                 "connected must have four entries")
-            checkRows(it, "replies", 16)
+            checkRows(it, "replies", 16, nullable = false)
             it.require(it.intArray("transmissionBuffer").size == 16, "must have a 16-byte transmission buffer")
             it.range("size", 1, 4); it.range("packetByte", 0, 15); it.range("bit", 0, 7)
             it.nonNegative("ticksUntilBit"); it.range("rate", 0, 0xff)
@@ -603,11 +655,21 @@ internal object StateSemantics {
     }
   }
 
-  private fun checkRows(fields: RecordFields, name: String, expectedLength: Int) {
+  private fun checkRows(
+      fields: RecordFields,
+      name: String,
+      expectedLength: Int,
+      nullable: Boolean,
+      values: IntRange? = null,
+  ) {
     fields.objectArray(name).forEachIndexed { index, row ->
+      fields.require(nullable || row != null, "$name[$index] is unexpectedly null")
       if (row != null) {
-        fields.require(row is IntArray && row.size == expectedLength,
-            "$name[$index] has invalid row length")
+        fields.require(row is IntArray && row.size == expectedLength, "$name[$index] has invalid row length")
+        if (row is IntArray && values != null) {
+          fields.require(row.all { value -> value in values },
+              "$name[$index] contains a value outside ${values.first}..${values.last}")
+        }
       }
     }
   }
@@ -620,8 +682,10 @@ internal object StateSemantics {
       fields.require(entries.size == stamps.size, "has mismatched delay-line lengths")
       fields.require(entries.isNotEmpty(), "has an empty delay line")
       fields.range("delayHead", 0, entries.lastIndex)
-      // The dot model retains a monotonic logical count even after the eight physical slots wrap.
-      fields.nonNegative("delaySize")
+      fields.range("delaySize", 0, entries.size)
+    } else {
+      fields.require(fields.int("delayHead") == 0 && fields.int("delaySize") == 0,
+          "has delay cursors without legacy delay-line arrays")
     }
   }
 
@@ -707,7 +771,6 @@ internal object StateSemantics {
   private fun addPassThroughPolicies(target: MutableMap<String, Policy>) {
     val valueOnly =
         setOf(
-            "eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento",
             "eu.rekawek.coffeegb.core.sound.SoundMode4\$SoundMode4Memento",
             "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeMomento",
             "eu.rekawek.coffeegb.core.memory.BiosShadow\$BiosShadowMemento",
@@ -739,6 +802,8 @@ internal object StateSemantics {
   private const val SOUND_BUFFER_CAPACITY = 70_224 * 2
   private const val MAX_CPU_OPS = 64
   private const val SGB_TRANSFER_SIZE = 0x1000
+  private const val FULL_CHANGER_SCHEDULE_SIZE = 36
+  private const val BARCODE_FRAME_SIZE = 30
   private const val RTC_TICKS_PER_SECOND = 4_194_304L
   private const val CPU_VISIBLE_PPU_REGISTERS = 12
   private const val DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento"
@@ -760,6 +825,11 @@ internal object StateSemantics {
   private const val MBC5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5Memento"
   private const val MBC7_EEPROM_MEMENTO =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromMemento"
+  private val REGISTERED_PATCH_TYPES =
+      setOf(
+          "eu.rekawek.coffeegb.core.genie.GameGeniePatch",
+          "eu.rekawek.coffeegb.core.genie.GameSharkPatch",
+      )
   private val DELAYED_PPU_REGISTERS = setOf(0xff40, 0xff43, 0xff47, 0xff4b)
   private val TRANSFER_COMMAND_CODES = setOf(0x09, 0x0b, 0x10, 0x13, 0x14, 0x15)
 }

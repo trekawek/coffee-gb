@@ -5,6 +5,9 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.genie.AddPatches
+import eu.rekawek.coffeegb.core.genie.GameGeniePatch
+import eu.rekawek.coffeegb.core.genie.GameSharkPatch
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
@@ -197,6 +200,13 @@ class DetachedStateTest {
       val before = session.captureDetachedState()
       val display = before.machine.record(DISPLAY_MEMENTO)
       val queue = before.machine.record(INT_QUEUE_MEMENTO)
+      val dmgFifo = before.machine.record(DMG_FIFO_MEMENTO)
+      val sgbDisplay = before.machine.record(SGB_DISPLAY_MEMENTO)
+      val attributeFiles = sgbDisplay.field("attributeFiles") as ObjectArrayState
+      val firstAttributeFile = attributeFiles.values.first() as Int32ArrayState
+      val invalidAttributeFile =
+          Int32ArrayState(firstAttributeFile.copyValue().also { it[0] = 4 })
+      val paletteMap = sgbDisplay.intArray("paletteMap").also { it[0] = 4 }
 
       val invalidRoots =
           listOf(
@@ -219,6 +229,48 @@ class DetachedStateTest {
                   "i",
                   Int32State(display.intArray("buffer").size + 1),
               ),
+              before.machine.root.replaceRecordField(
+                  DMG_FIFO_MEMENTO,
+                  "delaySize",
+                  Int32State(dmgFifo.intArray("delayEntry").size + 1),
+              ),
+              before.machine.root.replaceRecordField(
+                  POLYNOMIAL_COUNTER_MEMENTO,
+                  "alignment",
+                  Int32State(4),
+              ),
+              before.machine.root.replaceRecordField(
+                  SGB_DISPLAY_MEMENTO,
+                  "paletteMap",
+                  Int32ArrayState(paletteMap),
+              ),
+              before.machine.root.replaceRecordField(
+                  SGB_DISPLAY_MEMENTO,
+                  "attributeFiles",
+                  ObjectArrayState(
+                      attributeFiles.values.mapIndexed { index, value ->
+                        if (index == 0) invalidAttributeFile else value
+                      }),
+              ),
+              before.machine.root.replaceRecordField(
+                  SGB_DISPLAY_MEMENTO,
+                  "attributeFiles",
+                  ObjectArrayState(
+                      attributeFiles.values.mapIndexed { index, value ->
+                        if (index == 0) NullState else value
+                      }),
+              ),
+              before.machine.root.replaceRecordField(
+                  GENIE_MEMENTO,
+                  "patches",
+                  Int32MapState(listOf(Int32MapEntry(0x1234, NullState))),
+              ),
+              before.machine.root.replaceRecordField(
+                  GENIE_MEMENTO,
+                  "patches",
+                  Int32MapState(
+                      listOf(Int32MapEntry(0x1234, ListState(listOf(NullState))))),
+              ),
           )
 
       invalidRoots.forEachIndexed { index, root ->
@@ -240,6 +292,32 @@ class DetachedStateTest {
               queue
                   .replaceField("size", Int32State(queue.intArray("array").size))
                   .replaceField("offset", Int32State(queue.intArray("array").lastIndex))))
+      StateSemantics.validate(
+          StateGraph.restore(
+              dmgFifo.replaceField(
+                  "delaySize",
+                  Int32State(dmgFifo.intArray("delayEntry").size),
+              )))
+    }
+
+    session(configuration(cgbIdleRom()).setGameboyType(GameboyType.CGB)).use { session ->
+      repeat(2_000) { session.gameboy.tick() }
+      val before = session.captureDetachedState()
+      val fifo = before.machine.record(COLOR_FIFO_MEMENTO)
+      val invalid =
+          before.withMachineRoot(
+              before.machine.root.replaceRecordField(
+                  COLOR_FIFO_MEMENTO,
+                  "delaySize",
+                  Int32State(fifo.intArray("delayEntry").size + 1),
+              ))
+      assertRejectedBeforeMutation(session, before, invalid, "CGB delay-line capacity")
+      StateSemantics.validate(
+          StateGraph.restore(
+              fifo.replaceField(
+                  "delaySize",
+                  Int32State(fifo.intArray("delayEntry").size),
+              )))
     }
   }
 
@@ -270,13 +348,16 @@ class DetachedStateTest {
           "legacy-pending-writes",
       )
 
-      // SGB row elements are independently nullable by PAL_SET/legacy state.
+      // Historical PAL_TRN state may have an unavailable system-palette row.
       val display = state.record(SGB_DISPLAY_MEMENTO)
-      val palettes = display.field("palettes") as ObjectArrayState
+      val systemPalettes = display.field("systemPalettes") as ObjectArrayState
       val withNullRow =
           display.replaceField(
-              "palettes",
-              ObjectArrayState(palettes.values.mapIndexed { index, value -> if (index == 0) NullState else value }),
+              "systemPalettes",
+              ObjectArrayState(
+                  systemPalettes.values.mapIndexed { index, value ->
+                    if (index == 0) NullState else value
+                  }),
           )
       StateGraph.validateCompatible(withNullRow, display, "nullable-sgb-row")
     }
@@ -297,18 +378,173 @@ class DetachedStateTest {
     StateSemantics.validate(StateGraph.restore(withPicture))
 
     val barcode = BarcodeBoySerialEndpoint()
-    val barcodeState = StateGraph.capture(barcode.saveToMemento()) as RecordState
-    val barcodeWithData = barcodeState.replaceField("data", Int32ArrayState(IntArray(30)))
-    StateGraph.validateCompatible(barcodeWithData, barcodeState, "optional-barcode-data")
+    val idleBarcode = StateGraph.capture(barcode.saveToMemento())
+    repeat(4) {
+      barcode.startSending()
+      repeat(8) { barcode.sendBit() }
+    }
+    barcode.scan("4901234567894")
+    barcode.setExternalTransfer(true)
+    barcode.recvBit()
+    val sendingBarcode = StateGraph.capture(barcode.saveToMemento())
+    StateGraph.validateCompatible(sendingBarcode, idleBarcode, "active-barcode-data")
+    StateSemantics.validate(StateGraph.restore(sendingBarcode))
+  }
 
-    session(configuration(datelRom())).use { emptySlot ->
-      session(datelConfiguration(mbc3Rom(), VirtualTimeSource(120_000))).use { populatedSlot ->
-        StateGraph.validateCompatible(
-            populatedSlot.captureDetachedState().machine.record(DATEL_MEMENTO),
-            emptySlot.captureDetachedState().machine.record(DATEL_MEMENTO),
-            "optional-datel-slot",
-        )
+  @Test
+  fun batteryAndDatelSlotPresenceAreTargetIdentityAndRejectBeforeMutation() {
+    val basicWithoutBattery = configuration(basicRom()).setSupportBatterySave(false)
+    val basicWithBattery =
+        configuration(basicRom())
+            .setBatteryData(ByteArray(0x2000))
+            .setSupportBatterySave(false)
+    assertCrossPresenceRejected(basicWithoutBattery, basicWithBattery)
+    assertCrossPresenceRejected(basicWithBattery, basicWithoutBattery)
+
+    val time = VirtualTimeSource(120_000)
+    val datelWithoutSlot =
+        configuration(datelRom())
+            .setGameboyType(GameboyType.CGB)
+            .setRtcTimeSource(time)
+            .setSupportBatterySave(false)
+    val datelWithSlot = datelConfiguration(mbc3Rom(), time)
+    assertCrossPresenceRejected(datelWithoutSlot, datelWithSlot)
+    assertCrossPresenceRejected(datelWithSlot, datelWithoutSlot)
+  }
+
+  @Test
+  fun malformedBarcodeMementoAndRuntimeRejectBeforeMutation() {
+    val endpoint = BarcodeBoySerialEndpoint()
+    session(endpoint).use { session ->
+      repeat(4) {
+        endpoint.startSending()
+        repeat(8) { endpoint.sendBit() }
       }
+      endpoint.scan("4901234567894")
+      endpoint.setExternalTransfer(true)
+      endpoint.recvBit()
+      val before = session.captureDetachedState()
+      val serial = before.serialState as RecordState
+      val idleState = StateGraph.capture(BarcodeBoySerialEndpoint().saveToMemento()) as RecordState
+      val activeData = serial.intArray("data")
+      val malformedSerial =
+          listOf(
+              serial.replaceField("data", NullState),
+              serial.replaceField("state", idleState.field("state")),
+              serial.replaceField("data", Int32ArrayState(activeData.copyOf(29))),
+              serial.replaceField(
+                  "data",
+                  Int32ArrayState(activeData.clone().also { it[0] = 0x100 }),
+              ),
+          )
+      val malformedRuntime =
+          listOf(
+              BarcodeBoyRuntimeState(true, IntArray(29)),
+              BarcodeBoyRuntimeState(true, IntArray(30).also { it[0] = 0x100 }),
+          )
+
+      malformedSerial.forEachIndexed { index, serialState ->
+        val invalid =
+            SessionState(
+                before.machine,
+                before.serialPeripheral,
+                serialState,
+                before.serialRuntime,
+                before.heldButtons,
+            )
+        assertRejectedBeforeMutation(session, before, invalid, "serial case $index")
+      }
+      malformedRuntime.forEachIndexed { index, runtime ->
+        val invalid =
+            SessionState(
+                before.machine,
+                before.serialPeripheral,
+                before.serialState,
+                runtime,
+                before.heldButtons,
+            )
+        assertRejectedBeforeMutation(session, before, invalid, "runtime case $index")
+      }
+    }
+  }
+
+  @Test
+  fun reachableWaveRtcHdmaAndLcdEnableStatesApplyAndContinueDeterministically() {
+    session().use { session ->
+      val bus = session.gameboy.addressSpace
+      bus.setByte(0xff26, 0x80)
+      bus.setByte(0xff30, 0xab)
+      bus.setByte(0xff1a, 0x80)
+      bus.setByte(0xff1c, 0x20)
+      bus.setByte(0xff1d, 0xff)
+      bus.setByte(0xff1e, 0x87)
+      repeat(24) { session.gameboy.tick() }
+      val wave = session.captureDetachedState()
+      assertTrue(wave.machine.record(SOUND_MODE3_MEMENTO).int("lastReadAddr") in 0xff30..0xff3f)
+      assertContinuation(session, wave, 192)
+    }
+
+    session(configuration(mbc3Rom())).use { session ->
+      val bus = session.gameboy.addressSpace
+      bus.setByte(0x0000, 0x0a)
+      listOf(0x08 to 63, 0x09 to 63, 0x0a to 31).forEach { (register, value) ->
+        bus.setByte(0x4000, register)
+        bus.setByte(0xa000, value)
+      }
+      bus.setByte(0x6000, 0)
+      bus.setByte(0x6000, 1)
+      val rtc = session.captureDetachedState()
+      val clock = rtc.machine.record(RTC_MEMENTO)
+      assertEquals(63, clock.int("seconds"))
+      assertEquals(63, clock.int("minutes"))
+      assertEquals(31, clock.int("hours"))
+      assertEquals(63, clock.int("latchedSeconds"))
+      assertEquals(63, clock.int("latchedMinutes"))
+      assertEquals(31, clock.int("latchedHours"))
+      assertContinuation(session, rtc, 4_096)
+    }
+
+    session(configuration(cgbIdleRom()).setGameboyType(GameboyType.CGB)).use { session ->
+      val bus = session.gameboy.addressSpace
+      bus.setByte(0xff51, 0xc0)
+      bus.setByte(0xff52, 0x00)
+      bus.setByte(0xff53, 0x00)
+      bus.setByte(0xff54, 0x00)
+      bus.setByte(0xff55, 0x01)
+      var hdma = session.captureDetachedState()
+      repeat(256) {
+        if (hdma.machine.record(HDMA_MEMENTO).int("sourceBytesTransferred") <= 16) {
+          session.gameboy.tick()
+          hdma = session.captureDetachedState()
+        }
+      }
+      assertTrue(hdma.machine.record(HDMA_MEMENTO).bool("transferInProgress"))
+      assertTrue(hdma.machine.record(HDMA_MEMENTO).int("sourceBytesTransferred") > 16)
+      assertContinuation(session, hdma, 64)
+    }
+
+    session().use { session ->
+      val bus = session.gameboy.addressSpace
+      bus.setByte(0xff40, 0x11)
+      bus.setByte(0xff40, 0x91)
+      val lcdEnable = session.captureDetachedState()
+      assertEquals(-1, lcdEnable.machine.record(GPU_MEMENTO).int("ticksInLine"))
+      assertContinuation(session, lcdEnable, 256)
+    }
+  }
+
+  @Test
+  fun registeredCheatPatchListsApplyAndContinue() {
+    session().use { session ->
+      session.eventBus.post(
+          AddPatches(
+              listOf(
+                  GameGeniePatch(0x42, 0x1234, -1),
+                  GameSharkPatch(8, 2, 0xa123, 0x99),
+              )))
+      val captured = session.captureDetachedState()
+      StateSemantics.validate(StateGraph.restore(captured.machine.record(GENIE_MEMENTO)))
+      assertContinuation(session, captured, 128)
     }
   }
 
@@ -476,6 +712,46 @@ class DetachedStateTest {
   private fun configuration(bytes: ByteArray): Gameboy.GameboyConfiguration =
       Gameboy.GameboyConfiguration(Rom(bytes)).setBootstrapMode(BootstrapMode.SKIP)
 
+  private fun assertContinuation(session: Session, captured: SessionState, ticks: Int) {
+    repeat(ticks) { session.gameboy.tick() }
+    val expected = session.captureDetachedState()
+    repeat(31) { session.gameboy.tick() }
+    session.restoreDetachedState(captured)
+    repeat(ticks) { session.gameboy.tick() }
+    assertEquals(expected, session.captureDetachedState())
+  }
+
+  private fun assertCrossPresenceRejected(
+      targetConfiguration: Gameboy.GameboyConfiguration,
+      candidateConfiguration: Gameboy.GameboyConfiguration,
+  ) {
+    session(targetConfiguration).use { target ->
+      session(candidateConfiguration).use { candidate ->
+        val before = target.captureDetachedState()
+        assertRejectedBeforeMutation(
+            target,
+            before,
+            candidate.captureDetachedState(),
+            "configuration identity",
+        )
+      }
+    }
+  }
+
+  private fun assertRejectedBeforeMutation(
+      session: Session,
+      before: SessionState,
+      invalid: SessionState,
+      label: String,
+  ) {
+    val stages = mutableListOf<ApplyStage>()
+    assertFailsWith<StateApplyException>(label) {
+      DetachedStateAdapter.apply(session, invalid) { stages += it }
+    }
+    assertTrue(stages.isEmpty(), "$label reached live mutation")
+    assertEquals(before, session.captureDetachedState(), "$label changed the session")
+  }
+
   private fun MachineState.record(className: String): RecordState {
     fun find(value: StateValue): RecordState? =
         when (value) {
@@ -619,6 +895,15 @@ class DetachedStateTest {
 
   private fun mbc3Rom(): ByteArray = slotRom(0x10, 0x03)
 
+  private fun basicRom(): ByteArray = slotRom(0x08, 0x02)
+
+  private fun cgbIdleRom(): ByteArray =
+      ByteArray(0x8000).also {
+        it[0x100] = 0x18
+        it[0x101] = 0xfe.toByte()
+        it[0x143] = 0x80.toByte()
+      }
+
   private fun slotRom(type: Int, ramSize: Int): ByteArray =
       ByteArray(0x8000).also {
         intArrayOf(0xce, 0xed, 0x66, 0x66, 0xcc, 0x0d).forEachIndexed { index, value ->
@@ -659,16 +944,23 @@ class DetachedStateTest {
     const val HDMA_MEMENTO = "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento"
     const val SPEED_MEMENTO = "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeMomento"
     const val SOUND_MODE_MEMENTO = "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeMemento"
+    const val SOUND_MODE3_MEMENTO = "eu.rekawek.coffeegb.core.sound.SoundMode3\$SoundMode3Memento"
+    const val POLYNOMIAL_COUNTER_MEMENTO =
+        "eu.rekawek.coffeegb.core.sound.PolynomialCounter\$PolynomialCounterMemento"
     const val SERIAL_PORT_MEMENTO = "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortMemento"
     const val CARTRIDGE_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeMemento"
     const val MBC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3Memento"
     const val INT_QUEUE_MEMENTO = "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueMemento"
+    const val DMG_FIFO_MEMENTO = "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento"
+    const val COLOR_FIFO_MEMENTO =
+        "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento"
     const val SGB_DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento"
     const val SUPER_GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyMemento"
     const val BACKGROUND_MEMENTO = "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundMemento"
     const val TRANSFER_MEMENTO =
         "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento"
     const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento"
+    const val GENIE_MEMENTO = "eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento"
     const val RTC_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockMemento"
     const val HUC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3Memento"
     const val TAMA5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Tama5\$Tama5Memento"

@@ -56,8 +56,8 @@ volatiles, monitor state) remain controller services and are not portable machin
 | Timer/divider | DIV/TIMA/TMA/TAC, selected-bit history, overflow/reload, DIV reset, HALT wake/ripple and interrupt suppression edges | Speed/interrupt object references are wiring |
 | Speed switch | Current multiplier, prepare latch, DMG compatibility plus Gameboy clock-mux tail/phase flags | Cartridge compatibility flags are immutable configuration |
 | Boot/memory mapping | BIOS enabled shadow, MMU fixed RAM/WRAM/HRAM banks, SVBK, undocumented registers and OAM echo | BIOS bytes, address-space index and component references are reconstructed from configuration |
-| DMA/HDMA | OAM ownership/restart/source/ticks/bus samples/interrupt collision state; VRAM-DMA registers, mode, block bytes, CPU arbitration, HBlank/LCD/speed/halt request history | Source/destination address-space references are wiring; all temporal arbitration caches that affect behavior are captured |
-| GPU/PPU | VRAM banks, registers/mix/write delays, LCDC/STAT, LY/mode/dot, palettes, OAM-search state/sprites, fetcher, pixel and sprite FIFOs, window/object penalties and delayed writes, VRAM transfer | Palette decoding and component references are derived; behavior-affecting FIFO/cache/edge state is captured |
+| DMA/HDMA | OAM ownership/restart/source/ticks/bus samples/interrupt collision state; VRAM-DMA registers, mode, block bytes, cumulative source-byte progress since the source-register write, CPU arbitration, HBlank/LCD/speed/halt request history | Source/destination address-space references are wiring; all temporal arbitration caches that affect behavior are captured |
+| GPU/PPU | VRAM banks, registers/mix/write delays, LCDC/STAT, LY/mode/dot (including the LCD-enable `-1` dot), palettes, OAM-search state/sprites, fetcher, pixel and sprite FIFOs, window/object penalties and delayed writes, VRAM transfer | Palette decoding and component references are derived; both dot machines advance their owned eight-slot LCD delay rings, and behavior-affecting FIFO/cache/edge state is captured |
 | Display/panel | Exactly one GPU-owned `DisplayMemento`: partial write buffer/index, enabled flag, complete visible frame and first-frame-after-enable state | Root `displayMemento` is null for new captures, retained only as a nullable legacy-fixture input; buses/listeners are services |
 | APU/channels | Master registers/output buffer/index, channel masks/enables, frame sequencer and divider phase, pulse/wave/noise phases, length/envelope/sweep/LFSR/polynomial counters and pending clocks | Host audio sink/mixer callback is a service; waveform/output behavior is captured |
 | Joypad | P1, debounced input history/lines, pending edge, SGB multiplayer transfer packet/bit/player state | Physical held buttons are intentionally session-owned and captured separately so rewind policy can differ |
@@ -66,15 +66,15 @@ volatiles, monitor state) remain controller services and are not portable machin
 | Peer cable endpoint | SB, received-bit count and bit index | Peer object pointer is reconstructed by link topology |
 | Printer endpoint | Protocol parser, command/image buffers, checksum/status/reply framing and print delay | `PrintCallback` is a host/UI service |
 | GPS endpoint | Master ticks, startup beacons, UART output queue/bit delay, RX parser/parity and TAIP command | No time/network/location service is retained; emulated response data is deterministic |
-| Barcode Boy endpoint | Handshake/send/receive phase and active data in the pinned memento; queued barcode and external-transfer latch in deep-owned `BarcodeBoyRuntimeState` | No callback/service is retained; pending payload arrays are cloned on capture and access |
+| Barcode Boy endpoint | Handshake/send/receive phase and exact 30-byte active frame in the pinned memento; exact 30-byte queued frame and external-transfer latch in deep-owned `BarcodeBoyRuntimeState` | No callback/service is retained; active data exists exactly in `SENDING`, and pending payload arrays are cloned on capture and access |
 | Four-player adapter | Shared SB/armed/connected/pending arrays, reply/transmit buffers, packet/bit/timing/rate/size/phase and restart requests | Endpoint objects and player-slot association are reconstructed from `LinkedTopologyState` |
 | Infrared | RP register plus Full Changer schedule/armed/running/index/remaining phase | Physical/peer IR endpoint callback is topology/service state |
-| Cartridge/battery | Mapper memento, RAM/EEPROM/flash, bank/register/mode gates, write-dirty state; memory/file battery byte buffers, clock-presence and dirty flag | Immutable ROM bytes, file path/stream and battery object identity are construction services |
-| MBC3 RTC | Seconds/minutes/hours/day/control, subsecond ticks, latch snapshot, halt/overflow; separately tagged primary and Datel-slot pause flag/reference in `CartridgeRtcRuntimeState` | Injected `TimeSource` is never captured; both physical cartridge constructors receive the configured service |
+| Cartridge/battery | Mapper memento, RAM/EEPROM/flash, bank/register/mode gates, write-dirty state; memory/file battery byte buffers, clock-presence and dirty flag | Immutable ROM bytes, file path/stream and battery object identity are construction services; BasicRom battery and Datel slot presence must match the configured target |
+| MBC3 RTC | Six-bit seconds/minutes, five-bit hours, day/control, subsecond ticks, latch snapshot, halt/overflow; separately tagged primary and Datel-slot pause flag/reference in `CartridgeRtcRuntimeState` | Injected `TimeSource` is never captured; both physical cartridge constructors receive the configured service |
 | HuC3 RTC/IR | Minute/day/alarm registers, command index/flags/read latch, primitive last-second reference and RAM | Injected `TimeSource` is never captured |
 | TAMA5/TAMA6 | Command registers, RAM, four RTC pages, disable/alarm state and primitive last-second reference | Injected `TimeSource` is never captured |
-| SGB | Command packet transfer, multiplayer joypad state, character/background/attribute/palette/border buffers, mask and fade/animation | SGB event buses and render listeners are services |
-| Cheats/rumble | Genie/Shark patch values and maps; CodeBreaker/MBC5/Makon motor state | Event-bus rumble consumers are services |
+| SGB | Command packet transfer, multiplayer joypad state, character/background/attribute/palette/border buffers, mask and fade/animation; palette-map and attribute IDs are 0..3 | SGB event buses and render listeners are services; only historical `systemPalettes` rows are nullable |
+| Cheats/rumble | Non-null registered Genie/Shark patch lists/maps; CodeBreaker/MBC5/Makon motor state | Event-bus rumble consumers are services |
 | Session | Detached machine, serial endpoint tag/state/runtime and canonical unique held-button enum list (a list on input so malformed duplicates can be rejected) | ROM/configuration, event bus, console and endpoint callback objects are services |
 | Linked session | Authoritative frame, local player, explicit normal/four-player topology tag, exactly four canonical player slots, session states and held input; four-player copies must describe one coherent shared adapter | Network connections, peers, event queues and worker thread are controller services; apply requires the same already-configured active-session shape and rebases history at the safe point |
 
@@ -104,6 +104,12 @@ allowlist. Its constrained policies cover every scalar that is later used as an 
 queue size/offset, copy length, parser bit/count, GPU/PPU/DMA phase, audio buffer/channel counter,
 IR/SGB packet/schedule index, RTC field, or mapper EEPROM/flash command phase.
 
+Reachable boundary regressions exercise CH3 after a physical wave-RAM read, MBC3's 63/63/31
+live-and-latched register values, Full Changer armed/running/completed phases, HDMA in its second
+block, LCD enable at dot `-1`, and both FIFO delay rings at capacity. Barcode protocol/runtime
+coherence, SGB palette IDs, polynomial reload alignment, and Genie map element types are rejected
+through the adapter before its live-mutation callback.
+
 Records whose fields are deliberately not range-constrained still have an explicit policy and
 rationale in that registry. Examples are raw bus/address/register latches, signed emulated clocks,
 documented `-1`/minimum-value sentinels, and parent records whose only relationship-bearing values
@@ -130,10 +136,11 @@ Unknown record/enum IDs, wrong field names/order/counts, mapper or endpoint root
 dimensions, required-value nulls, type mismatches, invalid enum ordinals, oversized/deep
 graphs/primitive arrays/strings, invalid semantic indices/counts/phases, RTC-location mismatches,
 malformed held input, and linked frame/player/topology/adapter mismatches are rejected before live
-mutation. Optional SGB operation records, nullable SGB display rows, optional barcode/transfer
-payloads, an absent Datel slot memento, and the nullable legacy display record are explicit
-owner/field exceptions rather than type-category exceptions. A serial endpoint outside the
-enumerated endpoint families throws
+mutation. Optional SGB operation records, optional barcode/transfer payloads, historical nullable
+`systemPalettes` rows, and the nullable legacy display record are explicit owner/field exceptions
+rather than type-category exceptions. BasicRom battery and Datel slot presence are target identity
+and cannot cross null/non-null configurations. A serial endpoint outside the enumerated endpoint
+families throws
 `StateCaptureException`; it is never silently serialized as null. Adding mutable production state
 requires all of: a memento/runtime DTO field, registry/schema and capture-site inventory updates,
 deep-ownership rule, and a deterministic-continuation regression.
