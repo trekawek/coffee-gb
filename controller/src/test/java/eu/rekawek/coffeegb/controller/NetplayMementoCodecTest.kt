@@ -15,7 +15,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
 import org.junit.Test
 
-class PortableMementoCodecTest {
+class NetplayMementoCodecTest {
 
   @Test
   fun gameboyStateIsDeterministicAndRoundTrips() {
@@ -26,11 +26,11 @@ class PortableMementoCodecTest {
       eventBus.post(AddPatches(listOf(GameGeniePatch(0x42, 0x1234, 0x24))))
       repeat(100) { gameboy.tick() }
       val memento = gameboy.saveToMemento()
-      val first = PortableMementoCodec.encodeGameboy(memento)
-      val second = PortableMementoCodec.encodeGameboy(memento)
+      val first = NetplayMementoCodec.encodeGameboy(memento)
+      val second = NetplayMementoCodec.encodeGameboy(memento)
 
       assertContentEquals(first, second)
-      gameboy.restoreFromMemento(PortableMementoCodec.decodeGameboy(first))
+      gameboy.restoreFromMemento(NetplayMementoCodec.decodeGameboy(first))
     } finally {
       gameboy.stop()
       gameboy.close()
@@ -44,9 +44,9 @@ class PortableMementoCodecTest {
     val adapter = FourPlayerAdapter()
     val session = Session(configuration(), eventBus, null, adapter.endpoint(0))
     try {
-      val encoded = PortableMementoCodec.encodeSession(session.saveToMemento())
+      val encoded = NetplayMementoCodec.encodeSession(session.saveToMemento())
 
-      session.restoreFromMemento(PortableMementoCodec.decodeSession(encoded))
+      session.restoreFromMemento(NetplayMementoCodec.decodeSession(encoded))
     } finally {
       session.close()
     }
@@ -54,21 +54,21 @@ class PortableMementoCodecTest {
 
   @Test
   fun invalidEnvelopeIsRejectedBeforeGraphConstruction() {
-    assertFailsWith<PortableMementoCodec.DecodeException> {
-      PortableMementoCodec.decodeGameboy(byteArrayOf(1, 2, 3, 4))
+    assertFailsWith<NetplayMementoCodec.DecodeException> {
+      NetplayMementoCodec.decodeGameboy(byteArrayOf(1, 2, 3, 4))
     }
 
     val eventBus = EventBusImpl()
     val gameboy = configuration().build()
     gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
     try {
-      val encoded = PortableMementoCodec.encodeGameboy(gameboy.saveToMemento())
+      val encoded = NetplayMementoCodec.encodeGameboy(gameboy.saveToMemento())
       val corrupt = encoded.clone().also { it[it.lastIndex / 2] = (it[it.lastIndex / 2] + 1).toByte() }
-      assertFailsWith<PortableMementoCodec.DecodeException> {
-        PortableMementoCodec.decodeGameboy(corrupt)
+      assertFailsWith<NetplayMementoCodec.DecodeException> {
+        NetplayMementoCodec.decodeGameboy(corrupt)
       }
-      assertFailsWith<PortableMementoCodec.DecodeException> {
-        PortableMementoCodec.decodeGameboy(encoded.copyOf(encoded.size - 1))
+      assertFailsWith<NetplayMementoCodec.DecodeException> {
+        NetplayMementoCodec.decodeGameboy(encoded.copyOf(encoded.size - 1))
       }
     } finally {
       gameboy.stop()
@@ -90,10 +90,10 @@ class PortableMementoCodecTest {
       @Suppress("UNCHECKED_CAST")
       val invalid =
           replaceRecordComponent(memento, "genieMemento", invalidGenie) as Memento<Gameboy>
-      val encoded = PortableMementoCodec.encodeGameboy(invalid)
+      val encoded = NetplayMementoCodec.encodeGameboy(invalid)
 
-      assertFailsWith<PortableMementoCodec.DecodeException> {
-        PortableMementoCodec.decodeGameboy(encoded)
+      assertFailsWith<NetplayMementoCodec.DecodeException> {
+        NetplayMementoCodec.decodeGameboy(encoded)
       }
     } finally {
       gameboy.stop()

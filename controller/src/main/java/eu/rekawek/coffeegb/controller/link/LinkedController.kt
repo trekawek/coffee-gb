@@ -8,7 +8,7 @@ import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
-import eu.rekawek.coffeegb.controller.PortableMementoCodec
+import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
@@ -16,12 +16,17 @@ import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
+import eu.rekawek.coffeegb.controller.network.Connection.ProtocolErrorReason
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerButtonStateEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
+import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
@@ -42,6 +47,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
+import java.io.IOException
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -65,6 +71,7 @@ class LinkedController(
           StateLimits.NETPLAY_EVENT_QUEUE_EVENTS,
           StateLimits.NETPLAY_EVENT_QUEUE_BYTES,
           ::eventWeight,
+          ::eventSource,
       )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
@@ -114,7 +121,7 @@ class LinkedController(
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       configs[localPlayer] = e.config
-      initSession(localPlayer, frame, e.snapshot?.let(PortableMementoCodec::decodeGameboy), null)
+      initSession(localPlayer, frame, e.snapshot?.let(NetplayMementoCodec::decodeGameboy), null)
       sendLocalRom(e.snapshot)
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
         broadcastCurrentState()
@@ -139,10 +146,11 @@ class LinkedController(
     }
 
     eventQueue.register<PeerLoadedGameEvent> { e ->
-      if (!loadPeerState(e)) return@register
+      val validated = validatePeerStateFrame(e) ?: return@register
+      if (!loadPeerState(validated)) return@register
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
           localPlayer == 0 &&
-          e.sessionSnapshot == null) {
+          validated.sessionSnapshot == null) {
         // The new physical port is now attached at this frame. Publish one checkpoint containing
         // every active console plus the shared adapter so old and new clients resume together.
         broadcastCurrentState()
@@ -151,6 +159,14 @@ class LinkedController(
 
     eventQueue.register<SessionCheckpointEvent> { e ->
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer != 0) {
+        if (!validatePeer(e.source) {
+              PeerFrameWindow.validateCheckpoint(
+                  e.frame,
+                  e.states.map(PeerLoadedGameEvent::frame),
+              )
+            }) {
+          return@register
+        }
         val activePlayers = e.states.mapTo(mutableSetOf()) { it.player }
         sessions.indices.filterNot(activePlayers::contains).forEach { player ->
           sessions[player]?.close()
@@ -178,21 +194,29 @@ class LinkedController(
     }
 
     eventQueue.register<RemoteButtonStateEvent> { e ->
-      if (e.player != localPlayer && e.player in sessions.indices) {
+      if (e.player != localPlayer &&
+          e.player in sessions.indices &&
+          validateRuntimeFrame(e.frame, e.source)) {
         stateHistory.addSecondaryInput(e.player, e.frame, e.input)
+        eventBus.post(ValidatedPeerButtonStateEvent(e))
       }
     }
 
     eventQueue.register<ReceivedRemoteResetEvent> { e ->
-      if (e.player != localPlayer && e.player in sessions.indices) {
+      if (e.player != localPlayer &&
+          e.player in sessions.indices &&
+          validateRuntimeFrame(e.frame, e.source)) {
         sessions[e.player]?.close()
         sessions[e.player] = null
         initSession(e.player, e.frame, null, null)
+        eventBus.post(ValidatedPeerResetEvent(e))
       }
     }
 
     eventQueue.register<ReceivedRemoteStopEvent> { e ->
-      if (e.player != localPlayer && e.player in sessions.indices) {
+      if (e.player != localPlayer &&
+          e.player in sessions.indices &&
+          validateRuntimeFrame(e.frame, e.source)) {
         sessions[e.player]?.close()
         sessions[e.player] = null
         if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
@@ -229,7 +253,7 @@ class LinkedController(
       eventBus.post(
           LoadedLocalConfigEvent(
               config = config,
-              snapshot = it.memento?.let(PortableMementoCodec::encodeGameboy),
+              snapshot = it.memento?.let(NetplayMementoCodec::encodeGameboy),
           ))
     }
 
@@ -378,13 +402,44 @@ class LinkedController(
     initSession(
         e.player,
         e.frame,
-        e.decodedSnapshot ?: e.snapshot?.let(PortableMementoCodec::decodeGameboy),
+        e.decodedSnapshot ?: e.snapshot?.let(NetplayMementoCodec::decodeGameboy),
         e.decodedSessionSnapshot
-            ?: e.sessionSnapshot?.let(PortableMementoCodec::decodeSession),
+            ?: e.sessionSnapshot?.let(NetplayMementoCodec::decodeSession),
         e.heldButtons,
     )
     return true
   }
+
+  private fun validatePeerStateFrame(event: PeerLoadedGameEvent): PeerLoadedGameEvent? {
+    // A new DMG-07 port is attached to the host's current adapter phase without replaying the
+    // joining console's private pre-link timeline. All other peer state is bounded against the
+    // controller-owned frame before any live configuration or session is replaced.
+    if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
+      return if (validatePeer(event.source) {
+            PeerFrameWindow.validateRuntimeFrame(event.frame, 0)
+          }) {
+        event.copy(frame = frame)
+      } else {
+        null
+      }
+    }
+    return if (validateRuntimeFrame(event.frame, event.source)) event else null
+  }
+
+  private fun validateRuntimeFrame(peerFrame: Long, source: PeerEventSource?): Boolean =
+      validatePeer(source) { PeerFrameWindow.validateRuntimeFrame(peerFrame, frame) }
+
+  private inline fun validatePeer(source: PeerEventSource?, validation: () -> Unit): Boolean =
+      try {
+        validation()
+        true
+      } catch (e: IOException) {
+        LOG.info("Rejecting player {} frame at controller frame {}: {}",
+            source?.player?.plus(1), frame, e.message)
+        source?.player?.let(eventQueue::discardSource)
+        source?.reject(ProtocolErrorReason.INVALID_FRAME, e)
+        false
+      }
 
   private fun sendLocalRom(snapshot: ByteArray?) {
     val config = configs[localPlayer] ?: return
@@ -422,7 +477,7 @@ class LinkedController(
               frame = frame,
               cgb0Revision = config.isCgb0Revision,
               player = player,
-              sessionSnapshot = PortableMementoCodec.encodeSession(session.saveToMemento()),
+              sessionSnapshot = NetplayMementoCodec.encodeSession(session.saveToMemento()),
               heldButtons = session.heldButtons,
           )
         }
@@ -439,6 +494,16 @@ class LinkedController(
               Math.addExact(total, peerStateWeight(state))
             }
         else -> 64L
+      }
+
+  private fun eventSource(event: Event): Any? =
+      when (event) {
+        is PeerLoadedGameEvent -> event.source?.player
+        is SessionCheckpointEvent -> event.source?.player
+        is RemoteButtonStateEvent -> event.source?.player
+        is ReceivedRemoteResetEvent -> event.source?.player
+        is ReceivedRemoteStopEvent -> event.source?.player
+        else -> null
       }
 
   private fun peerStateWeight(event: PeerLoadedGameEvent): Long {
@@ -490,6 +555,7 @@ class LinkedController(
       val frame: Long,
       val input: Input,
       val player: Int = 1,
+      internal val source: PeerEventSource? = null,
   ) : Event
 
   data class LoadedLocalConfigEvent(val config: GameboyConfiguration, val snapshot: ByteArray?) :

@@ -20,10 +20,10 @@ class EventQueueTest {
       assertFailsWith<EventQueue.EventQueueFullException> { bus.post(WeightedEvent(3)) }
 
       queue.dispatch()
-      assertEquals(listOf(1L, 2L), received)
+      assertEquals(emptyList(), received)
       bus.post(WeightedEvent(3))
       queue.dispatch()
-      assertEquals(listOf(1L, 2L, 3L), received)
+      assertEquals(listOf(3L), received)
     } finally {
       bus.close()
     }
@@ -49,5 +49,35 @@ class EventQueueTest {
     }
   }
 
-  private data class WeightedEvent(val bytes: Long) : Event
+  @Test
+  fun aFullProducerBudgetDoesNotConsumeAnotherProducersReservation() {
+    val bus = EventBusImpl()
+    val received = mutableListOf<WeightedEvent>()
+    val queue =
+        EventQueue(
+            bus,
+            maxEvents = 2,
+            maxBytes = 10,
+            eventWeight = { (it as WeightedEvent).bytes },
+            eventSource = { (it as WeightedEvent).source },
+        )
+    queue.register<WeightedEvent> { received += it }
+    try {
+      bus.post(WeightedEvent(5, "offender"))
+      bus.post(WeightedEvent(5, "offender"))
+      val error =
+          assertFailsWith<EventQueue.EventQueueFullException> {
+            bus.post(WeightedEvent(1, "offender"))
+          }
+      assertEquals("offender", error.source)
+
+      bus.post(WeightedEvent(10, "honest"))
+      queue.dispatch()
+      assertEquals(listOf("honest"), received.map { it.source })
+    } finally {
+      bus.close()
+    }
+  }
+
+  private data class WeightedEvent(val bytes: Long, val source: String = "local") : Event
 }

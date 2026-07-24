@@ -11,11 +11,12 @@ class EventQueue(
     private val maxEvents: Int = Int.MAX_VALUE,
     private val maxBytes: Long = Long.MAX_VALUE,
     private val eventWeight: (Event) -> Long = { 0L },
+    private val eventSource: (Event) -> Any? = { null },
 ) {
 
   private val queue = ArrayDeque<WeightedEvent>()
 
-  private var queuedBytes = 0L
+  private val queuedBySource = mutableMapOf<Any, SourceBudget>()
 
   private val registrations: MutableList<Registration<*>> = CopyOnWriteArrayList()
 
@@ -33,7 +34,10 @@ class EventQueue(
       val e =
           synchronized(queue) {
             val weighted = queue.pollFirst() ?: return
-            queuedBytes -= weighted.weight
+            val budget = checkNotNull(queuedBySource[weighted.source])
+            budget.events--
+            budget.bytes -= weighted.weight
+            if (budget.events == 0) queuedBySource.remove(weighted.source)
             weighted.event
           }
       for (r in registrations) {
@@ -46,25 +50,47 @@ class EventQueue(
     }
   }
 
+  fun discardSource(source: Any) {
+    synchronized(queue) { discardSourceLocked(source) }
+  }
+
   private fun enqueue(event: Event) {
     val weight = eventWeight(event)
     if (weight < 0) throw IllegalArgumentException("Negative event weight")
+    val source = eventSource(event) ?: LOCAL_SOURCE
     synchronized(queue) {
-      if (queue.size >= maxEvents || weight > maxBytes - queuedBytes) {
-        throw EventQueueFullException(maxEvents, maxBytes)
+      val budget = queuedBySource.getOrPut(source, ::SourceBudget)
+      if (budget.events >= maxEvents || weight > maxBytes - budget.bytes) {
+        discardSourceLocked(source)
+        throw EventQueueFullException(source, maxEvents, maxBytes)
       }
-      queue.addLast(WeightedEvent(event, weight))
-      queuedBytes += weight
+      queue.addLast(WeightedEvent(event, weight, source))
+      budget.events++
+      budget.bytes += weight
     }
   }
 
-  internal class EventQueueFullException(maxEvents: Int, maxBytes: Long) :
-      IllegalStateException("Event queue exceeds $maxEvents events or $maxBytes bytes")
+  private fun discardSourceLocked(source: Any) {
+    queue.removeIf { it.source == source }
+    queuedBySource.remove(source)
+  }
 
-  private data class WeightedEvent(val event: Event, val weight: Long)
+  internal class EventQueueFullException(
+      val source: Any,
+      maxEvents: Int,
+      maxBytes: Long,
+  ) : IllegalStateException("Event source exceeds $maxEvents queued events or $maxBytes bytes")
+
+  private data class WeightedEvent(val event: Event, val weight: Long, val source: Any)
+
+  private data class SourceBudget(var events: Int = 0, var bytes: Long = 0)
 
   private data class Registration<T : Event>(
       val subscriber: Subscriber<T>,
       val eventType: Class<T>,
   )
+
+  private companion object {
+    val LOCAL_SOURCE = Any()
+  }
 }

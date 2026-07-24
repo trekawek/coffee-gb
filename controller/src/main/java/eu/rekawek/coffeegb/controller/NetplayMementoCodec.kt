@@ -20,18 +20,18 @@ import java.util.HashMap
 import java.util.zip.CRC32
 
 /**
- * Bounded, explicit-type transport for the current memento graph.
+ * Bounded, explicit-type transport for the protocol-v7 netplay memento graph.
  *
- * This is the compatibility seam needed to remove Java native serialization from netplay before
- * the immutable State v2 DTOs land. The envelope is versioned and checksummed, every concrete
- * record/enum has an audited stable ID, and decoding builds a detached graph without invoking any
- * service or emulator object.
+ * This is an intentionally temporary wire-only compatibility seam: it removes Java native
+ * serialization from netplay before the immutable State v2 DTOs in #322/#323 land. It is not the
+ * persistent CGBS state format, does not define stable cross-protocol IDs, and must never be used
+ * for local save files. The protocol version and capability byte negotiate its complete schema.
  */
-internal object PortableMementoCodec {
+internal object NetplayMementoCodec {
 
   const val FORMAT_VERSION: Int = 1
 
-  private const val MAGIC = 0x43474253 // CGBS
+  private const val MAGIC = 0x4347424e // CGBN: temporary netplay-only envelope
   private const val HEADER_BYTES = 10
   private const val TRAILER_BYTES = 4
   private const val GAMEBOY_ROOT: Int = 1

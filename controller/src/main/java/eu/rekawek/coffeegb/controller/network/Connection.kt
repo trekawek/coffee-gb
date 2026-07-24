@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.LegacyMementoCodec
-import eu.rekawek.coffeegb.controller.PortableMementoCodec
+import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.EventQueue
@@ -51,6 +51,8 @@ class Connection(
 
   private val output = DataOutputStream(BufferedOutputStream(outputStream))
 
+  private val outputLock = Any()
+
   private val eventBus: EventBus = mainEventBus.fork("connection-$assignedPlayer")
 
   val mode: LinkMode
@@ -62,6 +64,12 @@ class Connection(
 
   @Volatile private var serverHandshakeComplete = !server
 
+  @Volatile private var controllerFailure: ProtocolException? = null
+
+  private val pendingOutboundMessages = ArrayDeque<ByteArray>()
+
+  private var pendingOutboundBytes = 0L
+
   private var sessionActive = server
 
   private val pendingEvents = mutableListOf<Event>()
@@ -72,12 +80,33 @@ class Connection(
 
   private var pendingCheckpointBytes = 0L
 
-  private val peerFrames = PeerFrameWindow()
+  private val peerSource: PeerEventSource
 
   init {
-    val handshake = handshake(requestedMode, assignedPlayer)
+    val handshake =
+        try {
+          handshake(requestedMode, assignedPlayer)
+        } catch (e: Exception) {
+          try {
+            eventBus.close()
+          } catch (closeFailure: Exception) {
+            e.addSuppressed(closeFailure)
+          }
+          try {
+            input.close()
+          } catch (closeFailure: IOException) {
+            e.addSuppressed(closeFailure)
+          }
+          try {
+            output.close()
+          } catch (closeFailure: IOException) {
+            e.addSuppressed(closeFailure)
+          }
+          throw e
+        }
     mode = handshake.mode
     player = handshake.player
+    peerSource = PeerEventSource(player, ::rejectFromController)
 
     eventBus.register<LinkedController.LocalRomLoadedEvent> {
       // Four-player host state is sent as an atomic SessionStateReadyEvent checkpoint. Sending the
@@ -100,22 +129,23 @@ class Connection(
       }
     }
 
-    // Only host-side connections see relay events. The originating player's connection is
-    // skipped; every other client receives the exact same player-labelled message.
-    eventBus.register<RelayRomEvent> {
-      if (server && player != it.sourcePlayer) sendSafely { sendRom(it.event) }
-    }
-    eventBus.register<RelayButtonsEvent> {
-      if (server && player != it.sourcePlayer) sendSafely { sendButtons(it.event) }
-    }
-    eventBus.register<RelayResetEvent> {
-      if (server && player != it.sourcePlayer) {
-        sendSafely { sendFrameCommand(RESET, it.event.frame, it.event.player) }
+    // Relay only after LinkedController has checked the frame against its authoritative clock.
+    // The originating connection is skipped; every other client receives the same player label.
+    eventBus.register<ValidatedPeerButtonStateEvent> {
+      if (server && it.event.source !== peerSource) {
+        sendSafely {
+          sendButtons(
+              LinkedController.LocalButtonStateEvent(
+                  it.event.frame,
+                  it.event.input,
+                  it.event.player,
+              ))
+        }
       }
     }
-    eventBus.register<RelayStopEvent> {
-      if (server && player != it.sourcePlayer) {
-        sendSafely { sendFrameCommand(STOP, it.event.frame, it.event.player) }
+    eventBus.register<ValidatedPeerResetEvent> {
+      if (server && it.event.source !== peerSource) {
+        sendSafely { sendFrameCommand(RESET, it.event.frame, it.event.player) }
       }
     }
     eventBus.register<LinkedController.SessionStateReadyEvent> {
@@ -152,7 +182,6 @@ class Connection(
   }
 
   private fun sendRom(event: LinkedController.LocalRomLoadedEvent) {
-    if (server && !serverHandshakeComplete) return
     checkedDecodedMessageSize(
         event.romFile.size,
         event.batteryFile?.size ?: 0,
@@ -196,7 +225,6 @@ class Connection(
     snapshot?.let(buf::put)
     sessionSnapshot?.let(buf::put)
     sendMessage(buf)
-    peerFrames.establishSharedFrame(event.frame)
     LOG.atInfo().log("Sent player {} ROM ({} -> {} bytes compressed)", event.player + 1,
         event.romFile.size, rom.size)
   }
@@ -231,11 +259,22 @@ class Connection(
     sendMessage(buf)
   }
 
-  @Synchronized
   private fun sendMessage(buf: ByteBuffer) {
-    if (doStop || (server && !serverHandshakeComplete)) return
-    output.write(buf.array(), 0, buf.position())
-    output.flush()
+    synchronized(outputLock) {
+      if (doStop) return
+      if (server && !serverHandshakeComplete) {
+        val message = buf.array().copyOf(buf.position())
+        if (pendingOutboundMessages.size >= StateLimits.NETPLAY_HANDSHAKE_PENDING_MESSAGES ||
+            message.size > StateLimits.NETPLAY_HANDSHAKE_PENDING_BYTES - pendingOutboundBytes) {
+          throw IOException("Netplay handshake outbound queue limit exceeded")
+        }
+        pendingOutboundMessages += message
+        pendingOutboundBytes += message.size
+        return
+      }
+      output.write(buf.array(), 0, buf.position())
+      output.flush()
+    }
   }
 
   /** Releases a client after the host has accepted its physical link port. */
@@ -253,8 +292,10 @@ class Connection(
           try {
             input.read()
           } catch (e: IOException) {
+            controllerFailure?.let { throw it }
             if (doStop) -1 else throw e
           }
+      controllerFailure?.let { throw it }
       if (command == -1) return
 
       try {
@@ -267,15 +308,14 @@ class Connection(
           SYNCHRONIZE -> {
             if (!server && mode == LinkMode.FOUR_PLAYER_ADAPTER) {
               val frame =
-                  peerFrames.validateCheckpoint(
+                  PeerFrameWindow.validateCheckpoint(
                       input.readLong(),
                       pendingCheckpointStates.map(PeerLoadedGameEvent::frame),
                   )
               val states = pendingCheckpointStates.toList()
-              peerFrames.accept(frame)
               pendingCheckpointStates.clear()
               pendingCheckpointBytes = 0
-              deliver(SessionCheckpointEvent(frame, states))
+              deliver(SessionCheckpointEvent(frame, states, peerSource))
             } else {
               throw IOException("Client sent a server-only synchronization command")
             }
@@ -315,7 +355,7 @@ class Connection(
     val buf = ByteBuffer.wrap(header)
     val wirePlayer = buf.get().toInt()
     val eventPlayer = receivedPlayer(wirePlayer)
-    val frame = peerFrames.validateStateFrame(buf.getLong())
+    val frame = PeerFrameWindow.validateAbsolute(buf.getLong())
     val gameboyType = enumValue<GameboyType>(buf.get(), "Game Boy type")
     val bootstrapMode = enumValue<BootstrapMode>(buf.get(), "bootstrap mode")
     val cgb0RevisionValue = buf.get().toInt() and 0xff
@@ -411,8 +451,8 @@ class Connection(
             heldButtons = heldButtons,
             decodedSnapshot = snapshot,
             decodedSessionSnapshot = sessionSnapshot,
+            source = peerSource,
         )
-    peerFrames.accept(frame)
     if (!server && mode == LinkMode.FOUR_PLAYER_ADAPTER && event.sessionSnapshot != null) {
       if (pendingCheckpointStates.size >= mode.playerCount ||
           pendingCheckpointStates.any { it.player == event.player }) {
@@ -427,23 +467,6 @@ class Connection(
     } else {
       deliver(event)
     }
-    if (server && mode != LinkMode.FOUR_PLAYER_ADAPTER) {
-      eventBus.post(
-          RelayRomEvent(
-              eventPlayer,
-              LinkedController.LocalRomLoadedEvent(
-                  event.rom,
-                  event.battery,
-                  snapshotBytes,
-                  event.gameboyType,
-                  event.bootstrapMode,
-                  event.frame,
-                  event.cgb0Revision,
-                  event.player,
-                  sessionSnapshotBytes,
-                  event.heldButtons,
-              )))
-    }
     LOG.atInfo().log("Received player {} ROM", eventPlayer + 1)
   }
 
@@ -452,7 +475,7 @@ class Connection(
     input.readFully(header)
     val buf = ByteBuffer.wrap(header)
     val eventPlayer = receivedPlayer(buf.get().toInt())
-    val frame = peerFrames.validateRuntimeFrame(buf.getLong())
+    val frame = PeerFrameWindow.validateAbsolute(buf.getLong())
     val pressedCount = buf.get().toInt() and 0xff
     val releasedCount = buf.get().toInt() and 0xff
     if (pressedCount > Button.entries.size || releasedCount > Button.entries.size) {
@@ -464,16 +487,14 @@ class Connection(
     val pressed = (0 until pressedCount).map { buttonValue(buttons[it]) }
     val released =
         (0 until releasedCount).map { buttonValue(buttons[pressedCount + it]) }
-    peerFrames.accept(frame)
-    val event = LinkedController.RemoteButtonStateEvent(frame, Input(pressed, released), eventPlayer)
+    val event =
+        LinkedController.RemoteButtonStateEvent(
+            frame,
+            Input(pressed, released),
+            eventPlayer,
+            peerSource,
+        )
     deliver(event)
-    if (server) {
-      eventBus.post(
-          RelayButtonsEvent(
-              eventPlayer,
-              LinkedController.LocalButtonStateEvent(event.frame, event.input, event.player),
-          ))
-    }
   }
 
   private fun receiveReset() {
@@ -495,17 +516,12 @@ class Connection(
 
   private fun receiveFrameEvent(command: Byte) {
     val (eventPlayer, frame) = readPlayerAndFrame()
-    peerFrames.accept(frame)
     if (command == RESET) {
-      val event = ReceivedRemoteResetEvent(frame, eventPlayer)
+      val event = ReceivedRemoteResetEvent(frame, eventPlayer, peerSource)
       deliver(event)
-      if (server) eventBus.post(RelayResetEvent(eventPlayer, event))
     } else {
-      val event = ReceivedRemoteStopEvent(frame, eventPlayer)
+      val event = ReceivedRemoteStopEvent(frame, eventPlayer, peerSource)
       deliver(event)
-      if (server && mode != LinkMode.FOUR_PLAYER_ADAPTER) {
-        eventBus.post(RelayStopEvent(eventPlayer, event))
-      }
     }
   }
 
@@ -513,7 +529,7 @@ class Connection(
     val payload = ByteArray(9)
     input.readFully(payload)
     val buf = ByteBuffer.wrap(payload)
-    return receivedPlayer(buf.get().toInt()) to peerFrames.validateRuntimeFrame(buf.getLong())
+    return receivedPlayer(buf.get().toInt()) to PeerFrameWindow.validateAbsolute(buf.getLong())
   }
 
   private fun receivedPlayer(wirePlayer: Int): Int {
@@ -581,8 +597,8 @@ class Connection(
   private fun decodePeerGameState(bytes: ByteArray): Memento<eu.rekawek.coffeegb.core.Gameboy> {
     validatePeerStateHeader(bytes)
     return try {
-      PortableMementoCodec.decodeGameboy(bytes)
-    } catch (e: PortableMementoCodec.DecodeException) {
+      NetplayMementoCodec.decodeGameboy(bytes)
+    } catch (e: NetplayMementoCodec.DecodeException) {
       failProtocol(ProtocolErrorReason.INVALID_PORTABLE_STATE, e)
     }
   }
@@ -590,8 +606,8 @@ class Connection(
   private fun decodePeerSessionState(bytes: ByteArray): Memento<Session> {
     validatePeerStateHeader(bytes)
     return try {
-      PortableMementoCodec.decodeSession(bytes)
-    } catch (e: PortableMementoCodec.DecodeException) {
+      NetplayMementoCodec.decodeSession(bytes)
+    } catch (e: NetplayMementoCodec.DecodeException) {
       failProtocol(ProtocolErrorReason.INVALID_PORTABLE_STATE, e)
     }
   }
@@ -678,7 +694,7 @@ class Connection(
         when {
           LegacyMementoCodec.hasJavaSerializationHeader(bytes) ->
               ProtocolErrorReason.LEGACY_JAVA_STATE
-          !PortableMementoCodec.hasHeader(bytes) -> ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT
+          !NetplayMementoCodec.hasHeader(bytes) -> ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT
           else -> return
         }
     sendProtocolError(reason)
@@ -701,6 +717,29 @@ class Connection(
     throw ProtocolException(reason, cause)
   }
 
+  private fun rejectFromController(reason: ProtocolErrorReason, cause: IOException) {
+    val failure = ProtocolException(reason, cause)
+    synchronized(outputLock) {
+      if (controllerFailure != null || doStop) return
+      try {
+        val buf = ByteBuffer.allocate(2)
+        buf.put(PROTOCOL_ERROR)
+        buf.put(reason.wireCode.toByte())
+        output.write(buf.array(), 0, buf.position())
+        output.flush()
+      } catch (sendFailure: IOException) {
+        failure.addSuppressed(sendFailure)
+      }
+      controllerFailure = failure
+      doStop = true
+    }
+    try {
+      input.close()
+    } catch (closeFailure: IOException) {
+      failure.addSuppressed(closeFailure)
+    }
+  }
+
   fun stop() {
     doStop = true
   }
@@ -708,8 +747,18 @@ class Connection(
   override fun close() {
     doStop = true
     eventBus.close()
-    input.close()
-    output.close()
+    var failure: IOException? = null
+    try {
+      input.close()
+    } catch (e: IOException) {
+      failure = e
+    }
+    try {
+      output.close()
+    } catch (e: IOException) {
+      failure?.addSuppressed(e) ?: run { failure = e }
+    }
+    failure?.let { throw it }
   }
 
   private fun handshake(requestedMode: LinkMode, assignedPlayer: Int): Handshake {
@@ -721,7 +770,7 @@ class Connection(
       buf[PROTOCOL_NAME.length + 1] = requestedMode.ordinal.toByte()
       buf[PROTOCOL_NAME.length + 2] = assignedPlayer.toByte()
       output.write(buf)
-      output.writeByte(STATE_FORMAT_CAPABILITIES)
+      output.writeByte(NETPLAY_STATE_CAPABILITY)
       output.flush()
       return Handshake(requestedMode, assignedPlayer)
     }
@@ -753,24 +802,29 @@ class Connection(
     }
     val capabilities = input.read()
     if (capabilities == -1) throw IOException("Truncated netplay capability handshake")
-    if (capabilities and STATE_FORMAT_CAPABILITIES == 0) {
-      throw CompatibilityException("The server does not support portable state format 1.")
+    if (capabilities and NETPLAY_STATE_CAPABILITY == 0) {
+      throw CompatibilityException("The server does not support the protocol-v7 netplay state codec.")
     }
-    output.writeByte(STATE_FORMAT_CAPABILITIES)
+    output.writeByte(NETPLAY_STATE_CAPABILITY)
     output.flush()
     LOG.atInfo().log("Connected as player {} in {} mode", receivedPlayer + 1, receivedMode)
     return Handshake(receivedMode, receivedPlayer)
   }
 
-  @Synchronized
   internal fun completeServerHandshake() {
     if (serverHandshakeComplete) return
     val capabilities = input.read()
     if (capabilities == -1) throw CompatibilityException("Truncated netplay capability handshake")
-    if (capabilities and STATE_FORMAT_CAPABILITIES == 0) {
-      throw CompatibilityException("The client does not support portable state format 1.")
+    if (capabilities and NETPLAY_STATE_CAPABILITY == 0) {
+      throw CompatibilityException("The client does not support the protocol-v7 netplay state codec.")
     }
-    serverHandshakeComplete = true
+    synchronized(outputLock) {
+      serverHandshakeComplete = true
+      pendingOutboundMessages.forEach(output::write)
+      if (pendingOutboundMessages.isNotEmpty()) output.flush()
+      pendingOutboundMessages.clear()
+      pendingOutboundBytes = 0
+    }
   }
 
   private data class Handshake(val mode: LinkMode, val player: Int)
@@ -808,12 +862,25 @@ class Connection(
         4,
         "The peer sent an invalid portable state. The connection was closed safely.",
     ),
+    INVALID_FRAME(
+        5,
+        "The peer sent a frame outside the safe rollback window. " +
+            "The connection was closed safely.",
+    ),
   }
 
   internal class ProtocolException(
       val reason: ProtocolErrorReason,
       cause: Throwable? = null,
   ) : IOException(reason.userMessage, cause)
+
+  class PeerEventSource internal constructor(
+      val player: Int,
+      private val reject: (ProtocolErrorReason, IOException) -> Unit,
+  ) {
+    internal fun reject(reason: ProtocolErrorReason, cause: IOException) =
+        reject.invoke(reason, cause)
+  }
 
   data class PeerLoadedGameEvent(
       val rom: ByteArray,
@@ -828,46 +895,42 @@ class Connection(
       val heldButtons: Set<Button> = emptySet(),
       internal val decodedSnapshot: Memento<eu.rekawek.coffeegb.core.Gameboy>? = null,
       internal val decodedSessionSnapshot: Memento<Session>? = null,
+      internal val source: PeerEventSource? = null,
   ) : Event
 
   data class SessionCheckpointEvent(
       val frame: Long,
       val states: List<PeerLoadedGameEvent>,
+      internal val source: PeerEventSource? = null,
   ) : Event
 
   data class RequestResetEvent(val frame: Long, val player: Int = 0) : Event
 
   data class RequestStopEvent(val frame: Long, val player: Int = 0) : Event
 
-  data class ReceivedRemoteResetEvent(val frame: Long, val player: Int = 1) : Event
-
-  data class ReceivedRemoteStopEvent(val frame: Long, val player: Int = 1) : Event
-
-  private data class RelayRomEvent(
-      val sourcePlayer: Int,
-      val event: LinkedController.LocalRomLoadedEvent,
+  data class ReceivedRemoteResetEvent(
+      val frame: Long,
+      val player: Int = 1,
+      internal val source: PeerEventSource? = null,
   ) : Event
 
-  private data class RelayButtonsEvent(
-      val sourcePlayer: Int,
-      val event: LinkedController.LocalButtonStateEvent,
+  data class ReceivedRemoteStopEvent(
+      val frame: Long,
+      val player: Int = 1,
+      internal val source: PeerEventSource? = null,
   ) : Event
 
-  private data class RelayResetEvent(
-      val sourcePlayer: Int,
-      val event: ReceivedRemoteResetEvent,
+  internal data class ValidatedPeerButtonStateEvent(
+      val event: LinkedController.RemoteButtonStateEvent,
   ) : Event
 
-  private data class RelayStopEvent(
-      val sourcePlayer: Int,
-      val event: ReceivedRemoteStopEvent,
-  ) : Event
+  internal data class ValidatedPeerResetEvent(val event: ReceivedRemoteResetEvent) : Event
 
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
     private const val PROTOCOL_NAME = "CoffeeGB NETPLAY"
     private const val PROTOCOL_VERSION: Byte = 0x07
-    private const val STATE_FORMAT_CAPABILITIES = 0x01
+    private const val NETPLAY_STATE_CAPABILITY = 0x01
     private const val REJECTION_MARKER = 0xff
     private const val ROM: Byte = 0x01
     private const val INPUT: Byte = 0x03

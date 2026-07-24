@@ -10,46 +10,51 @@ class PeerFrameWindowTest {
 
   @Test
   fun exactRollbackAndFutureBoundariesAreAccepted() {
-    val window = PeerFrameWindow()
-    window.validateStateFrame(1_000)
-    window.accept(1_000)
-
-    assertEquals(700, window.validateRuntimeFrame(700))
-    assertEquals(1_120, window.validateRuntimeFrame(1_120))
-    assertFailsWith<IOException> { window.validateRuntimeFrame(699) }
-    assertFailsWith<IOException> { window.validateRuntimeFrame(1_121) }
+    assertEquals(700, PeerFrameWindow.validateRuntimeFrame(700, 1_000))
+    assertEquals(1_120, PeerFrameWindow.validateRuntimeFrame(1_120, 1_000))
+    assertFailsWith<IOException> { PeerFrameWindow.validateRuntimeFrame(699, 1_000) }
+    assertFailsWith<IOException> { PeerFrameWindow.validateRuntimeFrame(1_121, 1_000) }
   }
 
   @Test
   fun negativeAndExtremeLongFramesAreRejected() {
-    assertFailsWith<IOException> { PeerFrameWindow().validateStateFrame(-1) }
-    assertFailsWith<IOException> { PeerFrameWindow().validateStateFrame(Long.MIN_VALUE) }
-    assertFailsWith<IOException> { PeerFrameWindow().validateStateFrame(Long.MAX_VALUE) }
+    assertFailsWith<IOException> { PeerFrameWindow.validateRuntimeFrame(-1, 0) }
+    assertFailsWith<IOException> { PeerFrameWindow.validateRuntimeFrame(Long.MIN_VALUE, 0) }
+    assertFailsWith<IOException> { PeerFrameWindow.validateRuntimeFrame(Long.MAX_VALUE, 0) }
     assertEquals(
         StateLimits.NETPLAY_MAX_FRAME,
-        PeerFrameWindow().validateStateFrame(StateLimits.NETPLAY_MAX_FRAME),
+        PeerFrameWindow.validateAbsolute(StateLimits.NETPLAY_MAX_FRAME),
     )
   }
 
   @Test
-  fun rejectedFrameDoesNotAdvanceTheWindow() {
-    val window = PeerFrameWindow()
-    window.validateStateFrame(100)
-    window.accept(100)
-
-    assertFailsWith<IOException> { window.validateRuntimeFrame(221) }
-    assertEquals(0, window.validateRuntimeFrame(0))
+  fun peerBurstsCannotRatchetTheAuthoritativeWindow() {
+    assertEquals(1_120, PeerFrameWindow.validateRuntimeFrame(1_120, 1_000))
+    repeat(511) { index ->
+      val ratcheted = 1_240L + index * StateLimits.NETPLAY_FUTURE_FRAMES
+      assertFailsWith<IOException> {
+        PeerFrameWindow.validateRuntimeFrame(ratcheted, 1_000)
+      }
+    }
   }
 
   @Test
-  fun runtimeAndCheckpointRequireASequencedState() {
-    val window = PeerFrameWindow()
-    assertFailsWith<IOException> { window.validateRuntimeFrame(0) }
-
-    window.validateStateFrame(50)
-    window.accept(50)
-    assertFailsWith<IOException> { window.validateCheckpoint(50, emptyList()) }
-    assertFailsWith<IOException> { window.validateCheckpoint(50, listOf(49, 50)) }
-    assertEquals(50, window.validateCheckpoint(50, listOf(50, 50)))
+  fun checkpointRequiresMatchingStatesAndRuntimeHeadroom() {
+    assertFailsWith<IOException> { PeerFrameWindow.validateCheckpoint(50, emptyList()) }
+    assertFailsWith<IOException> { PeerFrameWindow.validateCheckpoint(50, listOf(49, 50)) }
+    assertEquals(50, PeerFrameWindow.validateCheckpoint(50, listOf(50, 50)))
+    assertEquals(
+        StateLimits.NETPLAY_MAX_REBASE_FRAME,
+        PeerFrameWindow.validateCheckpoint(
+            StateLimits.NETPLAY_MAX_REBASE_FRAME,
+            listOf(StateLimits.NETPLAY_MAX_REBASE_FRAME),
+        ),
+    )
+    assertFailsWith<IOException> {
+      PeerFrameWindow.validateCheckpoint(
+          StateLimits.NETPLAY_MAX_REBASE_FRAME + 1,
+          listOf(StateLimits.NETPLAY_MAX_REBASE_FRAME + 1),
+      )
+    }
   }
 }

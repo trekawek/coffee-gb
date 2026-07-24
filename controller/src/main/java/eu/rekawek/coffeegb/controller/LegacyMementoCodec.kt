@@ -36,6 +36,34 @@ internal object LegacyMementoCodec {
           "java.util.Map\$Entry",
       )
 
+  // Coffee GB 1.7.13 carried atfNumber in this record. Version 1.7.14 removed it, and Java record
+  // deserialization safely ignores that pinned historical component while supplying the current
+  // canonical constructor with the remaining fields. No other descriptor drift is admitted.
+  private val historicalSerialShapes =
+      mapOf(
+          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to
+              setOf(
+                  SerialShape(
+                      0L,
+                      listOf(
+                          SerialField("atfNumber", 'I', null),
+                          SerialField("borderFade", 'I', null),
+                          SerialField("attributeFiles", '[', "[[I"),
+                          SerialField("paletteMap", '[', "[I"),
+                          SerialField("palettes", '[', "[[I"),
+                          SerialField(
+                              "screenMask",
+                              'L',
+                              "Leu/rekawek/coffeegb/core/sgb/Commands\$MaskEnCmd\$GameboyScreenMask;",
+                          ),
+                          SerialField("sgbBuffer", '[', "[I"),
+                          SerialField("sgbMask", '[', "[I"),
+                          SerialField("systemPalettes", '[', "[[I"),
+                      ),
+                  ),
+              ),
+      )
+
   fun serializeGameboy(memento: Memento<Gameboy>): ByteArray =
       serialize(memento, StateLimits.GAME_SNAPSHOT)
 
@@ -77,6 +105,7 @@ internal object LegacyMementoCodec {
     if (!hasJavaSerializationHeader(bytes)) {
       throw InvalidObjectException("Invalid legacy ${limit.description} header")
     }
+    LegacySerializationPreflight.validate(bytes, limit.decodedBytes)
 
     val input = ByteArrayInputStream(bytes)
     val value =
@@ -99,6 +128,8 @@ internal object LegacyMementoCodec {
       input: ByteArrayInputStream,
       private val limit: StateLimits.Payload,
   ) : ObjectInputStream(input) {
+
+    private var allocatedArrayBytes = 0L
 
     init {
       setObjectInputFilter(::filter)
@@ -140,8 +171,13 @@ internal object LegacyMementoCodec {
     }
 
     private fun filter(info: ObjectInputFilter.FilterInfo): ObjectInputFilter.Status {
+      val serialClass = info.serialClass()
       val objectArray =
-          info.serialClass()?.let { it.isArray && !it.componentType.isPrimitive } == true
+          serialClass?.let {
+            it.isArray &&
+                !it.componentType.isPrimitive &&
+                it.name != "[Ljava.util.Map\$Entry;"
+          } == true
       if (!isWithinGraphLimits(
               info.depth(),
               info.references(),
@@ -152,7 +188,21 @@ internal object LegacyMementoCodec {
           )) {
         return ObjectInputFilter.Status.REJECTED
       }
-      val serialClass = info.serialClass() ?: return ObjectInputFilter.Status.UNDECIDED
+      serialClass ?: return ObjectInputFilter.Status.UNDECIDED
+      if (serialClass.isArray && info.arrayLength() >= 0) {
+        try {
+          allocatedArrayBytes =
+              Math.addExact(
+                  allocatedArrayBytes,
+                  LegacyArrayShapes.allocationBytes(serialClass.name, info.arrayLength().toInt()),
+              )
+          if (allocatedArrayBytes > StateLimits.LEGACY_MAX_ARRAY_BYTES) {
+            return ObjectInputFilter.Status.REJECTED
+          }
+        } catch (_: Exception) {
+          return ObjectInputFilter.Status.REJECTED
+        }
+      }
       return if (isAllowed(serialClass)) {
         ObjectInputFilter.Status.ALLOWED
       } else {
@@ -164,7 +214,7 @@ internal object LegacyMementoCodec {
   private fun isAllowed(type: Class<*>): Boolean {
     if (Proxy.isProxyClass(type)) return false
     if (type.isPrimitive) return true
-    if (type.isArray) return isAllowed(type.componentType)
+    if (type.isArray) return LegacyArrayShapes.isAllowed(type)
     if (type == Memento::class.java) return true
     if (allowedSupportClasses.contains(type) || allowedSupportClassNames.contains(type.name)) {
       return true
@@ -175,11 +225,20 @@ internal object LegacyMementoCodec {
   /** Rejects added, removed, renamed, or retyped fields even when the class name is allowed. */
   private fun hasExpectedSerialShape(descriptor: ObjectStreamClass, type: Class<*>): Boolean {
     val expected = ObjectStreamClass.lookup(type) ?: return descriptor.fields.isEmpty()
-    if (descriptor.serialVersionUID != expected.serialVersionUID) return false
-    fun ObjectStreamClass.shape() =
-        fields.map { field -> Triple(field.name, field.typeCode, field.typeString) }
-    return descriptor.shape() == expected.shape()
+    val incoming = descriptor.serialShape()
+    return incoming == expected.serialShape() ||
+        historicalSerialShapes[type.name]?.contains(incoming) == true
   }
+
+  private fun ObjectStreamClass.serialShape() =
+      SerialShape(
+          serialVersionUID,
+          fields.map { field -> SerialField(field.name, field.typeCode, field.typeString) },
+      )
+
+  private data class SerialShape(val serialVersionUid: Long, val fields: List<SerialField>)
+
+  private data class SerialField(val name: String, val typeCode: Char, val typeName: String?)
 
   internal fun isWithinGraphLimits(
       depth: Long,
