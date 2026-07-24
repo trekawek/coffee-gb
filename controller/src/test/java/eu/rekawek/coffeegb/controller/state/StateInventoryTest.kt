@@ -6,6 +6,7 @@ import java.nio.file.Paths
 import kotlin.io.path.readLines
 import kotlin.io.path.readText
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class StateInventoryTest {
@@ -58,6 +59,13 @@ class StateInventoryTest {
 
     assertEquals(97, discovered.size)
     assertEquals(discovered, documented)
+  }
+
+  @Test
+  fun everyAdmittedRecordHasAnExplicitSemanticPolicyAndRationale() {
+    assertEquals(MementoTypeRegistry.recordClassNames.toSet(), StateSemantics.policyAudit.keys)
+    assertEquals(91, StateSemantics.policyAudit.size)
+    assertTrue(StateSemantics.policyAudit.values.all { it.isNotBlank() })
   }
 
   private companion object {
