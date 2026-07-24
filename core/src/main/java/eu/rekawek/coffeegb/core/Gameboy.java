@@ -826,6 +826,19 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
     }
 
+    /** Captures DMG FIFO fields kept outside the pinned legacy Java memento. */
+    public Gpu.DmgFifoRuntimeState captureDmgFifoRuntimeState() {
+        return gpu.captureDmgFifoRuntimeState();
+    }
+
+    public void validateDmgFifoRuntimeState(Gpu.DmgFifoRuntimeState state) {
+        gpu.validateDmgFifoRuntimeState(state);
+    }
+
+    public void restoreDmgFifoRuntimeState(Gpu.DmgFifoRuntimeState state) {
+        gpu.restoreDmgFifoRuntimeState(state);
+    }
+
     /** Service-free runtime state that is intentionally outside the pinned legacy memento. */
     public record RtcRuntimeState(RealTimeClock.RuntimeState primary,
                                   RealTimeClock.RuntimeState slot) {

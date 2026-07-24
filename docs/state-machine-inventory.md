@@ -56,8 +56,8 @@ volatiles, monitor state) remain controller services and are not portable machin
 | Timer/divider | DIV/TIMA/TMA/TAC, selected-bit history, overflow/reload, DIV reset, HALT wake/ripple and interrupt suppression edges | Speed/interrupt object references are wiring |
 | Speed switch | Current multiplier, prepare latch, DMG compatibility plus Gameboy clock-mux tail/phase flags | Cartridge compatibility flags are immutable configuration |
 | Boot/memory mapping | BIOS enabled shadow, MMU fixed RAM/WRAM/HRAM banks, SVBK, undocumented registers and OAM echo | BIOS bytes, address-space index and component references are reconstructed from configuration |
-| DMA/HDMA | OAM ownership/restart/source/ticks/bus samples/interrupt collision state; VRAM-DMA registers, mode, block bytes, cumulative source-byte progress since the source-register write, CPU arbitration, HBlank/LCD/speed/halt request history | Source/destination address-space references are wiring; all temporal arbitration caches that affect behavior are captured |
-| GPU/PPU | VRAM banks, registers/mix/write delays, LCDC/STAT, LY/mode/dot (including the LCD-enable `-1` dot), palettes, OAM-search state/sprites, fetcher, pixel and sprite FIFOs, window/object penalties and delayed writes, VRAM transfer | Palette decoding and component references are derived; both dot machines advance their owned eight-slot LCD delay rings, and behavior-affecting FIFO/cache/edge state is captured |
+| DMA/HDMA | OAM ownership/restart/source/ticks/bus samples/interrupt collision state; VRAM-DMA registers, mode, block bytes, signed wrapping cumulative source-byte progress since the source-register write, CPU arbitration, HBlank/LCD/speed/halt request history | Source/destination address-space references are wiring; source-byte progress is an emulated `int` counter used for bus/start arbitration, not an allocation or array cursor |
+| GPU/PPU | VRAM banks, registers/mix/write delays, LCDC/STAT, LY/mode/dot (including the LCD-enable `-1` dot), palettes, OAM-search state/sprites, fetcher, pixel and sprite FIFOs, window/object penalties and delayed writes, VRAM transfer | Both dot machines advance their owned eight-slot LCD delay rings; the DMG timing/output FIFOs additionally own `linePixels`, `outCount`, `firstEntry`, `firstBgp`, `firstObp0`, and `firstObp1` in a primitive detached supplement because the pinned legacy record predates them |
 | Display/panel | Exactly one GPU-owned `DisplayMemento`: partial write buffer/index, enabled flag, complete visible frame and first-frame-after-enable state | Root `displayMemento` is null for new captures, retained only as a nullable legacy-fixture input; buses/listeners are services |
 | APU/channels | Master registers/output buffer/index, channel masks/enables, frame sequencer and divider phase, pulse/wave/noise phases, length/envelope/sweep/LFSR/polynomial counters and pending clocks | Host audio sink/mixer callback is a service; waveform/output behavior is captured |
 | Joypad | P1, debounced input history/lines, pending edge, SGB multiplayer transfer packet/bit/player state | Physical held buttons are intentionally session-owned and captured separately so rewind policy can differ |
@@ -77,6 +77,11 @@ volatiles, monitor state) remain controller services and are not portable machin
 | Cheats/rumble | Non-null registered Genie/Shark patch lists/maps; CodeBreaker/MBC5/Makon motor state | Event-bus rumble consumers are services |
 | Session | Detached machine, serial endpoint tag/state/runtime and canonical unique held-button enum list (a list on input so malformed duplicates can be rejected) | ROM/configuration, event bus, console and endpoint callback objects are services |
 | Linked session | Authoritative frame, local player, explicit normal/four-player topology tag, exactly four canonical player slots, session states and held input; four-player copies must describe one coherent shared adapter | Network connections, peers, event queues and worker thread are controller services; apply requires the same already-configured active-session shape and rebases history at the safe point |
+
+The repeat DMG FIFO audit found no further mutable behavior state: `pixels`, `spriteFifo`,
+`delayEntry`, `delayStamp`, `delayHead`, `delaySize`, and `outputTicks` remain in the pinned
+memento; the six fields named above are in the detached supplement; and `display`, `lcdc`,
+`registers`, and `vRamTransfer` are final reconstructed wiring.
 
 ## Mapper coverage matrix
 
@@ -106,9 +111,10 @@ IR/SGB packet/schedule index, RTC field, or mapper EEPROM/flash command phase.
 
 Reachable boundary regressions exercise CH3 after a physical wave-RAM read, MBC3's 63/63/31
 live-and-latched register values, Full Changer armed/running/completed phases, HDMA in its second
-block, LCD enable at dot `-1`, and both FIFO delay rings at capacity. Barcode protocol/runtime
-coherence, SGB palette IDs, polynomial reload alignment, and Genie map element types are rejected
-through the adapter before its live-mutation callback.
+block, a signed-wrapped HDMA source counter, LCD enable at dot `-1`, both FIFO delay rings at
+capacity, a pending DMG first-pixel palette latch, and a pending window rewind. Barcode
+protocol/runtime coherence, SGB palette IDs, polynomial reload alignment, and Genie map element
+types are rejected through the adapter before its live-mutation callback.
 
 Records whose fields are deliberately not range-constrained still have an explicit policy and
 rationale in that registry. Examples are raw bus/address/register latches, signed emulated clocks,
@@ -120,11 +126,13 @@ deterministically malformed detached candidate.
 
 ## Compatibility and display ownership
 
-The legacy Java serialization shape and pinned manifest remain unchanged. Existing fixtures may
-still carry the historical root display copy; restore accepts it after GPU restore. New captures set
-that nullable compatibility component to null, so only `GpuMemento.displayMemento` owns the two
-160x144 panel arrays. Visible frame, partial scanout/index, LCD enable and repeat behavior therefore
-remain restorable without duplicate payload.
+The legacy Java serialization shape and pinned manifest remain unchanged. The six DMG FIFO fields
+introduced after that manifest are captured once per dot machine by `DmgFifoRuntimeState`; adding
+them to `DmgPixelFifoMemento` would change its Java descriptor and break the supported fixtures.
+Existing fixtures may still carry the historical root display copy; restore accepts it after GPU
+restore. New captures set that nullable compatibility component to null, so only
+`GpuMemento.displayMemento` owns the two 160x144 panel arrays. Visible frame, partial scanout/index,
+LCD enable and repeat behavior therefore remain restorable without duplicate payload.
 
 Disk snapshots, rewind, boot-state reuse, and current netplay continue to use their existing bounded
 legacy/netplay adapters in this phase. The detached model is a new internal seam for Phase 2; it

@@ -300,6 +300,51 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
                 delayEntry.clone(), delayStamp.clone(), delayHead, delaySize, outputTicks);
     }
 
+    /**
+     * Captures fields added after the pinned legacy Java-memento shape was established.
+     *
+     * <p>The first-pixel latch is deliberately outside {@link DmgPixelFifoMemento}: changing
+     * that record would change its Java serialization descriptor and reject the supported
+     * 1.7.13/1.7.14 fixtures. The Phase-1 detached machine seam owns this supplement for both
+     * PPU dot machines.
+     */
+    public RuntimeState captureRuntimeState() {
+        return new RuntimeState(
+                linePixels, outCount, firstEntry, firstBgp, firstObp0, firstObp1);
+    }
+
+    public void validateRuntimeState(RuntimeState state) {
+        if (state == null) {
+            throw new IllegalArgumentException("DMG pixel FIFO runtime state is missing");
+        }
+        if (state.linePixels < 0 || state.outCount < 0) {
+            throw new IllegalArgumentException("DMG pixel FIFO counters cannot be negative");
+        }
+        if (state.firstEntry < -1 || state.firstEntry > 0x3f) {
+            throw new IllegalArgumentException("Invalid pending DMG first-pixel entry");
+        }
+        if (state.firstEntry >= 0 && state.outCount == 0) {
+            throw new IllegalArgumentException("Pending DMG first pixel has no output count");
+        }
+        if (!isByte(state.firstBgp) || !isByte(state.firstObp0) || !isByte(state.firstObp1)) {
+            throw new IllegalArgumentException("Invalid pending DMG first-pixel palette");
+        }
+    }
+
+    public void restoreRuntimeState(RuntimeState state) {
+        validateRuntimeState(state);
+        linePixels = state.linePixels;
+        outCount = state.outCount;
+        firstEntry = state.firstEntry;
+        firstBgp = state.firstBgp;
+        firstObp0 = state.firstObp0;
+        firstObp1 = state.firstObp1;
+    }
+
+    private static boolean isByte(int value) {
+        return value >= 0 && value <= 0xff;
+    }
+
     @Override
     public void restoreFromMemento(Memento<DmgPixelFifo> memento) {
         if (!(memento instanceof DmgPixelFifoMemento mem)) {
@@ -324,5 +369,15 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
                                        int[] delayEntry, long[] delayStamp, int delayHead,
                                        int delaySize, long outputTicks)
             implements Memento<DmgPixelFifo> {
+    }
+
+    /** Service-free supplement retained by the immutable machine-state seam. */
+    public record RuntimeState(
+            int linePixels,
+            int outCount,
+            int firstEntry,
+            int firstBgp,
+            int firstObp0,
+            int firstObp1) {
     }
 }
