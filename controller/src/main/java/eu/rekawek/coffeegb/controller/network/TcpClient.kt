@@ -17,7 +17,13 @@ class TcpClient(
     try {
       clientSocket = createSocket(host)
       LOG.info("Connected to {}", clientSocket!!.inetAddress)
-      Connection(clientSocket!!.getInputStream(), clientSocket!!.getOutputStream(), eventBus, false)
+      Connection(
+          clientSocket!!.getInputStream(),
+          clientSocket!!.getOutputStream(),
+          eventBus,
+          false,
+          cancelTransport = { clientSocket?.close() },
+      )
           .use {
             eventBus.post(ConnectionController.ClientHandshakeCompletedEvent(it.mode, it.player))
             it.run()

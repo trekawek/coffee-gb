@@ -25,8 +25,10 @@ import eu.rekawek.coffeegb.controller.network.Connection.RequestResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerButtonStateEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerCheckpointEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStateEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
@@ -116,6 +118,8 @@ class LinkedController(
   /** Runtime records older than the latest authoritative checkpoint belong to an old generation. */
   private var runtimeFrameFloor = 0L
 
+  private var hostCheckpointPending = false
+
   private val replayWorkBySource = IdentityHashMap<PeerEventSource, StateChangeBudget>()
 
   private val disconnectedSources = ConcurrentLinkedQueue<PeerEventSource>()
@@ -165,9 +169,15 @@ class LinkedController(
     }
 
     eventQueue.register<ResetEmulationEvent> {
+      reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       initSession(localPlayer, frame, null, null)
+      if (isFourPlayerHost()) {
+        commitHostCheckpoint()
+      } else {
+        commitStateBoundary()
+      }
       eventBus.postAsync(RequestResetEvent(frame, localPlayer))
     }
 
@@ -195,6 +205,13 @@ class LinkedController(
             }) {
           return@register
         }
+        if (!consumeReplayWork(
+            e.frame,
+            e.source,
+            StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK * maxOf(1, e.states.size),
+        )) {
+          return@register
+        }
         runtimeFrameFloor = e.frame
         val activePlayers = e.states.mapTo(mutableSetOf()) { it.player }
         sessions.indices.filterNot(activePlayers::contains).forEach { player ->
@@ -208,6 +225,7 @@ class LinkedController(
         frame = e.frame
         rebaseHistoryToLiveState()
         initialStateSynchronized = true
+        eventBus.post(ValidatedPeerCheckpointEvent(e))
       }
     }
 
@@ -237,9 +255,15 @@ class LinkedController(
           e.player in sessions.indices &&
           validateRuntimeFrame(e.frame, e.source) &&
           consumeReplayWork(e.frame, e.source)) {
+        reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
         initSession(e.player, e.frame, null, null)
+        if (isFourPlayerHost()) {
+          commitHostCheckpoint()
+        } else {
+          commitStateBoundary()
+        }
         eventBus.post(ValidatedPeerResetEvent(e))
       }
     }
@@ -248,11 +272,19 @@ class LinkedController(
       if (e.player != localPlayer &&
           e.player in sessions.indices &&
           validateRuntimeFrame(e.frame, e.source)) {
-        val checkpoint = isFourPlayerHost()
-        if (checkpoint) reconcileHistory()
+        // A stopped port is already at the requested topology. Treat repeats as cheap no-ops so
+        // they cannot force unbounded reconciliation and checkpoint fanout.
+        if (sessions[e.player] == null) return@register
+        if (!consumeReplayWork(e.frame, e.source)) return@register
+        reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
-        if (checkpoint) commitHostCheckpoint()
+        if (isFourPlayerHost()) {
+          commitHostCheckpoint()
+        } else {
+          commitStateBoundary()
+        }
+        eventBus.post(ValidatedPeerStopEvent(e))
       }
     }
 
@@ -331,6 +363,7 @@ class LinkedController(
     }
 
     reconcileHistory()
+    flushHostCheckpoint()
 
     val input = currentInput ?: Input(emptyList(), emptyList())
     val effectiveInput = if (input != lastInput) input else Input(emptyList(), emptyList())
@@ -477,7 +510,11 @@ class LinkedController(
     return validatePeer(source) { PeerFrameWindow.validateRuntimeFrame(peerFrame, frame) }
   }
 
-  private fun consumeReplayWork(peerFrame: Long, source: PeerEventSource?): Boolean {
+  private fun consumeReplayWork(
+      peerFrame: Long,
+      source: PeerEventSource?,
+      fixedWork: Long = StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
+  ): Boolean {
     source ?: return true
     val budget =
         replayWorkBySource.getOrPut(source) {
@@ -503,7 +540,7 @@ class LinkedController(
     val requested =
         maxOf(
             (frame - peerFrame).coerceAtLeast(0),
-            StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
+            fixedWork,
         )
     if (requested > budget.available) {
       val failure =
@@ -595,9 +632,22 @@ class LinkedController(
 
   /** Publishes and installs the same exact generation boundary used by remote clients. */
   private fun commitHostCheckpoint() {
+    commitStateBoundary()
+    hostCheckpointPending = true
+  }
+
+  /** Coalesces mutations in one dispatch and captures any same-frame patches after the boundary. */
+  private fun flushHostCheckpoint() {
+    if (!hostCheckpointPending) return
+    commitStateBoundary()
+    broadcastCurrentState()
+    hostCheckpointPending = false
+  }
+
+  /** Ends the old input/history generation after a reset or topology mutation. */
+  private fun commitStateBoundary() {
     runtimeFrameFloor = frame
     rebaseHistoryToLiveState()
-    broadcastCurrentState()
   }
 
   private fun rebaseHistoryToLiveState() {
@@ -633,12 +683,9 @@ class LinkedController(
       }
 
   private fun peerStateWeight(event: PeerLoadedGameEvent): Long {
-    val bytes =
-        listOf(event.rom, event.battery, event.snapshot, event.sessionSnapshot)
-            .filterNotNull()
-            .fold(0L) { total, value -> Math.addExact(total, value.size.toLong()) }
-    // The queue retains both the validated bytes and a detached decoded memento graph.
-    return Math.multiplyExact(bytes, 2L)
+    return listOf(event.rom, event.battery, event.snapshot, event.sessionSnapshot)
+        .filterNotNull()
+        .fold(0L) { total, value -> Math.addExact(total, value.size.toLong()) }
   }
 
   override fun closeWithState(): Controller.ControllerState? {

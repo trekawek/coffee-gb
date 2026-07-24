@@ -121,6 +121,7 @@ class TcpServer(
               true,
               mode,
               reservedPlayer,
+              cancelTransport = { socket.close() },
           )
       pendingConnections[socket] = connection
       handshakeExecutor.execute { completeHandshake(socket, connection, reservedPlayer) }
