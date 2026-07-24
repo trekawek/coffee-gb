@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.events.register
@@ -22,6 +23,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -286,6 +288,177 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun pendingHandshakesUseABoundedPoolAndBackpressure() {
+    val port = ServerSocket(0).use { it.localPort }
+    val started = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { started.add(it) }
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(started.poll(5, TimeUnit.SECONDS))
+
+    val silent = mutableListOf<Socket>()
+    try {
+      repeat(StateLimits.NETPLAY_PENDING_HANDSHAKES) {
+        val socket = Socket("localhost", port).also(silent::add)
+        socket.soTimeout = 5_000
+        DataInputStream(socket.getInputStream()).readFully(
+            ByteArray("CoffeeGB NETPLAY".length + 4))
+      }
+      awaitCondition { server.pendingHandshakeCount() == StateLimits.NETPLAY_PENDING_HANDSHAKES }
+      assertTrue(server.handshakeWorkerCount() <= StateLimits.NETPLAY_HANDSHAKE_WORKERS)
+
+      Socket("localhost", port).use { rejected ->
+        rejected.soTimeout = 5_000
+        val greeting = ByteArray("CoffeeGB NETPLAY".length + 3)
+        DataInputStream(rejected.getInputStream()).readFully(greeting)
+        assertEquals(0xff, greeting["CoffeeGB NETPLAY".length + 1].toInt() and 0xff)
+        assertEquals(
+            Connection.RejectionReason.SERVER_BUSY.wireCode,
+            greeting["CoffeeGB NETPLAY".length + 2].toInt() and 0xff,
+        )
+      }
+    } finally {
+      silent.forEach(Socket::close)
+    }
+  }
+
+  @Test
+  fun fourPlayerPendingHandshakesReserveDistinctSlotsAndReleaseThem() {
+    val port = ServerSocket(0).use { it.localPort }
+    val started = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { started.add(it) }
+    val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(started.poll(5, TimeUnit.SECONDS))
+
+    val pending = mutableListOf<Socket>()
+    try {
+      val assigned =
+          (1..3).map {
+            val socket = Socket("localhost", port).also(pending::add)
+            socket.soTimeout = 5_000
+            val greeting = ByteArray("CoffeeGB NETPLAY".length + 4)
+            DataInputStream(socket.getInputStream()).readFully(greeting)
+            greeting["CoffeeGB NETPLAY".length + 2].toInt()
+          }
+      assertEquals(listOf(1, 2, 3), assigned.sorted())
+
+      Socket("localhost", port).use { rejected ->
+        rejected.soTimeout = 5_000
+        val greeting = ByteArray("CoffeeGB NETPLAY".length + 3)
+        DataInputStream(rejected.getInputStream()).readFully(greeting)
+        assertEquals(
+            Connection.RejectionReason.SERVER_FULL.wireCode,
+            greeting["CoffeeGB NETPLAY".length + 2].toInt() and 0xff,
+        )
+      }
+
+      pending.removeAt(0).close()
+      awaitCondition { server.pendingHandshakeCount() == 2 }
+      val replacement = Socket("localhost", port).also(pending::add)
+      replacement.soTimeout = 5_000
+      val greeting = ByteArray("CoffeeGB NETPLAY".length + 4)
+      DataInputStream(replacement.getInputStream()).readFully(greeting)
+      assertEquals(1, greeting["CoffeeGB NETPLAY".length + 2].toInt())
+    } finally {
+      pending.forEach(Socket::close)
+    }
+  }
+
+  @Test
+  fun realTcpRuntimeHeldDuringCapabilityHandshakeFollowsStart() {
+    val port = ServerSocket(0).use { it.localPort }
+    val started = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { started.add(it) }
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(started.poll(5, TimeUnit.SECONDS))
+
+    Socket("localhost", port).use { socket ->
+      socket.soTimeout = 5_000
+      val input = DataInputStream(socket.getInputStream())
+      val output = DataOutputStream(socket.getOutputStream())
+      input.readFully(ByteArray("CoffeeGB NETPLAY".length + 4))
+      awaitCondition { server.pendingConnectionCount() == 1 }
+
+      serverBus.post(
+          LinkedController.LocalButtonStateEvent(
+              42,
+              Input(listOf(Button.A), emptyList()),
+              player = 0,
+          ))
+      output.writeByte(0x01)
+      output.flush()
+
+      assertEquals(0x08, readWireCommand(input), "runtime traffic preceded START")
+      assertEquals(0x03, readWireCommand(input), "queued input was not released after START")
+    }
+  }
+
+  @Test
+  fun realTcpCheckpointRecordsRemainAtomicDuringConcurrentRuntimeWrites() {
+    val port = ServerSocket(0).use { it.localPort }
+    val started = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { started.add(it) }
+    val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(started.poll(5, TimeUnit.SECONDS))
+
+    Socket("localhost", port).use { socket ->
+      socket.soTimeout = 10_000
+      val input = DataInputStream(socket.getInputStream())
+      val output = DataOutputStream(socket.getOutputStream())
+      input.readFully(ByteArray("CoffeeGB NETPLAY".length + 4))
+      output.writeByte(0x01)
+      output.flush()
+      assertEquals(0x08, readWireCommand(input))
+
+      val noisyRom = ByteArray(8 * 1024 * 1024) { ((it * 31 + it / 17) and 0xff).toByte() }
+      val states =
+          listOf(0, 1).map { player ->
+            LinkedController.LocalRomLoadedEvent(
+                noisyRom,
+                null,
+                null,
+                GameboyType.DMG,
+                Gameboy.BootstrapMode.SKIP,
+                73,
+                player = player,
+                sessionSnapshot = byteArrayOf(1, 2, 3),
+            )
+          }
+      val startedWrite = CountDownLatch(1)
+      val checkpoint =
+          Thread {
+            startedWrite.countDown()
+            serverBus.post(LinkedController.SessionStateReadyEvent(73, states))
+          }.also { it.start() }
+      startedWrite.await(5, TimeUnit.SECONDS)
+      Thread.sleep(10)
+      repeat(32) { frame ->
+        serverBus.post(
+            LinkedController.LocalButtonStateEvent(
+                frame.toLong(),
+                Input(listOf(Button.A), emptyList()),
+                player = 0,
+            ))
+      }
+      checkpoint.join(10_000)
+
+      var command: Int
+      do {
+        command = readWireCommand(input)
+      } while (command != 0x01)
+      assertEquals(0x01, readWireCommand(input), "runtime split checkpoint state records")
+      assertEquals(0x09, readWireCommand(input), "runtime split checkpoint synchronization")
+    }
+  }
+
+  @Test
   fun fourPlayerServerRejectsAnExtraClientWithAClearReason() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
@@ -508,6 +681,38 @@ class TcpConnectionTest {
       Thread.sleep(10)
     }
     assertTrue(complete(), "linked controllers did not synchronize within the test timeout")
+  }
+
+  private fun awaitCondition(condition: () -> Boolean) {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (!condition() && System.nanoTime() < deadline) {
+      Thread.sleep(10)
+    }
+    assertTrue(condition(), "condition was not reached before timeout")
+  }
+
+  /** Reads and consumes one protocol-v7 command, returning its command byte. */
+  private fun readWireCommand(input: DataInputStream): Int {
+    val command = input.readUnsignedByte()
+    when (command) {
+      0x01 -> {
+        val header = ByteArray(45).also(input::readFully)
+        val heldButtons = header[12].toInt() and 0xff
+        val encoded = ByteBuffer.wrap(header, 29, 16)
+        val payloadBytes = (0 until 4).sumOf { encoded.getInt().toLong() }
+        require(payloadBytes <= Int.MAX_VALUE)
+        input.readFully(ByteArray(heldButtons + payloadBytes.toInt()))
+      }
+      0x03 -> {
+        val header = ByteArray(11).also(input::readFully)
+        val buttons = (header[9].toInt() and 0xff) + (header[10].toInt() and 0xff)
+        input.readFully(ByteArray(buttons))
+      }
+      0x06, 0x07 -> input.readFully(ByteArray(9))
+      0x09 -> input.readLong()
+      0x0a -> input.readUnsignedByte()
+    }
+    return command
   }
 
   private fun runningMemento(ticks: Int): eu.rekawek.coffeegb.core.memento.Memento<Gameboy> {

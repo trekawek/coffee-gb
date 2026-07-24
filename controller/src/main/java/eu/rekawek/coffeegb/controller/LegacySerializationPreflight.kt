@@ -7,7 +7,7 @@ import java.io.EOFException
 import java.io.InvalidClassException
 import java.io.InvalidObjectException
 import java.io.ObjectStreamConstants
-import java.nio.charset.StandardCharsets
+import java.util.IdentityHashMap
 
 /**
  * Allocation-only pass over the constrained legacy Java stream.
@@ -28,74 +28,114 @@ internal object LegacySerializationPreflight {
     private val handles = mutableMapOf<Int, Handle>()
     private var nextHandle = ObjectStreamConstants.baseWireHandle
     private var allocatedArrayBytes = 0L
+    private var parserDepth = 0L
+    private var handlesAssigned = 0L
+    private var referencesSeen = 0L
 
     fun validate() {
       if (input.readUnsignedShort() != (ObjectStreamConstants.STREAM_MAGIC.toInt() and 0xffff) ||
           input.readUnsignedShort() != (ObjectStreamConstants.STREAM_VERSION.toInt() and 0xffff)) {
         throw InvalidObjectException("Invalid legacy serialization header")
       }
-      readContent()
+      while (input.available() > 0) {
+        readContent()
+      }
     }
 
     private fun readContent(token: Int = input.readUnsignedByte()): Handle? =
-        when (token) {
-          ObjectStreamConstants.TC_NULL.toInt() -> null
-          ObjectStreamConstants.TC_REFERENCE.toInt() -> reference()
-          ObjectStreamConstants.TC_CLASSDESC.toInt() -> readNewClassDescriptor()
-          ObjectStreamConstants.TC_PROXYCLASSDESC.toInt() ->
-              throw InvalidClassException("Proxy classes are forbidden in legacy state")
-          ObjectStreamConstants.TC_OBJECT.toInt() -> readObject()
-          ObjectStreamConstants.TC_STRING.toInt() -> readString(input.readUnsignedShort().toLong())
-          ObjectStreamConstants.TC_LONGSTRING.toInt() -> readString(input.readLong())
-          ObjectStreamConstants.TC_ARRAY.toInt() -> readArray()
-          ObjectStreamConstants.TC_CLASS.toInt() -> readClassObject()
-          ObjectStreamConstants.TC_ENUM.toInt() -> readEnum()
-          ObjectStreamConstants.TC_RESET.toInt() -> {
-            handles.clear()
-            nextHandle = ObjectStreamConstants.baseWireHandle
-            null
+        withParserDepth {
+          when (token) {
+            ObjectStreamConstants.TC_NULL.toInt() -> null
+            ObjectStreamConstants.TC_REFERENCE.toInt() -> reference()
+            ObjectStreamConstants.TC_CLASSDESC.toInt() -> readNewClassDescriptor()
+            ObjectStreamConstants.TC_PROXYCLASSDESC.toInt() ->
+                throw InvalidClassException("Proxy classes are forbidden in legacy state")
+            ObjectStreamConstants.TC_OBJECT.toInt() -> readObject()
+            ObjectStreamConstants.TC_STRING.toInt() ->
+                readString(input.readUnsignedShort().toLong())
+            ObjectStreamConstants.TC_LONGSTRING.toInt() -> readString(input.readLong())
+            ObjectStreamConstants.TC_ARRAY.toInt() -> readArray()
+            ObjectStreamConstants.TC_CLASS.toInt() -> readClassObject()
+            ObjectStreamConstants.TC_ENUM.toInt() -> readEnum()
+            ObjectStreamConstants.TC_RESET.toInt() -> {
+              handles.clear()
+              nextHandle = ObjectStreamConstants.baseWireHandle
+              null
+            }
+            ObjectStreamConstants.TC_EXCEPTION.toInt() ->
+                throw InvalidObjectException("Exception records are forbidden in legacy state")
+            else ->
+                throw InvalidObjectException(
+                    "Unexpected legacy serialization token 0x${token.toString(16)}")
           }
-          ObjectStreamConstants.TC_EXCEPTION.toInt() ->
-              throw InvalidObjectException("Exception records are forbidden in legacy state")
-          else -> throw InvalidObjectException("Unexpected legacy serialization token 0x${token.toString(16)}")
         }
 
     private fun readNewClassDescriptor(): ClassDescriptorHandle {
-      val name = input.readUTF()
+      val name = readModifiedUtf(input.readUnsignedShort().toLong(), capture = true)
+          ?: throw InvalidClassException("Legacy class descriptor name is too long")
       val serialVersionUid = input.readLong()
+      var candidates =
+          LegacyMementoCodec.expectedSerialShapes(name).filterTo(mutableSetOf()) {
+            it.serialVersionUid == serialVersionUid
+          }
+      if (candidates.isEmpty()) {
+        throw InvalidClassException("Rejected legacy state class or SUID", name)
+      }
       val handle = ClassDescriptorHandle(ClassDescriptor(name, serialVersionUid))
       assign(handle)
       val flags = input.readUnsignedByte()
       handle.descriptor.flags = flags
       val fieldCount = input.readUnsignedShort()
-      repeat(fieldCount) {
+      candidates =
+          candidates.filterTo(mutableSetOf()) {
+            it.flags == flags && it.fields.size == fieldCount
+          }
+      if (candidates.isEmpty()) {
+        throw InvalidClassException(
+            "Rejected legacy state flags $flags or field count $fieldCount",
+            name,
+        )
+      }
+      repeat(fieldCount) { index ->
         val typeCode = input.readUnsignedByte().toChar()
-        val fieldName = input.readUTF()
+        val fieldName = readModifiedUtf(input.readUnsignedShort().toLong(), capture = true)
+            ?: throw InvalidClassException("Legacy field name is too long", name)
         val typeName =
             if (typeCode == 'L' || typeCode == '[') {
               val type = readContent() as? StringHandle
                   ?: throw InvalidClassException("Invalid legacy field descriptor", name)
-              type.value
+              type.value ?: throw InvalidClassException("Legacy field type is too long", name)
             } else {
               null
             }
+        val field = LegacySerialField(fieldName, typeCode, typeName)
+        candidates =
+            candidates.filterTo(mutableSetOf()) { it.fields[index] == field }
+        if (candidates.isEmpty()) {
+          throw InvalidClassException("Rejected legacy state field shape", name)
+        }
         handle.descriptor.fields += FieldDescriptor(typeCode, fieldName, typeName)
       }
       readAnnotations(null)
       handle.descriptor.superDescriptor = readClassDescriptor()
+      checkedHierarchy(handle.descriptor)
       return handle
     }
 
     private fun readClassDescriptor(): ClassDescriptor? =
-        when (val token = input.readUnsignedByte()) {
-          ObjectStreamConstants.TC_NULL.toInt() -> null
-          ObjectStreamConstants.TC_REFERENCE.toInt() ->
-              (reference() as? ClassDescriptorHandle)?.descriptor
-                  ?: throw InvalidClassException("Invalid legacy class descriptor reference")
-          ObjectStreamConstants.TC_CLASSDESC.toInt() -> readNewClassDescriptor().descriptor
-          ObjectStreamConstants.TC_PROXYCLASSDESC.toInt() ->
-              throw InvalidClassException("Proxy classes are forbidden in legacy state")
-          else -> throw InvalidClassException("Invalid legacy class descriptor token 0x${token.toString(16)}")
+        withParserDepth {
+          when (val token = input.readUnsignedByte()) {
+            ObjectStreamConstants.TC_NULL.toInt() -> null
+            ObjectStreamConstants.TC_REFERENCE.toInt() ->
+                (reference() as? ClassDescriptorHandle)?.descriptor
+                    ?: throw InvalidClassException("Invalid legacy class descriptor reference")
+            ObjectStreamConstants.TC_CLASSDESC.toInt() -> readNewClassDescriptor().descriptor
+            ObjectStreamConstants.TC_PROXYCLASSDESC.toInt() ->
+                throw InvalidClassException("Proxy classes are forbidden in legacy state")
+            else ->
+                throw InvalidClassException(
+                    "Invalid legacy class descriptor token 0x${token.toString(16)}")
+          }
         }
 
     private fun readObject(): Handle {
@@ -103,7 +143,7 @@ internal object LegacySerializationPreflight {
           ?: throw InvalidClassException("Legacy object has no class descriptor")
       val handle = ObjectHandle
       assign(handle)
-      val hierarchy = generateSequence(descriptor) { it.superDescriptor }.toList().asReversed()
+      val hierarchy = checkedHierarchy(descriptor).asReversed()
       for (current in hierarchy) {
         when {
           current.flags and ObjectStreamConstants.SC_ENUM.toInt() != 0 -> Unit
@@ -160,7 +200,10 @@ internal object LegacySerializationPreflight {
         "[B", "[Z" -> skipFully(length.toLong())
         "[I" -> skipFully(Math.multiplyExact(length.toLong(), 4))
         "[J" -> skipFully(Math.multiplyExact(length.toLong(), 8))
-        "[[I", "[Leu.rekawek.coffeegb.core.memento.Memento;" ->
+        "[[I",
+        "[Ljava.lang.Object;",
+        "[Ljava.util.Map\$Entry;",
+        "[Leu.rekawek.coffeegb.core.memento.Memento;" ->
             repeat(length) { readContent() }
         else -> throw InvalidClassException("Unaudited legacy array shape", descriptor.name)
       }
@@ -168,20 +211,69 @@ internal object LegacySerializationPreflight {
     }
 
     private fun readString(encodedBytes: Long): StringHandle {
+      val capture = encodedBytes <= 4_096
+      val value = readModifiedUtf(encodedBytes, capture)
+      return StringHandle(value).also(::assign)
+    }
+
+    /** Validates Java modified UTF-8 and its decoded UTF-16 length before allocating a String. */
+    private fun readModifiedUtf(encodedBytes: Long, capture: Boolean): String? {
       if (encodedBytes < 0 || encodedBytes > StateLimits.LEGACY_MAX_STRING_BYTES) {
         throw InvalidObjectException(
             "Legacy state string exceeds ${StateLimits.LEGACY_MAX_STRING_BYTES} encoded bytes")
       }
-      val capture = encodedBytes <= 4_096
-      val value =
-          if (capture) {
-            ByteArray(encodedBytes.toInt()).also(input::readFully)
-                .toString(StandardCharsets.ISO_8859_1)
-          } else {
-            skipFully(encodedBytes)
-            null
+      if (encodedBytes > input.available().toLong()) throw EOFException("Truncated legacy state")
+      val bytes = ByteArray(encodedBytes.toInt()).also(input::readFully)
+      var offset = 0
+      var decodedChars = 0
+      while (offset < bytes.size) {
+        val first = bytes[offset].toInt() and 0xff
+        val width =
+            when {
+              first in 0x01..0x7f -> 1
+              first and 0xe0 == 0xc0 -> 2
+              first and 0xf0 == 0xe0 -> 3
+              else -> throw InvalidObjectException("Malformed modified UTF-8 in legacy state")
+            }
+        if (offset + width > bytes.size ||
+            (1 until width).any { continuation ->
+              bytes[offset + continuation].toInt() and 0xc0 != 0x80
+            }) {
+          throw InvalidObjectException("Malformed modified UTF-8 in legacy state")
+        }
+        decodedChars++
+        if (decodedChars > StateLimits.LEGACY_MAX_STRING_CHARS) {
+          throw InvalidObjectException(
+              "Legacy state string exceeds ${StateLimits.LEGACY_MAX_STRING_CHARS} characters")
+        }
+        offset += width
+      }
+      if (!capture) return null
+
+      val decoded = StringBuilder(decodedChars)
+      offset = 0
+      while (offset < bytes.size) {
+        val first = bytes[offset].toInt() and 0xff
+        when {
+          first in 0x01..0x7f -> {
+            decoded.append(first.toChar())
+            offset++
           }
-      return StringHandle(value).also(::assign)
+          first and 0xe0 == 0xc0 -> {
+            val second = bytes[offset + 1].toInt() and 0x3f
+            decoded.append((((first and 0x1f) shl 6) or second).toChar())
+            offset += 2
+          }
+          else -> {
+            val second = bytes[offset + 1].toInt() and 0x3f
+            val third = bytes[offset + 2].toInt() and 0x3f
+            decoded.append(
+                (((first and 0x0f) shl 12) or (second shl 6) or third).toChar())
+            offset += 3
+          }
+        }
+      }
+      return decoded.toString()
     }
 
     private fun readClassObject(): Handle {
@@ -245,15 +337,23 @@ internal object LegacySerializationPreflight {
         if (prefix.size < 8) throw InvalidObjectException("Truncated legacy HashMap declaration")
         val capacity = intAt(prefix, 0).toLong()
         val size = intAt(prefix, 4).toLong()
-        validateCollectionSize(capacity, "HashMap capacity")
+        validateSize(
+            capacity,
+            StateLimits.LEGACY_MAX_MAP_TABLE_ENTRIES,
+            "HashMap capacity",
+        )
         validateCollectionSize(size, "HashMap")
       }
     }
 
     private fun validateCollectionSize(size: Long, description: String) {
-      if (size < 0 || size > StateLimits.LEGACY_MAX_COLLECTION_ENTRIES) {
+      validateSize(size, StateLimits.LEGACY_MAX_COLLECTION_ENTRIES, description)
+    }
+
+    private fun validateSize(size: Long, limit: Int, description: String) {
+      if (size < 0 || size > limit) {
         throw InvalidObjectException(
-            "Legacy $description exceeds ${StateLimits.LEGACY_MAX_COLLECTION_ENTRIES} entries")
+            "Legacy $description exceeds $limit entries")
       }
     }
 
@@ -264,12 +364,56 @@ internal object LegacySerializationPreflight {
             (bytes[offset + 3].toInt() and 0xff)
 
     private fun reference(): Handle {
+      referencesSeen++
+      checkReferenceLimit()
       val handle = input.readInt()
       return handles[handle] ?: throw InvalidObjectException("Invalid legacy handle 0x${handle.toString(16)}")
     }
 
     private fun assign(handle: Handle) {
+      handlesAssigned++
+      referencesSeen++
+      checkReferenceLimit()
       handles[nextHandle++] = handle
+    }
+
+    private fun checkReferenceLimit() {
+      if (handlesAssigned > StateLimits.LEGACY_MAX_REFERENCES ||
+          referencesSeen > StateLimits.LEGACY_MAX_REFERENCES) {
+        throw InvalidObjectException(
+            "Legacy state exceeds ${StateLimits.LEGACY_MAX_REFERENCES} references")
+      }
+    }
+
+    private fun <T> withParserDepth(block: () -> T): T {
+      parserDepth++
+      if (parserDepth > StateLimits.LEGACY_MAX_DEPTH) {
+        parserDepth--
+        throw InvalidObjectException(
+            "Legacy state exceeds ${StateLimits.LEGACY_MAX_DEPTH} parser depth")
+      }
+      return try {
+        block()
+      } finally {
+        parserDepth--
+      }
+    }
+
+    private fun checkedHierarchy(descriptor: ClassDescriptor): List<ClassDescriptor> {
+      val seen = IdentityHashMap<ClassDescriptor, Boolean>()
+      val hierarchy = mutableListOf<ClassDescriptor>()
+      var current: ClassDescriptor? = descriptor
+      while (current != null) {
+        if (seen.put(current, true) != null) {
+          throw InvalidClassException("Cyclic legacy class descriptor", current.name)
+        }
+        hierarchy += current
+        if (hierarchy.size > StateLimits.LEGACY_MAX_DEPTH) {
+          throw InvalidClassException("Legacy class hierarchy is too deep", current.name)
+        }
+        current = current.superDescriptor
+      }
+      return hierarchy
     }
 
     private fun skipFully(bytes: Long) {
@@ -317,6 +461,8 @@ internal object LegacyArrayShapes {
           "[Ljava.util.Map\$Entry;" to Long.SIZE_BYTES,
           "[Leu.rekawek.coffeegb.core.memento.Memento;" to Long.SIZE_BYTES,
       )
+
+  val descriptors: Set<String> = elementWidths.keys
 
   fun isAllowed(type: Class<*>): Boolean = type.name in elementWidths
 

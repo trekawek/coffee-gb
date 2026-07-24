@@ -9,13 +9,33 @@ import java.io.InvalidObjectException
 import java.io.ObjectInputFilter
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
+import java.io.ObjectStreamConstants
 import java.io.ObjectStreamClass
 import java.lang.reflect.Proxy
+import java.security.MessageDigest
 import java.util.ArrayList
 import java.util.HashMap
 
+internal data class LegacySerialShape(
+    val serialVersionUid: Long,
+    val flags: Int,
+    val fields: List<LegacySerialField>,
+)
+
+internal data class LegacySerialField(
+    val name: String,
+    val typeCode: Char,
+    val typeName: String?,
+)
+
 /** Local-file migration bridge for Coffee GB's historical Java-serialized mementos. */
 internal object LegacyMementoCodec {
+
+  // SHA-256 of every accepted descriptor name, SUID, flag byte, and ordered field shape below.
+  // Updating a memento class cannot silently broaden legacy migration; this value must be changed
+  // deliberately together with compatibility fixtures and review of the resulting manifest.
+  private const val PINNED_SERIAL_MANIFEST_SHA256 =
+      "63d10eccdece6fa4392807489d6862d07d06817b80c3989dcb8f5ff9c5233aa9"
 
   private const val GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
   private const val SESSION_MEMENTO = "eu.rekawek.coffeegb.controller.Session\$SessionMemento"
@@ -43,22 +63,23 @@ internal object LegacyMementoCodec {
       mapOf(
           "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to
               setOf(
-                  SerialShape(
+                  LegacySerialShape(
                       0L,
+                      ObjectStreamConstants.SC_SERIALIZABLE.toInt(),
                       listOf(
-                          SerialField("atfNumber", 'I', null),
-                          SerialField("borderFade", 'I', null),
-                          SerialField("attributeFiles", '[', "[[I"),
-                          SerialField("paletteMap", '[', "[I"),
-                          SerialField("palettes", '[', "[[I"),
-                          SerialField(
+                          LegacySerialField("atfNumber", 'I', null),
+                          LegacySerialField("borderFade", 'I', null),
+                          LegacySerialField("attributeFiles", '[', "[[I"),
+                          LegacySerialField("paletteMap", '[', "[I"),
+                          LegacySerialField("palettes", '[', "[[I"),
+                          LegacySerialField(
                               "screenMask",
                               'L',
                               "Leu/rekawek/coffeegb/core/sgb/Commands\$MaskEnCmd\$GameboyScreenMask;",
                           ),
-                          SerialField("sgbBuffer", '[', "[I"),
-                          SerialField("sgbMask", '[', "[I"),
-                          SerialField("systemPalettes", '[', "[[I"),
+                          LegacySerialField("sgbBuffer", '[', "[I"),
+                          LegacySerialField("sgbMask", '[', "[I"),
+                          LegacySerialField("systemPalettes", '[', "[[I"),
                       ),
                   ),
               ),
@@ -224,21 +245,94 @@ internal object LegacyMementoCodec {
 
   /** Rejects added, removed, renamed, or retyped fields even when the class name is allowed. */
   private fun hasExpectedSerialShape(descriptor: ObjectStreamClass, type: Class<*>): Boolean {
-    val expected = ObjectStreamClass.lookup(type) ?: return descriptor.fields.isEmpty()
-    val incoming = descriptor.serialShape()
-    return incoming == expected.serialShape() ||
-        historicalSerialShapes[type.name]?.contains(incoming) == true
+    val incoming = descriptor.serialShape(expectedFlags(type))
+    return expectedSerialShapes(descriptor.name).contains(incoming)
   }
 
-  private fun ObjectStreamClass.serialShape() =
-      SerialShape(
+  private fun ObjectStreamClass.serialShape(flags: Int) =
+      LegacySerialShape(
           serialVersionUID,
-          fields.map { field -> SerialField(field.name, field.typeCode, field.typeString) },
+          flags,
+          fields.map { field -> LegacySerialField(field.name, field.typeCode, field.typeString) },
       )
 
-  private data class SerialShape(val serialVersionUid: Long, val fields: List<SerialField>)
+  private fun expectedSerialShapes(type: Class<*>): Set<LegacySerialShape> {
+    val current = ObjectStreamClass.lookup(type)?.serialShape(expectedFlags(type))
+    return listOfNotNull(current).toSet() + historicalSerialShapes[type.name].orEmpty()
+  }
 
-  private data class SerialField(val name: String, val typeCode: Char, val typeName: String?)
+  internal fun expectedSerialShapes(name: String): Set<LegacySerialShape> {
+    return pinnedSerialManifest[name]
+        ?: throw InvalidClassException("Rejected legacy state class", name)
+  }
+
+  private val pinnedSerialManifest: Map<String, Set<LegacySerialShape>> by lazy {
+    val manifest = auditedSerialClasses.mapValues { (_, type) -> expectedSerialShapes(type) }
+    val canonical =
+        buildString {
+          manifest.toSortedMap().forEach { (name, shapes) ->
+            append(name.length).append(':').append(name).append('\n')
+            shapes
+                .sortedWith(
+                    compareBy<LegacySerialShape>(
+                        { it.serialVersionUid },
+                        { it.flags },
+                        { shape ->
+                          shape.fields.joinToString("|") { field ->
+                            "${field.name}:${field.typeCode}:${field.typeName.orEmpty()}"
+                          }
+                        },
+                    ))
+                .forEach { shape ->
+                  append(shape.serialVersionUid).append(':').append(shape.flags).append(':')
+                  append(shape.fields.size).append('\n')
+                  shape.fields.forEach { field ->
+                    append(field.name.length).append(':').append(field.name).append(':')
+                    append(field.typeCode).append(':')
+                    append(field.typeName?.length ?: -1).append(':')
+                    append(field.typeName.orEmpty()).append('\n')
+                  }
+                }
+          }
+        }
+    val actual =
+        MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    check(actual == PINNED_SERIAL_MANIFEST_SHA256) {
+      "Legacy serial manifest changed; audited SHA-256 is $actual"
+    }
+    manifest
+  }
+
+  private fun expectedFlags(type: Class<*>): Int =
+      when {
+        type.isEnum || type == java.lang.Enum::class.java ->
+            ObjectStreamConstants.SC_SERIALIZABLE.toInt() or
+                ObjectStreamConstants.SC_ENUM.toInt()
+        type == ArrayList::class.java || type == HashMap::class.java ->
+            ObjectStreamConstants.SC_SERIALIZABLE.toInt() or
+                ObjectStreamConstants.SC_WRITE_METHOD.toInt()
+        else -> ObjectStreamConstants.SC_SERIALIZABLE.toInt()
+      }
+
+  private val auditedSerialClasses: Map<String, Class<*>> by lazy {
+    val support =
+        listOf(
+            ArrayList::class.java,
+            HashMap::class.java,
+            java.lang.Enum::class.java,
+            Integer::class.java,
+            Number::class.java,
+        )
+    val application =
+        (MementoTypeRegistry.recordClassNames +
+                MementoTypeRegistry.enumClassNames +
+                MementoTypeRegistry.SESSION_MEMENTO)
+            .map { Class.forName(it, false, javaClass.classLoader) }
+    val arrays = LegacyArrayShapes.descriptors.map { Class.forName(it, false, javaClass.classLoader) }
+    (support + application + arrays).associateBy { it.name }
+  }
 
   internal fun isWithinGraphLimits(
       depth: Long,
