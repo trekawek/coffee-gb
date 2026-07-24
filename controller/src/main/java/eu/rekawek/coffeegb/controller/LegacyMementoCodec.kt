@@ -1,8 +1,6 @@
 package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.core.Gameboy
-import eu.rekawek.coffeegb.core.genie.GameGeniePatch
-import eu.rekawek.coffeegb.core.genie.GameSharkPatch
 import eu.rekawek.coffeegb.core.memento.Memento
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -26,14 +24,10 @@ internal object LegacyMementoCodec {
       setOf(
           ArrayList::class.java,
           HashMap::class.java,
-          GameGeniePatch::class.java,
-          GameSharkPatch::class.java,
       )
 
   private val allowedSupportClassNames =
       setOf(
-          "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWrite",
-          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWrite",
           "java.lang.Enum",
           "java.lang.Integer",
           "java.lang.Number",
@@ -113,8 +107,8 @@ internal object LegacyMementoCodec {
 
     override fun resolveClass(desc: ObjectStreamClass): Class<*> {
       val resolved = super.resolveClass(desc)
-      if (!isAllowed(resolved)) {
-        throw InvalidClassException("Rejected legacy state class", desc.name)
+      if (!isAllowed(resolved) || !hasExpectedSerialShape(desc, resolved)) {
+        throw InvalidClassException("Rejected legacy state class or shape", desc.name)
       }
       return resolved
     }
@@ -146,10 +140,16 @@ internal object LegacyMementoCodec {
     }
 
     private fun filter(info: ObjectInputFilter.FilterInfo): ObjectInputFilter.Status {
-      if (info.depth() > StateLimits.LEGACY_MAX_DEPTH ||
-          info.references() > StateLimits.LEGACY_MAX_REFERENCES ||
-          info.streamBytes() > limit.decodedBytes ||
-          info.arrayLength() > StateLimits.LEGACY_MAX_ARRAY_LENGTH) {
+      val objectArray =
+          info.serialClass()?.let { it.isArray && !it.componentType.isPrimitive } == true
+      if (!isWithinGraphLimits(
+              info.depth(),
+              info.references(),
+              info.streamBytes(),
+              info.arrayLength(),
+              objectArray,
+              limit.decodedBytes,
+          )) {
         return ObjectInputFilter.Status.REJECTED
       }
       val serialClass = info.serialClass() ?: return ObjectInputFilter.Status.UNDECIDED
@@ -169,13 +169,29 @@ internal object LegacyMementoCodec {
     if (allowedSupportClasses.contains(type) || allowedSupportClassNames.contains(type.name)) {
       return true
     }
-    if (type.isEnum) {
-      return type.name.startsWith("eu.rekawek.coffeegb.core.")
-    }
-    // The dedicated marker plus Java's record constraint limits this to Coffee GB's compiled,
-    // data-only core mementos; arbitrary application classes implementing Memento are rejected.
-    return Memento::class.java.isAssignableFrom(type) &&
-        ((type.isRecord && type.name.startsWith("eu.rekawek.coffeegb.core.")) ||
-            type.name == SESSION_MEMENTO)
+    return type.name in MementoTypeRegistry.legacyApplicationClassNames
   }
+
+  /** Rejects added, removed, renamed, or retyped fields even when the class name is allowed. */
+  private fun hasExpectedSerialShape(descriptor: ObjectStreamClass, type: Class<*>): Boolean {
+    val expected = ObjectStreamClass.lookup(type) ?: return descriptor.fields.isEmpty()
+    if (descriptor.serialVersionUID != expected.serialVersionUID) return false
+    fun ObjectStreamClass.shape() =
+        fields.map { field -> Triple(field.name, field.typeCode, field.typeString) }
+    return descriptor.shape() == expected.shape()
+  }
+
+  internal fun isWithinGraphLimits(
+      depth: Long,
+      references: Long,
+      streamBytes: Long,
+      arrayLength: Long,
+      objectArray: Boolean,
+      streamLimit: Int,
+  ): Boolean =
+      depth <= StateLimits.LEGACY_MAX_DEPTH &&
+          references <= StateLimits.LEGACY_MAX_REFERENCES &&
+          streamBytes <= streamLimit &&
+          arrayLength <= StateLimits.LEGACY_MAX_ARRAY_LENGTH &&
+          (!objectArray || arrayLength <= StateLimits.LEGACY_MAX_COLLECTION_ENTRIES)
 }

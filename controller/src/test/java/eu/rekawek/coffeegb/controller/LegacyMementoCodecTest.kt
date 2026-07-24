@@ -22,6 +22,7 @@ import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.nio.file.Paths
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -75,6 +76,27 @@ class LegacyMementoCodecTest {
   }
 
   @Test
+  fun alteredAllowedClassShapeIsRejected() {
+    val eventBus = EventBusImpl()
+    val gameboy = configuration().build()
+    gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    try {
+      val serialized = gameboy.saveToMemento().serialize()
+      val field = "biosShadowMemento".toByteArray()
+      val index = serialized.indexOf(field)
+      assertTrue(index >= 0, "fixture should contain the root record descriptor")
+      val altered = serialized.clone()
+      altered[index] = 'x'.code.toByte()
+
+      assertFailsWith<InvalidClassException> { altered.deserializeToGameboyMemento() }
+    } finally {
+      gameboy.stop()
+      gameboy.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun proxyMementoIsRejected() {
     @Suppress("UNCHECKED_CAST")
     val proxy =
@@ -123,6 +145,49 @@ class LegacyMementoCodecTest {
   }
 
   @Test
+  fun graphLimitsAcceptExactBoundariesAndRejectPlusOneAndOverflow() {
+    fun allowed(
+        depth: Long = 0,
+        references: Long = 0,
+        streamBytes: Long = 0,
+        arrayLength: Long = -1,
+        objectArray: Boolean = false,
+    ) =
+        LegacyMementoCodec.isWithinGraphLimits(
+            depth,
+            references,
+            streamBytes,
+            arrayLength,
+            objectArray,
+            StateLimits.GAME_SNAPSHOT.decodedBytes,
+        )
+
+    assertTrue(allowed(depth = StateLimits.LEGACY_MAX_DEPTH))
+    assertTrue(allowed(references = StateLimits.LEGACY_MAX_REFERENCES))
+    assertTrue(allowed(streamBytes = StateLimits.GAME_SNAPSHOT.decodedBytes.toLong()))
+    assertTrue(allowed(arrayLength = StateLimits.LEGACY_MAX_ARRAY_LENGTH))
+    assertTrue(
+        allowed(
+            arrayLength = StateLimits.LEGACY_MAX_COLLECTION_ENTRIES.toLong(),
+            objectArray = true,
+        ))
+
+    assertFalse(allowed(depth = StateLimits.LEGACY_MAX_DEPTH + 1))
+    assertFalse(allowed(references = StateLimits.LEGACY_MAX_REFERENCES + 1))
+    assertFalse(allowed(streamBytes = StateLimits.GAME_SNAPSHOT.decodedBytes.toLong() + 1))
+    assertFalse(allowed(arrayLength = StateLimits.LEGACY_MAX_ARRAY_LENGTH + 1))
+    assertFalse(
+        allowed(
+            arrayLength = StateLimits.LEGACY_MAX_COLLECTION_ENTRIES.toLong() + 1,
+            objectArray = true,
+        ))
+    assertFalse(allowed(depth = Long.MAX_VALUE))
+    assertFalse(allowed(references = Long.MAX_VALUE))
+    assertFalse(allowed(streamBytes = Long.MAX_VALUE))
+    assertFalse(allowed(arrayLength = Long.MAX_VALUE))
+  }
+
+  @Test
   fun legacyCollectionLimitAcceptsBoundaryAndRejectsBoundaryPlusOne() {
     val eventBus = EventBusImpl()
     val gameboy = configuration().build()
@@ -134,7 +199,7 @@ class LegacyMementoCodecTest {
 
       eventBus.post(AddPatches(listOf(patch)))
       val oversized = gameboy.saveToMemento().serialize()
-      assertFailsWith<InvalidObjectException> { oversized.deserializeToGameboyMemento() }
+      assertFailsWith<IOException> { oversized.deserializeToGameboyMemento() }
     } finally {
       gameboy.stop()
       gameboy.close()
@@ -189,6 +254,13 @@ class LegacyMementoCodecTest {
     val output = ByteArrayOutputStream()
     ObjectOutputStream(output).use { it.writeObject(value) }
     return output.toByteArray()
+  }
+
+  private fun ByteArray.indexOf(needle: ByteArray): Int {
+    for (start in 0..size - needle.size) {
+      if (needle.indices.all { this[start + it] == needle[it] }) return start
+    }
+    return -1
   }
 
   private data class UnexpectedMemento(val command: String) : Memento<Gameboy>

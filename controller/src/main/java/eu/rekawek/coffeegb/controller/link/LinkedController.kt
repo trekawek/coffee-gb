@@ -8,10 +8,10 @@ import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.PortableMementoCodec
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
-import eu.rekawek.coffeegb.controller.deserializeToGameboyMemento
-import eu.rekawek.coffeegb.controller.deserializeToSessionMemento
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
@@ -23,8 +23,6 @@ import eu.rekawek.coffeegb.controller.network.Connection.RequestStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
-import eu.rekawek.coffeegb.controller.serialize
-import eu.rekawek.coffeegb.controller.serializeSessionMemento
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
@@ -61,7 +59,13 @@ class LinkedController(
 
   private val eventBus = parentEventBus.fork("session")
 
-  private val eventQueue = EventQueue(eventBus)
+  private val eventQueue =
+      EventQueue(
+          eventBus,
+          StateLimits.NETPLAY_EVENT_QUEUE_EVENTS,
+          StateLimits.NETPLAY_EVENT_QUEUE_BYTES,
+          ::eventWeight,
+      )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
 
@@ -110,7 +114,7 @@ class LinkedController(
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       configs[localPlayer] = e.config
-      initSession(localPlayer, frame, e.snapshot?.deserializeToGameboyMemento(), null)
+      initSession(localPlayer, frame, e.snapshot?.let(PortableMementoCodec::decodeGameboy), null)
       sendLocalRom(e.snapshot)
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
         broadcastCurrentState()
@@ -222,7 +226,11 @@ class LinkedController(
       eventBus.post(Controller.SessionPauseSupportEvent(false))
       eventBus.post(Controller.SessionSnapshotSupportEvent(null))
       eventBus.post(Controller.EmulationStartedEvent(rom.title))
-      eventBus.post(LoadedLocalConfigEvent(config, it.memento?.serialize()))
+      eventBus.post(
+          LoadedLocalConfigEvent(
+              config = config,
+              snapshot = it.memento?.let(PortableMementoCodec::encodeGameboy),
+          ))
     }
 
     eventBus.register<UpdatedSystemMappingEvent> {
@@ -370,8 +378,9 @@ class LinkedController(
     initSession(
         e.player,
         e.frame,
-        e.snapshot?.deserializeToGameboyMemento(),
-        e.sessionSnapshot?.deserializeToSessionMemento(),
+        e.decodedSnapshot ?: e.snapshot?.let(PortableMementoCodec::decodeGameboy),
+        e.decodedSessionSnapshot
+            ?: e.sessionSnapshot?.let(PortableMementoCodec::decodeSession),
         e.heldButtons,
     )
     return true
@@ -413,7 +422,7 @@ class LinkedController(
               frame = frame,
               cgb0Revision = config.isCgb0Revision,
               player = player,
-              sessionSnapshot = session.saveToMemento().serializeSessionMemento(),
+              sessionSnapshot = PortableMementoCodec.encodeSession(session.saveToMemento()),
               heldButtons = session.heldButtons,
           )
         }
@@ -421,6 +430,25 @@ class LinkedController(
   }
 
   override fun close() {}
+
+  private fun eventWeight(event: Event): Long =
+      when (event) {
+        is PeerLoadedGameEvent -> peerStateWeight(event)
+        is SessionCheckpointEvent ->
+            event.states.fold(0L) { total, state ->
+              Math.addExact(total, peerStateWeight(state))
+            }
+        else -> 64L
+      }
+
+  private fun peerStateWeight(event: PeerLoadedGameEvent): Long {
+    val bytes =
+        listOf(event.rom, event.battery, event.snapshot, event.sessionSnapshot)
+            .filterNotNull()
+            .fold(0L) { total, value -> Math.addExact(total, value.size.toLong()) }
+    // The queue retains both the validated bytes and a detached decoded memento graph.
+    return Math.multiplyExact(bytes, 2L)
+  }
 
   override fun closeWithState(): Controller.ControllerState? {
     doStop = true

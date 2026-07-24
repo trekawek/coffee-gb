@@ -27,7 +27,17 @@ class SnapshotManager(private val rom: File) {
           "Snapshot exceeds the ${StateLimits.GAME_SNAPSHOT.decodedBytes}-byte legacy limit")
     }
     val memento = readSnapshotBytes(snapshotFile).deserializeToGameboyMemento()
-    gameboy.restoreFromMemento(memento)
+    val rollback = gameboy.saveToMemento()
+    try {
+      gameboy.restoreFromMemento(memento)
+    } catch (e: Exception) {
+      try {
+        gameboy.restoreFromMemento(rollback)
+      } catch (rollbackFailure: Exception) {
+        e.addSuppressed(rollbackFailure)
+      }
+      throw IOException("Snapshot could not be applied; the previous state was restored", e)
+    }
     return true
   }
 
