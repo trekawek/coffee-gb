@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
@@ -10,10 +11,13 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.joypad.Button
 import org.junit.After
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
+import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -334,6 +338,175 @@ class ConnectionTest {
   }
 
   @Test
+  fun everyPayloadLimitRejectsBoundaryPlusOneAndOverflowDeclarations() {
+    val limits =
+        listOf(
+            StateLimits.ROM,
+            StateLimits.BATTERY,
+            StateLimits.GAME_SNAPSHOT,
+            StateLimits.SESSION_SNAPSHOT,
+        )
+
+    for (limit in limits) {
+      assertEquals(
+          limit.decodedBytes,
+          Connection.validateDeclaration(limit.decodedBytes, 1, limit, required = true).decodedBytes,
+      )
+      assertFailsWith<IOException>(limit.description) {
+        Connection.validateDeclaration(limit.decodedBytes + 1, 1, limit, required = true)
+      }
+      assertEquals(
+          limit.encodedBytes,
+          Connection.validateDeclaration(1, limit.encodedBytes, limit, required = true).encodedBytes,
+      )
+      assertFailsWith<IOException>(limit.description) {
+        Connection.validateDeclaration(1, limit.encodedBytes + 1, limit, required = true)
+      }
+      assertFailsWith<IOException>(limit.description) {
+        Connection.validateDeclaration(Int.MAX_VALUE, Int.MAX_VALUE, limit, required = true)
+      }
+    }
+  }
+
+  @Test
+  fun optionalPayloadRequiresConsistentZeroLengths() {
+    assertEquals(
+        Connection.PayloadDeclaration(0, 0),
+        Connection.validateDeclaration(0, 0, StateLimits.BATTERY),
+    )
+    assertFailsWith<IOException> {
+      Connection.validateDeclaration(1, 0, StateLimits.BATTERY)
+    }
+    assertFailsWith<IOException> {
+      Connection.validateDeclaration(0, 1, StateLimits.BATTERY)
+    }
+  }
+
+  @Test
+  fun inflateRejectsCorruptionTrailingDataAndOutputPastDeclaration() {
+    val limit = StateLimits.Payload("test payload", 4096, 4096)
+    val original = ByteArray(1024) { (it % 31).toByte() }
+    val compressed = Connection.deflate(original, limit)
+
+    val corrupt =
+        compressed.clone().also {
+          it[it.lastIndex / 2] = (it[it.lastIndex / 2].toInt() xor 0x55).toByte()
+        }
+    assertFailsWith<IOException> {
+      Connection.inflate(
+          corrupt,
+          Connection.PayloadDeclaration(original.size, corrupt.size),
+          limit,
+      )
+    }
+    val trailing = compressed + byteArrayOf(1, 2, 3)
+    assertFailsWith<IOException> {
+      Connection.inflate(
+          trailing,
+          Connection.PayloadDeclaration(original.size, trailing.size),
+          limit,
+      )
+    }
+    assertFailsWith<IOException> {
+      Connection.inflate(
+          compressed,
+          Connection.PayloadDeclaration(original.size - 1, compressed.size),
+          limit,
+      )
+    }
+  }
+
+  @Test
+  fun compressionBombDeclarationIsRejectedBeforeInflation() {
+    val compressed = Connection.deflate(ByteArray(1024))
+
+    assertFailsWith<IOException> {
+      Connection.validateDeclaration(
+          StateLimits.BATTERY.decodedBytes + 1,
+          compressed.size,
+          StateLimits.BATTERY,
+          required = true,
+      )
+    }
+  }
+
+  @Test
+  fun aggregateRomMessageLimitIsCheckedBeforePayloadReads() {
+    val header =
+        romHeader(
+            decodedSizes = intArrayOf(1, 1, 1, 1),
+            encodedSizes =
+                intArrayOf(
+                    StateLimits.ROM.encodedBytes,
+                    StateLimits.BATTERY.encodedBytes,
+                    StateLimits.GAME_SNAPSHOT.encodedBytes,
+                    StateLimits.SESSION_SNAPSHOT.encodedBytes,
+                ),
+        )
+    val connection = clientConnection(byteArrayOf(0x01) + header)
+
+    val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
+    assertTrue(error.cause!!.message!!.contains("message exceeds"))
+  }
+
+  @Test
+  fun aggregateDecodedRomMessageLimitIsCheckedBeforePayloadReads() {
+    val header =
+        romHeader(
+            decodedSizes =
+                intArrayOf(
+                    StateLimits.ROM.decodedBytes,
+                    StateLimits.BATTERY.decodedBytes,
+                    StateLimits.GAME_SNAPSHOT.decodedBytes,
+                    StateLimits.SESSION_SNAPSHOT.decodedBytes,
+                ),
+            encodedSizes = intArrayOf(1, 1, 1, 1),
+        )
+    val connection = clientConnection(byteArrayOf(0x01) + header)
+
+    val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
+    assertTrue(error.cause!!.message!!.contains("Decoded netplay ROM message exceeds"))
+  }
+
+  @Test
+  fun invalidEnumAndFlagDeclarationsAreProtocolErrors() {
+    val invalidEnum = romHeader(gameboyType = 0xff)
+    assertFailsWith<IOException> { clientConnection(byteArrayOf(0x01) + invalidEnum).run() }
+
+    val invalidFlag = romHeader(cgb0Revision = 2)
+    assertFailsWith<IOException> { clientConnection(byteArrayOf(0x01) + invalidFlag).run() }
+  }
+
+  @Test
+  fun legacyJavaSnapshotFromPeerIsRejectedBeforeEventDelivery() {
+    val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
+    val rom = Connection.deflate(byteArrayOf(1), StateLimits.ROM)
+    val legacyState = byteArrayOf(0xac.toByte(), 0xed.toByte(), 0x00, 0x05)
+    val snapshot = Connection.deflate(legacyState, StateLimits.GAME_SNAPSHOT)
+    val header =
+        romHeader(
+            decodedSizes = intArrayOf(1, 0, legacyState.size, 0),
+            encodedSizes = intArrayOf(rom.size, 0, snapshot.size, 0),
+        )
+    val connection = clientConnection(byteArrayOf(0x01) + header + rom + snapshot)
+
+    val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
+    assertTrue(error.message!!.contains("unsafe legacy Java save state"))
+    assertEquals(null, received.poll())
+  }
+
+  @Test
+  fun peerProtocolErrorHasAUserFacingReason() {
+    val error =
+        assertFailsWith<Connection.ProtocolException> {
+          clientConnection(byteArrayOf(0x0a, 0x01)).run()
+        }
+
+    assertTrue(error.message!!.contains("portable state format"))
+  }
+
+  @Test
   fun deflateShrinksSparseData() {
     val sparse = ByteArray(1 shl 20)
     Random(1).nextBytes(sparse, 0, 64 * 1024)
@@ -342,5 +515,35 @@ class ConnectionTest {
         compressed.size < sparse.size / 4,
         "expected sparse memento-like data to compress well, got ${compressed.size}")
     assertContentEquals(sparse, Connection.inflate(compressed, sparse.size))
+  }
+
+  private fun clientConnection(messages: ByteArray): Connection {
+    val handshake =
+        "CoffeeGB NETPLAY".toByteArray() +
+            byteArrayOf(0x06, LinkMode.NORMAL.ordinal.toByte(), 0x01)
+    return Connection(
+        ByteArrayInputStream(handshake + messages),
+        ByteArrayOutputStream(),
+        receiverBus,
+        false,
+    )
+  }
+
+  private fun romHeader(
+      gameboyType: Int = GameboyType.DMG.ordinal,
+      cgb0Revision: Int = 0,
+      decodedSizes: IntArray = intArrayOf(1, 0, 0, 0),
+      encodedSizes: IntArray = intArrayOf(1, 0, 0, 0),
+  ): ByteArray {
+    val header = ByteBuffer.allocate(45)
+    header.put(0)
+    header.putLong(0)
+    header.put(gameboyType.toByte())
+    header.put(Gameboy.BootstrapMode.SKIP.ordinal.toByte())
+    header.put(cgb0Revision.toByte())
+    header.put(0)
+    decodedSizes.forEach(header::putInt)
+    encodedSizes.forEach(header::putInt)
+    return header.array()
   }
 }

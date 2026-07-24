@@ -893,6 +893,16 @@ class SwingMenu(
         )
       }
     }
+    eventBus.register<ConnectionController.ClientProtocolErrorEvent> {
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            it.message,
+            "Netplay protocol error",
+            JOptionPane.ERROR_MESSAGE,
+        )
+      }
+    }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       setStatus("Disconnected", false)
       connectToServer.state = false
