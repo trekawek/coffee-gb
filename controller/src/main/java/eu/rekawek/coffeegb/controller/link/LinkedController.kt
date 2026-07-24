@@ -12,9 +12,13 @@ import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
+import eu.rekawek.coffeegb.controller.state.ApplyStage
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
+import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
+import eu.rekawek.coffeegb.controller.state.StateApplyException
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
@@ -123,10 +127,100 @@ class LinkedController(
           localPlayer,
           if (mode == LinkMode.NORMAL) LinkedTopologyState.NORMAL
           else LinkedTopologyState.FOUR_PLAYER_ADAPTER,
-          sessions.mapIndexed { player, session ->
-            LinkedPlayerState(player, session?.captureDetachedState())
+          (0 until CANONICAL_PLAYER_SLOTS).map { player ->
+            LinkedPlayerState(player, sessions.getOrNull(player)?.captureDetachedState())
           },
       )
+
+  /** Applies an already-configured linked group at the owning controller frame safe point. */
+  internal fun restoreDetachedState(
+      state: LinkedSessionState,
+      probe: ((Int, ApplyStage) -> Unit)? = null,
+  ) {
+    validateLinkedState(state)
+    val active =
+        sessions.indices.mapNotNull { player ->
+          val session = sessions[player] ?: return@mapNotNull null
+          val sessionState = state.players[player].session ?: return@mapNotNull null
+          Triple(player, session, DetachedStateAdapter.prepare(session, sessionState))
+        }
+    // Prepare rollback records before the first mutation as part of the same transaction.
+    val rollbackState = captureDetachedState()
+    val rollback =
+        sessions.indices.mapNotNull { player ->
+          val session = sessions[player] ?: return@mapNotNull null
+          val sessionState = rollbackState.players[player].session ?: return@mapNotNull null
+          Triple(player, session, DetachedStateAdapter.prepare(session, sessionState))
+        }
+    val oldFrame = frame
+    val oldRuntimeFrameFloor = runtimeFrameFloor
+    val oldCurrentInput = currentInput
+    val oldLastInput = lastInput
+    try {
+      active.forEach { (player, session, prepared) ->
+        probe?.invoke(player, ApplyStage.BEFORE_LIVE_MUTATION)
+        DetachedStateAdapter.commit(session, prepared) { stage -> probe?.invoke(player, stage) }
+      }
+      frame = state.frame
+      runtimeFrameFloor = frame
+      currentInput = null
+      lastInput = null
+      rebaseHistoryToLiveState()
+    } catch (failure: Throwable) {
+      try {
+        rollback.forEach { (_, session, prepared) ->
+          DetachedStateAdapter.commit(session, prepared)
+        }
+        frame = oldFrame
+        runtimeFrameFloor = oldRuntimeFrameFloor
+        currentInput = oldCurrentInput
+        lastInput = oldLastInput
+      } catch (rollbackFailure: Throwable) {
+        failure.addSuppressed(rollbackFailure)
+      }
+      throw StateApplyException("Linked session state could not be applied atomically", failure)
+    }
+  }
+
+  private fun validateLinkedState(state: LinkedSessionState) {
+    if (state.frame < 0 || state.frame > StateLimits.NETPLAY_MAX_FRAME) {
+      throw StateApplyException("Detached linked frame ${state.frame} is outside the supported range")
+    }
+    if (state.localPlayer != localPlayer) {
+      throw StateApplyException(
+          "Detached local player ${state.localPlayer} does not match controller player $localPlayer")
+    }
+    val expectedTopology =
+        if (mode == LinkMode.NORMAL) LinkedTopologyState.NORMAL
+        else LinkedTopologyState.FOUR_PLAYER_ADAPTER
+    if (state.topology != expectedTopology) {
+      throw StateApplyException(
+          "Detached ${state.topology} topology does not match $expectedTopology")
+    }
+    if (state.players.size != CANONICAL_PLAYER_SLOTS ||
+        state.players.indices.any { state.players[it].player != it }) {
+      throw StateApplyException("Detached linked state requires canonical player indices 0..3")
+    }
+    if (mode == LinkMode.NORMAL && state.players.drop(mode.playerCount).any { it.session != null }) {
+      throw StateApplyException("Normal link state cannot populate four-player-only slots")
+    }
+    sessions.indices.forEach { player ->
+      if ((sessions[player] == null) != (state.players[player].session == null)) {
+        throw StateApplyException("Detached player $player does not match the active-session shape")
+      }
+    }
+    val activeStates = state.players.mapNotNull(LinkedPlayerState::session)
+    val expectedPeripheral =
+        if (mode == LinkMode.NORMAL) SerialPeripheralState.PEER_TO_PEER
+        else SerialPeripheralState.FOUR_PLAYER_ADAPTER
+    if (activeStates.any { it.serialPeripheral != expectedPeripheral }) {
+      throw StateApplyException("Detached serial endpoint identity does not match linked topology")
+    }
+    if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+        activeStates.map { it.serialState }.distinct().size > 1) {
+      throw StateApplyException("Detached four-player sessions disagree on shared adapter state")
+    }
+  }
 
   @Volatile private var doStop = false
 
@@ -706,12 +800,14 @@ class LinkedController(
   }
 
   private fun rebaseHistoryToLiveState() {
+    val mementos = sessions.map { it?.saveToMemento() }
+    val heldButtons = sessions.map { it?.heldButtons ?: emptySet() }
     stateHistory.clear()
     stateHistory.addState(
         frame,
         List(mode.playerCount) { Input(emptyList(), emptyList()) },
-        sessions.map { it?.saveToMemento() },
-        sessions.map { it?.heldButtons ?: emptySet() },
+        mementos,
+        heldButtons,
     )
   }
 
@@ -797,6 +893,7 @@ class LinkedController(
   )
 
   private companion object {
+    const val CANONICAL_PLAYER_SLOTS = 4
     val LOG: Logger = LoggerFactory.getLogger(LinkedController::class.java)
   }
 }

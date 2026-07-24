@@ -7,10 +7,13 @@ import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint
+import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.nio.file.Paths
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -120,7 +123,7 @@ class DetachedStateTest {
       val before = session.captureDetachedState()
       val invalidRoot = RecordState(before.machine.root.typeId, before.machine.root.fields.dropLast(1))
       val invalid = SessionState(
-          MachineState(invalidRoot, before.machine.rtcRuntime),
+          MachineState(invalidRoot, before.machine.rtcRuntime, before.machine.hardware),
           before.serialPeripheral,
           before.serialState,
           before.serialRuntime,
@@ -129,6 +132,150 @@ class DetachedStateTest {
 
       assertFailsWith<StateApplyException> { session.restoreDetachedState(invalid) }
       assertEquals(before, session.captureDetachedState())
+    }
+  }
+
+  @Test
+  fun mapperEndpointAndInvariantDimensionsAreRejectedBeforeLiveMutation() {
+    session().use { target ->
+      session(configuration(mbc3Rom())).use { differentMapper ->
+        val before = target.captureDetachedState()
+        val mbc3 = differentMapper.captureDetachedState().machine.record(MBC3_MEMENTO)
+        val wrongRoot =
+            before.machine.root.replaceRecordField(
+                CARTRIDGE_MEMENTO, "memoryControllerMemento", mbc3)
+        val wrongMapper = before.withMachineRoot(wrongRoot)
+        val stages = mutableListOf<ApplyStage>()
+
+        assertFailsWith<StateApplyException> {
+          DetachedStateAdapter.apply(target, wrongMapper) { stages += it }
+        }
+        assertTrue(stages.isEmpty())
+        assertEquals(before, target.captureDetachedState())
+
+        val display = before.machine.record(DISPLAY_MEMENTO)
+        val shortBuffer =
+            Int32ArrayState(display.intArray("buffer").copyOf(display.intArray("buffer").size - 1))
+        val wrongDimensions =
+            before.withMachineRoot(
+                before.machine.root.replaceRecordField(DISPLAY_MEMENTO, "buffer", shortBuffer))
+        assertFailsWith<StateApplyException> {
+          DetachedStateAdapter.apply(target, wrongDimensions) { stages += it }
+        }
+        assertTrue(stages.isEmpty())
+        assertEquals(before, target.captureDetachedState())
+      }
+    }
+
+    val receiver = ByteReceivingSerialEndpoint { _ -> }
+    session(receiver).use { target ->
+      session(GameboyPrinterSerialEndpoint { _, _, _, _, _, _ -> }).use { printer ->
+        val before = target.captureDetachedState()
+        val printerState = printer.captureDetachedState().serialState
+        val wrongEndpoint =
+            SessionState(
+                before.machine,
+                before.serialPeripheral,
+                printerState,
+                before.serialRuntime,
+                before.heldButtons,
+            )
+        val stages = mutableListOf<ApplyStage>()
+        assertFailsWith<StateApplyException> {
+          DetachedStateAdapter.apply(target, wrongEndpoint) { stages += it }
+        }
+        assertTrue(stages.isEmpty())
+        assertEquals(before, target.captureDetachedState())
+      }
+    }
+  }
+
+  @Test
+  fun unexpectedLiveFailureRollsBackMachineRtcEndpointRuntimeAndHeldInput() {
+    val time = VirtualTimeSource(120_000)
+    val endpoint = BarcodeBoySerialEndpoint()
+    val config = configuration(mbc3Rom()).setRtcTimeSource(time)
+    session(config, endpoint).use { session ->
+      repeat(32) {
+        endpoint.startSending()
+        repeat(8) { endpoint.sendBit() }
+      }
+      endpoint.scan("4901234567894")
+      endpoint.setExternalTransfer(true)
+      session.heldButtons = setOf(Button.START)
+      session.gameboy.setCartridgeClockPaused(true)
+      val target = session.captureDetachedState()
+
+      time.forward(2, TimeUnit.SECONDS)
+      session.gameboy.setCartridgeClockPaused(false)
+      repeat(2_000) { session.gameboy.tick() }
+      repeat(64) { endpoint.recvBit() }
+      endpoint.setExternalTransfer(false)
+      session.heldButtons = setOf(Button.B)
+      val beforeFailure = session.captureDetachedState()
+      var reachedLiveFailure = false
+
+      assertFailsWith<StateApplyException> {
+        DetachedStateAdapter.apply(session, target) { stage ->
+          if (stage == ApplyStage.AFTER_MACHINE_MUTATION) {
+            reachedLiveFailure = true
+            throw InjectedApplyFailure()
+          }
+        }
+      }
+
+      assertTrue(reachedLiveFailure)
+      assertEquals(beforeFailure, session.captureDetachedState())
+    }
+  }
+
+  @Test
+  fun datelSlotRtcLocationsUseInjectedTimeAndRoundTripIndependently() {
+    val time = VirtualTimeSource(120_000)
+    val config = datelConfiguration(mbc3Rom(), time)
+    session(config).use { session ->
+      repeat(Gameboy.TICKS_PER_SEC / 4) { session.gameboy.tick() }
+      session.gameboy.setCartridgeClockPaused(true)
+      time.forward(1500, TimeUnit.MILLISECONDS)
+      val captured = session.captureDetachedState()
+      assertEquals(null, captured.machine.rtcRuntime.primary)
+      assertTrue(captured.machine.rtcRuntime.slot?.emulationPaused == true)
+      assertEquals(
+          3L * Gameboy.TICKS_PER_SEC / 4,
+          captured.machine.record(RTC_MEMENTO).long("subSecondTicks"),
+      )
+
+      val capturedTime = time.currentTimeMillis()
+      time.forward(250, TimeUnit.MILLISECONDS)
+      session.gameboy.setCartridgeClockPaused(false)
+      repeat(128) { session.gameboy.tick() }
+      val expected = session.captureDetachedState()
+
+      time.forward(5, TimeUnit.SECONDS)
+      repeat(1_000) { session.gameboy.tick() }
+      session.restoreDetachedState(captured)
+      time.setCurrentTimeMillis(capturedTime)
+      time.forward(250, TimeUnit.MILLISECONDS)
+      session.gameboy.setCartridgeClockPaused(false)
+      repeat(128) { session.gameboy.tick() }
+      assertEquals(expected, session.captureDetachedState())
+    }
+
+    listOf(HUC3_MEMENTO to slotRom(0xfe, 0x03), TAMA5_MEMENTO to slotRom(0xfd, 0)).forEach {
+        (mementoName, slotRom) ->
+      val familyTime = VirtualTimeSource(120_000)
+      session(datelConfiguration(slotRom, familyTime)).use { session ->
+        familyTime.forward(2, TimeUnit.MINUTES)
+        val bus = session.gameboy.addressSpace
+        bus.setByte(0x7fe5, 0x10)
+        if (mementoName == HUC3_MEMENTO) {
+          readHuc3Register(bus, 0)
+        } else {
+          readTama5Minutes(bus)
+        }
+        val reference = session.captureDetachedState().machine.record(mementoName).long("lastRtcSecond")
+        assertEquals(240L, reference, mementoName)
+      }
     }
   }
 
@@ -232,6 +379,46 @@ class DetachedStateTest {
   private fun RecordState.bool(name: String): Boolean =
       (fields.single { it.name == name }.value as BooleanState).value
 
+  private fun RecordState.long(name: String): Long =
+      (fields.single { it.name == name }.value as Int64State).value
+
+  private fun SessionState.withMachineRoot(root: RecordState): SessionState =
+      SessionState(
+          MachineState(root, machine.rtcRuntime, machine.hardware),
+          serialPeripheral,
+          serialState,
+          serialRuntime,
+          heldButtons,
+      )
+
+  private fun RecordState.replaceRecordField(
+      ownerClass: String,
+      fieldName: String,
+      replacement: StateValue,
+  ): RecordState {
+    fun replace(value: StateValue): StateValue =
+        when (value) {
+          is RecordState -> {
+            val owner = MementoClassNames.record(value.typeId) == ownerClass
+            RecordState(
+                value.typeId,
+                value.fields.map { field ->
+                  StateField(
+                      field.name,
+                      if (owner && field.name == fieldName) replacement else replace(field.value),
+                  )
+                },
+            )
+          }
+          is ObjectArrayState -> ObjectArrayState(value.values.map(::replace))
+          is ListState -> ListState(value.values.map(::replace))
+          is Int32MapState ->
+              Int32MapState(value.entries.map { Int32MapEntry(it.key, replace(it.value)) })
+          else -> value
+        }
+    return replace(this) as RecordState
+  }
+
   private fun firstDifference(expected: StateValue, actual: StateValue, path: String = "root"): String {
     if (expected == actual) return "states are equal"
     if (expected::class != actual::class) return "$path: ${expected::class} != ${actual::class}"
@@ -275,6 +462,56 @@ class DetachedStateTest {
     return rom
   }
 
+  private fun datelConfiguration(slot: ByteArray, time: VirtualTimeSource) =
+      configuration(datelRom())
+          .setGameboyType(GameboyType.CGB)
+          .setSlotRom(Rom(slot))
+          .setRtcTimeSource(time)
+          .setSupportBatterySave(false)
+
+  private fun datelRom(): ByteArray =
+      ByteArray(0x20000).also {
+        it[0x100] = 0x00
+        it[0x101] = 0xc3.toByte()
+        it[0x104] = 0x44 // invalid Nintendo logo selects the Datel mapper
+        it[0x147] = 0x00
+        it[0x148] = 0x02
+      }
+
+  private fun mbc3Rom(): ByteArray = slotRom(0x10, 0x03)
+
+  private fun slotRom(type: Int, ramSize: Int): ByteArray =
+      ByteArray(0x8000).also {
+        intArrayOf(0xce, 0xed, 0x66, 0x66, 0xcc, 0x0d).forEachIndexed { index, value ->
+          it[0x104 + index] = value.toByte()
+        }
+        it[0x100] = 0x18
+        it[0x101] = 0xfe.toByte()
+        it[0x147] = type.toByte()
+        it[0x148] = 0x00
+        it[0x149] = ramSize.toByte()
+      }
+
+  private fun readHuc3Register(bus: eu.rekawek.coffeegb.core.AddressSpace, register: Int): Int {
+    bus.setByte(0x0000, 0x0b)
+    bus.setByte(0xa000, 0x40 or (register and 0x0f))
+    bus.setByte(0xa000, 0x50 or ((register shr 4) and 0x0f))
+    bus.setByte(0xa000, 0x10)
+    bus.setByte(0x0000, 0x0c)
+    return bus.getByte(0xa000)
+  }
+
+  private fun readTama5Minutes(bus: eu.rekawek.coffeegb.core.AddressSpace): Int {
+    bus.setByte(0xa001, 0x6)
+    bus.setByte(0xa000, 0x4)
+    bus.setByte(0xa001, 0x7)
+    bus.setByte(0xa000, 0x6)
+    bus.setByte(0xa001, 0xc)
+    return bus.getByte(0xa000) and 0x0f
+  }
+
+  private class InjectedApplyFailure : RuntimeException()
+
   private companion object {
     const val DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento"
     const val DMA_MEMENTO = "eu.rekawek.coffeegb.core.memory.Dma\$DmaMemento"
@@ -282,6 +519,11 @@ class DetachedStateTest {
     const val SPEED_MEMENTO = "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeMomento"
     const val SOUND_MODE_MEMENTO = "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeMemento"
     const val SERIAL_PORT_MEMENTO = "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortMemento"
+    const val CARTRIDGE_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeMemento"
+    const val MBC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3Memento"
+    const val RTC_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockMemento"
+    const val HUC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3Memento"
+    const val TAMA5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Tama5\$Tama5Memento"
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
   }
 }

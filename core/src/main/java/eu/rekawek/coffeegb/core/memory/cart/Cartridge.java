@@ -134,7 +134,7 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         return addressSpace instanceof Mbc3 mbc3 ? mbc3.captureRtcRuntimeState() : null;
     }
 
-    public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
+    public void validateRtcRuntimeState(RealTimeClock.RuntimeState state) {
         if (!(addressSpace instanceof Mbc3 mbc3)) {
             if (state != null) {
                 throw new IllegalArgumentException("RTC runtime state supplied for a non-MBC3 cartridge");
@@ -144,7 +144,16 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         if (state == null) {
             throw new IllegalArgumentException("MBC3 RTC runtime state is missing");
         }
-        mbc3.restoreRtcRuntimeState(state);
+        if (!state.emulationPaused() && state.pauseStartedMillis() != 0) {
+            throw new IllegalArgumentException("Running MBC3 RTC has a stale pause reference");
+        }
+    }
+
+    public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
+        validateRtcRuntimeState(state);
+        if (addressSpace instanceof Mbc3 mbc3) {
+            mbc3.restoreRtcRuntimeState(state);
+        }
     }
 
     /** The Sachen MMC2 needs to observe reads on the upper half of the bus (see Mmu). */

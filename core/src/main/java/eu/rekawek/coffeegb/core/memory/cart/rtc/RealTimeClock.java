@@ -150,6 +150,7 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
         } else {
             catchUpPausedTime();
             emulationPaused = false;
+            pauseStartedMillis = 0;
         }
     }
 
