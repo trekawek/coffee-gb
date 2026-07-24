@@ -3,9 +3,10 @@ package eu.rekawek.coffeegb.controller
 /**
  * Audited concrete types present in Coffee GB 1.7.14 legacy snapshots.
  *
- * IDs are the one-based position in each list. Append new entries; never reorder existing entries.
- * The legacy reader and the bounded netplay codec deliberately share this exact inventory so a
- * future record or enum cannot silently become deserializable.
+ * IDs are the one-based position in each list for protocol v7 only. The legacy reader and the
+ * temporary bounded netplay codec deliberately share this exact inventory so a future record or
+ * enum cannot silently become deserializable. The persistent State v2 schema will use its own
+ * section identities and versions.
  */
 internal object MementoTypeRegistry {
 

@@ -19,23 +19,24 @@ import org.junit.Test
 class SnapshotManagerTest {
 
   @Test
-  fun priorReleaseFixtureLoadsThroughSnapshotManager() {
+  fun supportedPriorReleaseFixturesLoadThroughSnapshotManager() {
     withGameboy { rom, gameboy ->
-      snapshotFile(rom, 0).writeBytes(LEGACY_FIXTURE.readBytes())
-
-      assertTrue(SnapshotManager(rom).loadSnapshot(0, gameboy))
+      LEGACY_FIXTURES.forEachIndexed { slot, fixture ->
+        snapshotFile(rom, slot).writeBytes(fixture.readBytes())
+        assertTrue(SnapshotManager(rom).loadSnapshot(slot, gameboy), fixture.name)
+      }
     }
   }
 
   @Test
   fun rejectedSnapshotLeavesGameStateUnchanged() {
     withGameboy { rom, gameboy ->
-      val before = PortableMementoCodec.encodeGameboy(gameboy.saveToMemento())
+      val before = NetplayMementoCodec.encodeGameboy(gameboy.saveToMemento())
       snapshotFile(rom, 0).writeBytes(byteArrayOf(1, 2, 3, 4))
 
       assertFailsWith<IOException> { SnapshotManager(rom).loadSnapshot(0, gameboy) }
 
-      assertContentEquals(before, PortableMementoCodec.encodeGameboy(gameboy.saveToMemento()))
+      assertContentEquals(before, NetplayMementoCodec.encodeGameboy(gameboy.saveToMemento()))
     }
   }
 
@@ -43,7 +44,7 @@ class SnapshotManagerTest {
   fun restoreFailureRollsBackEveryPartialMutation() {
     withGameboy { rom, gameboy ->
       repeat(100) { gameboy.tick() }
-      val before = PortableMementoCodec.encodeGameboy(gameboy.saveToMemento())
+      val before = NetplayMementoCodec.encodeGameboy(gameboy.saveToMemento())
       repeat(2_000) { gameboy.tick() }
       val later = gameboy.saveToMemento()
       val mmu = recordComponent(later, "mmuMemento")!!
@@ -51,11 +52,11 @@ class SnapshotManagerTest {
       @Suppress("UNCHECKED_CAST")
       val invalid = replaceRecordComponent(later, "mmuMemento", invalidMmu) as Memento<Gameboy>
       snapshotFile(rom, 0).writeBytes(invalid.serialize())
-      gameboy.restoreFromMemento(PortableMementoCodec.decodeGameboy(before))
+      gameboy.restoreFromMemento(NetplayMementoCodec.decodeGameboy(before))
 
       assertFailsWith<IOException> { SnapshotManager(rom).loadSnapshot(0, gameboy) }
 
-      assertContentEquals(before, PortableMementoCodec.encodeGameboy(gameboy.saveToMemento()))
+      assertContentEquals(before, NetplayMementoCodec.encodeGameboy(gameboy.saveToMemento()))
     }
   }
 
@@ -115,7 +116,13 @@ class SnapshotManagerTest {
 
   private companion object {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
-    val LEGACY_FIXTURE =
-        Paths.get("src/test/resources/legacy", "coffee-gb-1.7.14-cpu-instrs.sn").toFile()
+    val LEGACY_FIXTURES =
+        listOf("1.7.13", "1.7.14").map { version ->
+          Paths.get(
+                  "src/test/resources/legacy",
+                  "coffee-gb-$version-cpu-instrs.sn",
+              )
+              .toFile()
+        }
   }
 }

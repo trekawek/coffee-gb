@@ -20,9 +20,13 @@ import java.io.Serializable
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import java.nio.ByteBuffer
 import java.nio.file.Paths
+import java.util.ArrayList
+import java.util.HashMap
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -141,7 +145,77 @@ class LegacyMementoCodecTest {
     val battery = MemoryBattery(ByteArray(StateLimits.LEGACY_MAX_ARRAY_LENGTH.toInt() + 1))
     val serialized = rawSerialize(battery.saveToMemento())
 
-    assertFailsWith<InvalidClassException> { serialized.deserializeToGameboyMemento() }
+    assertFailsWith<IOException> { serialized.deserializeToGameboyMemento() }
+  }
+
+  @Test
+  fun truncatedAllocationDeclarationsAreRejectedBeforeNativeDeserialization() {
+    val longArray = rawSerialize(LongArray(0))
+    putInt(
+        longArray,
+        longArray.size - Int.SIZE_BYTES,
+        (StateLimits.LEGACY_MAX_ARRAY_BYTES / Long.SIZE_BYTES + 1).toInt(),
+    )
+    val arrayError =
+        assertFailsWith<InvalidObjectException> { longArray.deserializeToGameboyMemento() }
+    assertTrue(arrayError.message!!.contains("allocation bytes"))
+
+    val longString =
+        ByteBuffer.allocate(4 + 1 + Long.SIZE_BYTES)
+            .putInt(0xaced0005.toInt())
+            .put(0x7c)
+            .putLong(StateLimits.LEGACY_MAX_STRING_BYTES + 1)
+            .array()
+    val stringError =
+        assertFailsWith<InvalidObjectException> { longString.deserializeToGameboyMemento() }
+    assertTrue(stringError.message!!.contains("encoded bytes"))
+
+    val list = rawSerialize(ArrayList<Any>())
+    val listBlock = list.indexOf(byteArrayOf(0x77, 0x04))
+    assertTrue(listBlock >= 4)
+    putInt(list, listBlock - Int.SIZE_BYTES, StateLimits.LEGACY_MAX_COLLECTION_ENTRIES + 1)
+    val listError = assertFailsWith<InvalidObjectException> { list.deserializeToGameboyMemento() }
+    assertTrue(listError.message!!.contains("ArrayList"))
+
+    val map = rawSerialize(HashMap<Any, Any>())
+    val mapBlock = map.indexOf(byteArrayOf(0x77, 0x08))
+    assertTrue(mapBlock >= 0)
+    putInt(map, mapBlock + 2 + Int.SIZE_BYTES, StateLimits.LEGACY_MAX_COLLECTION_ENTRIES + 1)
+    val mapError = assertFailsWith<InvalidObjectException> { map.deserializeToGameboyMemento() }
+    assertTrue(mapError.message!!.contains("HashMap"))
+  }
+
+  @Test
+  fun onlyAuditedArrayShapesAndCumulativeBytesAreAccepted() {
+    assertEquals(
+        StateLimits.LEGACY_MAX_ARRAY_BYTES,
+        LegacyArrayShapes.allocationBytes(
+            "[J",
+            (StateLimits.LEGACY_MAX_ARRAY_BYTES / Long.SIZE_BYTES).toInt(),
+        ),
+    )
+    assertFailsWith<InvalidObjectException> {
+      LegacyArrayShapes.allocationBytes(
+          "[J",
+          (StateLimits.LEGACY_MAX_ARRAY_BYTES / Long.SIZE_BYTES + 1).toInt(),
+      )
+    }
+    assertFailsWith<InvalidClassException> {
+      rawSerialize(DoubleArray(0)).deserializeToGameboyMemento()
+    }
+    assertEquals(
+        StateLimits.LEGACY_MAX_MAP_TABLE_ENTRIES.toLong() * Long.SIZE_BYTES,
+        LegacyArrayShapes.allocationBytes(
+            "[Ljava.util.Map\$Entry;",
+            StateLimits.LEGACY_MAX_MAP_TABLE_ENTRIES,
+        ),
+    )
+    assertFailsWith<InvalidObjectException> {
+      LegacyArrayShapes.allocationBytes(
+          "[Ljava.util.Map\$Entry;",
+          StateLimits.LEGACY_MAX_MAP_TABLE_ENTRIES + 1,
+      )
+    }
   }
 
   @Test
@@ -261,6 +335,10 @@ class LegacyMementoCodecTest {
       if (needle.indices.all { this[start + it] == needle[it] }) return start
     }
     return -1
+  }
+
+  private fun putInt(bytes: ByteArray, offset: Int, value: Int) {
+    ByteBuffer.wrap(bytes, offset, Int.SIZE_BYTES).putInt(value)
   }
 
   private data class UnexpectedMemento(val command: String) : Memento<Gameboy>

@@ -183,6 +183,8 @@ class TcpConnectionTest {
     val atServer = assertNotNull(serverInputs.poll(5, TimeUnit.SECONDS))
     assertEquals(2, atServer.player)
     assertEquals(55, atServer.frame)
+    // LinkedController emits this only after checking the peer frame against its own clock.
+    serverBus.post(Connection.ValidatedPeerButtonStateEvent(atServer))
     for (clientIndex in listOf(0, 2)) {
       val relayed = assertNotNull(clientInputs[clientIndex].poll(5, TimeUnit.SECONDS))
       assertEquals(2, relayed.player)
@@ -246,6 +248,41 @@ class TcpConnectionTest {
 
     assertEquals(1, assertNotNull(replacementHandshake.poll(5, TimeUnit.SECONDS)).player)
     assertNotNull(replacementReady.poll(5, TimeUnit.SECONDS))
+  }
+
+  @Test
+  fun silentCapabilityPeerDoesNotBlockAnotherClientOrServerShutdown() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val clientReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    val serverStopped = LinkedBlockingQueue<ConnectionController.ServerStoppedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    serverBus.register<ConnectionController.ServerStoppedEvent> { serverStopped.add(it) }
+    clientBus.register<ConnectionController.ClientConnectedToServerEvent> { clientReady.add(it) }
+
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    val serverThread = Thread(server).also { it.start() }
+    threads += serverThread
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+
+    Socket("localhost", port).use { silent ->
+      // Read the server greeting but deliberately withhold the capability byte.
+      DataInputStream(silent.getInputStream()).readFully(
+          ByteArray("CoffeeGB NETPLAY".length + 4))
+
+      val client = TcpClient("localhost:$port", clientBus)
+      this.client = client
+      threads += Thread(client).also { it.start() }
+      assertNotNull(
+          clientReady.poll(1, TimeUnit.SECONDS),
+          "silent peer blocked the accept loop",
+      )
+
+      server.stop()
+      serverThread.join(1_000)
+      assertNotNull(serverStopped.poll(1, TimeUnit.SECONDS), "pending handshake blocked shutdown")
+    }
   }
 
   @Test
@@ -388,7 +425,7 @@ class TcpConnectionTest {
     assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
     assertTrue(
         checkpoint.states.all { state ->
-          state.sessionSnapshot?.copyOfRange(0, 4)?.contentEquals("CGBS".toByteArray()) == true
+          state.sessionSnapshot?.copyOfRange(0, 4)?.contentEquals("CGBN".toByteArray()) == true
         })
     assertEquals(2, hostController.activeSessionCount())
     assertEquals(2, clientController.activeSessionCount())

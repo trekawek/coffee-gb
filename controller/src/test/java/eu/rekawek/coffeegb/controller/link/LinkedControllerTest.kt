@@ -2,11 +2,15 @@ package eu.rekawek.coffeegb.controller.link
 
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
+import eu.rekawek.coffeegb.controller.network.Connection.ProtocolErrorReason
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerButtonStateEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
@@ -17,6 +21,7 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import org.junit.Test
+import java.io.IOException
 import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -64,7 +69,8 @@ class LinkedControllerTest {
     hostBus.register<LinkedController.SessionStateReadyEvent> { checkpoints.add(it) }
 
     hostBus.post(LoadRomEvent(ROM))
-    repeat(3) { host.runFrame() }
+    host.runFrame()
+    setControllerFrame(host, StateLimits.NETPLAY_FUTURE_FRAMES + 5)
     checkpoints.clear()
 
     // Player 2 joins after the host has already advanced. Its existing Game Boy is hot-plugged at
@@ -81,7 +87,7 @@ class LinkedControllerTest {
         ))
     host.runFrame()
     val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
-    assertEquals(3, checkpoint.frame)
+    assertTrue(checkpoint.frame > StateLimits.NETPLAY_FUTURE_FRAMES)
     assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
     assertTrue(checkpoint.states.all { it.sessionSnapshot != null })
 
@@ -158,7 +164,7 @@ class LinkedControllerTest {
     assertEquals(2, host.activeSessionCount())
     assertEquals(2, client.activeSessionCount())
     assertEquals(host.currentFrame(), client.currentFrame())
-    assertEquals(6, host.currentFrame())
+    assertTrue(host.currentFrame() > StateLimits.NETPLAY_FUTURE_FRAMES)
 
     clientBus.close()
     hostBus.close()
@@ -182,6 +188,101 @@ class LinkedControllerTest {
         ))
 
     sut.runFrame()
+    assertEquals(2, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun controllerClockRejectsExtremeStateAndInputWithoutStoppingLiveSession() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<Pair<ProtocolErrorReason, IOException>>()
+    val source = PeerEventSource(1) { reason, cause -> failures += reason to cause }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            source = source,
+        ))
+    sut.runFrame()
+    assertEquals(2, sut.activeSessionCount())
+
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            Int.MAX_VALUE.toLong(),
+            source = source,
+        ))
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            Int.MAX_VALUE.toLong(),
+            Input(listOf(Button.A), emptyList()),
+            source = source,
+        ))
+    sut.runFrame()
+
+    assertEquals(2, sut.activeSessionCount())
+    assertEquals(1, failures.size)
+    assertTrue(failures.all { it.first == ProtocolErrorReason.INVALID_FRAME })
+    sut.runFrame()
+    assertTrue(sut.currentFrame() >= 3, "controller stopped after hostile frames")
+    eventBus.close()
+  }
+
+  @Test
+  fun idleHeartbeatIsBoundedByControllerRatherThanPeerHighWaterMark() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val accepted = mutableListOf<ValidatedPeerButtonStateEvent>()
+    eventBus.register<ValidatedPeerButtonStateEvent> { accepted += it }
+    val source = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            source = source,
+        ))
+    sut.runFrame()
+    setControllerFrame(sut, 301)
+
+    val idleHeartbeatFrame = sut.currentFrame()
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            idleHeartbeatFrame,
+            Input(emptyList(), emptyList()),
+            source = source,
+        ))
+    sut.runFrame()
+    assertTrue(failures.isEmpty(), "a healthy post-idle heartbeat was rejected")
+    assertEquals(listOf(idleHeartbeatFrame), accepted.map { it.event.frame })
+
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            sut.currentFrame() + StateLimits.NETPLAY_FUTURE_FRAMES + 1,
+            Input(emptyList(), emptyList()),
+            source = source,
+        ))
+    sut.runFrame()
+
+    assertEquals(listOf(ProtocolErrorReason.INVALID_FRAME), failures)
+    assertEquals(listOf(idleHeartbeatFrame), accepted.map { it.event.frame })
     assertEquals(2, sut.activeSessionCount())
     eventBus.close()
   }
@@ -461,6 +562,13 @@ class LinkedControllerTest {
         val exp = expectedButtons.filter { it.tick == t }.map { it.button }.sorted()
         val act = actualButtons.filter { it.tick == t }.map { it.button }.sorted()
         assertEquals(exp, act, "At tick $t, frame ${t/Gameboy.TICKS_PER_FRAME}")
+      }
+    }
+
+    fun setControllerFrame(controller: LinkedController, frame: Long) {
+      LinkedController::class.java.getDeclaredField("frame").also { field ->
+        field.isAccessible = true
+        field.setLong(controller, frame)
       }
     }
   }

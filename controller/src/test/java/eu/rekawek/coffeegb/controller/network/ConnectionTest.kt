@@ -1,9 +1,10 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
-import eu.rekawek.coffeegb.controller.PortableMementoCodec
+import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
+import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
@@ -143,10 +144,12 @@ class ConnectionTest {
         Connection(TrickleInputStream(senderToReceiver.source), receiverToSender.sink, receiverBus, false)
     this.sender = sender
     this.receiver = receiver
+    // Exercise the deterministic pre-capability queue: START must not be silently discarded when
+    // the server run loop has not consumed the client's capability byte yet.
+    if (startSession) sender.startSession()
     // run() performs the handshake and then reads; both sides need it running
     threads += Thread { sender.run() }.also { it.start() }
     threads += Thread { receiver.run() }.also { it.start() }
-    if (startSession) sender.startSession()
   }
 
   @After
@@ -325,7 +328,7 @@ class ConnectionTest {
   }
 
   @Test
-  fun relayDestinationWriteFailureDoesNotAbortOriginParsing() {
+  fun validatedRelayDestinationWriteFailureDoesNotEscapeControllerDispatch() {
     val delivered = LinkedBlockingQueue<LinkedController.RemoteButtonStateEvent>()
     receiverBus.register<LinkedController.RemoteButtonStateEvent> { delivered.add(it) }
     val destinationOutput = ToggleFailingOutputStream()
@@ -379,10 +382,87 @@ class ConnectionTest {
       val event = assertNotNull(delivered.poll(1, TimeUnit.SECONDS))
       assertEquals(1, event.player)
       assertEquals(listOf(Button.A), event.input.pressedButtons)
+      receiverBus.post(Connection.ValidatedPeerButtonStateEvent(event))
     } finally {
       origin.close()
       destination.close()
     }
+  }
+
+  @Test
+  fun runtimeOverflowPurgesOnlyTheOffendingConnectionsQueuedEvents() {
+    val delivered = mutableListOf<LinkedController.RemoteButtonStateEvent>()
+    val queue =
+        EventQueue(
+            receiverBus,
+            maxEvents = 2,
+            maxBytes = 1_024,
+            eventWeight = { 1 },
+            eventSource = {
+              (it as? LinkedController.RemoteButtonStateEvent)?.source
+            },
+        )
+    queue.register<LinkedController.RemoteButtonStateEvent> { delivered += it }
+    val inputMessage =
+        byteArrayOf(0x03, 0x00) + ByteBuffer.allocate(8).putLong(0).array() + byteArrayOf(0, 0)
+    val offender =
+        Connection(
+            ByteArrayInputStream(byteArrayOf(0x01) + inputMessage + inputMessage + inputMessage),
+            ByteArrayOutputStream(),
+            receiverBus,
+            true,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            assignedPlayer = 1,
+        )
+    val honest =
+        Connection(
+            ByteArrayInputStream(byteArrayOf(0x01) + inputMessage),
+            ByteArrayOutputStream(),
+            receiverBus,
+            true,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            assignedPlayer = 2,
+        )
+    try {
+      assertFailsWith<Connection.ProtocolException> { offender.run() }
+      honest.run()
+      queue.dispatch()
+
+      assertEquals(listOf(2), delivered.map { it.player })
+    } finally {
+      offender.close()
+      honest.close()
+    }
+  }
+
+  @Test
+  fun pendingCheckpointOverflowDisconnectsBeforeControllerDelivery() {
+    val delivered = LinkedBlockingQueue<Connection.SessionCheckpointEvent>()
+    receiverBus.register<Connection.SessionCheckpointEvent> { delivered += it }
+    val romBytes = ROM.readBytes()
+    val rom = Connection.deflate(romBytes, StateLimits.ROM)
+    val sessionBytes = portableStates().second
+    val session = Connection.deflate(sessionBytes, StateLimits.SESSION_SNAPSHOT)
+    val checkpoint =
+        byteArrayOf(0x01) +
+            romHeader(
+                decodedSizes = intArrayOf(romBytes.size, 0, 0, sessionBytes.size),
+                encodedSizes = intArrayOf(rom.size, 0, 0, session.size),
+            ) +
+            rom +
+            session +
+            byteArrayOf(0x09) +
+            ByteBuffer.allocate(8).putLong(0).array()
+    val connection =
+        clientConnection(
+            ByteArrayOutputStream().also { output ->
+              repeat(StateLimits.NETPLAY_PENDING_EVENTS + 1) { output.write(checkpoint) }
+            }.toByteArray(),
+            LinkMode.FOUR_PLAYER_ADAPTER,
+        )
+
+    assertFailsWith<Connection.ProtocolException> { connection.run() }
+    assertEquals(null, delivered.poll())
   }
 
   @Test
@@ -691,10 +771,13 @@ class ConnectionTest {
     assertContentEquals(sparse, Connection.inflate(compressed, sparse.size))
   }
 
-  private fun clientConnection(messages: ByteArray): Connection {
+  private fun clientConnection(
+      messages: ByteArray,
+      mode: LinkMode = LinkMode.NORMAL,
+  ): Connection {
     val handshake =
         "CoffeeGB NETPLAY".toByteArray() +
-            byteArrayOf(0x07, LinkMode.NORMAL.ordinal.toByte(), 0x01, 0x01)
+            byteArrayOf(0x07, mode.ordinal.toByte(), 0x01, 0x01)
     return Connection(
         ByteArrayInputStream(handshake + messages),
         ByteArrayOutputStream(),
@@ -736,7 +819,7 @@ class ConnectionTest {
     )
     val game =
         try {
-          PortableMementoCodec.encodeGameboy(gameboy.saveToMemento())
+          NetplayMementoCodec.encodeGameboy(gameboy.saveToMemento())
         } finally {
           gameboy.stop()
           gameboy.close()
@@ -746,7 +829,7 @@ class ConnectionTest {
     val session = Session(config, sessionBus, null, FourPlayerAdapter().endpoint(0))
     val sessionState =
         try {
-          PortableMementoCodec.encodeSession(session.saveToMemento())
+          NetplayMementoCodec.encodeSession(session.saveToMemento())
         } finally {
           session.close()
           sessionBus.close()
@@ -766,7 +849,7 @@ class ConnectionTest {
       val mmu = recordComponent(memento, "mmuMemento")!!
       val invalidMmu = replaceRecordComponent(mmu, "ramC000Memento", Ram.RamMemento(IntArray(0)))
       @Suppress("UNCHECKED_CAST")
-      PortableMementoCodec.encodeGameboy(
+      NetplayMementoCodec.encodeGameboy(
           replaceRecordComponent(memento, "mmuMemento", invalidMmu) as Memento<Gameboy>)
     } finally {
       gameboy.stop()
