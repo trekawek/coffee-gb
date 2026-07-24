@@ -160,7 +160,10 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     private final boolean gbc;
 
+    private final GameboyType gameboyType;
+
     public Gameboy(GameboyConfiguration configuration) {
+        this.gameboyType = configuration.gameboyType;
         this.gbc = configuration.gameboyType == GameboyType.CGB;
         boolean gbc = this.gbc;
         boolean sgb = configuration.gameboyType == GameboyType.SGB;
@@ -215,7 +218,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
         if (configuration.slotRom != null && cartridge.getDatel() != null) {
             // the game cartridge in the Action Replay's pass-through slot
-            slotCartridge = new Cartridge(configuration.slotRom, configuration.supportBatterySave);
+            slotCartridge = new Cartridge(configuration.slotRom, configuration.supportBatterySave,
+                    configuration.rtcTimeSource);
             cartridge.getDatel().setSlotCartridge(slotCartridge.getMemoryController(),
                     configuration.slotRom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB);
         } else {
@@ -793,12 +797,42 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
     }
 
-    public RealTimeClock.RuntimeState captureRtcRuntimeState() {
-        return cartridge.captureRtcRuntimeState();
+    /** Captures MBC3 pause bookkeeping for each physical cartridge location. */
+    public RtcRuntimeState captureRtcRuntimeState() {
+        return new RtcRuntimeState(
+                cartridge.captureRtcRuntimeState(),
+                slotCartridge == null ? null : slotCartridge.captureRtcRuntimeState());
     }
 
-    public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
-        cartridge.restoreRtcRuntimeState(state);
+    public void validateRtcRuntimeState(RtcRuntimeState state) {
+        if (state == null) {
+            throw new IllegalArgumentException("Cartridge RTC runtime state is missing");
+        }
+        cartridge.validateRtcRuntimeState(state.primary());
+        if (slotCartridge == null) {
+            if (state.slot() != null) {
+                throw new IllegalArgumentException("Slot RTC runtime state supplied without a slot cartridge");
+            }
+        } else {
+            slotCartridge.validateRtcRuntimeState(state.slot());
+        }
+    }
+
+    public void restoreRtcRuntimeState(RtcRuntimeState state) {
+        validateRtcRuntimeState(state);
+        cartridge.restoreRtcRuntimeState(state.primary());
+        if (slotCartridge != null) {
+            slotCartridge.restoreRtcRuntimeState(state.slot());
+        }
+    }
+
+    /** Service-free runtime state that is intentionally outside the pinned legacy memento. */
+    public record RtcRuntimeState(RealTimeClock.RuntimeState primary,
+                                  RealTimeClock.RuntimeState slot) {
+    }
+
+    public GameboyType getGameboyType() {
+        return gameboyType;
     }
 
     /** Flushes persistent cartridge state without closing the running machine. */

@@ -21,12 +21,23 @@ import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.ApplyStage
+import eu.rekawek.coffeegb.controller.state.Int32State
+import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
+import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
+import eu.rekawek.coffeegb.controller.state.RecordState
+import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
+import eu.rekawek.coffeegb.controller.state.SessionState
+import eu.rekawek.coffeegb.controller.state.StateApplyException
+import eu.rekawek.coffeegb.controller.state.StateField
+import eu.rekawek.coffeegb.controller.state.StateValue
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import org.junit.Test
 import java.io.IOException
@@ -1151,6 +1162,148 @@ class LinkedControllerTest {
     assertJoypadEventsEqual(buttons1, buttons2)
   }
 
+  @Test
+  fun normalLinkedStateRestoresHeldInputAndContinuesDeterministically() {
+    val (eventBus, sut) = configuredController(LinkMode.NORMAL, 2)
+    eventBus.post(ButtonPressEvent(Button.A))
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            sut.currentFrame(),
+            Input(listOf(Button.B), emptyList()),
+            player = 1,
+        ))
+    sut.runFrame()
+    val captured = sut.captureDetachedState()
+    assertEquals(4, captured.players.size)
+    assertTrue(captured.players.drop(2).all { it.session == null })
+    assertEquals(setOf(Button.A), sut.heldButtonStates()[0])
+    assertEquals(setOf(Button.B), sut.heldButtonStates()[1])
+
+    sut.runFrame()
+    val expected = sut.captureDetachedState()
+    eventBus.post(ButtonReleaseEvent(Button.A))
+    sut.runFrame()
+
+    sut.restoreDetachedState(captured)
+    sut.runFrame()
+    assertEquals(expected, sut.captureDetachedState())
+    eventBus.close()
+  }
+
+  @Test
+  fun fourPlayerLinkedStateRestoresAtomicallyAndRejectsIncoherentAdapterCopies() {
+    val (eventBus, sut) = configuredController(LinkMode.FOUR_PLAYER_ADAPTER, 3)
+    eventBus.post(ButtonPressEvent(Button.SELECT))
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            sut.currentFrame(),
+            Input(listOf(Button.START), emptyList()),
+            player = 2,
+        ))
+    sut.runFrame()
+    val target = sut.captureDetachedState()
+    assertEquals(setOf(Button.SELECT), sut.heldButtonStates()[0])
+    assertEquals(setOf(Button.START), sut.heldButtonStates()[2])
+    val activeStates = target.players.mapNotNull { it.session }
+    assertEquals(1, activeStates.map { it.serialState }.distinct().size)
+
+    sut.runFrame()
+    val expectedContinuation = sut.captureDetachedState()
+    sut.runFrame()
+    sut.restoreDetachedState(target)
+    sut.runFrame()
+    assertEquals(expectedContinuation, sut.captureDetachedState())
+
+    val coherent = sut.captureDetachedState()
+    val playerOne = assertNotNull(coherent.players[1].session)
+    val adapter = playerOne.serialState as RecordState
+    val inconsistentAdapter =
+        RecordState(
+            adapter.typeId,
+            adapter.fields.map { field ->
+              if (field.name == "packetByte") {
+                StateField(field.name, Int32State((field.value as Int32State).value + 1))
+              } else {
+                field
+              }
+            },
+        )
+    val inconsistentSession = copySession(playerOne, serialState = inconsistentAdapter)
+    val inconsistent =
+        linkedCopy(
+            coherent,
+            players =
+                coherent.players.map {
+                  if (it.player == 1) LinkedPlayerState(1, inconsistentSession) else it
+                },
+        )
+    assertFailsWith<StateApplyException> { sut.restoreDetachedState(inconsistent) }
+    assertEquals(coherent, sut.captureDetachedState())
+
+    sut.runFrame()
+    val beforeInjectedFailure = sut.captureDetachedState()
+    assertFailsWith<StateApplyException> {
+      sut.restoreDetachedState(coherent) { player, stage ->
+        if (player == 1 && stage == ApplyStage.AFTER_MACHINE_MUTATION) {
+          throw IllegalStateException("injected linked restore failure")
+        }
+      }
+    }
+    assertEquals(beforeInjectedFailure, sut.captureDetachedState())
+    eventBus.close()
+  }
+
+  @Test
+  fun linkedStateRejectsMalformedTopologyBeforeMutation() {
+    val (eventBus, sut) = configuredController(LinkMode.FOUR_PLAYER_ADAPTER, 2)
+    val valid = sut.captureDetachedState()
+    val session = assertNotNull(valid.players[0].session)
+    val invalidStates =
+        listOf(
+            linkedCopy(valid, frame = -1),
+            linkedCopy(valid, localPlayer = 1),
+            linkedCopy(valid, topology = LinkedTopologyState.NORMAL),
+            linkedCopy(valid, players = valid.players.dropLast(1)),
+            linkedCopy(
+                valid,
+                players =
+                    valid.players.map {
+                      if (it.player == 1) LinkedPlayerState(0, it.session) else it
+                    },
+            ),
+            linkedCopy(
+                valid,
+                players =
+                    valid.players.map {
+                      if (it.player == 1) LinkedPlayerState(1, null) else it
+                    },
+            ),
+            linkedCopy(
+                valid,
+                players =
+                    valid.players.map {
+                      if (it.player == 0) {
+                        LinkedPlayerState(
+                            0,
+                            copySession(
+                                session,
+                                serialPeripheral = SerialPeripheralState.PEER_TO_PEER,
+                            ),
+                        )
+                      } else {
+                        it
+                      }
+                    },
+            ),
+        )
+    invalidStates.forEach { invalid ->
+      val before = sut.captureDetachedState()
+      assertFailsWith<StateApplyException> { sut.restoreDetachedState(invalid) }
+      assertEquals(before, sut.captureDetachedState())
+    }
+    eventBus.close()
+  }
+
   private companion object {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
 
@@ -1195,6 +1348,55 @@ class LinkedControllerTest {
         field.setLong(controller, frame)
       }
     }
+
+    fun configuredController(
+        mode: LinkMode,
+        activePlayers: Int,
+    ): Pair<EventBusImpl, LinkedController> {
+      val eventBus = EventBusImpl()
+      val controller =
+          LinkedController(eventBus, EmulatorProperties(), null, mode, localPlayer = 0).also {
+            it.timingTicker.disabled = true
+          }
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      for (player in 1 until activePlayers) {
+        eventBus.post(
+            PeerLoadedGameEvent(
+                ROM_BYTES,
+                null,
+                null,
+                GAMEBOY_TYPE,
+                BOOTSTRAP_MODE,
+                controller.currentFrame(),
+                player = player,
+            ))
+        controller.runFrame()
+      }
+      assertEquals(activePlayers, controller.activeSessionCount())
+      return eventBus to controller
+    }
+
+    fun copySession(
+        state: SessionState,
+        serialPeripheral: SerialPeripheralState = state.serialPeripheral,
+        serialState: StateValue = state.serialState,
+    ) =
+        SessionState(
+            state.machine,
+            serialPeripheral,
+            serialState,
+            state.serialRuntime,
+            state.heldButtons,
+        )
+
+    fun linkedCopy(
+        state: LinkedSessionState,
+        frame: Long = state.frame,
+        localPlayer: Int = state.localPlayer,
+        topology: LinkedTopologyState = state.topology,
+        players: Collection<LinkedPlayerState> = state.players,
+    ) = LinkedSessionState(frame, localPlayer, topology, players)
 
     fun peerState(frame: Long, source: PeerEventSource) =
         PeerLoadedGameEvent(

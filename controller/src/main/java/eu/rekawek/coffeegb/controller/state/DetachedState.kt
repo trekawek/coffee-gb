@@ -15,6 +15,7 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
 import java.lang.reflect.WildcardType
+import java.nio.charset.StandardCharsets
 import java.util.Collections
 
 /** Fixed-width, service-free value kinds used by the Phase-1 detached state seam. */
@@ -68,6 +69,10 @@ data class Float64State(val value: Double) : StateValue {
 }
 
 data class StringState(val value: String) : StateValue {
+  init {
+    DetachedValueBounds.requireString(value) { message -> throw IllegalArgumentException(message) }
+  }
+
   override val kind = StateKind.STRING
 }
 
@@ -92,18 +97,33 @@ class RecordState(val typeId: Int, fields: Collection<StateField>) : StateValue 
 sealed class PrimitiveArrayState<T>(
     final override val kind: StateKind,
 ) : StateValue {
+  abstract val size: Int
   abstract fun copyValue(): T
 }
 
 class BytesState(value: ByteArray) : PrimitiveArrayState<ByteArray>(StateKind.BYTES) {
+  init {
+    DetachedValueBounds.requireArray(value.size.toLong(), Byte.SIZE_BYTES.toLong()) { message ->
+      throw IllegalArgumentException(message)
+    }
+  }
+
   private val owned = value.clone()
+  override val size: Int get() = owned.size
   override fun copyValue(): ByteArray = owned.clone()
   override fun equals(other: Any?): Boolean = other is BytesState && owned.contentEquals(other.owned)
   override fun hashCode(): Int = owned.contentHashCode()
 }
 
 class Int32ArrayState(value: IntArray) : PrimitiveArrayState<IntArray>(StateKind.INT32_ARRAY) {
+  init {
+    DetachedValueBounds.requireArray(value.size.toLong(), Int.SIZE_BYTES.toLong()) { message ->
+      throw IllegalArgumentException(message)
+    }
+  }
+
   private val owned = value.clone()
+  override val size: Int get() = owned.size
   override fun copyValue(): IntArray = owned.clone()
   override fun equals(other: Any?): Boolean =
       other is Int32ArrayState && owned.contentEquals(other.owned)
@@ -111,7 +131,14 @@ class Int32ArrayState(value: IntArray) : PrimitiveArrayState<IntArray>(StateKind
 }
 
 class Int64ArrayState(value: LongArray) : PrimitiveArrayState<LongArray>(StateKind.INT64_ARRAY) {
+  init {
+    DetachedValueBounds.requireArray(value.size.toLong(), Long.SIZE_BYTES.toLong()) { message ->
+      throw IllegalArgumentException(message)
+    }
+  }
+
   private val owned = value.clone()
+  override val size: Int get() = owned.size
   override fun copyValue(): LongArray = owned.clone()
   override fun equals(other: Any?): Boolean =
       other is Int64ArrayState && owned.contentEquals(other.owned)
@@ -120,7 +147,14 @@ class Int64ArrayState(value: LongArray) : PrimitiveArrayState<LongArray>(StateKi
 
 class BooleanArrayState(value: BooleanArray) :
     PrimitiveArrayState<BooleanArray>(StateKind.BOOLEAN_ARRAY) {
+  init {
+    DetachedValueBounds.requireArray(value.size.toLong(), 1) { message ->
+      throw IllegalArgumentException(message)
+    }
+  }
+
   private val owned = value.clone()
+  override val size: Int get() = owned.size
   override fun copyValue(): BooleanArray = owned.clone()
   override fun equals(other: Any?): Boolean =
       other is BooleanArrayState && owned.contentEquals(other.owned)
@@ -160,7 +194,19 @@ class Int32MapState(entries: Collection<Int32MapEntry>) : StateValue {
 }
 
 /** MBC3 pause bookkeeping kept outside the pinned legacy Java-serialization shape. */
-data class RtcRuntimeState(val emulationPaused: Boolean, val pauseStartedMillis: Long)
+data class Mbc3RtcRuntimeState(val emulationPaused: Boolean, val pauseStartedMillis: Long)
+
+/** Explicit physical cartridge locations; neither location retains its TimeSource service. */
+data class CartridgeRtcRuntimeState(
+    val primary: Mbc3RtcRuntimeState?,
+    val slot: Mbc3RtcRuntimeState?,
+)
+
+enum class MachineHardwareState {
+  DMG,
+  CGB,
+  SGB,
+}
 
 sealed interface SerialRuntimeState
 
@@ -170,7 +216,16 @@ class BarcodeBoyRuntimeState(
     val transferArmed: Boolean,
     pending: IntArray?,
 ) : SerialRuntimeState {
+  init {
+    pending?.let {
+      DetachedValueBounds.requireArray(it.size.toLong(), Int.SIZE_BYTES.toLong()) { message ->
+        throw IllegalArgumentException(message)
+      }
+    }
+  }
+
   private val ownedPending = pending?.clone()
+  val pendingSize: Int? get() = ownedPending?.size
   fun copyPending(): IntArray? = ownedPending?.clone()
 
   override fun equals(other: Any?): Boolean =
@@ -188,14 +243,18 @@ class BarcodeBoyRuntimeState(
 /** One complete, deeply owned Game Boy machine state. */
 class MachineState internal constructor(
     val root: RecordState,
-    val rtcRuntime: RtcRuntimeState?,
+    val rtcRuntime: CartridgeRtcRuntimeState,
+    val hardware: MachineHardwareState,
 ) {
   fun recordCount(className: String): Int =
       StateGraph.countRecords(root, className)
 
   override fun equals(other: Any?): Boolean =
-      other is MachineState && root == other.root && rtcRuntime == other.rtcRuntime
-  override fun hashCode(): Int = 31 * root.hashCode() + (rtcRuntime?.hashCode() ?: 0)
+      other is MachineState &&
+          root == other.root &&
+          rtcRuntime == other.rtcRuntime &&
+          hardware == other.hardware
+  override fun hashCode(): Int = arrayOf(root, rtcRuntime, hardware).contentHashCode()
 }
 
 enum class HeldButtonState {
@@ -227,8 +286,7 @@ class SessionState internal constructor(
     val serialRuntime: SerialRuntimeState,
     heldButtons: Collection<HeldButtonState>,
 ) {
-  val heldButtons: Set<HeldButtonState> =
-      Collections.unmodifiableSet(linkedSetOf<HeldButtonState>().also { it.addAll(heldButtons) })
+  val heldButtons: List<HeldButtonState> = Collections.unmodifiableList(ArrayList(heldButtons))
 
   override fun equals(other: Any?): Boolean =
       other is SessionState &&
@@ -273,6 +331,23 @@ class StateCaptureException(message: String, cause: Throwable? = null) : IOExcep
 
 class StateApplyException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
+internal enum class ApplyStage {
+  BEFORE_LIVE_MUTATION,
+  AFTER_MACHINE_MUTATION,
+}
+
+internal data class PreparedMachineState(
+    val memento: Memento<Gameboy>,
+    val rtcRuntime: Gameboy.RtcRuntimeState,
+)
+
+internal data class PreparedSessionState(
+    val machine: PreparedMachineState,
+    val serialMemento: Memento<SerialEndpoint>?,
+    val serialRuntime: SerialRuntimeState,
+    val heldButtons: Set<Button>,
+)
+
 /**
  * Transitional adapter between the legacy in-memory mementos and the explicit immutable model.
  * This is deliberately not a byte codec; #322 owns the sectioned StateFile representation.
@@ -282,9 +357,8 @@ internal object DetachedStateAdapter {
   fun capture(gameboy: Gameboy): MachineState =
       MachineState(
           StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT),
-          gameboy.captureRtcRuntimeState()?.let {
-            RtcRuntimeState(it.emulationPaused(), it.pauseStartedMillis())
-          },
+          gameboy.captureRtcRuntimeState().toDetached(),
+          MachineHardwareState.valueOf(gameboy.gameboyType.name),
       )
 
   fun capture(session: Session): SessionState {
@@ -295,28 +369,18 @@ internal object DetachedStateAdapter {
         peripheral,
         serial,
         captureSerialRuntime(session.serialEndpoint),
-        session.heldButtons.map { HeldButtonState.valueOf(it.name) },
+        session.heldButtons.map { HeldButtonState.valueOf(it.name) }.sortedBy { it.ordinal },
     )
   }
 
   fun apply(gameboy: Gameboy, state: MachineState) {
-    val detached = StateGraph.restoreRoot(state.root, GAMEBOY_ROOT)
-    @Suppress("UNCHECKED_CAST") val replacement = detached as Memento<Gameboy>
-    val currentRtc = gameboy.captureRtcRuntimeState()
-    if ((currentRtc == null) != (state.rtcRuntime == null)) {
-      throw StateApplyException("Detached state RTC family does not match the running cartridge")
-    }
-    val rollback = gameboy.saveToMemento()
+    val prepared = prepare(gameboy, state)
+    val rollback = prepare(gameboy, capture(gameboy))
     try {
-      gameboy.restoreFromMemento(replacement)
-      gameboy.restoreRtcRuntimeState(state.rtcRuntime?.let {
-        eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock.RuntimeState(
-            it.emulationPaused, it.pauseStartedMillis)
-      })
+      commit(gameboy, prepared)
     } catch (failure: Throwable) {
       try {
-        gameboy.restoreFromMemento(rollback)
-        gameboy.restoreRtcRuntimeState(currentRtc)
+        commit(gameboy, rollback)
       } catch (rollbackFailure: Throwable) {
         failure.addSuppressed(rollbackFailure)
       }
@@ -324,54 +388,85 @@ internal object DetachedStateAdapter {
     }
   }
 
-  fun apply(session: Session, state: SessionState) {
+  fun apply(
+      session: Session,
+      state: SessionState,
+      probe: ((ApplyStage) -> Unit)? = null,
+  ) {
+    val prepared = prepare(session, state)
+    val rollback = prepare(session, capture(session))
+    try {
+      probe?.invoke(ApplyStage.BEFORE_LIVE_MUTATION)
+      commit(session, prepared, probe)
+    } catch (failure: Throwable) {
+      try {
+        commit(session, rollback)
+      } catch (rollbackFailure: Throwable) {
+        failure.addSuppressed(rollbackFailure)
+      }
+      throw StateApplyException("Detached session state could not be applied atomically", failure)
+    }
+  }
+
+  internal fun prepare(session: Session, state: SessionState): PreparedSessionState {
     val currentPeripheral = serialPeripheral(session.serialEndpoint)
     if (currentPeripheral != state.serialPeripheral) {
       throw StateApplyException(
           "Session peripheral mismatch: expected ${state.serialPeripheral}, found $currentPeripheral")
     }
 
-    val machineValue = StateGraph.restoreRoot(state.machine.root, GAMEBOY_ROOT)
+    val machine = prepare(session.gameboy, state.machine)
+    val currentSerialState = StateGraph.capture(session.serialEndpoint.saveToMemento())
+    if ((state.serialState === NullState) != (currentSerialState === NullState)) {
+      throw StateApplyException("Detached serial memento presence does not match the endpoint")
+    }
+    StateGraph.validateCompatible(state.serialState, currentSerialState, "serial")
     val serialValue = StateGraph.restore(state.serialState)
     if (serialValue != null && serialValue !is Memento<*>) {
       throw StateApplyException("Session serial state has the wrong root type")
     }
-    @Suppress("UNCHECKED_CAST") val machineMemento = machineValue as Memento<Gameboy>
     @Suppress("UNCHECKED_CAST") val serialMemento = serialValue as Memento<SerialEndpoint>?
     validateSerialRuntime(session.serialEndpoint, state.serialRuntime)
-    val currentRtc = session.gameboy.captureRtcRuntimeState()
-    if ((currentRtc == null) != (state.machine.rtcRuntime == null)) {
-      throw StateApplyException("Detached state RTC family does not match the running cartridge")
+    if (state.heldButtons.distinct().size != state.heldButtons.size) {
+      throw StateApplyException("Detached held-button state contains duplicates")
     }
+    val heldButtons = state.heldButtons.map { Button.valueOf(it.name) }.toSet()
+    return PreparedSessionState(machine, serialMemento, state.serialRuntime, heldButtons)
+  }
 
-    // Complete reconstruction above is the validation boundary. No live subsystem is touched
-    // until both graphs and the endpoint identity have been checked.
-    val rollbackMachine = session.gameboy.saveToMemento()
-    val rollbackRtc = currentRtc
-    val rollbackSerial = session.serialEndpoint.saveToMemento()
-    val rollbackSerialRuntime = captureSerialRuntime(session.serialEndpoint)
-    val rollbackButtons = session.heldButtons
-    try {
-      session.gameboy.restoreFromMemento(machineMemento)
-      session.gameboy.restoreRtcRuntimeState(state.machine.rtcRuntime?.let {
-        eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock.RuntimeState(
-            it.emulationPaused, it.pauseStartedMillis)
-      })
-      session.serialEndpoint.restoreFromMemento(serialMemento)
-      applySerialRuntime(session.serialEndpoint, state.serialRuntime)
-      session.heldButtons = state.heldButtons.map { Button.valueOf(it.name) }.toSet()
-    } catch (failure: Throwable) {
-      try {
-        session.gameboy.restoreFromMemento(rollbackMachine)
-        session.gameboy.restoreRtcRuntimeState(rollbackRtc)
-        session.serialEndpoint.restoreFromMemento(rollbackSerial)
-        applySerialRuntime(session.serialEndpoint, rollbackSerialRuntime)
-        session.heldButtons = rollbackButtons
-      } catch (rollbackFailure: Throwable) {
-        failure.addSuppressed(rollbackFailure)
-      }
-      throw StateApplyException("Detached session state could not be applied atomically", failure)
+  internal fun commit(
+      session: Session,
+      prepared: PreparedSessionState,
+      probe: ((ApplyStage) -> Unit)? = null,
+  ) {
+    commit(session.gameboy, prepared.machine)
+    probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)
+    session.serialEndpoint.restoreFromMemento(prepared.serialMemento)
+    applySerialRuntime(session.serialEndpoint, prepared.serialRuntime)
+    session.heldButtons = prepared.heldButtons
+  }
+
+  private fun prepare(gameboy: Gameboy, state: MachineState): PreparedMachineState {
+    if (state.hardware != MachineHardwareState.valueOf(gameboy.gameboyType.name)) {
+      throw StateApplyException(
+          "Detached ${state.hardware} state does not match ${gameboy.gameboyType} hardware")
     }
+    val current = StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT)
+    StateGraph.validateCompatible(state.root, current, "machine")
+    val detached = StateGraph.restoreRoot(state.root, GAMEBOY_ROOT)
+    @Suppress("UNCHECKED_CAST") val memento = detached as Memento<Gameboy>
+    val rtcRuntime = state.rtcRuntime.toCore()
+    try {
+      gameboy.validateRtcRuntimeState(rtcRuntime)
+    } catch (failure: IllegalArgumentException) {
+      throw StateApplyException("Detached cartridge RTC layout is incompatible", failure)
+    }
+    return PreparedMachineState(memento, rtcRuntime)
+  }
+
+  private fun commit(gameboy: Gameboy, prepared: PreparedMachineState) {
+    gameboy.restoreFromMemento(prepared.memento)
+    gameboy.restoreRtcRuntimeState(prepared.rtcRuntime)
   }
 
   private fun serialPeripheral(endpoint: SerialEndpoint): SerialPeripheralState =
@@ -410,6 +505,13 @@ internal object DetachedStateAdapter {
           NoSerialRuntimeState -> endpoint !is BarcodeBoySerialEndpoint
         }
     if (!valid) throw StateApplyException("Detached serial runtime state does not match the endpoint")
+    if (state is BarcodeBoyRuntimeState) {
+      state.pendingSize?.let {
+        DetachedValueBounds.requireArray(it.toLong(), Int.SIZE_BYTES.toLong()) { message ->
+          throw StateApplyException(message)
+        }
+      }
+    }
   }
 
   private fun applySerialRuntime(endpoint: SerialEndpoint, state: SerialRuntimeState) {
@@ -421,6 +523,23 @@ internal object DetachedStateAdapter {
   }
 
   private const val GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
+
+  private fun Gameboy.RtcRuntimeState.toDetached(): CartridgeRtcRuntimeState =
+      CartridgeRtcRuntimeState(primary.toDetached(), slot.toDetached())
+
+  private fun eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock.RuntimeState?.toDetached():
+      Mbc3RtcRuntimeState? =
+      this?.let { Mbc3RtcRuntimeState(it.emulationPaused(), it.pauseStartedMillis()) }
+
+  private fun CartridgeRtcRuntimeState.toCore(): Gameboy.RtcRuntimeState =
+      Gameboy.RtcRuntimeState(primary.toCore(), slot.toCore())
+
+  private fun Mbc3RtcRuntimeState?.toCore():
+      eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock.RuntimeState? =
+      this?.let {
+        eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock.RuntimeState(
+            it.emulationPaused, it.pauseStartedMillis)
+      }
 }
 
 internal object StateGraph {
@@ -449,6 +568,11 @@ internal object StateGraph {
   }
 
   fun restore(value: StateValue): Any? = Restore().value(value, null, 0)
+
+  /** Validates target-dependent restore preconditions without touching the live target. */
+  fun validateCompatible(candidate: StateValue, target: StateValue, path: String) {
+    Compatibility().value(candidate, target, path, null, null)
+  }
 
   fun countRecords(value: StateValue, className: String): Int {
     var count = 0
@@ -485,15 +609,25 @@ internal object StateGraph {
         is Boolean -> BooleanState(value)
         is Double -> Float64State(value)
         is String -> {
-          if (value.length > StateLimits.LEGACY_MAX_STRING_CHARS) {
-            throw StateCaptureException("State string is too long")
-          }
+          DetachedValueBounds.requireString(value) { message -> throw StateCaptureException(message) }
           StringState(value)
         }
-        is ByteArray -> BytesState(value.also { checkArray(it.size) })
-        is IntArray -> Int32ArrayState(value.also { checkArray(it.size) })
-        is LongArray -> Int64ArrayState(value.also { checkArray(it.size) })
-        is BooleanArray -> BooleanArrayState(value.also { checkArray(it.size) })
+        is ByteArray -> {
+          checkArray(value.size, Byte.SIZE_BYTES)
+          BytesState(value)
+        }
+        is IntArray -> {
+          checkArray(value.size, Int.SIZE_BYTES)
+          Int32ArrayState(value)
+        }
+        is LongArray -> {
+          checkArray(value.size, Long.SIZE_BYTES)
+          Int64ArrayState(value)
+        }
+        is BooleanArray -> {
+          checkArray(value.size, 1)
+          BooleanArrayState(value)
+        }
         is List<*> -> {
           checkCaptureCollection(value.size)
           ListState(value.map { this.value(it, depth + 1) })
@@ -572,13 +706,18 @@ internal object StateGraph {
             is Int64State -> value.value
             is BooleanState -> value.value
             is Float64State -> value.value
-            is StringState -> value.value
+            is StringState -> {
+              DetachedValueBounds.requireString(value.value) { message ->
+                throw StateApplyException(message)
+              }
+              value.value
+            }
             is EnumState -> restoreEnum(value)
             is RecordState -> restoreRecord(value, depth)
-            is BytesState -> value.copyValue()
-            is Int32ArrayState -> value.copyValue()
-            is Int64ArrayState -> value.copyValue()
-            is BooleanArrayState -> value.copyValue()
+            is BytesState -> checkedCopy(value, Byte.SIZE_BYTES)
+            is Int32ArrayState -> checkedCopy(value, Int.SIZE_BYTES)
+            is Int64ArrayState -> checkedCopy(value, Long.SIZE_BYTES)
+            is BooleanArrayState -> checkedCopy(value, 1)
             is ObjectArrayState -> restoreArray(value, expectedType, depth)
             is ListState -> restoreList(value, expectedType, depth)
             is Int32MapState -> restoreMap(value, expectedType, depth)
@@ -664,6 +803,69 @@ internal object StateGraph {
         throw StateApplyException("State has too many references")
       }
     }
+
+    private fun <T> checkedCopy(value: PrimitiveArrayState<T>, width: Int): T {
+      DetachedValueBounds.requireArray(value.size.toLong(), width.toLong()) { message ->
+        throw StateApplyException(message)
+      }
+      return value.copyValue()
+    }
+  }
+
+  private class Compatibility {
+    fun value(
+        candidate: StateValue,
+        target: StateValue,
+        path: String,
+        owner: String?,
+        field: String?,
+    ) {
+      if (candidate === NullState || target === NullState) {
+        val nonNull = if (candidate === NullState) target else candidate
+        if (nonNull is RecordState && !isNullableRecord(owner, field)) {
+          throw StateApplyException("$path has incompatible memento presence")
+        }
+        return
+      }
+      if (candidate.kind != target.kind) {
+        throw StateApplyException("$path has ${candidate.kind}, expected ${target.kind}")
+      }
+      when {
+        candidate is RecordState && target is RecordState -> {
+          if (candidate.typeId != target.typeId) {
+            throw StateApplyException(
+                "$path has ${recordClass(candidate).name}, expected ${recordClass(target).name}")
+          }
+          val type = recordClass(target).name
+          if (candidate.fields.size != target.fields.size) {
+            throw StateApplyException("$path has an incompatible field count")
+          }
+          candidate.fields.indices.forEach { index ->
+            val left = candidate.fields[index]
+            val right = target.fields[index]
+            if (left.name != right.name) {
+              throw StateApplyException("$path has an incompatible field order")
+            }
+            value(left.value, right.value, "$path.${left.name}", type, left.name)
+          }
+        }
+        candidate is PrimitiveArrayState<*> && target is PrimitiveArrayState<*> -> {
+          if (!isVariableArray(owner, field) && candidate.size != target.size) {
+            throw StateApplyException(
+                "$path has length ${candidate.size}, expected invariant length ${target.size}")
+          }
+        }
+        candidate is ObjectArrayState && target is ObjectArrayState -> {
+          if (candidate.values.size != target.values.size) {
+            throw StateApplyException(
+                "$path has length ${candidate.values.size}, expected invariant length ${target.values.size}")
+          }
+          candidate.values.indices.forEach { index ->
+            value(candidate.values[index], target.values[index], "$path[$index]", owner, field)
+          }
+        }
+      }
+    }
   }
 
   private fun checkCaptureDepth(depth: Int) {
@@ -674,11 +876,10 @@ internal object StateGraph {
     if (depth > StateLimits.LEGACY_MAX_DEPTH) throw StateApplyException("State is too deep")
   }
 
-  private fun checkArray(size: Int) {
-    if (size < 0 || size.toLong() > StateLimits.LEGACY_MAX_ARRAY_LENGTH) {
-      throw StateCaptureException("Invalid state array length $size")
-    }
-  }
+  private fun checkArray(size: Int, width: Int) =
+      DetachedValueBounds.requireArray(size.toLong(), width.toLong()) { message ->
+        throw StateCaptureException(message)
+      }
 
   private fun checkCaptureCollection(size: Int) {
     if (size < 0 || size > StateLimits.LEGACY_MAX_COLLECTION_ENTRIES) {
@@ -721,4 +922,74 @@ internal object StateGraph {
 
   private fun Type?.typeArguments(): Array<Type>? =
       (this as? ParameterizedType)?.actualTypeArguments
+
+  private fun isVariableArray(owner: String?, field: String?): Boolean =
+      owner to field in VARIABLE_ARRAY_FIELDS
+
+  private fun isNullableRecord(owner: String?, field: String?): Boolean =
+      owner to field in NULLABLE_RECORD_FIELDS
+
+  private val VARIABLE_ARRAY_FIELDS =
+      setOf(
+          "eu.rekawek.coffeegb.core.sound.Sound\$SoundMemento" to "buffer",
+          "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento" to "data",
+          "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerMemento" to "schedule",
+          "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento" to
+              "dataTransfer",
+      )
+
+  private val NULLABLE_RECORD_FIELDS =
+      setOf(
+          // Transitional legacy root display copy; new captures use only GpuMemento's display.
+          "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento" to "displayMemento",
+          // These SGB operations are genuinely optional behavior state, not hardware identity.
+          "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyMemento" to
+              "waitingTransferCommandMemento",
+          "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundMemento" to
+              "pendingPictureMemento",
+      )
+}
+
+/** Checked allocation arithmetic shared by capture, restore, and the future Phase-2 decoder. */
+internal object DetachedValueBounds {
+  fun checkedArrayBytesForApply(elements: Long, width: Long): Long =
+      requireArray(elements, width) { message -> throw StateApplyException(message) }
+
+  fun checkStringMetricsForApply(chars: Long, encodedBytes: Long) {
+    requireStringMetrics(chars, encodedBytes) { message -> throw StateApplyException(message) }
+  }
+
+  fun requireArray(elements: Long, width: Long, fail: (String) -> Nothing): Long {
+    if (elements < 0 || elements > StateLimits.LEGACY_MAX_ARRAY_LENGTH) {
+      fail("State array length $elements exceeds ${StateLimits.LEGACY_MAX_ARRAY_LENGTH}")
+    }
+    if (width <= 0) fail("State array element width must be positive")
+    val bytes =
+        try {
+          Math.multiplyExact(elements, width)
+        } catch (_: ArithmeticException) {
+          fail("State array allocation byte count overflows")
+        }
+    if (bytes > StateLimits.LEGACY_MAX_ARRAY_BYTES) {
+      fail("State array allocation $bytes exceeds ${StateLimits.LEGACY_MAX_ARRAY_BYTES} bytes")
+    }
+    return bytes
+  }
+
+  fun requireString(value: String, fail: (String) -> Nothing) {
+    if (value.length.toLong() > StateLimits.LEGACY_MAX_STRING_CHARS) {
+      fail("State string exceeds ${StateLimits.LEGACY_MAX_STRING_CHARS} characters")
+    }
+    val encodedBytes = value.toByteArray(StandardCharsets.UTF_8).size.toLong()
+    requireStringMetrics(value.length.toLong(), encodedBytes, fail)
+  }
+
+  private fun requireStringMetrics(chars: Long, encodedBytes: Long, fail: (String) -> Nothing) {
+    if (chars < 0 || chars > StateLimits.LEGACY_MAX_STRING_CHARS) {
+      fail("State string character count $chars exceeds ${StateLimits.LEGACY_MAX_STRING_CHARS}")
+    }
+    if (encodedBytes < 0 || encodedBytes > StateLimits.LEGACY_MAX_STRING_BYTES) {
+      fail("State string encoding $encodedBytes exceeds ${StateLimits.LEGACY_MAX_STRING_BYTES} bytes")
+    }
+  }
 }

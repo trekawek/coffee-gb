@@ -25,4 +25,8 @@ public class VirtualTimeSource implements TimeSource, Serializable {
     public void forward(long i, TimeUnit unit) {
         clock += unit.toMillis(i);
     }
+
+    public void setCurrentTimeMillis(long clock) {
+        this.clock = clock;
+    }
 }

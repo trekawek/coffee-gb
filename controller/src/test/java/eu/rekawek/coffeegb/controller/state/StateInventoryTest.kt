@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import java.nio.file.Files
 import java.nio.file.Paths
 import kotlin.io.path.readLines
+import kotlin.io.path.readText
 import kotlin.test.assertEquals
 import org.junit.Test
 
@@ -23,5 +25,42 @@ class StateInventoryTest {
     assertEquals(91, runtime.size)
     assertEquals(runtime, documented)
     assertEquals(11, MementoTypeRegistry.enumClasses.size)
+  }
+
+  @Test
+  fun everyProductionOriginatorAndCaptureSiteIsInTheOwnershipAudit() {
+    val repository = Paths.get("..").toAbsolutePath().normalize()
+    val productionRoots =
+        listOf(repository.resolve("core/src/main/java"), repository.resolve("controller/src/main/java"))
+    val discovered =
+        productionRoots
+            .flatMap { root ->
+              Files.walk(root).use { paths ->
+                paths
+                    .filter { Files.isRegularFile(it) }
+                    .filter {
+                      val source = it.readText()
+                      "saveToMemento(" in source || "Originator<" in source
+                    }
+                    .map { repository.relativize(it).toString() }
+                    .toList()
+              }
+            }
+            .sorted()
+    val documented =
+        repository
+            .resolve("docs/state-originator-sites.md")
+            .readLines()
+            .mapNotNull { line ->
+              ORIGINATOR_AUDIT_LINE.matchEntire(line)?.groupValues?.get(1)
+            }
+            .sorted()
+
+    assertEquals(97, discovered.size)
+    assertEquals(discovered, documented)
+  }
+
+  private companion object {
+    val ORIGINATOR_AUDIT_LINE = Regex("- (?:OWNER|COMPOSITE|WORKFLOW|CONTRACT) `([^`]+)`")
   }
 }
