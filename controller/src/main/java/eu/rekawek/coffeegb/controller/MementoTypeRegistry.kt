@@ -120,10 +120,8 @@ internal object MementoTypeRegistry {
           "eu.rekawek.coffeegb.core.sgb.Commands\$MaskEnCmd\$GameboyScreenMask",
       )
 
-  const val SESSION_MEMENTO = "eu.rekawek.coffeegb.controller.Session\$SessionMemento"
-
   val legacyApplicationClassNames: Set<String> =
-      (recordClassNames + enumClassNames + SESSION_MEMENTO).toSet()
+      (recordClassNames + enumClassNames).toSet()
 
   val recordClasses: List<Class<*>> by lazy {
     recordClassNames.map(::loadAuditedClass).also { classes ->

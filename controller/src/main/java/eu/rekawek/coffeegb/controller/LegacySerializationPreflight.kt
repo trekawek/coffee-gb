@@ -28,7 +28,8 @@ internal object LegacySerializationPreflight {
     private val handles = mutableMapOf<Int, Handle>()
     private var nextHandle = ObjectStreamConstants.baseWireHandle
     private var allocatedArrayBytes = 0L
-    private var parserDepth = 0L
+    private var contentDepth = 0L
+    private var descriptorDepth = 0L
     private var handlesAssigned = 0L
     private var referencesSeen = 0L
 
@@ -43,7 +44,7 @@ internal object LegacySerializationPreflight {
     }
 
     private fun readContent(token: Int = input.readUnsignedByte()): Handle? =
-        withParserDepth {
+        withContentDepth {
           when (token) {
             ObjectStreamConstants.TC_NULL.toInt() -> null
             ObjectStreamConstants.TC_REFERENCE.toInt() -> reference()
@@ -123,7 +124,7 @@ internal object LegacySerializationPreflight {
     }
 
     private fun readClassDescriptor(): ClassDescriptor? =
-        withParserDepth {
+        withDescriptorDepth {
           when (val token = input.readUnsignedByte()) {
             ObjectStreamConstants.TC_NULL.toInt() -> null
             ObjectStreamConstants.TC_REFERENCE.toInt() ->
@@ -385,17 +386,30 @@ internal object LegacySerializationPreflight {
       }
     }
 
-    private fun <T> withParserDepth(block: () -> T): T {
-      parserDepth++
-      if (parserDepth > StateLimits.LEGACY_MAX_DEPTH) {
-        parserDepth--
+    private fun <T> withContentDepth(block: () -> T): T {
+      contentDepth++
+      if (contentDepth > StateLimits.LEGACY_MAX_DEPTH) {
+        contentDepth--
         throw InvalidObjectException(
             "Legacy state exceeds ${StateLimits.LEGACY_MAX_DEPTH} parser depth")
       }
       return try {
         block()
       } finally {
-        parserDepth--
+        contentDepth--
+      }
+    }
+
+    private fun <T> withDescriptorDepth(block: () -> T): T {
+      descriptorDepth++
+      if (descriptorDepth > StateLimits.LEGACY_MAX_DEPTH) {
+        descriptorDepth--
+        throw InvalidClassException("Legacy class descriptor hierarchy is too deep")
+      }
+      return try {
+        block()
+      } finally {
+        descriptorDepth--
       }
     }
 

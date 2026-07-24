@@ -28,18 +28,22 @@ internal data class LegacySerialField(
     val typeName: String?,
 )
 
-/** Local-file migration bridge for Coffee GB's historical Java-serialized mementos. */
+/**
+ * Local-file migration bridge for Coffee GB's historical Java-serialized game snapshots.
+ *
+ * Historical SessionMemento values belonged to the old network protocol and were never a local
+ * file format. They are deliberately excluded instead of implying a compatibility contract that
+ * cannot be pinned to a released local-state fixture.
+ */
 internal object LegacyMementoCodec {
 
   // SHA-256 of every accepted descriptor name, SUID, flag byte, and ordered field shape below.
   // Updating a memento class cannot silently broaden legacy migration; this value must be changed
   // deliberately together with compatibility fixtures and review of the resulting manifest.
   private const val PINNED_SERIAL_MANIFEST_SHA256 =
-      "63d10eccdece6fa4392807489d6862d07d06817b80c3989dcb8f5ff9c5233aa9"
+      "920b1c388e311116ba05cbdbbe7614d6dc4ea5e7da57f7da9ded58ed0038da88"
 
   private const val GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
-  private const val SESSION_MEMENTO = "eu.rekawek.coffeegb.controller.Session\$SessionMemento"
-
   private val allowedSupportClasses =
       setOf(
           ArrayList::class.java,
@@ -88,14 +92,8 @@ internal object LegacyMementoCodec {
   fun serializeGameboy(memento: Memento<Gameboy>): ByteArray =
       serialize(memento, StateLimits.GAME_SNAPSHOT)
 
-  fun serializeSession(memento: Memento<Session>): ByteArray =
-      serialize(memento, StateLimits.SESSION_SNAPSHOT)
-
   fun deserializeGameboy(bytes: ByteArray): Memento<Gameboy> =
       deserialize(bytes, StateLimits.GAME_SNAPSHOT, GAMEBOY_MEMENTO)
-
-  fun deserializeSession(bytes: ByteArray): Memento<Session> =
-      deserialize(bytes, StateLimits.SESSION_SNAPSHOT, SESSION_MEMENTO)
 
   fun hasJavaSerializationHeader(bytes: ByteArray): Boolean =
       bytes.size >= 4 &&
@@ -326,9 +324,7 @@ internal object LegacyMementoCodec {
             Number::class.java,
         )
     val application =
-        (MementoTypeRegistry.recordClassNames +
-                MementoTypeRegistry.enumClassNames +
-                MementoTypeRegistry.SESSION_MEMENTO)
+        (MementoTypeRegistry.recordClassNames + MementoTypeRegistry.enumClassNames)
             .map { Class.forName(it, false, javaClass.classLoader) }
     val arrays = LegacyArrayShapes.descriptors.map { Class.forName(it, false, javaClass.classLoader) }
     (support + application + arrays).associateBy { it.name }

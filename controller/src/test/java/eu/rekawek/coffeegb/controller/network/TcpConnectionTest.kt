@@ -27,6 +27,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -459,6 +460,71 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun nonReadingPeerIsIsolatedAndCannotBlockHostOrShutdown() {
+    val port = ServerSocket(0).use { it.localPort }
+    val started = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val disconnected = LinkedBlockingQueue<ConnectionController.ServerPlayerDisconnectedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { started.add(it) }
+    serverBus.register<ConnectionController.ServerPlayerDisconnectedEvent> { disconnected.add(it) }
+    val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
+    this.server = server
+    val serverThread = Thread(server, "slow-reader-server").also { it.start() }
+    threads += serverThread
+    assertNotNull(started.poll(5, TimeUnit.SECONDS))
+
+    val noisyRom = ByteArray(16 * 1024 * 1024).also { java.util.Random(314).nextBytes(it) }
+    val state =
+        LinkedController.LocalRomLoadedEvent(
+            noisyRom,
+            null,
+            null,
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            73,
+            player = 0,
+        )
+    val slow = handshakenRawClient(port)
+    try {
+      repeat(20) { attempt ->
+        if (disconnected.isEmpty()) {
+          serverBus.post(LinkedController.SessionStateReadyEvent(attempt.toLong(), listOf(state)))
+        }
+      }
+      val dropped =
+          assertNotNull(disconnected.poll(10, TimeUnit.SECONDS), "slow peer was not isolated")
+      assertEquals(1, dropped.player)
+
+      val heartbeatStart = System.nanoTime()
+      serverBus.post(
+          LinkedController.LocalButtonStateEvent(
+              100,
+              Input(listOf(Button.A), emptyList()),
+              player = 0,
+          ))
+      assertTrue(
+          System.nanoTime() - heartbeatStart < TimeUnit.SECONDS.toNanos(1),
+          "a disconnected slow reader stalled host event delivery",
+      )
+    } finally {
+      slow.close()
+    }
+
+    // The old physical slot is reusable, proving that only the offending connection was removed.
+    val replacement = handshakenRawClient(port)
+    serverBus.post(LinkedController.SessionStateReadyEvent(200, listOf(state)))
+    Thread.sleep(100)
+    val stopper = Thread(server::stop, "slow-reader-stop").also { it.start() }
+    stopper.join(2_000)
+    val stoppedWithinBound = !stopper.isAlive
+    replacement.close()
+    stopper.join(3_000)
+    serverThread.join(2_000)
+
+    assertTrue(stoppedWithinBound, "a blocked socket writer made server.stop() exceed two seconds")
+    assertFalse(serverThread.isAlive, "server run loop did not stop after closing a slow peer")
+  }
+
+  @Test
   fun fourPlayerServerRejectsAnExtraClientWithAClearReason() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
@@ -689,6 +755,21 @@ class TcpConnectionTest {
       Thread.sleep(10)
     }
     assertTrue(condition(), "condition was not reached before timeout")
+  }
+
+  private fun handshakenRawClient(port: Int): Socket {
+    val socket = Socket()
+    socket.receiveBufferSize = 1_024
+    socket.soTimeout = 10_000
+    socket.connect(java.net.InetSocketAddress("localhost", port))
+    val input = DataInputStream(socket.getInputStream())
+    val output = DataOutputStream(socket.getOutputStream())
+    input.readFully(ByteArray("CoffeeGB NETPLAY".length + 4))
+    output.writeByte(0x01)
+    output.flush()
+    assertEquals(0x08, readWireCommand(input))
+    socket.soTimeout = 0
+    return socket
   }
 
   /** Reads and consumes one protocol-v7 command, returning its command byte. */

@@ -308,16 +308,20 @@ class TcpServer(
   internal fun handshakeWorkerCount(): Int = handshakeExecutor.poolSize
 
   private fun closeConnection(connection: Connection, socket: Socket) {
+    var socketFailure: IOException? = null
+    try {
+      // Closing the raw socket first cancels an in-flight writer before Connection waits for its
+      // bounded writer thread. A peer that stopped reading cannot deadlock server shutdown.
+      socket.close()
+    } catch (e: IOException) {
+      socketFailure = e
+      LOG.debug("Error closing netplay socket", e)
+    }
     try {
       connection.close()
     } catch (e: IOException) {
+      socketFailure?.let(e::addSuppressed)
       LOG.debug("Error closing netplay connection", e)
-    } finally {
-      try {
-        socket.close()
-      } catch (e: IOException) {
-        LOG.debug("Error closing netplay socket", e)
-      }
     }
   }
 
