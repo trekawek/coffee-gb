@@ -15,7 +15,7 @@ internal object PeerFrameWindow {
 
   fun validateCheckpoint(frame: Long, stateFrames: Collection<Long>): Long {
     validateRebaseFrame(frame)
-    if (stateFrames.isEmpty() || stateFrames.any { it != frame }) {
+    if (stateFrames.any { it != frame }) {
       throw IOException("Checkpoint frame $frame does not match every checkpoint state")
     }
     return frame

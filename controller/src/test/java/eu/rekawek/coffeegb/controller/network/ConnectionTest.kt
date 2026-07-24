@@ -279,6 +279,37 @@ class ConnectionTest {
   }
 
   @Test
+  fun runtimeMessagesWaitBehindStartWhileBootstrapStateMayLeadIt() {
+    val games = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    val inputs = LinkedBlockingQueue<LinkedController.RemoteButtonStateEvent>()
+    receiverBus.register<Connection.PeerLoadedGameEvent> { games.add(it) }
+    receiverBus.register<LinkedController.RemoteButtonStateEvent> { inputs.add(it) }
+    connect(startSession = false)
+
+    senderBus.post(
+        LinkedController.LocalRomLoadedEvent(
+            ROM.readBytes(),
+            null,
+            null,
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            12,
+        ))
+    senderBus.post(
+        LinkedController.LocalButtonStateEvent(
+            12,
+            Input(listOf(Button.A), emptyList()),
+        ))
+
+    assertEquals(null, games.poll(200, TimeUnit.MILLISECONDS))
+    assertEquals(null, inputs.poll(200, TimeUnit.MILLISECONDS))
+    sender!!.startSession()
+
+    assertEquals(12, assertNotNull(games.poll(5, TimeUnit.SECONDS)).frame)
+    assertEquals(12, assertNotNull(inputs.poll(5, TimeUnit.SECONDS)).frame)
+  }
+
+  @Test
   fun resetAndStopRoundTrip() {
     val resets = LinkedBlockingQueue<Connection.ReceivedRemoteResetEvent>()
     val stops = LinkedBlockingQueue<Connection.ReceivedRemoteStopEvent>()

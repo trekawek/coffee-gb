@@ -12,10 +12,13 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.InvalidClassException
 import java.io.InvalidObjectException
 import java.io.IOException
 import java.io.ObjectOutputStream
+import java.io.ObjectStreamClass
+import java.io.ObjectStreamConstants
 import java.io.Serializable
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -186,6 +189,114 @@ class LegacyMementoCodecTest {
   }
 
   @Test
+  fun preflightRejectsDeepContentAndCumulativeHandlesAcrossResets() {
+    var nested: Any? = null
+    repeat(StateLimits.LEGACY_MAX_DEPTH.toInt() + 1) { nested = arrayOf(nested) }
+    assertFailsWith<InvalidObjectException> {
+      LegacySerializationPreflight.validate(
+          rawSerialize(nested!!),
+          StateLimits.GAME_SNAPSHOT.decodedBytes,
+      )
+    }
+
+    val excessiveHandles =
+        rawStream {
+          repeat(StateLimits.LEGACY_MAX_REFERENCES.toInt() + 1) { index ->
+            writeByte(ObjectStreamConstants.TC_STRING.toInt())
+            writeShort(0)
+            if (index % 1_000 == 999) writeByte(ObjectStreamConstants.TC_RESET.toInt())
+          }
+        }
+    val error =
+        assertFailsWith<InvalidObjectException> {
+          LegacySerializationPreflight.validate(
+              excessiveHandles,
+              StateLimits.GAME_SNAPSHOT.decodedBytes,
+          )
+        }
+    assertTrue(error.message!!.contains("references"))
+  }
+
+  @Test
+  fun preflightRejectsCyclicAndMismatchedClassDescriptors() {
+    val byteArrayUid = ObjectStreamClass.lookup(ByteArray::class.java).serialVersionUID
+    val cyclic =
+        rawStream {
+          writeByte(ObjectStreamConstants.TC_ARRAY.toInt())
+          writeByte(ObjectStreamConstants.TC_CLASSDESC.toInt())
+          writeUTF("[B")
+          writeLong(byteArrayUid)
+          writeByte(ObjectStreamConstants.SC_SERIALIZABLE.toInt())
+          writeShort(0)
+          writeByte(ObjectStreamConstants.TC_ENDBLOCKDATA.toInt())
+          writeByte(ObjectStreamConstants.TC_REFERENCE.toInt())
+          writeInt(ObjectStreamConstants.baseWireHandle)
+        }
+    val cycleError =
+        assertFailsWith<InvalidClassException> {
+          LegacySerializationPreflight.validate(cyclic, StateLimits.GAME_SNAPSHOT.decodedBytes)
+        }
+    assertTrue(cycleError.message!!.contains("Cyclic"))
+
+    for (fieldCount in listOf(1, UShort.MAX_VALUE.toInt())) {
+      val mismatched =
+          rawStream {
+            writeByte(ObjectStreamConstants.TC_ARRAY.toInt())
+            writeByte(ObjectStreamConstants.TC_CLASSDESC.toInt())
+            writeUTF("[B")
+            writeLong(byteArrayUid)
+            writeByte(ObjectStreamConstants.SC_SERIALIZABLE.toInt())
+            writeShort(fieldCount)
+          }
+      val shapeError =
+          assertFailsWith<InvalidClassException> {
+            LegacySerializationPreflight.validate(
+                mismatched,
+                StateLimits.GAME_SNAPSHOT.decodedBytes,
+            )
+          }
+      assertTrue(shapeError.message!!.contains("field count"))
+    }
+  }
+
+  @Test
+  fun preflightRejectsDecodedStringsPastLimitBeforeStringAllocation() {
+    val overlong =
+        rawStream {
+          writeByte(ObjectStreamConstants.TC_LONGSTRING.toInt())
+          writeLong(StateLimits.LEGACY_MAX_STRING_CHARS.toLong() + 1)
+          repeat(StateLimits.LEGACY_MAX_STRING_CHARS + 1) { writeByte('x'.code) }
+        }
+
+    val error =
+        assertFailsWith<InvalidObjectException> {
+          LegacySerializationPreflight.validate(overlong, StateLimits.GAME_SNAPSHOT.decodedBytes)
+        }
+    assertTrue(error.message!!.contains("characters"))
+  }
+
+  @Test
+  fun hashMapTableAndLogicalSizeBoundariesAreAccepted() {
+    val map = HashMap<Int, Int>(StateLimits.LEGACY_MAX_MAP_TABLE_ENTRIES)
+    repeat(StateLimits.LEGACY_MAX_COLLECTION_ENTRIES) { map[it] = it }
+    val serialized = rawSerialize(map)
+    LegacySerializationPreflight.validate(serialized, StateLimits.GAME_SNAPSHOT.decodedBytes)
+
+    val mapBlock = serialized.indexOf(byteArrayOf(0x77, 0x08))
+    assertTrue(mapBlock >= 0)
+    putInt(
+        serialized,
+        mapBlock + 2,
+        StateLimits.LEGACY_MAX_MAP_TABLE_ENTRIES + 1,
+    )
+    val error =
+        assertFailsWith<InvalidObjectException> {
+          LegacySerializationPreflight.validate(serialized, StateLimits.GAME_SNAPSHOT.decodedBytes)
+        }
+    assertTrue(error.message!!.contains("capacity"))
+  }
+
+  @Test
   fun onlyAuditedArrayShapesAndCumulativeBytesAreAccepted() {
     assertEquals(
         StateLimits.LEGACY_MAX_ARRAY_BYTES,
@@ -327,6 +438,16 @@ class LegacyMementoCodecTest {
   private fun rawSerialize(value: Any): ByteArray {
     val output = ByteArrayOutputStream()
     ObjectOutputStream(output).use { it.writeObject(value) }
+    return output.toByteArray()
+  }
+
+  private fun rawStream(block: DataOutputStream.() -> Unit): ByteArray {
+    val output = ByteArrayOutputStream()
+    DataOutputStream(output).use {
+      it.writeShort(ObjectStreamConstants.STREAM_MAGIC.toInt())
+      it.writeShort(ObjectStreamConstants.STREAM_VERSION.toInt())
+      it.block()
+    }
     return output.toByteArray()
   }
 

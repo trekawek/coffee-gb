@@ -17,6 +17,7 @@ import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
+import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSourceDisconnectedEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ProtocolErrorReason
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
@@ -48,6 +49,7 @@ import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
 import java.io.IOException
+import java.util.IdentityHashMap
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -72,6 +74,8 @@ class LinkedController(
           StateLimits.NETPLAY_EVENT_QUEUE_BYTES,
           ::eventWeight,
           ::eventSource,
+          StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_EVENTS,
+          StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_BYTES,
       )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
@@ -98,6 +102,14 @@ class LinkedController(
   @Volatile private var doStop = false
 
   private var frame = 0L
+
+  /** Runtime records older than the latest authoritative checkpoint belong to an old generation. */
+  private var runtimeFrameFloor = 0L
+
+  private val replayWorkBySource = IdentityHashMap<PeerEventSource, Long>()
+
+  @VisibleForTesting internal var lastDispatchReplayFrames = 0L
+    private set
 
   private var currentInput: Input? = null
 
@@ -147,6 +159,7 @@ class LinkedController(
 
     eventQueue.register<PeerLoadedGameEvent> { e ->
       val validated = validatePeerStateFrame(e) ?: return@register
+      if (!consumeReplayWork(validated.frame, validated.source)) return@register
       if (!loadPeerState(validated)) return@register
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
           localPlayer == 0 &&
@@ -167,6 +180,7 @@ class LinkedController(
             }) {
           return@register
         }
+        runtimeFrameFloor = e.frame
         val activePlayers = e.states.mapTo(mutableSetOf()) { it.player }
         sessions.indices.filterNot(activePlayers::contains).forEach { player ->
           sessions[player]?.close()
@@ -205,7 +219,8 @@ class LinkedController(
     eventQueue.register<ReceivedRemoteResetEvent> { e ->
       if (e.player != localPlayer &&
           e.player in sessions.indices &&
-          validateRuntimeFrame(e.frame, e.source)) {
+          validateRuntimeFrame(e.frame, e.source) &&
+          consumeReplayWork(e.frame, e.source)) {
         sessions[e.player]?.close()
         sessions[e.player] = null
         initSession(e.player, e.frame, null, null)
@@ -266,6 +281,13 @@ class LinkedController(
         }
       }
     }
+
+    // This subscription intentionally bypasses the bounded event queue: disconnect cleanup must
+    // be able to release the exact old connection's retained budget even when that queue is full.
+    eventBus.register<PeerEventSourceDisconnectedEvent> {
+      eventQueue.discardSource(it.source)
+      replayWorkBySource.remove(it.source)
+    }
   }
 
   override fun startController() {
@@ -273,6 +295,8 @@ class LinkedController(
   }
 
   fun runFrame() {
+    replayWorkBySource.clear()
+    lastDispatchReplayFrames = 0
     eventQueue.dispatch()
 
     // A DMG-07 host runs with any number of attached ports. A client waits only for the coherent
@@ -337,6 +361,7 @@ class LinkedController(
       state: Memento<Gameboy>?,
       sessionState: Memento<Session>?,
       heldButtons: Set<Button> = emptySet(),
+      hotPlug: Boolean = false,
   ) {
     val config = configs[player] ?: return
     val sessionEventBus = EventBusImpl(null, null, false)
@@ -373,10 +398,8 @@ class LinkedController(
     // checkpoints are already at their advertised frame. Other late reset/reload events retain
     // the historical catch-up path.
     var current = sessionFrame
-    val hotPlug =
-        mode == LinkMode.FOUR_PLAYER_ADAPTER &&
-            (sessionState != null || (localPlayer == 0 && player != localPlayer))
-    while (!hotPlug && current < frame) {
+    val alreadyAtSharedPhase = sessionState != null || hotPlug
+    while (!alreadyAtSharedPhase && current < frame) {
       stateHistory.setPlayerState(player, current, session.saveToMemento(), session.heldButtons)
       repeat(TICKS_PER_FRAME) { session.gameboy.tick() }
       current++
@@ -389,6 +412,7 @@ class LinkedController(
         (e.player == localPlayer && e.sessionSnapshot == null)) {
       return false
     }
+    val newPort = configs[e.player] == null
     configs[e.player] =
         createGameboyConfig(properties, Rom(e.rom))
             .setGameboyType(e.gameboyType)
@@ -406,6 +430,11 @@ class LinkedController(
         e.decodedSessionSnapshot
             ?: e.sessionSnapshot?.let(NetplayMementoCodec::decodeSession),
         e.heldButtons,
+        hotPlug =
+            mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+                localPlayer == 0 &&
+                e.player != localPlayer &&
+                newPort,
     )
     return true
   }
@@ -414,7 +443,10 @@ class LinkedController(
     // A new DMG-07 port is attached to the host's current adapter phase without replaying the
     // joining console's private pre-link timeline. All other peer state is bounded against the
     // controller-owned frame before any live configuration or session is replaced.
-    if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
+    if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+        localPlayer == 0 &&
+        event.player in configs.indices &&
+        configs[event.player] == null) {
       return if (validatePeer(event.source) {
             PeerFrameWindow.validateRuntimeFrame(event.frame, 0)
           }) {
@@ -426,8 +458,36 @@ class LinkedController(
     return if (validateRuntimeFrame(event.frame, event.source)) event else null
   }
 
-  private fun validateRuntimeFrame(peerFrame: Long, source: PeerEventSource?): Boolean =
-      validatePeer(source) { PeerFrameWindow.validateRuntimeFrame(peerFrame, frame) }
+  private fun validateRuntimeFrame(peerFrame: Long, source: PeerEventSource?): Boolean {
+    if (peerFrame < runtimeFrameFloor) {
+      LOG.atDebug().log(
+          "Discarding player {} frame {} from before checkpoint floor {}",
+          source?.player?.plus(1),
+          peerFrame,
+          runtimeFrameFloor,
+      )
+      return false
+    }
+    return validatePeer(source) { PeerFrameWindow.validateRuntimeFrame(peerFrame, frame) }
+  }
+
+  private fun consumeReplayWork(peerFrame: Long, source: PeerEventSource?): Boolean {
+    source ?: return true
+    val requested = (frame - peerFrame).coerceAtLeast(0)
+    val used = replayWorkBySource[source] ?: 0L
+    if (requested > StateLimits.NETPLAY_REPLAY_WORK_FRAMES - used) {
+      val failure =
+          IOException(
+              "Player ${source.player + 1} exceeded the " +
+                  "${StateLimits.NETPLAY_REPLAY_WORK_FRAMES}-frame replay budget")
+      eventQueue.discardSource(source)
+      source.reject(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK, failure)
+      return false
+    }
+    replayWorkBySource[source] = used + requested
+    lastDispatchReplayFrames += requested
+    return true
+  }
 
   private inline fun validatePeer(source: PeerEventSource?, validation: () -> Unit): Boolean =
       try {
@@ -436,7 +496,7 @@ class LinkedController(
       } catch (e: IOException) {
         LOG.info("Rejecting player {} frame at controller frame {}: {}",
             source?.player?.plus(1), frame, e.message)
-        source?.player?.let(eventQueue::discardSource)
+        source?.let(eventQueue::discardSource)
         source?.reject(ProtocolErrorReason.INVALID_FRAME, e)
         false
       }
@@ -498,11 +558,11 @@ class LinkedController(
 
   private fun eventSource(event: Event): Any? =
       when (event) {
-        is PeerLoadedGameEvent -> event.source?.player
-        is SessionCheckpointEvent -> event.source?.player
-        is RemoteButtonStateEvent -> event.source?.player
-        is ReceivedRemoteResetEvent -> event.source?.player
-        is ReceivedRemoteStopEvent -> event.source?.player
+        is PeerLoadedGameEvent -> event.source
+        is SessionCheckpointEvent -> event.source
+        is RemoteButtonStateEvent -> event.source
+        is ReceivedRemoteResetEvent -> event.source
+        is ReceivedRemoteStopEvent -> event.source
         else -> null
       }
 

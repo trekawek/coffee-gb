@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.controller.link.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
 import eu.rekawek.coffeegb.controller.network.Connection.ProtocolErrorReason
+import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerButtonStateEvent
@@ -171,6 +172,68 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun checkpointFloorDropsDelayedRuntimeAndEmptyCheckpointCanRestartLater() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        )
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val source = PeerEventSource(0) { reason, _ -> failures += reason }
+
+    eventBus.post(SessionCheckpointEvent(100, emptyList(), source))
+    sut.runFrame()
+    assertEquals(0, sut.activeSessionCount())
+    assertEquals(101, sut.currentFrame())
+
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            99,
+            Input(listOf(Button.A), emptyList()),
+            player = 0,
+            source = source,
+        ))
+    eventBus.post(ReceivedRemoteResetEvent(99, player = 0, source = source))
+    eventBus.post(ReceivedRemoteStopEvent(99, player = 0, source = source))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            99,
+            player = 0,
+            source = source,
+        ))
+    sut.runFrame()
+    assertTrue(failures.isEmpty(), "old-generation runtime should be discarded, not fatal")
+    assertEquals(0, sut.activeSessionCount())
+    assertEquals(102, sut.currentFrame())
+
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            sut.currentFrame(),
+            player = 0,
+            source = source,
+        ))
+    sut.runFrame()
+    assertEquals(1, sut.activeSessionCount())
+    assertTrue(failures.isEmpty())
+    eventBus.close()
+  }
+
+  @Test
   fun peerWithEmptyMbc2SaveStartsSession() {
     val eventBus = EventBusImpl()
     val sut = LinkedController(eventBus, EmulatorProperties(), null)
@@ -288,6 +351,55 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun cumulativeRollbackWorkRejectsOnlyOffendingConnection() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    sut.runFrame()
+    setControllerFrame(sut, StateLimits.NETPLAY_ROLLBACK_FRAMES)
+
+    eventBus.post(ReceivedRemoteResetEvent(0, player = 1, source = offender))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            player = 1,
+            source = offender,
+        ))
+    eventBus.post(ReceivedRemoteResetEvent(0, player = 1, source = offender))
+    sut.runFrame()
+
+    assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
+    assertEquals(StateLimits.NETPLAY_REPLAY_WORK_FRAMES, sut.lastDispatchReplayFrames)
+    assertEquals(1, sut.activeSessionCount())
+
+    val replacementFailures = mutableListOf<ProtocolErrorReason>()
+    val replacement = PeerEventSource(1) { reason, _ -> replacementFailures += reason }
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            sut.currentFrame(),
+            player = 1,
+            source = replacement,
+        ))
+    sut.runFrame()
+    assertEquals(2, sut.activeSessionCount())
+    assertTrue(replacementFailures.isEmpty())
+    eventBus.close()
+  }
+
+  @Test
   fun fourPlayerControllerRunsAllConsolesAndLabelsLocalAndRemoteInput() {
     val eventBus = EventBusImpl()
     val sut =
@@ -344,6 +456,65 @@ class LinkedControllerTest {
     sut.runFrame()
     assertEquals(3, sut.activeSessionCount())
     assertTrue(sut.stateHistory.getHead().frame > previousFrame)
+    eventBus.close()
+  }
+
+  @Test
+  fun existingFourPlayerPeerReloadUsesCurrentFrameWhileNewSlotUsesZeroFrame() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 0,
+        )
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<Pair<Int, ProtocolErrorReason>>()
+    val existing = PeerEventSource(1) { reason, _ -> failures += 1 to reason }
+    val joining = PeerEventSource(2) { reason, _ -> failures += 2 to reason }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            player = 1,
+            source = existing,
+        ))
+    sut.runFrame()
+    setControllerFrame(sut, StateLimits.NETPLAY_FUTURE_FRAMES + 10)
+
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            sut.currentFrame(),
+            player = 1,
+            source = existing,
+        ))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            player = 2,
+            source = joining,
+        ))
+    sut.runFrame()
+
+    assertTrue(failures.isEmpty())
+    assertEquals(3, sut.activeSessionCount())
     eventBus.close()
   }
 

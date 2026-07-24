@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.network
 
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.core.events.EventBus
 import java.io.IOException
@@ -8,6 +9,10 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.Volatile
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -30,6 +35,18 @@ class TcpServer(
   private val pendingConnections = ConcurrentHashMap<Socket, Connection>()
 
   private val lock = Any()
+
+  private val pendingPlayers = mutableSetOf<Int>()
+
+  private val handshakeExecutor =
+      ThreadPoolExecutor(
+          StateLimits.NETPLAY_HANDSHAKE_WORKERS,
+          StateLimits.NETPLAY_HANDSHAKE_WORKERS,
+          0,
+          TimeUnit.MILLISECONDS,
+          ArrayBlockingQueue(StateLimits.NETPLAY_PENDING_HANDSHAKES),
+          { task -> Thread(task, "netplay-handshake-worker").also { it.isDaemon = true } },
+      )
 
   @Volatile private var sessionStarted = false
 
@@ -57,15 +74,34 @@ class TcpServer(
     }
     serverSocket = null
     stopClients()
+    handshakeExecutor.shutdownNow()
     eventBus.post(ConnectionController.ServerStoppedEvent())
   }
 
   private fun accept(listener: ServerSocket) {
     val socket = listener.accept()
-    pendingSockets += socket
+    val admitted =
+        synchronized(lock) {
+          if (doStop || pendingSockets.size >= StateLimits.NETPLAY_PENDING_HANDSHAKES) {
+            false
+          } else {
+            pendingSockets += socket
+            true
+          }
+        }
+    if (!admitted) {
+      LOG.info("Rejecting connection from {}: pending handshake limit reached", socket.inetAddress)
+      try {
+        Connection.reject(socket.getOutputStream(), Connection.RejectionReason.SERVER_BUSY)
+      } finally {
+        socket.close()
+      }
+      return
+    }
+    var player: Int? = null
     try {
       TcpClient.configure(socket)
-      val player = synchronized(lock) { firstAvailablePlayer() }
+      player = synchronized(lock) { reservePlayer() }
       if (player == null) {
         LOG.info("Rejecting extra connection from {}: {} session is full", socket.inetAddress, mode)
         try {
@@ -76,15 +112,26 @@ class TcpServer(
         }
         return
       }
+      val reservedPlayer = requireNotNull(player)
       val connection =
-          Connection(socket.getInputStream(), socket.getOutputStream(), eventBus, true, mode, player)
-      pendingConnections[socket] = connection
-      Thread(
-              { completeHandshake(socket, connection, player) },
-              "netplay-handshake-${socket.port}",
+          Connection(
+              socket.getInputStream(),
+              socket.getOutputStream(),
+              eventBus,
+              true,
+              mode,
+              reservedPlayer,
           )
-          .start()
+      pendingConnections[socket] = connection
+      handshakeExecutor.execute { completeHandshake(socket, connection, reservedPlayer) }
+    } catch (e: RejectedExecutionException) {
+      synchronized(lock) { player?.let(pendingPlayers::remove) }
+      pendingSockets.remove(socket)
+      pendingConnections.remove(socket)?.close()
+      socket.close()
+      if (!doStop) throw IOException("Netplay handshake executor is full", e)
     } catch (e: IOException) {
+      synchronized(lock) { player?.let(pendingPlayers::remove) }
       pendingSockets.remove(socket)
       socket.close()
       throw e
@@ -100,6 +147,7 @@ class TcpServer(
       val handle = ClientHandle(player, socket, connection)
       claimed =
           synchronized(lock) {
+            pendingPlayers.remove(player)
             if (doStop || clients.containsKey(player)) false
             else {
               clients[player] = handle
@@ -131,14 +179,26 @@ class TcpServer(
     } catch (e: IOException) {
       if (!doStop) LOG.info("Player {} capability handshake failed: {}", player + 1, e.message)
     } finally {
+      synchronized(lock) { pendingPlayers.remove(player) }
       pendingConnections.remove(socket)
       pendingSockets.remove(socket)
       if (!claimed) closeConnection(connection, socket)
     }
   }
 
-  private fun firstAvailablePlayer(): Int? =
-      (1 until mode.playerCount).firstOrNull { !clients.containsKey(it) }
+  private fun reservePlayer(): Int? {
+    if (mode == LinkMode.NORMAL) {
+      // Normal mode deliberately permits several speculative handshakes for its single slot so a
+      // silent peer cannot monopolize admission. The first completed capability exchange claims it.
+      return 1.takeUnless { clients.containsKey(it) }
+    }
+    val player =
+        (1 until mode.playerCount).firstOrNull {
+          !clients.containsKey(it) && it !in pendingPlayers
+        }
+    player?.let(pendingPlayers::add)
+    return player
+  }
 
   private fun startSessionIfFull(lastHost: String) {
     val toStart =
@@ -228,6 +288,7 @@ class TcpServer(
     doStop = true
     serverSocket?.close()
     stopClients()
+    handshakeExecutor.shutdownNow()
   }
 
   private fun stopClients() {
@@ -237,7 +298,14 @@ class TcpServer(
     pendingConnections.clear()
     clients.values.forEach { closeConnection(it.connection, it.socket) }
     clients.clear()
+    synchronized(lock) { pendingPlayers.clear() }
   }
+
+  internal fun pendingHandshakeCount(): Int = pendingSockets.size
+
+  internal fun pendingConnectionCount(): Int = pendingConnections.size
+
+  internal fun handshakeWorkerCount(): Int = handshakeExecutor.poolSize
 
   private fun closeConnection(connection: Connection, socket: Socket) {
     try {

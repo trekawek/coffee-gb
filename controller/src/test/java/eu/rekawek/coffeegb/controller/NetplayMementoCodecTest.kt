@@ -30,7 +30,9 @@ class NetplayMementoCodecTest {
       val second = NetplayMementoCodec.encodeGameboy(memento)
 
       assertContentEquals(first, second)
-      gameboy.restoreFromMemento(NetplayMementoCodec.decodeGameboy(first))
+      val decoded = NetplayMementoCodec.decodeGameboy(first)
+      assertContentEquals(first, NetplayMementoCodec.encodeGameboy(decoded))
+      gameboy.restoreFromMemento(decoded)
     } finally {
       gameboy.stop()
       gameboy.close()
@@ -42,11 +44,23 @@ class NetplayMementoCodecTest {
   fun fourPlayerSessionStateRoundTrips() {
     val eventBus = EventBusImpl()
     val adapter = FourPlayerAdapter()
-    val session = Session(configuration(), eventBus, null, adapter.endpoint(0))
+    val endpoint = adapter.endpoint(0)
+    val session = Session(configuration(), eventBus, null, endpoint)
     try {
+      // Exercise a non-default shared-adapter phase, rather than proving only the zero state.
+      val adapterState = endpoint.saveToMemento()
+      val phaseType =
+          adapterState.javaClass.recordComponents.single { it.name == "phase" }.type
+      val transmission = phaseType.enumConstants.single { (it as Enum<*>).name == "TRANSMISSION" }
+      @Suppress("UNCHECKED_CAST")
+      endpoint.restoreFromMemento(
+          replaceRecordComponent(adapterState, "phase", transmission) as Memento<SerialEndpoint>)
       val encoded = NetplayMementoCodec.encodeSession(session.saveToMemento())
+      val decoded = NetplayMementoCodec.decodeSession(encoded)
 
-      session.restoreFromMemento(NetplayMementoCodec.decodeSession(encoded))
+      assertContentEquals(encoded, NetplayMementoCodec.encodeSession(decoded))
+      session.restoreFromMemento(decoded)
+      assertContentEquals(encoded, NetplayMementoCodec.encodeSession(session.saveToMemento()))
     } finally {
       session.close()
     }

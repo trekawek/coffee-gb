@@ -79,5 +79,77 @@ class EventQueueTest {
     }
   }
 
-  private data class WeightedEvent(val bytes: Long, val source: String = "local") : Event
+  @Test
+  fun globalLimitKeepsAlreadyAcceptedEventsFromEverySource() {
+    val bus = EventBusImpl()
+    val received = mutableListOf<WeightedEvent>()
+    val queue =
+        EventQueue(
+            bus,
+            maxEvents = 4,
+            maxBytes = 12,
+            eventWeight = { (it as WeightedEvent).bytes },
+            eventSource = { (it as WeightedEvent).source },
+            maxSourceEvents = 3,
+            maxSourceBytes = 9,
+        )
+    queue.register<WeightedEvent> { received += it }
+    val first = Source("first")
+    val second = Source("second")
+    val overflow = Source("overflow")
+    try {
+      bus.post(WeightedEvent(3, first))
+      bus.post(WeightedEvent(3, second))
+      bus.post(WeightedEvent(3, first))
+      bus.post(WeightedEvent(3, second))
+      val error =
+          assertFailsWith<EventQueue.EventQueueFullException> {
+            bus.post(WeightedEvent(1, overflow))
+          }
+      assertEquals(true, error.global)
+
+      queue.dispatch()
+      assertEquals(listOf(first, second, first, second), received.map { it.source })
+    } finally {
+      bus.close()
+    }
+  }
+
+  @Test
+  fun sourceBudgetsUseConnectionIdentityAndDiscardDoesNotPoisonReplacement() {
+    val bus = EventBusImpl()
+    val received = mutableListOf<WeightedEvent>()
+    val queue =
+        EventQueue(
+            bus,
+            maxEvents = 4,
+            maxBytes = 40,
+            eventWeight = { (it as WeightedEvent).bytes },
+            eventSource = { (it as WeightedEvent).source },
+            maxSourceEvents = 2,
+            maxSourceBytes = 20,
+        )
+    queue.register<WeightedEvent> { received += it }
+    val old = Source("same-player")
+    val replacement = Source("same-player")
+    try {
+      bus.post(WeightedEvent(10, old))
+      bus.post(WeightedEvent(10, old))
+      queue.discardSource(old)
+      bus.post(WeightedEvent(10, replacement))
+      queue.dispatch()
+
+      assertEquals(listOf(replacement), received.map { it.source })
+    } finally {
+      bus.close()
+    }
+  }
+
+  private data class WeightedEvent(val bytes: Long, val source: Any = LOCAL) : Event
+
+  private data class Source(val label: String)
+
+  private companion object {
+    val LOCAL = Any()
+  }
 }

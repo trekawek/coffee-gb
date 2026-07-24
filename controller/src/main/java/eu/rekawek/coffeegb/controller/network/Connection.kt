@@ -62,11 +62,15 @@ class Connection(
 
   @Volatile private var doStop = false
 
-  @Volatile private var serverHandshakeComplete = !server
-
   @Volatile private var controllerFailure: ProtocolException? = null
 
-  private val pendingOutboundMessages = ArrayDeque<ByteArray>()
+  private var outboundPhase = if (server) OutboundPhase.HANDSHAKE else OutboundPhase.ACTIVE
+
+  private var startRequested = false
+
+  private val pendingBootstrapMessages = ArrayDeque<ByteArray>()
+
+  private val pendingRuntimeMessages = ArrayDeque<ByteArray>()
 
   private var pendingOutboundBytes = 0L
 
@@ -81,6 +85,8 @@ class Connection(
   private var pendingCheckpointBytes = 0L
 
   private val peerSource: PeerEventSource
+
+  @Volatile private var peerSourceDisconnected = false
 
   init {
     val handshake =
@@ -151,8 +157,12 @@ class Connection(
     eventBus.register<LinkedController.SessionStateReadyEvent> {
       if (server && mode == LinkMode.FOUR_PLAYER_ADAPTER) {
         sendSafely {
-          it.states.forEach(::sendRom)
-          sendSynchronization(it.frame)
+          // A checkpoint is one output transaction. Runtime traffic cannot split its state
+          // records from the synchronization marker that commits them.
+          synchronized(outputLock) {
+            it.states.forEach(::sendRom)
+            sendSynchronization(it.frame)
+          }
         }
       }
     }
@@ -224,7 +234,7 @@ class Connection(
     battery?.let(buf::put)
     snapshot?.let(buf::put)
     sessionSnapshot?.let(buf::put)
-    sendMessage(buf)
+    sendMessage(buf, OutboundMessage.BOOTSTRAP)
     LOG.atInfo().log("Sent player {} ROM ({} -> {} bytes compressed)", event.player + 1,
         event.romFile.size, rom.size)
   }
@@ -240,7 +250,7 @@ class Connection(
     buf.put(event.input.releasedButtons.size.toByte())
     event.input.pressedButtons.forEach { buf.put(it.ordinal.toByte()) }
     event.input.releasedButtons.forEach { buf.put(it.ordinal.toByte()) }
-    sendMessage(buf)
+    sendMessage(buf, OutboundMessage.RUNTIME)
     LOG.atDebug().log("Sent {}", event)
   }
 
@@ -249,26 +259,33 @@ class Connection(
     buf.put(command)
     buf.put(eventPlayer.toByte())
     buf.putLong(frame)
-    sendMessage(buf)
+    sendMessage(buf, OutboundMessage.RUNTIME)
   }
 
   private fun sendSynchronization(frame: Long) {
     val buf = ByteBuffer.allocate(9)
     buf.put(SYNCHRONIZE)
     buf.putLong(frame)
-    sendMessage(buf)
+    sendMessage(buf, OutboundMessage.BOOTSTRAP)
   }
 
-  private fun sendMessage(buf: ByteBuffer) {
+  private fun sendMessage(buf: ByteBuffer, kind: OutboundMessage = OutboundMessage.RUNTIME) {
     synchronized(outputLock) {
       if (doStop) return
-      if (server && !serverHandshakeComplete) {
+      if (server &&
+          (outboundPhase == OutboundPhase.HANDSHAKE ||
+              (outboundPhase == OutboundPhase.BOOTSTRAP && kind == OutboundMessage.RUNTIME))) {
         val message = buf.array().copyOf(buf.position())
-        if (pendingOutboundMessages.size >= StateLimits.NETPLAY_HANDSHAKE_PENDING_MESSAGES ||
+        val pendingCount = pendingBootstrapMessages.size + pendingRuntimeMessages.size
+        if (pendingCount >= StateLimits.NETPLAY_HANDSHAKE_PENDING_MESSAGES ||
             message.size > StateLimits.NETPLAY_HANDSHAKE_PENDING_BYTES - pendingOutboundBytes) {
           throw IOException("Netplay handshake outbound queue limit exceeded")
         }
-        pendingOutboundMessages += message
+        if (kind == OutboundMessage.BOOTSTRAP) {
+          pendingBootstrapMessages += message
+        } else {
+          pendingRuntimeMessages += message
+        }
         pendingOutboundBytes += message.size
         return
       }
@@ -280,9 +297,14 @@ class Connection(
   /** Releases a client after the host has accepted its physical link port. */
   fun startSession() {
     check(server)
-    val buf = ByteBuffer.allocate(1)
-    buf.put(START)
-    sendMessage(buf)
+    synchronized(outputLock) {
+      check(outboundPhase != OutboundPhase.ACTIVE) { "Netplay session already started" }
+      if (outboundPhase == OutboundPhase.HANDSHAKE) {
+        startRequested = true
+      } else {
+        finishStartLocked()
+      }
+    }
   }
 
   override fun run() {
@@ -746,6 +768,14 @@ class Connection(
 
   override fun close() {
     doStop = true
+    if (!peerSourceDisconnected) {
+      synchronized(outputLock) {
+        if (!peerSourceDisconnected) {
+          peerSourceDisconnected = true
+          eventBus.post(PeerEventSourceDisconnectedEvent(peerSource))
+        }
+      }
+    }
     eventBus.close()
     var failure: IOException? = null
     try {
@@ -812,19 +842,52 @@ class Connection(
   }
 
   internal fun completeServerHandshake() {
-    if (serverHandshakeComplete) return
+    synchronized(outputLock) {
+      if (outboundPhase != OutboundPhase.HANDSHAKE) return
+    }
     val capabilities = input.read()
     if (capabilities == -1) throw CompatibilityException("Truncated netplay capability handshake")
     if (capabilities and NETPLAY_STATE_CAPABILITY == 0) {
       throw CompatibilityException("The client does not support the protocol-v7 netplay state codec.")
     }
     synchronized(outputLock) {
-      serverHandshakeComplete = true
-      pendingOutboundMessages.forEach(output::write)
-      if (pendingOutboundMessages.isNotEmpty()) output.flush()
-      pendingOutboundMessages.clear()
-      pendingOutboundBytes = 0
+      if (outboundPhase != OutboundPhase.HANDSHAKE) return
+      outboundPhase = OutboundPhase.BOOTSTRAP
+      pendingBootstrapMessages.forEach { message ->
+        output.write(message)
+        pendingOutboundBytes -= message.size
+      }
+      pendingBootstrapMessages.clear()
+      if (startRequested) {
+        finishStartLocked()
+      } else {
+        output.flush()
+      }
     }
+  }
+
+  /** Must be called with [outputLock] held. START and queued runtime traffic are one commit. */
+  private fun finishStartLocked() {
+    output.writeByte(START.toInt())
+    outboundPhase = OutboundPhase.ACTIVE
+    startRequested = false
+    pendingRuntimeMessages.forEach { message ->
+      output.write(message)
+      pendingOutboundBytes -= message.size
+    }
+    pendingRuntimeMessages.clear()
+    output.flush()
+  }
+
+  private enum class OutboundPhase {
+    HANDSHAKE,
+    BOOTSTRAP,
+    ACTIVE,
+  }
+
+  private enum class OutboundMessage {
+    BOOTSTRAP,
+    RUNTIME,
   }
 
   private data class Handshake(val mode: LinkMode, val player: Int)
@@ -834,6 +897,7 @@ class Connection(
       val userMessage: String,
   ) {
     SERVER_FULL(1, "The netplay server is already full."),
+    SERVER_BUSY(2, "The netplay server has too many pending connections."),
   }
 
   internal class ConnectionRejectedException(val reason: RejectionReason) :
@@ -866,6 +930,10 @@ class Connection(
         5,
         "The peer sent a frame outside the safe rollback window. " +
             "The connection was closed safely.",
+    ),
+    EXCESSIVE_REPLAY_WORK(
+        6,
+        "The peer requested excessive rollback replay work. The connection was closed safely.",
     ),
   }
 
@@ -903,6 +971,8 @@ class Connection(
       val states: List<PeerLoadedGameEvent>,
       internal val source: PeerEventSource? = null,
   ) : Event
+
+  internal data class PeerEventSourceDisconnectedEvent(val source: PeerEventSource) : Event
 
   data class RequestResetEvent(val frame: Long, val player: Int = 0) : Event
 

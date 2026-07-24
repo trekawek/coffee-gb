@@ -40,7 +40,7 @@ class PeerFrameWindowTest {
 
   @Test
   fun checkpointRequiresMatchingStatesAndRuntimeHeadroom() {
-    assertFailsWith<IOException> { PeerFrameWindow.validateCheckpoint(50, emptyList()) }
+    assertEquals(50, PeerFrameWindow.validateCheckpoint(50, emptyList()))
     assertFailsWith<IOException> { PeerFrameWindow.validateCheckpoint(50, listOf(49, 50)) }
     assertEquals(50, PeerFrameWindow.validateCheckpoint(50, listOf(50, 50)))
     assertEquals(
