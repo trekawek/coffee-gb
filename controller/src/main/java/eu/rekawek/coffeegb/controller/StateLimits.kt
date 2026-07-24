@@ -49,15 +49,18 @@ internal object StateLimits {
   const val NETPLAY_OUTBOUND_MESSAGES = 512
   const val NETPLAY_OUTBOUND_BYTES = NETPLAY_ENCODED_MESSAGE_BYTES.toLong() * 2
   const val NETPLAY_WRITER_CLOSE_MILLIS = 250L
+  const val NETPLAY_PROTOCOL_ERROR_GRACE_MILLIS = 50L
   const val NETPLAY_EVENT_QUEUE_EVENTS = 512
-  const val NETPLAY_EVENT_QUEUE_BYTES = NETPLAY_DECODED_MESSAGE_BYTES.toLong() * 3
   // Four-player hosting has one local producer and three remote connections. Reserve one equal
-  // share for each so saturated peers cannot make the next honest producer trip the global cap.
+  // protocol-sized message for each so saturated peers cannot make the next honest producer trip
+  // the global cap. Queue admission charges the exact retained payload byte arrays; decoded
+  // memento graphs have their own per-payload and aggregate decode limits above.
   const val NETPLAY_EVENT_QUEUE_SOURCES = 4
+  const val NETPLAY_EVENT_QUEUE_SOURCE_BYTES = NETPLAY_DECODED_MESSAGE_BYTES.toLong()
+  const val NETPLAY_EVENT_QUEUE_BYTES =
+      NETPLAY_EVENT_QUEUE_SOURCE_BYTES * NETPLAY_EVENT_QUEUE_SOURCES
   const val NETPLAY_EVENT_QUEUE_SOURCE_EVENTS =
       NETPLAY_EVENT_QUEUE_EVENTS / NETPLAY_EVENT_QUEUE_SOURCES
-  const val NETPLAY_EVENT_QUEUE_SOURCE_BYTES =
-      NETPLAY_EVENT_QUEUE_BYTES / NETPLAY_EVENT_QUEUE_SOURCES
   const val NETPLAY_EVENT_DISPATCH_EVENTS = 64
 
   // JEP 290 graph limits for the local-only legacy migration reader.

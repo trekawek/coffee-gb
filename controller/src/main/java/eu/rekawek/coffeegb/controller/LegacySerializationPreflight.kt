@@ -43,33 +43,46 @@ internal object LegacySerializationPreflight {
       }
     }
 
-    private fun readContent(token: Int = input.readUnsignedByte()): Handle? =
-        withContentDepth {
-          when (token) {
-            ObjectStreamConstants.TC_NULL.toInt() -> null
-            ObjectStreamConstants.TC_REFERENCE.toInt() -> reference()
-            ObjectStreamConstants.TC_CLASSDESC.toInt() -> readNewClassDescriptor()
-            ObjectStreamConstants.TC_PROXYCLASSDESC.toInt() ->
-                throw InvalidClassException("Proxy classes are forbidden in legacy state")
-            ObjectStreamConstants.TC_OBJECT.toInt() -> readObject()
-            ObjectStreamConstants.TC_STRING.toInt() ->
-                readString(input.readUnsignedShort().toLong())
-            ObjectStreamConstants.TC_LONGSTRING.toInt() -> readString(input.readLong())
-            ObjectStreamConstants.TC_ARRAY.toInt() -> readArray()
-            ObjectStreamConstants.TC_CLASS.toInt() -> readClassObject()
-            ObjectStreamConstants.TC_ENUM.toInt() -> readEnum()
-            ObjectStreamConstants.TC_RESET.toInt() -> {
-              handles.clear()
-              nextHandle = ObjectStreamConstants.baseWireHandle
-              null
-            }
-            ObjectStreamConstants.TC_EXCEPTION.toInt() ->
-                throw InvalidObjectException("Exception records are forbidden in legacy state")
-            else ->
-                throw InvalidObjectException(
-                    "Unexpected legacy serialization token 0x${token.toString(16)}")
+    private fun readContent(
+        token: Int = input.readUnsignedByte(),
+        graphValue: Boolean = true,
+    ): Handle? {
+      val read = {
+        when (token) {
+          ObjectStreamConstants.TC_NULL.toInt() -> null
+          ObjectStreamConstants.TC_REFERENCE.toInt() -> reference()
+          ObjectStreamConstants.TC_CLASSDESC.toInt() -> readNewClassDescriptor()
+          ObjectStreamConstants.TC_PROXYCLASSDESC.toInt() ->
+              throw InvalidClassException("Proxy classes are forbidden in legacy state")
+          ObjectStreamConstants.TC_OBJECT.toInt() -> readObject()
+          ObjectStreamConstants.TC_STRING.toInt() ->
+              readString(input.readUnsignedShort().toLong())
+          ObjectStreamConstants.TC_LONGSTRING.toInt() -> readString(input.readLong())
+          ObjectStreamConstants.TC_ARRAY.toInt() -> readArray()
+          ObjectStreamConstants.TC_CLASS.toInt() -> readClassObject()
+          ObjectStreamConstants.TC_ENUM.toInt() -> readEnum()
+          ObjectStreamConstants.TC_RESET.toInt() -> {
+            handles.clear()
+            nextHandle = ObjectStreamConstants.baseWireHandle
+            null
           }
+          ObjectStreamConstants.TC_EXCEPTION.toInt() ->
+              throw InvalidObjectException("Exception records are forbidden in legacy state")
+          else ->
+              throw InvalidObjectException(
+                  "Unexpected legacy serialization token 0x${token.toString(16)}")
         }
+      }
+      return if (graphValue && token.createsGraphValue()) withContentDepth(read) else read()
+    }
+
+    private fun Int.createsGraphValue(): Boolean =
+        this == ObjectStreamConstants.TC_OBJECT.toInt() ||
+            this == ObjectStreamConstants.TC_STRING.toInt() ||
+            this == ObjectStreamConstants.TC_LONGSTRING.toInt() ||
+            this == ObjectStreamConstants.TC_ARRAY.toInt() ||
+            this == ObjectStreamConstants.TC_CLASS.toInt() ||
+            this == ObjectStreamConstants.TC_ENUM.toInt()
 
     private fun readNewClassDescriptor(): ClassDescriptorHandle {
       val name = readModifiedUtf(input.readUnsignedShort().toLong(), capture = true)
@@ -103,7 +116,8 @@ internal object LegacySerializationPreflight {
             ?: throw InvalidClassException("Legacy field name is too long", name)
         val typeName =
             if (typeCode == 'L' || typeCode == '[') {
-              val type = readContent() as? StringHandle
+              // A field signature is serialization metadata, not another application graph level.
+              val type = readContent(graphValue = false) as? StringHandle
                   ?: throw InvalidClassException("Invalid legacy field descriptor", name)
               type.value ?: throw InvalidClassException("Legacy field type is too long", name)
             } else {

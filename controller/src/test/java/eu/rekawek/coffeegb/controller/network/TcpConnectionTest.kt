@@ -525,6 +525,101 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun controllerRejectionCancelsABlockedWriterAndReleasesOnlyThatSlot() {
+    val port = ServerSocket(0).use { it.localPort }
+    val started = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val disconnected = LinkedBlockingQueue<ConnectionController.ServerPlayerDisconnectedEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { started.add(it) }
+    serverBus.register<ConnectionController.ServerPlayerDisconnectedEvent> { disconnected.add(it) }
+    val host = linkedController(serverBus, LinkMode.FOUR_PLAYER_ADAPTER, 0)
+    serverBus.post(LoadRomEvent(ROM))
+    host.runFrame()
+
+    val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
+    this.server = server
+    threads += Thread(server, "controller-rejection-server").also { it.start() }
+    assertNotNull(started.poll(5, TimeUnit.SECONDS))
+
+    val slow = handshakenRawClient(port)
+    val healthyBus = EventBusImpl().also(extraBuses::add)
+    val healthyHandshake =
+        LinkedBlockingQueue<ConnectionController.ClientHandshakeCompletedEvent>()
+    val healthyInputs = LinkedBlockingQueue<LinkedController.RemoteButtonStateEvent>()
+    healthyBus.register<ConnectionController.ClientHandshakeCompletedEvent> {
+      healthyHandshake.add(it)
+    }
+    healthyBus.register<LinkedController.RemoteButtonStateEvent> { healthyInputs.add(it) }
+    val healthy = TcpClient("localhost:$port", healthyBus)
+    extraClients += healthy
+    threads += Thread(healthy).also { it.start() }
+    assertEquals(2, assertNotNull(healthyHandshake.poll(5, TimeUnit.SECONDS)).player)
+
+    try {
+      val noisyRom = ByteArray(16 * 1024 * 1024)
+      ROM.readBytes().copyInto(noisyRom)
+      val randomTail = ByteArray(noisyRom.size - 0x8000)
+          .also { java.util.Random(314).nextBytes(it) }
+      randomTail.copyInto(noisyRom, destinationOffset = 0x8000)
+      serverBus.post(
+          LinkedController.SessionStateReadyEvent(
+              host.currentFrame(),
+              listOf(
+                  LinkedController.LocalRomLoadedEvent(
+                      noisyRom,
+                      null,
+                      null,
+                      GameboyType.DMG,
+                      Gameboy.BootstrapMode.SKIP,
+                      host.currentFrame(),
+                      player = 0,
+                  )),
+          ))
+
+      val received = LinkedBlockingQueue<LinkedController.RemoteButtonStateEvent>()
+      serverBus.register<LinkedController.RemoteButtonStateEvent> { received.add(it) }
+      DataOutputStream(slow.getOutputStream()).also { output ->
+        output.writeByte(0x03)
+        output.writeByte(1)
+        output.writeLong(Int.MAX_VALUE.toLong())
+        output.writeByte(0)
+        output.writeByte(0)
+        output.flush()
+      }
+      assertNotNull(received.poll(5, TimeUnit.SECONDS), "host did not receive hostile input")
+      host.runFrame()
+
+      val dropped =
+          assertNotNull(
+              disconnected.poll(5, TimeUnit.SECONDS),
+              "controller rejection did not release the blocked socket",
+          )
+      assertEquals(1, dropped.player)
+
+      serverBus.post(
+          LinkedController.LocalButtonStateEvent(
+              host.currentFrame(),
+              Input(listOf(Button.A), emptyList()),
+              player = 0,
+          ))
+      assertNotNull(healthyInputs.poll(5, TimeUnit.SECONDS), "healthy peer stopped responding")
+      host.runFrame()
+
+      val replacementBus = EventBusImpl().also(extraBuses::add)
+      val replacementHandshake =
+          LinkedBlockingQueue<ConnectionController.ClientHandshakeCompletedEvent>()
+      replacementBus.register<ConnectionController.ClientHandshakeCompletedEvent> {
+        replacementHandshake.add(it)
+      }
+      val replacement = TcpClient("localhost:$port", replacementBus)
+      extraClients += replacement
+      threads += Thread(replacement).also { it.start() }
+      assertEquals(1, assertNotNull(replacementHandshake.poll(5, TimeUnit.SECONDS)).player)
+    } finally {
+      slow.close()
+    }
+  }
+
+  @Test
   fun fourPlayerServerRejectsAnExtraClientWithAClearReason() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()

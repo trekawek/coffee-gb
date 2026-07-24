@@ -169,10 +169,10 @@ class LegacyMementoCodecTest {
 
   @Test
   fun preflightAcceptsExactContentDepthAndRejectsBoundaryPlusOne() {
-    fun nestedArrays(depth: Int): Any {
-      var nested: Any = emptyArray<Any?>()
-      repeat(depth - 1) { nested = arrayOf(nested) }
-      return nested
+    fun nestedArrays(depth: Int, leaf: Any? = null): Any {
+      var nested: Any? = leaf
+      repeat(depth) { nested = arrayOf(nested) }
+      return checkNotNull(nested)
     }
 
     LegacySerializationPreflight.validate(
@@ -185,6 +185,18 @@ class LegacyMementoCodecTest {
           StateLimits.GAME_SNAPSHOT.decodedBytes,
       )
     }
+
+    val mementoType = MemoryBattery(ByteArray(0)).saveToMemento().javaClass
+    val constructor = mementoType.declaredConstructors.single().also { it.isAccessible = true }
+    val nullBufferMemento = constructor.newInstance(null)
+    LegacySerializationPreflight.validate(
+        rawSerialize(
+            nestedArrays(
+                StateLimits.LEGACY_MAX_DEPTH.toInt() - 1,
+                nullBufferMemento,
+            )),
+        StateLimits.GAME_SNAPSHOT.decodedBytes,
+    )
   }
 
   @Test

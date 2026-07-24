@@ -45,6 +45,7 @@ class Connection(
     private val server: Boolean,
     requestedMode: LinkMode = LinkMode.NORMAL,
     assignedPlayer: Int = 1,
+    private val cancelTransport: (() -> Unit)? = null,
 ) : Runnable, AutoCloseable {
 
   private val input = DataInputStream(BufferedInputStream(inputStream))
@@ -372,6 +373,11 @@ class Connection(
       // An in-flight record remains included until the writer observes the closed stream.
       writerClosing = true
       outputLock.notifyAll()
+    }
+    try {
+      cancelTransport?.invoke()
+    } catch (closeFailure: Exception) {
+      cause.addSuppressed(closeFailure)
     }
     try {
       input.close()
@@ -841,6 +847,24 @@ class Connection(
       writerClosing = true
       outputLock.notifyAll()
     }
+    // Give an idle writer one short chance to send the diagnostic. Never wait for a peer to drain
+    // earlier state: independently cancel the raw transport at the deadline so the reader exits
+    // and TcpServer can release this player's slot.
+    Thread(
+            {
+              try {
+                writerThread.join(StateLimits.NETPLAY_PROTOCOL_ERROR_GRACE_MILLIS)
+              } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+              }
+              if (writerThread.isAlive) abortWriter(failure)
+            },
+            "netplay-rejection-$player",
+        )
+        .also {
+          it.isDaemon = true
+          it.start()
+        }
   }
 
   fun stop() {
@@ -1093,6 +1117,10 @@ class Connection(
   ) : Event
 
   internal data class ValidatedPeerResetEvent(val event: ReceivedRemoteResetEvent) : Event
+
+  internal data class ValidatedPeerStopEvent(val event: ReceivedRemoteStopEvent) : Event
+
+  internal data class ValidatedPeerCheckpointEvent(val event: SessionCheckpointEvent) : Event
 
   internal data class ValidatedPeerStateEvent(val event: PeerLoadedGameEvent) : Event
 
