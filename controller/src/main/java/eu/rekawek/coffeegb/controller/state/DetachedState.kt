@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.controller.MementoTypeRegistry
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.gpu.DmgPixelFifo
+import eu.rekawek.coffeegb.core.gpu.Gpu
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
@@ -202,6 +204,22 @@ data class CartridgeRtcRuntimeState(
     val slot: Mbc3RtcRuntimeState?,
 )
 
+/** First-pixel and window-rewind bookkeeping omitted by the pinned legacy DMG FIFO record. */
+data class DmgPixelFifoRuntimeState(
+    val linePixels: Int,
+    val outCount: Int,
+    val firstEntry: Int,
+    val firstBgp: Int,
+    val firstObp0: Int,
+    val firstObp1: Int,
+)
+
+/** Explicit timing-skeleton and pixel-producing FIFO ownership. Null on native CGB hardware. */
+data class DmgFifoRuntimeState(
+    val timing: DmgPixelFifoRuntimeState,
+    val output: DmgPixelFifoRuntimeState,
+)
+
 enum class MachineHardwareState {
   DMG,
   CGB,
@@ -245,6 +263,7 @@ class MachineState internal constructor(
     val root: RecordState,
     val rtcRuntime: CartridgeRtcRuntimeState,
     val hardware: MachineHardwareState,
+    val dmgFifoRuntime: DmgFifoRuntimeState?,
 ) {
   fun recordCount(className: String): Int =
       StateGraph.countRecords(root, className)
@@ -253,8 +272,10 @@ class MachineState internal constructor(
       other is MachineState &&
           root == other.root &&
           rtcRuntime == other.rtcRuntime &&
-          hardware == other.hardware
-  override fun hashCode(): Int = arrayOf(root, rtcRuntime, hardware).contentHashCode()
+          hardware == other.hardware &&
+          dmgFifoRuntime == other.dmgFifoRuntime
+  override fun hashCode(): Int =
+      arrayOf(root, rtcRuntime, hardware, dmgFifoRuntime).contentHashCode()
 }
 
 enum class HeldButtonState {
@@ -339,6 +360,7 @@ internal enum class ApplyStage {
 internal data class PreparedMachineState(
     val memento: Memento<Gameboy>,
     val rtcRuntime: Gameboy.RtcRuntimeState,
+    val dmgFifoRuntime: Gpu.DmgFifoRuntimeState?,
 )
 
 internal data class PreparedSessionState(
@@ -362,6 +384,7 @@ internal object DetachedStateAdapter {
           StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT),
           gameboy.captureRtcRuntimeState().toDetached(),
           MachineHardwareState.valueOf(gameboy.gameboyType.name),
+          gameboy.captureDmgFifoRuntimeState().toDetached(),
       )
 
   fun capture(session: Session): SessionState {
@@ -461,16 +484,19 @@ internal object DetachedStateAdapter {
     StateSemantics.validate(detached)
     @Suppress("UNCHECKED_CAST") val memento = detached as Memento<Gameboy>
     val rtcRuntime = state.rtcRuntime.toCore()
+    val dmgFifoRuntime = state.dmgFifoRuntime.toCore()
     try {
       gameboy.validateRtcRuntimeState(rtcRuntime)
+      gameboy.validateDmgFifoRuntimeState(dmgFifoRuntime)
     } catch (failure: IllegalArgumentException) {
-      throw StateApplyException("Detached cartridge RTC layout is incompatible", failure)
+      throw StateApplyException("Detached machine runtime layout is incompatible", failure)
     }
-    return PreparedMachineState(memento, rtcRuntime)
+    return PreparedMachineState(memento, rtcRuntime, dmgFifoRuntime)
   }
 
   private fun commit(gameboy: Gameboy, prepared: PreparedMachineState) {
     gameboy.restoreFromMemento(prepared.memento)
+    gameboy.restoreDmgFifoRuntimeState(prepared.dmgFifoRuntime)
     gameboy.restoreRtcRuntimeState(prepared.rtcRuntime)
   }
 
@@ -541,6 +567,22 @@ internal object DetachedStateAdapter {
         eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock.RuntimeState(
             it.emulationPaused, it.pauseStartedMillis)
       }
+
+  private fun Gpu.DmgFifoRuntimeState?.toDetached(): DmgFifoRuntimeState? =
+      this?.let {
+        DmgFifoRuntimeState(it.timing().toDetached(), it.output().toDetached())
+      }
+
+  private fun DmgPixelFifo.RuntimeState.toDetached(): DmgPixelFifoRuntimeState =
+      DmgPixelFifoRuntimeState(
+          linePixels(), outCount(), firstEntry(), firstBgp(), firstObp0(), firstObp1())
+
+  private fun DmgFifoRuntimeState?.toCore(): Gpu.DmgFifoRuntimeState? =
+      this?.let { Gpu.DmgFifoRuntimeState(it.timing.toCore(), it.output.toCore()) }
+
+  private fun DmgPixelFifoRuntimeState.toCore(): DmgPixelFifo.RuntimeState =
+      DmgPixelFifo.RuntimeState(
+          linePixels, outCount, firstEntry, firstBgp, firstObp0, firstObp1)
 }
 
 internal object StateGraph {

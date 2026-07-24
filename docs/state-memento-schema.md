@@ -15,6 +15,12 @@ The 11 explicit behavior tags are `Cpu.State`, `InterruptManager.InterruptType`,
 `FourPlayerAdapter.Phase`, and `Commands.MaskEnCmd.GameboyScreenMask`. Their portable form is the
 audited enum type ID plus ordinal; a missing type or out-of-range ordinal is rejected.
 
+`DmgPixelFifo$DmgPixelFifoMemento` deliberately retains its pinned seven-component Java
+serialization descriptor. The immutable Phase-1 `MachineState` carries `linePixels`, `outCount`,
+`firstEntry`, `firstBgp`, `firstObp0`, and `firstObp1` for both DMG dot machines in the separate
+primitive-only `DmgFifoRuntimeState` supplement. This closes current state ownership without
+altering the 1.7.13/1.7.14 migration schema listed below.
+
 - `eu.rekawek.coffeegb.core.genie.Genie$GenieMemento`: patches
 - `eu.rekawek.coffeegb.core.sound.FrameSequencer$FrameSequencerMemento`: step, previousBit, skipNextEdge
 - `eu.rekawek.coffeegb.core.sound.FrequencySweep$FrequencySweepMemento`: period, negate, shift, timer, shadowFreq, nr13, nr14, overflow, counterEnabled, negging, calculationDelay, unshiftedCalculation, restartHold, frequencyUpdatePending

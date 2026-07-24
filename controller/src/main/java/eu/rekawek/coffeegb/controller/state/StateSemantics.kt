@@ -25,11 +25,13 @@ internal object StateSemantics {
   }
 
   fun validateBarcodeRuntime(state: BarcodeBoyRuntimeState) {
-    state.copyPending()?.let { pending ->
-      if (pending.size != BARCODE_FRAME_SIZE) {
-        throw StateApplyException(
-            "Barcode runtime has pending frame length ${pending.size}, expected $BARCODE_FRAME_SIZE")
-      }
+    val pendingSize = state.pendingSize
+    if (pendingSize != null && pendingSize != BARCODE_FRAME_SIZE) {
+      throw StateApplyException(
+          "Barcode runtime has pending frame length $pendingSize, expected $BARCODE_FRAME_SIZE")
+    }
+    if (pendingSize != null) {
+      val pending = checkNotNull(state.copyPending())
       pending.forEachIndexed { index, value ->
         if (value !in 0..0xff) {
           throw StateApplyException("Barcode runtime has invalid pending[$index]=$value")
@@ -339,11 +341,12 @@ internal object StateSemantics {
             it.range("pendingInterruptWriteValue", 0, 0xff)
           })
       put("eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento",
-          constrained("HDMA block length, source progress, request ages, and line phases are bounded.") {
+          constrained("HDMA block length, signed source progress, request ages, and line phases are audited.") {
             it.range("length", 0, 0x7f); it.range("tick", -8, 31)
             it.range("src", 0, 0xffff); it.range("dst", 0, 0xffff)
-            // This is cumulative from the most recent source-register write, not per-block.
-            it.nonNegative("sourceBytesTransferred")
+            // This cumulative diagnostic/arbitration counter intentionally wraps as an Int
+            // across repeated HDMA5 starts. It is neither an allocation size nor an array cursor.
+            it.int("sourceBytesTransferred")
             listOf("hblankRequestAge", "nextHblankRequestAge").forEach { name -> it.nonNegative(name) }
             it.range("gpuLine", 0, 153); it.range("gpuTicksInLine", 0, 455)
           })

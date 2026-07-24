@@ -6,7 +6,9 @@ exact path match, so a new capture owner or call site cannot be omitted from rev
 
 `OWNER` means that the file owns behavior fields in the record(s) named in
 [`state-memento-schema.md`](state-memento-schema.md); those record-component lists are the exact
-captured fields. Arrays and collections become deep-owned at the detached boundary. `COMPOSITE`
+legacy-memento fields. `DmgPixelFifo` additionally exposes the six primitive fields listed there
+through the detached runtime supplement, preserving its pinned record descriptor. Arrays and
+collections become deep-owned at the detached boundary. `COMPOSITE`
 means that the owner captures child mementos and any root fields listed in that schema. `WORKFLOW`
 is a controller call site which retains no additional machine field. `CONTRACT` is an interface and
 owns no instance state. Derived caches and external services omitted by each owner are documented

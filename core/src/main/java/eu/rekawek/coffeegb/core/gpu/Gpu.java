@@ -1909,6 +1909,47 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return speedMode.isDmgCompat();
     }
 
+    /**
+     * Captures the two DMG FIFO supplements without changing the pinned legacy mementos.
+     * Native CGB hardware uses {@link ColorPixelFifo} and therefore has no supplement.
+     */
+    public DmgFifoRuntimeState captureDmgFifoRuntimeState() {
+        if (gbc) {
+            return null;
+        }
+        return new DmgFifoRuntimeState(
+                pixelTransferPhase.captureDmgFifoRuntimeState(),
+                pixelMachine.captureDmgFifoRuntimeState());
+    }
+
+    public void validateDmgFifoRuntimeState(DmgFifoRuntimeState state) {
+        if (gbc) {
+            if (state != null) {
+                throw new IllegalArgumentException("DMG FIFO state supplied for CGB hardware");
+            }
+            return;
+        }
+        if (state == null) {
+            throw new IllegalArgumentException("DMG FIFO state is missing");
+        }
+        pixelTransferPhase.validateDmgFifoRuntimeState(state.timing());
+        pixelMachine.validateDmgFifoRuntimeState(state.output());
+    }
+
+    public void restoreDmgFifoRuntimeState(DmgFifoRuntimeState state) {
+        validateDmgFifoRuntimeState(state);
+        if (!gbc) {
+            pixelTransferPhase.restoreDmgFifoRuntimeState(state.timing());
+            pixelMachine.restoreDmgFifoRuntimeState(state.output());
+        }
+    }
+
+    /** Service-free state for the timing and pixel-producing DMG FIFOs. */
+    public record DmgFifoRuntimeState(
+            DmgPixelFifo.RuntimeState timing,
+            DmgPixelFifo.RuntimeState output) {
+    }
+
     public ColorPalette getBgPalette() {
         return bgPalette;
     }

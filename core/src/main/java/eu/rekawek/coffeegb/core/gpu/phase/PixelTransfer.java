@@ -331,6 +331,27 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         fifo.outputTick();
     }
 
+    public DmgPixelFifo.RuntimeState captureDmgFifoRuntimeState() {
+        return fifo instanceof DmgPixelFifo dmgFifo ? dmgFifo.captureRuntimeState() : null;
+    }
+
+    public void validateDmgFifoRuntimeState(DmgPixelFifo.RuntimeState state) {
+        if (!(fifo instanceof DmgPixelFifo dmgFifo)) {
+            if (state != null) {
+                throw new IllegalArgumentException("DMG pixel FIFO state supplied for a CGB FIFO");
+            }
+            return;
+        }
+        dmgFifo.validateRuntimeState(state);
+    }
+
+    public void restoreDmgFifoRuntimeState(DmgPixelFifo.RuntimeState state) {
+        validateDmgFifoRuntimeState(state);
+        if (fifo instanceof DmgPixelFifo dmgFifo) {
+            dmgFifo.restoreRuntimeState(state);
+        }
+    }
+
     /** Ticks the pixel-machine instance; called by the GPU every T-cycle. */
     public void machineTick() {
         if (machineActive && !tick()) {
