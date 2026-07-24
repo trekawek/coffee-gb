@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.timer.Timer;
 
 import java.io.Serializable;
+import java.util.Arrays;
 
 public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
@@ -306,7 +307,14 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         for (int i = 0; i < allModes.length; i++) {
             allModeMementos[i] = allModes[i].saveToMemento();
         }
-        return new SoundMemento(allModeMementos, r.saveToMemento(), frameSequencer.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone(), buffer.clone(), i, pendingFrameSequencerStep, frameSequencerClockPhase, frameSequencerDivOffset);
+        // Only the prefix before i has been written. The rest is overwritten before the
+        // next SoundSampleEvent can expose it, so retaining the full ~546 KiB frame buffer
+        // in every rewind state wastes memory and creates a G1 humongous allocation.
+        int[] pendingSamples = Arrays.copyOf(buffer, i);
+        return new SoundMemento(allModeMementos, r.saveToMemento(),
+                frameSequencer.saveToMemento(), channels.clone(), enabled,
+                overriddenEnabled.clone(), pendingSamples, i, pendingFrameSequencerStep,
+                frameSequencerClockPhase, frameSequencerDivOffset);
     }
 
     @Override
@@ -323,7 +331,12 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         if (this.overriddenEnabled.length != mem.overriddenEnabled.length) {
             throw new IllegalArgumentException("Memento overriddenEnabled length doesn't match");
         }
-        if (this.buffer.length != mem.buffer.length) {
+        if (mem.i < 0 || mem.i >= this.buffer.length || (mem.i & 1) != 0) {
+            throw new IllegalArgumentException("Memento buffer position is invalid");
+        }
+        // New mementos retain only buffer[0..i). Accept the former full-buffer shape as
+        // well so save states written by older Coffee GB versions remain loadable.
+        if (mem.buffer.length != mem.i && mem.buffer.length != this.buffer.length) {
             throw new IllegalArgumentException("Memento buffer length doesn't match");
         }
         for (int i = 0; i < allModes.length; i++) {
@@ -334,7 +347,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         System.arraycopy(mem.channels, 0, this.channels, 0, this.channels.length);
         this.enabled = mem.enabled();
         System.arraycopy(mem.overriddenEnabled, 0, this.overriddenEnabled, 0, this.overriddenEnabled.length);
-        System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
+        System.arraycopy(mem.buffer, 0, this.buffer, 0, mem.i);
         this.i = mem.i;
         this.pendingFrameSequencerStep = mem.pendingFrameSequencerStep;
         this.frameSequencerClockPhase = mem.frameSequencerClockPhase;
