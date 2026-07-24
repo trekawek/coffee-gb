@@ -13,8 +13,10 @@ import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
 import eu.rekawek.coffeegb.core.memory.cart.type.*
 import eu.rekawek.coffeegb.core.serial.*
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class StateCoverageMatrixTest {
@@ -36,8 +38,8 @@ class StateCoverageMatrixTest {
             mapper("Mbc3", rtcSetup(0x13), listOf(0xa000, 0x4000)) {
               Mbc3(it, Battery.NULL_BATTERY, VirtualTimeSource(120_000))
             },
-            mapper("Mbc5", listOf(0x0000 to 0x0a, 0x2000 to 0x25, 0x4000 to 0x02, 0xa000 to 0x34)) {
-              Mbc5(it, Battery.NULL_BATTERY)
+            mapper("Mbc5", listOf(0x0000 to 0x0a, 0x2000 to 0x25, 0x4000 to 0x0a, 0xa000 to 0x34)) {
+              Mbc5(mutableRom(0x1e), Battery.NULL_BATTERY)
             },
             mapper("Mbc6", listOf(0x0000 to 0x0a, 0x2000 to 0x03, 0x3000 to 0x04, 0xa000 to 0x35)) {
               Mbc6(it, Battery.NULL_BATTERY)
@@ -119,8 +121,10 @@ class StateCoverageMatrixTest {
       val expectedState = StateGraph.capture(controller.saveToMemento())
       disturbMapper(controller)
 
+      val restored = StateGraph.restore(captured)
+      StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      controller.restoreFromMemento(StateGraph.restore(captured) as Memento<MemoryController>)
+      controller.restoreFromMemento(restored as Memento<MemoryController>)
       val actualTrace = continueMapper(controller, case.probes)
       assertEquals(expectedTrace, actualTrace, "${case.name} continuation trace")
       assertEquals(expectedState, StateGraph.capture(controller.saveToMemento()), case.name)
@@ -197,8 +201,10 @@ class StateCoverageMatrixTest {
       val expectedState = StateGraph.capture(endpoint.saveToMemento())
       disturbPeripheral(endpoint)
 
+      val restored = StateGraph.restore(captured)
+      StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      endpoint.restoreFromMemento(StateGraph.restore(captured) as Memento<SerialEndpoint>?)
+      endpoint.restoreFromMemento(restored as Memento<SerialEndpoint>?)
       case.clearObserved()
       val actualTrace = continuePeripheral(endpoint) + case.observed()
       assertEquals(expectedTrace, actualTrace, "${case.name} continuation trace")
@@ -224,8 +230,10 @@ class StateCoverageMatrixTest {
 
       sgbBus.post(SuperGameboy.PacketReceivedEvent(IntArray(16)))
       val expected = StateGraph.capture(sgb.saveToMemento())
+      val restored = StateGraph.restore(partial)
+      StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      sgb.restoreFromMemento(StateGraph.restore(partial) as Memento<SuperGameboy>)
+      sgb.restoreFromMemento(restored as Memento<SuperGameboy>)
       sgbBus.post(SuperGameboy.PacketReceivedEvent(IntArray(16)))
       assertEquals(expected, StateGraph.capture(sgb.saveToMemento()))
     }
@@ -247,11 +255,156 @@ class StateCoverageMatrixTest {
       irBus.post(FullChanger.TransformEvent(9))
       infrared.getByte(0xff56)
       repeat(41) { infrared.tick() }
+      val restored = StateGraph.restore(active)
+      StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      infrared.restoreFromMemento(StateGraph.restore(active) as Memento<InfraredPort>)
+      infrared.restoreFromMemento(restored as Memento<InfraredPort>)
       val actualTrace = continueInfrared(infrared, 500)
       assertEquals(expectedTrace, actualTrace)
       assertEquals(expected, StateGraph.capture(infrared.saveToMemento()))
+    }
+  }
+
+  @Test
+  fun mbc6FlashUnlockIdAndProgramPhasesContinueDeterministically() {
+    val mbc6 = Mbc6(mutableRom(), Battery.NULL_BATTERY)
+    EventBusImpl().use(mbc6::init)
+    enableMbc6Flash(mbc6)
+
+    // Capture after AA; the continuation completes the unlock and enters software-ID mode.
+    mbc6.setByte(0x5555, 0xaa)
+    val unlock = StateGraph.capture(mbc6.saveToMemento())
+    assertEquals(1, unlock.record(MBC6_MEMENTO).int("flashCommandState"))
+    assertMapperContinuation(
+        mbc6,
+        unlock,
+        disturb = { resetMbc6Flash(it) },
+    ) {
+      it.setByte(0x4aaa, 0x55)
+      it.setByte(0x5555, 0x90)
+      listOf(it.getByte(0x4000), it.getByte(0x4001))
+    }
+    assertTrue(StateGraph.capture(mbc6.saveToMemento()).record(MBC6_MEMENTO).bool("flashIdMode"))
+
+    resetMbc6Flash(mbc6)
+    mbc6.setByte(0x5555, 0xaa)
+    mbc6.setByte(0x4aaa, 0x55)
+    mbc6.setByte(0x5555, 0xa0)
+    val program = StateGraph.capture(mbc6.saveToMemento())
+    assertTrue(program.record(MBC6_MEMENTO).bool("flashProgramMode"))
+    assertMapperContinuation(
+        mbc6,
+        program,
+        disturb = { resetMbc6Flash(it) },
+    ) {
+      it.setByte(0x4321, 0x12)
+      listOf(it.getByte(0x4321))
+    }
+  }
+
+  @Test
+  fun mbc7EepromMidWriteContinuesDeterministically() {
+    val mbc7 = Mbc7(mutableRom(), Battery.NULL_BATTERY)
+    EventBusImpl().use(mbc7::init)
+    mbc7.setByte(0x0000, 0x0a)
+    mbc7.setByte(0x4000, 0x40)
+    mbc7Command(mbc7, 0b00, 0b11000000) // EWEN
+    mbc7.setByte(0xa080, 0)
+    mbc7Command(mbc7, 0b01, 0x12) // WRITE
+    mbc7SendBits(mbc7, 0xbe, 8)
+
+    val captured = StateGraph.capture(mbc7.saveToMemento())
+    val eeprom = captured.record(MBC7_EEPROM_MEMENTO)
+    assertEquals("WRITING", eeprom.enumName("state"))
+    assertEquals(8, eeprom.int("bitsRead"))
+    assertEquals(0xbe, eeprom.int("writeValue"))
+
+    assertMapperContinuation(
+        mbc7,
+        captured,
+        disturb = {
+          it.setByte(0xa080, 0)
+          mbc7Command(it, 0b01, 0x12)
+          mbc7SendBits(it, 0, 16)
+          it.setByte(0xa080, 0)
+        },
+    ) {
+      mbc7SendBits(it, 0xef, 8)
+      it.setByte(0xa080, 0)
+      mbc7Command(it, 0b10, 0x12)
+      val word = mbc7ReadWord(it)
+      it.setByte(0xa080, 0)
+      listOf(word)
+    }
+  }
+
+  @Test
+  fun mbc5RumbleLatchContinuesDeterministically() {
+    val log = mutableListOf<Boolean>()
+    val mbc5 = Mbc5(mutableRom(0x1e), Battery.NULL_BATTERY)
+    EventBusImpl().use { bus ->
+      bus.register({ event -> log += event.on() }, RumbleEvent::class.java)
+      mbc5.init(bus)
+      mbc5.setByte(0x0000, 0x0a)
+      mbc5.setByte(0x4000, 0x0b) // RAM bank 3 + motor on
+      val captured = StateGraph.capture(mbc5.saveToMemento())
+      assertTrue(captured.record(MBC5_MEMENTO).bool("motorOn"))
+      assertEquals(3, captured.record(MBC5_MEMENTO).int("selectedRamBank"))
+
+      log.clear()
+      val expectedTrace = run {
+        mbc5.setByte(0x4000, 0x03)
+        log.toList()
+      }
+      val expectedState = StateGraph.capture(mbc5.saveToMemento())
+      mbc5.setByte(0x4000, 0x08)
+      @Suppress("UNCHECKED_CAST")
+      mbc5.restoreFromMemento(StateGraph.restore(captured) as Memento<MemoryController>)
+      log.clear()
+      mbc5.setByte(0x4000, 0x03)
+      assertEquals(listOf(false), expectedTrace)
+      assertEquals(expectedTrace, log)
+      assertEquals(expectedState, StateGraph.capture(mbc5.saveToMemento()))
+    }
+  }
+
+  @Test
+  fun datelOuterFlashProgramEraseAndIdPhasesContinueDeterministically() {
+    val datel = datelWithRtcSlot(mutableFlashRom())
+    EventBusImpl().use(datel::init)
+
+    datel.setByte(0x5555, 0xaa)
+    datel.setByte(0x2aaa, 0x55)
+    datel.setByte(0x5555, 0xa0)
+    val program = StateGraph.capture(datel.saveToMemento())
+    assertEquals(3, program.record(DATEL_MEMENTO).int("flashCycle"))
+    assertTrue(program.record(DATEL_MEMENTO).field("slotMemento") is RecordState)
+    assertMapperContinuation(datel, program, disturb = { resetDatelFlash(it) }) {
+      it.setByte(0x3000, 0x12)
+      listOf(it.getByte(0x3000))
+    }
+
+    datel.setByte(0x5555, 0xaa)
+    datel.setByte(0x2aaa, 0x55)
+    datel.setByte(0x5555, 0x80)
+    datel.setByte(0x5555, 0xaa)
+    val erase = StateGraph.capture(datel.saveToMemento())
+    val eraseRecord = erase.record(DATEL_MEMENTO)
+    assertTrue(eraseRecord.bool("flashErasePending"))
+    assertEquals(1, eraseRecord.int("flashCycle"))
+    assertMapperContinuation(datel, erase, disturb = { resetDatelFlash(it) }) {
+      it.setByte(0x2aaa, 0x55)
+      it.setByte(0x3000, 0x30)
+      listOf(it.getByte(0x3000))
+    }
+
+    datel.setByte(0x5555, 0xaa)
+    datel.setByte(0x2aaa, 0x55)
+    datel.setByte(0x5555, 0x90)
+    val id = StateGraph.capture(datel.saveToMemento())
+    assertTrue(id.record(DATEL_MEMENTO).bool("flashIdMode"))
+    assertMapperContinuation(datel, id, disturb = { resetDatelFlash(it) }) {
+      listOf(it.getByte(0), it.getByte(1))
     }
   }
 
@@ -364,6 +517,90 @@ class StateCoverageMatrixTest {
     return trace
   }
 
+  private fun assertMapperContinuation(
+      controller: MemoryController,
+      captured: StateValue,
+      disturb: (MemoryController) -> Unit,
+      continuation: (MemoryController) -> List<Int>,
+  ) {
+    val expectedTrace = continuation(controller)
+    val expectedState = StateGraph.capture(controller.saveToMemento())
+    disturb(controller)
+    val restored = StateGraph.restore(captured)
+    StateSemantics.validate(restored)
+    @Suppress("UNCHECKED_CAST")
+    controller.restoreFromMemento(restored as Memento<MemoryController>)
+    val actualTrace = continuation(controller)
+    assertEquals(expectedTrace, actualTrace)
+    assertEquals(expectedState, StateGraph.capture(controller.saveToMemento()))
+  }
+
+  private fun enableMbc6Flash(controller: MemoryController) {
+    controller.setByte(0x1000, 1)
+    controller.setByte(0x0c00, 1)
+    controller.setByte(0x2800, 0x08)
+  }
+
+  private fun resetMbc6Flash(controller: MemoryController) {
+    controller.setByte(0x5555, 0xaa)
+    controller.setByte(0x4aaa, 0x55)
+    controller.setByte(0x5555, 0xf0)
+  }
+
+  private fun mbc7SendBit(controller: MemoryController, bit: Boolean) {
+    val data = if (bit) 0x02 else 0
+    controller.setByte(0xa080, 0x80 or data)
+    controller.setByte(0xa080, 0xc0 or data)
+  }
+
+  private fun mbc7SendBits(controller: MemoryController, value: Int, count: Int) {
+    for (bit in count - 1 downTo 0) mbc7SendBit(controller, ((value shr bit) and 1) != 0)
+  }
+
+  private fun mbc7Command(controller: MemoryController, op: Int, address: Int) {
+    mbc7SendBit(controller, true)
+    mbc7SendBits(controller, op, 2)
+    mbc7SendBits(controller, address, 8)
+  }
+
+  private fun mbc7ReadWord(controller: MemoryController): Int {
+    var result = 0
+    repeat(17) { index ->
+      controller.setByte(0xa080, 0x80)
+      controller.setByte(0xa080, 0xc0)
+      if (index > 0) result = (result shl 1) or (controller.getByte(0xa080) and 1)
+    }
+    return result
+  }
+
+  private fun resetDatelFlash(controller: MemoryController) {
+    controller.setByte(0x5555, 0xaa)
+    controller.setByte(0x2aaa, 0x55)
+    controller.setByte(0x5555, 0xf0)
+  }
+
+  private fun StateValue.record(className: String): RecordState {
+    fun find(value: StateValue): RecordState? =
+        when (value) {
+          is RecordState ->
+              if (MementoTypeRegistry.recordClassNames[value.typeId - 1] == className) value
+              else value.fields.firstNotNullOfOrNull { find(it.value) }
+          is ObjectArrayState -> value.values.firstNotNullOfOrNull(::find)
+          is ListState -> value.values.firstNotNullOfOrNull(::find)
+          is Int32MapState -> value.entries.firstNotNullOfOrNull { find(it.value) }
+          else -> null
+        }
+    return requireNotNull(find(this)) { "Missing $className" }
+  }
+
+  private fun RecordState.field(name: String): StateValue = fields.single { it.name == name }.value
+  private fun RecordState.int(name: String): Int = (field(name) as Int32State).value
+  private fun RecordState.bool(name: String): Boolean = (field(name) as BooleanState).value
+  private fun RecordState.enumName(name: String): String {
+    val enum = field(name) as EnumState
+    return (MementoTypeRegistry.enumClasses[enum.typeId - 1].enumConstants[enum.ordinal] as Enum<*>).name
+  }
+
   private fun rtcSetup(seconds: Int) =
       listOf(
           0x0000 to 0x0a,
@@ -382,15 +619,28 @@ class StateCoverageMatrixTest {
     return datel
   }
 
-  private fun mutableRom(): Rom {
+  private fun mutableRom(type: Int = 0x1b): Rom {
     val bytes = ByteArray(0x200000)
-    bytes[0x147] = 0x1b // MBC5 + RAM + battery; constructors are selected explicitly.
+    bytes[0x147] = type.toByte() // constructors are selected explicitly except MBC5 rumble wiring.
+    bytes[0x148] = 0x06
+    bytes[0x149] = 0x03
+    return Rom(bytes)
+  }
+
+  private fun mutableFlashRom(): Rom {
+    val bytes = ByteArray(0x200000) { 0xff.toByte() }
+    bytes[0x147] = 0x1b
     bytes[0x148] = 0x06
     bytes[0x149] = 0x03
     return Rom(bytes)
   }
 
   private companion object {
+    const val MBC5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5Memento"
+    const val MBC6_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6Memento"
+    const val MBC7_EEPROM_MEMENTO =
+        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromMemento"
+    const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento"
     val DEFAULT_MAPPER_PROBES = listOf(0x0100, 0x4000, 0x7000, 0x7fe1, 0xa000, 0xa001)
 
     val EXPECTED_MAPPER_FAMILIES =

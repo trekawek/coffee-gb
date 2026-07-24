@@ -6,10 +6,13 @@
 for the future portable state format. A capture owns every array and collection it exposes. Before
 mutation, apply checks the hardware tag, nested record/mapper tree, invariant array dimensions,
 serial endpoint and memento root, cartridge RTC locations, runtime DTO, held input, and linked
-topology against the already-configured target. It then reconstructs the complete replacement and
-rollback graphs. If a live restore nevertheless throws, the adapter restores the machine, both RTC
-locations, serial endpoint/runtime, held buttons, and—when linked—the other sessions and controller
-frame from those rollback captures.
+topology against the already-configured target. Null is admitted only for audited owner/field or
+array-element positions, not inferred from the non-null value's type. The adapter then reconstructs
+the complete replacement and applies the semantic policy registered for each of the 91 admitted
+record types. Those policies reject invalid indices, counts, capacities, command phases, and scalar
+relationships before the first live mutation. If a legacy live restore nevertheless throws, the
+adapter restores the machine, both RTC locations, serial endpoint/runtime, held buttons, and—when
+linked—the other sessions and controller frame from rollback captures.
 
 The model contains only `Int`, `Long`, `Boolean`, `Double`, `String`, explicit enum/type IDs, and
 deep-owned immutable containers. It cannot represent a thread, callback, event bus, stream, file,
@@ -23,7 +26,9 @@ production `Originator` declarations and `saveToMemento` owner/call-site files i
 allowlist. `StateCoverageMatrixTest` gives every mutable mapper and stateful serial peripheral an
 explicit non-idle setup and compares a fixed continuation trace plus final state;
 `DetachedStateTest` exercises the complete root graph, deep ownership, failure atomicity, display,
-held input, endpoint runtime state, and difficult-cycle deterministic continuation.
+held input, endpoint runtime state, required-value null rejection, semantic cursor boundaries, and
+difficult-cycle deterministic continuation. `StateInventoryTest` independently scans production
+capture sites and proves every admitted record has a non-empty semantic-policy rationale.
 
 ## Supported safe points and thread ownership
 
@@ -81,10 +86,31 @@ Every supported mutable mapper family is explicit and executable: `BasicRom`, `M
 `SlMulticart`, `Sintax`, `Bbd`, both `SachenMmc` modes, `WisdomTree`, and `Datel` with a real MBC3
 pass-through slot. For each family the matrix captures a non-idle setup, runs address/tick probes,
 restores through the detached graph, reruns the same probes, and compares both observable trace and
-final state. Nested `Mbc7Eeprom` state is exercised as part of MBC7. Mapper ROM-bank masks/counts
-and immutable ROM arrays are derived from the required matching ROM; all writable arrays/registers
-are owned state. Separate virtual-time tests cover MBC3 subsecond/latch/halt/pause continuation and
-MBC3, HuC3, and TAMA5 battery references, including all three families in a Datel slot.
+final state. Dedicated mid-operation cases capture MBC6 during JEDEC unlock/ID/program sequences,
+MBC7 after EEPROM write-enable and halfway through a serial write, MBC5 with a real rumble cartridge
+and an active motor latch, and the outer Datel flash during program, erase, and ID modes while a real
+slot cartridge is present. Each case asserts the nested phase is non-default before comparing its
+observable continuation and final detached state. Mapper ROM-bank masks/counts and immutable ROM
+arrays are derived from the required matching ROM; all writable arrays/registers are owned state.
+Separate virtual-time tests cover MBC3 subsecond/latch/halt/pause continuation and MBC3, HuC3, and
+TAMA5 battery references, including all three families in a Datel slot.
+
+## Semantic preflight audit
+
+`StateGraph` enforces the registered schema, target mapper/endpoint tree, invariant dimensions,
+container shape, graph limits, and exact audited nullable positions. `StateSemantics` then walks the
+fully reconstructed candidate and dispatches by the same stable record class names used by the
+allowlist. Its constrained policies cover every scalar that is later used as an array cursor,
+queue size/offset, copy length, parser bit/count, GPU/PPU/DMA phase, audio buffer/channel counter,
+IR/SGB packet/schedule index, RTC field, or mapper EEPROM/flash command phase.
+
+Records whose fields are deliberately not range-constrained still have an explicit policy and
+rationale in that registry. Examples are raw bus/address/register latches, signed emulated clocks,
+documented `-1`/minimum-value sentinels, and parent records whose only relationship-bearing values
+are validated by nested records. `StateInventoryTest` requires the policy-key set to equal all 91
+admitted record types, so a new memento cannot enter the model without an audited choice. Rollback
+is retained for unexpected failures in legacy restore code; it is not the validation path for a
+deterministically malformed detached candidate.
 
 ## Compatibility and display ownership
 
@@ -101,11 +127,13 @@ does not change payload, graph, queue, frame, or work limits.
 ## Failure and extension policy
 
 Unknown record/enum IDs, wrong field names/order/counts, mapper or endpoint roots, invariant array
-dimensions, type mismatches, invalid enum ordinals, oversized/deep graphs/primitive arrays/strings,
-RTC-location mismatches, malformed held input, and linked frame/player/topology/adapter mismatches
-are rejected before live mutation. Optional SGB operation records and the nullable legacy display
-record remain value-state exceptions rather than hardware-identity fields. A serial endpoint
-outside the enumerated endpoint families throws
+dimensions, required-value nulls, type mismatches, invalid enum ordinals, oversized/deep
+graphs/primitive arrays/strings, invalid semantic indices/counts/phases, RTC-location mismatches,
+malformed held input, and linked frame/player/topology/adapter mismatches are rejected before live
+mutation. Optional SGB operation records, nullable SGB display rows, optional barcode/transfer
+payloads, an absent Datel slot memento, and the nullable legacy display record are explicit
+owner/field exceptions rather than type-category exceptions. A serial endpoint outside the
+enumerated endpoint families throws
 `StateCaptureException`; it is never silently serialized as null. Adding mutable production state
 requires all of: a memento/runtime DTO field, registry/schema and capture-site inventory updates,
 deep-ownership rule, and a deterministic-continuation regression.

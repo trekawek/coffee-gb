@@ -350,6 +350,9 @@ internal data class PreparedSessionState(
 
 /**
  * Transitional adapter between the legacy in-memory mementos and the explicit immutable model.
+ * Apply first checks target-dependent structure and explicit nullability, reconstructs the full
+ * candidate, and runs every registered record's semantic policy before the first live mutation.
+ * Rollback remains the guard for unexpected failures in legacy restore implementations.
  * This is deliberately not a byte codec; #322 owns the sectioned StateFile representation.
  */
 internal object DetachedStateAdapter {
@@ -422,6 +425,7 @@ internal object DetachedStateAdapter {
     }
     StateGraph.validateCompatible(state.serialState, currentSerialState, "serial")
     val serialValue = StateGraph.restore(state.serialState)
+    StateSemantics.validate(serialValue)
     if (serialValue != null && serialValue !is Memento<*>) {
       throw StateApplyException("Session serial state has the wrong root type")
     }
@@ -454,6 +458,7 @@ internal object DetachedStateAdapter {
     val current = StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT)
     StateGraph.validateCompatible(state.root, current, "machine")
     val detached = StateGraph.restoreRoot(state.root, GAMEBOY_ROOT)
+    StateSemantics.validate(detached)
     @Suppress("UNCHECKED_CAST") val memento = detached as Memento<Gameboy>
     val rtcRuntime = state.rtcRuntime.toCore()
     try {
@@ -819,10 +824,10 @@ internal object StateGraph {
         path: String,
         owner: String?,
         field: String?,
+        element: Boolean = false,
     ) {
       if (candidate === NullState || target === NullState) {
-        val nonNull = if (candidate === NullState) target else candidate
-        if (nonNull is RecordState && !isNullableRecord(owner, field)) {
+        if (candidate !== target && !isAuditedNullable(owner, field, element)) {
           throw StateApplyException("$path has incompatible memento presence")
         }
         return
@@ -846,7 +851,7 @@ internal object StateGraph {
             if (left.name != right.name) {
               throw StateApplyException("$path has an incompatible field order")
             }
-            value(left.value, right.value, "$path.${left.name}", type, left.name)
+            value(left.value, right.value, "$path.${left.name}", type, left.name, false)
           }
         }
         candidate is PrimitiveArrayState<*> && target is PrimitiveArrayState<*> -> {
@@ -861,7 +866,7 @@ internal object StateGraph {
                 "$path has length ${candidate.values.size}, expected invariant length ${target.values.size}")
           }
           candidate.values.indices.forEach { index ->
-            value(candidate.values[index], target.values[index], "$path[$index]", owner, field)
+            value(candidate.values[index], target.values[index], "$path[$index]", owner, field, true)
           }
         }
       }
@@ -926,8 +931,8 @@ internal object StateGraph {
   private fun isVariableArray(owner: String?, field: String?): Boolean =
       owner to field in VARIABLE_ARRAY_FIELDS
 
-  private fun isNullableRecord(owner: String?, field: String?): Boolean =
-      owner to field in NULLABLE_RECORD_FIELDS
+  private fun isAuditedNullable(owner: String?, field: String?, element: Boolean): Boolean =
+      owner to field in if (element) AUDITED_NULLABLE_ELEMENTS else AUDITED_NULLABLE_FIELDS
 
   private val VARIABLE_ARRAY_FIELDS =
       setOf(
@@ -938,15 +943,69 @@ internal object StateGraph {
               "dataTransfer",
       )
 
-  private val NULLABLE_RECORD_FIELDS =
+  /**
+   * Exact nullable locations in the pinned legacy graph. Nullability is a field contract, not a
+   * consequence of the value kind: primitive arrays, enums, collections, and records all default
+   * to required unless their precise owner/field pair is listed here.
+   */
+  private val AUDITED_NULLABLE_FIELDS =
       setOf(
           // Transitional legacy root display copy; new captures use only GpuMemento's display.
           "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento" to "displayMemento",
+          // No interrupt has been selected while the CPU is outside interrupt entry.
+          "eu.rekawek.coffeegb.core.cpu.Cpu\$CpuMemento" to "requestedIrq",
+          // Old GPU snapshots predate these caches and dot-machine additions.
+          "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento" to "lastFrame",
+          "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesMemento" to
+              "mixValues",
+          "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesMemento" to
+              "pendingMixValues",
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento" to "pixelMachineMemento",
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento" to "pendingPpuWrites",
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento" to "cpuVisiblePpuRegisters",
+          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento" to "delayEntry",
+          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento" to "delayStamp",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to "delayEntry",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to "delayStamp",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to
+              "clearedPixels",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to
+              "clearedPalettes",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to
+              "clearedPriorities",
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento" to
+              "fifoMemento",
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento" to
+              "pendingWindowDisplayWrites",
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento" to
+              "pendingWindowXWrites",
+          // Added after the original HDMA memento; absence selects the legacy derivation.
+          // GPU mode is also absent until the first PPU mode publication.
+          "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento" to "gpuMode",
+          "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento" to "cpuRequestArbitration",
+          // ROM-only BasicRom instances have no battery memento.
+          "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomMemento" to
+              "batteryMemento",
+          // A Datel cartridge may have no physical pass-through slot.
+          "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento" to "slotMemento",
+          // Barcode data exists only while a scan is actively streaming.
+          "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento" to
+              "data",
           // These SGB operations are genuinely optional behavior state, not hardware identity.
           "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyMemento" to
               "waitingTransferCommandMemento",
           "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundMemento" to
               "pendingPictureMemento",
+          "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento" to
+              "dataTransfer",
+      )
+
+  private val AUDITED_NULLABLE_ELEMENTS =
+      setOf(
+          // SGB PAL_SET deliberately aliases/clears individual rows; the container is required.
+          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to "palettes",
+          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to "systemPalettes",
+          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to "attributeFiles",
       )
 }
 
