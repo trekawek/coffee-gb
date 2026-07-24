@@ -35,11 +35,11 @@ internal object StateLimits {
   const val NETPLAY_ROLLBACK_FRAMES = 60L * 5
   const val NETPLAY_REPLAY_WORK_FRAMES = NETPLAY_ROLLBACK_FRAMES
   const val NETPLAY_STATE_CHANGE_FIXED_WORK = 60L
-  // A first four-player client legitimately receives 2-, 3-, then 4-state checkpoints while the
-  // group forms. Keep that one-time burst admissible without making sustained checkpoint streams
-  // free: subsequent work refills at the ordinary per-frame rate.
+  // A checkpoint is one bounded transaction: protocol sequencing limits it to four distinct
+  // states and queue admission limits its aggregate payload to one decoded message. Allow a short
+  // burst of nine topology transactions, then refill at the ordinary per-frame rate.
   const val NETPLAY_CHECKPOINT_WORK_FRAMES =
-      NETPLAY_STATE_CHANGE_FIXED_WORK * (2L + 3L + 4L)
+      NETPLAY_STATE_CHANGE_FIXED_WORK * 9L
   const val NETPLAY_STATE_CHANGE_REFILL_PER_FRAME = 1L
   const val NETPLAY_FUTURE_FRAMES = 60L * 2
   const val NETPLAY_MAX_FRAME = Int.MAX_VALUE.toLong()
