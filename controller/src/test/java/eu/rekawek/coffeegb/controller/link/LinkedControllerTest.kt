@@ -21,6 +21,7 @@ import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
@@ -61,6 +62,11 @@ class LinkedControllerTest {
     assertEquals(1, sut.activeSessionCount())
     assertEquals(3, sut.currentFrame())
     assertEquals(2, sut.stateHistory.getHead().frame)
+    val detached = sut.captureDetachedState()
+    assertEquals(LinkedTopologyState.FOUR_PLAYER_ADAPTER, detached.topology)
+    assertEquals(4, detached.players.size)
+    assertNotNull(detached.players[0].session)
+    assertTrue(detached.players.drop(1).all { it.session == null })
     eventBus.close()
   }
 

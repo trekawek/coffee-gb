@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 
 import java.util.Arrays;
 
@@ -25,6 +27,8 @@ public class Huc3 implements MemoryController {
     private final int ramBanks;
 
     private final Battery battery;
+
+    private final TimeSource timeSource;
 
     private int romBank = 1;
 
@@ -49,17 +53,23 @@ public class Huc3 implements MemoryController {
 
     private int readValue;
 
-    private long lastRtcSecond = System.currentTimeMillis() / 1000;
+    private long lastRtcSecond;
 
     private boolean ramUpdated;
 
     public Huc3(Rom rom, Battery battery) {
+        this(rom, battery, new SystemTimeSource());
+    }
+
+    public Huc3(Rom rom, Battery battery, TimeSource timeSource) {
         this.cartridge = rom.getRom();
         this.romBanks = rom.getRomBanks();
         this.ramBanks = Math.max(rom.getRamBanks(), 1);
         this.ram = new int[0x2000 * this.ramBanks];
         Arrays.fill(ram, 0xff);
         this.battery = battery;
+        this.timeSource = timeSource;
+        this.lastRtcSecond = timeSource.currentTimeMillis() / 1000;
 
         long[] clockData = new long[12];
         battery.loadRamWithClock(ram, clockData);
@@ -75,7 +85,7 @@ public class Huc3 implements MemoryController {
     }
 
     private void updateRtc() {
-        long now = System.currentTimeMillis() / 1000;
+        long now = timeSource.currentTimeMillis() / 1000;
         while (lastRtcSecond / 60 < now / 60) {
             lastRtcSecond += 60;
             minutes++;

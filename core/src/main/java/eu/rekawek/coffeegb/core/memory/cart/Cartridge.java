@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.type.*;
@@ -73,9 +74,9 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
         } else if (type.isHuc1()) {
             return new Huc1(rom, battery);
         } else if (type.isHuc3()) {
-            return new Huc3(rom, battery);
+            return new Huc3(rom, battery, rtcTimeSource);
         } else if (type.isTama5()) {
-            return new Tama5(rom, battery);
+            return new Tama5(rom, battery, rtcTimeSource);
         } else if (type.isMbc1()) {
             return new Mbc1(rom, battery);
         } else if (type.isMbc2()) {
@@ -126,6 +127,24 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     /** Notifies independent cartridge clocks that emulation has paused or resumed. */
     public void setClockPaused(boolean paused) {
         addressSpace.setClockPaused(paused);
+    }
+
+    /** Returns detached MBC3 pause bookkeeping, or null for mappers without that clock. */
+    public RealTimeClock.RuntimeState captureRtcRuntimeState() {
+        return addressSpace instanceof Mbc3 mbc3 ? mbc3.captureRtcRuntimeState() : null;
+    }
+
+    public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
+        if (!(addressSpace instanceof Mbc3 mbc3)) {
+            if (state != null) {
+                throw new IllegalArgumentException("RTC runtime state supplied for a non-MBC3 cartridge");
+            }
+            return;
+        }
+        if (state == null) {
+            throw new IllegalArgumentException("MBC3 RTC runtime state is missing");
+        }
+        mbc3.restoreRtcRuntimeState(state);
     }
 
     /** The Sachen MMC2 needs to observe reads on the upper half of the bus (see Mmu). */

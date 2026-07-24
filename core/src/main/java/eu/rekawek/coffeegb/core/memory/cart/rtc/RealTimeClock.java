@@ -294,6 +294,23 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
         }
     }
 
+    /**
+     * Captures controller-owned pause bookkeeping that is deliberately absent from the pinned
+     * legacy memento shape. The TimeSource service itself is never retained.
+     */
+    public RuntimeState captureRuntimeState() {
+        catchUpPausedTime();
+        return new RuntimeState(emulationPaused, pauseStartedMillis);
+    }
+
+    public void restoreRuntimeState(RuntimeState state) {
+        emulationPaused = state.emulationPaused;
+        pauseStartedMillis = state.emulationPaused ? state.pauseStartedMillis : 0;
+    }
+
+    public record RuntimeState(boolean emulationPaused, long pauseStartedMillis) {
+    }
+
     private record RealTimeClockMemento(int seconds, int minutes, int hours, int days, boolean halt,
                                         boolean counterOverflow, long subSecondTicks,
                                         boolean latched, int latchedSeconds, int latchedMinutes, int latchedHours,

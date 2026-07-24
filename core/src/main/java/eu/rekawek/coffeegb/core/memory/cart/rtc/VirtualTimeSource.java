@@ -5,7 +5,17 @@ import java.util.concurrent.TimeUnit;
 
 public class VirtualTimeSource implements TimeSource, Serializable {
 
-    private long clock = System.currentTimeMillis();
+    private long clock;
+
+    public VirtualTimeSource() {
+        // Battery formats reserve zero as "no persisted wall-clock reference".
+        // Keep the test clock deterministic while starting beyond that sentinel.
+        this(946_684_800_000L);
+    }
+
+    public VirtualTimeSource(long initialMillis) {
+        this.clock = initialMillis;
+    }
 
     @Override
     public long currentTimeMillis() {

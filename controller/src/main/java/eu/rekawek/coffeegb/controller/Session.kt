@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memento.Originator
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.SessionState
 
 class Session(
     val config: Gameboy.GameboyConfiguration,
@@ -51,6 +53,12 @@ class Session(
   override fun saveToMemento(): Memento<Session> {
     return SessionMemento(gameboy.saveToMemento(), serialEndpoint.saveToMemento())
   }
+
+  /** Captures a detached, deeply owned session state at the controller frame safe point. */
+  internal fun captureDetachedState(): SessionState = DetachedStateAdapter.capture(this)
+
+  /** Applies a fully validated detached state or rolls the complete session back on failure. */
+  internal fun restoreDetachedState(state: SessionState) = DetachedStateAdapter.apply(this, state)
 
   override fun restoreFromMemento(memento: Memento<Session>) {
     if (memento !is SessionMemento) {
