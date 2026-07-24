@@ -17,9 +17,11 @@ public class PixelFifoTest {
 
     @Before
     public void createFifo() {
-        GpuRegisterValues r = new GpuRegisterValues();
-        r.put(GpuRegister.BGP, 0b11100100);
-        fifo = new DmgPixelFifo(new Display(false), new Lcdc(), r, null);
+        GpuRegisterValues registers = new GpuRegisterValues();
+        registers.put(GpuRegister.BGP, 0b11100100);
+        registers.put(GpuRegister.OBP0, 0);
+        registers.put(GpuRegister.OBP1, 0xff);
+        fifo = new DmgPixelFifo(new Display(false), new Lcdc(), registers, null);
     }
 
     @Test
@@ -37,6 +39,44 @@ public class PixelFifoTest {
         assertEquals(0b10, fifo.dequeuePixel());
         assertEquals(0b10, fifo.dequeuePixel());
         assertEquals(0b01, fifo.dequeuePixel());
+    }
+
+    @Test
+    public void firstPixelLatchClearsBeforeAnotherOutputIsRequired() {
+        DmgPixelFifo.RuntimeState initial = fifo.captureRuntimeState();
+        assertEquals(0, initial.linePixels());
+        assertEquals(0, initial.outCount());
+        assertEquals(-1, initial.firstEntry());
+
+        fifo.enqueue8Pixels(zip(0b11001001, 0b11110000, false), TileAttributes.EMPTY);
+        fifo.setOverlay(
+                new int[]{3, 0, 0, 0, 0, 0, 0, 0},
+                0,
+                TileAttributes.valueOf(0x90),
+                0);
+        fifo.putPixelToScreen();
+        fifo.outputTick();
+        fifo.outputTick();
+        fifo.outputTick();
+
+        DmgPixelFifo.RuntimeState pending = fifo.captureRuntimeState();
+        assertEquals(1, pending.linePixels());
+        assertEquals(1, pending.outCount());
+        assertEquals(0x3f, pending.firstEntry());
+        assertEquals(0b11100100, pending.firstBgp());
+        assertEquals(0, pending.firstObp0());
+        assertEquals(0xff, pending.firstObp1());
+
+        fifo.outputTick();
+        DmgPixelFifo.RuntimeState emitted = fifo.captureRuntimeState();
+        assertEquals(1, emitted.linePixels());
+        assertEquals(1, emitted.outCount());
+        assertEquals(-1, emitted.firstEntry());
+
+        fifo.restoreRuntimeState(pending);
+        assertEquals(pending, fifo.captureRuntimeState());
+        fifo.restoreRuntimeState(emitted);
+        assertEquals(emitted, fifo.captureRuntimeState());
     }
 
     @Test

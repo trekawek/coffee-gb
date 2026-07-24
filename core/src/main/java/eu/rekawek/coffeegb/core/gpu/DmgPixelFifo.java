@@ -317,14 +317,22 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         if (state == null) {
             throw new IllegalArgumentException("DMG pixel FIFO runtime state is missing");
         }
-        if (state.linePixels < 0 || state.outCount < 0) {
-            throw new IllegalArgumentException("DMG pixel FIFO counters cannot be negative");
+        if (state.linePixels < 0 || state.linePixels > 160) {
+            throw new IllegalArgumentException("DMG pixel FIFO line position is outside 0..160");
+        }
+        if (state.outCount < 0) {
+            throw new IllegalArgumentException("DMG pixel FIFO output count cannot be negative");
         }
         if (state.firstEntry < -1 || state.firstEntry > 0x3f) {
             throw new IllegalArgumentException("Invalid pending DMG first-pixel entry");
         }
-        if (state.firstEntry >= 0 && state.outCount == 0) {
-            throw new IllegalArgumentException("Pending DMG first pixel has no output count");
+        // The latch is installed only for the first due output entry, which increments
+        // outCount from zero to one. The following output tick clears firstEntry before it
+        // considers another due entry, so firstEntry == -1 does not imply any outCount value.
+        // outCount deliberately has no upper bound: it is bookkeeping, not an array cursor,
+        // and window/timing rewinds do not establish a tighter invariant.
+        if (state.firstEntry >= 0 && state.outCount != 1) {
+            throw new IllegalArgumentException("Pending DMG first pixel requires output count 1");
         }
         if (!isByte(state.firstBgp) || !isByte(state.firstObp0) || !isByte(state.firstObp1)) {
             throw new IllegalArgumentException("Invalid pending DMG first-pixel palette");

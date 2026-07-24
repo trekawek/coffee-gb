@@ -140,7 +140,7 @@ class DetachedStateTest {
       assertTrue(timingRuntime.linePixels > 0)
       assertTrue(timingRuntime.outCount > 0)
       assertTrue(pendingRuntime.linePixels > 0)
-      assertTrue(pendingRuntime.outCount > 0)
+      assertEquals(1, pendingRuntime.outCount)
       assertTrue(pendingRuntime.firstEntry in 0..0x3f)
       assertTrue(pendingRuntime.firstBgp in 0..0xff)
       assertTrue(pendingRuntime.firstObp0 in 0..0xff)
@@ -200,6 +200,125 @@ class DetachedStateTest {
       val actual = session.captureDetachedState()
       assertEquals(expectedDisplay, actual.machine.record(DISPLAY_MEMENTO))
       assertEquals(expected, actual)
+    }
+  }
+
+  @Test
+  fun invalidDmgFifoRuntimeIsRejectedBeforeAnyLiveMutation() {
+    session(configuration().setGameboyType(GameboyType.DMG)).use { session ->
+      repeat(400) { session.gameboy.tick() }
+      val before = session.captureDetachedState()
+      val capturedRuntime = requireNotNull(before.machine.dmgFifoRuntime)
+      val neutral = DmgPixelFifoRuntimeState(0, 0, -1, 0, 0, 0)
+      val invalidStates =
+          listOf<Pair<String, DmgPixelFifoRuntimeState>>(
+              "linePixels below zero" to neutral.copy(linePixels = -1),
+              "linePixels above the visible line" to neutral.copy(linePixels = 161),
+              "negative outCount" to neutral.copy(outCount = -1),
+              "firstEntry below its sentinel" to neutral.copy(firstEntry = -2),
+              "firstEntry above its packed range" to neutral.copy(firstEntry = 0x40),
+              "pending firstEntry without its first output" to
+                  neutral.copy(outCount = 0, firstEntry = 0),
+              "pending firstEntry after the first output" to
+                  neutral.copy(outCount = 2, firstEntry = 0),
+              "BGP below byte range" to neutral.copy(firstBgp = -1),
+              "BGP above byte range" to neutral.copy(firstBgp = 0x100),
+              "OBP0 below byte range" to neutral.copy(firstObp0 = -1),
+              "OBP0 above byte range" to neutral.copy(firstObp0 = 0x100),
+              "OBP1 below byte range" to neutral.copy(firstObp1 = -1),
+              "OBP1 above byte range" to neutral.copy(firstObp1 = 0x100),
+          )
+
+      invalidStates.forEach { (case, invalidRuntime) ->
+        val timingCandidate =
+            before.withDmgFifoRuntime(capturedRuntime.copy(timing = invalidRuntime))
+        assertRejectedBeforeMutation(session, before, timingCandidate, "timing FIFO: $case")
+
+        val outputCandidate =
+            before.withDmgFifoRuntime(capturedRuntime.copy(output = invalidRuntime))
+        assertRejectedBeforeMutation(session, before, outputCandidate, "output FIFO: $case")
+      }
+    }
+  }
+
+  @Test
+  fun dmgFifoRuntimePresenceMatchesHardwareBeforeAnyLiveMutation() {
+    listOf(GameboyType.DMG, GameboyType.SGB).forEach { hardware ->
+      session(configuration().setGameboyType(hardware)).use { session ->
+        val before = session.captureDetachedState()
+        assertRejectedBeforeMutation(
+            session,
+            before,
+            before.withDmgFifoRuntime(null),
+            "$hardware state without its FIFO supplement",
+        )
+      }
+    }
+
+    val dmgRuntime =
+        session(configuration().setGameboyType(GameboyType.DMG)).use {
+          requireNotNull(it.captureDetachedState().machine.dmgFifoRuntime)
+        }
+    session(configuration(cgbIdleRom()).setGameboyType(GameboyType.CGB)).use { session ->
+      val before = session.captureDetachedState()
+      assertRejectedBeforeMutation(
+          session,
+          before,
+          before.withDmgFifoRuntime(dmgRuntime),
+          "native CGB state with a DMG FIFO supplement",
+      )
+    }
+  }
+
+  @Test
+  fun reachableDmgAndSgbFifoRuntimeBoundariesApplyAtTheAtomicBoundary() {
+    listOf(GameboyType.DMG, GameboyType.SGB).forEach { hardware ->
+      session(configuration().setGameboyType(hardware)).use { session ->
+        val initial = session.captureDetachedState()
+        val initialRuntime = requireNotNull(initial.machine.dmgFifoRuntime)
+        listOf(initialRuntime.timing, initialRuntime.output).forEach {
+          assertEquals(0, it.linePixels, "$hardware FIFO did not begin at line position zero")
+          assertEquals(0, it.outCount, "$hardware FIFO did not begin before output")
+          assertEquals(-1, it.firstEntry, "$hardware FIFO began with a pending first pixel")
+        }
+        assertAcceptedAtMutationBoundary(session, initial, "$hardware initial FIFO boundary")
+
+        val sawLineEnd = BooleanArray(2)
+        var sawPendingFirst = false
+        var sawActiveProgress = false
+        repeat(5_000) {
+          session.gameboy.tick()
+          val coreRuntime = requireNotNull(session.gameboy.captureDmgFifoRuntimeState())
+          val runtime = listOf(coreRuntime.timing(), coreRuntime.output())
+          var sample = false
+          runtime.forEachIndexed { index, fifo ->
+            if (!sawLineEnd[index] && fifo.linePixels() == 160) {
+              sawLineEnd[index] = true
+              sample = true
+            }
+            if (!sawPendingFirst && fifo.firstEntry() >= 0) {
+              assertEquals(1, fifo.outCount())
+              sawPendingFirst = true
+              sample = true
+            }
+            if (!sawActiveProgress && fifo.linePixels() in 1..159) {
+              sawActiveProgress = true
+              sample = true
+            }
+          }
+          if (sample) {
+            assertAcceptedAtMutationBoundary(
+                session,
+                session.captureDetachedState(),
+                "$hardware reachable FIFO sample",
+            )
+          }
+        }
+
+        assertTrue(sawLineEnd.all { it }, "$hardware FIFOs never reached line position 160")
+        assertTrue(sawPendingFirst, "$hardware FIFO never held the first output entry")
+        assertTrue(sawActiveProgress, "$hardware FIFO never showed active line progress")
+      }
     }
   }
 
@@ -916,6 +1035,21 @@ class DetachedStateTest {
     assertEquals(before, session.captureDetachedState(), "$label changed the session")
   }
 
+  private fun assertAcceptedAtMutationBoundary(
+      session: Session,
+      state: SessionState,
+      label: String,
+  ) {
+    val stages = mutableListOf<ApplyStage>()
+    DetachedStateAdapter.apply(session, state) { stages += it }
+    assertEquals(
+        listOf(ApplyStage.BEFORE_LIVE_MUTATION, ApplyStage.AFTER_MACHINE_MUTATION),
+        stages,
+        "$label did not cross the expected apply stages",
+    )
+    assertEquals(state, session.captureDetachedState(), "$label did not restore exactly")
+  }
+
   private fun MachineState.record(className: String): RecordState {
     return requireNotNull(records(className).firstOrNull()) { "Missing $className" }
   }
@@ -983,6 +1117,15 @@ class DetachedStateTest {
   private fun SessionState.withMachineRoot(root: RecordState): SessionState =
       SessionState(
           MachineState(root, machine.rtcRuntime, machine.hardware, machine.dmgFifoRuntime),
+          serialPeripheral,
+          serialState,
+          serialRuntime,
+          heldButtons,
+      )
+
+  private fun SessionState.withDmgFifoRuntime(runtime: DmgFifoRuntimeState?): SessionState =
+      SessionState(
+          MachineState(machine.root, machine.rtcRuntime, machine.hardware, runtime),
           serialPeripheral,
           serialState,
           serialRuntime,

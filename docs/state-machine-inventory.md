@@ -129,6 +129,11 @@ deterministically malformed detached candidate.
 The legacy Java serialization shape and pinned manifest remain unchanged. The six DMG FIFO fields
 introduced after that manifest are captured once per dot machine by `DmgFifoRuntimeState`; adding
 them to `DmgPixelFifoMemento` would change its Java descriptor and break the supported fixtures.
+`linePixels` is the inclusive 0..160 LCD position; `outCount` is nonnegative but deliberately has
+no unsound upper bound because it is bookkeeping rather than an array cursor. A pending packed
+6-bit `firstEntry` is created only by the first due output and requires `outCount == 1`; an absent
+entry permits any nonnegative count because the next tick clears the latch before considering
+another due entry. Its three palette latches are bytes.
 Existing fixtures may still carry the historical root display copy; restore accepts it after GPU
 restore. New captures set that nullable compatibility component to null, so only
 `GpuMemento.displayMemento` owns the two 160x144 panel arrays. Visible frame, partial scanout/index,
