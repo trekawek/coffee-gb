@@ -120,7 +120,7 @@ class LinkedController(
 
   private var hostCheckpointPending = false
 
-  private var localCheckpointCreditFrame: Long? = null
+  private var localCheckpointCreditPending = false
 
   private val peerWorkBySource = IdentityHashMap<PeerEventSource, PeerWorkBudget>()
 
@@ -179,7 +179,7 @@ class LinkedController(
         commitHostCheckpoint()
       } else {
         commitStateBoundary()
-        if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditFrame = frame
+        if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditPending = true
       }
       eventBus.postAsync(RequestResetEvent(frame, localPlayer))
     }
@@ -208,7 +208,7 @@ class LinkedController(
             }) {
           return@register
         }
-        if (!consumeCheckpointWork(e.frame, e.source, e.states.size)) {
+        if (!consumeCheckpointWork(e.source)) {
           return@register
         }
         runtimeFrameFloor = e.frame
@@ -262,7 +262,7 @@ class LinkedController(
           commitHostCheckpoint()
         } else {
           commitStateBoundary()
-          grantCheckpointCredit(e.frame, e.source)
+          if (mode == LinkMode.FOUR_PLAYER_ADAPTER) grantCheckpointCredit(e.source)
         }
         eventBus.post(ValidatedPeerResetEvent(e))
       }
@@ -527,25 +527,15 @@ class LinkedController(
     return true
   }
 
-  private fun consumeCheckpointWork(
-      peerFrame: Long,
-      source: PeerEventSource?,
-      stateCount: Int,
-  ): Boolean {
+  private fun consumeCheckpointWork(source: PeerEventSource?): Boolean {
     source ?: return true
     val budget = peerWorkBudget(source)
-    val credited =
-        budget.checkpointCreditFrame == peerFrame || localCheckpointCreditFrame == peerFrame
-    budget.checkpointCreditFrame = null
-    localCheckpointCreditFrame = null
+    val credited = budget.checkpointCreditPending || localCheckpointCreditPending
+    budget.checkpointCreditPending = false
+    localCheckpointCreditPending = false
     if (credited) return true
 
-    val fixedWork =
-        Math.multiplyExact(
-            StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
-            maxOf(1, stateCount).toLong(),
-        )
-    val requested = maxOf((frame - peerFrame).coerceAtLeast(0), fixedWork)
+    val requested = StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK
     if (requested > budget.checkpointAvailable) {
       rejectExcessiveWork(source, StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES, "checkpoint")
       return false
@@ -555,10 +545,10 @@ class LinkedController(
     return true
   }
 
-  /** A relayed RESET and its same-frame authoritative checkpoint are one state transition. */
-  private fun grantCheckpointCredit(peerFrame: Long, source: PeerEventSource?) {
+  /** A validated RESET and the next authoritative checkpoint are one logical transition. */
+  private fun grantCheckpointCredit(source: PeerEventSource?) {
     source ?: return
-    peerWorkBudget(source).checkpointCreditFrame = peerFrame
+    peerWorkBudget(source).checkpointCreditPending = true
   }
 
   private fun peerWorkBudget(source: PeerEventSource): PeerWorkBudget {
@@ -782,7 +772,7 @@ class LinkedController(
       var replayAvailable: Long,
       var checkpointAvailable: Long,
       var lastFrame: Long,
-      var checkpointCreditFrame: Long? = null,
+      var checkpointCreditPending: Boolean = false,
   )
 
   private companion object {

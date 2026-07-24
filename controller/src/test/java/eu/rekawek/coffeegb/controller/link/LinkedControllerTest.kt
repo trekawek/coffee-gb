@@ -227,7 +227,7 @@ class LinkedControllerTest {
   }
 
   @Test
-  fun fourPlayerFormationAndRelayedResetFitPersistentCheckpointBudget() {
+  fun fourPlayerFormationResetAndReplacementFitPersistentCheckpointBudget() {
     val hostBus = EventBusImpl()
     val host =
         LinkedController(
@@ -254,13 +254,16 @@ class LinkedControllerTest {
     val failures = mutableListOf<ProtocolErrorReason>()
     val serverSource = PeerEventSource(0) { reason, _ -> failures += reason }
 
-    fun deliverCheckpoint(expectedPlayers: List<Int>) {
+    fun deliverCheckpoint(
+        expectedPlayers: List<Int>,
+    ): LinkedController.SessionStateReadyEvent {
       val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
       assertEquals(expectedPlayers, checkpoint.states.map { it.player })
       clientBus.post(checkpointEvent(checkpoint, serverSource))
       client.runFrame()
       assertTrue(failures.isEmpty(), "normal topology formation exhausted the checkpoint budget")
       assertCompleteStateEquals(host, client)
+      return checkpoint
     }
 
     hostBus.post(LoadRomEvent(ROM))
@@ -298,6 +301,42 @@ class LinkedControllerTest {
             player = 1,
             source = PeerEventSource(1) { _, _ -> },
         ))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2, 3))
+
+    // Pending input makes history reconciliation publish the RESET checkpoint one frame later.
+    // The source-scoped credit follows the logical transition rather than requiring F == F + 1.
+    val pendingResetFrame = host.currentFrame()
+    val resetOrigin = PeerEventSource(2) { _, _ -> }
+    val pendingInput = Input(listOf(Button.B), emptyList())
+    hostBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            pendingResetFrame,
+            pendingInput,
+            player = 2,
+            source = resetOrigin,
+        ))
+    hostBus.post(
+        ReceivedRemoteResetEvent(pendingResetFrame, player = 2, source = resetOrigin))
+    host.runFrame()
+    clientBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            pendingResetFrame,
+            pendingInput,
+            player = 2,
+            source = serverSource,
+        ))
+    clientBus.post(
+        ReceivedRemoteResetEvent(pendingResetFrame, player = 2, source = serverSource))
+    val advancedResetCheckpoint = deliverCheckpoint(listOf(0, 1, 2, 3))
+    assertEquals(pendingResetFrame + 1, advancedResetCheckpoint.frame)
+
+    // Normal churn immediately after formation remains admissible on the same server source.
+    hostBus.post(ServerPlayerDisconnectedEvent(3))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2))
+
+    hostBus.post(peerState(0, PeerEventSource(3) { _, _ -> }).copy(player = 3))
     host.runFrame()
     deliverCheckpoint(listOf(0, 1, 2, 3))
 
