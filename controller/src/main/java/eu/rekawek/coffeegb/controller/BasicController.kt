@@ -382,9 +382,18 @@ class BasicController private constructor(
   private fun loadSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
-    if (manager.loadSnapshot(slot, currentSession.gameboy)) {
-      rewindManager.clear()
-      currentSession.eventBus.post(Controller.SnapshotRestoredEvent(slot))
+    try {
+      if (manager.loadSnapshot(slot, currentSession.gameboy)) {
+        rewindManager.clear()
+        currentSession.eventBus.post(Controller.SnapshotRestoredEvent(slot))
+      }
+    } catch (e: Exception) {
+      LOG.warn("Unable to load snapshot slot {}", slot, e)
+      currentSession.eventBus.post(
+          Controller.SnapshotLoadFailedEvent(
+              slot,
+              e.message ?: "The state file is invalid or incompatible.",
+          ))
     }
   }
 

@@ -17,7 +17,13 @@ class TcpClient(
     try {
       clientSocket = createSocket(host)
       LOG.info("Connected to {}", clientSocket!!.inetAddress)
-      Connection(clientSocket!!.getInputStream(), clientSocket!!.getOutputStream(), eventBus, false)
+      Connection(
+          clientSocket!!.getInputStream(),
+          clientSocket!!.getOutputStream(),
+          eventBus,
+          false,
+          cancelTransport = { clientSocket?.close() },
+      )
           .use {
             eventBus.post(ConnectionController.ClientHandshakeCompletedEvent(it.mode, it.player))
             it.run()
@@ -26,6 +32,12 @@ class TcpClient(
     } catch (e: Connection.ConnectionRejectedException) {
       LOG.info("Connection rejected: {}", e.reason.userMessage)
       eventBus.post(ConnectionController.ClientConnectionRejectedEvent(e.reason.userMessage))
+    } catch (e: Connection.ProtocolException) {
+      LOG.info("Netplay protocol error: {}", e.reason.userMessage)
+      eventBus.post(ConnectionController.ClientProtocolErrorEvent(e.reason.userMessage))
+    } catch (e: Connection.CompatibilityException) {
+      LOG.info("Netplay compatibility error: {}", e.message)
+      eventBus.post(ConnectionController.ClientProtocolErrorEvent(e.message ?: "Incompatible peer"))
     } catch (e: SocketException) {
       if (e.message == "Socket closed") {
         LOG.atInfo().log("Disconnected from server")

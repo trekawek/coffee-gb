@@ -2,11 +2,22 @@ package eu.rekawek.coffeegb.controller.link
 
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.StateLimits
+import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.StateHistory.GameboyJoypadPressEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
+import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSourceDisconnectedEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ProtocolErrorReason
+import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerButtonStateEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStateEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
@@ -17,10 +28,15 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import org.junit.Test
+import java.io.IOException
 import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -64,7 +80,8 @@ class LinkedControllerTest {
     hostBus.register<LinkedController.SessionStateReadyEvent> { checkpoints.add(it) }
 
     hostBus.post(LoadRomEvent(ROM))
-    repeat(3) { host.runFrame() }
+    host.runFrame()
+    setControllerFrame(host, StateLimits.NETPLAY_FUTURE_FRAMES + 5)
     checkpoints.clear()
 
     // Player 2 joins after the host has already advanced. Its existing Game Boy is hot-plugged at
@@ -81,7 +98,7 @@ class LinkedControllerTest {
         ))
     host.runFrame()
     val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
-    assertEquals(3, checkpoint.frame)
+    assertTrue(checkpoint.frame > StateLimits.NETPLAY_FUTURE_FRAMES)
     assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
     assertTrue(checkpoint.states.all { it.sessionSnapshot != null })
 
@@ -98,26 +115,11 @@ class LinkedControllerTest {
     clientBus.post(LoadRomEvent(ROM))
     client.runFrame()
     assertEquals(0, client.currentFrame(), "client must wait for the host checkpoint")
+    val clientFailures = mutableListOf<ProtocolErrorReason>()
+    val serverSource = PeerEventSource(0) { reason, _ -> clientFailures += reason }
 
     fun deliverCheckpoint(value: LinkedController.SessionStateReadyEvent) {
-      clientBus.post(
-          SessionCheckpointEvent(
-              value.frame,
-              value.states.map { state ->
-                PeerLoadedGameEvent(
-                    rom = state.romFile,
-                    battery = state.batteryFile,
-                    snapshot = state.snapshot,
-                    gameboyType = state.gameboyType,
-                    bootstrapMode = state.bootstrapMode,
-                    frame = state.frame,
-                    cgb0Revision = state.cgb0Revision,
-                    player = state.player,
-                    sessionSnapshot = state.sessionSnapshot,
-                    heldButtons = state.heldButtons,
-                )
-              },
-          ))
+      clientBus.post(checkpointEvent(value, serverSource))
     }
 
     deliverCheckpoint(checkpoint)
@@ -127,7 +129,31 @@ class LinkedControllerTest {
     assertEquals(host.currentFrame(), client.currentFrame())
     assertEquals(host.stateHistory.getHead().frame, client.stateHistory.getHead().frame)
 
+    // RESET is a generation boundary. A valid input at the same frame must apply to the fresh
+    // machine instead of letting history merge restore the pre-reset session over it.
+    val resetFrame = host.currentFrame()
+    hostBus.post(ReceivedRemoteResetEvent(resetFrame, player = 1))
+    hostBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            resetFrame,
+            Input(listOf(Button.SELECT), emptyList()),
+            player = 1,
+        ))
+    host.runFrame()
+    val resetCheckpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+    deliverCheckpoint(resetCheckpoint)
+    client.runFrame()
+    assertCompleteStateEquals(host, client)
+
     // Another physical port can hot-plug while the original client is already running.
+    val joinBoundaryPatchFrame = host.currentFrame() - 1
+    hostBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            joinBoundaryPatchFrame,
+            Input(listOf(Button.A), emptyList()),
+            player = 1,
+        ))
+    hostBus.post(ReceivedRemoteResetEvent(host.currentFrame(), player = 1))
     hostBus.post(
         PeerLoadedGameEvent(
             ROM_BYTES,
@@ -147,8 +173,25 @@ class LinkedControllerTest {
     assertEquals(3, client.activeSessionCount())
     assertEquals(host.currentFrame(), client.currentFrame())
 
+    // Old-generation traffic received after the checkpoint must not change either side.
+    hostBus.post(ReceivedRemoteResetEvent(expandedCheckpoint.frame - 1, player = 1))
+    clientBus.post(ReceivedRemoteResetEvent(expandedCheckpoint.frame - 1, player = 1))
+    repeat(3) {
+      host.runFrame()
+      client.runFrame()
+    }
+    assertCompleteStateEquals(host, client)
+
     // Removing Player 3 leaves the other consoles and adapter running from an authoritative
     // checkpoint, and frees that physical slot for a replacement.
+    val disconnectBoundaryPatchFrame = host.currentFrame() - 1
+    hostBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            disconnectBoundaryPatchFrame,
+            Input(listOf(Button.B), emptyList()),
+            player = 1,
+        ))
+    hostBus.post(ReceivedRemoteResetEvent(disconnectBoundaryPatchFrame, player = 1))
     hostBus.post(ServerPlayerDisconnectedEvent(2))
     host.runFrame()
     val disconnectCheckpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
@@ -158,10 +201,262 @@ class LinkedControllerTest {
     assertEquals(2, host.activeSessionCount())
     assertEquals(2, client.activeSessionCount())
     assertEquals(host.currentFrame(), client.currentFrame())
-    assertEquals(6, host.currentFrame())
+    assertTrue(host.currentFrame() > StateLimits.NETPLAY_FUTURE_FRAMES)
+
+    hostBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            disconnectCheckpoint.frame - 1,
+            Input(listOf(Button.START), emptyList()),
+            player = 1,
+        ))
+    clientBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            disconnectCheckpoint.frame - 1,
+            Input(listOf(Button.START), emptyList()),
+            player = 1,
+        ))
+    repeat(3) {
+      host.runFrame()
+      client.runFrame()
+    }
+    assertCompleteStateEquals(host, client)
+    assertTrue(clientFailures.isEmpty(), "healthy host checkpoints exhausted the client budget")
 
     clientBus.close()
     hostBus.close()
+  }
+
+  @Test
+  fun fourPlayerFormationResetAndReplacementFitPersistentCheckpointBudget() {
+    val hostBus = EventBusImpl()
+    val host =
+        LinkedController(
+            hostBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 0,
+        )
+    host.timingTicker.disabled = true
+    val checkpoints = LinkedBlockingQueue<LinkedController.SessionStateReadyEvent>()
+    hostBus.register<LinkedController.SessionStateReadyEvent> { checkpoints.add(it) }
+
+    val clientBus = EventBusImpl()
+    val client =
+        LinkedController(
+            clientBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        )
+    client.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val serverSource = PeerEventSource(0) { reason, _ -> failures += reason }
+
+    fun deliverCheckpoint(
+        expectedPlayers: List<Int>,
+    ): LinkedController.SessionStateReadyEvent {
+      val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+      assertEquals(expectedPlayers, checkpoint.states.map { it.player })
+      clientBus.post(checkpointEvent(checkpoint, serverSource))
+      client.runFrame()
+      assertTrue(failures.isEmpty(), "normal topology formation exhausted the checkpoint budget")
+      assertCompleteStateEquals(host, client)
+      return checkpoint
+    }
+
+    hostBus.post(LoadRomEvent(ROM))
+    hostBus.post(peerState(0, PeerEventSource(1) { _, _ -> }))
+    clientBus.post(LoadRomEvent(ROM))
+    client.runFrame()
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1))
+
+    // A host RESET is relayed before the same-frame authoritative checkpoint. It consumes one
+    // replay/state-change token, while the checkpoint uses the transition credit instead of being
+    // charged a second time.
+    val resetFrame = host.currentFrame()
+    hostBus.post(Controller.ResetEmulationEvent())
+    host.runFrame()
+    clientBus.post(ReceivedRemoteResetEvent(resetFrame, player = 0, source = serverSource))
+    deliverCheckpoint(listOf(0, 1))
+
+    hostBus.post(peerState(0, PeerEventSource(2) { _, _ -> }).copy(player = 2))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2))
+
+    hostBus.post(peerState(0, PeerEventSource(3) { _, _ -> }).copy(player = 3))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2, 3))
+
+    // The reset origin does not receive its own relayed RESET. Its trusted local transition grants
+    // the equivalent one-use credit, so the checkpoint is not charged twice during the formation
+    // burst.
+    val originResetFrame = host.currentFrame()
+    clientBus.post(Controller.ResetEmulationEvent())
+    hostBus.post(
+        ReceivedRemoteResetEvent(
+            originResetFrame,
+            player = 1,
+            source = PeerEventSource(1) { _, _ -> },
+        ))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2, 3))
+
+    // Pending input makes history reconciliation publish the RESET checkpoint one frame later.
+    // The source-scoped credit follows the logical transition rather than requiring F == F + 1.
+    val pendingResetFrame = host.currentFrame()
+    val resetOrigin = PeerEventSource(2) { _, _ -> }
+    val pendingInput = Input(listOf(Button.B), emptyList())
+    hostBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            pendingResetFrame,
+            pendingInput,
+            player = 2,
+            source = resetOrigin,
+        ))
+    hostBus.post(
+        ReceivedRemoteResetEvent(pendingResetFrame, player = 2, source = resetOrigin))
+    host.runFrame()
+    clientBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            pendingResetFrame,
+            pendingInput,
+            player = 2,
+            source = serverSource,
+        ))
+    clientBus.post(
+        ReceivedRemoteResetEvent(pendingResetFrame, player = 2, source = serverSource))
+    val advancedResetCheckpoint = deliverCheckpoint(listOf(0, 1, 2, 3))
+    assertEquals(pendingResetFrame + 1, advancedResetCheckpoint.frame)
+
+    // Normal churn immediately after formation remains admissible on the same server source.
+    hostBus.post(ServerPlayerDisconnectedEvent(3))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2))
+
+    hostBus.post(peerState(0, PeerEventSource(3) { _, _ -> }).copy(player = 3))
+    host.runFrame()
+    deliverCheckpoint(listOf(0, 1, 2, 3))
+
+    assertTrue(failures.isEmpty())
+    clientBus.close()
+    hostBus.close()
+  }
+
+  @Test
+  fun checkpointFloorDropsDelayedRuntimeAndEmptyCheckpointCanRestartLater() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        )
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val source = PeerEventSource(0) { reason, _ -> failures += reason }
+
+    eventBus.post(SessionCheckpointEvent(100, emptyList(), source))
+    sut.runFrame()
+    assertEquals(0, sut.activeSessionCount())
+    assertEquals(101, sut.currentFrame())
+
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            99,
+            Input(listOf(Button.A), emptyList()),
+            player = 0,
+            source = source,
+        ))
+    eventBus.post(ReceivedRemoteResetEvent(99, player = 0, source = source))
+    eventBus.post(ReceivedRemoteStopEvent(99, player = 0, source = source))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            99,
+            player = 0,
+            source = source,
+        ))
+    sut.runFrame()
+    assertTrue(failures.isEmpty(), "old-generation runtime should be discarded, not fatal")
+    assertEquals(0, sut.activeSessionCount())
+    assertEquals(102, sut.currentFrame())
+
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            sut.currentFrame(),
+            player = 0,
+            source = source,
+        ))
+    sut.runFrame()
+    assertEquals(1, sut.activeSessionCount())
+    assertTrue(failures.isEmpty())
+    eventBus.close()
+  }
+
+  @Test
+  fun queueAdmissionAcceptsEveryLegalStateBoundaryAndRejectsAggregatePlusOne() {
+    val eventBus = EventBusImpl()
+    LinkedController(eventBus, EmulatorProperties(), null)
+    val maxRom = ByteArray(StateLimits.ROM.decodedBytes)
+
+    fun state(
+        rom: ByteArray,
+        battery: ByteArray? = null,
+        source: PeerEventSource,
+    ) =
+        PeerLoadedGameEvent(
+            rom,
+            battery,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            source = source,
+        )
+
+    val romSource = PeerEventSource(1) { _, _ -> }
+    eventBus.post(state(maxRom, source = romSource))
+    eventBus.post(PeerEventSourceDisconnectedEvent(romSource))
+
+    val boundarySource = PeerEventSource(1) { _, _ -> }
+    eventBus.post(
+        SessionCheckpointEvent(
+            0,
+            listOf(
+                state(maxRom, source = boundarySource),
+                state(maxRom, source = boundarySource),
+            ),
+            boundarySource,
+        ))
+    eventBus.post(PeerEventSourceDisconnectedEvent(boundarySource))
+
+    val oversizedSource = PeerEventSource(1) { _, _ -> }
+    assertFailsWith<EventQueue.EventQueueFullException> {
+      eventBus.post(
+          SessionCheckpointEvent(
+              0,
+              listOf(
+                  state(maxRom, source = oversizedSource),
+                  state(maxRom, byteArrayOf(0), oversizedSource),
+              ),
+              oversizedSource,
+          ))
+    }
+    eventBus.close()
   }
 
   @Test
@@ -183,6 +478,371 @@ class LinkedControllerTest {
 
     sut.runFrame()
     assertEquals(2, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun controllerClockRejectsExtremeStateAndInputWithoutStoppingLiveSession() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<Pair<ProtocolErrorReason, IOException>>()
+    val source = PeerEventSource(1) { reason, cause -> failures += reason to cause }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            source = source,
+        ))
+    sut.runFrame()
+    assertEquals(2, sut.activeSessionCount())
+
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            Int.MAX_VALUE.toLong(),
+            source = source,
+        ))
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            Int.MAX_VALUE.toLong(),
+            Input(listOf(Button.A), emptyList()),
+            source = source,
+        ))
+    sut.runFrame()
+
+    assertEquals(2, sut.activeSessionCount())
+    assertEquals(1, failures.size)
+    assertTrue(failures.all { it.first == ProtocolErrorReason.INVALID_FRAME })
+    sut.runFrame()
+    assertTrue(sut.currentFrame() >= 3, "controller stopped after hostile frames")
+    eventBus.close()
+  }
+
+  @Test
+  fun idleHeartbeatIsBoundedByControllerRatherThanPeerHighWaterMark() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val accepted = mutableListOf<ValidatedPeerButtonStateEvent>()
+    eventBus.register<ValidatedPeerButtonStateEvent> { accepted += it }
+    val source = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            source = source,
+        ))
+    sut.runFrame()
+    setControllerFrame(sut, 301)
+
+    val idleHeartbeatFrame = sut.currentFrame()
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            idleHeartbeatFrame,
+            Input(emptyList(), emptyList()),
+            source = source,
+        ))
+    sut.runFrame()
+    assertTrue(failures.isEmpty(), "a healthy post-idle heartbeat was rejected")
+    assertEquals(listOf(idleHeartbeatFrame), accepted.map { it.event.frame })
+
+    eventBus.post(
+        LinkedController.RemoteButtonStateEvent(
+            sut.currentFrame() + StateLimits.NETPLAY_FUTURE_FRAMES + 1,
+            Input(emptyList(), emptyList()),
+            source = source,
+        ))
+    sut.runFrame()
+
+    assertEquals(listOf(ProtocolErrorReason.INVALID_FRAME), failures)
+    assertEquals(listOf(idleHeartbeatFrame), accepted.map { it.event.frame })
+    assertEquals(2, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun cumulativeRollbackWorkRejectsOnlyOffendingConnection() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+        ))
+    sut.runFrame()
+
+    repeat(3) {
+      eventBus.post(
+          ReceivedRemoteResetEvent(sut.currentFrame(), player = 1, source = offender))
+      eventBus.post(peerState(sut.currentFrame(), offender))
+    }
+    sut.runFrame()
+
+    assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
+    assertEquals(StateLimits.NETPLAY_REPLAY_WORK_FRAMES, sut.lastDispatchReplayFrames)
+    assertEquals(2, sut.activeSessionCount())
+
+    val replacementFailures = mutableListOf<ProtocolErrorReason>()
+    val replacement = PeerEventSource(1) { reason, _ -> replacementFailures += reason }
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            sut.currentFrame(),
+            player = 1,
+            source = replacement,
+        ))
+    sut.runFrame()
+    assertEquals(2, sut.activeSessionCount())
+    assertTrue(replacementFailures.isEmpty())
+    eventBus.close()
+  }
+
+  @Test
+  fun streamingCurrentFrameResetsAreBoundedAcrossDispatches() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            source = offender,
+        ))
+    sut.runFrame()
+
+    eventBus.register<ValidatedPeerResetEvent> {
+      eventBus.post(
+          ReceivedRemoteResetEvent(sut.currentFrame(), player = 1, source = offender))
+    }
+    eventBus.post(ReceivedRemoteResetEvent(sut.currentFrame(), player = 1, source = offender))
+    repeat(12) {
+      if (failures.isEmpty()) sut.runFrame()
+    }
+
+    assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
+    assertTrue(sut.currentFrame() >= 5, "bounded dispatches must continue advancing frames")
+
+    val healthyFailures = mutableListOf<ProtocolErrorReason>()
+    val healthy = PeerEventSource(1) { reason, _ -> healthyFailures += reason }
+    eventBus.post(ReceivedRemoteResetEvent(sut.currentFrame(), player = 1, source = healthy))
+    sut.runFrame()
+    assertTrue(healthyFailures.isEmpty(), "only the streaming source should be rejected")
+    assertEquals(2, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun streamingCurrentFrameRomChangesAreBoundedAcrossDispatches() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    sut.runFrame()
+
+    eventBus.register<ValidatedPeerStateEvent> { validated ->
+      if (validated.event.source === offender) {
+        eventBus.post(peerState(sut.currentFrame(), offender))
+      }
+    }
+    eventBus.post(peerState(sut.currentFrame(), offender))
+    repeat(12) {
+      if (failures.isEmpty()) sut.runFrame()
+    }
+
+    assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
+    assertTrue(sut.currentFrame() >= 5, "bounded dispatches must continue advancing frames")
+
+    val healthyFailures = mutableListOf<ProtocolErrorReason>()
+    val healthy = PeerEventSource(1) { reason, _ -> healthyFailures += reason }
+    eventBus.post(peerState(sut.currentFrame(), healthy))
+    sut.runFrame()
+    assertTrue(healthyFailures.isEmpty(), "only the streaming source should be rejected")
+    assertEquals(2, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun streamingCurrentFrameStopAndReloadChangesAreBoundedAcrossDispatches() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    sut.runFrame()
+
+    eventBus.register<ValidatedPeerStateEvent> { validated ->
+      if (validated.event.source === offender) {
+        eventBus.post(
+            ReceivedRemoteStopEvent(sut.currentFrame(), player = 1, source = offender))
+      }
+    }
+    eventBus.register<ValidatedPeerStopEvent> { validated ->
+      if (validated.event.source === offender) {
+        eventBus.post(peerState(sut.currentFrame(), offender))
+      }
+    }
+    eventBus.post(peerState(sut.currentFrame(), offender))
+    repeat(12) {
+      if (failures.isEmpty()) sut.runFrame()
+    }
+
+    assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
+    assertTrue(sut.currentFrame() > 1, "bounded dispatches must continue advancing frames")
+
+    val healthyFailures = mutableListOf<ProtocolErrorReason>()
+    val healthy = PeerEventSource(1) { reason, _ -> healthyFailures += reason }
+    eventBus.post(peerState(sut.currentFrame(), healthy))
+    sut.runFrame()
+    assertTrue(healthyFailures.isEmpty(), "only the streaming source should be rejected")
+    assertEquals(2, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun repeatedStopOfAnEmptyPortIsACheapNoOp() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val source = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    sut.runFrame()
+
+    repeat(100) {
+      eventBus.post(ReceivedRemoteStopEvent(sut.currentFrame(), player = 1, source = source))
+    }
+    sut.runFrame()
+
+    assertTrue(failures.isEmpty())
+    assertEquals(0, sut.lastDispatchReplayFrames)
+    assertEquals(1, sut.activeSessionCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun streamingLeapingCheckpointsCannotRefillTheirOwnWorkBudget() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        )
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val offender = PeerEventSource(0) { reason, _ -> failures += reason }
+    var acceptedCheckpoints = 0
+    eventBus.register<ValidatedPeerCheckpointEvent> { validated ->
+      if (validated.event.source === offender) {
+        acceptedCheckpoints++
+        eventBus.post(
+            SessionCheckpointEvent(
+                validated.event.frame + StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
+                emptyList(),
+                offender,
+            ))
+      }
+    }
+    eventBus.post(SessionCheckpointEvent(0, emptyList(), offender))
+    repeat(20) {
+      if (failures.isEmpty()) sut.runFrame()
+    }
+
+    assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
+    assertEquals(9, acceptedCheckpoints)
+    assertEquals(
+        acceptedCheckpoints.toLong() + 1,
+        sut.meteredWorkFrames(),
+        "bounded dispatches must continue running emulator frames",
+    )
+
+    val healthyFailures = mutableListOf<ProtocolErrorReason>()
+    val healthy = PeerEventSource(0) { reason, _ -> healthyFailures += reason }
+    eventBus.post(SessionCheckpointEvent(sut.currentFrame(), emptyList(), healthy))
+    sut.runFrame()
+    assertTrue(healthyFailures.isEmpty(), "only the streaming source should be rejected")
+    eventBus.close()
+  }
+
+  @Test
+  fun disconnectDuringStateDispatchDoesNotRaceReplayAccounting() {
+    val eventBus = EventBusImpl()
+    val sut = LinkedController(eventBus, EmulatorProperties(), null)
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val source = PeerEventSource(1) { reason, _ -> failures += reason }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(peerState(0, source))
+    sut.runFrame()
+
+    val inDispatch = CountDownLatch(1)
+    val disconnected = CountDownLatch(1)
+    eventBus.register<ValidatedPeerStateEvent> { validated ->
+      if (validated.event.source === source) {
+        inDispatch.countDown()
+        assertTrue(disconnected.await(5, TimeUnit.SECONDS), "disconnect did not overlap dispatch")
+      }
+    }
+    eventBus.post(peerState(sut.currentFrame(), source))
+    val dispatch = Thread(sut::runFrame, "state-dispatch-test")
+    val disconnect =
+        Thread(
+            {
+              assertTrue(inDispatch.await(5, TimeUnit.SECONDS), "state dispatch did not begin")
+              eventBus.post(PeerEventSourceDisconnectedEvent(source))
+              disconnected.countDown()
+            },
+            "disconnect-test",
+        )
+    dispatch.start()
+    disconnect.start()
+    dispatch.join(5_000)
+    disconnect.join(5_000)
+
+    assertFalse(dispatch.isAlive, "state dispatch deadlocked with disconnect cleanup")
+    assertFalse(disconnect.isAlive, "disconnect cleanup deadlocked with state dispatch")
+    sut.runFrame()
+    assertTrue(failures.isEmpty())
     eventBus.close()
   }
 
@@ -243,6 +903,65 @@ class LinkedControllerTest {
     sut.runFrame()
     assertEquals(3, sut.activeSessionCount())
     assertTrue(sut.stateHistory.getHead().frame > previousFrame)
+    eventBus.close()
+  }
+
+  @Test
+  fun existingFourPlayerPeerReloadUsesCurrentFrameWhileNewSlotUsesZeroFrame() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 0,
+        )
+    sut.timingTicker.disabled = true
+    val failures = mutableListOf<Pair<Int, ProtocolErrorReason>>()
+    val existing = PeerEventSource(1) { reason, _ -> failures += 1 to reason }
+    val joining = PeerEventSource(2) { reason, _ -> failures += 2 to reason }
+    eventBus.post(LoadRomEvent(ROM))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            player = 1,
+            source = existing,
+        ))
+    sut.runFrame()
+    setControllerFrame(sut, StateLimits.NETPLAY_FUTURE_FRAMES + 10)
+
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            sut.currentFrame(),
+            player = 1,
+            source = existing,
+        ))
+    eventBus.post(
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            0,
+            player = 2,
+            source = joining,
+        ))
+    sut.runFrame()
+
+    assertTrue(failures.isEmpty())
+    assertEquals(3, sut.activeSessionCount())
     eventBus.close()
   }
 
@@ -462,6 +1181,68 @@ class LinkedControllerTest {
         val act = actualButtons.filter { it.tick == t }.map { it.button }.sorted()
         assertEquals(exp, act, "At tick $t, frame ${t/Gameboy.TICKS_PER_FRAME}")
       }
+    }
+
+    fun setControllerFrame(controller: LinkedController, frame: Long) {
+      LinkedController::class.java.getDeclaredField("frame").also { field ->
+        field.isAccessible = true
+        field.setLong(controller, frame)
+      }
+    }
+
+    fun peerState(frame: Long, source: PeerEventSource) =
+        PeerLoadedGameEvent(
+            ROM_BYTES,
+            null,
+            null,
+            GAMEBOY_TYPE,
+            BOOTSTRAP_MODE,
+            frame,
+            source = source,
+        )
+
+    fun checkpointEvent(
+        value: LinkedController.SessionStateReadyEvent,
+        source: PeerEventSource,
+    ) =
+        SessionCheckpointEvent(
+            value.frame,
+            value.states.map { state ->
+              PeerLoadedGameEvent(
+                  rom = state.romFile,
+                  battery = state.batteryFile,
+                  snapshot = state.snapshot,
+                  gameboyType = state.gameboyType,
+                  bootstrapMode = state.bootstrapMode,
+                  frame = state.frame,
+                  cgb0Revision = state.cgb0Revision,
+                  player = state.player,
+                  sessionSnapshot = state.sessionSnapshot,
+                  heldButtons = state.heldButtons,
+                  source = source,
+              )
+            },
+            source,
+        )
+
+    fun assertCompleteStateEquals(expected: LinkedController, actual: LinkedController) {
+      val expectedStates = expected.encodedSessionStates()
+      val actualStates = actual.encodedSessionStates()
+      assertEquals(expectedStates.size, actualStates.size)
+      expectedStates.indices.forEach { player ->
+        val expectedState = expectedStates[player]
+        val actualState = actualStates[player]
+        if (expectedState == null || actualState == null) {
+          assertEquals(expectedState, actualState, "active state differs for player $player")
+        } else {
+          assertContentEquals(
+              expectedState,
+              actualState,
+              "game and adapter state differ for player $player",
+          )
+        }
+      }
+      assertEquals(expected.heldButtonStates(), actual.heldButtonStates())
     }
   }
 }

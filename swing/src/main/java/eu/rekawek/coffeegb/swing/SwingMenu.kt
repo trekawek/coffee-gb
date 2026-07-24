@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.SaveSnapshotEvent
 import eu.rekawek.coffeegb.controller.Controller.SnapshotSavedEvent
+import eu.rekawek.coffeegb.controller.Controller.SnapshotLoadFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.SessionSnapshotSupportEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.SnapshotSupport
@@ -216,6 +217,16 @@ class SwingMenu(
     eventBus.register<SnapshotSavedEvent> {
       if (it.slot == stateSlot) {
         loadSnapshot.isEnabled = true
+      }
+    }
+    eventBus.register<SnapshotLoadFailedEvent> {
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            it.message,
+            "Unable to load state",
+            JOptionPane.ERROR_MESSAGE,
+        )
       }
     }
     eventBus.register<EmulationStartedEvent> { saveSnapshot.isEnabled = snapshotSupport != null }
@@ -889,6 +900,26 @@ class SwingMenu(
             window,
             it.message,
             "Netplay connection rejected",
+            JOptionPane.ERROR_MESSAGE,
+        )
+      }
+    }
+    eventBus.register<ConnectionController.ClientProtocolErrorEvent> {
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            it.message,
+            "Netplay protocol error",
+            JOptionPane.ERROR_MESSAGE,
+        )
+      }
+    }
+    eventBus.register<ConnectionController.ServerProtocolErrorEvent> {
+      SwingUtilities.invokeLater {
+        JOptionPane.showMessageDialog(
+            window,
+            "Player ${it.player + 1}: ${it.message}",
+            "Netplay protocol error",
             JOptionPane.ERROR_MESSAGE,
         )
       }

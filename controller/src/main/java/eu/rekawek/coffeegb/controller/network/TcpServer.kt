@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.network
 
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.core.events.EventBus
 import java.io.IOException
@@ -8,6 +9,10 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.Volatile
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -25,7 +30,23 @@ class TcpServer(
 
   private val clients = ConcurrentHashMap<Int, ClientHandle>()
 
+  private val pendingSockets = ConcurrentHashMap.newKeySet<Socket>()
+
+  private val pendingConnections = ConcurrentHashMap<Socket, Connection>()
+
   private val lock = Any()
+
+  private val pendingPlayers = mutableSetOf<Int>()
+
+  private val handshakeExecutor =
+      ThreadPoolExecutor(
+          StateLimits.NETPLAY_HANDSHAKE_WORKERS,
+          StateLimits.NETPLAY_HANDSHAKE_WORKERS,
+          0,
+          TimeUnit.MILLISECONDS,
+          ArrayBlockingQueue(StateLimits.NETPLAY_PENDING_HANDSHAKES),
+          { task -> Thread(task, "netplay-handshake-worker").also { it.isDaemon = true } },
+      )
 
   @Volatile private var sessionStarted = false
 
@@ -53,28 +74,90 @@ class TcpServer(
     }
     serverSocket = null
     stopClients()
+    handshakeExecutor.shutdownNow()
     eventBus.post(ConnectionController.ServerStoppedEvent())
   }
 
   private fun accept(listener: ServerSocket) {
     val socket = listener.accept()
-    TcpClient.configure(socket)
-    val player = synchronized(lock) { firstAvailablePlayer() }
-    if (player == null) {
-      LOG.info("Rejecting extra connection from {}: {} session is full", socket.inetAddress, mode)
+    val admitted =
+        synchronized(lock) {
+          if (doStop || pendingSockets.size >= StateLimits.NETPLAY_PENDING_HANDSHAKES) {
+            false
+          } else {
+            pendingSockets += socket
+            true
+          }
+        }
+    if (!admitted) {
+      LOG.info("Rejecting connection from {}: pending handshake limit reached", socket.inetAddress)
       try {
-        Connection.reject(socket.getOutputStream(), Connection.RejectionReason.SERVER_FULL)
+        Connection.reject(socket.getOutputStream(), Connection.RejectionReason.SERVER_BUSY)
       } finally {
         socket.close()
       }
       return
     }
-
+    var player: Int? = null
     try {
+      TcpClient.configure(socket)
+      player = synchronized(lock) { reservePlayer() }
+      if (player == null) {
+        LOG.info("Rejecting extra connection from {}: {} session is full", socket.inetAddress, mode)
+        try {
+          Connection.reject(socket.getOutputStream(), Connection.RejectionReason.SERVER_FULL)
+        } finally {
+          pendingSockets.remove(socket)
+          socket.close()
+        }
+        return
+      }
+      val reservedPlayer = requireNotNull(player)
       val connection =
-          Connection(socket.getInputStream(), socket.getOutputStream(), eventBus, true, mode, player)
+          Connection(
+              socket.getInputStream(),
+              socket.getOutputStream(),
+              eventBus,
+              true,
+              mode,
+              reservedPlayer,
+              cancelTransport = { socket.close() },
+          )
+      pendingConnections[socket] = connection
+      handshakeExecutor.execute { completeHandshake(socket, connection, reservedPlayer) }
+    } catch (e: RejectedExecutionException) {
+      synchronized(lock) { player?.let(pendingPlayers::remove) }
+      pendingSockets.remove(socket)
+      pendingConnections.remove(socket)?.close()
+      socket.close()
+      if (!doStop) throw IOException("Netplay handshake executor is full", e)
+    } catch (e: IOException) {
+      synchronized(lock) { player?.let(pendingPlayers::remove) }
+      pendingSockets.remove(socket)
+      socket.close()
+      throw e
+    }
+  }
+
+  private fun completeHandshake(socket: Socket, connection: Connection, player: Int) {
+    var claimed = false
+    try {
+      socket.soTimeout = HANDSHAKE_TIMEOUT_MILLIS
+      connection.completeServerHandshake()
+      socket.soTimeout = 0
       val handle = ClientHandle(player, socket, connection)
-      clients[player] = handle
+      claimed =
+          synchronized(lock) {
+            pendingPlayers.remove(player)
+            if (doStop || clients.containsKey(player)) false
+            else {
+              clients[player] = handle
+              true
+            }
+          }
+      if (!claimed) return
+      pendingConnections.remove(socket)
+      pendingSockets.remove(socket)
       LOG.info("Player {} connected from {}", player + 1, socket.inetAddress.hostAddress)
       eventBus.post(
           ConnectionController.ServerPlayerCountEvent(clients.size, mode.playerCount - 1, mode))
@@ -84,14 +167,39 @@ class TcpServer(
       } else {
         startSessionIfFull(socket.inetAddress.hostAddress)
       }
+    } catch (e: Connection.CompatibilityException) {
+      if (!doStop) {
+        eventBus.post(
+            ConnectionController.ServerProtocolErrorEvent(
+                player,
+                e.message ?: "Incompatible netplay peer",
+            ))
+      }
+    } catch (e: SocketTimeoutException) {
+      if (!doStop) LOG.info("Player {} capability handshake timed out", player + 1)
     } catch (e: IOException) {
-      socket.close()
-      throw e
+      if (!doStop) LOG.info("Player {} capability handshake failed: {}", player + 1, e.message)
+    } finally {
+      synchronized(lock) { pendingPlayers.remove(player) }
+      pendingConnections.remove(socket)
+      pendingSockets.remove(socket)
+      if (!claimed) closeConnection(connection, socket)
     }
   }
 
-  private fun firstAvailablePlayer(): Int? =
-      (1 until mode.playerCount).firstOrNull { !clients.containsKey(it) }
+  private fun reservePlayer(): Int? {
+    if (mode == LinkMode.NORMAL) {
+      // Normal mode deliberately permits several speculative handshakes for its single slot so a
+      // silent peer cannot monopolize admission. The first completed capability exchange claims it.
+      return 1.takeUnless { clients.containsKey(it) }
+    }
+    val player =
+        (1 until mode.playerCount).firstOrNull {
+          !clients.containsKey(it) && it !in pendingPlayers
+        }
+    player?.let(pendingPlayers::add)
+    return player
+  }
 
   private fun startSessionIfFull(lastHost: String) {
     val toStart =
@@ -107,6 +215,24 @@ class TcpServer(
   private fun runClient(handle: ClientHandle) {
     try {
       handle.connection.use { it.run() }
+    } catch (e: Connection.ProtocolException) {
+      if (!doStop) {
+        LOG.info("Player {} protocol error: {}", handle.player + 1, e.reason.userMessage)
+        eventBus.post(
+            ConnectionController.ServerProtocolErrorEvent(
+                handle.player,
+                e.reason.userMessage,
+          ))
+      }
+    } catch (e: Connection.CompatibilityException) {
+      if (!doStop) {
+        LOG.info("Player {} compatibility error: {}", handle.player + 1, e.message)
+        eventBus.post(
+            ConnectionController.ServerProtocolErrorEvent(
+                handle.player,
+                e.message ?: "Incompatible netplay peer",
+            ))
+      }
     } catch (e: IOException) {
       if (!doStop) LOG.info("Player {} disconnected: {}", handle.player + 1, e.message)
     } finally {
@@ -163,14 +289,41 @@ class TcpServer(
     doStop = true
     serverSocket?.close()
     stopClients()
+    handshakeExecutor.shutdownNow()
   }
 
   private fun stopClients() {
-    clients.values.forEach {
-      it.connection.stop()
-      it.socket.close()
-    }
+    pendingSockets.forEach(Socket::close)
+    pendingConnections.forEach { socket, connection -> closeConnection(connection, socket) }
+    pendingSockets.clear()
+    pendingConnections.clear()
+    clients.values.forEach { closeConnection(it.connection, it.socket) }
     clients.clear()
+    synchronized(lock) { pendingPlayers.clear() }
+  }
+
+  internal fun pendingHandshakeCount(): Int = pendingSockets.size
+
+  internal fun pendingConnectionCount(): Int = pendingConnections.size
+
+  internal fun handshakeWorkerCount(): Int = handshakeExecutor.poolSize
+
+  private fun closeConnection(connection: Connection, socket: Socket) {
+    var socketFailure: IOException? = null
+    try {
+      // Closing the raw socket first cancels an in-flight writer before Connection waits for its
+      // bounded writer thread. A peer that stopped reading cannot deadlock server shutdown.
+      socket.close()
+    } catch (e: IOException) {
+      socketFailure = e
+      LOG.debug("Error closing netplay socket", e)
+    }
+    try {
+      connection.close()
+    } catch (e: IOException) {
+      socketFailure?.let(e::addSuppressed)
+      LOG.debug("Error closing netplay connection", e)
+    }
   }
 
   private data class ClientHandle(
@@ -182,5 +335,6 @@ class TcpServer(
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(TcpServer::class.java)
     const val PORT: Int = 6688
+    private const val HANDSHAKE_TIMEOUT_MILLIS = 2_000
   }
 }

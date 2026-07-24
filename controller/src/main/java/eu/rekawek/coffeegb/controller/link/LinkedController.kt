@@ -8,23 +8,30 @@ import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
-import eu.rekawek.coffeegb.controller.deserializeToGameboyMemento
-import eu.rekawek.coffeegb.controller.deserializeToSessionMemento
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
+import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSourceDisconnectedEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ProtocolErrorReason
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ReceivedRemoteStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.RequestStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection.SessionCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerButtonStateEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerCheckpointEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStateEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
+import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
+import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
-import eu.rekawek.coffeegb.controller.serialize
-import eu.rekawek.coffeegb.controller.serializeSessionMemento
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
@@ -44,6 +51,9 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
+import java.io.IOException
+import java.util.IdentityHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -61,7 +71,17 @@ class LinkedController(
 
   private val eventBus = parentEventBus.fork("session")
 
-  private val eventQueue = EventQueue(eventBus)
+  private val eventQueue =
+      EventQueue(
+          eventBus,
+          StateLimits.NETPLAY_EVENT_QUEUE_EVENTS,
+          StateLimits.NETPLAY_EVENT_QUEUE_BYTES,
+          ::eventWeight,
+          ::eventSource,
+          StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_EVENTS,
+          StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_BYTES,
+          StateLimits.NETPLAY_EVENT_DISPATCH_EVENTS,
+      )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
 
@@ -84,9 +104,35 @@ class LinkedController(
 
   @VisibleForTesting internal fun currentFrame() = frame
 
+  @VisibleForTesting internal fun meteredWorkFrames() = workProgressFrame
+
+  @VisibleForTesting
+  internal fun encodedSessionStates(): List<ByteArray?> =
+      sessions.map { session -> session?.let { NetplayMementoCodec.encodeSession(it.saveToMemento()) } }
+
+  @VisibleForTesting
+  internal fun heldButtonStates(): List<Set<Button>?> = sessions.map { it?.heldButtons }
+
   @Volatile private var doStop = false
 
   private var frame = 0L
+
+  /** Counts only emulator frames actually run; peer-controlled rebases cannot advance it. */
+  private var workProgressFrame = 0L
+
+  /** Runtime records older than the latest authoritative checkpoint belong to an old generation. */
+  private var runtimeFrameFloor = 0L
+
+  private var hostCheckpointPending = false
+
+  private var localCheckpointCreditPending = false
+
+  private val peerWorkBySource = IdentityHashMap<PeerEventSource, PeerWorkBudget>()
+
+  private val disconnectedSources = ConcurrentLinkedQueue<PeerEventSource>()
+
+  @VisibleForTesting internal var lastDispatchReplayFrames = 0L
+    private set
 
   private var currentInput: Input? = null
 
@@ -107,46 +153,70 @@ class LinkedController(
     require(localPlayer in 0 until mode.playerCount)
 
     eventQueue.register<LoadedLocalConfigEvent> { e ->
+      val checkpoint = isFourPlayerHost()
+      if (checkpoint) reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       configs[localPlayer] = e.config
-      initSession(localPlayer, frame, e.snapshot?.deserializeToGameboyMemento(), null)
+      initSession(localPlayer, frame, e.snapshot?.let(NetplayMementoCodec::decodeGameboy), null)
       sendLocalRom(e.snapshot)
-      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
-        broadcastCurrentState()
-      }
+      if (checkpoint) commitHostCheckpoint()
     }
 
     eventQueue.register<StopEmulationEvent> {
+      val checkpoint = isFourPlayerHost()
+      if (checkpoint) reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
-      if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
-        broadcastCurrentState()
+      if (checkpoint) {
+        commitHostCheckpoint()
       } else {
         eventBus.postAsync(RequestStopEvent(frame, localPlayer))
       }
     }
 
     eventQueue.register<ResetEmulationEvent> {
+      reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       initSession(localPlayer, frame, null, null)
+      if (isFourPlayerHost()) {
+        commitHostCheckpoint()
+      } else {
+        commitStateBoundary()
+        if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditPending = true
+      }
       eventBus.postAsync(RequestResetEvent(frame, localPlayer))
     }
 
     eventQueue.register<PeerLoadedGameEvent> { e ->
-      if (!loadPeerState(e)) return@register
-      if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
-          localPlayer == 0 &&
-          e.sessionSnapshot == null) {
+      val validated = validatePeerStateFrame(e) ?: return@register
+      if (!consumeReplayWork(validated.frame, validated.source)) return@register
+      val checkpoint = isFourPlayerHost() && validated.sessionSnapshot == null
+      if (checkpoint) reconcileHistory()
+      if (!loadPeerState(validated)) return@register
+      eventBus.post(ValidatedPeerStateEvent(validated))
+      if (checkpoint) {
         // The new physical port is now attached at this frame. Publish one checkpoint containing
         // every active console plus the shared adapter so old and new clients resume together.
-        broadcastCurrentState()
+        commitHostCheckpoint()
       }
     }
 
     eventQueue.register<SessionCheckpointEvent> { e ->
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer != 0) {
+        if (!validatePeer(e.source) {
+              PeerFrameWindow.validateCheckpoint(
+                  e.frame,
+                  e.states.map(PeerLoadedGameEvent::frame),
+              )
+            }) {
+          return@register
+        }
+        if (!consumeCheckpointWork(e.source)) {
+          return@register
+        }
+        runtimeFrameFloor = e.frame
         val activePlayers = e.states.mapTo(mutableSetOf()) { it.player }
         sessions.indices.filterNot(activePlayers::contains).forEach { player ->
           sessions[player]?.close()
@@ -156,44 +226,70 @@ class LinkedController(
           batteryBuffers[player] = null
         }
         e.states.forEach(::loadPeerState)
-        stateHistory.clear()
         frame = e.frame
+        rebaseHistoryToLiveState()
         initialStateSynchronized = true
+        eventBus.post(ValidatedPeerCheckpointEvent(e))
       }
     }
 
     eventQueue.register<ServerPlayerDisconnectedEvent> { e ->
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0 && e.player in sessions.indices) {
+        reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
         configs[e.player] = null
         romBuffers[e.player] = null
         batteryBuffers[e.player] = null
-        broadcastCurrentState()
+        commitHostCheckpoint()
       }
     }
 
     eventQueue.register<RemoteButtonStateEvent> { e ->
-      if (e.player != localPlayer && e.player in sessions.indices) {
+      if (e.player != localPlayer &&
+          e.player in sessions.indices &&
+          validateRuntimeFrame(e.frame, e.source)) {
         stateHistory.addSecondaryInput(e.player, e.frame, e.input)
+        eventBus.post(ValidatedPeerButtonStateEvent(e))
       }
     }
 
     eventQueue.register<ReceivedRemoteResetEvent> { e ->
-      if (e.player != localPlayer && e.player in sessions.indices) {
+      if (e.player != localPlayer &&
+          e.player in sessions.indices &&
+          validateRuntimeFrame(e.frame, e.source) &&
+          consumeReplayWork(e.frame, e.source)) {
+        reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
         initSession(e.player, e.frame, null, null)
+        if (isFourPlayerHost()) {
+          commitHostCheckpoint()
+        } else {
+          commitStateBoundary()
+          if (mode == LinkMode.FOUR_PLAYER_ADAPTER) grantCheckpointCredit(e.source)
+        }
+        eventBus.post(ValidatedPeerResetEvent(e))
       }
     }
 
     eventQueue.register<ReceivedRemoteStopEvent> { e ->
-      if (e.player != localPlayer && e.player in sessions.indices) {
+      if (e.player != localPlayer &&
+          e.player in sessions.indices &&
+          validateRuntimeFrame(e.frame, e.source)) {
+        // A stopped port is already at the requested topology. Treat repeats as cheap no-ops so
+        // they cannot force unbounded reconciliation and checkpoint fanout.
+        if (sessions[e.player] == null) return@register
+        if (!consumeReplayWork(e.frame, e.source)) return@register
+        reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
-        if (mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0) {
-          broadcastCurrentState()
+        if (isFourPlayerHost()) {
+          commitHostCheckpoint()
+        } else {
+          commitStateBoundary()
         }
+        eventBus.post(ValidatedPeerStopEvent(e))
       }
     }
 
@@ -222,7 +318,11 @@ class LinkedController(
       eventBus.post(Controller.SessionPauseSupportEvent(false))
       eventBus.post(Controller.SessionSnapshotSupportEvent(null))
       eventBus.post(Controller.EmulationStartedEvent(rom.title))
-      eventBus.post(LoadedLocalConfigEvent(config, it.memento?.serialize()))
+      eventBus.post(
+          LoadedLocalConfigEvent(
+              config = config,
+              snapshot = it.memento?.let(NetplayMementoCodec::encodeGameboy),
+          ))
     }
 
     eventBus.register<UpdatedSystemMappingEvent> {
@@ -234,6 +334,13 @@ class LinkedController(
         }
       }
     }
+
+    // This subscription intentionally bypasses the bounded event queue: disconnect cleanup must
+    // be able to release the exact old connection's retained budget even when that queue is full.
+    eventBus.register<PeerEventSourceDisconnectedEvent> {
+      eventQueue.discardSource(it.source)
+      disconnectedSources += it.source
+    }
   }
 
   override fun startController() {
@@ -241,6 +348,10 @@ class LinkedController(
   }
 
   fun runFrame() {
+    while (true) {
+      peerWorkBySource.remove(disconnectedSources.poll() ?: break)
+    }
+    lastDispatchReplayFrames = 0
     eventQueue.dispatch()
 
     // A DMG-07 host runs with any number of attached ports. A client waits only for the coherent
@@ -256,19 +367,8 @@ class LinkedController(
       return
     }
 
-    if (stateHistory.merge(configs)) {
-      val head = stateHistory.getHead()
-      for (player in sessions.indices) {
-        val session = sessions[player]
-        val memento = head.mementos[player]
-        if (session != null && memento != null) {
-          session.restoreFromMemento(memento)
-          session.heldButtons = head.buttons[player]
-        }
-      }
-      frame = head.frame
-      LOG.atDebug().log("State merged to {}", frame)
-    }
+    reconcileHistory()
+    flushHostCheckpoint()
 
     val input = currentInput ?: Input(emptyList(), emptyList())
     val effectiveInput = if (input != lastInput) input else Input(emptyList(), emptyList())
@@ -297,6 +397,7 @@ class LinkedController(
     }
 
     frame++
+    workProgressFrame++
   }
 
   private fun initSession(
@@ -305,6 +406,7 @@ class LinkedController(
       state: Memento<Gameboy>?,
       sessionState: Memento<Session>?,
       heldButtons: Set<Button> = emptySet(),
+      hotPlug: Boolean = false,
   ) {
     val config = configs[player] ?: return
     val sessionEventBus = EventBusImpl(null, null, false)
@@ -341,10 +443,8 @@ class LinkedController(
     // checkpoints are already at their advertised frame. Other late reset/reload events retain
     // the historical catch-up path.
     var current = sessionFrame
-    val hotPlug =
-        mode == LinkMode.FOUR_PLAYER_ADAPTER &&
-            (sessionState != null || (localPlayer == 0 && player != localPlayer))
-    while (!hotPlug && current < frame) {
+    val alreadyAtSharedPhase = sessionState != null || hotPlug
+    while (!alreadyAtSharedPhase && current < frame) {
       stateHistory.setPlayerState(player, current, session.saveToMemento(), session.heldButtons)
       repeat(TICKS_PER_FRAME) { session.gameboy.tick() }
       current++
@@ -357,6 +457,7 @@ class LinkedController(
         (e.player == localPlayer && e.sessionSnapshot == null)) {
       return false
     }
+    val newPort = configs[e.player] == null
     configs[e.player] =
         createGameboyConfig(properties, Rom(e.rom))
             .setGameboyType(e.gameboyType)
@@ -370,12 +471,142 @@ class LinkedController(
     initSession(
         e.player,
         e.frame,
-        e.snapshot?.deserializeToGameboyMemento(),
-        e.sessionSnapshot?.deserializeToSessionMemento(),
+        e.decodedSnapshot ?: e.snapshot?.let(NetplayMementoCodec::decodeGameboy),
+        e.decodedSessionSnapshot
+            ?: e.sessionSnapshot?.let(NetplayMementoCodec::decodeSession),
         e.heldButtons,
+        hotPlug =
+            mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+                localPlayer == 0 &&
+                e.player != localPlayer &&
+                newPort,
     )
     return true
   }
+
+  private fun validatePeerStateFrame(event: PeerLoadedGameEvent): PeerLoadedGameEvent? {
+    // A new DMG-07 port is attached to the host's current adapter phase without replaying the
+    // joining console's private pre-link timeline. All other peer state is bounded against the
+    // controller-owned frame before any live configuration or session is replaced.
+    if (mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+        localPlayer == 0 &&
+        event.player in configs.indices &&
+        configs[event.player] == null) {
+      return if (validatePeer(event.source) {
+            PeerFrameWindow.validateRuntimeFrame(event.frame, 0)
+          }) {
+        event.copy(frame = frame)
+      } else {
+        null
+      }
+    }
+    return if (validateRuntimeFrame(event.frame, event.source)) event else null
+  }
+
+  private fun validateRuntimeFrame(peerFrame: Long, source: PeerEventSource?): Boolean {
+    if (peerFrame < runtimeFrameFloor) {
+      LOG.atDebug().log(
+          "Discarding player {} frame {} from before checkpoint floor {}",
+          source?.player?.plus(1),
+          peerFrame,
+          runtimeFrameFloor,
+      )
+      return false
+    }
+    return validatePeer(source) { PeerFrameWindow.validateRuntimeFrame(peerFrame, frame) }
+  }
+
+  private fun consumeReplayWork(
+      peerFrame: Long,
+      source: PeerEventSource?,
+      fixedWork: Long = StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
+  ): Boolean {
+    source ?: return true
+    val budget = peerWorkBudget(source)
+    val requested = maxOf((frame - peerFrame).coerceAtLeast(0), fixedWork)
+    if (requested > budget.replayAvailable) {
+      rejectExcessiveWork(source, StateLimits.NETPLAY_REPLAY_WORK_FRAMES, "replay")
+      return false
+    }
+    budget.replayAvailable -= requested
+    lastDispatchReplayFrames += requested
+    return true
+  }
+
+  private fun consumeCheckpointWork(source: PeerEventSource?): Boolean {
+    source ?: return true
+    val budget = peerWorkBudget(source)
+    val credited = budget.checkpointCreditPending || localCheckpointCreditPending
+    budget.checkpointCreditPending = false
+    localCheckpointCreditPending = false
+    if (credited) return true
+
+    val requested = StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK
+    if (requested > budget.checkpointAvailable) {
+      rejectExcessiveWork(source, StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES, "checkpoint")
+      return false
+    }
+    budget.checkpointAvailable -= requested
+    lastDispatchReplayFrames += requested
+    return true
+  }
+
+  /** A validated RESET and the next authoritative checkpoint are one logical transition. */
+  private fun grantCheckpointCredit(source: PeerEventSource?) {
+    source ?: return
+    peerWorkBudget(source).checkpointCreditPending = true
+  }
+
+  private fun peerWorkBudget(source: PeerEventSource): PeerWorkBudget {
+    val budget =
+        peerWorkBySource.getOrPut(source) {
+          PeerWorkBudget(
+              StateLimits.NETPLAY_REPLAY_WORK_FRAMES,
+              StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES,
+              workProgressFrame,
+          )
+        }
+    val elapsedFrames = (workProgressFrame - budget.lastProgressFrame).coerceAtLeast(0)
+    val refill =
+        try {
+          Math.multiplyExact(elapsedFrames, StateLimits.NETPLAY_STATE_CHANGE_REFILL_PER_FRAME)
+        } catch (_: ArithmeticException) {
+          Long.MAX_VALUE
+        }
+    budget.replayAvailable =
+        refillWork(budget.replayAvailable, StateLimits.NETPLAY_REPLAY_WORK_FRAMES, refill)
+    budget.checkpointAvailable =
+        refillWork(
+            budget.checkpointAvailable,
+            StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES,
+            refill,
+        )
+    budget.lastProgressFrame = workProgressFrame
+    return budget
+  }
+
+  private fun refillWork(available: Long, limit: Long, refill: Long): Long =
+      if (refill > limit - available) limit else available + refill
+
+  private fun rejectExcessiveWork(source: PeerEventSource, limit: Long, kind: String) {
+    val failure =
+        IOException(
+            "Player ${source.player + 1} exceeded the $limit-frame $kind work budget")
+    eventQueue.discardSource(source)
+    source.reject(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK, failure)
+  }
+
+  private inline fun validatePeer(source: PeerEventSource?, validation: () -> Unit): Boolean =
+      try {
+        validation()
+        true
+      } catch (e: IOException) {
+        LOG.info("Rejecting player {} frame at controller frame {}: {}",
+            source?.player?.plus(1), frame, e.message)
+        source?.let(eventQueue::discardSource)
+        source?.reject(ProtocolErrorReason.INVALID_FRAME, e)
+        false
+      }
 
   private fun sendLocalRom(snapshot: ByteArray?) {
     val config = configs[localPlayer] ?: return
@@ -413,14 +644,89 @@ class LinkedController(
               frame = frame,
               cgb0Revision = config.isCgb0Revision,
               player = player,
-              sessionSnapshot = session.saveToMemento().serializeSessionMemento(),
+              sessionSnapshot = NetplayMementoCodec.encodeSession(session.saveToMemento()),
               heldButtons = session.heldButtons,
           )
         }
     eventBus.post(SessionStateReadyEvent(frame, states))
   }
 
+  private fun isFourPlayerHost(): Boolean =
+      mode == LinkMode.FOUR_PLAYER_ADAPTER && localPlayer == 0
+
+  /** Applies every accepted old-generation patch before a topology snapshot is captured. */
+  private fun reconcileHistory() {
+    if (!stateHistory.merge(configs)) return
+    val head = stateHistory.getHead()
+    for (player in sessions.indices) {
+      val session = sessions[player]
+      val memento = head.mementos[player]
+      if (session != null && memento != null) {
+        session.restoreFromMemento(memento)
+        session.heldButtons = head.buttons[player]
+      }
+    }
+    frame = head.frame
+    LOG.atDebug().log("State merged to {}", frame)
+  }
+
+  /** Publishes and installs the same exact generation boundary used by remote clients. */
+  private fun commitHostCheckpoint() {
+    commitStateBoundary()
+    hostCheckpointPending = true
+  }
+
+  /** Coalesces mutations in one dispatch and captures any same-frame patches after the boundary. */
+  private fun flushHostCheckpoint() {
+    if (!hostCheckpointPending) return
+    commitStateBoundary()
+    broadcastCurrentState()
+    hostCheckpointPending = false
+  }
+
+  /** Ends the old input/history generation after a reset or topology mutation. */
+  private fun commitStateBoundary() {
+    runtimeFrameFloor = frame
+    rebaseHistoryToLiveState()
+  }
+
+  private fun rebaseHistoryToLiveState() {
+    stateHistory.clear()
+    stateHistory.addState(
+        frame,
+        List(mode.playerCount) { Input(emptyList(), emptyList()) },
+        sessions.map { it?.saveToMemento() },
+        sessions.map { it?.heldButtons ?: emptySet() },
+    )
+  }
+
   override fun close() {}
+
+  private fun eventWeight(event: Event): Long =
+      when (event) {
+        is PeerLoadedGameEvent -> peerStateWeight(event)
+        is SessionCheckpointEvent ->
+            event.states.fold(0L) { total, state ->
+              Math.addExact(total, peerStateWeight(state))
+            }
+        else -> 64L
+      }
+
+  private fun eventSource(event: Event): Any? =
+      when (event) {
+        is PeerLoadedGameEvent -> event.source
+        is SessionCheckpointEvent -> event.source
+        is RemoteButtonStateEvent -> event.source
+        is ReceivedRemoteResetEvent -> event.source
+        is ReceivedRemoteStopEvent -> event.source
+        else -> null
+      }
+
+  private fun peerStateWeight(event: PeerLoadedGameEvent): Long {
+    return listOf(event.rom, event.battery, event.snapshot, event.sessionSnapshot)
+        .filterNotNull()
+        .fold(0L) { total, value -> Math.addExact(total, value.size.toLong()) }
+  }
 
   override fun closeWithState(): Controller.ControllerState? {
     doStop = true
@@ -462,10 +768,18 @@ class LinkedController(
       val frame: Long,
       val input: Input,
       val player: Int = 1,
+      internal val source: PeerEventSource? = null,
   ) : Event
 
   data class LoadedLocalConfigEvent(val config: GameboyConfiguration, val snapshot: ByteArray?) :
       Event
+
+  private data class PeerWorkBudget(
+      var replayAvailable: Long,
+      var checkpointAvailable: Long,
+      var lastProgressFrame: Long,
+      var checkpointCreditPending: Boolean = false,
+  )
 
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(LinkedController::class.java)

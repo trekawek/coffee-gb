@@ -65,6 +65,10 @@ class ConnectionController(private val eventBus: EventBus) {
 
   data class ClientConnectionRejectedEvent(val message: String) : Event
 
+  data class ClientProtocolErrorEvent(val message: String) : Event
+
+  data class ServerProtocolErrorEvent(val player: Int, val message: String) : Event
+
   data class ClientConnectedToServerEvent(
       val mode: LinkMode = LinkMode.NORMAL,
       val player: Int = 1,
