@@ -26,6 +26,9 @@ class TcpClient(
     } catch (e: Connection.ConnectionRejectedException) {
       LOG.info("Connection rejected: {}", e.reason.userMessage)
       eventBus.post(ConnectionController.ClientConnectionRejectedEvent(e.reason.userMessage))
+    } catch (e: Connection.ProtocolException) {
+      LOG.info("Netplay protocol error: {}", e.reason.userMessage)
+      eventBus.post(ConnectionController.ClientProtocolErrorEvent(e.reason.userMessage))
     } catch (e: SocketException) {
       if (e.message == "Socket closed") {
         LOG.atInfo().log("Disconnected from server")

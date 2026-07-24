@@ -4,8 +4,8 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.memento.Memento
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.ObjectInputStream
-import java.io.ObjectOutputStream
+import java.io.IOException
+import java.nio.file.Files
 
 class SnapshotManager(private val rom: File) {
 
@@ -22,7 +22,11 @@ class SnapshotManager(private val rom: File) {
       return false
     }
 
-    val memento = snapshotFile.readBytes().deserializeToGameboyMemento()
+    if (snapshotFile.length() > StateLimits.GAME_SNAPSHOT.decodedBytes) {
+      throw IOException(
+          "Snapshot exceeds the ${StateLimits.GAME_SNAPSHOT.decodedBytes}-byte legacy limit")
+    }
+    val memento = readSnapshotBytes(snapshotFile).deserializeToGameboyMemento()
     gameboy.restoreFromMemento(memento)
     return true
   }
@@ -32,25 +36,40 @@ class SnapshotManager(private val rom: File) {
     val name = rom.nameWithoutExtension + ".sn${slot}"
     return parentDir.resolve(name)
   }
+
+  private fun readSnapshotBytes(snapshotFile: File): ByteArray {
+    val limit = StateLimits.GAME_SNAPSHOT.decodedBytes
+    val initialSize = snapshotFile.length().coerceAtMost(limit.toLong()).toInt()
+    val output = ByteArrayOutputStream(initialSize)
+    Files.newInputStream(snapshotFile.toPath()).use { input ->
+      val buffer = ByteArray(8192)
+      var total = 0
+      while (true) {
+        val count = input.read(buffer)
+        if (count == -1) break
+        if (count > limit - total) {
+          throw IOException("Snapshot exceeds the $limit-byte legacy limit")
+        }
+        output.write(buffer, 0, count)
+        total += count
+      }
+    }
+    return output.toByteArray()
+  }
 }
 
 fun Memento<Gameboy>.serialize(): ByteArray {
-  val baos = ByteArrayOutputStream()
-  ObjectOutputStream(baos).use { it.writeObject(this) }
-  return baos.toByteArray()
+  return LegacyMementoCodec.serializeGameboy(this)
 }
 
 fun ByteArray.deserializeToGameboyMemento(): Memento<Gameboy> {
-  return ObjectInputStream(inputStream()).use { it.readObject() as Memento<Gameboy> }
+  return LegacyMementoCodec.deserializeGameboy(this)
 }
 
 fun Memento<Session>.serializeSessionMemento(): ByteArray {
-  val baos = ByteArrayOutputStream()
-  ObjectOutputStream(baos).use { it.writeObject(this) }
-  return baos.toByteArray()
+  return LegacyMementoCodec.serializeSession(this)
 }
 
 fun ByteArray.deserializeToSessionMemento(): Memento<Session> {
-  @Suppress("UNCHECKED_CAST")
-  return ObjectInputStream(inputStream()).use { it.readObject() as Memento<Session> }
+  return LegacyMementoCodec.deserializeSession(this)
 }

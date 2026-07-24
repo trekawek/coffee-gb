@@ -254,4 +254,42 @@ class TcpConnectionTest {
     assertEquals("The netplay server is already full.", event.message)
     assertEquals(null, handshake.poll(200, TimeUnit.MILLISECONDS))
   }
+
+  @Test
+  fun legacyPeerSnapshotClosesConnectionWithAUserFacingProtocolError() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val serverGotConnection = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    serverBus.register<ConnectionController.ServerGotConnectionEvent> { serverGotConnection.add(it) }
+
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+
+    val protocolErrors = LinkedBlockingQueue<ConnectionController.ClientProtocolErrorEvent>()
+    clientBus.register<ConnectionController.ClientProtocolErrorEvent> { protocolErrors.add(it) }
+    val client = TcpClient("localhost:$port", clientBus)
+    this.client = client
+    threads += Thread(client).also { it.start() }
+    assertNotNull(serverGotConnection.poll(5, TimeUnit.SECONDS))
+
+    serverBus.post(
+        LinkedController.LocalRomLoadedEvent(
+            byteArrayOf(1, 2, 3),
+            null,
+            byteArrayOf(0xac.toByte(), 0xed.toByte(), 0x00, 0x05),
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            0,
+        ))
+
+    val error = assertNotNull(protocolErrors.poll(5, TimeUnit.SECONDS))
+    assertEquals(
+        "The peer sent an unsafe legacy Java save state. " +
+            "Network state transfer requires the portable state format.",
+        error.message,
+    )
+  }
 }

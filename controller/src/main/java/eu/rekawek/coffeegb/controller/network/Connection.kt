@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.LegacyMementoCodec
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
@@ -18,6 +20,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
+import java.util.zip.DataFormatException
 import java.util.zip.Deflater
 import java.util.zip.Inflater
 import kotlin.concurrent.Volatile
@@ -105,15 +108,28 @@ class Connection(
       if (server) eventPlayer == 0 else eventPlayer == player
 
   private fun sendRom(event: LinkedController.LocalRomLoadedEvent) {
-    val rom = deflate(event.romFile)
-    val battery = event.batteryFile?.let(::deflate)
-    val snapshot = event.snapshot?.let(::deflate)
-    val sessionSnapshot = event.sessionSnapshot?.let(::deflate)
+    checkedDecodedMessageSize(
+        event.romFile.size,
+        event.batteryFile?.size ?: 0,
+        event.snapshot?.size ?: 0,
+        event.sessionSnapshot?.size ?: 0,
+    )
+    val rom = deflate(event.romFile, StateLimits.ROM)
+    val battery = event.batteryFile?.let { deflate(it, StateLimits.BATTERY) }
+    val snapshot = event.snapshot?.let { deflate(it, StateLimits.GAME_SNAPSHOT) }
+    val sessionSnapshot =
+        event.sessionSnapshot?.let { deflate(it, StateLimits.SESSION_SNAPSHOT) }
     val heldButtons = event.heldButtons.sorted()
+    val messageSize =
+        checkedMessageSize(
+            1L + ROM_HEADER_SIZE + heldButtons.size,
+            rom,
+            battery,
+            snapshot,
+            sessionSnapshot,
+        )
     val buf =
-        ByteBuffer.allocate(
-            1 + ROM_HEADER_SIZE + heldButtons.size + rom.size + (battery?.size ?: 0) +
-                (snapshot?.size ?: 0) + (sessionSnapshot?.size ?: 0))
+        ByteBuffer.allocate(messageSize)
     buf.put(ROM)
     buf.put(event.player.toByte())
     buf.putLong(event.frame)
@@ -194,33 +210,40 @@ class Connection(
           }
       if (command == -1) return
 
-      when (command.toByte()) {
-        ROM -> receiveRom()
-        INPUT -> receiveButtons()
-        RESET -> receiveReset()
-        STOP -> receiveStop()
-        SYNCHRONIZE -> {
-          if (!server) {
-            val frame = input.readLong()
-            val states = pendingCheckpointStates.toList()
-            pendingCheckpointStates.clear()
-            deliver(SessionCheckpointEvent(frame, states))
-          } else {
-            throw IOException("Client sent a server-only synchronization command")
+      try {
+        when (command.toByte()) {
+          ROM -> receiveRom()
+          INPUT -> receiveButtons()
+          RESET -> receiveReset()
+          STOP -> receiveStop()
+          PROTOCOL_ERROR -> receiveProtocolError()
+          SYNCHRONIZE -> {
+            if (!server) {
+              val frame = input.readLong()
+              val states = pendingCheckpointStates.toList()
+              pendingCheckpointStates.clear()
+              deliver(SessionCheckpointEvent(frame, states))
+            } else {
+              throw IOException("Client sent a server-only synchronization command")
+            }
           }
-        }
-        START -> {
-          if (!server) {
-            sessionActive = true
-            eventBus.post(ConnectionController.ClientConnectedToServerEvent(mode, player))
-            // The host may have sent its ROM before START. The connection is already listening at
-            // that point, but the LinkedController is created by the event above; deliver cached
-            // state only after that synchronous transition has completed.
-            pendingEvents.forEach(eventBus::post)
-            pendingEvents.clear()
+          START -> {
+            if (!server) {
+              sessionActive = true
+              eventBus.post(ConnectionController.ClientConnectedToServerEvent(mode, player))
+              // The host may have sent its ROM before START. The connection is already listening at
+              // that point, but the LinkedController is created by the event above; deliver cached
+              // state only after that synchronous transition has completed.
+              pendingEvents.forEach(eventBus::post)
+              pendingEvents.clear()
+            }
           }
+          else -> throw IOException("Unknown netplay command $command")
         }
-        else -> LOG.atWarn().log("Received remote unknown command $command")
+      } catch (e: ProtocolException) {
+        throw e
+      } catch (e: IOException) {
+        failProtocol(ProtocolErrorReason.MALFORMED_MESSAGE, e)
       }
     }
   }
@@ -232,9 +255,13 @@ class Connection(
     val wirePlayer = buf.get().toInt()
     val eventPlayer = receivedPlayer(wirePlayer)
     val frame = buf.getLong()
-    val gameboyType = GameboyType.entries[buf.get().toInt()]
-    val bootstrapMode = BootstrapMode.entries[buf.get().toInt()]
-    val cgb0Revision = buf.get().toInt() != 0
+    val gameboyType = enumValue<GameboyType>(buf.get(), "Game Boy type")
+    val bootstrapMode = enumValue<BootstrapMode>(buf.get(), "bootstrap mode")
+    val cgb0RevisionValue = buf.get().toInt() and 0xff
+    if (cgb0RevisionValue !in 0..1) {
+      throw IOException("Invalid CGB0 revision flag $cgb0RevisionValue")
+    }
+    val cgb0Revision = cgb0RevisionValue == 1
     val heldCount = buf.get().toInt() and 0xff
     if (heldCount > Button.entries.size) throw IOException("Invalid held button count $heldCount")
     val romSize = buf.getInt()
@@ -245,6 +272,31 @@ class Connection(
     val batteryCompressed = buf.getInt()
     val snapshotCompressed = buf.getInt()
     val sessionSnapshotCompressed = buf.getInt()
+    val romDeclaration =
+        validateDeclaration(romSize, romCompressed, StateLimits.ROM, required = true)
+    val batteryDeclaration =
+        validateDeclaration(batterySize, batteryCompressed, StateLimits.BATTERY)
+    val snapshotDeclaration =
+        validateDeclaration(snapshotSize, snapshotCompressed, StateLimits.GAME_SNAPSHOT)
+    val sessionSnapshotDeclaration =
+        validateDeclaration(
+            sessionSnapshotSize,
+            sessionSnapshotCompressed,
+            StateLimits.SESSION_SNAPSHOT,
+        )
+    checkedMessageSize(
+        1L + ROM_HEADER_SIZE + heldCount,
+        romDeclaration,
+        batteryDeclaration,
+        snapshotDeclaration,
+        sessionSnapshotDeclaration,
+    )
+    checkedDecodedMessageSize(
+        romDeclaration.decodedBytes,
+        batteryDeclaration.decodedBytes,
+        snapshotDeclaration.decodedBytes,
+        sessionSnapshotDeclaration.decodedBytes,
+    )
     val heldButtons = ByteArray(heldCount).also(input::readFully).map {
       val ordinal = it.toInt() and 0xff
       if (ordinal !in Button.entries.indices) throw IOException("Invalid held button $ordinal")
@@ -252,18 +304,29 @@ class Connection(
     }.toSet()
     val event =
         PeerLoadedGameEvent(
-            rom = inflate(readPayload(romCompressed), romSize)!!,
-            battery = inflate(readPayload(batteryCompressed), batterySize),
-            snapshot = inflate(readPayload(snapshotCompressed), snapshotSize),
+            rom = inflate(readPayload(romDeclaration), romDeclaration, StateLimits.ROM)!!,
+            battery =
+                inflate(readPayload(batteryDeclaration), batteryDeclaration, StateLimits.BATTERY),
+            snapshot =
+                inflate(
+                    readPayload(snapshotDeclaration),
+                    snapshotDeclaration,
+                    StateLimits.GAME_SNAPSHOT,
+                ),
             gameboyType = gameboyType,
             bootstrapMode = bootstrapMode,
             frame = frame,
             cgb0Revision = cgb0Revision,
             player = eventPlayer,
             sessionSnapshot =
-                inflate(readPayload(sessionSnapshotCompressed), sessionSnapshotSize),
+                inflate(
+                    readPayload(sessionSnapshotDeclaration),
+                    sessionSnapshotDeclaration,
+                    StateLimits.SESSION_SNAPSHOT,
+                ),
             heldButtons = heldButtons,
         )
+    rejectLegacyPeerState(event.snapshot, event.sessionSnapshot)
     if (!server && mode == LinkMode.FOUR_PLAYER_ADAPTER && event.sessionSnapshot != null) {
       pendingCheckpointStates += event
     } else {
@@ -295,13 +358,17 @@ class Connection(
     val buf = ByteBuffer.wrap(header)
     val eventPlayer = receivedPlayer(buf.get().toInt())
     val frame = buf.getLong()
-    val pressedCount = buf.get().toInt()
-    val releasedCount = buf.get().toInt()
+    val pressedCount = buf.get().toInt() and 0xff
+    val releasedCount = buf.get().toInt() and 0xff
+    if (pressedCount > Button.entries.size || releasedCount > Button.entries.size) {
+      throw IOException(
+          "Invalid button counts: $pressedCount pressed, $releasedCount released")
+    }
     val buttons = ByteArray(pressedCount + releasedCount)
     input.readFully(buttons)
-    val pressed = (0 until pressedCount).map { Button.entries[buttons[it].toInt()] }
+    val pressed = (0 until pressedCount).map { buttonValue(buttons[it]) }
     val released =
-        (0 until releasedCount).map { Button.entries[buttons[pressedCount + it].toInt()] }
+        (0 until releasedCount).map { buttonValue(buttons[pressedCount + it]) }
     val event = LinkedController.RemoteButtonStateEvent(frame, Input(pressed, released), eventPlayer)
     deliver(event)
     if (server) {
@@ -319,6 +386,15 @@ class Connection(
 
   private fun receiveStop() {
     receiveFrameEvent(STOP)
+  }
+
+  private fun receiveProtocolError(): Nothing {
+    val wireCode = input.read()
+    if (wireCode == -1) throw IOException("Truncated netplay protocol error")
+    val reason =
+        ProtocolErrorReason.entries.firstOrNull { it.wireCode == wireCode }
+            ?: throw IOException("Peer reported unknown protocol error $wireCode")
+    throw ProtocolException(reason)
   }
 
   private fun receiveFrameEvent(command: Byte) {
@@ -359,12 +435,48 @@ class Connection(
     }
   }
 
-  private fun readPayload(size: Int): ByteArray? {
-    if (size == 0) return null
-    if (size < 0 || size > MAX_COMPRESSED_PAYLOAD) {
-      throw IOException("Invalid compressed payload size: $size")
+  private fun readPayload(declaration: PayloadDeclaration): ByteArray? {
+    if (declaration.encodedBytes == 0) return null
+    return ByteArray(declaration.encodedBytes).also(input::readFully)
+  }
+
+  private fun buttonValue(value: Byte): Button {
+    val ordinal = value.toInt() and 0xff
+    if (ordinal !in Button.entries.indices) throw IOException("Invalid button $ordinal")
+    return Button.entries[ordinal]
+  }
+
+  private inline fun <reified T : Enum<T>> enumValue(value: Byte, description: String): T {
+    val ordinal = value.toInt() and 0xff
+    val values = enumValues<T>()
+    if (ordinal !in values.indices) throw IOException("Invalid $description $ordinal")
+    return values[ordinal]
+  }
+
+  private fun rejectLegacyPeerState(snapshot: ByteArray?, sessionSnapshot: ByteArray?) {
+    if ((snapshot != null && LegacyMementoCodec.hasJavaSerializationHeader(snapshot)) ||
+        (sessionSnapshot != null &&
+            LegacyMementoCodec.hasJavaSerializationHeader(sessionSnapshot))) {
+      val reason = ProtocolErrorReason.LEGACY_JAVA_STATE
+      sendProtocolError(reason)
+      throw ProtocolException(reason)
     }
-    return ByteArray(size).also(input::readFully)
+  }
+
+  private fun sendProtocolError(reason: ProtocolErrorReason) {
+    val buf = ByteBuffer.allocate(2)
+    buf.put(PROTOCOL_ERROR)
+    buf.put(reason.wireCode.toByte())
+    sendMessage(buf)
+  }
+
+  private fun failProtocol(reason: ProtocolErrorReason, cause: IOException): Nothing {
+    try {
+      sendProtocolError(reason)
+    } catch (sendFailure: IOException) {
+      cause.addSuppressed(sendFailure)
+    }
+    throw ProtocolException(reason, cause)
   }
 
   fun stop() {
@@ -430,6 +542,26 @@ class Connection(
   internal class ConnectionRejectedException(val reason: RejectionReason) :
       IOException(reason.userMessage)
 
+  internal enum class ProtocolErrorReason(
+      val wireCode: Int,
+      val userMessage: String,
+  ) {
+    LEGACY_JAVA_STATE(
+        1,
+        "The peer sent an unsafe legacy Java save state. " +
+            "Network state transfer requires the portable state format.",
+    ),
+    MALFORMED_MESSAGE(
+        2,
+        "The peer sent malformed or oversized netplay data. The connection was closed safely.",
+    ),
+  }
+
+  internal class ProtocolException(
+      val reason: ProtocolErrorReason,
+      cause: Throwable? = null,
+  ) : IOException(reason.userMessage, cause)
+
   data class PeerLoadedGameEvent(
       val rom: ByteArray,
       val battery: ByteArray?,
@@ -481,13 +613,13 @@ class Connection(
     private const val PROTOCOL_NAME = "CoffeeGB NETPLAY"
     private const val PROTOCOL_VERSION: Byte = 0x06
     private const val REJECTION_MARKER = 0xff
-    private const val MAX_COMPRESSED_PAYLOAD = 64 * 1024 * 1024
     private const val ROM: Byte = 0x01
     private const val INPUT: Byte = 0x03
     private const val RESET: Byte = 0x06
     private const val STOP: Byte = 0x07
     private const val START: Byte = 0x08
     private const val SYNCHRONIZE: Byte = 0x09
+    private const val PROTOCOL_ERROR: Byte = 0x0a
     private const val ROM_HEADER_SIZE = 45
 
     internal fun reject(outputStream: OutputStream, reason: RejectionReason) {
@@ -501,39 +633,162 @@ class Connection(
       output.flush()
     }
 
-    fun deflate(data: ByteArray): ByteArray {
+    fun deflate(data: ByteArray): ByteArray = deflate(data, StateLimits.GAME_SNAPSHOT)
+
+    internal fun deflate(data: ByteArray, limit: StateLimits.Payload): ByteArray {
+      validateDecodedSize(data.size, limit)
       val deflater = Deflater(Deflater.BEST_SPEED)
-      deflater.setInput(data)
-      deflater.finish()
-      val out = ByteArrayOutputStream(data.size / 2 + 64)
-      val buffer = ByteArray(64 * 1024)
-      while (!deflater.finished()) {
-        val count = deflater.deflate(buffer)
-        out.write(buffer, 0, count)
+      try {
+        deflater.setInput(data)
+        deflater.finish()
+        val out = ByteArrayOutputStream(data.size / 2 + 64)
+        val buffer = ByteArray(64 * 1024)
+        while (!deflater.finished()) {
+          val count = deflater.deflate(buffer)
+          out.write(buffer, 0, count)
+          if (out.size() > limit.encodedBytes) {
+            throw IOException(
+                "Compressed ${limit.description} exceeds ${limit.encodedBytes} bytes")
+          }
+        }
+        return out.toByteArray()
+      } finally {
+        deflater.end()
       }
-      deflater.end()
-      return out.toByteArray()
     }
 
     fun inflate(data: ByteArray?, originalSize: Int): ByteArray? {
-      if (data == null) return null
-      if (originalSize < 0 || originalSize > MAX_COMPRESSED_PAYLOAD * 4) {
-        throw IOException("Invalid uncompressed payload size: $originalSize")
+      val declaration =
+          validateDeclaration(
+              originalSize,
+              data?.size ?: 0,
+              StateLimits.GAME_SNAPSHOT,
+              required = data != null,
+          )
+      return inflate(data, declaration, StateLimits.GAME_SNAPSHOT)
+    }
+
+    internal fun inflate(
+        data: ByteArray?,
+        declaration: PayloadDeclaration,
+        limit: StateLimits.Payload,
+    ): ByteArray? {
+      if (data == null) {
+        if (declaration.decodedBytes != 0 || declaration.encodedBytes != 0) {
+          throw IOException("Missing compressed ${limit.description}")
+        }
+        return null
+      }
+      if (data.size != declaration.encodedBytes) {
+        throw IOException(
+            "Compressed ${limit.description} length changed while it was being read")
       }
       val inflater = Inflater()
-      inflater.setInput(data)
-      val result = ByteArray(originalSize)
-      var offset = 0
-      while (offset < originalSize && !inflater.finished()) {
-        val count = inflater.inflate(result, offset, originalSize - offset)
-        if (count == 0 && inflater.needsInput()) throw IOException("Truncated compressed payload")
-        offset += count
+      try {
+        inflater.setInput(data)
+        val result = ByteArray(declaration.decodedBytes)
+        var offset = 0
+        val overflowProbe = ByteArray(1)
+        while (!inflater.finished()) {
+          val count =
+              if (offset < result.size) {
+                inflater.inflate(result, offset, result.size - offset)
+              } else {
+                inflater.inflate(overflowProbe)
+              }
+          if (count > 0) {
+            if (offset == result.size) {
+              throw IOException("${limit.description} expands beyond its declared size")
+            }
+            offset += count
+            continue
+          }
+          if (inflater.needsDictionary()) {
+            throw IOException("Compressed ${limit.description} requires a dictionary")
+          }
+          if (inflater.needsInput()) {
+            throw IOException("Truncated compressed ${limit.description}")
+          }
+          if (!inflater.finished()) {
+            throw IOException("Compressed ${limit.description} made no progress")
+          }
+        }
+        if (offset != declaration.decodedBytes) {
+          throw IOException(
+              "Corrupted compressed ${limit.description}: expected " +
+                  "${declaration.decodedBytes}, got $offset")
+        }
+        if (inflater.remaining != 0) {
+          throw IOException("Trailing data after compressed ${limit.description}")
+        }
+        return result
+      } catch (e: DataFormatException) {
+        throw IOException("Corrupted compressed ${limit.description}", e)
+      } finally {
+        inflater.end()
       }
-      inflater.end()
-      if (offset != originalSize) {
-        throw IOException("Corrupted compressed payload: expected $originalSize, got $offset")
+    }
+
+    internal fun validateDeclaration(
+        decodedBytes: Int,
+        encodedBytes: Int,
+        limit: StateLimits.Payload,
+        required: Boolean = false,
+    ): PayloadDeclaration {
+      if (decodedBytes == 0 && encodedBytes == 0 && !required) {
+        return PayloadDeclaration(0, 0)
       }
-      return result
+      if (decodedBytes <= 0 || encodedBytes <= 0) {
+        throw IOException(
+            "Inconsistent ${limit.description} lengths: $decodedBytes decoded, " +
+                "$encodedBytes encoded")
+      }
+      validateDecodedSize(decodedBytes, limit)
+      if (encodedBytes > limit.encodedBytes) {
+        throw IOException(
+            "Compressed ${limit.description} exceeds ${limit.encodedBytes} bytes: $encodedBytes")
+      }
+      return PayloadDeclaration(decodedBytes, encodedBytes)
+    }
+
+    private fun validateDecodedSize(size: Int, limit: StateLimits.Payload) {
+      if (size < 0 || size > limit.decodedBytes) {
+        throw IOException(
+            "${limit.description} exceeds ${limit.decodedBytes} decoded bytes: $size")
+      }
+    }
+
+    private fun checkedMessageSize(baseBytes: Long, vararg payloads: ByteArray?): Int =
+        checkedMessageSize(baseBytes, *payloads.map { it?.size ?: 0 }.toIntArray())
+
+    private fun checkedMessageSize(
+        baseBytes: Long,
+        vararg declarations: PayloadDeclaration,
+    ): Int =
+        checkedMessageSize(
+            baseBytes,
+            *declarations.map(PayloadDeclaration::encodedBytes).toIntArray(),
+        )
+
+    private fun checkedMessageSize(baseBytes: Long, vararg encodedSizes: Int): Int {
+      val total = encodedSizes.fold(baseBytes) { sum, size -> Math.addExact(sum, size.toLong()) }
+      if (total > StateLimits.NETPLAY_ENCODED_MESSAGE_BYTES) {
+        throw IOException(
+            "Encoded netplay ROM message exceeds " +
+                "${StateLimits.NETPLAY_ENCODED_MESSAGE_BYTES} bytes: $total")
+      }
+      return total.toInt()
+    }
+
+    private fun checkedDecodedMessageSize(vararg decodedSizes: Int) {
+      val total = decodedSizes.fold(0L) { sum, size -> Math.addExact(sum, size.toLong()) }
+      if (total > StateLimits.NETPLAY_DECODED_MESSAGE_BYTES) {
+        throw IOException(
+            "Decoded netplay ROM message exceeds " +
+                "${StateLimits.NETPLAY_DECODED_MESSAGE_BYTES} bytes: $total")
+      }
     }
   }
+
+  internal data class PayloadDeclaration(val decodedBytes: Int, val encodedBytes: Int)
 }
