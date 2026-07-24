@@ -262,6 +262,44 @@ class StateCoverageMatrixTest {
       val actualTrace = continueInfrared(infrared, 500)
       assertEquals(expectedTrace, actualTrace)
       assertEquals(expected, StateGraph.capture(infrared.saveToMemento()))
+
+      irBus.post(FullChanger.TransformEvent(12))
+      val armed = StateGraph.capture(infrared.saveToMemento())
+      val armedChanger = armed.record(FULL_CHANGER_MEMENTO)
+      assertTrue(armedChanger.bool("armed"))
+      assertTrue(!armedChanger.bool("running"))
+      StateSemantics.validate(StateGraph.restore(armed))
+
+      infrared.getByte(0xff56)
+      repeat(30) { infrared.tick() }
+      val running = StateGraph.capture(infrared.saveToMemento())
+      val runningChanger = running.record(FULL_CHANGER_MEMENTO)
+      assertTrue(!runningChanger.bool("armed"))
+      assertTrue(runningChanger.bool("running"))
+      StateSemantics.validate(StateGraph.restore(running))
+
+      repeat(100_000) { infrared.tick() }
+      val completed = StateGraph.capture(infrared.saveToMemento())
+      val completedChanger = completed.record(FULL_CHANGER_MEMENTO)
+      assertTrue(!completedChanger.bool("armed"))
+      assertTrue(!completedChanger.bool("running"))
+      assertEquals(
+          completedChanger.intArray("schedule").size,
+          completedChanger.int("index"),
+      )
+      StateSemantics.validate(StateGraph.restore(completed))
+
+      irBus.post(FullChanger.TransformEvent(17))
+      infrared.getByte(0xff56)
+      val completedContinuation = continueInfrared(infrared, 600)
+      val completedExpected = StateGraph.capture(infrared.saveToMemento())
+      @Suppress("UNCHECKED_CAST")
+      infrared.restoreFromMemento(
+          StateGraph.restore(completed) as Memento<InfraredPort>)
+      irBus.post(FullChanger.TransformEvent(17))
+      infrared.getByte(0xff56)
+      assertEquals(completedContinuation, continueInfrared(infrared, 600))
+      assertEquals(completedExpected, StateGraph.capture(infrared.saveToMemento()))
     }
   }
 
@@ -596,6 +634,7 @@ class StateCoverageMatrixTest {
   private fun RecordState.field(name: String): StateValue = fields.single { it.name == name }.value
   private fun RecordState.int(name: String): Int = (field(name) as Int32State).value
   private fun RecordState.bool(name: String): Boolean = (field(name) as BooleanState).value
+  private fun RecordState.intArray(name: String): IntArray = (field(name) as Int32ArrayState).copyValue()
   private fun RecordState.enumName(name: String): String {
     val enum = field(name) as EnumState
     return (MementoTypeRegistry.enumClasses[enum.typeId - 1].enumConstants[enum.ordinal] as Enum<*>).name
@@ -641,6 +680,7 @@ class StateCoverageMatrixTest {
     const val MBC7_EEPROM_MEMENTO =
         "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromMemento"
     const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento"
+    const val FULL_CHANGER_MEMENTO = "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerMemento"
     val DEFAULT_MAPPER_PROBES = listOf(0x0100, 0x4000, 0x7000, 0x7fe1, 0xa000, 0xa001)
 
     val EXPECTED_MAPPER_FAMILIES =

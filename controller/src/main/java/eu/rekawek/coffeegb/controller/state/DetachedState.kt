@@ -511,11 +511,7 @@ internal object DetachedStateAdapter {
         }
     if (!valid) throw StateApplyException("Detached serial runtime state does not match the endpoint")
     if (state is BarcodeBoyRuntimeState) {
-      state.pendingSize?.let {
-        DetachedValueBounds.requireArray(it.toLong(), Int.SIZE_BYTES.toLong()) { message ->
-          throw StateApplyException(message)
-        }
-      }
+      StateSemantics.validateBarcodeRuntime(state)
     }
   }
 
@@ -983,11 +979,6 @@ internal object StateGraph {
           // GPU mode is also absent until the first PPU mode publication.
           "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento" to "gpuMode",
           "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento" to "cpuRequestArbitration",
-          // ROM-only BasicRom instances have no battery memento.
-          "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomMemento" to
-              "batteryMemento",
-          // A Datel cartridge may have no physical pass-through slot.
-          "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento" to "slotMemento",
           // Barcode data exists only while a scan is actively streaming.
           "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento" to
               "data",
@@ -1002,10 +993,8 @@ internal object StateGraph {
 
   private val AUDITED_NULLABLE_ELEMENTS =
       setOf(
-          // SGB PAL_SET deliberately aliases/clears individual rows; the container is required.
-          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to "palettes",
+          // Historical SGB snapshots can contain unavailable PAL_TRN entries.
           "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to "systemPalettes",
-          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to "attributeFiles",
       )
 }
 

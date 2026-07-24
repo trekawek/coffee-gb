@@ -463,6 +463,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         pixelTransferPhase.checkWindowY(line, ticksInLine);
         pixelMachine.checkWindowY(line, ticksInLine);
+        // Both dot machines enqueue popped pixels into an eight-slot LCD delay line.
+        // The timing-only skeleton has a throwaway Display, but its delay line still
+        // participates in window rewind/refresh bookkeeping and must advance as a
+        // bounded ring just like the shifted output machine.
+        pixelTransferPhase.outputTick();
         pixelMachine.outputTick();
         pixelMachine.machineTick();
 
