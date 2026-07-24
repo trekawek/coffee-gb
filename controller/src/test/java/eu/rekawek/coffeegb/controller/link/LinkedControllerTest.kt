@@ -291,8 +291,8 @@ class LinkedControllerTest {
     deliverCheckpoint(listOf(0, 1, 2, 3))
 
     // The reset origin does not receive its own relayed RESET. Its trusted local transition grants
-    // the equivalent one-use credit, so the checkpoint is still accepted after the exact 2+3+4
-    // formation allowance has been consumed.
+    // the equivalent one-use credit, so the checkpoint is not charged twice during the formation
+    // burst.
     val originResetFrame = host.currentFrame()
     clientBus.post(Controller.ResetEmulationEvent())
     hostBus.post(
@@ -758,7 +758,7 @@ class LinkedControllerTest {
   }
 
   @Test
-  fun streamingCurrentFrameCheckpointsAreBoundedAcrossDispatches() {
+  fun streamingLeapingCheckpointsCannotRefillTheirOwnWorkBudget() {
     val eventBus = EventBusImpl()
     val sut =
         LinkedController(
@@ -771,10 +771,16 @@ class LinkedControllerTest {
     sut.timingTicker.disabled = true
     val failures = mutableListOf<ProtocolErrorReason>()
     val offender = PeerEventSource(0) { reason, _ -> failures += reason }
+    var acceptedCheckpoints = 0
     eventBus.register<ValidatedPeerCheckpointEvent> { validated ->
       if (validated.event.source === offender) {
+        acceptedCheckpoints++
         eventBus.post(
-            SessionCheckpointEvent(validated.event.frame + 1, emptyList(), offender))
+            SessionCheckpointEvent(
+                validated.event.frame + StateLimits.NETPLAY_STATE_CHANGE_FIXED_WORK,
+                emptyList(),
+                offender,
+            ))
       }
     }
     eventBus.post(SessionCheckpointEvent(0, emptyList(), offender))
@@ -783,7 +789,12 @@ class LinkedControllerTest {
     }
 
     assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
-    assertTrue(sut.currentFrame() >= 5, "bounded dispatches must continue advancing frames")
+    assertEquals(9, acceptedCheckpoints)
+    assertEquals(
+        acceptedCheckpoints.toLong() + 1,
+        sut.meteredWorkFrames(),
+        "bounded dispatches must continue running emulator frames",
+    )
 
     val healthyFailures = mutableListOf<ProtocolErrorReason>()
     val healthy = PeerEventSource(0) { reason, _ -> healthyFailures += reason }

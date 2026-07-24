@@ -104,6 +104,8 @@ class LinkedController(
 
   @VisibleForTesting internal fun currentFrame() = frame
 
+  @VisibleForTesting internal fun meteredWorkFrames() = workProgressFrame
+
   @VisibleForTesting
   internal fun encodedSessionStates(): List<ByteArray?> =
       sessions.map { session -> session?.let { NetplayMementoCodec.encodeSession(it.saveToMemento()) } }
@@ -114,6 +116,9 @@ class LinkedController(
   @Volatile private var doStop = false
 
   private var frame = 0L
+
+  /** Counts only emulator frames actually run; peer-controlled rebases cannot advance it. */
+  private var workProgressFrame = 0L
 
   /** Runtime records older than the latest authoritative checkpoint belong to an old generation. */
   private var runtimeFrameFloor = 0L
@@ -392,6 +397,7 @@ class LinkedController(
     }
 
     frame++
+    workProgressFrame++
   }
 
   private fun initSession(
@@ -557,10 +563,10 @@ class LinkedController(
           PeerWorkBudget(
               StateLimits.NETPLAY_REPLAY_WORK_FRAMES,
               StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES,
-              frame,
+              workProgressFrame,
           )
         }
-    val elapsedFrames = (frame - budget.lastFrame).coerceAtLeast(0)
+    val elapsedFrames = (workProgressFrame - budget.lastProgressFrame).coerceAtLeast(0)
     val refill =
         try {
           Math.multiplyExact(elapsedFrames, StateLimits.NETPLAY_STATE_CHANGE_REFILL_PER_FRAME)
@@ -575,7 +581,7 @@ class LinkedController(
             StateLimits.NETPLAY_CHECKPOINT_WORK_FRAMES,
             refill,
         )
-    budget.lastFrame = frame
+    budget.lastProgressFrame = workProgressFrame
     return budget
   }
 
@@ -771,7 +777,7 @@ class LinkedController(
   private data class PeerWorkBudget(
       var replayAvailable: Long,
       var checkpointAvailable: Long,
-      var lastFrame: Long,
+      var lastProgressFrame: Long,
       var checkpointCreditPending: Boolean = false,
   )
 
