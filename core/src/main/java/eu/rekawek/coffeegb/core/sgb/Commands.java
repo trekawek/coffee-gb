@@ -354,7 +354,7 @@ public class Commands {
         public int getDataSet(int index) {
             int b = packet[6 + (index - 1) / 4];
             int i = (index - 1) % 4;
-            return (b >> (i * 2)) & 0b00000011;
+            return (b >> (2 * (3 - i))) & 0b00000011;
         }
 
         public String toString() {

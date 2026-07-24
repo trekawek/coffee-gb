@@ -48,8 +48,6 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private GameboyScreenMask screenMask = GameboyScreenMask.CANCEL;
 
-    private int atfNumber = -1;
-
     private int borderFade;
 
     public SgbDisplay(Rom rom, EventBus sgbBus, boolean sgb, boolean sgbBorder) {
@@ -69,22 +67,10 @@ public class SgbDisplay implements Originator<SgbDisplay> {
             eventBus.register(e -> this.sgbBorder = e.borderEnabled, SetSgbBorder.class);
 
             sgbBus.register(this::onAttrBlk, Commands.AttrBlkCmd.class);
-            sgbBus.register(e -> {
-                palettes[0] = e.getPalette0();
-                palettes[1] = e.getPalette1();
-            }, Commands.Pal01Cmd.class);
-            sgbBus.register(e -> {
-                palettes[0] = e.getPalette0();
-                palettes[3] = e.getPalette3();
-            }, Commands.Pal03Cmd.class);
-            sgbBus.register(e -> {
-                palettes[1] = e.getPalette1();
-                palettes[2] = e.getPalette2();
-            }, Commands.Pal12Cmd.class);
-            sgbBus.register(e -> {
-                palettes[2] = e.getPalette2();
-                palettes[3] = e.getPalette3();
-            }, Commands.Pal23Cmd.class);
+            sgbBus.register(e -> setPalettes(0, e.getPalette0(), 1, e.getPalette1()), Commands.Pal01Cmd.class);
+            sgbBus.register(e -> setPalettes(0, e.getPalette0(), 3, e.getPalette3()), Commands.Pal03Cmd.class);
+            sgbBus.register(e -> setPalettes(1, e.getPalette1(), 2, e.getPalette2()), Commands.Pal12Cmd.class);
+            sgbBus.register(e -> setPalettes(2, e.getPalette2(), 3, e.getPalette3()), Commands.Pal23Cmd.class);
             sgbBus.register(e -> {
                 for (int i = 0; i < 512; i++) {
                     systemPalettes[i] = e.getPalette(i);
@@ -93,8 +79,18 @@ public class SgbDisplay implements Originator<SgbDisplay> {
             sgbBus.register(this::onPalSet, Commands.PalSetCmd.class);
             sgbBus.register(this::onAttrTransfer, Commands.AttrTrnCmd.class);
             sgbBus.register(this::onAttrSet, Commands.AttrSetCmd.class);
+            sgbBus.register(this::onAttrChr, Commands.AttrChrCmd.class);
             sgbBus.register(e -> screenMask = e.getScreenMask(), Commands.MaskEnCmd.class);
         }
+    }
+
+    private void setPalettes(int firstId, int[] first, int secondId, int[] second) {
+        palettes[firstId] = first;
+        palettes[secondId] = second;
+        if (firstId != 0) {
+            palettes[0] = palettes[0].clone();
+        }
+        palettes[0][0] = first[0];
     }
 
     private void onAttrTransfer(Commands.AttrTrnCmd attrTrnCmd) {
@@ -110,7 +106,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
             palettes[i] = systemPalettes[palSetCmd.getPaletteIds()[i]];
         }
         if (palSetCmd.getApplyAtf()) {
-            atfNumber = palSetCmd.getAtfNumber();
+            loadAttributeFile(palSetCmd.getAtfNumber());
         }
         if (palSetCmd.getCancelMaskEn()) {
             screenMask = GameboyScreenMask.CANCEL;
@@ -121,7 +117,44 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         if (attrSetCmd.getCancelMask()) {
             screenMask = GameboyScreenMask.CANCEL;
         }
-        atfNumber = attrSetCmd.getAttributeFileNumber();
+        loadAttributeFile(attrSetCmd.getAttributeFileNumber());
+    }
+
+    private void loadAttributeFile(int id) {
+        if (id >= attributeFiles.length) {
+            return;
+        }
+        System.arraycopy(attributeFiles[id], 0, paletteMap, 0, paletteMap.length);
+    }
+
+    private void onAttrChr(Commands.AttrChrCmd attrChrCmd) {
+        int x = attrChrCmd.getX();
+        int y = attrChrCmd.getY();
+        if (x >= DMG_TILES_WIDTH || y >= DMG_TILES_HEIGHT) {
+            return;
+        }
+        for (int i = 1; i <= attrChrCmd.getDataSetCount(); i++) {
+            paletteMap[x + y * DMG_TILES_WIDTH] = attrChrCmd.getDataSet(i);
+            if (attrChrCmd.getWritingStyle() != 0) {
+                y++;
+                if (y == DMG_TILES_HEIGHT) {
+                    x++;
+                    y = 0;
+                    if (x == DMG_TILES_WIDTH) {
+                        break;
+                    }
+                }
+            } else {
+                x++;
+                if (x == DMG_TILES_WIDTH) {
+                    y++;
+                    x = 0;
+                    if (y == DMG_TILES_HEIGHT) {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     private void onAttrBlk(Commands.AttrBlkCmd attrBlkCmd) {
@@ -160,12 +193,6 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         int height = sgbBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
         int[] result = new int[width * height];
 
-        int lastPaletteId = paletteMap[paletteMap.length - 1];
-        if (atfNumber != -1) {
-            var atf = attributeFiles[atfNumber];
-            lastPaletteId = atf[atf.length - 1];
-        }
-
         for (int x = offsetX; x < offsetX + width; x++) {
             for (int y = offsetY; y < offsetY + height; y++) {
                 int sgbPixel = sgbBuffer[x + y * SGB_DISPLAY_WIDTH];
@@ -178,15 +205,12 @@ public class SgbDisplay implements Originator<SgbDisplay> {
                     int tileY = dmgY / 8;
                     int charId = tileX + tileY * DMG_TILES_WIDTH;
                     int paletteId = paletteMap[charId];
-                    if (atfNumber >= 0) {
-                        paletteId = attributeFiles[atfNumber][charId];
-                    }
                     int p = dmgFrameReadyEvent.pixels()[dmgX + dmgY * DISPLAY_WIDTH];
                     if (screenMask == GameboyScreenMask.BLANK_COLOR0) {
                         p = 0;
                     }
                     if (p == 0) {
-                        paletteId = lastPaletteId;
+                        paletteId = 0;
                     }
                     dmgPixel = palettes[paletteId][p];
                     if (screenMask == GameboyScreenMask.BLANK_BLACK) {
@@ -221,7 +245,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
     @Override
     public Memento<SgbDisplay> saveToMemento() {
         return new SgbDisplayMemento(sgbBuffer.clone(), sgbMask.clone(), clone2(palettes),
-                clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask, atfNumber,
+                clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask,
                 borderFade);
     }
 
@@ -255,7 +279,6 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         System.arraycopy(mem.paletteMap, 0, this.paletteMap, 0, this.paletteMap.length);
         replaceRows(mem.attributeFiles, this.attributeFiles, DMG_TILES_WIDTH * DMG_TILES_HEIGHT);
         this.screenMask = mem.screenMask;
-        this.atfNumber = mem.atfNumber;
         this.borderFade = mem.borderFade;
     }
 
@@ -287,7 +310,7 @@ public class SgbDisplay implements Originator<SgbDisplay> {
 
     private record SgbDisplayMemento(int[] sgbBuffer, int[] sgbMask, int[][] palettes, int[][] systemPalettes,
                                      int[] paletteMap, int[][] attributeFiles, GameboyScreenMask screenMask,
-                                     int atfNumber, int borderFade) implements Memento<SgbDisplay> {
+                                     int borderFade) implements Memento<SgbDisplay> {
     }
 
     public record SgbFrameReadyEvent(int[] buffer, boolean includeBorder) implements Event {
