@@ -43,6 +43,7 @@ import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import org.junit.Test
 import java.io.IOException
+import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.CountDownLatch
@@ -264,10 +265,11 @@ class LinkedControllerTest {
     hostBus.register<LinkedController.SessionStateReadyEvent> { checkpoints.add(it) }
 
     val clientBus = EventBusImpl()
+    val clientProperties = EmulatorProperties()
     val client =
         LinkedController(
             clientBus,
-            EmulatorProperties(),
+            clientProperties,
             null,
             LinkMode.FOUR_PLAYER_ADAPTER,
             localPlayer = 1,
@@ -294,7 +296,7 @@ class LinkedControllerTest {
     client.runFrame()
     host.runFrame()
     deliverCheckpoint(listOf(0, 1))
-    assertEquals(listOf(false, true, null, null), client.localInputSourceAssignments())
+    assertEquals(listOf(true, true, null, null), client.releasedInputSourceAssignments())
 
     // A host RESET is relayed before the same-frame authoritative checkpoint. It consumes one
     // replay/state-change token, while the checkpoint uses the transition credit instead of being
@@ -312,7 +314,7 @@ class LinkedControllerTest {
     hostBus.post(peerState(0, PeerEventSource(3) { _, _ -> }).copy(player = 3))
     host.runFrame()
     deliverCheckpoint(listOf(0, 1, 2, 3))
-    assertEquals(listOf(false, true, false, false), client.localInputSourceAssignments())
+    assertEquals(listOf(true, true, true, true), client.releasedInputSourceAssignments())
 
     // The reset origin does not receive its own relayed RESET. Its trusted local transition grants
     // the equivalent one-use credit, so the checkpoint is not charged twice during the formation
@@ -363,6 +365,15 @@ class LinkedControllerTest {
     hostBus.post(peerState(0, PeerEventSource(3) { _, _ -> }).copy(player = 3))
     host.runFrame()
     deliverCheckpoint(listOf(0, 1, 2, 3))
+
+    clientProperties.playerInputSource.openSource(0).update(setOf(Button.A))
+    clientProperties.playerInputSource.openSource(2).update(setOf(Button.START))
+    client.runFrame()
+    assertTrue(
+        client.mainEffectivePressedButtons().isEmpty(),
+        "a checkpoint replacement must keep the local linked machine detached from the hub",
+    )
+    assertTrue(client.releasedInputSourceAssignments().filterNotNull().all { it })
 
     assertTrue(failures.isEmpty())
     clientBus.close()
@@ -873,10 +884,11 @@ class LinkedControllerTest {
   @Test
   fun fourPlayerControllerRunsAllConsolesAndLabelsLocalAndRemoteInput() {
     val eventBus = EventBusImpl()
+    val properties = EmulatorProperties()
     val sut =
         LinkedController(
             eventBus,
-            EmulatorProperties(),
+            properties,
             null,
             LinkMode.FOUR_PLAYER_ADAPTER,
             localPlayer = 0,
@@ -903,21 +915,49 @@ class LinkedControllerTest {
     }
     sut.runFrame()
     assertEquals(4, sut.activeSessionCount())
-    assertEquals(listOf(true, false, false, false), sut.localInputSourceAssignments())
+    assertEquals(listOf(true, true, true, true), sut.releasedInputSourceAssignments())
     eventBus.drainAsyncEvents()
     localInputs.clear()
+
+    val physicalP1 = properties.playerInputSource.openSource(0)
+    val physicalP3 = properties.playerInputSource.openSource(2)
+    physicalP1.update(setOf(Button.A))
+    physicalP3.update(setOf(Button.START))
+    sut.runFrame()
+    eventBus.drainAsyncEvents()
+    assertTrue(
+        sut.mainEffectivePressedButtons().isEmpty(),
+        "a linked machine must never sample the asynchronously updated desktop hub",
+    )
+    assertTrue(localInputs.isEmpty(), "direct hub mutation must not create frame-owned input")
 
     eventBus.post(LogicalPlayerButtonPressEvent(2, Button.A))
     sut.runFrame()
     eventBus.drainAsyncEvents()
     assertTrue(localInputs.isEmpty(), "local SGB P3 must not become linked emulator player input")
+    assertTrue(sut.mainEffectivePressedButtons().isEmpty())
 
-    eventBus.post(ButtonPressEvent(Button.B))
+    eventBus.post(LogicalPlayerButtonPressEvent(0, Button.B))
+    assertTrue(
+        sut.mainEffectivePressedButtons().isEmpty(),
+        "logical desktop P1 must wait for the linked frame event queue",
+    )
     sut.runFrame()
     eventBus.drainAsyncEvents()
     val local = localInputs.poll(5, TimeUnit.SECONDS)
     assertEquals(0, local.player)
     assertEquals(listOf(Button.B), local.input.pressedButtons)
+    assertEquals(setOf(Button.B), sut.mainEffectivePressedButtons())
+    assertTrue(localInputs.isEmpty(), "logical P1 must be applied exactly once")
+
+    // Historical/agent callers still use the direct legacy event API. Its linked behavior is
+    // unchanged and remains frame-owned for ordinary DMG/CGB as well as SGB sessions.
+    eventBus.post(ButtonPressEvent(Button.SELECT))
+    sut.runFrame()
+    eventBus.drainAsyncEvents()
+    val legacy = localInputs.poll(5, TimeUnit.SECONDS)
+    assertEquals(listOf(Button.SELECT), legacy.input.pressedButtons)
+    assertEquals(setOf(Button.B, Button.SELECT), sut.mainEffectivePressedButtons())
 
     eventBus.post(
         LinkedController.RemoteButtonStateEvent(0, Input(listOf(Button.A), emptyList()), 1))
@@ -927,13 +967,72 @@ class LinkedControllerTest {
 
     assertTrue(replayed.any { it.gameboy == 1 && it.button == Button.A })
     assertTrue(replayed.any { it.gameboy == 3 && it.button == Button.START })
+    assertEquals(listOf(true, true, true, true), sut.releasedInputSourceAssignments())
+    assertEquals(
+        setOf(Button.B, Button.SELECT),
+        sut.mainEffectivePressedButtons(),
+        "rollback replay must retain frame-owned P1 without consulting the physical hub",
+    )
 
     val previousFrame = sut.stateHistory.getHead().frame
     eventBus.post(ReceivedRemoteStopEvent(previousFrame, player = 3))
     sut.runFrame()
     assertEquals(3, sut.activeSessionCount())
+    assertTrue(sut.releasedInputSourceAssignments().filterNotNull().all { it })
     assertTrue(sut.stateHistory.getHead().frame > previousFrame)
     eventBus.close()
+  }
+
+  @Test
+  fun ordinaryDmgLinkedInputRemainsFrameOwnedForLogicalAndLegacyP1() {
+    val romBytes = ByteArray(0x8000)
+    val romFile = Files.createTempFile("coffee-gb-linked-dmg", ".gb").toFile()
+    romFile.writeBytes(romBytes)
+    val eventBus = EventBusImpl()
+    try {
+      val properties = EmulatorProperties()
+      properties.properties.setProperty(
+          EmulatorProperties.Key.DmgGamesType.propertyName,
+          GameboyType.DMG.name,
+      )
+      val sut = LinkedController(eventBus, properties, null)
+      sut.timingTicker.disabled = true
+      val localInputs = LinkedBlockingQueue<LinkedController.LocalButtonStateEvent>()
+      eventBus.register<LinkedController.LocalButtonStateEvent> { localInputs.add(it) }
+
+      eventBus.post(LoadRomEvent(romFile))
+      eventBus.post(
+          PeerLoadedGameEvent(
+              romBytes,
+              null,
+              null,
+              GameboyType.DMG,
+              Gameboy.BootstrapMode.SKIP,
+              0,
+          ))
+      sut.runFrame()
+      eventBus.drainAsyncEvents()
+      localInputs.clear()
+      assertEquals(listOf(true, true), sut.releasedInputSourceAssignments())
+
+      properties.playerInputSource.openSource(0).update(setOf(Button.A))
+      sut.runFrame()
+      assertTrue(sut.mainEffectivePressedButtons().isEmpty())
+
+      eventBus.post(LogicalPlayerButtonPressEvent(0, Button.B))
+      assertTrue(sut.mainEffectivePressedButtons().isEmpty())
+      sut.runFrame()
+      eventBus.drainAsyncEvents()
+      assertEquals(setOf(Button.B), sut.mainEffectivePressedButtons())
+      assertEquals(listOf(Button.B), localInputs.poll(5, TimeUnit.SECONDS).input.pressedButtons)
+
+      eventBus.post(ButtonPressEvent(Button.START))
+      sut.runFrame()
+      assertEquals(setOf(Button.B, Button.START), sut.mainEffectivePressedButtons())
+    } finally {
+      eventBus.close()
+      romFile.delete()
+    }
   }
 
   @Test
@@ -1200,6 +1299,7 @@ class LinkedControllerTest {
     sut.restoreDetachedState(captured)
     sut.runFrame()
     assertEquals(expected, sut.captureDetachedState())
+    assertTrue(sut.releasedInputSourceAssignments().filterNotNull().all { it })
     eventBus.close()
   }
 
@@ -1226,6 +1326,7 @@ class LinkedControllerTest {
     sut.restoreDetachedState(target)
     sut.runFrame()
     assertEquals(expectedContinuation, sut.captureDetachedState())
+    assertTrue(sut.releasedInputSourceAssignments().filterNotNull().all { it })
 
     val coherent = sut.captureDetachedState()
     val playerOne = assertNotNull(coherent.players[1].session)
@@ -1320,6 +1421,7 @@ class LinkedControllerTest {
     val beforeRoms = privateByteArrays(sut, "romBuffers")
     val beforeSlots = privateByteArrays(sut, "slotRomBuffers")
     val beforeBatteries = privateByteArrays(sut, "batteryBuffers")
+    val beforeSources = sut.releasedInputSourceAssignments()
 
     eventBus.post(SessionCheckpointEvent(sut.currentFrame(), states, source))
     dispatchOnly(sut)
@@ -1334,6 +1436,8 @@ class LinkedControllerTest {
     assertByteArraysEqual(beforeRoms, privateByteArrays(sut, "romBuffers"))
     assertByteArraysEqual(beforeSlots, privateByteArrays(sut, "slotRomBuffers"))
     assertByteArraysEqual(beforeBatteries, privateByteArrays(sut, "batteryBuffers"))
+    assertEquals(beforeSources, sut.releasedInputSourceAssignments())
+    assertTrue(sut.releasedInputSourceAssignments().filterNotNull().all { it })
     eventBus.close()
   }
 

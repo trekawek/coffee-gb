@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb.swing.io;
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.joypad.Button;
-import eu.rekawek.coffeegb.core.memory.cart.type.AccelerometerEvent;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +15,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static eu.rekawek.coffeegb.swing.io.GamepadBackend.Axis.*;
 import static eu.rekawek.coffeegb.swing.io.GamepadBackend.PadButton.*;
@@ -36,9 +36,13 @@ public class SwingGamepad implements Runnable {
 
     private final EventBus eventBus;
     private final DesktopPlayerInput input;
+    private final DesktopTiltInput tiltInput;
     private final List<ControllerProperties.GamepadAssignment> assignments;
     private final GamepadBackend backend;
+    private final Consumer<GamepadBackend.DeviceInfo> discoveryObserver;
     private final Map<Integer, ActiveDevice> active = new HashMap<>();
+    private final Set<String> discovered = new HashSet<>();
+    private final Object tiltSourceIdentity = new Object();
 
     private volatile boolean doStop;
     private volatile boolean rumbleRequested;
@@ -46,16 +50,25 @@ public class SwingGamepad implements Runnable {
     private boolean tiltActive;
 
     public SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
-                        EventBus eventBus) {
-        this(mapping, input, eventBus, new SdlGamepadBackend());
+                        DesktopTiltInput tiltInput, EventBus eventBus) {
+        this(mapping, input, tiltInput, eventBus, new SdlGamepadBackend(), ignored -> {});
     }
 
     SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
-                 EventBus eventBus, GamepadBackend backend) {
+                 DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend) {
+        this(mapping, input, tiltInput, eventBus, backend, ignored -> {});
+    }
+
+    SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
+                 DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend,
+                 Consumer<GamepadBackend.DeviceInfo> discoveryObserver) {
         this.assignments = List.copyOf(mapping.getGamepads());
         this.input = input;
+        this.tiltInput = tiltInput;
         this.eventBus = eventBus;
         this.backend = backend;
+        this.discoveryObserver = discoveryObserver;
+        tiltInput.registerResetter(this::releaseTiltAndRumble);
         eventBus.register(e -> rumbleRequested = e.on(), RumbleEvent.class);
     }
 
@@ -93,7 +106,7 @@ public class SwingGamepad implements Runnable {
         }
     }
 
-    void pollOnce() {
+    synchronized void pollOnce() {
         backend.update();
         Map<String, GamepadBackend.DeviceInfo> devices = new HashMap<>();
         backend.devices().stream().sorted(Comparator.comparing(GamepadBackend.DeviceInfo::stableId))
@@ -106,6 +119,14 @@ public class SwingGamepad implements Runnable {
                 disconnect(entry.getKey(), "disconnected");
             }
         });
+
+        discovered.retainAll(devices.keySet());
+        devices.values().stream().sorted(Comparator.comparing(GamepadBackend.DeviceInfo::stableId))
+                .filter(device -> discovered.add(device.stableId()))
+                .forEach(device -> {
+                    LOG.info("Game controller {} discovered as {}", device.name(), device.stableId());
+                    discoveryObserver.accept(device);
+                });
 
         Set<String> claimed = new HashSet<>();
         assignments.stream()
@@ -213,21 +234,32 @@ public class SwingGamepad implements Runnable {
                 removed.device.name(), player + 1, reason);
     }
 
-    private void closeAll() {
+    private synchronized void closeAll() {
         new ArrayList<>(active.keySet()).forEach(player -> disconnect(player, "poller stopped"));
-        updateTilt(0, 0);
+        tiltInput.clear(tiltSourceIdentity);
+        discovered.clear();
     }
 
     void updateTilt(int rawX, int rawY) {
         double x = normalizeTiltAxis(rawX);
         double y = normalizeTiltAxis(rawY);
         if (x != 0 || y != 0) {
-            eventBus.post(new AccelerometerEvent(x, y));
+            tiltInput.update(tiltSourceIdentity, x, y);
             tiltActive = true;
         } else if (tiltActive) {
-            eventBus.post(new AccelerometerEvent(0, 0));
+            tiltInput.clear(tiltSourceIdentity);
             tiltActive = false;
         }
+    }
+
+    private synchronized void releaseTiltAndRumble() {
+        rumbleRequested = false;
+        ActiveDevice primary = active.get(0);
+        if (primary != null && rumbleActive) {
+            primary.device.rumble(false);
+        }
+        rumbleActive = false;
+        tiltActive = false;
     }
 
     static double normalizeTiltAxis(int raw) {

@@ -41,7 +41,7 @@ class StateHistoryTest {
   }
 
   @Test
-  fun replaySamplesExternalFourSlotServiceOnceAndUsesHistoricalPrimaryInput() {
+  fun replayNeverSamplesExternalFourSlotServiceAndUsesHistoricalPrimaryInput() {
     val samples = AtomicInteger()
     val physical =
         PlayerInputSnapshot.of(
@@ -97,9 +97,9 @@ class StateHistoryTest {
                 history.addSecondaryInput(0, 0, Input(listOf(Button.SELECT), emptyList()))
                 assertTrue(history.merge(listOf(config, second)))
                 assertEquals(
-                    1,
+                    0,
                     samples.get(),
-                    "original desktop service must be sampled once per replay",
+                    "rollback machines must use RELEASED rather than a desktop service",
                 )
                 assertEquals(
                     listOf(Button.SELECT to 0),

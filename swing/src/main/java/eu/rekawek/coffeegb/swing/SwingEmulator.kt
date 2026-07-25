@@ -16,6 +16,7 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import eu.rekawek.coffeegb.swing.io.DesktopPlayerInput
+import eu.rekawek.coffeegb.swing.io.DesktopTiltInput
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -32,6 +33,8 @@ class SwingEmulator(
   private val sound: AudioSystemSound
   private val accelerometer: SwingAccelerometer
 
+  private val tiltInput: DesktopTiltInput
+
   private val tiltKeys: SwingTiltKeys
 
   private val printer: SwingPrinter
@@ -44,10 +47,11 @@ class SwingEmulator(
     display = SwingDisplay(properties.display, eventBus, "main")
     sound = AudioSystemSound(properties.sound, eventBus, "main")
     val playerInput = DesktopPlayerInput(properties.playerInputSource, eventBus)
+    tiltInput = DesktopTiltInput(eventBus)
     joypad = SwingJoypad(properties.playerInputMapping, eventBus, playerInput)
-    gamepad = SwingGamepad(properties.playerInputMapping, playerInput, eventBus)
-    accelerometer = SwingAccelerometer(eventBus, display.preferredSize)
-    tiltKeys = SwingTiltKeys(eventBus)
+    gamepad = SwingGamepad(properties.playerInputMapping, playerInput, tiltInput, eventBus)
+    accelerometer = SwingAccelerometer(eventBus, tiltInput, display.preferredSize)
+    tiltKeys = SwingTiltKeys(tiltInput)
     printer = SwingPrinter(eventBus)
     connectionController = ConnectionController(eventBus)
 
@@ -68,11 +72,12 @@ class SwingEmulator(
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       startBasicController()
     }
-    eventBus.register<Controller.RomLoadingEvent> { joypad.releaseForLifecycleChange() }
-    eventBus.register<Controller.EmulationStoppedEvent> { joypad.releaseForLifecycleChange() }
+    eventBus.register<Controller.RomLoadingEvent> { releaseForLifecycleChange() }
+    eventBus.register<Controller.EmulationStoppedEvent> { releaseForLifecycleChange() }
   }
 
   private fun startBasicController() {
+    releaseForLifecycleChange()
     val state = controller.closeWithState()
     controller = BasicController(eventBus, properties, console).also { it.startController() }
     if (state != null) {
@@ -81,6 +86,7 @@ class SwingEmulator(
   }
 
   private fun startLinkedController(mode: LinkMode, player: Int) {
+    releaseForLifecycleChange()
     val state = controller.closeWithState()
     controller =
         LinkedController(eventBus, properties, console, mode, player).also { it.startController() }
@@ -91,12 +97,18 @@ class SwingEmulator(
 
   fun stop() {
     joypad.stop()
+    tiltInput.stop()
     gamepad.stop()
     gamepadThread.interrupt()
     gamepadThread.join(1000)
     controller.close()
     sound.stopThread()
     display.stop()
+  }
+
+  private fun releaseForLifecycleChange() {
+    joypad.releaseForLifecycleChange()
+    tiltInput.releaseForLifecycleChange()
   }
 
   fun bind(jFrame: JFrame) {
@@ -108,6 +120,7 @@ class SwingEmulator(
     jFrame.contentPane = mainPanel
     jFrame.addKeyListener(joypad)
     jFrame.addWindowFocusListener(joypad)
+    jFrame.addWindowFocusListener(tiltInput)
     jFrame.addKeyListener(tiltKeys)
     jFrame.addMouseMotionListener(accelerometer)
 

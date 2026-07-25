@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memory.cart.type.AccelerometerEvent;
 
 import java.awt.*;
 import java.awt.event.MouseEvent;
@@ -9,12 +8,14 @@ import java.awt.event.MouseMotionListener;
 
 public class SwingAccelerometer implements MouseMotionListener {
 
-    private final EventBus eventBus;
+    private final DesktopTiltInput tiltInput;
+    private final Object sourceIdentity = new Object();
 
     private Dimension dimension;
 
-    public SwingAccelerometer(EventBus eventBus, Dimension initialDimension) {
-        this.eventBus = eventBus;
+    public SwingAccelerometer(EventBus eventBus, DesktopTiltInput tiltInput,
+                              Dimension initialDimension) {
+        this.tiltInput = tiltInput;
         this.dimension = initialDimension;
         eventBus.register(event -> dimension = event.preferredSize(), SwingDisplay.DisplaySizeUpdatedEvent.class);
     }
@@ -31,6 +32,6 @@ public class SwingAccelerometer implements MouseMotionListener {
         x = Math.max(0, Math.min(1, x)) * 2 - 1;
         y = Math.max(0, Math.min(1, y)) * 2 - 1;
 
-        eventBus.post(new AccelerometerEvent(x, y));
+        tiltInput.update(sourceIdentity, x, y);
     }
 }

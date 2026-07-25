@@ -83,8 +83,9 @@ Joypad machine state includes the SGB `MLT_REQ` mode, selected logical player, s
 filter, and packet receiver, so those phases rewind exactly. Physical input is a separate immutable
 four-slot service sampled at the next Joypad tick. It is not a snapshot page: restoring an older
 machine cannot resurrect a released P1-P4 host button, while a button that is still physically held
-remains held. Linked rollback replays legacy P1 from its established input history and freezes one
-P2-P4 service sample for the duration of a rebase so desktop polling cannot change mid-replay.
+remains held. Linked rollback replays P1 from its established frame-owned input history and forces
+`PlayerInputSource.RELEASED` on every live/replay machine. Protocol v8 cannot represent local SGB
+P2-P4, so those desktop slots are masked for linked sessions rather than sampled during a rebase.
 
 Before live mutation, restore reconstructs the complete registered machine record, checks hardware
 and mapper/battery ownership, runs the Phase-1 semantic validation, and validates both primitive

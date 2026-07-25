@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.joypad;
 
+import eu.rekawek.coffeegb.core.cpu.InterruptManager;
+import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.sgb.SgbPacketTestBuilder;
 import org.junit.Test;
 
@@ -132,6 +134,38 @@ public class SgbFourPlayerInputTest {
             joypad.tick();
             assertEquals(2, samples.get());
         }
+    }
+
+    @Test
+    public void atomicPhysicalP1LatchCoexistsWithUnchangedLegacyEventApi() {
+        PlayerInputHub hub = new PlayerInputHub();
+        var physical = hub.openSource(0);
+        EventBusImpl machineBus = new EventBusImpl(null, null, false);
+        EventBusImpl sgbBus = new EventBusImpl(null, null, false);
+        Joypad joypad = new Joypad(new InterruptManager(false), sgbBus, false, hub);
+        joypad.init(machineBus);
+
+        physical.update(Set.of(Button.A));
+        assertTrue("physical updates wait for the Joypad tick", joypad.getPressedButtons().isEmpty());
+        joypad.tick();
+        assertEquals(Set.of(Button.A), joypad.getPressedButtons());
+
+        physical.update(Set.of(Button.B));
+        assertEquals("the old latch remains intact before the next tick",
+                Set.of(Button.A), joypad.getPressedButtons());
+        joypad.tick();
+        assertEquals("A to B is one atomic sample, never an A+B transient",
+                Set.of(Button.B), joypad.getPressedButtons());
+
+        machineBus.post(new ButtonPressEvent(Button.START));
+        assertEquals(Set.of(Button.B, Button.START), joypad.getPressedButtons());
+        assertEquals(Set.of(Button.START), joypad.getLegacyPressedButtons());
+        machineBus.post(new ButtonReleaseEvent(Button.START));
+        assertEquals(Set.of(Button.B), joypad.getPressedButtons());
+        assertTrue(joypad.getLegacyPressedButtons().isEmpty());
+
+        machineBus.close();
+        sgbBus.close();
     }
 
     @Test

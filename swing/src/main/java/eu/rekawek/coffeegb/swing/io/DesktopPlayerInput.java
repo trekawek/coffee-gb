@@ -2,8 +2,6 @@ package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.joypad.Button;
-import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent;
-import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent;
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent;
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonReleaseEvent;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
@@ -84,19 +82,11 @@ public final class DesktopPlayerInput {
     }
 
     private void postPress(int player, Button button) {
-        if (player == 0) {
-            eventBus.post(new ButtonPressEvent(button));
-        } else {
-            eventBus.post(new LogicalPlayerButtonPressEvent(player, button));
-        }
+        eventBus.post(new LogicalPlayerButtonPressEvent(player, button));
     }
 
     private void postRelease(int player, Button button) {
-        if (player == 0) {
-            eventBus.post(new ButtonReleaseEvent(button));
-        } else {
-            eventBus.post(new LogicalPlayerButtonReleaseEvent(player, button));
-        }
+        eventBus.post(new LogicalPlayerButtonReleaseEvent(player, button));
     }
 
     private record Registration(int player, PlayerInputHub.SourceHandle handle) {
