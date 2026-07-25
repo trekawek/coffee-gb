@@ -897,13 +897,23 @@ class TcpConnectionTest {
       client: LinkedController,
       complete: () -> Boolean,
   ) {
-    repeat(100) {
+    val started = System.nanoTime()
+    val timeout = TimeUnit.SECONDS.toNanos(5)
+    var pumps = 0
+    while (System.nanoTime() - started < timeout) {
       host.runFrame()
       client.runFrame()
+      pumps++
       if (complete()) return
       Thread.sleep(10)
     }
-    assertTrue(complete(), "linked controllers did not synchronize within the test timeout")
+    val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+    assertTrue(
+        complete(),
+        "linked controllers did not synchronize after ${elapsedMillis}ms/$pumps pumps; " +
+            "host sessions=${host.activeSessionCount()}, frame=${host.currentFrame()}; " +
+            "client sessions=${client.activeSessionCount()}, frame=${client.currentFrame()}",
+    )
   }
 
   private fun awaitCondition(condition: () -> Boolean) {

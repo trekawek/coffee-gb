@@ -8,7 +8,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 
 import static io.github.libsdl4j.api.Sdl.SDL_Init;
@@ -79,10 +78,20 @@ final class SdlGamepadBackend implements GamepadBackend {
                     ? "instance:" + instance : "path:" + path;
             byte[] bytes = (nullToEmpty(guid) + '\0' + location + '\0'
                     + nullToEmpty(name)).getBytes(StandardCharsets.UTF_8);
-            return "sdl-" + HexFormat.of().formatHex(digest.digest(bytes));
+            return "sdl-" + lowercaseHex(digest.digest(bytes));
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 unavailable", impossible);
         }
+    }
+
+    private static String lowercaseHex(byte[] bytes) {
+        char[] encoded = new char[Math.multiplyExact(bytes.length, 2)];
+        for (int i = 0; i < bytes.length; i++) {
+            int value = bytes[i] & 0xff;
+            encoded[i * 2] = Character.forDigit(value >>> 4, 16);
+            encoded[i * 2 + 1] = Character.forDigit(value & 0x0f, 16);
+        }
+        return new String(encoded);
     }
 
     private static String nullToEmpty(String value) {
