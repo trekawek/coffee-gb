@@ -67,9 +67,11 @@ class BasicControllerTest {
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
     val failures = LinkedBlockingQueue<Controller.SnapshotLoadFailedEvent>()
     val saved = LinkedBlockingQueue<Controller.SnapshotSavedEvent>()
+    val restored = LinkedBlockingQueue<Controller.SnapshotRestoredEvent>()
     eventBus.register<EmulationStartedEvent> { started.add(it) }
     eventBus.register<Controller.SnapshotLoadFailedEvent> { failures.add(it) }
     eventBus.register<Controller.SnapshotSavedEvent> { saved.add(it) }
+    eventBus.register<Controller.SnapshotRestoredEvent> { restored.add(it) }
     val directory = Files.createTempDirectory("coffee-gb-controller-state")
     val rom = directory.resolve("state-test.gb").toFile().also { it.writeBytes(ROM.readBytes()) }
     directory.resolve("state-test.sn0").toFile().writeBytes(byteArrayOf(1, 2, 3, 4))
@@ -92,6 +94,12 @@ class BasicControllerTest {
               )
               .slot,
       )
+      val portable = directory.resolve("state-test.sn1").toFile().readBytes()
+      assertEquals("CGBS", portable.copyOf(4).toString(Charsets.US_ASCII))
+      assertTrue(!LegacyMementoCodec.hasJavaSerializationHeader(portable))
+
+      eventBus.post(Controller.RestoreSnapshotEvent(1))
+      assertEquals(1, assertNotNull(restored.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot)
     } finally {
       controller.close()
       eventBus.close()

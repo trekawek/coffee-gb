@@ -387,6 +387,84 @@ internal object DetachedStateAdapter {
           gameboy.captureDmgFifoRuntimeState().toDetached(),
       )
 
+  /**
+   * Imports a strict-reader legacy root through target-aware structural preflight and rollback.
+   *
+   * Historical Java files do not own Phase-1 runtime supplements, so the current machine's RTC
+   * pause and DMG FIFO supplements remain attached. The released monotonic FIFO delay count is
+   * explicitly normalized to current ring occupancy; the complete candidate then passes current
+   * record, nullability, array, and semantic validation before mutation. Unexpected legacy restore
+   * failures roll the whole machine back.
+   */
+  fun applyLegacyMemento(
+      gameboy: Gameboy,
+      memento: Memento<Gameboy>,
+      probeAfterMementoMutation: (() -> Unit)? = null,
+  ) {
+    val current = capture(gameboy)
+    val legacyRoot =
+        normalizeLegacyFifoOccupancy(StateGraph.captureRoot(memento, GAMEBOY_ROOT)) as RecordState
+    StateGraph.validateCompatible(legacyRoot, current.root, "legacy machine")
+    val normalized = StateGraph.restoreRoot(legacyRoot, GAMEBOY_ROOT)
+    StateSemantics.validate(normalized)
+    @Suppress("UNCHECKED_CAST")
+    val normalizedMemento = normalized as Memento<Gameboy>
+    val rollback = prepare(gameboy, current)
+    val candidate =
+        PreparedMachineState(
+            normalizedMemento,
+            current.rtcRuntime.toCore(),
+            current.dmgFifoRuntime.toCore(),
+        )
+    try {
+      gameboy.restoreFromMemento(candidate.memento)
+      probeAfterMementoMutation?.invoke()
+      gameboy.restoreDmgFifoRuntimeState(candidate.dmgFifoRuntime)
+      gameboy.restoreRtcRuntimeState(candidate.rtcRuntime)
+    } catch (failure: Throwable) {
+      try {
+        commit(gameboy, rollback)
+      } catch (rollbackFailure: Throwable) {
+        failure.addSuppressed(rollbackFailure)
+      }
+      throw StateApplyException("Legacy machine state could not be applied atomically", failure)
+    }
+  }
+
+  /**
+   * Released 1.7.13/1.7.14 files can contain the old monotonically incremented FIFO delay count.
+   * Only eight ring entries were ever retained, so cap that historical count to the owned ring
+   * before applying or migrating it. Negative and otherwise malformed values are left untouched
+   * for current semantic validation to reject.
+   */
+  private fun normalizeLegacyFifoOccupancy(value: StateValue): StateValue =
+      when (value) {
+        is RecordState -> {
+          val fields =
+              value.fields
+                  .map { StateField(it.name, normalizeLegacyFifoOccupancy(it.value)) }
+                  .toMutableList()
+          if (value.typeId in LEGACY_FIFO_RECORD_IDS) {
+            val entries = fields.single { it.name == "delayEntry" }.value
+            val capacity = (entries as? Int32ArrayState)?.size
+            val sizeIndex = fields.indexOfFirst { it.name == "delaySize" }
+            val size = (fields[sizeIndex].value as Int32State).value
+            if (capacity != null && size > capacity) {
+              fields[sizeIndex] = StateField("delaySize", Int32State(capacity))
+            }
+          }
+          RecordState(value.typeId, fields)
+        }
+        is ObjectArrayState -> ObjectArrayState(value.values.map(::normalizeLegacyFifoOccupancy))
+        is ListState -> ListState(value.values.map(::normalizeLegacyFifoOccupancy))
+        is Int32MapState ->
+            Int32MapState(
+                value.entries.map {
+                  Int32MapEntry(it.key, normalizeLegacyFifoOccupancy(it.value))
+                })
+        else -> value
+      }
+
   fun capture(session: Session): SessionState {
     val peripheral = serialPeripheral(session.serialEndpoint)
     val serial = StateGraph.capture(session.serialEndpoint.saveToMemento())
@@ -552,6 +630,19 @@ internal object DetachedStateAdapter {
       endpoint.restoreRuntimeState(
           BarcodeBoySerialEndpoint.RuntimeState(state.transferArmed, state.copyPending()))
     }
+  }
+
+  private val LEGACY_FIFO_RECORD_IDS by lazy {
+    listOf(
+            "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento",
+            "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento",
+        )
+        .map { className ->
+          MementoTypeRegistry.recordClassNames.indexOf(className).plus(1).also { id ->
+            check(id > 0) { "State registry has no $className" }
+          }
+        }
+        .toSet()
   }
 
   private const val GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"

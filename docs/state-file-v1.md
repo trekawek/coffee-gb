@@ -4,9 +4,9 @@ StateFile v1 is the portable byte representation of the detached machine/session
 independent of Coffee GB's Maven/application version and of Java serialization. All multibyte
 integers are big-endian, all lengths are nonnegative, and all strings are strict UTF-8.
 
-This phase defines the codec and explicit decode-then-apply seam only. SnapshotManager, rewind,
-netplay `Connection`, `NetplayMementoCodec`, and existing persistence continue to use their
-bounded legacy formats until issue #323.
+The codec and explicit decode-then-apply seam are used by local slot snapshots as of issue #323A.
+Rewind, `ControllerState`, netplay `Connection`, and `NetplayMementoCodec` retain their existing
+in-memory/transport formats until their explicitly assigned phases.
 
 ## Envelope
 
@@ -232,6 +232,28 @@ Session, or LinkedController. It performs, in order:
 No live-mutation callback occurs before all deterministic validation succeeds. Unexpected restore
 failures use the Phase-1 rollback record. Linked preparation covers every player before the first
 commit and rollback remains group-atomic.
+
+## Local slot integration and legacy dispatch
+
+`SnapshotManager` captures a machine root with the exact active `GameboyConfiguration` at
+`BasicController`'s frame-boundary event-dispatch safe point and writes canonical DEFLATE StateFile
+bytes to the existing `.sn<slot>` filename. New slot files therefore begin with `CGBS`; the local
+save path never emits a Java serialization header.
+
+Local reads use exactly four prefix bytes:
+
+- `43 47 42 53` (`CGBS`) routes only to this codec and its 134,348,800-byte file limit;
+- `AC ED 00 05` routes only to the strict, allowlisted local legacy reader and its 33,554,432-byte
+  game-snapshot limit;
+- every other complete or truncated prefix is rejected as an unknown format.
+
+The selected limit is enforced by the streaming read count and by explicitly capped buffer growth,
+not only by file metadata. Portable bytes never reach `ObjectInputStream`. After the complete
+portable decode, identity/profile validation and detached preflight, apply uses the Phase-1
+transaction. Rewind history is cleared only after `SnapshotManager` returns success.
+
+The detailed local migration policy, diagnostics, compatibility window, and non-atomic replacement
+boundary are documented in [snapshot-migration.md](snapshot-migration.md).
 
 ## Fixture and evolution policy
 

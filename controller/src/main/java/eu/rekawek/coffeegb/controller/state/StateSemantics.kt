@@ -802,7 +802,9 @@ internal object StateSemantics {
     }
   }
 
-  private const val SOUND_BUFFER_CAPACITY = 70_224 * 2
+  // Historical 1.7.13 files retain the complete buffer. Match Sound's actual
+  // Gameboy.TICKS_PER_FRAME * 2 capacity (integer 4,194,304 / 60), not a rounded frame estimate.
+  private const val SOUND_BUFFER_CAPACITY = 69_905 * 2
   private const val MAX_CPU_OPS = 64
   private const val SGB_TRANSFER_SIZE = 0x1000
   private const val FULL_CHANGER_SCHEDULE_SIZE = 36
