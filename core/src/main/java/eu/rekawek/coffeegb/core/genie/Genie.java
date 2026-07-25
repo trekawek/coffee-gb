@@ -16,7 +16,7 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
 
     private final AddressSpace delegate;
 
-    private final Map<Integer, List<Patch>> patches = new HashMap<>();
+    private final Map<Integer, List<CheatPatch>> patches = new HashMap<>();
 
     private final boolean gbc;
 
@@ -31,7 +31,7 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
         eventBus.register(e -> e.patches().forEach(this::addPatch), AddPatches.class);
     }
 
-    private void addPatch(Patch patch) {
+    private void addPatch(CheatPatch patch) {
         patches.computeIfAbsent(patch.getAddress(), k -> new ArrayList<>()).add(patch);
     }
 
@@ -62,7 +62,7 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
     public int getByte(int address) {
         var value = delegate.getByte(address);
         if (patches.containsKey(address)) {
-            for (Patch p : patches.get(address)) {
+            for (CheatPatch p : patches.get(address)) {
                 if (p.accepts(delegate, ramBank, gbc)) {
                     return p.getValue();
                 }
@@ -73,8 +73,8 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
 
     @Override
     public ComponentState<Genie> captureState() {
-        var map = new HashMap<Integer, List<Patch>>();
-        patches.forEach((k, v) -> map.put(k, new ArrayList<>(v)));
+        var map = new HashMap<Integer, List<PatchState>>();
+        patches.forEach((k, v) -> map.put(k, v.stream().map(Genie::capturePatch).toList()));
         return new GenieState(map);
     }
 
@@ -84,10 +84,45 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
             throw new IllegalArgumentException("Invalid state type");
         }
         patches.clear();
-        mem.patches.forEach((k, v) -> patches.put(k, new ArrayList<>(v)));
+        mem.patches.forEach((k, v) ->
+                patches.put(k, new ArrayList<>(v.stream().map(Genie::restorePatch).toList())));
     }
 
-    private record GenieState(Map<Integer, List<Patch>> patches) implements ComponentState<Genie> {
+    private static PatchState capturePatch(CheatPatch patch) {
+        if (patch instanceof GameGenieCheat genie) {
+            return new GameGeniePatchState(genie.newData(), genie.address(), genie.oldData());
+        }
+        if (patch instanceof GameSharkCheat shark) {
+            return new GameSharkPatchState(
+                    shark.mode(), shark.bank(), shark.address(), shark.data());
+        }
+        throw new IllegalArgumentException("Unsupported cheat patch type");
+    }
+
+    private static CheatPatch restorePatch(PatchState state) {
+        if (state instanceof GameGeniePatchState genie) {
+            return new GameGenieCheat(genie.newData(), genie.address(), genie.oldData());
+        }
+        if (state instanceof GameSharkPatchState shark) {
+            return new GameSharkCheat(
+                    shark.mode(), shark.bank(), shark.address(), shark.data());
+        }
+        throw new IllegalArgumentException("Unsupported cheat state type");
+    }
+
+    private interface PatchState {
+    }
+
+    private record GameGeniePatchState(int newData, int address, int oldData)
+            implements PatchState {
+    }
+
+    private record GameSharkPatchState(int mode, int bank, int address, int data)
+            implements PatchState {
+    }
+
+    private record GenieState(Map<Integer, List<PatchState>> patches)
+            implements ComponentState<Genie> {
     }
 
     /** Importer-only compatibility record for released local snapshots. */

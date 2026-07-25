@@ -5,10 +5,11 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import java.io.Serializable;
 
 /**
- * Immutable patch value contract.
+ * Historical patch compatibility contract.
  *
- * <p>The serialization marker is retained solely because released local snapshots embed the two
- * concrete patch records. No live owner serializes patches on a normal runtime path.
+ * <p>This exact binary interface is retained solely because released local snapshots embed the
+ * two concrete compatibility records. Normal execution uses {@link CheatPatch} and never
+ * constructs this type.
  */
 public interface Patch extends Serializable {
 

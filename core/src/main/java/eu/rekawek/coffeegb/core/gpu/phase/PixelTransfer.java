@@ -129,11 +129,11 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     // inside the crossing delay.
     private int windowDisplayOverride = -1;
 
-    private final List<DelayedWindowWrite> pendingWindowDisplayWrites = new ArrayList<>();
+    private final List<DelayedWindowWriteRuntime> pendingWindowDisplayWrites = new ArrayList<>();
 
     private int windowXOverride = -1;
 
-    private final List<DelayedWindowWrite> pendingWindowXWrites = new ArrayList<>();
+    private final List<DelayedWindowWriteRuntime> pendingWindowXWrites = new ArrayList<>();
 
     // The CGB retains the old background shift register throughout StartWindowDraw's
     // six states. If LCDC.5 is cleared, the remaining states plot that register while
@@ -439,7 +439,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         if (pendingWindowDisplayWrites.isEmpty()) {
             windowDisplayOverride = isWindowDisplay() ? 1 : 0;
         }
-        pendingWindowDisplayWrites.add(new DelayedWindowWrite(
+        pendingWindowDisplayWrites.add(new DelayedWindowWriteRuntime(
                 windowDisplay ? 1 : 0, Math.max(0, delayDots)));
     }
 
@@ -447,7 +447,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         if (pendingWindowXWrites.isEmpty()) {
             windowXOverride = getWindowX();
         }
-        pendingWindowXWrites.add(new DelayedWindowWrite(
+        pendingWindowXWrites.add(new DelayedWindowWriteRuntime(
                 windowX & 0xff, Math.max(0, delayDots)));
     }
 
@@ -463,7 +463,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     public void advanceDelayedWindowWrites() {
         for (int i = 0; i < pendingWindowDisplayWrites.size(); ) {
-            DelayedWindowWrite pending = pendingWindowDisplayWrites.get(i);
+            DelayedWindowWriteRuntime pending = pendingWindowDisplayWrites.get(i);
             if (pending.remainingDots() == 0) {
                 boolean wasWindowDisplay = isWindowDisplay();
                 windowDisplayOverride = pending.value();
@@ -481,7 +481,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
 
         for (int i = 0; i < pendingWindowXWrites.size(); ) {
-            DelayedWindowWrite pending = pendingWindowXWrites.get(i);
+            DelayedWindowWriteRuntime pending = pendingWindowXWrites.get(i);
             if (pending.remainingDots() == 0) {
                 windowXOverride = pending.value();
                 pendingWindowXWrites.remove(i);
@@ -1162,9 +1162,14 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 windowWyDelay,
                 windowWyOldOnWriteTick,
                 windowDisplayOverride,
-                new ArrayList<>(pendingWindowDisplayWrites),
+                captureDelayedWrites(pendingWindowDisplayWrites),
                 windowXOverride,
-                new ArrayList<>(pendingWindowXWrites));
+                captureDelayedWrites(pendingWindowXWrites));
+    }
+
+    private static List<DelayedWindowWriteState> captureDelayedWrites(
+            List<DelayedWindowWriteRuntime> writes) {
+        return writes.stream().map(DelayedWindowWriteRuntime::captureState).toList();
     }
 
     @Override
@@ -1236,13 +1241,17 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         this.pendingWindowXWrites.clear();
         if (mem.pendingWindowDisplayWrites != null) {
             this.windowDisplayOverride = mem.windowDisplayOverride;
-            this.pendingWindowDisplayWrites.addAll(mem.pendingWindowDisplayWrites);
+            mem.pendingWindowDisplayWrites.stream()
+                    .map(DelayedWindowWriteRuntime::restoreState)
+                    .forEach(this.pendingWindowDisplayWrites::add);
         } else {
             this.windowDisplayOverride = -1;
         }
         if (mem.pendingWindowXWrites != null) {
             this.windowXOverride = mem.windowXOverride;
-            this.pendingWindowXWrites.addAll(mem.pendingWindowXWrites);
+            mem.pendingWindowXWrites.stream()
+                    .map(DelayedWindowWriteRuntime::restoreState)
+                    .forEach(this.pendingWindowXWrites::add);
         } else {
             this.windowXOverride = -1;
         }
@@ -1294,9 +1303,9 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             int windowWyDelay,
             int windowWyOldOnWriteTick,
             int windowDisplayOverride,
-            List<DelayedWindowWrite> pendingWindowDisplayWrites,
+            List<DelayedWindowWriteState> pendingWindowDisplayWrites,
             int windowXOverride,
-            List<DelayedWindowWrite> pendingWindowXWrites)
+            List<DelayedWindowWriteState> pendingWindowXWrites)
             implements ComponentState<PixelTransfer> {
     }
 
@@ -1352,11 +1361,25 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             implements Memento<PixelTransfer> {
     }
 
-    /** Importer-compatible immutable value embedded by released pixel-transfer records. */
-    private record DelayedWindowWrite(int value, int remainingDots) implements Serializable {
+    private record DelayedWindowWriteRuntime(int value, int remainingDots) {
 
-        private DelayedWindowWrite advance() {
-            return new DelayedWindowWrite(value, remainingDots - 1);
+        private DelayedWindowWriteRuntime advance() {
+            return new DelayedWindowWriteRuntime(value, remainingDots - 1);
         }
+
+        private DelayedWindowWriteState captureState() {
+            return new DelayedWindowWriteState(value, remainingDots);
+        }
+
+        private static DelayedWindowWriteRuntime restoreState(DelayedWindowWriteState state) {
+            return new DelayedWindowWriteRuntime(state.value(), state.remainingDots());
+        }
+    }
+
+    private record DelayedWindowWriteState(int value, int remainingDots) {
+    }
+
+    /** Importer-only compatibility leaf record for released local snapshots. */
+    private record DelayedWindowWrite(int value, int remainingDots) implements Serializable {
     }
 }

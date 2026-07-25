@@ -9,6 +9,9 @@ import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.core.state.ComponentState
+import java.io.Serializable
+import java.lang.reflect.GenericArrayType
+import java.lang.reflect.ParameterizedType
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -107,11 +110,58 @@ class LegacySerializationBoundaryTest {
         StateTypeRegistry.recordClasses.take(87).all(ComponentState::class.java::isAssignableFrom))
     assertTrue(
         StateTypeRegistry.legacyRecordClasses.take(87).all(Memento::class.java::isAssignableFrom))
-    assertEquals(
-        StateTypeRegistry.recordClassNames.takeLast(4),
-        StateTypeRegistry.legacyRecordClassNames.takeLast(4),
-        "The four shared immutable leaf values retain stable v1 IDs and legacy descriptors",
+    assertTrue(
+        StateTypeRegistry.legacyRecordClasses.takeLast(4)
+            .all(Serializable::class.java::isAssignableFrom),
+        "The four historical leaves must retain their released serialization descriptors",
     )
+    assertTrue(
+        StateTypeRegistry.recordClasses.none(Serializable::class.java::isAssignableFrom),
+        "Normal portable records must not implement the legacy serialization contract",
+    )
+    assertTrue(
+        StateTypeRegistry.recordClassNames.toSet()
+            .intersect(StateTypeRegistry.legacyRecordClassNames.toSet())
+            .isEmpty(),
+        "Normal and compatibility record registries must be disjoint",
+    )
+    val legacyLeafClasses = StateTypeRegistry.legacyRecordClasses.takeLast(4).toSet()
+    StateTypeRegistry.recordClasses.takeLast(4)
+        .zip(StateTypeRegistry.legacyRecordClasses.takeLast(4))
+        .forEachIndexed { index, (normal, legacy) ->
+          assertEquals(
+              legacy.recordComponents.map { it.name to it.type },
+              normal.recordComponents.map { it.name to it.type },
+              "Stable record ID ${88 + index} must retain its v1 field schema",
+          )
+        }
+    StateTypeRegistry.recordClasses.forEach { type ->
+      type.recordComponents.forEach { component ->
+        assertFalse(
+            component.genericType.referencesAny(legacyLeafClasses),
+            "Normal state field ${type.name}.${component.name} reaches a compatibility leaf",
+        )
+      }
+    }
+
+    val compatibilityLeafSources =
+        setOf(
+            root.resolve("core/src/main/java/eu/rekawek/coffeegb/core/genie/Patch.java"),
+            root.resolve("core/src/main/java/eu/rekawek/coffeegb/core/genie/GameGeniePatch.java"),
+            root.resolve("core/src/main/java/eu/rekawek/coffeegb/core/genie/GameSharkPatch.java"),
+        )
+    val normalCoreSource =
+        coreSources
+            .filterKeys { it !in compatibilityLeafSources }
+            .values
+            .joinToString("\n") { stripCompatibilityRecords(it) }
+    listOf("GameGeniePatch", "GameSharkPatch", "PendingPpuWrite", "DelayedWindowWrite")
+        .forEach { compatibilityType ->
+          assertFalse(
+              Regex("\\b$compatibilityType\\b").containsMatchIn(normalCoreSource),
+              "Normal core source must not name compatibility leaf $compatibilityType",
+          )
+        }
 
     val networkSource =
         texts
@@ -202,8 +252,8 @@ class LegacySerializationBoundaryTest {
   private fun stripCompatibilityRecords(source: String): String {
     var result = source
     while (true) {
-      val marker = result.indexOf(COMPATIBILITY_MARKER)
-      if (marker < 0) return result
+      val markers = listOf(COMPATIBILITY_MARKER, COMPATIBILITY_LEAF_MARKER)
+      val marker = markers.map(result::indexOf).filter { it >= 0 }.minOrNull() ?: return result
       val open = result.indexOf('{', marker)
       check(open >= 0) { "Importer compatibility record has no body" }
       var depth = 0
@@ -220,9 +270,13 @@ class LegacySerializationBoundaryTest {
       }
       check(depth == 0) { "Importer compatibility record has an unterminated body" }
       val declaration = result.substring(marker, open)
-      check(
+      val memento =
           Regex("\\brecord\\s+\\w+(?:Memento|Momento)\\s*\\(").containsMatchIn(declaration) &&
-              "implements Memento<" in declaration) {
+              "implements Memento<" in declaration
+      val leaf =
+          Regex("\\brecord\\s+(?:PendingPpuWrite|DelayedWindowWrite)\\s*\\(")
+              .containsMatchIn(declaration) && "implements Serializable" in declaration
+      check(memento || leaf) {
         "Importer compatibility marker must guard one historical data record"
       }
       check(result.substring(open + 1, end).isBlank()) {
@@ -232,8 +286,19 @@ class LegacySerializationBoundaryTest {
     }
   }
 
+  private fun java.lang.reflect.Type.referencesAny(forbidden: Set<Class<*>>): Boolean =
+      when (this) {
+        is Class<*> -> this in forbidden || (isArray && componentType.referencesAny(forbidden))
+        is ParameterizedType ->
+            rawType.referencesAny(forbidden) || actualTypeArguments.any { it.referencesAny(forbidden) }
+        is GenericArrayType -> genericComponentType.referencesAny(forbidden)
+        else -> false
+      }
+
   private companion object {
     const val COMPATIBILITY_MARKER =
         "/** Importer-only compatibility record for released local snapshots. */"
+    const val COMPATIBILITY_LEAF_MARKER =
+        "/** Importer-only compatibility leaf record for released local snapshots. */"
   }
 }

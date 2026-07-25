@@ -3,8 +3,8 @@ package eu.rekawek.coffeegb.core.genie;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.memory.GbcRam;
 
-/** Importer-only historical cheat value; normal execution uses {@link GameSharkCheat}. */
-public record GameSharkPatch(int mode, int bank, int address, int data) implements Patch {
+/** Active, non-serializable GameShark patch. */
+public record GameSharkCheat(int mode, int bank, int address, int data) implements CheatPatch {
     @Override
     public int getAddress() {
         return address;
@@ -19,7 +19,8 @@ public record GameSharkPatch(int mode, int bank, int address, int data) implemen
             return true;
         }
         if (mode == 9) {
-            return Math.max(1, bank) == (gbc ? Math.max(addressSpace.getByte(GbcRam.SVBK) & 0x07, 1) : 1);
+            return Math.max(1, bank)
+                    == (gbc ? Math.max(addressSpace.getByte(GbcRam.SVBK) & 0x07, 1) : 1);
         }
         return false;
     }

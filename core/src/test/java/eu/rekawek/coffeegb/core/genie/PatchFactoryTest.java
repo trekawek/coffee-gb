@@ -11,19 +11,19 @@ public class PatchFactoryTest {
     public void testGameGenieCode() {
         var patch = PatchFactory.createPatch("00A-17B-C49");
 
-        assertTrue(patch instanceof GameGeniePatch);
-        assertEquals(0x4a17, ((GameGeniePatch) patch).address());
-        assertEquals(0x00, ((GameGeniePatch) patch).newData());
-        assertEquals(0xc8, ((GameGeniePatch) patch).oldData());
+        assertTrue(patch instanceof GameGenieCheat);
+        assertEquals(0x4a17, ((GameGenieCheat) patch).address());
+        assertEquals(0x00, ((GameGenieCheat) patch).newData());
+        assertEquals(0xc8, ((GameGenieCheat) patch).oldData());
     }
 
     @Test
     public void testGameSharkCode() {
         var patch = PatchFactory.createPatch("010238CD");
 
-        assertTrue(patch instanceof GameSharkPatch);
-        assertEquals(0x01, ((GameSharkPatch) patch).bank());
-        assertEquals(0x02, ((GameSharkPatch) patch).data());
-        assertEquals(0xCD38, ((GameSharkPatch) patch).address());
+        assertTrue(patch instanceof GameSharkCheat);
+        assertEquals(0x01, ((GameSharkCheat) patch).bank());
+        assertEquals(0x02, ((GameSharkCheat) patch).data());
+        assertEquals(0xCD38, ((GameSharkCheat) patch).address());
     }
 }

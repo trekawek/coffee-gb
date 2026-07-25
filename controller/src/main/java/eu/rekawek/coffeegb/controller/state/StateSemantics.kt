@@ -436,7 +436,7 @@ internal object StateSemantics {
             it.range("state", 0, 6); it.range("tileAttributesValue", -1, 0xff)
             it.nonNegative("data2Delay")
           })
-      put("eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWrite",
+      put("eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWriteState",
           constrained("Pending PPU writes retain a 16-bit address and non-negative dot delay.") {
             val address = it.int("address")
             it.require(address in DELAYED_PPU_REGISTERS,
@@ -449,7 +449,7 @@ internal object StateSemantics {
             }, "has an invalid mask for its delayed PPU register")
             it.range("remainingDots", 0, 4)
           })
-      put("eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWrite",
+      put("eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWriteState",
           constrained("Delayed window-register writes carry a byte and non-negative dot delay.") {
             it.range("value", 0, 0xff); it.range("remainingDots", 0, 4)
           })
@@ -641,12 +641,12 @@ internal object StateSemantics {
             it.require(it.intArray("consecutiveFf").all { count -> count >= 0 }, "has a negative FF counter")
           })
 
-      put("eu.rekawek.coffeegb.core.genie.GameGeniePatch",
+      put("eu.rekawek.coffeegb.core.genie.Genie\$GameGeniePatchState",
           constrained("Game Genie addresses/data are fixed-width; -1 is the no-old-value sentinel.") {
             it.range("newData", 0, 0xff); it.range("address", 0, 0xffff)
             it.range("oldData", -1, 0xff)
           })
-      put("eu.rekawek.coffeegb.core.genie.GameSharkPatch",
+      put("eu.rekawek.coffeegb.core.genie.Genie\$GameSharkPatchState",
           constrained("GameShark mode/bank/data are bytes and the destination is a 16-bit address.") {
             it.range("mode", 0, 0xff); it.range("bank", 0, 0xff)
             it.range("address", 0, 0xffff); it.range("data", 0, 0xff)
@@ -818,9 +818,9 @@ internal object StateSemantics {
   private const val COLOR_FIFO_STATE =
       "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState"
   private const val INT_QUEUE_STATE = "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueState"
-  private const val PENDING_PPU_WRITE = "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWrite"
+  private const val PENDING_PPU_WRITE = "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWriteState"
   private const val DELAYED_WINDOW_WRITE =
-      "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWrite"
+      "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWriteState"
   private const val TRANSFER_COMMAND_STATE =
       "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState"
   private const val MEMORY_BATTERY_STATE =
@@ -832,8 +832,8 @@ internal object StateSemantics {
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
   private val REGISTERED_PATCH_TYPES =
       setOf(
-          "eu.rekawek.coffeegb.core.genie.GameGeniePatch",
-          "eu.rekawek.coffeegb.core.genie.GameSharkPatch",
+          "eu.rekawek.coffeegb.core.genie.Genie\$GameGeniePatchState",
+          "eu.rekawek.coffeegb.core.genie.Genie\$GameSharkPatchState",
       )
   private val DELAYED_PPU_REGISTERS = setOf(0xff40, 0xff43, 0xff47, 0xff4b)
   private val TRANSFER_COMMAND_CODES = setOf(0x09, 0x0b, 0x10, 0x13, 0x14, 0x15)
