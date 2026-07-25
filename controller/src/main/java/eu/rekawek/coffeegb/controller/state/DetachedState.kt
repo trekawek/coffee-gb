@@ -375,7 +375,7 @@ internal data class PreparedSessionState(
  * Apply first checks target-dependent structure and explicit nullability, reconstructs the full
  * candidate, and runs every registered record's semantic policy before the first live mutation.
  * Rollback remains the guard for unexpected failures in legacy restore implementations.
- * This is deliberately not a byte codec; #322 owns the sectioned StateFile representation.
+ * This adapter deliberately remains independent of bytes; [StateCodec] wraps it with StateFile v1.
  */
 internal object DetachedStateAdapter {
 
@@ -399,10 +399,15 @@ internal object DetachedStateAdapter {
     )
   }
 
-  fun apply(gameboy: Gameboy, state: MachineState) {
+  fun apply(
+      gameboy: Gameboy,
+      state: MachineState,
+      probe: ((ApplyStage) -> Unit)? = null,
+  ) {
     val prepared = prepare(gameboy, state)
     val rollback = prepare(gameboy, capture(gameboy))
     try {
+      probe?.invoke(ApplyStage.BEFORE_LIVE_MUTATION)
       commit(gameboy, prepared)
     } catch (failure: Throwable) {
       try {

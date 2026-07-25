@@ -16,6 +16,8 @@ import eu.rekawek.coffeegb.controller.state.ApplyStage
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
+import eu.rekawek.coffeegb.controller.state.StateIdentity
+import eu.rekawek.coffeegb.controller.state.StateIdentityEntry
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.StateApplyException
@@ -131,6 +133,13 @@ class LinkedController(
             LinkedPlayerState(player, sessions.getOrNull(player)?.captureDetachedState())
           },
       )
+
+  /** Captures ROM/profile identities for the same canonical slots as [captureDetachedState]. */
+  internal fun capturePortableIdentities(): List<StateIdentityEntry> =
+      (0 until CANONICAL_PLAYER_SLOTS).map { player ->
+        val session = sessions.getOrNull(player)
+        StateIdentityEntry(player, session?.let { StateIdentity.from(it.config) })
+      }
 
   /** Applies an already-configured linked group at the owning controller frame safe point. */
   internal fun restoreDetachedState(

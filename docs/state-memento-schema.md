@@ -1,9 +1,10 @@
 # Audited state-memento schema
 
 This is the exact captured-field inventory for all 91 production record types admitted by
-`MementoTypeRegistry` at Phase 1. Each line names the concrete record and every record component
-captured by `saveToMemento`. The executable state inventory test prevents the registry, this
-appendix, and the detached graph adapter from drifting independently.
+`MementoTypeRegistry`. Each bullet's one-based position is its stable StateFile-v1 record type ID;
+each line names the concrete record and every record component captured by `saveToMemento`. The
+executable state inventory test prevents the registry, this appendix, and the detached graph
+adapter from drifting independently.
 
 Array and collection fields are deep-owned by the detached state adapter. The ownership contract,
 safe points, derived/excluded state, and subsystem grouping are in
@@ -13,7 +14,8 @@ The 11 explicit behavior tags are `Cpu.State`, `InterruptManager.InterruptType`,
 `OamSearch.State`, `Hdma.CpuRequestArbitration`, `Hdma.HaltHdmaState`,
 `Hdma.WakeRequestArbitration`, `Mbc7Eeprom.State`, `BarcodeBoySerialEndpoint.State`,
 `FourPlayerAdapter.Phase`, and `Commands.MaskEnCmd.GameboyScreenMask`. Their portable form is the
-audited enum type ID plus ordinal; a missing type or out-of-range ordinal is rejected.
+audited enum type ID plus explicit one-based v1 value ID; the complete value registry is in
+[state-file-v1.md](state-file-v1.md). A missing type or out-of-range value ID is rejected.
 
 `DmgPixelFifo$DmgPixelFifoMemento` deliberately retains its pinned seven-component Java
 serialization descriptor. The immutable Phase-1 `MachineState` carries `linePixels`, `outCount`,
