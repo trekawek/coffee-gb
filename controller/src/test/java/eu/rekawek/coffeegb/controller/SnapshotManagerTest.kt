@@ -1,13 +1,22 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.state.Int32ArrayState
+import eu.rekawek.coffeegb.controller.state.Int32MapState
+import eu.rekawek.coffeegb.controller.state.Int32State
+import eu.rekawek.coffeegb.controller.state.Int64ArrayState
+import eu.rekawek.coffeegb.controller.state.ListState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.ObjectArrayState
+import eu.rekawek.coffeegb.controller.state.RecordState
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateDecodeException
 import eu.rekawek.coffeegb.controller.state.StateDecodeReason
+import eu.rekawek.coffeegb.controller.state.StateGraph
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateRootKind
+import eu.rekawek.coffeegb.controller.state.StateValue
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
@@ -245,6 +254,115 @@ class SnapshotManagerTest {
   }
 
   @Test
+  fun legacyMigrationPreservesTheRetainedOverfullFifoRingOrder() {
+    val fixtureBytes = LEGACY_FIXTURES.last().readBytes()
+    val fixture = LegacyMementoCodec.deserializeGameboy(fixtureBytes)
+    val legacyRoot = StateGraph.capture(fixture) as RecordState
+    val original =
+        legacyRoot.records(COLOR_FIFO_TYPE_ID).first {
+          it.int("delaySize") == 321 &&
+              it.int("delayHead") == 0 &&
+              it.intArray("delayEntry").size == 8 &&
+              it.longArray("delayStamp").size == 8
+        }
+    assertEquals(321, original.int("delaySize"))
+    assertEquals(0, original.int("delayHead"))
+    assertEquals(8, original.intArray("delayEntry").size)
+    @Suppress("UNCHECKED_CAST")
+    val orderedFixture =
+        replaceFirstRecord(
+            fixture,
+            COLOR_FIFO_MEMENTO,
+            predicate = {
+              recordComponent(it, "delaySize") as Int == 321 &&
+                  recordComponent(it, "delayHead") as Int == 0
+            },
+        ) {
+          replaceRecordComponent(
+              replaceRecordComponent(it, "delayEntry", IntArray(8) { index -> 10 + index }),
+              "delayStamp",
+              LongArray(8) { index -> 100L + index },
+          )
+        } as Memento<Gameboy>
+    val orderedRoot = StateGraph.capture(orderedFixture) as RecordState
+    val ordered =
+        orderedRoot.records(COLOR_FIFO_TYPE_ID).first {
+          it.int("delaySize") == 321 &&
+              it.int("delayHead") == 0 &&
+              it.intArray("delayEntry").contentEquals(IntArray(8) { index -> 10 + index })
+        }
+    val expectedHead = 1
+    val expectedEntries = ordered.orderedIntRing(expectedHead, 8)
+    val expectedStamps = ordered.orderedLongRing(expectedHead, 8)
+    val staleEntries = ordered.orderedIntRing(0, 8)
+    val staleStamps = ordered.orderedLongRing(0, 8)
+    assertFalse(
+        expectedEntries.contentEquals(staleEntries) &&
+            expectedStamps.contentEquals(staleStamps),
+        "The seeded retained entries must distinguish the rebased logical ring order",
+    )
+
+    withDefaultMachine { rom, configuration, gameboy ->
+      val file = snapshotFile(rom, 0)
+      file.writeBytes(LegacyMementoCodec.serializeGameboy(orderedFixture))
+      val manager =
+          SnapshotManager(
+              configuration,
+              LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS,
+          )
+
+      assertTrue(manager.loadSnapshot(0, gameboy))
+
+      val migrated =
+          ((StateCodec.decode(file.readBytes()).root as MachineStateRoot).machine.root)
+              .records(COLOR_FIFO_TYPE_ID)
+              .first {
+                it.intArray("delayEntry").contentEquals(ordered.intArray("delayEntry")) &&
+                    it.longArray("delayStamp").contentEquals(ordered.longArray("delayStamp"))
+              }
+      assertEquals(8, migrated.int("delaySize"))
+      assertEquals(expectedHead, migrated.int("delayHead"))
+      assertContentEquals(expectedEntries, migrated.orderedIntRing(expectedHead, 8))
+      assertContentEquals(expectedStamps, migrated.orderedLongRing(expectedHead, 8))
+    }
+  }
+
+  @Test
+  fun malformedLegacyOverfullFifoShapeIsRejectedAtomicallyWithoutMigration() {
+    withDefaultMachine { rom, configuration, gameboy ->
+      val fixtureBytes = LEGACY_FIXTURES.last().readBytes()
+      val fixture = LegacyMementoCodec.deserializeGameboy(fixtureBytes)
+      @Suppress("UNCHECKED_CAST")
+      val malformed =
+          replaceFirstRecord(
+              fixture,
+              COLOR_FIFO_MEMENTO,
+              predicate = {
+                val entries = recordComponent(it, "delayEntry") as IntArray
+                recordComponent(it, "delaySize") as Int > entries.size
+              },
+          ) {
+            val stamps = recordComponent(it, "delayStamp") as LongArray
+            replaceRecordComponent(it, "delayStamp", stamps.copyOf(stamps.size - 1))
+          } as Memento<Gameboy>
+      val malformedBytes = LegacyMementoCodec.serializeGameboy(malformed)
+      val manager =
+          SnapshotManager(
+              configuration,
+              LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS,
+          )
+
+      assertRejectedLegacyUnchanged(
+          manager,
+          rom,
+          configuration,
+          gameboy,
+          malformedBytes,
+      )
+    }
+  }
+
+  @Test
   fun failedLegacyReadAndApplyNeverMutateOrRewriteOriginalFile() {
     withDefaultMachine { rom, configuration, gameboy ->
       val manager =
@@ -451,6 +569,81 @@ class SnapshotManagerTest {
     return constructor.newInstance(*arguments)
   }
 
+  private fun replaceFirstRecord(
+      root: Any,
+      className: String,
+      predicate: (Any) -> Boolean,
+      replacement: (Any) -> Any,
+  ): Any {
+    var replaced = false
+
+    fun visit(value: Any?): Any? {
+      if (value == null || replaced) return value
+      if (value.javaClass.name == className && predicate(value)) {
+        replaced = true
+        return replacement(value)
+      }
+      if (!value.javaClass.isRecord) return value
+
+      val components = value.javaClass.recordComponents
+      val original =
+          components.map { component ->
+            component.accessor.let { accessor ->
+              accessor.isAccessible = true
+              accessor.invoke(value)
+            }
+          }
+      val updated = original.map(::visit)
+      if (original.indices.all { original[it] === updated[it] }) return value
+      val constructor =
+          value.javaClass.getDeclaredConstructor(*components.map { it.type }.toTypedArray()).also {
+            it.isAccessible = true
+          }
+      return constructor.newInstance(*updated.toTypedArray())
+    }
+
+    return checkNotNull(visit(root)).also {
+      check(replaced) { "No matching $className record found" }
+    }
+  }
+
+  private fun StateValue.records(typeId: Int): List<RecordState> {
+    val matches = mutableListOf<RecordState>()
+    fun visit(value: StateValue) {
+      when (value) {
+        is RecordState -> {
+          if (value.typeId == typeId) matches += value
+          value.fields.forEach { visit(it.value) }
+        }
+        is ObjectArrayState -> value.values.forEach(::visit)
+        is ListState -> value.values.forEach(::visit)
+        is Int32MapState -> value.entries.forEach { visit(it.value) }
+        else -> Unit
+      }
+    }
+    visit(this)
+    return matches
+  }
+
+  private fun RecordState.int(name: String): Int =
+      (fields.single { it.name == name }.value as Int32State).value
+
+  private fun RecordState.intArray(name: String): IntArray =
+      (fields.single { it.name == name }.value as Int32ArrayState).copyValue()
+
+  private fun RecordState.longArray(name: String): LongArray =
+      (fields.single { it.name == name }.value as Int64ArrayState).copyValue()
+
+  private fun RecordState.orderedIntRing(head: Int, size: Int): IntArray {
+    val values = intArray("delayEntry")
+    return IntArray(size) { offset -> values[(head + offset) % values.size] }
+  }
+
+  private fun RecordState.orderedLongRing(head: Int, size: Int): LongArray {
+    val values = longArray("delayStamp")
+    return LongArray(size) { offset -> values[(head + offset) % values.size] }
+  }
+
   private companion object {
     val CGBS =
         byteArrayOf(
@@ -460,6 +653,12 @@ class SnapshotManagerTest {
             'S'.code.toByte(),
         )
     val LEGACY_HEADER = byteArrayOf(0xac.toByte(), 0xed.toByte(), 0x00, 0x05)
+    const val COLOR_FIFO_MEMENTO =
+        "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento"
+    val COLOR_FIFO_TYPE_ID =
+        MementoTypeRegistry.recordClassNames.indexOf(COLOR_FIFO_MEMENTO).plus(1).also {
+          check(it > 0)
+        }
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
     val LEGACY_FIXTURES =
         listOf("1.7.13", "1.7.14").map { version ->

@@ -433,9 +433,9 @@ internal object DetachedStateAdapter {
 
   /**
    * Released 1.7.13/1.7.14 files can contain the old monotonically incremented FIFO delay count.
-   * Only eight ring entries were ever retained, so cap that historical count to the owned ring
-   * before applying or migrating it. Negative and otherwise malformed values are left untouched
-   * for current semantic validation to reject.
+   * Only the last physical ringful was retained, so rebase the head to the oldest retained entry
+   * and cap that historical count before applying or migrating it. Negative and otherwise
+   * malformed values are left untouched for current semantic validation to reject.
    */
   private fun normalizeLegacyFifoOccupancy(value: StateValue): StateValue =
       when (value) {
@@ -445,13 +445,7 @@ internal object DetachedStateAdapter {
                   .map { StateField(it.name, normalizeLegacyFifoOccupancy(it.value)) }
                   .toMutableList()
           if (value.typeId in LEGACY_FIFO_RECORD_IDS) {
-            val entries = fields.single { it.name == "delayEntry" }.value
-            val capacity = (entries as? Int32ArrayState)?.size
-            val sizeIndex = fields.indexOfFirst { it.name == "delaySize" }
-            val size = (fields[sizeIndex].value as Int32State).value
-            if (capacity != null && size > capacity) {
-              fields[sizeIndex] = StateField("delaySize", Int32State(capacity))
-            }
+            normalizeLegacyFifoRecord(fields)
           }
           RecordState(value.typeId, fields)
         }
@@ -464,6 +458,35 @@ internal object DetachedStateAdapter {
                 })
         else -> value
       }
+
+  private fun normalizeLegacyFifoRecord(fields: MutableList<StateField>) {
+    val entries = fields.valueOrNull("delayEntry") as? Int32ArrayState ?: return
+    val stamps = fields.valueOrNull("delayStamp") as? Int64ArrayState ?: return
+    val headIndex = fields.indexOfFirst { it.name == "delayHead" }
+    val sizeIndex = fields.indexOfFirst { it.name == "delaySize" }
+    if (headIndex < 0 || sizeIndex < 0) return
+    val head = (fields[headIndex].value as? Int32State)?.value ?: return
+    val size = (fields[sizeIndex].value as? Int32State)?.value ?: return
+    val capacity = entries.size
+    if (capacity <= 0 || stamps.size != capacity || head !in 0 until capacity || size <= capacity) {
+      return
+    }
+
+    // The old counter could grow past the physical ring while writes continued modulo capacity.
+    // Its last `capacity` logical entries therefore begin S-C slots after the original head.
+    // Compute in Long so an otherwise valid positive legacy counter cannot overflow the rebase.
+    val normalizedHead =
+        Math.floorMod(
+                head.toLong() + size.toLong() - capacity.toLong(),
+                capacity.toLong(),
+            )
+            .toInt()
+    fields[headIndex] = StateField("delayHead", Int32State(normalizedHead))
+    fields[sizeIndex] = StateField("delaySize", Int32State(capacity))
+  }
+
+  private fun List<StateField>.valueOrNull(name: String): StateValue? =
+      singleOrNull { it.name == name }?.value
 
   fun capture(session: Session): SessionState {
     val peripheral = serialPeripheral(session.serialEndpoint)

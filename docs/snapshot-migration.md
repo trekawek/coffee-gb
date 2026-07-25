@@ -39,10 +39,12 @@ their stable `StateDecodeReason`.
 
 The legacy route first uses the pinned descriptor manifest and JEP 290 bounds. It then checks the
 current target's record, nullability, and invariant array layout before mutation and validates the
-normalized candidate. Released 1.7.13/1.7.14 FIFO delay counts are capped to their eight retained
-ring entries during import; this converts their historical monotonic representation to the current
-portable occupancy invariant. Unexpected restore failures roll back the complete machine,
-including RTC and DMG FIFO runtime supplements.
+normalized candidate. Released 1.7.13/1.7.14 FIFO delay counts can exceed their physical ring
+capacity. For only the two audited pixel-FIFO records, a coherent overfull ring is reduced to its
+last eight entries and its head is advanced to the oldest retained entry; malformed shapes remain
+invalid. This converts the historical monotonic representation to the current portable occupancy
+invariant without changing logical order. Unexpected restore failures roll back the complete
+machine, including RTC and DMG FIFO runtime supplements.
 
 Load errors identify the selected format, target ROM SHA-256, optional slot hash, and target stable
 profile. A safely inspectable portable source includes the corresponding source values. Legacy
