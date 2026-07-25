@@ -6,8 +6,8 @@ import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.genie.AddPatches
-import eu.rekawek.coffeegb.core.genie.GameGeniePatch
-import eu.rekawek.coffeegb.core.genie.GameSharkPatch
+import eu.rekawek.coffeegb.core.genie.GameGenieCheat
+import eu.rekawek.coffeegb.core.genie.GameSharkCheat
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
@@ -807,8 +807,8 @@ class DetachedStateTest {
       session.eventBus.post(
           AddPatches(
               listOf(
-                  GameGeniePatch(0x42, 0x1234, -1),
-                  GameSharkPatch(8, 2, 0xa123, 0x99),
+                  GameGenieCheat(0x42, 0x1234, -1),
+                  GameSharkCheat(8, 2, 0xa123, 0x99),
               )))
       val captured = session.captureDetachedState()
       StateSemantics.validate(StateGraph.restore(captured.machine.record(GENIE_MEMENTO)))

@@ -12,6 +12,12 @@ not Java-serialization dependencies, and changing them would change canonical v1
 historical importer has a parallel, ID-aligned registry of the released `*Memento` compatibility
 records. Those data-only mirrors are never constructed or invoked by live owners.
 
+IDs 88 through 91 use non-serializable explicit-state leaf records. Their ID-aligned historical
+counterparts retain the released `GameGeniePatch`, `GameSharkPatch`, `Gpu.PendingPpuWrite`, and
+`PixelTransfer.DelayedWindowWrite` binary names only inside the local importer. Type names are not
+encoded by StateFile v1; the identical numeric IDs, field names, order, and primitive values keep
+canonical v1 bytes unchanged.
+
 Array and collection fields are deep-owned by the detached state adapter. The ownership contract,
 safe points, derived/excluded state, and subsystem grouping are in
 [state-machine-inventory.md](state-machine-inventory.md).
@@ -117,7 +123,7 @@ altering the 1.7.13/1.7.14 migration schema listed below.
 - `eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint$BarcodeBoyState`: state, handshakeByte, sendBitIndex, data, dataByte, recvBitIndex, clockDivider
 - `eu.rekawek.coffeegb.core.serial.FourPlayerAdapter$AdapterState`: sb, transferArmed, pendingBits, connected, consecutiveFf, replies, transmissionBuffer, packetByte, bit, ticksUntilBit, rate, size, phase, transmissionRequested, restartPingRequested
 - `eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble$CodeBreakerRumbleState`: motorOn
-- `eu.rekawek.coffeegb.core.genie.GameGeniePatch`: newData, address, oldData
-- `eu.rekawek.coffeegb.core.genie.GameSharkPatch`: mode, bank, address, data
-- `eu.rekawek.coffeegb.core.gpu.Gpu$PendingPpuWrite`: address, value, mask, remainingDots
-- `eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer$DelayedWindowWrite`: value, remainingDots
+- `eu.rekawek.coffeegb.core.genie.Genie$GameGeniePatchState`: newData, address, oldData
+- `eu.rekawek.coffeegb.core.genie.Genie$GameSharkPatchState`: mode, bank, address, data
+- `eu.rekawek.coffeegb.core.gpu.Gpu$PendingPpuWriteState`: address, value, mask, remainingDots
+- `eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer$DelayedWindowWriteState`: value, remainingDots

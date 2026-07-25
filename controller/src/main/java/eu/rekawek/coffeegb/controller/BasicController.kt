@@ -8,7 +8,7 @@ import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
-import eu.rekawek.coffeegb.core.genie.Patch
+import eu.rekawek.coffeegb.core.genie.CheatPatch
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
@@ -114,7 +114,7 @@ class BasicController private constructor(
 
   private var isRewinding = false
 
-  private val patches = mutableListOf<Patch>()
+  private val patches = mutableListOf<CheatPatch>()
 
   private var loadJob: LoadJob? = null
 

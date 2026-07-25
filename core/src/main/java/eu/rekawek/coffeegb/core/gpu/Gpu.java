@@ -150,7 +150,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * second clock domain through their own latches; CPU reads still see the bus value
      * immediately. This queue models that crossing without delaying the CPU or timer.
      */
-    private final List<PendingPpuWrite> pendingPpuWrites = new ArrayList<>();
+    private final List<PendingPpuWriteRuntime> pendingPpuWrites = new ArrayList<>();
 
     private final int[] cpuVisiblePpuRegisters =
             new int[LAST_STANDARD_REGISTER_ADDRESS - LCDC_ADDRESS + 1];
@@ -296,7 +296,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // immediate WX "just changed" pulse) while the synchronized value is pending.
         int immediateValue = (value & ~mask) | (current & mask);
         setByteImmediately(address, immediateValue);
-        pendingPpuWrites.add(new PendingPpuWrite(
+        pendingPpuWrites.add(new PendingPpuWriteRuntime(
                 address, value, mask, getPpuWriteDelayDots(address)));
     }
 
@@ -704,7 +704,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private void advancePendingPpuWrites() {
         for (int i = 0; i < pendingPpuWrites.size(); ) {
-            PendingPpuWrite pending = pendingPpuWrites.get(i);
+            PendingPpuWriteRuntime pending = pendingPpuWrites.get(i);
             if (pending.remainingDots() == 0) {
                 pendingPpuWrites.remove(i);
                 int current = getCurrentPpuWriteValue(pending.address());
@@ -715,7 +715,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                     cpuVisiblePpuRegisters[pending.address() - LCDC_ADDRESS] = -1;
                 }
             } else {
-                pendingPpuWrites.set(i, new PendingPpuWrite(
+                pendingPpuWrites.set(i, new PendingPpuWriteRuntime(
                         pending.address(), pending.value(), pending.mask(),
                         pending.remainingDots() - 1));
                 i++;
@@ -1966,7 +1966,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         ComponentState<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.captureState() : null;
         ComponentState<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.captureState() : null;
 
-        return new GpuState(videoRam0Memento, videoRam1Memento, display.captureState(), lcdc.captureState(), bgPalette.captureState(), oamPalette.captureState(), oamSearchPhase.captureState(), pixelTransferPhase.captureState(), pixelMachine.captureState(), r.captureState(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+        return new GpuState(videoRam0Memento, videoRam1Memento, display.captureState(), lcdc.captureState(), bgPalette.captureState(), oamPalette.captureState(), oamSearchPhase.captureState(), pixelTransferPhase.captureState(), pixelMachine.captureState(), r.captureState(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, capturePendingPpuWrites(), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
@@ -2008,8 +2008,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 lateDoubleSpeedLineZeroWindowEnable,
                 lastCpuVramWriteTick,
                 mode,
-                new ArrayList<>(pendingPpuWrites),
+                capturePendingPpuWrites(),
                 capture.ints(cpuVisiblePpuRegisters));
+    }
+
+    private List<PendingPpuWriteState> capturePendingPpuWrites() {
+        return pendingPpuWrites.stream().map(PendingPpuWriteRuntime::captureState).toList();
     }
 
     @Override
@@ -2076,7 +2080,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.mode = mem.mode;
         pendingPpuWrites.clear();
         if (mem.pendingPpuWrites != null) {
-            pendingPpuWrites.addAll(mem.pendingPpuWrites);
+            mem.pendingPpuWrites.stream()
+                    .map(PendingPpuWriteRuntime::restoreState)
+                    .forEach(pendingPpuWrites::add);
         }
         Arrays.fill(cpuVisiblePpuRegisters, -1);
         if (mem.cpuVisiblePpuRegisters != null) {
@@ -2113,7 +2119,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                               boolean wyWrittenThisLine,
                               boolean lateDoubleSpeedLineZeroWindowEnable,
                               int lastCpuVramWriteTick, Mode mode,
-                              List<PendingPpuWrite> pendingPpuWrites,
+                              List<PendingPpuWriteState> pendingPpuWrites,
                               int[] cpuVisiblePpuRegisters) implements ComponentState<Gpu> {
     }
 
@@ -2143,7 +2149,24 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                               int[] cpuVisiblePpuRegisters) implements Memento<Gpu> {
     }
 
-    /** Importer-compatible immutable value embedded by released GPU snapshot records. */
+    private record PendingPpuWriteRuntime(int address, int value, int mask,
+                                          int remainingDots) {
+
+        private PendingPpuWriteState captureState() {
+            return new PendingPpuWriteState(address, value, mask, remainingDots);
+        }
+
+        private static PendingPpuWriteRuntime restoreState(PendingPpuWriteState state) {
+            return new PendingPpuWriteRuntime(
+                    state.address(), state.value(), state.mask(), state.remainingDots());
+        }
+    }
+
+    private record PendingPpuWriteState(int address, int value, int mask,
+                                        int remainingDots) {
+    }
+
+    /** Importer-only compatibility leaf record for released local snapshots. */
     private record PendingPpuWrite(int address, int value, int mask,
                                    int remainingDots) implements Serializable {
     }

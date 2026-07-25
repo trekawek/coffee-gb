@@ -152,7 +152,10 @@ loaded or instantiated.
 
 The record ID/name/field registry is the exact ordered 91-record appendix in
 [state-memento-schema.md](state-memento-schema.md), where each bullet's one-based position is its
-ID. The v1 enum registry is:
+ID. IDs 88 through 91 deliberately name non-serializable normal-state leaves; the local legacy
+importer has ID-aligned historical descriptor classes with the same field schemas. StateFile does
+not encode either JVM class name, so this runtime/compatibility separation does not change v1
+bytes. The v1 enum registry is:
 
 | Type ID | Enum | Value IDs in order starting at 1 |
 |---:|---|---|

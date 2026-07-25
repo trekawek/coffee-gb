@@ -36,13 +36,23 @@ non-`CGBS` state prefix—including `AC ED 00 05` and `CGBN`—as unsupported pr
 
 Exact released binary names are necessary for Java stream resolution. Eighty-seven data-only
 nested `*Memento` records therefore remain beside their owners, marked importer-only; live owners
-never construct, return, or restore them. Four immutable released leaf types are shared by the
-normal and compatibility registries: `GameGeniePatch`, `GameSharkPatch`,
-`Gpu.PendingPpuWrite`, and `PixelTransfer.DelayedWindowWrite`. The `Memento` marker and the
-serialization marker on those leaves exist only to preserve their pinned descriptors. The
-architecture test strips the marked compatibility declarations and proves that the remaining live
-owner source has no `Memento<T>` dependency. It also pins this exact native-serialization
-allowlist, the 91 normal record IDs, the 91 compatibility IDs, and the network prohibition.
+never construct, return, or restore them. The four released serializable leaf descriptors also
+remain importer-only under their historical names: `GameGeniePatch`, `GameSharkPatch`,
+`Gpu.PendingPpuWrite`, and `PixelTransfer.DelayedWindowWrite`.
+
+Normal execution uses a disjoint set of non-serializable values. Active cheats are
+`GameGenieCheat`/`GameSharkCheat`; GPU and window queues use private runtime values; capture maps
+those values to `Genie.GameGeniePatchState`, `Genie.GameSharkPatchState`,
+`Gpu.PendingPpuWriteState`, and `PixelTransfer.DelayedWindowWriteState`. Legacy import instead maps
+the four historical descriptors to those same stable numeric record IDs before normal detached
+validation and apply. No normal capture, restore, rewind, disk, or network path constructs or
+carries the compatibility leaves.
+
+The architecture test strips the marked compatibility declarations and proves that the remaining
+live owner source has no `Memento<T>` or compatibility-leaf dependency. It also proves that every
+normal record is non-serializable, the normal and compatibility registries are disjoint, and the
+91 normal IDs, 91 compatibility IDs, exact native-serialization allowlist, and network prohibition
+remain pinned.
 
 ## Supported migration inputs and limits
 
