@@ -132,6 +132,32 @@ public class Commands {
         return command instanceof PctTrnCmd ? validatePictureData(data) : null;
     }
 
+    /**
+     * Returns whether a delayed ICD2 capture belongs to the platform-neutral command set.
+     *
+     * <p>{@link SoundTrnCmd} and {@link DataTrnCmd} retain data-only compatibility classes for
+     * historical records, but executing either requires unsupported SNES-side services. They are
+     * therefore never valid as live or restored delayed captures.
+     */
+    public static boolean isPracticalTransferCommand(TransferCommand command) {
+        return command instanceof PalTrnCmd
+                || command instanceof ChrTrnCmd
+                || command instanceof PctTrnCmd
+                || command instanceof AttrTrnCmd;
+    }
+
+    /** Validates the state that exists between an accepted packet and its third VRAM frame. */
+    public static String validatePendingTransferState(TransferCommand command) {
+        if (!isPracticalTransferCommand(command)) {
+            return "delayed transfer command 0x" + Integer.toHexString(command.getCode())
+                    + " is not supported by the practical capture path";
+        }
+        if (command.dataTransfer != null) {
+            return "delayed transfer already contains a committed VRAM payload";
+        }
+        return null;
+    }
+
     private static String validatePictureData(int[] data) {
         // Coffee GB deliberately retains its established full three-bit palette addressing and
         // Pocket Kanjirou compatibility: tile numbers above 0xff (notably 0x2ff) are transparent
@@ -479,7 +505,7 @@ public class Commands {
                 this.dataTransfer = null;
                 return;
             }
-            String violation = validateTransferData(this, dataTransfer);
+            String violation = validateTransferCommitData(this, dataTransfer);
             if (violation != null) {
                 throw new IllegalArgumentException(violation);
             }

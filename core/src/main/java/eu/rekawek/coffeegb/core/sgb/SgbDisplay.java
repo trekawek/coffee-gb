@@ -372,12 +372,21 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         if (this.attributeFiles.length != mem.attributeFiles.length) {
             throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
+        int[][] restoredPalettes = copyRows(mem.palettes, 4, false);
+        int[][] restoredSystemPalettes = copyRows(mem.systemPalettes, 4, true);
+        int[][] restoredAttributeFiles = copyRows(
+                mem.attributeFiles, DMG_TILES_WIDTH * DMG_TILES_HEIGHT, false);
+
+        // Prepare and own every row before replacing live display state. Released snapshots can
+        // contain unavailable PAL_TRN rows; their deterministic compatibility value is all zero.
         System.arraycopy(mem.sgbBuffer, 0, this.sgbBuffer, 0, this.sgbBuffer.length);
         System.arraycopy(mem.sgbMask, 0, this.sgbMask, 0, this.sgbMask.length);
-        replaceRows(mem.palettes, this.palettes, 4);
-        replaceRows(mem.systemPalettes, this.systemPalettes, 4);
+        System.arraycopy(restoredPalettes, 0, this.palettes, 0, this.palettes.length);
+        System.arraycopy(restoredSystemPalettes, 0, this.systemPalettes, 0,
+                this.systemPalettes.length);
         System.arraycopy(mem.paletteMap, 0, this.paletteMap, 0, this.paletteMap.length);
-        replaceRows(mem.attributeFiles, this.attributeFiles, DMG_TILES_WIDTH * DMG_TILES_HEIGHT);
+        System.arraycopy(restoredAttributeFiles, 0, this.attributeFiles, 0,
+                this.attributeFiles.length);
         this.screenMask = mem.screenMask;
         this.borderFade = mem.borderFade & STATE_BORDER_FADE_MASK;
         this.palettePriority = (mem.borderFade & STATE_PALETTE_PRIORITY) != 0;
@@ -391,13 +400,15 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         return borderFade | (palettePriority ? STATE_PALETTE_PRIORITY : 0);
     }
 
-    private static void replaceRows(int[][] src, int[][] dst, int expectedRowLength) {
-        if (src.length != dst.length) {
-            throw new IllegalArgumentException("Array length doesn't match");
-        }
+    private static int[][] copyRows(int[][] src, int expectedRowLength,
+                                    boolean normalizeNullRows) {
+        int[][] result = new int[src.length][];
         for (int i = 0; i < src.length; i++) {
             if (src[i] == null) {
-                dst[i] = null;
+                if (!normalizeNullRows) {
+                    throw new IllegalArgumentException("Required array row is absent at i=" + i);
+                }
+                result[i] = new int[expectedRowLength];
                 continue;
             }
             if (src[i].length != expectedRowLength) {
@@ -405,8 +416,9 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
             }
             // PAL_SET makes active palette rows aliases of system palette rows. Replace
             // each row so restore cannot write through aliases left by the abandoned timeline.
-            dst[i] = src[i].clone();
+            result[i] = src[i].clone();
         }
+        return result;
     }
 
     private static int[][] clone2(int[][] src) {

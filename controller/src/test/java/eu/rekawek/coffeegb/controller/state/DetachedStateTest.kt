@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.GameGenieCheat
 import eu.rekawek.coffeegb.core.genie.GameSharkCheat
+import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
@@ -15,6 +16,10 @@ import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.core.sgb.Background
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay
+import eu.rekawek.coffeegb.core.sgb.SuperGameboy
+import eu.rekawek.coffeegb.core.state.ComponentState
 import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
@@ -577,6 +582,197 @@ class DetachedStateTest {
   }
 
   @Test
+  fun restoredSgbTransferAndPictureInvariantsRejectBeforeMutation() {
+    session(configuration().setGameboyType(GameboyType.SGB)).use { session ->
+      val before = session.captureDetachedState()
+      val validPayload = Int32ArrayState(IntArray(0x1000))
+      val invalidPicturePayload =
+          Int32ArrayState(IntArray(0x1000).also { it[1] = 0x20 }) // PCT priority bit 13.
+      val waitingWithPayload = transferCommand(0x14).replaceField("dataTransfer", validPayload)
+      val pictureWithoutPayload = transferCommand(0x14)
+      val invalidPicture =
+          transferCommand(0x14).replaceField("dataTransfer", invalidPicturePayload)
+
+      val cases =
+          listOf(
+              "SOU_TRN delayed capture" to waitingTransfer(before, transferCommand(0x09)),
+              "DATA_TRN delayed capture" to waitingTransfer(before, transferCommand(0x10)),
+              "committed delayed capture" to waitingTransfer(before, waitingWithPayload),
+              "picture without payload" to pendingPicture(before, pictureWithoutPayload, 105),
+              "picture with unsupported priority" to pendingPicture(before, invalidPicture, 105),
+              "animation without picture" to
+                  before.withMachineRoot(
+                      before.machine.root.replaceRecordField(
+                          BACKGROUND_MEMENTO,
+                          "borderAnimation",
+                          Int32State(1),
+                      )),
+          )
+
+      cases.forEach { (label, candidate) ->
+        assertRejectedBeforeMutation(session, before, candidate, label)
+        assertStateFileRejectedBeforeMutation(session, before, candidate, label)
+      }
+
+      // Direct ComponentState restore has the same allowlist even without the adapter preflight.
+      listOf(0x09, 0x10).forEach { code ->
+        val invalidRecord =
+            before.machine
+                .record(SUPER_GAMEBOY_MEMENTO)
+                .replaceField("waitingTransferCommandMemento", transferCommand(code))
+                .replaceField("transferCountdown", Int32State(3))
+        @Suppress("UNCHECKED_CAST")
+        val invalidState = StateGraph.restore(invalidRecord) as ComponentState<SuperGameboy>
+        EventBusImpl(null, null, false).use { bus ->
+          val component = SuperGameboy(bus)
+          val componentBefore = StateGraph.capture(component.captureState())
+          assertFailsWith<IllegalArgumentException>("direct transfer 0x${code.toString(16)}") {
+            component.restoreState(invalidState)
+          }
+          assertEquals(componentBefore, StateGraph.capture(component.captureState()))
+        }
+      }
+
+      // Background validates its complete picture before copying even the tile payload.
+      listOf(pictureWithoutPayload, invalidPicture).forEachIndexed { index, picture ->
+        val tiles = before.machine.record(BACKGROUND_MEMENTO).intArray("tiles").also { it[0] = 0x55 }
+        val invalidRecord =
+            before.machine
+                .record(BACKGROUND_MEMENTO)
+                .replaceField("tiles", Int32ArrayState(tiles))
+                .replaceField("pendingPictureMemento", picture)
+                .replaceField("borderAnimation", Int32State(105))
+        @Suppress("UNCHECKED_CAST")
+        val invalidState = StateGraph.restore(invalidRecord) as ComponentState<Background>
+        EventBusImpl(null, null, false).use { bus ->
+          val component = Background(bus)
+          val componentBefore = StateGraph.capture(component.captureState())
+          assertFailsWith<IllegalArgumentException>("direct picture case $index") {
+            component.restoreState(invalidState)
+          }
+          assertEquals(componentBefore, StateGraph.capture(component.captureState()))
+        }
+      }
+    }
+  }
+
+  @Test
+  fun validPendingPictureStateFileResumesAtTheBorderSwap() {
+    val eventBus = EventBusImpl(null, null, false)
+    val borders = mutableListOf<Pair<IntArray, IntArray>>()
+    eventBus.register(
+        { event -> borders += event.buffer().clone() to event.mask().clone() },
+        Background.SgbBackgroundReadyEvent::class.java,
+    )
+    val configuration =
+        configuration().setGameboyType(GameboyType.SGB).setDisplaySgbBorder(true)
+    Session(configuration, eventBus, null).use { session ->
+      val original = session.captureDetachedState()
+      val pictureData = IntArray(0x1000)
+      pictureData[0x782] = 0xff
+      pictureData[0x783] = 0x7f
+      val picture =
+          transferCommand(0x14).replaceField("dataTransfer", Int32ArrayState(pictureData))
+      val tiles = original.machine.record(BACKGROUND_MEMENTO).intArray("tiles")
+      tiles[0] = 0x80
+      val pending = pendingPicture(original, picture, 33)
+      val candidate =
+          pending.withMachineRoot(
+              pending.machine.root.replaceRecordField(
+                  BACKGROUND_MEMENTO,
+                  "tiles",
+                  Int32ArrayState(tiles),
+              ))
+      val file = StateCodec.capture(session)
+      val bytes = StateCodec.encode(StateFile(file.identities, SessionStateRoot(candidate)))
+
+      val stages = mutableListOf<ApplyStage>()
+      StateCodec.decodeAndApply(bytes, session) { stages += it }
+      assertEquals(
+          listOf(ApplyStage.BEFORE_LIVE_MUTATION, ApplyStage.AFTER_MACHINE_MUTATION),
+          stages,
+      )
+      eventBus.post(Display.DmgFrameReadyEvent(IntArray(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT)))
+      val expectedBorder = borders.single().let { it.first.clone() to it.second.clone() }
+      val expectedState = session.captureDetachedState()
+      assertEquals(0x7fff, expectedBorder.first[0])
+      assertEquals(1, expectedBorder.second[0])
+
+      repeat(5) {
+        eventBus.post(Display.DmgFrameReadyEvent(IntArray(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT)))
+      }
+      borders.clear()
+      StateCodec.decodeAndApply(bytes, session)
+      eventBus.post(Display.DmgFrameReadyEvent(IntArray(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT)))
+
+      assertContentEquals(expectedBorder.first, borders.single().first)
+      assertContentEquals(expectedBorder.second, borders.single().second)
+      assertEquals(expectedState, session.captureDetachedState())
+    }
+  }
+
+  @Test
+  fun legacyNullSystemPaletteRowNormalizesBeforePalSetAndRender() {
+    val eventBus = EventBusImpl(null, null, false)
+    val frames = mutableListOf<IntArray>()
+    eventBus.register(
+        { event -> frames += event.buffer().clone() },
+        SgbDisplay.SgbFrameReadyEvent::class.java,
+    )
+    val configuration =
+        configuration().setGameboyType(GameboyType.SGB).setDisplaySgbBorder(false)
+    Session(configuration, eventBus, null).use { session ->
+      val before = session.captureDetachedState()
+      val display = before.machine.record(SGB_DISPLAY_MEMENTO)
+      val systemPalettes = display.field("systemPalettes") as ObjectArrayState
+      val nullRow =
+          ObjectArrayState(
+              systemPalettes.values.mapIndexed { index, value ->
+                if (index == 0) NullState else value
+              })
+      val candidate =
+          before.withMachineRoot(
+              before.machine.root.replaceRecordField(
+                  SGB_DISPLAY_MEMENTO,
+                  "systemPalettes",
+                  nullRow,
+              ))
+      val file = StateCodec.capture(session)
+      val bytes = StateCodec.encode(StateFile(file.identities, SessionStateRoot(candidate)))
+      val stages = mutableListOf<ApplyStage>()
+
+      StateCodec.decodeAndApply(bytes, session) { stages += it }
+      assertEquals(
+          listOf(ApplyStage.BEFORE_LIVE_MUTATION, ApplyStage.AFTER_MACHINE_MUTATION),
+          stages,
+      )
+      val normalized =
+          session.captureDetachedState().machine.record(SGB_DISPLAY_MEMENTO)
+              .field("systemPalettes") as ObjectArrayState
+      assertContentEquals(IntArray(4), (normalized.values[0] as Int32ArrayState).copyValue())
+
+      val dmg = IntArray(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT) { 1 }
+      sendSgbCommand(session, 0x0a)
+      eventBus.post(Display.DmgFrameReadyEvent(dmg))
+      val zeroPaletteFrame = frames.last().clone()
+
+      sendSgbCommand(session, 0x00, 0, 0, 0x34, 0x12)
+      eventBus.post(Display.DmgFrameReadyEvent(dmg))
+      val commandPaletteFrame = frames.last().clone()
+      assertNotEquals(zeroPaletteFrame[0], commandPaletteFrame[0])
+
+      // PAL_SET must read the owned normalized system row, not an active-row alias.
+      sendSgbCommand(session, 0x0a)
+      eventBus.post(Display.DmgFrameReadyEvent(dmg))
+      assertContentEquals(zeroPaletteFrame, frames.last())
+      val recaptured =
+          session.captureDetachedState().machine.record(SGB_DISPLAY_MEMENTO)
+              .field("systemPalettes") as ObjectArrayState
+      assertContentEquals(IntArray(4), (recaptured.values[0] as Int32ArrayState).copyValue())
+    }
+  }
+
+  @Test
   fun auditedNullableRecordArrayEnumCollectionPayloadAndRowCategoriesRemainCompatible() {
     session().use { session ->
       repeat(2_000) { session.gameboy.tick() }
@@ -631,7 +827,7 @@ class DetachedStateTest {
     StateSemantics.validate(StateGraph.restore(withWaiting))
 
     val background = session().use { it.captureDetachedState().machine.record(BACKGROUND_MEMENTO) }
-    val withPicture = background.replaceField("pendingPictureMemento", transfer)
+    val withPicture = background.replaceField("pendingPictureMemento", transferWithPayload)
     StateGraph.validateCompatible(withPicture, background, "optional-pending-picture")
     StateSemantics.validate(StateGraph.restore(withPicture))
 
@@ -1070,6 +1266,24 @@ class DetachedStateTest {
     assertEquals(before, session.captureDetachedState(), "$label changed the session")
   }
 
+  private fun assertStateFileRejectedBeforeMutation(
+      session: Session,
+      before: SessionState,
+      invalid: SessionState,
+      label: String,
+  ) {
+    val identities = StateCodec.capture(session).identities
+    val bytes = StateCodec.encode(StateFile(identities, SessionStateRoot(invalid)))
+    val stages = mutableListOf<ApplyStage>()
+    val failure =
+        assertFailsWith<StateDecodeException>("$label StateFile") {
+          StateCodec.decodeAndApply(bytes, session) { stages += it }
+        }
+    assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, failure.reason, label)
+    assertTrue(stages.isEmpty(), "$label StateFile reached live mutation")
+    assertEquals(before, session.captureDetachedState(), "$label StateFile changed the session")
+  }
+
   private fun assertAcceptedAtMutationBoundary(
       session: Session,
       state: SessionState,
@@ -1137,6 +1351,56 @@ class DetachedStateTest {
               StateField("dataTransfer", NullState),
           ),
       )
+
+  private fun waitingTransfer(state: SessionState, transfer: RecordState): SessionState =
+      state.withMachineRoot(
+          state.machine.root
+              .replaceRecordField(
+                  SUPER_GAMEBOY_MEMENTO,
+                  "waitingTransferCommandMemento",
+                  transfer,
+              )
+              .replaceRecordField(
+                  SUPER_GAMEBOY_MEMENTO,
+                  "transferCountdown",
+                  Int32State(3),
+              ))
+
+  private fun pendingPicture(
+      state: SessionState,
+      transfer: RecordState,
+      animation: Int,
+  ): SessionState =
+      state.withMachineRoot(
+          state.machine.root
+              .replaceRecordField(
+                  BACKGROUND_MEMENTO,
+                  "pendingPictureMemento",
+                  transfer,
+              )
+              .replaceRecordField(
+                  BACKGROUND_MEMENTO,
+                  "borderAnimation",
+                  Int32State(animation),
+              ))
+
+  private fun sendSgbCommand(session: Session, code: Int, vararg payload: Int) {
+    require(code in 0..0x1f && payload.size <= 15 && payload.all { it in 0..0xff })
+    val packet = IntArray(16)
+    packet[0] = code shl 3 or 1
+    payload.copyInto(packet, destinationOffset = 1)
+    val joyp = session.gameboy.addressSpace
+    joyp.setByte(0xff00, 0x30)
+    joyp.setByte(0xff00, 0x00)
+    joyp.setByte(0xff00, 0x30)
+    repeat(128) { bit ->
+      val value = packet[bit / 8] ushr (bit and 7) and 1
+      joyp.setByte(0xff00, if (value == 0) 0x20 else 0x10)
+      joyp.setByte(0xff00, 0x30)
+    }
+    joyp.setByte(0xff00, 0x20)
+    joyp.setByte(0xff00, 0x30)
+  }
 
   private fun RecordState.intArray(name: String): IntArray = arrayState(name).copyValue()
 

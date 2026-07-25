@@ -173,6 +173,7 @@ public class CommandsValidationTest {
         assertNull(Commands.validateTransferCommitData(picture, validPicture));
         setLittleEndian16(validPicture, 0, 4 << 10 | 1 << 13);
         assertNotNull(Commands.validateTransferCommitData(picture, validPicture));
+        assertThrows(IllegalArgumentException.class, () -> picture.setDataTransfer(validPicture));
     }
 
     private static void setLittleEndian16(int[] data, int offset, int value) {

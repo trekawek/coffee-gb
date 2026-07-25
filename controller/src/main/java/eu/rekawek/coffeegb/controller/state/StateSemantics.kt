@@ -279,7 +279,7 @@ internal object StateSemantics {
             }
           })
       put("eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyState",
-          constrained("Multipacket assembly indices and delayed transfer countdown are bounded.") {
+          constrained("Multipacket assembly indices and practical delayed-transfer state are coherent.") {
             val packets = it.objectArray("multipacket")
             packets.forEachIndexed { index, row ->
               it.require(row is IntArray && row.size == 16,
@@ -307,6 +307,20 @@ internal object StateSemantics {
             val countdown = it.int("transferCountdown")
             it.require(if (waiting == null) countdown == 0 else countdown in 1..3,
                 "has a delayed transfer/countdown presence mismatch")
+            if (waiting != null) {
+              val transfer = RecordFields(waiting, "superGameboy.waitingTransferCommandMemento")
+              val parsed = Commands.parse(transfer.intArray("packet"))
+              val command = parsed.command() as? Commands.TransferCommand
+              it.require(
+                  parsed.disposition() == Commands.Disposition.PRACTICAL &&
+                      command != null && Commands.isPracticalTransferCommand(command),
+                  "has an unsupported delayed transfer command",
+              )
+              it.require(
+                  transfer.value("dataTransfer") == null,
+                  "has a delayed transfer with an already committed payload",
+              )
+            }
           })
       put("eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayState",
           constrained("SGB palette rows, palette IDs, attribute rows, and fade phase are bounded.") {
@@ -320,13 +334,25 @@ internal object StateSemantics {
                 "has invalid packed border fade/palette-priority state $packedFade")
           })
       put("eu.rekawek.coffeegb.core.sgb.Background\$BackgroundState",
-          constrained("The 105-frame border animation and optional picture-command type are validated.") {
+          constrained("The border animation owns one fully committed, render-safe PCT_TRN picture.") {
             it.range("borderAnimation", 0, 105)
-            it.value("pendingPictureMemento")?.let { pending ->
+            val animation = it.int("borderAnimation")
+            val pending = it.value("pendingPictureMemento")
+            it.require(pending != null || animation == 0,
+                "has an active border animation without a pending picture")
+            pending?.let { pendingValue ->
               it.recordType("pendingPictureMemento", TRANSFER_COMMAND_STATE)
-              val transfer = RecordFields(pending, "background.pendingPictureMemento")
-              it.require(transfer.intArray("packet")[0] / 8 == 0x14,
+              val transfer = RecordFields(pendingValue, "background.pendingPictureMemento")
+              val parsed = Commands.parse(transfer.intArray("packet"))
+              val picture = parsed.command() as? Commands.PctTrnCmd
+              it.require(picture != null && parsed.disposition() == Commands.Disposition.PRACTICAL,
                   "pending picture is not a PCT_TRN command")
+              val data = transfer.value("dataTransfer") as? IntArray
+              it.require(data != null, "pending picture has no committed VRAM payload")
+              if (picture != null && data != null) {
+                val violation = Commands.validateTransferCommitData(picture, data)
+                it.require(violation == null, "has invalid pending picture payload: $violation")
+              }
             }
           })
       put("eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState",

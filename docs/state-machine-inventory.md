@@ -77,7 +77,7 @@ volatiles, monitor state) remain controller services and are not portable machin
 | MBC3 RTC | Six-bit seconds/minutes, five-bit hours, day/control, subsecond ticks, latch snapshot, halt/overflow; separately tagged primary and Datel-slot pause flag/reference in `CartridgeRtcRuntimeState` | Injected `TimeSource` is never captured; both physical cartridge constructors receive the configured service |
 | HuC3 RTC/IR | Minute/day/alarm registers, command index/flags/read latch, primitive last-second reference and RAM | Injected `TimeSource` is never captured |
 | TAMA5/TAMA6 | Command registers, RAM, four RTC pages, disable/alarm state and primitive last-second reference | Injected `TimeSource` is never captured |
-| SGB | Command packet transfer, multiplayer joypad state, character/background/attribute/palette/border buffers, mask and fade/animation; palette-map and attribute IDs are 0..3 | SGB event buses and render listeners are services; only historical `systemPalettes` rows are nullable |
+| SGB | Command packet transfer, multiplayer joypad state, character/background/attribute/palette/border buffers, mask and fade/animation; palette-map and attribute IDs are 0..3 | SGB event buses and render listeners are services; historical null `systemPalettes` rows normalize to new four-zero rows, while restored delayed captures admit only the four practical transfers and a pending picture owns a validated committed PCT payload |
 | Cheats/rumble | Non-null registered Genie/Shark runtime patch lists/maps are converted to disjoint non-serializable explicit-state leaves; CodeBreaker/MBC5/Makon motor state | Event-bus rumble consumers and the four historical serializable compatibility leaves are excluded from normal state |
 | Session | Detached machine, serial endpoint tag/state/runtime and canonical unique held-button enum list (a list on input so malformed duplicates can be rejected) | ROM/configuration, event bus, console and endpoint callback objects are services |
 | Linked session | Authoritative frame, local player, explicit normal/four-player topology tag, exactly four canonical player slots, session states and held input; four-player copies must describe one coherent shared adapter | Network connections, peers, event queues and worker thread are controller services; apply requires the same already-configured active-session shape and rebases history at the safe point |
@@ -160,7 +160,7 @@ dimensions, required-value nulls, type mismatches, invalid enum ordinals, oversi
 graphs/primitive arrays/strings, invalid semantic indices/counts/phases, RTC-location mismatches,
 malformed held input, and linked frame/player/topology/adapter mismatches are rejected before live
 mutation. Optional SGB operation records, optional barcode/transfer payloads, historical nullable
-`systemPalettes` rows, and the nullable legacy display record are explicit owner/field exceptions
+`systemPalettes` rows (normalized to owned four-zero rows on restore), and the nullable legacy display record are explicit owner/field exceptions
 rather than type-category exceptions. BasicRom battery and Datel slot presence are target identity
 and cannot cross null/non-null configurations. A serial endpoint outside the enumerated endpoint
 families throws
