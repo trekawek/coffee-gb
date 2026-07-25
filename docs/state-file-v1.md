@@ -238,7 +238,8 @@ Session, or LinkedController. It performs, in order:
 1. bounded envelope/checksum/decompression/section parsing;
 2. detached structural and runtime validation;
 3. primary/slot ROM and canonical profile plus full behavior-flag comparison for every active machine;
-4. Phase-1 target-aware graph, nullability, semantic, mapper, endpoint, and hardware validation;
+4. Phase-1 target-aware graph, nullability, mapper, endpoint, hardware, and semantic validation,
+   including Sound capacity and MBC3 subsecond phase derived from the exact target `ClockSpec`;
 5. the Phase-1 safe-point prepare-and-commit transaction.
 
 An incompatible canonical ID is reported as typed `HARDWARE_PROFILE_MISMATCH` before any target

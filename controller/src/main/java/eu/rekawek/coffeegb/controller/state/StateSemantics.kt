@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
+import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.sgb.Commands
 import java.lang.reflect.Array as ReflectArray
 import java.util.IdentityHashMap
@@ -12,7 +13,9 @@ import java.util.IdentityHashMap
  * dimensions. This second layer audits relationships inside each admitted record before any live
  * subsystem is touched. Every registered record has an explicit policy: either executable
  * constraints or a reviewable explanation of why its captured values need no relationship check.
- * Phase-2 decoders can call the same validator after graph reconstruction.
+ * Phase-2 decoders can call the profile-independent validator after graph reconstruction. Apply
+ * preparation additionally calls [validateForClock] so dimensions and phases derived from the
+ * target session clock are rejected before any live component is touched.
  */
 internal object StateSemantics {
 
@@ -22,7 +25,13 @@ internal object StateSemantics {
 
   fun validate(value: Any?) {
     verifyPolicyInventory()
-    visit(value, "state", IdentityHashMap())
+    visit(value, "state", IdentityHashMap(), null)
+  }
+
+  /** Completes semantic preflight with bounds owned by the exact target session clock. */
+  fun validateForClock(value: Any?, clockSpec: ClockSpec) {
+    verifyPolicyInventory()
+    visit(value, "state", IdentityHashMap(), clockSpec)
   }
 
   fun validateBarcodeRuntime(state: BarcodeBoyRuntimeState) {
@@ -41,27 +50,35 @@ internal object StateSemantics {
     }
   }
 
-  private fun visit(value: Any?, path: String, visited: IdentityHashMap<Any, Boolean>) {
+  private fun visit(
+      value: Any?,
+      path: String,
+      visited: IdentityHashMap<Any, Boolean>,
+      clockSpec: ClockSpec?,
+  ) {
     if (value == null || value.javaClass.isPrimitive || value is String || value is Enum<*>) return
     if (visited.put(value, true) != null) return
     when {
       value.javaClass.isArray -> {
         if (!value.javaClass.componentType.isPrimitive) {
           repeat(ReflectArray.getLength(value)) { index ->
-            visit(ReflectArray.get(value, index), "$path[$index]", visited)
+            visit(ReflectArray.get(value, index), "$path[$index]", visited, clockSpec)
           }
         }
       }
-      value is Iterable<*> -> value.forEachIndexed { index, item -> visit(item, "$path[$index]", visited) }
-      value is Map<*, *> -> value.forEach { (key, item) -> visit(item, "$path[$key]", visited) }
+      value is Iterable<*> ->
+          value.forEachIndexed { index, item -> visit(item, "$path[$index]", visited, clockSpec) }
+      value is Map<*, *> ->
+          value.forEach { (key, item) -> visit(item, "$path[$key]", visited, clockSpec) }
       value.javaClass.isRecord -> {
         val type = value.javaClass.name
         val policy = policies[type]
             ?: throw StateApplyException("No semantic state policy for $type")
         val fields = RecordFields(value, path)
         policy.validate(fields)
+        if (clockSpec != null) policy.validateForClock?.invoke(fields, clockSpec)
         fields.components.forEach { component ->
-          visit(fields.value(component.name), "$path.${component.name}", visited)
+          visit(fields.value(component.name), "$path.${component.name}", visited, clockSpec)
         }
       }
     }
@@ -120,6 +137,11 @@ internal object StateSemantics {
       require(value >= 0, "has negative $name=$value")
     }
 
+    fun nonNegativeLong(name: String) {
+      val value = long(name)
+      require(value >= 0, "has negative $name=$value")
+    }
+
     fun intValues(name: String, minimum: Int, maximum: Int) {
       intArray(name).forEachIndexed { index, value ->
         require(value in minimum..maximum,
@@ -144,12 +166,19 @@ internal object StateSemantics {
   private data class Policy(
       val rationale: String,
       val validate: (RecordFields) -> Unit,
+      val validateForClock: ((RecordFields, ClockSpec) -> Unit)? = null,
   )
 
   private fun constrained(rationale: String, validate: (RecordFields) -> Unit) =
       Policy(rationale, validate)
 
-  private fun pass(rationale: String) = Policy(rationale) {}
+  private fun clockConstrained(
+      rationale: String,
+      validate: (RecordFields) -> Unit,
+      validateForClock: (RecordFields, ClockSpec) -> Unit,
+  ) = Policy(rationale, validate, validateForClock)
+
+  private fun pass(rationale: String) = Policy(rationale, {})
 
   private val policies: Map<String, Policy> by lazy {
     buildMap {
@@ -198,20 +227,33 @@ internal object StateSemantics {
             it.range("length", 0, 256)
           })
       put("eu.rekawek.coffeegb.core.sound.Sound\$SoundState",
-          constrained("APU collection sizes, sample write index, and sequencer phases are validated together.") {
-            it.require(it.objectArray("allModeMementos").size == 4, "must contain four sound modes")
-            it.require(it.intArray("channels").size == 4, "must contain four channel outputs")
-            it.require((it.value("overriddenEnabled") as BooleanArray).size == 4,
-                "must contain four channel overrides")
-            val index = it.int("i")
-            val samples = it.intArray("buffer")
-            it.require(index in 0 until SOUND_BUFFER_CAPACITY && index % 2 == 0,
-                "has invalid stereo sample index $index")
-            it.require(samples.size == index || samples.size == SOUND_BUFFER_CAPACITY,
-                "buffer length ${samples.size} does not match index $index or the legacy capacity")
-            it.range("pendingFrameSequencerStep", -1, 7)
-            it.range("frameSequencerClockPhase", 0, 3)
-          })
+          clockConstrained(
+              "APU collection sizes and target-clock sample capacity, write index, and sequencer phases are validated together.",
+              {
+                it.require(it.objectArray("allModeMementos").size == 4, "must contain four sound modes")
+                it.require(it.intArray("channels").size == 4, "must contain four channel outputs")
+                it.require((it.value("overriddenEnabled") as BooleanArray).size == 4,
+                    "must contain four channel overrides")
+                val index = it.int("i")
+                val samples = it.intArray("buffer")
+                it.require(index >= 0 && index % 2 == 0,
+                    "has invalid stereo sample index $index")
+                it.require(
+                    samples.size == index || (samples.size > index && samples.size % 2 == 0),
+                    "buffer length ${samples.size} is neither the pending prefix nor a bounded stereo full buffer")
+                it.range("pendingFrameSequencerStep", -1, 7)
+                it.range("frameSequencerClockPhase", 0, 3)
+              },
+              { fields, clock ->
+                val capacity = Math.multiplyExact(clock.controllerTicksPerFrame(), 2)
+                val index = fields.int("i")
+                val samples = fields.intArray("buffer")
+                fields.require(index < capacity,
+                    "has stereo sample index $index outside target-clock capacity $capacity")
+                fields.require(samples.size == index || samples.size == capacity,
+                    "buffer length ${samples.size} does not match index $index or target-clock capacity $capacity")
+              },
+          ))
       put("eu.rekawek.coffeegb.core.timer.Timer\$TimerState",
           constrained("Divider/timer registers and delayed edge counters are bounded; MAX_VALUE is a documented sentinel.") {
             it.range("div", 0, 0xffff)
@@ -558,12 +600,18 @@ internal object StateSemantics {
 
       // RTC and mapper command-state indices.
       put("eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState",
-          constrained("Live and latched RTC registers plus subsecond phase are hardware-bounded.") {
-            listOf("seconds", "minutes", "latchedSeconds", "latchedMinutes").forEach { name -> it.range(name, 0, 0x3f) }
-            listOf("hours", "latchedHours").forEach { name -> it.range(name, 0, 0x1f) }
-            listOf("days", "latchedDays").forEach { name -> it.range(name, 0, 511) }
-            it.range("subSecondTicks", 0L, RTC_TICKS_PER_SECOND - 1L)
-          })
+          clockConstrained(
+              "Live and latched RTC registers are hardware-bounded; subsecond phase is bounded by the target clock.",
+              {
+                listOf("seconds", "minutes", "latchedSeconds", "latchedMinutes").forEach { name -> it.range(name, 0, 0x3f) }
+                listOf("hours", "latchedHours").forEach { name -> it.range(name, 0, 0x1f) }
+                listOf("days", "latchedDays").forEach { name -> it.range(name, 0, 511) }
+                it.nonNegativeLong("subSecondTicks")
+              },
+              { fields, clock ->
+                fields.range("subSecondTicks", 0L, clock.ticksPerSecond() - 1L)
+              },
+          ))
       put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State",
           constrained("AMD flash unlock/erase transaction state is one of six stages.") {
             it.range("flashCommandState", 0, 5)
@@ -874,15 +922,11 @@ internal object StateSemantics {
     }
   }
 
-  // Historical 1.7.13 files retain the complete buffer. Match Sound's actual
-  // Gameboy.TICKS_PER_FRAME * 2 capacity (integer 4,194,304 / 60), not a rounded frame estimate.
-  private const val SOUND_BUFFER_CAPACITY = 69_905 * 2
   private const val MAX_CPU_OPS = 64
   private const val SGB_DISPLAY_FADE_MASK = 0xff
   private const val SGB_DISPLAY_STATE_ALLOWED_BITS = 0x1ff
   private const val FULL_CHANGER_SCHEDULE_SIZE = 36
   private const val BARCODE_FRAME_SIZE = 30
-  private const val RTC_TICKS_PER_SECOND = 4_194_304L
   private const val CPU_VISIBLE_PPU_REGISTERS = 12
   private const val DISPLAY_STATE = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState"
   private const val PIXEL_TRANSFER_STATE =
