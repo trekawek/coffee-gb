@@ -283,6 +283,11 @@ complete set is validated and prepared before one frame-boundary group commit. D
 command layout, limits, and failure behavior are specified in
 [netplay-protocol-v8.md](netplay-protocol-v8.md).
 
+Protocol v8 carries only the existing frame-owned P1 input stream for each linked emulator. A
+`LinkedController` therefore constructs every local, remote, checkpoint-replacement, and rollback
+machine with `PlayerInputSource.RELEASED`. Independent local SGB P2-P4 desktop input remains a
+Basic-controller feature until a later versioned protocol can transmit and replay those slots.
+
 ## Fixture and evolution policy
 
 The committed fixture

@@ -61,6 +61,7 @@ import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
+import eu.rekawek.coffeegb.core.joypad.PlayerInputSource
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
@@ -121,6 +122,10 @@ class LinkedController(
 
   @VisibleForTesting internal fun currentFrame() = frame
 
+  @VisibleForTesting
+  internal fun mainEffectivePressedButtons() =
+      sessions[localPlayer]?.gameboy?.pressedButtons ?: emptySet()
+
   @VisibleForTesting internal fun meteredWorkFrames() = workProgressFrame
 
   @VisibleForTesting
@@ -135,9 +140,9 @@ class LinkedController(
   internal fun heldButtonStates(): List<Set<Button>?> = sessions.map { it?.heldButtons }
 
   @VisibleForTesting
-  internal fun localInputSourceAssignments(): List<Boolean?> =
+  internal fun releasedInputSourceAssignments(): List<Boolean?> =
       configs.map { config ->
-        config?.let { it.playerInputSource === properties.playerInputSource }
+        config?.let { it.playerInputSource === PlayerInputSource.RELEASED }
       }
 
   /** Captures controller-owned frame, topology, session machines, endpoints, and held input. */
@@ -293,6 +298,9 @@ class LinkedController(
       if (checkpoint) reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
+      // Protocol v8 owns linked P1 at frame boundaries and cannot represent local SGB P2-P4.
+      // Never allow an asynchronous platform source into any linked machine.
+      e.config.setPlayerInputSource(PlayerInputSource.RELEASED)
       configs[localPlayer] = e.config
       initSession(localPlayer, frame, e.snapshot)
       sendLocalRom(includeState = e.snapshot != null)
@@ -436,8 +444,9 @@ class LinkedController(
           )
     }
 
-    // Desktop P2-P4 are local SGB controller slots, not linked-emulator players. Only P1 enters
-    // the protocol-v8 input stream; the local machine samples the shared four-slot service.
+    // Desktop logical P1 is translated to the existing frame-owned protocol input. P2-P4 are
+    // local SGB controller slots and remain unavailable in linked mode until a versioned protocol
+    // can transmit and replay them deterministically.
     eventQueue.register<LogicalPlayerButtonPressEvent> { e ->
       if (e.player != 0) return@register
       val input = currentInput ?: Input(emptyList(), emptyList())
@@ -769,13 +778,7 @@ class LinkedController(
               event.mealybugDmgBlob,
               event.codeBreakerRumble,
               event.displaySgbBorder,
-          )
-      // A received group checkpoint may replace the client's own session too. Only that local
-      // machine receives the desktop four-slot service; remote linked consoles continue to get
-      // their P1 input exclusively from protocol-v8 history events.
-      if (event.player == localPlayer) {
-        config.setPlayerInputSource(properties.playerInputSource)
-      }
+          ).setPlayerInputSource(PlayerInputSource.RELEASED)
       candidate =
           Session(
               if (root != null) config.forRestore() else config,

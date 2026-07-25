@@ -98,12 +98,17 @@ only one logical player; malformed players/buttons/keys and collisions stop star
 configuration error instead of silently overwriting another mapping.
 
 P1 uses the first available SDL game controller by default. The explicit grammar is
-`input.pN.gamepad=auto|none|sdl-<64 lowercase hex digits>`. At startup, Coffee GB logs each
-controller's stable `sdl-*` ID; copy that value to pin a physical device to P1-P4. Only one player
+`input.pN.gamepad=auto|none|sdl-<64 lowercase hex digits>`. Coffee GB logs every attached
+controller's stable `sdl-*` ID once when it is discovered, including unassigned controllers; copy
+that value to pin a physical device to P1-P4. Only one player
 may use a given ID, and only one `auto` assignment is allowed. The ID hashes SDL's GUID, device
 path, and name. If SDL exposes no path, the current connection's instance ID disambiguates otherwise
 identical pads. IDs are stable across enumeration-order changes; an OS path change (or reconnect on
 a path-less backend) is conservatively treated as device replacement.
+
+Independent SGB P2-P4 desktop input is available only in local/basic-controller mode. Netplay
+protocol v8 carries one frame-owned P1 stream per linked emulator and has no representation for
+local SGB controller slots, so every linked machine masks the live four-slot desktop source.
 
 </details>
 

@@ -175,7 +175,10 @@ value once at its emulator clock `tick()` boundary; JOYP reads never call AWT or
 rapid reads between ticks see the same latch. An unassigned source is all released. The legacy
 `ButtonPressEvent`/`ButtonReleaseEvent`, `Gameboy.pressedButtons`, and protocol-v8 input retain their
 P1 meaning for DMG/CGB, agents, linked emulators, and historical state. The desktop bridge emits
-those established events for aggregate P1 transitions and logical-slot events only for P2-P4.
+logical-slot transitions for all four players. A Basic/local machine reads desktop P1 only from
+the atomic tick latch; a `LinkedController` translates logical P1 into its existing frame-owned
+protocol stream. Direct legacy events remain available to agents, replay, protocol input, and
+historical callers without mirroring desktop P1 into that ownership model.
 
 Desktop keyboard and gamepad adapters contribute through opaque source handles. Per-player state is
 the set union of those handles, so autorepeat is idempotent and releasing/disconnecting one device
@@ -185,13 +188,18 @@ behind an in-memory test seam, handles at most four assignments, and binds by a 
 the SDL GUID/path/name rather than enumeration index. A path-less SDL backend adds the current
 connection's instance ID so identical pads cannot collide. Array-order churn cannot move a held
 state; an OS path change or path-less reconnect is conservatively treated as device replacement.
-Right-stick tilt and rumble remain P1-only.
+Every newly enumerated attached pad is logged once per connection even when unassigned. Keyboard,
+mouse, and P1-gamepad tilt share one last-writer lifecycle bridge; focus loss, controller/ROM
+replacement, thread exit, and stop recenter it, reset keyboard ramp state, and prevent stopped AWT
+listeners from relatching. Right-stick tilt and rumble remain P1-only.
 
 The Joypad's mode, selected player, JOYP selector/filter, and packet receiver already round-trip in
 the stable component record. Physical P1-P4 input remains a service: MachineSnapshot and StateFile
 restore never resurrect historical presses. Rollback replay applies its existing P1 event history
-and freezes one P2-P4 sample at the replay boundary. Local SGB slots are never encoded as linked
-emulator players, so StateFile v1 and protocol v8 bytes do not change. Apply-time semantics accept
+with `PlayerInputSource.RELEASED`. Every live and replay Game Boy owned by `LinkedController` uses
+that released source: protocol v8 cannot transmit local SGB P2-P4, so those slots are deliberately
+unavailable in linked/network mode pending a versioned capability. Local SGB slots are never
+encoded as linked emulator players, so StateFile v1 and protocol v8 bytes do not change. Apply-time semantics accept
 only control/player pairs reachable by production (`0:0`, `1:0..1`, `2:{0,2}`, `3:0..3`) before
 the first live mutation.
 

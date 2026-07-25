@@ -1,8 +1,5 @@
 package eu.rekawek.coffeegb.swing.io;
 
-import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memory.cart.type.AccelerometerEvent;
-
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 
@@ -18,12 +15,14 @@ public class SwingTiltKeys implements KeyListener {
 
     private static final double MAX = 0.9;
 
-    private final EventBus eventBus;
+    private final DesktopTiltInput tiltInput;
+    private final Object sourceIdentity = new Object();
 
     private double x, y;
 
-    public SwingTiltKeys(EventBus eventBus) {
-        this.eventBus = eventBus;
+    public SwingTiltKeys(DesktopTiltInput tiltInput) {
+        this.tiltInput = tiltInput;
+        tiltInput.registerResetter(this::resetState);
     }
 
     @Override
@@ -31,7 +30,7 @@ public class SwingTiltKeys implements KeyListener {
     }
 
     @Override
-    public void keyPressed(KeyEvent e) {
+    public synchronized void keyPressed(KeyEvent e) {
         switch (e.getKeyCode()) {
             case KeyEvent.VK_I -> y = Math.max(-MAX, y - STEP);
             case KeyEvent.VK_K -> y = Math.min(MAX, y + STEP);
@@ -41,11 +40,11 @@ public class SwingTiltKeys implements KeyListener {
                 return;
             }
         }
-        eventBus.post(new AccelerometerEvent(x, y));
+        tiltInput.update(sourceIdentity, x, y);
     }
 
     @Override
-    public void keyReleased(KeyEvent e) {
+    public synchronized void keyReleased(KeyEvent e) {
         switch (e.getKeyCode()) {
             case KeyEvent.VK_I, KeyEvent.VK_K -> y = 0;
             case KeyEvent.VK_J, KeyEvent.VK_L -> x = 0;
@@ -53,6 +52,11 @@ public class SwingTiltKeys implements KeyListener {
                 return;
             }
         }
-        eventBus.post(new AccelerometerEvent(x, y));
+        tiltInput.update(sourceIdentity, x, y);
+    }
+
+    private synchronized void resetState() {
+        x = 0;
+        y = 0;
     }
 }

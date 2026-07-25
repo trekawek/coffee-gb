@@ -115,6 +115,31 @@ public class SwingGamepadTest {
     }
 
     @Test
+    public void everyControllerIsDiscoveredOncePerConnectionEvenWhenUnassigned() {
+        List<GamepadBackend.DeviceInfo> discovered = new ArrayList<>();
+        Rig rig = new Rig(
+                mapping(new ControllerProperties.GamepadAssignment(0, "auto")), discovered);
+        rig.backend.add(ID_A, "assigned");
+        rig.backend.add(ID_B, "unassigned-two");
+        rig.backend.add(ID_C, "unassigned-three");
+
+        rig.gamepad.pollOnce();
+        assertEquals(List.of(ID_A, ID_B, ID_C),
+                discovered.stream().map(GamepadBackend.DeviceInfo::stableId).toList());
+        rig.backend.reverseEnumeration();
+        rig.gamepad.pollOnce();
+        assertEquals(3, discovered.size());
+
+        rig.backend.remove(ID_B);
+        rig.gamepad.pollOnce();
+        rig.backend.add(ID_B, "reconnected-two");
+        rig.gamepad.pollOnce();
+        assertEquals(List.of(ID_A, ID_B, ID_C, ID_B),
+                discovered.stream().map(GamepadBackend.DeviceInfo::stableId).toList());
+        assertEquals("reconnected-two", discovered.get(3).name());
+    }
+
+    @Test
     public void focusAndStopReleaseAllButtonsWhileTiltAndRumbleStayP1Only() {
         Rig rig = new Rig(mapping(
                 new ControllerProperties.GamepadAssignment(0, ID_A),
@@ -137,6 +162,7 @@ public class SwingGamepadTest {
         assertEquals(new AccelerometerEvent(1, 0), tilt.get(0));
 
         rig.input.setFocused(false);
+        rig.tiltInput.windowLostFocus(null);
         rig.gamepad.pollOnce();
         assertTrue(rig.hub.sample().players().stream().allMatch(Set::isEmpty));
         assertFalse(primary.rumbling);
@@ -162,8 +188,14 @@ public class SwingGamepadTest {
         Rig rig = new Rig(mapping(new ControllerProperties.GamepadAssignment(0, ID_A)));
         FakeDevice device = rig.backend.add(ID_A, "primary");
         device.buttons.add(GamepadBackend.PadButton.A);
+        device.axes.put(GamepadBackend.Axis.RIGHT_X, 32767);
+        List<AccelerometerEvent> tilt = new ArrayList<>();
+        rig.bus.register(tilt::add, AccelerometerEvent.class);
+        rig.bus.post(new RumbleEvent(true));
         rig.gamepad.pollOnce();
         assertEquals(Set.of(Button.A), rig.hub.sample().buttons(0));
+        assertTrue(device.rumbling);
+        assertEquals(new AccelerometerEvent(1, 0), tilt.get(0));
 
         Thread thread = new Thread(rig.gamepad, "fake-gamepad-test");
         thread.start();
@@ -175,6 +207,8 @@ public class SwingGamepadTest {
         assertTrue(rig.hub.sample().players().stream().allMatch(Set::isEmpty));
         assertTrue(rig.backend.closed);
         assertTrue(device.closeCount > 0);
+        assertFalse(device.rumbling);
+        assertEquals(new AccelerometerEvent(0, 0), tilt.get(tilt.size() - 1));
     }
 
     private static ControllerProperties.PlayerMapping mapping(
@@ -186,11 +220,17 @@ public class SwingGamepadTest {
         final EventBusImpl bus = new EventBusImpl(null, null, false);
         final PlayerInputHub hub = new PlayerInputHub();
         final DesktopPlayerInput input = new DesktopPlayerInput(hub, bus);
+        final DesktopTiltInput tiltInput = new DesktopTiltInput(bus);
         final FakeBackend backend = new FakeBackend();
         final SwingGamepad gamepad;
 
         Rig(ControllerProperties.PlayerMapping mapping) {
-            gamepad = new SwingGamepad(mapping, input, bus, backend);
+            this(mapping, new ArrayList<>());
+        }
+
+        Rig(ControllerProperties.PlayerMapping mapping,
+            List<GamepadBackend.DeviceInfo> discovered) {
+            gamepad = new SwingGamepad(mapping, input, tiltInput, bus, backend, discovered::add);
         }
     }
 

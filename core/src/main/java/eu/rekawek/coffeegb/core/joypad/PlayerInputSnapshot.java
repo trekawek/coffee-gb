@@ -53,13 +53,6 @@ public final class PlayerInputSnapshot {
         return players;
     }
 
-    public PlayerInputSnapshot withoutPrimary() {
-        if (players.get(0).isEmpty()) {
-            return this;
-        }
-        return of(List.of(Set.of(), players.get(1), players.get(2), players.get(3)));
-    }
-
     static void checkPlayer(int player) {
         if (player < 0 || player >= PlayerInputSource.PLAYER_COUNT) {
             throw new IllegalArgumentException("Logical player index must be in 0..3: " + player);

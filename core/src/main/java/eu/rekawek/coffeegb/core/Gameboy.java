@@ -1269,15 +1269,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
 
         /**
-         * Stable physical-input view for deterministic rollback replay. P1 is replayed from the
-         * controller's historical input log; P2-P4 are live local SGB services and are sampled
-         * once at the replay boundary so asynchronous desktop polling cannot change mid-replay.
+         * Service-free configuration for deterministic rollback replay. All linked input is
+         * replayed from the controller's frame-owned input log; protocol v8 has no representation
+         * for local SGB P2-P4 input, so no physical input service may enter a replay machine.
          */
         public GameboyConfiguration forStateHistoryReplay() {
             GameboyConfiguration copy = copy();
-            var snapshot = java.util.Objects.requireNonNull(
-                    playerInputSource.sample(), "PlayerInputSource returned null").withoutPrimary();
-            copy.playerInputSource = () -> snapshot;
+            copy.playerInputSource = PlayerInputSource.RELEASED;
             return copy;
         }
 
