@@ -17,7 +17,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -285,16 +284,19 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             return 0x0f - currentPlayer;
         }
 
-        int result = 0x0f;
-        EnumSet<Button> selectedButtons = EnumSet.noneOf(Button.class);
-        selectedButtons.addAll(sampledInput.buttons(currentPlayer));
+        int result = applyButtons(0x0f, sampledInput.buttons(currentPlayer));
         // The historical event-driven API remains P1-only for controller/netplay replay.
         if (currentPlayer == 0) {
-            selectedButtons.addAll(buttons);
+            result = applyButtons(result, buttons);
         }
-        for (Button b : selectedButtons) {
-            if ((b.getLine() & p1) == 0) {
-                result &= 0xff & ~b.getMask();
+        return result;
+    }
+
+    private int applyButtons(int inputLines, Collection<Button> pressedButtons) {
+        int result = inputLines;
+        for (Button button : pressedButtons) {
+            if ((button.getLine() & p1) == 0) {
+                result &= 0xff & ~button.getMask();
             }
         }
         return result;
