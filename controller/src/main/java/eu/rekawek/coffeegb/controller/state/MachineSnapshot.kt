@@ -128,10 +128,8 @@ internal class MachineSnapshot private constructor(
       val copiedPageBytes: Long,
       val reusedPages: Int,
       val newValueNodes: Int,
-      val sourcePayloadArraysRead: Int,
-      val sourcePayloadBytesRead: Long,
-      val sourcePayloadClones: Int,
-      val sourcePayloadCloneBytes: Long,
+      val identityVerifiedPayloadArrays: Int,
+      val identityVerifiedPayloadBytes: Long,
   )
 
   internal data class RetainedStats(
@@ -724,10 +722,8 @@ private object SnapshotGraph {
             copiedPageBytes,
             reusedPages,
             newValueNodes,
-            sourceCapture.borrowedPayloadArrays,
-            sourceCapture.borrowedPayloadBytes,
-            sourceCapture.sourcePayloadClones,
-            sourceCapture.sourcePayloadCloneBytes,
+            sourceCapture.verifiedPayloadArrays,
+            sourceCapture.verifiedPayloadBytes,
         )
 
     fun value(

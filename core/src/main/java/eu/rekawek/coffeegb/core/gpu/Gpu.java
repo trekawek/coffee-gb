@@ -2011,6 +2011,17 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        if (videoRam0 instanceof Ram) {
+            videoRam0.declareMachineStatePayloads(capture);
+        }
+        if (videoRam1 instanceof Ram) {
+            videoRam1.declareMachineStatePayloads(capture);
+        }
+        display.declareMachineStatePayloads(capture);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Gpu> memento) {
         if (!(memento instanceof GpuMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

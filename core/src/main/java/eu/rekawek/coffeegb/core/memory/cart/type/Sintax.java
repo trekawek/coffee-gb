@@ -122,6 +122,12 @@ public class Sintax implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        delegate.declareMachineStatePayloads(capture);
+        capture.declareInts(xorValues);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof SintaxMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

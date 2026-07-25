@@ -81,6 +81,11 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(ram);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<GbcRam> memento) {
         if (!(memento instanceof GbcRamMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

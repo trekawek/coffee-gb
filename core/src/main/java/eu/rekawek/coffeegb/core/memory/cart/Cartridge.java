@@ -227,6 +227,12 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        addressSpace.declareMachineStatePayloads(capture);
+        battery.declareMachineStatePayloads(capture);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Cartridge> memento) {
         if (!(memento instanceof CartridgeMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

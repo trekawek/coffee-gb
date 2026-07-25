@@ -144,6 +144,12 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(buffer);
+        capture.declareInts(lastFrame);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Display> memento) {
         if (!(memento instanceof DisplayMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

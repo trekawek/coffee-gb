@@ -168,6 +168,11 @@ public class Mbc7 implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        eeprom.declareMachineStatePayloads(capture);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof Mbc7Memento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

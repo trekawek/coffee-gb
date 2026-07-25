@@ -331,6 +331,18 @@ public class Datel implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(ram);
+        capture.declareInts(regs);
+        capture.declareBooleans(ramWritten);
+        capture.declareInts(regsB);
+        capture.declareInts(flash);
+        if (slot != null) {
+            slot.declareMachineStatePayloads(capture);
+        }
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof DatelMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

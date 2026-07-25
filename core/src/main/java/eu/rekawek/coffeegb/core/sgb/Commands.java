@@ -101,6 +101,13 @@ public class Commands {
                     dataTransfer == null ? null : capture.ints(dataTransfer));
         }
 
+        public void declareMachineStatePayloads(MachineStateCapture capture) {
+            capture.declareInts(packet);
+            if (dataTransfer != null) {
+                capture.declareInts(dataTransfer);
+            }
+        }
+
         private record TransferCommandMemento(int[] packet, int[] dataTransfer) implements Memento<TransferCommand> {
         }
     }

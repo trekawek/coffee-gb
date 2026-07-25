@@ -55,6 +55,11 @@ public class Ram implements AddressSpace, Serializable, Originator<Ram> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(space);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Ram> memento) {
         if (!(memento instanceof RamMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

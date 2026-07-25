@@ -77,10 +77,10 @@ class RewindManagerTest {
       assertEquals(RewindManager.CAPACITY, manager.historySize)
       assertTrue(
           manager.snapshotsForTesting().all {
-            it.captureStats.sourcePayloadClones == 0 &&
-                it.captureStats.sourcePayloadCloneBytes == 0L
+            it.captureStats.identityVerifiedPayloadArrays > 0 &&
+                it.captureStats.identityVerifiedPayloadBytes > 0L
           },
-          "production-cadence captures must borrow source payloads without cloning",
+          "production-cadence captures must identity-verify their live source payloads",
       )
       val retained = MachineSnapshot.retainedStats(manager.snapshotsForTesting())
       assertTrue(

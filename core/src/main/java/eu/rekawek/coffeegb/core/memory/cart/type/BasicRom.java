@@ -74,6 +74,12 @@ public class BasicRom implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        battery.declareMachineStatePayloads(capture);
+        capture.declareInts(ram);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         // BasicRom had no mutable state before plain ROM+RAM support was added.
         // Accept its legacy null snapshots as the initial RAM state.

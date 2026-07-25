@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.ir.InfraredPort
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -115,6 +116,17 @@ class StateCoverageMatrixTest {
       val idle = StateGraph.capture(controller.saveToMemento())
       case.setup(controller)
       val captured = StateGraph.capture(controller.saveToMemento())
+      val direct = directState(controller)
+      assertEquals(
+          captured,
+          direct.state,
+          "${case.name} direct capture must use identity-verified live payloads",
+      )
+      assertEquals(
+          primitivePayloadCount(captured),
+          direct.identityVerifiedPayloadArrays,
+          "${case.name} must explicitly declare every mapper-owned primitive payload",
+      )
       assertNotEquals(idle, captured, "${case.name} setup did not exercise owned state")
 
       val expectedTrace = continueMapper(controller, case.probes)
@@ -138,6 +150,30 @@ class StateCoverageMatrixTest {
         }
     assertEquals(24, registeredMapperRecords.size)
   }
+
+  private fun directState(controller: MemoryController): DirectState =
+      MachineStateCapture.withVerifiedView(
+          controller::declareMachineStatePayloads,
+          { capture -> controller.saveToMemento(capture) },
+          { view, capture ->
+            DirectState(StateGraph.capture(view), capture.verifiedPayloadArrays)
+          },
+      )
+
+  private fun primitivePayloadCount(value: StateValue): Int =
+      when (value) {
+        is PrimitiveArrayState<*> -> 1
+        is RecordState -> value.fields.sumOf { primitivePayloadCount(it.value) }
+        is ObjectArrayState -> value.values.sumOf(::primitivePayloadCount)
+        is ListState -> value.values.sumOf(::primitivePayloadCount)
+        is Int32MapState -> value.entries.sumOf { primitivePayloadCount(it.value) }
+        else -> 0
+      }
+
+  private data class DirectState(
+      val state: StateValue,
+      val identityVerifiedPayloadArrays: Int,
+  )
 
   @Test
   fun everyStatefulSerialPeripheralRoundTripsWithoutCapturingCallbacks() {

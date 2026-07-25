@@ -103,6 +103,14 @@ public class SuperGameboy implements Originator<SuperGameboy> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts2(multipacket);
+        if (waitingTransferCommand != null) {
+            waitingTransferCommand.declareMachineStatePayloads(capture);
+        }
+    }
+
+    @Override
     public void restoreFromMemento(Memento<SuperGameboy> memento) {
         if (!(memento instanceof SuperGameboyMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
