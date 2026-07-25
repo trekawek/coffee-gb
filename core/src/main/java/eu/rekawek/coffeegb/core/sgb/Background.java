@@ -151,16 +151,30 @@ public class Background implements StatefulComponent<Background> {
         if (this.tiles.length != mem.tiles.length) {
             throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
-        System.arraycopy(mem.tiles, 0, this.tiles, 0, this.tiles.length);
+        if (mem.borderAnimation < 0 || mem.borderAnimation > BORDER_ANIMATION_FRAMES) {
+            throw new IllegalArgumentException("Invalid border animation state");
+        }
+        Commands.PctTrnCmd restoredPicture = null;
         if (mem.pendingPictureMemento == null) {
-            this.pendingPicture = null;
+            if (mem.borderAnimation != 0) {
+                throw new IllegalArgumentException(
+                        "An active border animation requires a pending picture");
+            }
         } else {
             var restored = Commands.TransferCommand.restoreState(mem.pendingPictureMemento);
             if (!(restored instanceof Commands.PctTrnCmd picture)) {
                 throw new IllegalArgumentException("ComponentState does not contain a picture transfer command");
             }
-            this.pendingPicture = picture;
+            String violation = Commands.validateTransferCommitData(picture, picture.dataTransfer);
+            if (violation != null) {
+                throw new IllegalArgumentException("Invalid pending picture state: " + violation);
+            }
+            restoredPicture = picture;
         }
+
+        // Validate the complete candidate before replacing any live background storage.
+        System.arraycopy(mem.tiles, 0, this.tiles, 0, this.tiles.length);
+        this.pendingPicture = restoredPicture;
         this.borderAnimation = mem.borderAnimation;
     }
 

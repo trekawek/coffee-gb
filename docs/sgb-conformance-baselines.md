@@ -99,7 +99,7 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
 - A PCT map entry should select palette `4..6` in Pan Docs. Coffee GB retains its prior safe use of
   the complete three-bit palette field and the real-game `0x2ff` transparent-tile workaround from
   issue #174; narrowing either would break established continuation tests. The documented priority
-  bit must be zero and is rejected before a new border transfer changes state.
+  bit must be zero and is rejected before a new or restored border transfer changes state.
 - Independent player input is absent. `MLT_REQ` now validates `0..3` before Joypad mutation and
   retains the current ID rotation/value-2 fallback, while selected players above one still read
   released button lines. Independent sources remain #342.
@@ -140,6 +140,19 @@ an already accepted transfer. The third frame must contain exactly 4096 byte-val
 validated before delivery; invalid data clears only that attempted transfer. Consumers prepare
 complete palette/attribute tables before committing them. Command packet rows, transfer payloads,
 active rows, and emitted frame arrays are cloned or newly allocated at their ownership boundary.
+
+The same allowlist is an apply-time invariant. A restored delayed capture must contain one of those
+four practical commands, a countdown `1..3`, and no already-committed payload. `SOU_TRN`/`DATA_TRN`
+compatibility records are never executable. A restored pending picture must be `PCT_TRN` with one
+complete 4096-byte payload that passes the same priority-bit validation; a nonzero border-animation
+count requires that picture. Malformed portable, MachineSnapshot, or imported compatibility state
+is rejected before live mutation rather than normalized into a command. The released 1.7.13 and
+1.7.14 fixtures contain no such invalid pending transfer and remain supported.
+
+Historical display records may contain a null `systemPalettes` row. This is the one compatibility
+normalization in this path: restore replaces each such row with a newly owned four-zero palette
+before `PAL_SET` can select it. Present rows and active palettes are independently cloned, so later
+game palette commands cannot alias or mutate the normalized system table.
 
 `MASK_EN` is defined at produced-frame boundaries: cancel resumes newly rendered frames, freeze
 emits nothing and leaves the frontend's last owned frame visible, black emits black game-window

@@ -197,6 +197,12 @@ public class SuperGameboy implements StatefulComponent<SuperGameboy> {
         TransferCommand restoredTransfer = mem.waitingTransferCommandMemento == null
                 ? null
                 : TransferCommand.restoreState(mem.waitingTransferCommandMemento);
+        if (restoredTransfer != null) {
+            String violation = Commands.validatePendingTransferState(restoredTransfer);
+            if (violation != null) {
+                throw new IllegalArgumentException("Invalid delayed transfer state: " + violation);
+            }
+        }
         if ((restoredTransfer == null && mem.transferCountdown != 0)
                 || (restoredTransfer != null && (mem.transferCountdown < 1 || mem.transferCountdown > 3))) {
             throw new IllegalArgumentException("Invalid delayed transfer state");
