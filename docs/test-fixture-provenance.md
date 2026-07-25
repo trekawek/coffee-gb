@@ -1,0 +1,125 @@
+# Test fixture and conformance evidence provenance
+
+This policy applies to ROMs, traces, screenshots, palette tables, state files, and generated
+expected data committed for hardware/SGB conformance. It separates legally redistributable evidence
+from Coffee GB implementation baselines.
+
+## Required record for new evidence
+
+Before committing an external artifact, record all of:
+
+1. upstream project/author and stable public URL;
+2. license and an affirmative redistribution permission applicable to the artifact;
+3. exact release, source commit, or capture identifier;
+4. SHA-256 of every committed byte file;
+5. build tool/version or capture/generator method and hardware/environment when applicable;
+6. the narrow behavior the artifact supports, including model/revision; and
+7. unresolved provenance, measurement uncertainty, or disagreement with another source.
+
+A source-code license is not automatically proof that a proprietary game image, firmware dump, or
+third-party screenshot can be redistributed. If any required fact is unknown, do not add the bytes;
+link the reference and mark the evidence gap. Tests must never download an artifact during a normal
+build. A separately reviewed refresh must update provenance and expected hashes together.
+
+Do not commit Nintendo boot ROM/BIOS bytes, commercial ROMs, proprietary game graphics/audio,
+screenshots without redistribution permission, or extracted firmware tables as new evidence.
+User-supplied firmware remains outside repository fixtures. A hash identifies bytes but does not
+grant permission to redistribute them.
+
+## Synthetic Phase-0 fixtures
+
+All new #340 inputs are generated in test code from formulas and ASCII labels authored for Coffee
+GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
+
+- `SgbPacketTestBuilder` creates bounded 16-byte packet arrays and JOYP pulses.
+- `SgbRendererBaselineTest` generates pixel indices, RGB555 values, tiles, maps, and attributes with
+  fixed integer formulas. Only the expected SHA-256 text is committed.
+- `HardwareModelBaselineTest.syntheticRom` creates a 32 KiB ROM containing an infinite two-byte
+  branch, synthetic title/header flags, and a calculated valid header checksum. The ROM exists only
+  in memory and has SHA-256
+  `f89f3802d47dd31da0db6b5656ed5098194e85020ba735fb44c1c9d4f9043eee`.
+- `SgbStateBaselineTest` uses that same generated ROM and production StateFile capture. Only expected
+  hashes are committed; no generated StateFile or frame bytes are checked in.
+
+The canonical hash format and every expected hash are specified in
+[sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB
+behavior. They are not measurements from Nintendo hardware and must not be cited as such.
+
+The SGB constructor also reads the repository's pre-existing `sgb-palettes.bin`; current model
+output therefore includes its default palette before explicit SGB commands replace active palettes.
+That 256-byte implementation asset has SHA-256
+`cb16f594a3219983aeda15084c9b54e46a41a665a8c8caab0987c9c707427af9` and entered Coffee GB in
+commit `0d107e32a4094528e418bf62e6ab7addcedaf990`. Its source comment cites the Nintendo Player's Guide
+for title selection and
+[Gambatte `0606d45`](https://github.com/pokemon-speedrunning/gambatte-core/blob/0606d45caa0ab94c1ba34af4159d39e321a21036/libgambatte/src/initstate.cpp#L122-L247)
+for additional title mappings. The original binary generator and a standalone redistribution grant
+were not recorded. Phase 0 adds no copy and treats it only as an existing implementation baseline,
+not redistributable conformance evidence. A future replacement must satisfy the full policy above.
+
+The pre-existing `core/src/main/resources/bios/sgb_boot.bin` is likewise untouched and is not an
+input to any new #340 test: all new machine fixtures explicitly use `BootstrapMode.SKIP`. Its hash
+is recorded only to make that exclusion auditable:
+`0e4ddff32fc9d1eeaae812a157dd246459b00c9e14f2f61751f661f32361e360`.
+
+## Existing SGB-related profile assets audited for this phase
+
+These files predate #340 and are exercised by the required compatibility profiles. They are not
+copied into the new synthetic baselines.
+
+### SameSuite
+
+Origin: [LIJI32/SameSuite](https://github.com/LIJI32/SameSuite/tree/f15645fb049a47ea235f6d2c9a033e72d8087901)
+at commit `f15645fb049a47ea235f6d2c9a033e72d8087901`, built with RGBDS 1.0.1 as recorded in the existing
+`SOURCE.md`. License: X11, retained beside the ROMs. Evidence scope: automated SGB `MLT_REQ`
+feedback behavior, not arbitrary command/render conformance.
+
+| File | SHA-256 |
+| --- | --- |
+| `sgb/command_mlt_req.gb` | `5b5d007d3a6f939ddf27684f35ee11451cb29cafc74430dcdd3b4059e0598efa` |
+| `sgb/command_mlt_req_1_incrementing.gb` | `3804435ba1c35cbffebec2817141274f00541313a63ce286e9fffdf783169db5` |
+
+### CasualPokePlayer SGB extended-packet test
+
+Origin: [CasualPokePlayer/test-roms `326f6f8`](https://github.com/CasualPokePlayer/test-roms/tree/326f6f8f148a932e987d934dd9065783f9faacd2),
+MIT. The committed build and cropped expected image were copied from
+[GBEmulatorShootout `38b926b`](https://github.com/gbdev/GBEmulatorShootout/tree/38b926bdbc26993d1b4c43e97979ecc66287bf02),
+as recorded in the existing `SOURCE.md`. Evidence scope: the expected 160x144 output of the SGB
+extended packet protocol test under the current runner.
+
+| File | SHA-256 |
+| --- | --- |
+| `sgb-ext-test.gb` | `ae4084d4888cab6bb452f93b3c27964073e7c3dabea201cfab3ce9a8a985510e` |
+| `sgb-ext-test.png` | `25eed4bc01dd787924147a5fbb409b1f74ece488465ba9a0326c075a65f57575` |
+
+### Mooneye Test Suite model-labelled boot tests
+
+Origin: [Gekkio/mooneye-test-suite `443f6e1`](https://github.com/Gekkio/mooneye-test-suite/tree/443f6e1f2a8d83ad9da051cbb960311c5aaaea66),
+MIT. The bundled bytes match the upstream prebuilt archive
+`mts-20240926-1737-443f6e1.tar.xz` (archive SHA-256
+`d9ab11a01351e0eb2dea485237027c4dd66c0528c707d21ff78604157b967837`) available from the
+[upstream artifact index](https://gekkio.fi/files/mooneye-test-suite/mts-20240926-1737-443f6e1/).
+Accessed 2026-07-25. Evidence scope: upstream hardware-verified boot/divider/register expectations
+for names tagged `S`, `sgb`, or `sgb2`.
+
+| File | SHA-256 |
+| --- | --- |
+| `acceptance/boot_div-S.gb` | `6e9cfd9ab2800aaefdb79cef96de213e06bb8f7504001dea729f746b2f1d7769` |
+| `acceptance/boot_div2-S.gb` | `f4f7e5f7bc8fa283cc2e8412861d155ab821e942bdf76126028adbce821de77f` |
+| `acceptance/boot_hwio-S.gb` | `01d718c1d291166aca98113062b0a7a618f932e8e296b2d0cd017b42c0f8342c` |
+| `acceptance/boot_regs-sgb.gb` | `4fd002a2d913a0b99053e7c4b063bca5a84af779f366f9e5e45798b32f5e59a3` |
+| `acceptance/boot_regs-sgb2.gb` | `9b0fd3b63ecaa216e3387d3f01c005e3d7bfa98aca589fd8726c486fedc6c5cb` |
+
+Coffee GB's current generic Mooneye runner selects CGB only for `-C`/`-cgb` names and otherwise
+uses its DMG configuration. Thus the profile's current handling of these SGB-labelled files is an
+implementation limitation to classify, not proof that Coffee GB reproduced an SGB/SGB2 boot. The
+new synthetic model fixture records actual Coffee GB SGB skip-boot behavior separately and does not
+use these ROMs.
+
+## Review and update procedure
+
+For a new or refreshed external fixture, review license and provenance first, regenerate outside
+normal tests with the pinned tools, compare the intended behavior on the stated model, and commit
+the artifact, SHA-256, method, and scoped claim in one change. For a synthetic fixture, keep the
+generator in test code and commit only the smallest reviewable expected data. Any changed baseline
+must identify whether it is an intentional implementation change, an upstream evidence refresh, or
+a corrected generator; unexplained hash replacement is not acceptable.
