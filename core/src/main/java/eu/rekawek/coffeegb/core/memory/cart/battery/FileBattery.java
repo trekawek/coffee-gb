@@ -1,17 +1,22 @@
 package eu.rekawek.coffeegb.core.memory.cart.battery;
 
+import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter;
 import org.apache.commons.io.IOUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 
 public class FileBattery implements Battery {
+
+    private static final Logger LOG = LoggerFactory.getLogger(FileBattery.class);
 
     private final File saveFile;
 
@@ -19,48 +24,75 @@ public class FileBattery implements Battery {
 
     private final byte[] ramBuffer;
 
+    private final AtomicFileWriter persistence;
+
     private boolean isClockPresent;
 
     private boolean isDirty;
 
+    private EventBus eventBus = EventBus.NULL_EVENT_BUS;
+
+    private BatteryPersistenceFailedEvent pendingFailure;
+
     public FileBattery(File saveFile, int ramSize) {
+        this(saveFile, ramSize, AtomicFileWriter.system());
+    }
+
+    FileBattery(File saveFile, int ramSize, AtomicFileWriter persistence) {
         this.saveFile = saveFile;
         this.clockBuffer = new byte[11 * 4];
         this.ramBuffer = new byte[ramSize];
+        this.persistence = persistence;
     }
 
     @Override
-    public void loadRam(int[] ram) {
+    public synchronized void loadRam(int[] ram) {
         loadRamWithClock(ram, null);
     }
 
     @Override
-    public void saveRam(int[] ram) {
+    public synchronized void saveRam(int[] ram) {
         saveRamWithClock(ram, null);
     }
 
     @Override
-    public void loadRamWithClock(int[] ram, long[] clockData) {
-        if (!saveFile.exists()) {
-            return;
-        }
-        long saveLength = saveFile.length();
-        if (saveLength >= 0x2000) {
-            // strip a possible RTC data suffix; small EEPROM saves are used as-is
-            saveLength = saveLength - (saveLength % 0x2000);
-        }
-        try (InputStream is = Files.newInputStream(saveFile.toPath())) {
-            loadRam(ram, is, saveLength);
+    public synchronized void loadRamWithClock(int[] ram, long[] clockData) {
+        try {
+            LoadedBattery loaded =
+                    persistence.read(saveFile.toPath(), recovered -> {
+                        if (!Files.exists(recovered)) {
+                            return null;
+                        }
+                        long saveLength = Files.size(recovered);
+                        if (saveLength >= 0x2000) {
+                            // Strip a possible RTC suffix; small EEPROM saves are used as-is.
+                            saveLength = saveLength - (saveLength % 0x2000);
+                        }
+                        int[] loadedRam = new int[ram.length];
+                        long[] loadedClock =
+                                clockData == null ? null : new long[clockData.length];
+                        try (InputStream is = Files.newInputStream(recovered)) {
+                            loadRam(loadedRam, is, saveLength);
+                            if (loadedClock != null) {
+                                loadClock(loadedClock, is);
+                            }
+                        }
+                        return new LoadedBattery(loadedRam, loadedClock);
+                    });
+            if (loaded == null) {
+                return;
+            }
+            System.arraycopy(loaded.ram, 0, ram, 0, ram.length);
             if (clockData != null) {
-                loadClock(clockData, is);
+                System.arraycopy(loaded.clock, 0, clockData, 0, clockData.length);
             }
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            reportFailure(BatteryPersistenceFailedEvent.Operation.LOAD, e);
         }
     }
 
     @Override
-    public void saveRamWithClock(int[] ram, long[] clockData) {
+    public synchronized void saveRamWithClock(int[] ram, long[] clockData) {
         doSaveRam(ram);
         if (clockData != null) {
             doSaveClock(clockData);
@@ -69,23 +101,37 @@ public class FileBattery implements Battery {
         isDirty = true;
     }
 
-    public void flush() {
+    public synchronized void flush() {
         if (!isDirty) {
             return;
         }
-        try (OutputStream os = Files.newOutputStream(saveFile.toPath())) {
-            os.write(ramBuffer);
-            if (isClockPresent) {
-                os.write(clockBuffer);
-            }
+        int clockBytes = isClockPresent ? clockBuffer.length : 0;
+        byte[] intended = new byte[ramBuffer.length + clockBytes];
+        System.arraycopy(ramBuffer, 0, intended, 0, ramBuffer.length);
+        if (isClockPresent) {
+            System.arraycopy(clockBuffer, 0, intended, ramBuffer.length, clockBuffer.length);
+        }
+        try {
+            persistence.write(saveFile.toPath(), intended);
             isClockPresent = false;
             isDirty = false;
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            // Keep the exact RAM/RTC buffers and dirty flag for a later retry, including when
+            // replacement committed but a post-rename operation reported failure.
+            reportFailure(BatteryPersistenceFailedEvent.Operation.SAVE, e);
         }
     }
 
-    private void loadClock(long[] clockData, InputStream is) throws IOException {
+    @Override
+    public synchronized void init(EventBus eventBus) {
+        this.eventBus = eventBus == null ? EventBus.NULL_EVENT_BUS : eventBus;
+        if (pendingFailure != null) {
+            postFailure(pendingFailure);
+            pendingFailure = null;
+        }
+    }
+
+    private static void loadClock(long[] clockData, InputStream is) throws IOException {
         byte[] byteBuff = new byte[4 * clockData.length];
         IOUtils.read(is, byteBuff);
         ByteBuffer buff = ByteBuffer.wrap(byteBuff);
@@ -96,9 +142,10 @@ public class FileBattery implements Battery {
         }
     }
 
-    private void loadRam(int[] ram, InputStream is, long length) throws IOException {
+    private static void loadRam(int[] ram, InputStream is, long length) throws IOException {
         byte[] buffer = new byte[ram.length];
-        IOUtils.read(is, buffer, 0, Math.min((int) length, ram.length));
+        int bytesToRead = (int) Math.min(length, ram.length);
+        IOUtils.read(is, buffer, 0, bytesToRead);
         for (int i = 0; i < ram.length; i++) {
             ram[i] = buffer[i] & 0xff;
         }
@@ -122,12 +169,12 @@ public class FileBattery implements Battery {
     }
 
     @Override
-    public Memento<Battery> saveToMemento() {
+    public synchronized Memento<Battery> saveToMemento() {
         return new FileBatteryMemento(clockBuffer.clone(), ramBuffer.clone(), isClockPresent, isDirty);
     }
 
     @Override
-    public void restoreFromMemento(Memento<Battery> memento) {
+    public synchronized void restoreFromMemento(Memento<Battery> memento) {
         if (!(memento instanceof FileBatteryMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
@@ -141,6 +188,44 @@ public class FileBattery implements Battery {
         System.arraycopy(mem.ramBuffer, 0, this.ramBuffer, 0, this.ramBuffer.length);
         this.isClockPresent = mem.isClockPresent;
         this.isDirty = mem.isDirty;
+    }
+
+    private void reportFailure(BatteryPersistenceFailedEvent.Operation operation, IOException e) {
+        LOG.warn("Unable to {} battery file {}", operation.name().toLowerCase(), saveFile, e);
+        String detail = e.getClass().getSimpleName();
+        String message = "Unable to " + operation.name().toLowerCase() + " battery save "
+                + saveFile.getName() + " (" + detail + ").";
+        if (operation == BatteryPersistenceFailedEvent.Operation.SAVE) {
+            message += " Changes remain pending and will be retried.";
+        }
+        BatteryPersistenceFailedEvent event =
+                new BatteryPersistenceFailedEvent(operation, saveFile.getName(), message);
+        if (eventBus == EventBus.NULL_EVENT_BUS) {
+            pendingFailure = event;
+        } else {
+            postFailure(event);
+        }
+    }
+
+    private void postFailure(BatteryPersistenceFailedEvent event) {
+        try {
+            eventBus.post(event);
+        } catch (RuntimeException subscriberFailure) {
+            // A UI/error subscriber must not turn an already-handled persistence failure into an
+            // emulator-thread failure.
+            LOG.warn("Battery persistence failure subscriber threw an exception", subscriberFailure);
+        }
+    }
+
+    synchronized boolean isDirtyForTesting() {
+        return isDirty;
+    }
+
+    synchronized boolean isClockPresentForTesting() {
+        return isClockPresent;
+    }
+
+    private record LoadedBattery(int[] ram, long[] clock) {
     }
 
     record FileBatteryMemento(byte[] clockBuffer, byte[] ramBuffer, boolean isClockPresent,

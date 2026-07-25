@@ -61,9 +61,13 @@ portable machine file only after the legacy read, validation, and live restore h
 successfully. A failed read, preflight, or apply leaves both the running machine and original file
 bytes unchanged.
 
-The optional rewrite currently uses the same direct replacement behavior as the historical slot
-writer. It is not claimed to survive a process, filesystem, or power failure during replacement.
-Crash-safe temporary-file writing, synchronization, fsync, and atomic rename belong to issue #324.
+Ordinary saves and this optional rewrite share the core crash-recoverable persistence transaction.
+The complete portable bytes are forced in a unique same-directory temp and atomically replaced
+where supported. Its narrowly selected recovery-backup fallback leaves a failed rewrite as either
+the complete legacy file or the complete portable file. Snapshot availability and load recover an
+interrupted fallback before checking or reading the slot. See
+[atomic-persistence.md](atomic-persistence.md) for artifacts, crash points, cleanup bounds, and
+platform limitations.
 
 ## Compatibility window
 

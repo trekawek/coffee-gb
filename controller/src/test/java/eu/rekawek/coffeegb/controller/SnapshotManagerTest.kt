@@ -25,13 +25,16 @@ import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.Ram
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
 import java.io.InvalidObjectException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
 import kotlin.io.path.deleteIfExists
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -44,6 +47,58 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class SnapshotManagerTest {
+
+  @Test
+  fun failedReplacementRetainsReadablePriorSnapshotAndLaterRetrySucceeds() {
+    withDefaultMachine { rom, configuration, gameboy ->
+      val persistence = ToggleFailWriter()
+      val manager =
+          SnapshotManager.testing(
+              configuration,
+              LegacySnapshotMigrationPolicy.PRESERVE,
+              persistence = persistence,
+          )
+      repeat(100) { gameboy.tick() }
+      manager.saveSnapshot(0, gameboy)
+      val oldBytes = snapshotFile(rom, 0).readBytes()
+      val oldState = StateCodec.capture(configuration, gameboy).root
+
+      repeat(500) { gameboy.tick() }
+      persistence.fail = true
+      assertFailsWith<IOException> { manager.saveSnapshot(0, gameboy) }
+      assertContentEquals(oldBytes, snapshotFile(rom, 0).readBytes())
+      assertTrue(manager.snapshotAvailable(0))
+      assertTrue(manager.loadSnapshot(0, gameboy))
+      assertEquals(oldState, StateCodec.capture(configuration, gameboy).root)
+
+      repeat(250) { gameboy.tick() }
+      persistence.fail = false
+      manager.saveSnapshot(0, gameboy)
+      assertFalse(oldBytes.contentEquals(snapshotFile(rom, 0).readBytes()))
+    }
+  }
+
+  @Test
+  fun availabilityAndLoadRecoverAnInterruptedFallbackBackupBeforeReading() {
+    withDefaultMachine { rom, configuration, gameboy ->
+      val manager = SnapshotManager(configuration)
+      repeat(333) { gameboy.tick() }
+      manager.saveSnapshot(0, gameboy)
+      val expected = StateCodec.capture(configuration, gameboy).root
+      val target = snapshotFile(rom, 0).toPath().toAbsolutePath().normalize()
+      val backup = recoveryBackup(target)
+      Files.move(target, backup)
+      assertFalse(Files.exists(target))
+
+      assertTrue(manager.snapshotAvailable(0))
+      assertTrue(Files.exists(target))
+      assertFalse(Files.exists(backup))
+
+      repeat(999) { gameboy.tick() }
+      assertTrue(manager.loadSnapshot(0, gameboy))
+      assertEquals(expected, StateCodec.capture(configuration, gameboy).root)
+    }
+  }
 
   @Test
   fun newSaveIsDeflatedMachineStateWithExactPrimarySlotAndProfileIdentity() {
@@ -250,6 +305,38 @@ class SnapshotManagerTest {
       repeat(1_000) { gameboy.tick() }
       assertTrue(manager.loadSnapshot(0, gameboy))
       assertEquals(restored, StateCodec.capture(configuration, gameboy).root)
+    }
+  }
+
+  @Test
+  fun failedBestEffortLegacyRewriteLeavesACompleteLegacyOrPortableFile() {
+    withDefaultMachine { rom, configuration, gameboy ->
+      val file = snapshotFile(rom, 0)
+      val legacy = LEGACY_FIXTURES.last().readBytes()
+
+      file.writeBytes(legacy)
+      val failBeforeWrite = ToggleFailWriter().also { it.fail = true }
+      val preservingManager =
+          SnapshotManager.testing(
+              configuration,
+              LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS,
+              persistence = failBeforeWrite,
+          )
+      assertTrue(preservingManager.loadSnapshot(0, gameboy))
+      assertContentEquals(legacy, file.readBytes())
+
+      file.writeBytes(legacy)
+      val commitThenFail = CommitThenFailOnceWriter()
+      val committingManager =
+          SnapshotManager.testing(
+              configuration,
+              LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS,
+              persistence = commitThenFail,
+          )
+      assertTrue(committingManager.loadSnapshot(0, gameboy))
+      val committed = file.readBytes()
+      assertContentEquals(CGBS, committed.copyOf(4))
+      assertEquals(StateRootKind.MACHINE, StateCodec.inspect(committed).rootKind)
     }
   }
 
@@ -543,6 +630,14 @@ class SnapshotManagerTest {
   private fun snapshotFile(rom: File, slot: Int) =
       rom.parentFile.resolve("${rom.nameWithoutExtension}.sn$slot")
 
+  private fun recoveryBackup(target: Path): Path {
+    val digest =
+        MessageDigest.getInstance("SHA-256")
+            .digest(target.fileName.toString().toByteArray(Charsets.UTF_8))
+    val id = digest.copyOf(16).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    return target.parent.resolve(".coffeegb-$id.backup")
+  }
+
   private fun recordComponent(record: Any, name: String): Any? =
       record.javaClass.recordComponents.single { it.name == name }.accessor.let { accessor ->
         accessor.isAccessible = true
@@ -668,5 +763,28 @@ class SnapshotManagerTest {
               )
               .toFile()
         }
+  }
+
+  private class ToggleFailWriter : AtomicFileWriter() {
+    var fail = false
+
+    override fun write(target: Path, intendedBytes: ByteArray) {
+      if (fail) {
+        throw IOException("injected snapshot replacement failure")
+      }
+      AtomicFileWriter.system().write(target, intendedBytes)
+    }
+  }
+
+  private class CommitThenFailOnceWriter : AtomicFileWriter() {
+    private var fail = true
+
+    override fun write(target: Path, intendedBytes: ByteArray) {
+      AtomicFileWriter.system().write(target, intendedBytes)
+      if (fail) {
+        fail = false
+        throw IOException("injected after snapshot replacement")
+      }
+    }
   }
 }

@@ -31,20 +31,50 @@ class BasicController private constructor(
     private val console: Console?,
     private val sessionPreparer: SessionPreparer,
     private val loadExecutor: ExecutorService,
+    private val snapshotManagerFactory: SnapshotManagerFactory,
 ) : Controller, SnapshotSupport {
 
   constructor(
       parentEventBus: EventBus,
       properties: EmulatorProperties,
       console: Console?,
-  ) : this(parentEventBus, properties, console, RomSessionPreparer(), createLoadExecutor())
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      RomSessionPreparer(),
+      createLoadExecutor(),
+      SnapshotManagerFactory.DEFAULT,
+  )
 
   internal constructor(
       parentEventBus: EventBus,
       properties: EmulatorProperties,
       console: Console?,
       sessionPreparer: SessionPreparer,
-  ) : this(parentEventBus, properties, console, sessionPreparer, createLoadExecutor())
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      sessionPreparer,
+      createLoadExecutor(),
+      SnapshotManagerFactory.DEFAULT,
+  )
+
+  internal constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      sessionPreparer: SessionPreparer,
+      snapshotManagerFactory: SnapshotManagerFactory,
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      sessionPreparer,
+      createLoadExecutor(),
+      snapshotManagerFactory,
+  )
 
   private val timingTicker = TimingTicker()
 
@@ -356,7 +386,7 @@ class BasicController private constructor(
     val session = session ?: return
 
     isPaused = false
-    snapshotManager = SnapshotManager(session.config)
+    snapshotManager = snapshotManagerFactory.create(session.config)
 
     session.eventBus.post(AddPatches(patches))
     session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))
@@ -375,8 +405,18 @@ class BasicController private constructor(
   private fun saveSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
-    manager.saveSnapshot(slot, currentSession.gameboy)
-    currentSession.eventBus.post(Controller.SnapshotSavedEvent(slot))
+    try {
+      manager.saveSnapshot(slot, currentSession.gameboy)
+      currentSession.eventBus.post(Controller.SnapshotSavedEvent(slot))
+    } catch (e: Exception) {
+      LOG.warn("Unable to save snapshot slot {}", slot, e)
+      currentSession.eventBus.post(
+          Controller.SnapshotSaveFailedEvent(
+              slot,
+              "Unable to save state slot $slot. Any previous state remains recoverable. " +
+                  sanitizedPersistenceDetail(e),
+          ))
+    }
   }
 
   private fun loadSnapshot(slot: Int) {
@@ -441,6 +481,16 @@ class BasicController private constructor(
         }
   }
 
+  private fun sanitizedPersistenceDetail(error: Throwable): String {
+    val detail =
+        error.message
+            ?.replace(Regex("[\\r\\n\\t]+"), " ")
+            ?.trim()
+            ?.take(320)
+            ?.takeIf { it.isNotEmpty() }
+    return detail ?: error.javaClass.simpleName
+  }
+
   private data class LoadJob(
       val event: Controller.LoadRomEvent,
       val clearPatches: Boolean,
@@ -483,5 +533,13 @@ class BasicController private constructor(
         // A failed/cancelled preparation owns no live session resources.
       }
     }
+  }
+}
+
+internal fun interface SnapshotManagerFactory {
+  fun create(configuration: Gameboy.GameboyConfiguration): SnapshotManager
+
+  companion object {
+    val DEFAULT = SnapshotManagerFactory(::SnapshotManager)
   }
 }

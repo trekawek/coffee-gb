@@ -420,6 +420,9 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         sgbDisplay.init(eventBus);
         gameGenie.init(eventBus);
         cartridge.init(eventBus);
+        if (slotCartridge != null) {
+            slotCartridge.initBattery(eventBus);
+        }
         eventBus.register(
                 e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent) e).nonCgbGame),
                 eu.rekawek.coffeegb.core.memory.cart.type.Datel.LaunchEvent.class);

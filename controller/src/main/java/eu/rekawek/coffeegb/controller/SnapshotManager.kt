@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.controller.state.StateDecodeException
 import eu.rekawek.coffeegb.controller.state.StateDecodeReason
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -25,7 +26,7 @@ enum class SnapshotFileFormat {
  *
  * Production preserves an accepted historical file by default. The opt-in policy rewrites it
  * only after its state has been validated and committed successfully. The replacement itself is
- * deliberately not crash-safe until issue #324.
+ * committed through the same crash-recoverable writer as ordinary portable saves.
  */
 enum class LegacySnapshotMigrationPolicy {
   PRESERVE,
@@ -217,20 +218,33 @@ class SnapshotManager private constructor(
     private val legacyMigrationPolicy: LegacySnapshotMigrationPolicy,
     private val readLimits: SnapshotReadLimits,
     private val legacyApplyProbe: (() -> Unit)?,
+    private val persistence: AtomicFileWriter,
 ) {
 
   constructor(
       configuration: Gameboy.GameboyConfiguration,
       legacyMigrationPolicy: LegacySnapshotMigrationPolicy =
           LegacySnapshotMigrationPolicy.PRESERVE,
-  ) : this(configuration, legacyMigrationPolicy, SnapshotReadLimits.DEFAULT, null)
+  ) : this(
+      configuration,
+      legacyMigrationPolicy,
+      SnapshotReadLimits.DEFAULT,
+      null,
+      AtomicFileWriter.system(),
+  )
 
   private val rom: File =
       requireNotNull(configuration.rom.file) {
         "Local snapshots require a file-backed primary ROM"
       }
 
-  fun snapshotAvailable(slot: Int) = getSnapshotFile(slot).exists()
+  fun snapshotAvailable(slot: Int): Boolean =
+      try {
+        persistence.exists(getSnapshotFile(slot).toPath())
+      } catch (failure: IOException) {
+        LOG.warn("Unable to recover snapshot slot {} before checking availability", slot, failure)
+        false
+      }
 
   fun saveSnapshot(slot: Int, gameboy: Gameboy) {
     val snapshotFile = getSnapshotFile(slot)
@@ -239,19 +253,22 @@ class SnapshotManager private constructor(
             StateCodec.capture(configuration, gameboy),
             StateCompression.DEFLATE,
         )
-    snapshotFile.writeBytes(bytes)
+    persistence.write(snapshotFile.toPath(), bytes)
   }
 
   fun loadSnapshot(slot: Int, gameboy: Gameboy): Boolean {
     val snapshotFile = getSnapshotFile(slot)
-    if (!snapshotFile.exists()) {
-      return false
-    }
 
     val target = StateIdentity.from(configuration)
     val snapshot =
         try {
-          SnapshotFileReader.read(snapshotFile, readLimits)
+          persistence.read(snapshotFile.toPath()) { recovered ->
+            if (!Files.exists(recovered)) {
+              null
+            } else {
+              SnapshotFileReader.read(recovered.toFile(), readLimits)
+            }
+          }
         } catch (failure: SnapshotReadException) {
           throw loadFailure(
               failure.format,
@@ -261,7 +278,17 @@ class SnapshotManager private constructor(
               failure.message ?: "Snapshot file could not be read",
               failure,
           )
+        } catch (failure: IOException) {
+          throw loadFailure(
+              null,
+              null,
+              target,
+              null,
+              "Snapshot transaction recovery or read failed",
+              failure,
+          )
         }
+        ?: return false
 
     when (snapshot.format) {
       SnapshotFileFormat.PORTABLE -> loadPortable(snapshot.bytes, target, gameboy)
@@ -330,10 +357,10 @@ class SnapshotManager private constructor(
               StateCompression.DEFLATE,
           )
       try {
-        snapshotFile.writeBytes(portable)
+        persistence.write(snapshotFile.toPath(), portable)
       } catch (failure: IOException) {
-        // The state is already restored successfully. Keep controller behavior successful and
-        // leave crash-safe/transactional replacement to issue #324.
+        // The state is already restored successfully. The transaction remains recoverable and
+        // migration is deliberately best effort.
         LOG.warn("Legacy snapshot restored, but its optional portable rewrite failed", failure)
       }
     }
@@ -388,6 +415,7 @@ class SnapshotManager private constructor(
         configuration: Gameboy.GameboyConfiguration,
         legacyMigrationPolicy: LegacySnapshotMigrationPolicy,
         readLimits: SnapshotReadLimits = SnapshotReadLimits.DEFAULT,
+        persistence: AtomicFileWriter = AtomicFileWriter.system(),
         legacyApplyProbe: (() -> Unit)? = null,
     ): SnapshotManager =
         SnapshotManager(
@@ -395,6 +423,7 @@ class SnapshotManager private constructor(
             legacyMigrationPolicy,
             readLimits,
             legacyApplyProbe,
+            persistence,
         )
   }
 }

@@ -252,8 +252,10 @@ not only by file metadata. Portable bytes never reach `ObjectInputStream`. After
 portable decode, identity/profile validation and detached preflight, apply uses the Phase-1
 transaction. Rewind history is cleared only after `SnapshotManager` returns success.
 
-The detailed local migration policy, diagnostics, compatibility window, and non-atomic replacement
-boundary are documented in [snapshot-migration.md](snapshot-migration.md).
+The detailed local migration policy, diagnostics, and compatibility window are documented in
+[snapshot-migration.md](snapshot-migration.md). Snapshot and battery replacement durability is
+specified separately in [atomic-persistence.md](atomic-persistence.md); it does not alter StateFile
+v1 bytes.
 
 ## Netplay protocol v8 integration
 

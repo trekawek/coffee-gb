@@ -43,6 +43,9 @@ interface Controller : AutoCloseable {
   /** Emitted after a snapshot has been written successfully. */
   data class SnapshotSavedEvent(val slot: Int) : Event
 
+  /** Emitted when a snapshot replacement fails; any previous slot remains recoverable. */
+  data class SnapshotSaveFailedEvent(val slot: Int, val message: String) : Event
+
   /** Emitted after a snapshot has been restored successfully. */
   data class SnapshotRestoredEvent(val slot: Int) : Event
 
