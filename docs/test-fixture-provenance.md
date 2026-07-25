@@ -42,6 +42,9 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   hashes are committed; no generated StateFile or frame bytes are checked in.
 - Phase #341 adds only synthetic packet/map values and updated expected hashes to these harnesses.
   It adds no ROM, BIOS, screenshot, trace, palette table, or generated StateFile artifact.
+- Phase #342 replaces the test-only four-player gap fixture with production-contract tests using
+  synthetic button sets and fake in-memory SDL descriptors. It adds no byte fixture or external
+  device capture and changes none of the hashes listed here.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

@@ -40,6 +40,7 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
+import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import org.junit.Test
 import java.io.IOException
 import java.nio.file.Paths
@@ -293,6 +294,7 @@ class LinkedControllerTest {
     client.runFrame()
     host.runFrame()
     deliverCheckpoint(listOf(0, 1))
+    assertEquals(listOf(false, true, null, null), client.localInputSourceAssignments())
 
     // A host RESET is relayed before the same-frame authoritative checkpoint. It consumes one
     // replay/state-change token, while the checkpoint uses the transition credit instead of being
@@ -310,6 +312,7 @@ class LinkedControllerTest {
     hostBus.post(peerState(0, PeerEventSource(3) { _, _ -> }).copy(player = 3))
     host.runFrame()
     deliverCheckpoint(listOf(0, 1, 2, 3))
+    assertEquals(listOf(false, true, false, false), client.localInputSourceAssignments())
 
     // The reset origin does not receive its own relayed RESET. Its trusted local transition grants
     // the equivalent one-use credit, so the checkpoint is not charged twice during the formation
@@ -900,8 +903,14 @@ class LinkedControllerTest {
     }
     sut.runFrame()
     assertEquals(4, sut.activeSessionCount())
+    assertEquals(listOf(true, false, false, false), sut.localInputSourceAssignments())
     eventBus.drainAsyncEvents()
     localInputs.clear()
+
+    eventBus.post(LogicalPlayerButtonPressEvent(2, Button.A))
+    sut.runFrame()
+    eventBus.drainAsyncEvents()
+    assertTrue(localInputs.isEmpty(), "local SGB P3 must not become linked emulator player input")
 
     eventBus.post(ButtonPressEvent(Button.B))
     sut.runFrame()

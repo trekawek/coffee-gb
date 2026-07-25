@@ -1,9 +1,10 @@
 # SGB conformance baselines and practical-command contract
 
 Issue #340 established the observational Phase 0 evidence and deterministic fixtures. Issue #341
-uses those artifacts to complete and validate the platform-neutral practical command set. It does
-not change clocks, boot values, independent player input, hardware profiles, SGB2, or MGB. The
-existing StateFile-v1 record registry and field schema remain unchanged.
+used those artifacts to complete the platform-neutral practical command set. Issue #342 now adds
+independent SGB P1-P4 host input while preserving that command/framing contract. It does not change
+clocks, boot values, hardware profiles, SGB2, or MGB. The existing StateFile-v1 record registry and
+field schema remain unchanged.
 
 ## Checked-in sources of truth
 
@@ -18,8 +19,8 @@ The status breakdown is:
 
 | Status | Rows | Meaning in this matrix |
 | --- | ---: | --- |
-| `implemented` | 15 | Validated production parsing, an observable Coffee GB effect, malformed-input atomicity, and state continuation are exercised. |
-| `partial` | 2 | Safe validated behavior exists, but a platform service assigned to a later phase is missing. |
+| `implemented` | 16 | Validated production parsing, an observable Coffee GB effect, malformed-input atomicity, and state continuation are exercised. |
+| `partial` | 1 | Safe validated behavior exists, but an SNES firmware/user service Coffee GB does not emulate is missing. |
 | `intentionally-unsupported` | 9 | The command depends on an SNES CPU/APU/PPU or firmware service Coffee GB does not emulate. The row still records packet consumption. |
 | `unknown` | 6 | Reserved IDs whose behavior is only partially known from one firmware revision. |
 
@@ -44,7 +45,7 @@ part of the contract.
 | --- | ---: | ---: |
 | `GAMEBOY_TYPE` | 12 | 58 |
 | `CGB_FLAG` | 37 | 412 |
-| `SGB_FLAG` | 8 | 36 |
+| `SGB_FLAG` | 8 | 38 |
 | `CGB0` | 9 | 44 |
 | `BOOTSTRAP` | 11 | 77 |
 | `CLOCK` | 12 | 27 |
@@ -100,9 +101,11 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
   the complete three-bit palette field and the real-game `0x2ff` transparent-tile workaround from
   issue #174; narrowing either would break established continuation tests. The documented priority
   bit must be zero and is rejected before a new or restored border transfer changes state.
-- Independent player input is absent. `MLT_REQ` now validates `0..3` before Joypad mutation and
-  retains the current ID rotation/value-2 fallback, while selected players above one still read
-  released button lines. Independent sources remain #342.
+- `MLT_REQ` controls `0`, `1`, and `3` select P1, rotating P1/P2, and rotating P1-P4 respectively,
+  with both JOYP selector lines high returning IDs `0xf..0xc`. Reducing the mode masks the selected
+  zero-based player by the new control, matching pinned Pan Docs. Control `2` remains the prior
+  explicitly tested compatibility state (`1/2 -> 2`, `0/3 -> 0`) because the pinned public source
+  does not document it; no new hardware claim is made for that value.
 - Reserved `0x1a..0x1f` preserve Coffee GB's conformance-tested ICD behavior: each physical row is
   ignored independently even when its untrusted count bits advertise more rows. This keeps the
   CasualPokePlayer extended-protocol result unchanged. Public disassembly evidence is
@@ -164,6 +167,34 @@ actual fade stays in its original low-byte range `0..32`. This is a compatible v
 not a StateFile schema or record-ID change: old values decode with priority disabled, and legacy
 Java descriptors are unchanged.
 
+## Phase 2 independent-input contract
+
+`PlayerInputSource` is a platform-neutral core service returning one deeply owned immutable sample
+for exactly zero-based slots `0..3` (P1-P4). Invalid indices are rejected. Joypad samples the whole
+value once at its emulator clock `tick()` boundary; JOYP reads never call AWT or SDL and repeated or
+rapid reads between ticks see the same latch. An unassigned source is all released. The legacy
+`ButtonPressEvent`/`ButtonReleaseEvent`, `Gameboy.pressedButtons`, and protocol-v8 input retain their
+P1 meaning for DMG/CGB, agents, linked emulators, and historical state. The desktop bridge emits
+those established events for aggregate P1 transitions and logical-slot events only for P2-P4.
+
+Desktop keyboard and gamepad adapters contribute through opaque source handles. Per-player state is
+the set union of those handles, so autorepeat is idempotent and releasing/disconnecting one device
+cannot cancel the same button held by another. Focus loss, ROM/session replacement, reassignment,
+device replacement, thread exit, and emulator stop release their scoped latches. SDL polling is
+behind an in-memory test seam, handles at most four assignments, and binds by a logged SHA-256 of
+the SDL GUID/path/name rather than enumeration index. A path-less SDL backend adds the current
+connection's instance ID so identical pads cannot collide. Array-order churn cannot move a held
+state; an OS path change or path-less reconnect is conservatively treated as device replacement.
+Right-stick tilt and rumble remain P1-only.
+
+The Joypad's mode, selected player, JOYP selector/filter, and packet receiver already round-trip in
+the stable component record. Physical P1-P4 input remains a service: MachineSnapshot and StateFile
+restore never resurrect historical presses. Rollback replay applies its existing P1 event history
+and freezes one P2-P4 sample at the replay boundary. Local SGB slots are never encoded as linked
+emulator players, so StateFile v1 and protocol v8 bytes do not change. Apply-time semantics accept
+only control/player pairs reachable by production (`0:0`, `1:0..1`, `2:{0,2}`, `3:0..3`) before
+the first live mutation.
+
 ## Deterministic ROM-independent fixtures
 
 The packet builder creates 16-byte packets and one-to-seven-packet commands, then drives the real
@@ -212,13 +243,13 @@ the exact portable bytes and continuation:
 | continuation StateFile | `044ffd6c83983693c7bb4c75e180e2b108c02b7ff8e9a52c08484cd3f039e92d` |
 | continuation frame | `51dd2ed6cf24f04a64ea81af4e9768056ea48074445476c96d6dca015fd2e342` |
 
-The fake four-player source is test-only and platform-neutral. It provides independently mutable
-sets, deterministic sample counts, disconnect-to-release behavior, and stable sorted diagnostics.
-It documents the gap without introducing the production `PlayerInputSource` assigned to #342.
+The Phase 0 fake source has been removed. The reusable production `PlayerInputSource`, immutable
+snapshot, and source-union hub are exercised directly with four non-overlapping patterns, invalid
+indices, alias attempts, disconnects, mode transitions, tick sampling, rewind/StateFile restore,
+rollback replay, keyboard mappings, and fake no-SDL devices.
 
 ## Deferred work
 
-- #342 introduces independent production player input and desktop mapping.
 - #343 introduces stable immutable profiles and per-session `ClockSpec` with exact current parity.
 - #344 adds SGB2 only after model/timing evidence and long-run clock tests.
 - #345 adds MGB and the repeatable profile-extension process.

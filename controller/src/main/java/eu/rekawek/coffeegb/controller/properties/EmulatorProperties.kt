@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.properties
 
+import eu.rekawek.coffeegb.core.joypad.PlayerInputHub
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -20,7 +21,12 @@ class EmulatorProperties() {
 
   val system = SystemProperties(this)
 
-  val controllerMapping = ControllerProperties.getControllerMapping(properties)
+  val playerInputMapping = ControllerProperties.getPlayerMapping(properties)
+
+  /** Shared live-input service copied into each active machine configuration. */
+  val playerInputSource = PlayerInputHub()
+
+  val controllerMapping = playerInputMapping.legacyPrimaryKeyboard()
 
   fun getProperty(key: Key, defaultValue: String? = null) =
       properties.getProperty(key.propertyName, defaultValue)

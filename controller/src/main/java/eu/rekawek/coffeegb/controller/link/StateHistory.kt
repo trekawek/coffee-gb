@@ -90,8 +90,10 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
             debugEventBus?.post(GameboyJoypadPressEvent(it.button, it.tick, player))
           }
           config?.let {
+            val replayConfig = it.forStateHistoryReplay()
             Session(
-                if (baseState.sessionStates[player] != null) it.forRestore() else it,
+                if (baseState.sessionStates[player] != null) replayConfig.forRestore()
+                else replayConfig,
                 eventBus,
                 null,
                 links.serial[player],

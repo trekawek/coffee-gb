@@ -58,6 +58,8 @@ import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
+import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
+import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -131,6 +133,12 @@ class LinkedController(
 
   @VisibleForTesting
   internal fun heldButtonStates(): List<Set<Button>?> = sessions.map { it?.heldButtons }
+
+  @VisibleForTesting
+  internal fun localInputSourceAssignments(): List<Boolean?> =
+      configs.map { config ->
+        config?.let { it.playerInputSource === properties.playerInputSource }
+      }
 
   /** Captures controller-owned frame, topology, session machines, endpoints, and held input. */
   internal fun captureDetachedState(): LinkedSessionState =
@@ -420,6 +428,28 @@ class LinkedController(
     }
 
     eventQueue.register<ButtonReleaseEvent> { e ->
+      val input = currentInput ?: Input(emptyList(), emptyList())
+      currentInput =
+          input.copy(
+              pressedButtons = (input.pressedButtons - e.button).sorted(),
+              releasedButtons = (input.releasedButtons + e.button).sorted(),
+          )
+    }
+
+    // Desktop P2-P4 are local SGB controller slots, not linked-emulator players. Only P1 enters
+    // the protocol-v8 input stream; the local machine samples the shared four-slot service.
+    eventQueue.register<LogicalPlayerButtonPressEvent> { e ->
+      if (e.player != 0) return@register
+      val input = currentInput ?: Input(emptyList(), emptyList())
+      currentInput =
+          input.copy(
+              pressedButtons = (input.pressedButtons + e.button).sorted(),
+              releasedButtons = (input.releasedButtons - e.button).sorted(),
+          )
+    }
+
+    eventQueue.register<LogicalPlayerButtonReleaseEvent> { e ->
+      if (e.player != 0) return@register
       val input = currentInput ?: Input(emptyList(), emptyList())
       currentInput =
           input.copy(
@@ -740,6 +770,12 @@ class LinkedController(
               event.codeBreakerRumble,
               event.displaySgbBorder,
           )
+      // A received group checkpoint may replace the client's own session too. Only that local
+      // machine receives the desktop four-slot service; remote linked consoles continue to get
+      // their P1 input exclusively from protocol-v8 history events.
+      if (event.player == localPlayer) {
+        config.setPlayerInputSource(properties.playerInputSource)
+      }
       candidate =
           Session(
               if (root != null) config.forRestore() else config,

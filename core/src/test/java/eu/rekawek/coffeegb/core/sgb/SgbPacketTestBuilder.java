@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.sgb;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
+import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 
 import java.util.ArrayList;
@@ -27,7 +28,7 @@ public final class SgbPacketTestBuilder implements AutoCloseable {
 
     private final EventBusImpl sgbBus = new EventBusImpl(null, null, false);
 
-    private final Joypad joypad = new Joypad(new InterruptManager(false), sgbBus, true);
+    private final Joypad joypad;
 
     private final SuperGameboy superGameboy = new SuperGameboy(sgbBus);
 
@@ -36,6 +37,11 @@ public final class SgbPacketTestBuilder implements AutoCloseable {
     private final List<Commands.AbstractCommand> commands = new ArrayList<>();
 
     public SgbPacketTestBuilder() {
+        this(PlayerInputSource.RELEASED);
+    }
+
+    public SgbPacketTestBuilder(PlayerInputSource playerInputSource) {
+        joypad = new Joypad(new InterruptManager(false), sgbBus, true, playerInputSource);
         sgbBus.register(event -> receivedPackets.add(event.packet().clone()),
                 SuperGameboy.PacketReceivedEvent.class);
         sgbBus.register(commands::add, Commands.AbstractCommand.class);

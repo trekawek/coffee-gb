@@ -16,6 +16,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.EnumSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
@@ -32,6 +35,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     private final InterruptManager interruptManager;
     private final boolean isSgb;
     private final EventBus sgbBus;
+    private final PlayerInputSource playerInputSource;
+
+    /** Immutable physical input latched at the most recent Joypad clock boundary. */
+    private PlayerInputSnapshot sampledInput = PlayerInputSnapshot.released();
 
     private int p1;
     private long tick;
@@ -56,9 +63,15 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     private int currentPacketIndex;
 
     public Joypad(InterruptManager interruptManager, EventBus sgbBus, boolean isSgb) {
+        this(interruptManager, sgbBus, isSgb, PlayerInputSource.RELEASED);
+    }
+
+    public Joypad(InterruptManager interruptManager, EventBus sgbBus, boolean isSgb,
+                  PlayerInputSource playerInputSource) {
         this.interruptManager = interruptManager;
         this.isSgb = isSgb;
         this.sgbBus = sgbBus;
+        this.playerInputSource = Objects.requireNonNull(playerInputSource, "playerInputSource");
         // JOYP powers on with both selector lines low. On an SGB, that level has already
         // reset the ICD2 receiver, so the first transition to idle-high may release the
         // start pulse without software having to create another falling edge first.
@@ -101,15 +114,27 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     }
 
     /**
-     * The set of currently-held buttons. Intentionally not part of machine state (see
-     * {@link #captureState()}); rollback netplay snapshots and restores it separately so a
-     * held button survives a rebase whose base frame is past the original press.
+     * The effective P1 set of currently-held buttons. It combines the historical event stream
+     * with the latest live-source latch and is intentionally not part of machine state (see
+     * {@link #captureState()}). Rollback netplay snapshots only the event-owned subset; the live
+     * service remains current across restore.
      */
     public Set<Button> getPressedButtons() {
+        Set<Button> pressed = new java.util.HashSet<>(buttons);
+        pressed.addAll(sampledInput.buttons(0));
+        return pressed;
+    }
+
+    /**
+     * P1 buttons owned by the historical event/session stream. Unlike {@link #getPressedButtons()},
+     * this excludes the live input service so detached session state cannot resurrect a physical
+     * press after that source has released it.
+     */
+    public Set<Button> getLegacyPressedButtons() {
         return new java.util.HashSet<>(buttons);
     }
 
-    public void setPressedButtons(java.util.Collection<Button> pressed) {
+    public void setPressedButtons(Collection<Button> pressed) {
         if (buttons.equals(Set.copyOf(pressed))) {
             return;
         }
@@ -120,6 +145,12 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     public void tick() {
         tick++;
+        PlayerInputSnapshot nextInput = Objects.requireNonNull(
+                playerInputSource.sample(), "PlayerInputSource returned null");
+        if (!sampledInput.equals(nextInput)) {
+            sampledInput = nextInput;
+            inputChangedSinceLastTick = true;
+        }
         // JOYP writes happen after the joypad clock edge represented by this emulator
         // tick. Start sampling a changed input on the following tick, then require four
         // consecutive samples. This models the four flip-flop input filter visible in
@@ -255,12 +286,13 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         }
 
         int result = 0x0f;
-        if (currentPlayer > 0) {
-            // Only support controller for player 0
-            return result;
+        EnumSet<Button> selectedButtons = EnumSet.noneOf(Button.class);
+        selectedButtons.addAll(sampledInput.buttons(currentPlayer));
+        // The historical event-driven API remains P1-only for controller/netplay replay.
+        if (currentPlayer == 0) {
+            selectedButtons.addAll(buttons);
         }
-
-        for (Button b : buttons) {
+        for (Button b : selectedButtons) {
             if ((b.getLine() & p1) == 0) {
                 result &= 0xff & ~b.getMask();
             }
@@ -295,6 +327,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (!(state instanceof JoypadState mem)) {
             throw new IllegalArgumentException("Invalid state type");
         }
+        validateState(mem);
         this.p1 = mem.p1;
         this.tick = mem.tick;
         this.inputHistory = mem.inputHistory;
@@ -306,13 +339,104 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         this.transferReadyForData = mem.transferReadyForData;
         this.pendingTransferBit = mem.pendingTransferBit;
         this.currentByte = mem.currentByte;
-        if (mem.currentPacket.length != this.currentPacket.length) {
-            throw new IllegalArgumentException("Invalid state length");
-        }
         System.arraycopy(mem.currentPacket, 0, this.currentPacket, 0, mem.currentPacket.length);
         this.currentByteIndex = mem.currentByteIndex;
         this.currentPacketIndex = mem.currentPacketIndex;
+    }
 
+    private static void validateState(JoypadState state) {
+        if ((state.p1 & 0xcf) != 0) {
+            throw new IllegalArgumentException("Invalid JOYP selector state");
+        }
+        if (state.players < 0 || state.players > 3) {
+            throw new IllegalArgumentException("Invalid SGB multiplayer control");
+        }
+        boolean validPlayer = switch (state.players) {
+            case 0 -> state.currentPlayer == 0;
+            case 1 -> state.currentPlayer >= 0 && state.currentPlayer <= 1;
+            case 2 -> state.currentPlayer == 0 || state.currentPlayer == 2;
+            case 3 -> state.currentPlayer >= 0 && state.currentPlayer <= 3;
+            default -> false;
+        };
+        if (!validPlayer) {
+            throw new IllegalArgumentException("Invalid selected SGB player");
+        }
+        if ((state.inputHistory & ~0xffff) != 0
+                || (state.filteredInputLines & ~0x0f) != 0) {
+            throw new IllegalArgumentException("Invalid JOYP filter state");
+        }
+        if (state.pendingTransferBit < -1 || state.pendingTransferBit > 1
+                || state.currentByte < 0 || state.currentByte > 0xff
+                || state.currentByteIndex < 0 || state.currentByteIndex > 7) {
+            throw new IllegalArgumentException("Invalid SGB receiver state");
+        }
+        if (state.currentPacket == null || state.currentPacket.length != 16
+                || state.currentPacketIndex < 0
+                || state.currentPacketIndex > state.currentPacket.length) {
+            throw new IllegalArgumentException("Invalid SGB packet state");
+        }
+        for (int value : state.currentPacket) {
+            if (value < 0 || value > 0xff) {
+                throw new IllegalArgumentException("Invalid SGB packet byte");
+            }
+        }
+        if ((!state.transferInProgress
+                && (state.transferReadyForData || state.pendingTransferBit != -1))
+                || (state.pendingTransferBit != -1 && !state.transferReadyForData)) {
+            throw new IllegalArgumentException("Incoherent SGB receiver state");
+        }
+    }
+
+    /** Stable platform-neutral SGB multiplayer diagnostics for UI/status consumers. */
+    public SgbMultiplayerStatus getSgbMultiplayerStatus() {
+        return new SgbMultiplayerStatus(SgbMultiplayerMode.fromControl(players), currentPlayer);
+    }
+
+    public enum SgbMultiplayerMode {
+        ONE_PLAYER(0, 1),
+        TWO_PLAYER(1, 2),
+        CONTROL_2_COMPATIBILITY(2, 2),
+        FOUR_PLAYER(3, 4);
+
+        private final int control;
+        private final int playerCount;
+
+        SgbMultiplayerMode(int control, int playerCount) {
+            this.control = control;
+            this.playerCount = playerCount;
+        }
+
+        public int control() {
+            return control;
+        }
+
+        public int playerCount() {
+            return playerCount;
+        }
+
+        private static SgbMultiplayerMode fromControl(int control) {
+            return values()[control];
+        }
+    }
+
+    public record SgbMultiplayerStatus(SgbMultiplayerMode mode, int selectedPlayer) {
+        public SgbMultiplayerStatus {
+            Objects.requireNonNull(mode, "mode");
+            PlayerInputSnapshot.checkPlayer(selectedPlayer);
+            boolean coherent = switch (mode) {
+                case ONE_PLAYER -> selectedPlayer == 0;
+                case TWO_PLAYER -> selectedPlayer <= 1;
+                case CONTROL_2_COMPATIBILITY -> selectedPlayer == 0 || selectedPlayer == 2;
+                case FOUR_PLAYER -> true;
+            };
+            if (!coherent) {
+                throw new IllegalArgumentException("Selected player is invalid for " + mode);
+            }
+        }
+
+        public int playerCount() {
+            return mode.playerCount();
+        }
     }
 
     private record JoypadState(int p1, long tick, int inputHistory,

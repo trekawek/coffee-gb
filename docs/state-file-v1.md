@@ -237,6 +237,14 @@ No live-mutation callback occurs before all deterministic validation succeeds. U
 failures use an explicit deep-owned rollback capture. Linked preparation covers every player before the first
 commit and rollback remains group-atomic.
 
+SGB multiplayer does not extend the v1 wire schema. The existing Joypad record already stores the
+behavior-affecting `MLT_REQ` control/selected-player and JOYP filter/receiver phases. The four local
+physical player sets are host input services, like keyboard/device callbacks, and are intentionally
+absent from `MachineState`, `SessionState`, and `LinkedSessionState`. Decode/apply therefore restores
+the multiplex machine and retains the currently sampled physical input. The Session held-button
+list remains the protocol-v8 event-owned P1 rollback field; it excludes a direct live-source sample
+and is not a list of SGB logical controllers.
+
 ## Local slot integration and legacy dispatch
 
 `SnapshotManager` captures a machine root with the exact active `GameboyConfiguration` at

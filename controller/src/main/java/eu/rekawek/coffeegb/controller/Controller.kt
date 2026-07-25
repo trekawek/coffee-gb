@@ -111,6 +111,7 @@ interface Controller : AutoCloseable {
       val gameboyType = getGameboyType(properties.system, rom)
       config.setGameboyType(gameboyType)
       config.setBootstrapMode(properties.system.bootstrapMode)
+      config.setPlayerInputSource(properties.playerInputSource)
       if (config.gameboyType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
         config.setDisplaySgbBorder(false)
       } else {

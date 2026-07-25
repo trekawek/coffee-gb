@@ -62,7 +62,7 @@ and save states (`.sn0`&ndash;`.sn9`) are stored next to the ROM. Pause, save
 states, and rewind are disabled during netplay.
 
 <details>
-<summary>Custom keyboard mapping</summary>
+<summary>Custom keyboard and game-controller mapping</summary>
 
 Edit `~/.coffeegb.properties` and use
 [`KeyEvent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/event/KeyEvent.html)
@@ -78,6 +78,32 @@ btn_b=VK_X
 btn_start=VK_ENTER
 btn_select=VK_SHIFT
 ```
+
+Those historical `btn_*` names remain the P1 mapping. SGB games can use independent P2-P4
+keyboard mappings with disjoint keys:
+
+```properties
+input.p2.btn_up=VK_W
+input.p2.btn_down=VK_S
+input.p2.btn_left=VK_A
+input.p2.btn_right=VK_D
+input.p2.btn_a=VK_G
+input.p2.btn_b=VK_F
+input.p2.btn_start=VK_T
+input.p2.btn_select=VK_R
+```
+
+The same `input.pN.btn_<button>=VK_*` grammar accepts `p1` through `p4`. A key may belong to
+only one logical player; malformed players/buttons/keys and collisions stop startup with a clear
+configuration error instead of silently overwriting another mapping.
+
+P1 uses the first available SDL game controller by default. The explicit grammar is
+`input.pN.gamepad=auto|none|sdl-<64 lowercase hex digits>`. At startup, Coffee GB logs each
+controller's stable `sdl-*` ID; copy that value to pin a physical device to P1-P4. Only one player
+may use a given ID, and only one `auto` assignment is allowed. The ID hashes SDL's GUID, device
+path, and name. If SDL exposes no path, the current connection's instance ID disambiguates otherwise
+identical pads. IDs are stable across enumeration-order changes; an OS path change (or reconnect on
+a path-less backend) is conservatively treated as device replacement.
 
 </details>
 

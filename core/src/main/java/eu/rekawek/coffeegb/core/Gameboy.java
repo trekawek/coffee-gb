@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.core.gpu.*;
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.ir.InfraredPort;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
+import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -201,7 +202,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace(), speedMode);
         sound = new Sound(timer, speedMode, gbc);
-        joypad = new Joypad(interruptManager, sgbBus, sgb);
+        joypad = new Joypad(interruptManager, sgbBus, sgb, configuration.playerInputSource);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
         infraredPort = new InfraredPort(gbc, speedMode);
         codeBreakerRumble = new CodeBreakerRumble();
@@ -870,8 +871,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return joypad.getPressedButtons();
     }
 
+    /** Session-owned protocol/replay P1 state, excluding the live four-slot input service. */
+    public java.util.Set<eu.rekawek.coffeegb.core.joypad.Button> getLegacyPressedButtons() {
+        return joypad.getLegacyPressedButtons();
+    }
+
     public void setPressedButtons(java.util.Collection<eu.rekawek.coffeegb.core.joypad.Button> pressed) {
         joypad.setPressedButtons(pressed);
+    }
+
+    /** Platform-neutral SGB controller status for diagnostics and conformance tests. */
+    public Joypad.SgbMultiplayerStatus getSgbMultiplayerStatus() {
+        return joypad.getSgbMultiplayerStatus();
     }
 
     @Override
@@ -1115,6 +1126,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         private TimeSource rtcTimeSource = new SystemTimeSource();
 
+        /** Live platform input service; deliberately excluded from every machine-state model. */
+        private PlayerInputSource playerInputSource = PlayerInputSource.RELEASED;
+
         private BooleanSupplier bootCancellation = () -> false;
 
         public GameboyConfiguration(File romFile) throws IOException {
@@ -1231,6 +1245,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return this;
         }
 
+        public GameboyConfiguration setPlayerInputSource(PlayerInputSource playerInputSource) {
+            this.playerInputSource = playerInputSource == null
+                    ? PlayerInputSource.RELEASED : playerInputSource;
+            return this;
+        }
+
+        public PlayerInputSource getPlayerInputSource() {
+            return playerInputSource;
+        }
+
         /**
          * A copy of this configuration that skips the boot sequence, for building a
          * Gameboy whose state is immediately overwritten by an explicit state restore. With
@@ -1241,6 +1265,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         public GameboyConfiguration forRestore() {
             GameboyConfiguration copy = copy();
             copy.bootstrapMode = BootstrapMode.SKIP;
+            return copy;
+        }
+
+        /**
+         * Stable physical-input view for deterministic rollback replay. P1 is replayed from the
+         * controller's historical input log; P2-P4 are live local SGB services and are sampled
+         * once at the replay boundary so asynchronous desktop polling cannot change mid-replay.
+         */
+        public GameboyConfiguration forStateHistoryReplay() {
+            GameboyConfiguration copy = copy();
+            var snapshot = java.util.Objects.requireNonNull(
+                    playerInputSource.sample(), "PlayerInputSource returned null").withoutPrimary();
+            copy.playerInputSource = () -> snapshot;
             return copy;
         }
 
@@ -1264,6 +1301,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             copy.mealybugDmgBlob = mealybugDmgBlob;
             copy.codeBreakerRumble = codeBreakerRumble;
             copy.rtcTimeSource = rtcTimeSource;
+            copy.playerInputSource = playerInputSource;
             copy.bootCancellation = bootCancellation;
             return copy;
         }
