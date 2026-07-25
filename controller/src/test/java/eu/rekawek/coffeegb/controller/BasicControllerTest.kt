@@ -12,8 +12,11 @@ import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
@@ -26,6 +29,70 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerTest {
+
+  @Test
+  fun failedSnapshotSaveEmitsOnlyFailureRetainsOldFileAndControllerLaterSaves() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val failures = LinkedBlockingQueue<Controller.SnapshotSaveFailedEvent>()
+    val saved = LinkedBlockingQueue<Controller.SnapshotSavedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<Controller.SnapshotSaveFailedEvent> { failures.add(it) }
+    eventBus.register<Controller.SnapshotSavedEvent> { saved.add(it) }
+    val directory = Files.createTempDirectory("coffee-gb-controller-save-failure")
+    val rom = directory.resolve("state-test.gb").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val persistence = ToggleFailWriter()
+    val controller =
+        BasicController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory { configuration ->
+              SnapshotManager.testing(
+                  configuration,
+                  LegacySnapshotMigrationPolicy.PRESERVE,
+                  persistence = persistence,
+              )
+            },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      eventBus.post(Controller.SaveSnapshotEvent(0))
+      assertEquals(0, assertNotNull(saved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot)
+      val file = directory.resolve("state-test.sn0")
+      val prior = Files.readAllBytes(file)
+
+      persistence.fail = true
+      eventBus.post(Controller.SaveSnapshotEvent(0))
+      val failure = assertNotNull(failures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(0, failure.slot)
+      assertTrue(failure.message.contains("previous state remains recoverable"))
+      assertNull(saved.poll(250, TimeUnit.MILLISECONDS), "failure must not post success")
+      assertTrue(prior.contentEquals(Files.readAllBytes(file)))
+
+      persistence.fail = false
+      eventBus.post(Controller.SaveSnapshotEvent(1))
+      assertEquals(
+          1,
+          assertNotNull(
+                  saved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                  "controller must keep processing after a persistence failure",
+              )
+              .slot,
+      )
+      assertEquals("CGBS", Files.readAllBytes(directory.resolve("state-test.sn1")).copyOf(4).toString(Charsets.US_ASCII))
+    } finally {
+      controller.close()
+      eventBus.close()
+      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
+      Files.deleteIfExists(directory)
+    }
+  }
 
   @Test
   fun failedLoadDoesNotPreventLoadingAnotherRom() {
@@ -232,5 +299,16 @@ class BasicControllerTest {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
 
     const val TIMEOUT_SECONDS = 10L
+  }
+
+  private class ToggleFailWriter : AtomicFileWriter() {
+    @Volatile var fail = false
+
+    override fun write(target: Path, intendedBytes: ByteArray) {
+      if (fail) {
+        throw IOException("injected snapshot replacement failure")
+      }
+      AtomicFileWriter.system().write(target, intendedBytes)
+    }
   }
 }

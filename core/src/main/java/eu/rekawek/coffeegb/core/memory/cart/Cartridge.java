@@ -97,7 +97,13 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     }
 
     public void init(EventBus eventBus) {
+        battery.init(eventBus);
         addressSpace.init(eventBus);
+    }
+
+    /** Supplies only the persistence error route for a pass-through slot cartridge. */
+    public void initBattery(EventBus eventBus) {
+        battery.init(eventBus);
     }
 
     @Override

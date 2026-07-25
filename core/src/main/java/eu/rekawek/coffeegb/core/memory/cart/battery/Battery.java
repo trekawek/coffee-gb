@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.battery;
 
+import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -16,6 +17,10 @@ public interface Battery extends Serializable, Originator<Battery> {
     void saveRamWithClock(int[] ram, long[] clockData);
 
     void flush();
+
+    /** Supplies the session event route after machine construction. */
+    default void init(EventBus eventBus) {
+    }
 
     Battery NULL_BATTERY =
             new Battery() {
