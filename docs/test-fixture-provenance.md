@@ -40,6 +40,8 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   `f89f3802d47dd31da0db6b5656ed5098194e85020ba735fb44c1c9d4f9043eee`.
 - `SgbStateBaselineTest` uses that same generated ROM and production StateFile capture. Only expected
   hashes are committed; no generated StateFile or frame bytes are checked in.
+- Phase #341 adds only synthetic packet/map values and updated expected hashes to these harnesses.
+  It adds no ROM, BIOS, screenshot, trace, palette table, or generated StateFile artifact.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

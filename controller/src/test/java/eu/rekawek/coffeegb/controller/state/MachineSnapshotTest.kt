@@ -333,9 +333,9 @@ class MachineSnapshotTest {
         .use { session ->
           val firstPacket =
               IntArray(16).also {
-                it[0] = 2 // first half of a two-packet PAL01 command
-                it[1] = 0x34
-                it[2] = 0x12
+                it[0] = (0x05 shl 3) or 2 // first half of a valid two-packet ATTR_LIN
+                it[1] = 15
+                repeat(14) { index -> it[index + 2] = (1 shl 5) or index }
               }
           sendSgbPacket(session.gameboy.addressSpace, firstPacket)
           val snapshot = MachineSnapshot.capture(session.gameboy)

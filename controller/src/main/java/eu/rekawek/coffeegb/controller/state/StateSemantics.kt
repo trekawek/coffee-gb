@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
+import eu.rekawek.coffeegb.core.sgb.Commands
 import java.lang.reflect.Array as ReflectArray
 import java.util.IdentityHashMap
 
@@ -268,26 +269,44 @@ internal object StateSemantics {
       put("eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState",
           constrained("Transfer command packet length/code and optional 4 KiB VRAM payload are coherent.") {
             val packet = it.intArray("packet")
-            it.require(packet.isNotEmpty(), "has an empty transfer-command packet")
-            val declared = packet[0] and 7
-            it.require(declared in 1..7 && packet.size == declared * 16,
-                "has packet length ${packet.size} inconsistent with declared length $declared")
-            it.require(packet[0] / 8 in TRANSFER_COMMAND_CODES,
-                "does not encode an SGB transfer command")
+            val parsed = Commands.parse(packet)
+            it.require(parsed.command() is Commands.TransferCommand,
+                "does not encode a valid SGB transfer command: ${parsed.reason()}")
             (it.value("dataTransfer") as IntArray?)?.let { data ->
-              it.require(data.size == SGB_TRANSFER_SIZE, "has transfer payload length ${data.size}")
+              val violation =
+                  Commands.validateTransferData(parsed.command() as Commands.TransferCommand, data)
+              it.require(violation == null, "has invalid transfer payload: $violation")
             }
           })
       put("eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyState",
           constrained("Multipacket assembly indices and delayed transfer countdown are bounded.") {
             val packets = it.objectArray("multipacket")
+            packets.forEachIndexed { index, row ->
+              it.require(row is IntArray && row.size == 16,
+                  "has invalid multipacket row $index")
+              (row as IntArray).forEachIndexed { byteIndex, value ->
+                it.require(value in 0..0xff,
+                    "has invalid multipacket[$index][$byteIndex]=$value")
+              }
+            }
             it.range("multipacketLength", 0, packets.size)
             it.range("multipacketIndex", 0, packets.size)
-            it.require(it.int("multipacketLength") == 0 ||
-                it.int("multipacketIndex") < it.int("multipacketLength"),
-                "has multipacket index beyond the active packet count")
-            it.range("transferCountdown", 0, 3)
+            val length = it.int("multipacketLength")
+            val index = it.int("multipacketIndex")
+            if (length == 0) {
+              it.require(index == 0, "has an idle collector with nonzero packet index")
+            } else {
+              it.require(index in 1 until length,
+                  "has multipacket index outside the active packet count")
+              val first = packets[0] as IntArray
+              it.require((first[0] and 7) == length,
+                  "has a first-packet count inconsistent with collector length")
+            }
             it.recordType("waitingTransferCommandMemento", TRANSFER_COMMAND_STATE)
+            val waiting = it.value("waitingTransferCommandMemento")
+            val countdown = it.int("transferCountdown")
+            it.require(if (waiting == null) countdown == 0 else countdown in 1..3,
+                "has a delayed transfer/countdown presence mismatch")
           })
       put("eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayState",
           constrained("SGB palette rows, palette IDs, attribute rows, and fade phase are bounded.") {
@@ -295,7 +314,10 @@ internal object StateSemantics {
             checkRows(it, "systemPalettes", 4, nullable = true)
             checkRows(it, "attributeFiles", 20 * 18, nullable = false, values = 0..3)
             it.intValues("paletteMap", 0, 3)
-            it.range("borderFade", 0, 32)
+            val packedFade = it.int("borderFade")
+            it.require(packedFade >= 0 && (packedFade and SGB_DISPLAY_STATE_ALLOWED_BITS.inv()) == 0 &&
+                (packedFade and SGB_DISPLAY_FADE_MASK) in 0..32,
+                "has invalid packed border fade/palette-priority state $packedFade")
           })
       put("eu.rekawek.coffeegb.core.sgb.Background\$BackgroundState",
           constrained("The 105-frame border animation and optional picture-command type are validated.") {
@@ -806,7 +828,8 @@ internal object StateSemantics {
   // Gameboy.TICKS_PER_FRAME * 2 capacity (integer 4,194,304 / 60), not a rounded frame estimate.
   private const val SOUND_BUFFER_CAPACITY = 69_905 * 2
   private const val MAX_CPU_OPS = 64
-  private const val SGB_TRANSFER_SIZE = 0x1000
+  private const val SGB_DISPLAY_FADE_MASK = 0xff
+  private const val SGB_DISPLAY_STATE_ALLOWED_BITS = 0x1ff
   private const val FULL_CHANGER_SCHEDULE_SIZE = 36
   private const val BARCODE_FRAME_SIZE = 30
   private const val RTC_TICKS_PER_SECOND = 4_194_304L
@@ -836,5 +859,4 @@ internal object StateSemantics {
           "eu.rekawek.coffeegb.core.genie.Genie\$GameSharkPatchState",
       )
   private val DELAYED_PPU_REGISTERS = setOf(0xff40, 0xff43, 0xff47, 0xff4b)
-  private val TRANSFER_COMMAND_CODES = setOf(0x09, 0x0b, 0x10, 0x13, 0x14, 0x15)
 }

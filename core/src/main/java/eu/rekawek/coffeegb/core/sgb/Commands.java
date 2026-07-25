@@ -12,11 +12,140 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 public class Commands {
 
+    public static final int PACKET_SIZE = 16;
+
+    public static final int MAX_PACKETS = 7;
+
+    public static final int TRANSFER_SIZE = 0x1000;
+
     private Commands() {
     }
 
+    public enum Disposition {
+        PRACTICAL,
+        UNSUPPORTED,
+        UNKNOWN,
+        INVALID
+    }
+
+    /** A total, side-effect-free decode result for one completely collected command. */
+    public record ParseResult(AbstractCommand command, Disposition disposition, String reason) {
+
+        public boolean isDeliverable() {
+            return disposition == Disposition.PRACTICAL;
+        }
+    }
+
+    /**
+     * Validates the complete command before constructing an event that can reach a component.
+     * Unknown and unsupported commands are classified separately so the transport can consume
+     * their framing without exposing them to practical SGB state.
+     */
+    public static ParseResult parse(int[] packet) {
+        String violation = validateEnvelope(packet);
+        if (violation != null) {
+            return invalid(violation);
+        }
+
+        int code = packet[0] >>> 3;
+        if (code >= 0x1a) {
+            return new ParseResult(null, Disposition.UNKNOWN,
+                    "reserved or unknown command ID 0x" + Integer.toHexString(code));
+        }
+
+        violation = validateCommand(code, packet);
+        if (violation != null) {
+            return invalid(violation);
+        }
+
+        AbstractCommand command = createCommand(code, packet);
+        return new ParseResult(command, isPracticalCommand(code)
+                ? Disposition.PRACTICAL : Disposition.UNSUPPORTED, null);
+    }
+
     public static AbstractCommand toCommand(int[] packet) {
-        int code = packet[0] / 8;
+        ParseResult result = parse(packet);
+        return result.disposition == Disposition.INVALID || result.disposition == Disposition.UNKNOWN
+                ? null : result.command;
+    }
+
+    public static boolean isRecognizedCommandId(int code) {
+        return code >= 0 && code <= 0x19;
+    }
+
+    public static Class<? extends AbstractCommand> commandClass(int code) {
+        return switch (code) {
+            case 0x00 -> Pal01Cmd.class;
+            case 0x01 -> Pal23Cmd.class;
+            case 0x02 -> Pal03Cmd.class;
+            case 0x03 -> Pal12Cmd.class;
+            case 0x04 -> AttrBlkCmd.class;
+            case 0x05 -> AttrLinCmd.class;
+            case 0x06 -> AttrDivCmd.class;
+            case 0x07 -> AttrChrCmd.class;
+            case 0x08 -> SoundCmd.class;
+            case 0x09 -> SoundTrnCmd.class;
+            case 0x0a -> PalSetCmd.class;
+            case 0x0b -> PalTrnCmd.class;
+            case 0x0c -> AtrcEnCmd.class;
+            case 0x0d -> TestEnCmd.class;
+            case 0x0e -> IconEnCmd.class;
+            case 0x0f -> DataSndCmd.class;
+            case 0x10 -> DataTrnCmd.class;
+            case 0x11 -> MltReqCmd.class;
+            case 0x12 -> JumpCmd.class;
+            case 0x13 -> ChrTrnCmd.class;
+            case 0x14 -> PctTrnCmd.class;
+            case 0x15 -> AttrTrnCmd.class;
+            case 0x16 -> AttrSetCmd.class;
+            case 0x17 -> MaskEnCmd.class;
+            case 0x18 -> ObjTrnCmd.class;
+            case 0x19 -> PalPriCmd.class;
+            default -> null;
+        };
+    }
+
+    public static String validateTransferData(TransferCommand command, int[] data) {
+        if (command == null) {
+            return "transfer command is absent";
+        }
+        if (data == null) {
+            return "transfer payload is absent";
+        }
+        if (data.length != TRANSFER_SIZE) {
+            return "transfer payload has " + data.length + " bytes, expected " + TRANSFER_SIZE;
+        }
+        for (int i = 0; i < data.length; i++) {
+            if (data[i] < 0 || data[i] > 0xff) {
+                return "transfer payload byte " + i + " is outside 0..255";
+            }
+        }
+        return null;
+    }
+
+    /** Validates a newly captured ICD2 payload before it can enter practical SGB state. */
+    public static String validateTransferCommitData(TransferCommand command, int[] data) {
+        String violation = validateTransferData(command, data);
+        if (violation != null) {
+            return violation;
+        }
+        return command instanceof PctTrnCmd ? validatePictureData(data) : null;
+    }
+
+    private static String validatePictureData(int[] data) {
+        // Coffee GB deliberately retains its established full three-bit palette addressing and
+        // Pocket Kanjirou compatibility: tile numbers above 0xff (notably 0x2ff) are transparent
+        // rather than wrapped into CHR RAM. The documented BG-priority bit, however, must be zero.
+        for (int index = 0; index < 32 * 28; index++) {
+            int value = data[index * 2] | data[index * 2 + 1] << 8;
+            if ((value & 0x2000) != 0) {
+                return "PCT_TRN map entry " + index + " sets unsupported BG priority";
+            }
+        }
+        return null;
+    }
+
+    private static AbstractCommand createCommand(int code, int[] packet) {
         return switch (code) {
             case 0x00 -> new Pal01Cmd(packet);
             case 0x01 -> new Pal23Cmd(packet);
@@ -48,11 +177,267 @@ public class Commands {
         };
     }
 
+    private static ParseResult invalid(String reason) {
+        return new ParseResult(null, Disposition.INVALID, reason);
+    }
+
+    private static boolean isPracticalCommand(int code) {
+        return switch (code) {
+            case 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                    0x0a, 0x0b, 0x11, 0x13, 0x14, 0x15, 0x16, 0x17, 0x19 -> true;
+            default -> false;
+        };
+    }
+
+    private static String validateEnvelope(int[] packet) {
+        if (packet == null) {
+            return "command bytes are absent";
+        }
+        if (packet.length < PACKET_SIZE || packet.length > PACKET_SIZE * MAX_PACKETS
+                || packet.length % PACKET_SIZE != 0) {
+            return "command length " + packet.length + " is not 1..7 complete packets";
+        }
+        for (int i = 0; i < packet.length; i++) {
+            if (packet[i] < 0 || packet[i] > 0xff) {
+                return "command byte " + i + " is outside 0..255";
+            }
+        }
+        int count = packet[0] & 7;
+        if (count < 1 || count > MAX_PACKETS) {
+            return "declared packet count " + count + " is outside 1..7";
+        }
+        if (packet.length != count * PACKET_SIZE) {
+            return "declared packet count " + count + " does not match " + packet.length + " bytes";
+        }
+        return null;
+    }
+
+    private static String validateCommand(int code, int[] packet) {
+        return switch (code) {
+            // Byte 15 has no defined purpose for the direct-palette commands. Pan Docs' packet
+            // contract says such bytes are ignored, so rejecting it would invent a reserved-bit
+            // rule that the SGB firmware does not have.
+            case 0x00, 0x01, 0x02, 0x03 -> requirePacketCount(packet, 1, 1);
+            case 0x04 -> validateAttrBlk(packet);
+            case 0x05 -> validateAttrLin(packet);
+            case 0x06 -> validateAttrDiv(packet);
+            case 0x07 -> validateAttrChr(packet);
+            case 0x08 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireZeroes(packet, 5));
+            case 0x09 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireZeroes(packet, 1));
+            case 0x0a -> validatePalSet(packet);
+            // Only the fixed $59 header is defined. The other packet bytes are ignored.
+            case 0x0b -> requirePacketCount(packet, 1, 1);
+            case 0x0c, 0x0d -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireRange(packet[1], 0, 1,
+                            "boolean control"), requireZeroes(packet, 2));
+            case 0x0e -> firstViolation(
+                    requirePacketCount(packet, 1, 1),
+                    (packet[1] & ~0x07) == 0 ? null : "ICON_EN has reserved flag bits set",
+                    requireZeroes(packet, 2));
+            case 0x0f -> validateDataSnd(packet);
+            case 0x10 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireZeroes(packet, 4));
+            case 0x11 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireRange(packet[1], 0, 3,
+                            "MLT_REQ control"), requireZeroes(packet, 2));
+            case 0x12 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireZeroes(packet, 7));
+            case 0x13 -> firstViolation(
+                    requirePacketCount(packet, 1, 1),
+                    (packet[1] & ~0x03) == 0 ? null : "CHR_TRN has reserved destination bits set",
+                    requireZeroes(packet, 2));
+            case 0x14, 0x15 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireZeroes(packet, 1));
+            case 0x16 -> firstViolation(
+                    requirePacketCount(packet, 1, 1),
+                    (packet[1] & 0x80) == 0 ? null : "ATTR_SET has its reserved bit set",
+                    requireRange(packet[1] & 0x3f, 0, 44, "ATTR_SET file"),
+                    requireZeroes(packet, 2));
+            case 0x17 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireRange(packet[1], 0, 3,
+                            "MASK_EN value"), requireZeroes(packet, 2));
+            // The pinned public reference does not define the OBJ_TRN payload. Its platform-
+            // dependent behavior remains unsupported, so only its unambiguous framing is used.
+            case 0x18 -> requirePacketCount(packet, 1, 1);
+            case 0x19 -> firstViolation(
+                    requirePacketCount(packet, 1, 1), requireRange(packet[1], 0, 1,
+                            "PAL_PRI value"));
+            default -> "unregistered command ID 0x" + Integer.toHexString(code);
+        };
+    }
+
+    private static String validateAttrBlk(int[] packet) {
+        String violation = requirePacketCount(packet, 1, 7);
+        if (violation != null) {
+            return violation;
+        }
+        int count = packet[1];
+        if (count < 1 || count > 18) {
+            return "ATTR_BLK data-set count " + count + " is outside 1..18";
+        }
+        int used = 2 + count * 6;
+        if (used > packet.length) {
+            return "ATTR_BLK data-set count exceeds the collected payload";
+        }
+        for (int i = 0; i < count; i++) {
+            int offset = 2 + i * 6;
+            if ((packet[offset] & ~0x07) != 0) {
+                return "ATTR_BLK data set " + i + " has reserved control bits set";
+            }
+            if ((packet[offset + 1] & ~0x3f) != 0) {
+                return "ATTR_BLK data set " + i + " has reserved palette bits set";
+            }
+            int x1 = packet[offset + 2];
+            int y1 = packet[offset + 3];
+            int x2 = packet[offset + 4];
+            int y2 = packet[offset + 5];
+            if (x1 > 19 || x2 > 19 || y1 > 17 || y2 > 17 || x1 > x2 || y1 > y2) {
+                return "ATTR_BLK data set " + i + " has invalid rectangle coordinates";
+            }
+        }
+        return requireZeroes(packet, used);
+    }
+
+    private static String validateAttrLin(int[] packet) {
+        String violation = requirePacketCount(packet, 1, 7);
+        if (violation != null) {
+            return violation;
+        }
+        int count = packet[1];
+        if (count < 1 || count > 110) {
+            return "ATTR_LIN data-set count " + count + " is outside 1..110";
+        }
+        int used = 2 + count;
+        if (used > packet.length) {
+            return "ATTR_LIN data-set count exceeds the collected payload";
+        }
+        for (int i = 0; i < count; i++) {
+            int entry = packet[2 + i];
+            int line = entry & 0x1f;
+            boolean horizontal = (entry & 0x80) != 0;
+            if (line >= (horizontal ? 18 : 20)) {
+                return "ATTR_LIN data set " + i + " has out-of-range line " + line;
+            }
+        }
+        return requireZeroes(packet, used);
+    }
+
+    private static String validateAttrDiv(int[] packet) {
+        String violation = requirePacketCount(packet, 1, 1);
+        if (violation != null) {
+            return violation;
+        }
+        if ((packet[1] & 0x80) != 0) {
+            return "ATTR_DIV has its reserved bit set";
+        }
+        boolean horizontal = (packet[1] & 0x40) != 0;
+        int maximum = horizontal ? 17 : 19;
+        return firstViolation(requireRange(packet[2], 0, maximum, "ATTR_DIV coordinate"),
+                requireZeroes(packet, 3));
+    }
+
+    private static String validateAttrChr(int[] packet) {
+        String violation = requirePacketCount(packet, 1, 6);
+        if (violation != null) {
+            return violation;
+        }
+        violation = firstViolation(requireRange(packet[1], 0, 19, "ATTR_CHR x"),
+                requireRange(packet[2], 0, 17, "ATTR_CHR y"));
+        if (violation != null) {
+            return violation;
+        }
+        int count = littleEndian16(packet, 3);
+        if (count < 1 || count > 360) {
+            return "ATTR_CHR data-set count " + count + " is outside 1..360";
+        }
+        if (packet[5] != 0 && packet[5] != 1) {
+            return "ATTR_CHR writing style is outside 0..1";
+        }
+        int dataBytes = (count + 3) / 4;
+        int used = 6 + dataBytes;
+        if (used > packet.length) {
+            return "ATTR_CHR data-set count exceeds the collected payload";
+        }
+        int remainder = count & 3;
+        if (remainder != 0) {
+            int unusedBits = 8 - remainder * 2;
+            if ((packet[used - 1] & ((1 << unusedBits) - 1)) != 0) {
+                return "ATTR_CHR has nonzero unused palette bits";
+            }
+        }
+        return requireZeroes(packet, used);
+    }
+
+    private static String validatePalSet(int[] packet) {
+        String violation = requirePacketCount(packet, 1, 1);
+        if (violation != null) {
+            return violation;
+        }
+        for (int i = 0; i < 4; i++) {
+            int id = littleEndian16(packet, 1 + i * 2);
+            if (id > 511) {
+                return "PAL_SET palette " + i + " ID " + id + " is outside 0..511";
+            }
+        }
+        if ((packet[9] & 0x3f) > 44) {
+            return "PAL_SET attribute-file ID is outside 0..44";
+        }
+        // Bytes 10..15 have no defined purpose rather than a documented zero requirement.
+        return null;
+    }
+
+    private static String validateDataSnd(int[] packet) {
+        String violation = requirePacketCount(packet, 1, 1);
+        if (violation != null) {
+            return violation;
+        }
+        int count = packet[4];
+        if (count < 1 || count > 11) {
+            return "DATA_SND byte count " + count + " is outside 1..11";
+        }
+        return requireZeroes(packet, 5 + count);
+    }
+
+    private static int littleEndian16(int[] packet, int offset) {
+        return packet[offset] | packet[offset + 1] << 8;
+    }
+
+    private static String requirePacketCount(int[] packet, int minimum, int maximum) {
+        int count = packet[0] & 7;
+        return count >= minimum && count <= maximum ? null
+                : "command packet count " + count + " is outside " + minimum + ".." + maximum;
+    }
+
+    private static String requireRange(int value, int minimum, int maximum, String field) {
+        return value >= minimum && value <= maximum ? null
+                : field + " " + value + " is outside " + minimum + ".." + maximum;
+    }
+
+    private static String requireZeroes(int[] packet, int start) {
+        for (int i = start; i < packet.length; i++) {
+            if (packet[i] != 0) {
+                return "reserved or unused byte " + i + " is nonzero";
+            }
+        }
+        return null;
+    }
+
+    private static String firstViolation(String... violations) {
+        for (String violation : violations) {
+            if (violation != null) {
+                return violation;
+            }
+        }
+        return null;
+    }
+
     public static class AbstractCommand implements Event {
         protected final int[] packet;
 
         protected AbstractCommand(int[] packet) {
-            this.packet = packet;
+            this.packet = packet.clone();
         }
 
         public int getCode() {
@@ -90,7 +475,15 @@ public class Commands {
         }
 
         public void setDataTransfer(int[] dataTransfer) {
-            this.dataTransfer = dataTransfer;
+            if (dataTransfer == null) {
+                this.dataTransfer = null;
+                return;
+            }
+            String violation = validateTransferData(this, dataTransfer);
+            if (violation != null) {
+                throw new IllegalArgumentException(violation);
+            }
+            this.dataTransfer = dataTransfer.clone();
         }
 
         public ComponentState<TransferCommand> captureState() {

@@ -11,6 +11,8 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.sgb.Commands.MaskEnCmd.GameboyScreenMask;
 
+import java.util.Arrays;
+
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_WIDTH;
 import static eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent.translateGbcRgb;
@@ -18,6 +20,11 @@ import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
 
 public class SgbDisplay implements StatefulComponent<SgbDisplay> {
+
+    /** Compatible supplement bit carried inside the existing StateFile-v1 borderFade scalar. */
+    private static final int STATE_PALETTE_PRIORITY = 0x100;
+
+    private static final int STATE_BORDER_FADE_MASK = 0xff;
 
     private static final int DMG_TILES_WIDTH = DISPLAY_WIDTH / 8;
 
@@ -53,6 +60,13 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
 
     private int borderFade;
 
+    /**
+     * PAL_PRI controls whether later game palette commands reclaim a palette selected in the
+     * SNES firmware UI. Coffee GB has no SNES palette-selection UI, so game palettes are always
+     * active; retaining this bit is still required for deterministic state and future adapters.
+     */
+    private boolean palettePriority;
+
     public SgbDisplay(Rom rom, EventBus sgbBus, boolean sgb, boolean sgbBorder) {
         this.sgbBorder = sgbBorder;
         this.sgb = sgb;
@@ -70,20 +84,19 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
             eventBus.register(e -> this.sgbBorder = e.borderEnabled, SetSgbBorder.class);
 
             sgbBus.register(this::onAttrBlk, Commands.AttrBlkCmd.class);
+            sgbBus.register(this::onAttrLin, Commands.AttrLinCmd.class);
+            sgbBus.register(this::onAttrDiv, Commands.AttrDivCmd.class);
             sgbBus.register(e -> setPalettes(0, e.getPalette0(), 1, e.getPalette1()), Commands.Pal01Cmd.class);
             sgbBus.register(e -> setPalettes(0, e.getPalette0(), 3, e.getPalette3()), Commands.Pal03Cmd.class);
             sgbBus.register(e -> setPalettes(1, e.getPalette1(), 2, e.getPalette2()), Commands.Pal12Cmd.class);
             sgbBus.register(e -> setPalettes(2, e.getPalette2(), 3, e.getPalette3()), Commands.Pal23Cmd.class);
-            sgbBus.register(e -> {
-                for (int i = 0; i < 512; i++) {
-                    systemPalettes[i] = e.getPalette(i);
-                }
-            }, Commands.PalTrnCmd.class);
+            sgbBus.register(this::onPalTransfer, Commands.PalTrnCmd.class);
             sgbBus.register(this::onPalSet, Commands.PalSetCmd.class);
             sgbBus.register(this::onAttrTransfer, Commands.AttrTrnCmd.class);
             sgbBus.register(this::onAttrSet, Commands.AttrSetCmd.class);
             sgbBus.register(this::onAttrChr, Commands.AttrChrCmd.class);
             sgbBus.register(e -> screenMask = e.getScreenMask(), Commands.MaskEnCmd.class);
+            sgbBus.register(e -> palettePriority = e.getPriority(), Commands.PalPriCmd.class);
         }
     }
 
@@ -97,16 +110,36 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
     }
 
     private void onAttrTransfer(Commands.AttrTrnCmd attrTrnCmd) {
+        int[][] updated = new int[attributeFiles.length][];
         for (int atfId = 0; atfId < 45; atfId++) {
+            updated[atfId] = new int[DMG_TILES_WIDTH * DMG_TILES_HEIGHT];
+            Commands.AttrTrnCmd.AttributeFile file = attrTrnCmd.getAttributeFile(atfId);
             for (int i = 0; i < DMG_TILES_WIDTH * DMG_TILES_HEIGHT; i++) {
-                attributeFiles[atfId][i] = attrTrnCmd.getAttributeFile(atfId).getColor(i);
+                updated[atfId][i] = file.getColor(i);
             }
+        }
+        for (int i = 0; i < attributeFiles.length; i++) {
+            attributeFiles[i] = updated[i];
+        }
+    }
+
+    private void onPalTransfer(Commands.PalTrnCmd command) {
+        int[][] updated = new int[systemPalettes.length][];
+        for (int i = 0; i < updated.length; i++) {
+            updated[i] = command.getPalette(i);
+        }
+        for (int i = 0; i < updated.length; i++) {
+            systemPalettes[i] = updated[i];
         }
     }
 
     private void onPalSet(Commands.PalSetCmd palSetCmd) {
+        int[][] selected = new int[4][];
         for (int i = 0; i < 4; i++) {
-            palettes[i] = systemPalettes[palSetCmd.getPaletteIds()[i]];
+            selected[i] = systemPalettes[palSetCmd.getPaletteIds()[i]].clone();
+        }
+        for (int i = 0; i < 4; i++) {
+            palettes[i] = selected[i];
         }
         if (palSetCmd.getApplyAtf()) {
             loadAttributeFile(palSetCmd.getAtfNumber());
@@ -133,11 +166,9 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
     private void onAttrChr(Commands.AttrChrCmd attrChrCmd) {
         int x = attrChrCmd.getX();
         int y = attrChrCmd.getY();
-        if (x >= DMG_TILES_WIDTH || y >= DMG_TILES_HEIGHT) {
-            return;
-        }
+        int[] updated = paletteMap.clone();
         for (int i = 1; i <= attrChrCmd.getDataSetCount(); i++) {
-            paletteMap[x + y * DMG_TILES_WIDTH] = attrChrCmd.getDataSet(i);
+            updated[x + y * DMG_TILES_WIDTH] = attrChrCmd.getDataSet(i);
             if (attrChrCmd.getWritingStyle() != 0) {
                 y++;
                 if (y == DMG_TILES_HEIGHT) {
@@ -158,32 +189,71 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
                 }
             }
         }
+        System.arraycopy(updated, 0, paletteMap, 0, paletteMap.length);
     }
 
     private void onAttrBlk(Commands.AttrBlkCmd attrBlkCmd) {
+        int[] updated = paletteMap.clone();
         for (int i = 1; i <= attrBlkCmd.getDataSetsCount(); i++) {
             Commands.AttrBlkCmd.DataSet dataSet = attrBlkCmd.getDataSet(i);
             for (int x = 0; x < DMG_TILES_WIDTH; x++) {
                 for (int y = 0; y < DMG_TILES_HEIGHT; y++) {
                     int z = x + y * DMG_TILES_WIDTH;
                     if (dataSet.isOutside(x, y) && dataSet.changeColorsOutside()) {
-                        paletteMap[z] = dataSet.paletteNumberOutside();
+                        updated[z] = dataSet.paletteNumberOutside();
                     }
                     if (dataSet.isOnLine(x, y) && dataSet.changeLineColor()) {
-                        paletteMap[z] = dataSet.paletteNumberLine();
+                        updated[z] = dataSet.paletteNumberLine();
                     }
                     if (dataSet.isOnLine(x, y) && dataSet.changeColorsInside() && !dataSet.changeColorsOutside()) {
-                        paletteMap[z] = dataSet.paletteNumberInside();
+                        updated[z] = dataSet.paletteNumberInside();
                     }
                     if (dataSet.isOnLine(x, y) && !dataSet.changeColorsInside() && dataSet.changeColorsOutside()) {
-                        paletteMap[z] = dataSet.paletteNumberOutside();
+                        updated[z] = dataSet.paletteNumberOutside();
                     }
                     if (dataSet.isInside(x, y) && dataSet.changeColorsInside()) {
-                        paletteMap[z] = dataSet.paletteNumberInside();
+                        updated[z] = dataSet.paletteNumberInside();
                     }
                 }
             }
         }
+        System.arraycopy(updated, 0, paletteMap, 0, paletteMap.length);
+    }
+
+    private void onAttrLin(Commands.AttrLinCmd command) {
+        int[] updated = paletteMap.clone();
+        for (int i = 1; i <= command.getDataSetsCount(); i++) {
+            Commands.AttrLinCmd.DataSet dataSet = command.getDataSet(i);
+            int line = dataSet.getLineNumber();
+            int palette = dataSet.getPaletteNumber();
+            if (dataSet.getHVMode() == 'H') {
+                Arrays.fill(updated, line * DMG_TILES_WIDTH,
+                        (line + 1) * DMG_TILES_WIDTH, palette);
+            } else {
+                for (int y = 0; y < DMG_TILES_HEIGHT; y++) {
+                    updated[line + y * DMG_TILES_WIDTH] = palette;
+                }
+            }
+        }
+        System.arraycopy(updated, 0, paletteMap, 0, paletteMap.length);
+    }
+
+    private void onAttrDiv(Commands.AttrDivCmd command) {
+        int[] updated = new int[paletteMap.length];
+        boolean horizontal = command.getHVMode() == 'H';
+        int divider = command.getXY();
+        for (int y = 0; y < DMG_TILES_HEIGHT; y++) {
+            for (int x = 0; x < DMG_TILES_WIDTH; x++) {
+                int coordinate = horizontal ? y : x;
+                int palette = coordinate < divider
+                        ? command.getPaletteNumberAboveLeft()
+                        : coordinate == divider
+                        ? command.getPaletteNumberDivisionLine()
+                        : command.getPaletteNumberBelowRight();
+                updated[x + y * DMG_TILES_WIDTH] = palette;
+            }
+        }
+        System.arraycopy(updated, 0, paletteMap, 0, paletteMap.length);
     }
 
     private void onDmgFrame(DmgFrameReadyEvent dmgFrameReadyEvent) {
@@ -249,7 +319,7 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
     public ComponentState<SgbDisplay> captureState() {
         return new SgbDisplayState(sgbBuffer.clone(), sgbMask.clone(), clone2(palettes),
                 clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask,
-                borderFade);
+                encodedBorderFade());
     }
 
     @Override
@@ -262,7 +332,7 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
                 capture.ints(paletteMap),
                 capture.ints2(attributeFiles),
                 screenMask,
-                borderFade);
+                encodedBorderFade());
     }
 
     @Override
@@ -279,6 +349,10 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
     public void restoreState(ComponentState<SgbDisplay> state) {
         if (!(state instanceof SgbDisplayState mem)) {
             throw new IllegalArgumentException("Invalid state type");
+        }
+        if (mem.borderFade < 0 || (mem.borderFade & ~(STATE_PALETTE_PRIORITY | STATE_BORDER_FADE_MASK)) != 0
+                || (mem.borderFade & STATE_BORDER_FADE_MASK) > 32) {
+            throw new IllegalArgumentException("Invalid encoded SGB display fade/priority state");
         }
         if (this.sgbBuffer.length != mem.sgbBuffer.length) {
             throw new IllegalArgumentException("ComponentState array length doesn't match");
@@ -305,7 +379,16 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         System.arraycopy(mem.paletteMap, 0, this.paletteMap, 0, this.paletteMap.length);
         replaceRows(mem.attributeFiles, this.attributeFiles, DMG_TILES_WIDTH * DMG_TILES_HEIGHT);
         this.screenMask = mem.screenMask;
-        this.borderFade = mem.borderFade;
+        this.borderFade = mem.borderFade & STATE_BORDER_FADE_MASK;
+        this.palettePriority = (mem.borderFade & STATE_PALETTE_PRIORITY) != 0;
+    }
+
+    boolean isPalettePriorityEnabled() {
+        return palettePriority;
+    }
+
+    private int encodedBorderFade() {
+        return borderFade | (palettePriority ? STATE_PALETTE_PRIORITY : 0);
     }
 
     private static void replaceRows(int[][] src, int[][] dst, int expectedRowLength) {
