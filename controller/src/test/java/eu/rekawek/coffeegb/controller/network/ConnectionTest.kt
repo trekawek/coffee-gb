@@ -18,7 +18,7 @@ import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.state.ComponentState
 import eu.rekawek.coffeegb.core.memory.Ram
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.FourPlayerAdapter
@@ -1016,7 +1016,7 @@ class ConnectionTest {
         )
     val forbidden =
         listOf(
-            "LegacyMementoCodec",
+            "LegacySnapshotImporter",
             "NetplayMementoCodec",
             "ObjectInputStream",
             "ObjectOutputStream",
@@ -1223,16 +1223,16 @@ class ConnectionTest {
     return try {
       val validFile = StateCodec.capture(config, gameboy)
       val validMachine = (validFile.root as MachineStateRoot).machine
-      val memento = gameboy.saveToMemento()
+      val memento = gameboy.captureState()
       val mmu = recordComponent(memento, "mmuMemento")!!
-      val invalidMmu = replaceRecordComponent(mmu, "ramC000Memento", Ram.RamMemento(IntArray(0)))
+      val invalidMmu = replaceRecordComponent(mmu, "ramC000Memento", Ram.RamState(IntArray(0)))
       @Suppress("UNCHECKED_CAST")
       val invalid =
-          replaceRecordComponent(memento, "mmuMemento", invalidMmu) as Memento<Gameboy>
+          replaceRecordComponent(memento, "mmuMemento", invalidMmu) as ComponentState<Gameboy>
       val invalidRoot =
           StateGraph.captureRoot(
               invalid,
-              "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento",
+              "eu.rekawek.coffeegb.core.Gameboy\$GameboyState",
           )
       StateCodec.encode(
           StateFile(

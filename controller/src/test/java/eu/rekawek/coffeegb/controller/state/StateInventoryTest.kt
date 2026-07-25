@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import java.nio.file.Files
 import java.nio.file.Paths
 import kotlin.io.path.readLines
@@ -18,14 +18,14 @@ class StateInventoryTest {
             .readLines()
             .filter { it.startsWith("- `") }
     val runtime =
-        MementoTypeRegistry.recordClasses.map { type ->
+        StateTypeRegistry.recordClasses.map { type ->
           val fields = type.recordComponents.joinToString(", ") { it.name }
           "- `${type.name}`: $fields"
         }
 
     assertEquals(91, runtime.size)
     assertEquals(runtime, documented)
-    assertEquals(11, MementoTypeRegistry.enumClasses.size)
+    assertEquals(11, StateTypeRegistry.enumClasses.size)
   }
 
   @Test
@@ -41,7 +41,11 @@ class StateInventoryTest {
                     .filter { Files.isRegularFile(it) }
                     .filter {
                       val source = it.readText()
-                      "saveToMemento(" in source || "Originator<" in source
+                      "captureState(" in source ||
+                          "StatefulComponent<" in source ||
+                          "captureDetachedState(" in source ||
+                          "DetachedStateAdapter.capture(" in source ||
+                          "MachineSnapshot.capture(" in source
                     }
                     .map { repository.relativize(it).toString() }
                     .toList()
@@ -57,13 +61,13 @@ class StateInventoryTest {
             }
             .sorted()
 
-    assertEquals(97, discovered.size)
+    assertEquals(99, discovered.size)
     assertEquals(discovered, documented)
   }
 
   @Test
   fun everyAdmittedRecordHasAnExplicitSemanticPolicyAndRationale() {
-    assertEquals(MementoTypeRegistry.recordClassNames.toSet(), StateSemantics.policyAudit.keys)
+    assertEquals(StateTypeRegistry.recordClassNames.toSet(), StateSemantics.policyAudit.keys)
     assertEquals(91, StateSemantics.policyAudit.size)
     assertTrue(StateSemantics.policyAudit.values.all { it.isNotBlank() })
   }

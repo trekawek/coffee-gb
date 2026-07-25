@@ -3,7 +3,7 @@ package eu.rekawek.coffeegb.core.integration.support;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 
@@ -14,7 +14,7 @@ import java.util.Map;
 /** Runs one GBMicrotest ROM and reads its documented HRAM result protocol. */
 public final class GbMicrotestRunner {
 
-    private static final Map<BootStateKey, Memento<Gameboy>> DMG_BOOT_MEMENTOS = new HashMap<>();
+    private static final Map<BootStateKey, ComponentState<Gameboy>> DMG_BOOT_MEMENTOS = new HashMap<>();
 
     private final Gameboy gameboy;
 
@@ -23,7 +23,7 @@ public final class GbMicrotestRunner {
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP);
         gameboy = configuration.build();
         gameboy.init(new EventBusImpl(null, null, false), SerialEndpoint.NULL_ENDPOINT, null);
-        gameboy.restoreFromMemento(getDmgBootMemento(rom));
+        gameboy.restoreState(getDmgBootMemento(rom));
     }
 
     public GbMicrotestRunner(byte[] rom, Gameboy.BootstrapMode bootstrapMode) throws IOException {
@@ -39,16 +39,16 @@ public final class GbMicrotestRunner {
                 .setSupportBatterySave(false);
     }
 
-    private static synchronized Memento<Gameboy> getDmgBootMemento(byte[] rom) throws IOException {
+    private static synchronized ComponentState<Gameboy> getDmgBootMemento(byte[] rom) throws IOException {
         BootStateKey key = new BootStateKey(rom.length, headerByte(rom, 0x143),
                 headerByte(rom, 0x147), headerByte(rom, 0x148), headerByte(rom, 0x149));
-        Memento<Gameboy> memento = DMG_BOOT_MEMENTOS.get(key);
+        ComponentState<Gameboy> memento = DMG_BOOT_MEMENTOS.get(key);
         if (memento == null) {
             Gameboy booted = configuration(rom)
                     .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
                     .build();
             booted.init(new EventBusImpl(null, null, false), SerialEndpoint.NULL_ENDPOINT, null);
-            memento = booted.saveToMemento();
+            memento = booted.captureState();
             DMG_BOOT_MEMENTOS.put(key, memento);
             booted.close();
         }

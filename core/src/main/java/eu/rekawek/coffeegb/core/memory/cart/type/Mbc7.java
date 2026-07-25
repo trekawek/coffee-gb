@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -138,8 +140,8 @@ public class Mbc7 implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new Mbc7Memento(
+    public ComponentState<MemoryController> captureState() {
+        return new Mbc7State(
                 selectedRomBank,
                 ramWriteEnabled1,
                 ramWriteEnabled2,
@@ -148,13 +150,13 @@ public class Mbc7 implements MemoryController {
                 latchX,
                 latchY,
                 latchState,
-                eeprom.saveToMemento()
+                eeprom.captureState()
         );
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new Mbc7Memento(
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new Mbc7State(
                 selectedRomBank,
                 ramWriteEnabled1,
                 ramWriteEnabled2,
@@ -163,7 +165,7 @@ public class Mbc7 implements MemoryController {
                 latchX,
                 latchY,
                 latchState,
-                eeprom.saveToMemento(capture)
+                eeprom.captureState(capture)
         );
     }
 
@@ -173,9 +175,9 @@ public class Mbc7 implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof Mbc7Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof Mbc7State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.selectedRomBank = mem.selectedRomBank;
         this.ramWriteEnabled1 = mem.ramWriteEnabled1;
@@ -185,9 +187,23 @@ public class Mbc7 implements MemoryController {
         this.latchX = mem.latchX;
         this.latchY = mem.latchY;
         this.latchState = mem.latchState;
-        this.eeprom.restoreFromMemento(mem.eepromMemento);
+        this.eeprom.restoreState(mem.eepromMemento);
     }
 
+    private record Mbc7State(
+            int selectedRomBank,
+            boolean ramWriteEnabled1,
+            boolean ramWriteEnabled2,
+            double x,
+            double y,
+            int latchX,
+            int latchY,
+            int latchState,
+            ComponentState<Mbc7Eeprom> eepromMemento
+    ) implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record Mbc7Memento(
             int selectedRomBank,
             boolean ramWriteEnabled1,

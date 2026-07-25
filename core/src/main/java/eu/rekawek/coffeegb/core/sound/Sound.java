@@ -1,19 +1,20 @@
 package eu.rekawek.coffeegb.core.sound;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.timer.Timer;
 
-import java.io.Serializable;
 import java.util.Arrays;
 
-public class Sound implements AddressSpace, Serializable, Originator<Sound> {
+public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     private static final int CGB_BOOT_DIV_APU_OFFSET = 2;
 
@@ -303,26 +304,26 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     }
 
     @Override
-    public Memento<Sound> saveToMemento() {
-        return saveToMemento(null);
+    public ComponentState<Sound> captureState() {
+        return captureState(null);
     }
 
     @Override
-    public Memento<Sound> saveToMemento(MachineStateCapture capture) {
-        var allModeMementos = new Memento[allModes.length];
+    public ComponentState<Sound> captureState(MachineStateCapture capture) {
+        var allModeMementos = new ComponentState[allModes.length];
         for (int i = 0; i < allModes.length; i++) {
             allModeMementos[i] = capture == null
-                    ? allModes[i].saveToMemento()
-                    : allModes[i].saveToMemento(capture);
+                    ? allModes[i].captureState()
+                    : allModes[i].captureState(capture);
         }
         // Only the prefix before i has been written. The rest is overwritten before the
         // next SoundSampleEvent can expose it, so retaining the full ~546 KiB frame buffer
         // in every rewind state wastes memory and creates a G1 humongous allocation.
         int[] pendingSamples = capture == null ? Arrays.copyOf(buffer, i) : capture.ints(buffer, i);
-        return new SoundMemento(
+        return new SoundState(
                 allModeMementos,
-                capture == null ? r.saveToMemento() : r.saveToMemento(capture),
-                frameSequencer.saveToMemento(),
+                capture == null ? r.captureState() : r.captureState(capture),
+                frameSequencer.captureState(),
                 capture == null ? channels.clone() : capture.ints(channels),
                 enabled,
                 capture == null ? overriddenEnabled.clone() : capture.booleans(overriddenEnabled),
@@ -337,32 +338,32 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Sound> memento) {
-        if (!(memento instanceof SoundMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Sound> state) {
+        if (!(state instanceof SoundState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.allModes.length != mem.allModeMementos.length) {
-            throw new IllegalArgumentException("Memento allModes length doesn't match");
+            throw new IllegalArgumentException("ComponentState allModes length doesn't match");
         }
         if (this.channels.length != mem.channels.length) {
-            throw new IllegalArgumentException("Memento channels length doesn't match");
+            throw new IllegalArgumentException("ComponentState channels length doesn't match");
         }
         if (this.overriddenEnabled.length != mem.overriddenEnabled.length) {
-            throw new IllegalArgumentException("Memento overriddenEnabled length doesn't match");
+            throw new IllegalArgumentException("ComponentState overriddenEnabled length doesn't match");
         }
         if (mem.i < 0 || mem.i >= this.buffer.length || (mem.i & 1) != 0) {
-            throw new IllegalArgumentException("Memento buffer position is invalid");
+            throw new IllegalArgumentException("ComponentState buffer position is invalid");
         }
         // New mementos retain only buffer[0..i). Accept the former full-buffer shape as
         // well so save states written by older Coffee GB versions remain loadable.
         if (mem.buffer.length != mem.i && mem.buffer.length != this.buffer.length) {
-            throw new IllegalArgumentException("Memento buffer length doesn't match");
+            throw new IllegalArgumentException("ComponentState buffer length doesn't match");
         }
         for (int i = 0; i < allModes.length; i++) {
-            this.allModes[i].restoreFromMemento(mem.allModeMementos[i]);
+            this.allModes[i].restoreState(mem.allModeMementos[i]);
         }
-        this.r.restoreFromMemento(mem.ramMemento());
-        this.frameSequencer.restoreFromMemento(mem.frameSequencerMemento());
+        this.r.restoreState(mem.ramMemento());
+        this.frameSequencer.restoreState(mem.frameSequencerMemento());
         System.arraycopy(mem.channels, 0, this.channels, 0, this.channels.length);
         this.enabled = mem.enabled();
         System.arraycopy(mem.overriddenEnabled, 0, this.overriddenEnabled, 0, this.overriddenEnabled.length);
@@ -380,6 +381,15 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     public record SoundEnabledEvent(boolean enabled) implements Event {
     }
 
+    private record SoundState(ComponentState<AbstractSoundMode>[] allModeMementos, ComponentState<Ram> ramMemento,
+                                ComponentState<FrameSequencer> frameSequencerMemento, int[] channels,
+                                boolean enabled, boolean[] overriddenEnabled, int[] buffer,
+                                int i, int pendingFrameSequencerStep,
+                                int frameSequencerClockPhase,
+                                int frameSequencerDivOffset) implements ComponentState<Sound> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SoundMemento(Memento<AbstractSoundMode>[] allModeMementos, Memento<Ram> ramMemento,
                                 Memento<FrameSequencer> frameSequencerMemento, int[] channels,
                                 boolean enabled, boolean[] overriddenEnabled, int[] buffer,

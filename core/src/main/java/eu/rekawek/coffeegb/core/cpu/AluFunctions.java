@@ -2,12 +2,11 @@ package eu.rekawek.coffeegb.core.cpu;
 
 import eu.rekawek.coffeegb.core.cpu.op.DataType;
 
-import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
-public class AluFunctions implements Serializable {
+public class AluFunctions  {
 
     private final Map<FunctionKey, IntRegistryFunction> functions = new HashMap<>();
 
@@ -347,15 +346,15 @@ public class AluFunctions implements Serializable {
                 "SET", DataType.D8, DataType.D8, (flags, arg1, arg2) -> BitUtils.setBit(arg1, arg2));
     }
 
-    public interface IntRegistryFunction extends Serializable {
+    public interface IntRegistryFunction  {
         int apply(Flags flags, int arg);
     }
 
-    public interface BiIntRegistryFunction extends Serializable {
+    public interface BiIntRegistryFunction  {
         int apply(Flags flags, int arg1, int arg2);
     }
 
-    private static class FunctionKey implements Serializable {
+    private static class FunctionKey  {
 
         private final String name;
 

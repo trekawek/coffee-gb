@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
@@ -76,12 +76,12 @@ public class MakonNtOld2Test {
         mapper.setByte(0x5002, 0x0c);
         mapper.setByte(0x2000, 3);
         mapper.setByte(0xa123, 0x5a);
-        Memento<MemoryController> memento = mapper.saveToMemento();
+        ComponentState<MemoryController> memento = mapper.captureState();
 
         mapper.setByte(0x5001, 0x20);
         mapper.setByte(0x2000, 7);
         mapper.setByte(0xa123, 0x33);
-        mapper.restoreFromMemento(memento);
+        mapper.restoreState(memento);
 
         assertEquals(96, mapper.getByte(0x0000));
         assertEquals(99, mapper.getByte(0x4000));

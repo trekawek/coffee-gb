@@ -1,17 +1,17 @@
 package eu.rekawek.coffeegb.core.serial;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.Serializable;
-
-public class SerialPort implements AddressSpace, Serializable, Originator<SerialPort> {
+public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
 
     private static final Logger LOG = LoggerFactory.getLogger(SerialPort.class);
 
@@ -45,7 +45,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         this.speedMode = speedMode;
         // The oscillator is already eight clocks into its phase when a DMG is
         // released from reset; CGB starts at zero. Authentic boot execution is
-        // then captured in the integration runner's boot memento.
+        // then captured in the integration runner's boot state.
         this.serialClocks = gbc ? 0 : 8;
     }
 
@@ -215,15 +215,15 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
     }
 
     @Override
-    public Memento<SerialPort> saveToMemento() {
-        return new SerialPortMemento(sb, sc, serialClocks, serialClockSignal, receivedBits, haltWakeDelay);
+    public ComponentState<SerialPort> captureState() {
+        return new SerialPortState(sb, sc, serialClocks, serialClockSignal, receivedBits, haltWakeDelay);
     }
 
     @Override
-    public void restoreFromMemento(Memento<SerialPort> memento) {
-        LOG.atDebug().log("[{}] Restore from memento", this.hashCode());
-        if (!(memento instanceof SerialPortMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SerialPort> state) {
+        LOG.atDebug().log("[{}] Restore component state", this.hashCode());
+        if (!(state instanceof SerialPortState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.sb = mem.sb;
         this.sc = mem.sc;
@@ -233,6 +233,11 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
         this.haltWakeDelay = mem.haltWakeDelay;
     }
 
+    private record SerialPortState(int sb, int sc, int serialClocks, boolean serialClockSignal,
+                                     int receivedBits, int haltWakeDelay) implements ComponentState<SerialPort> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SerialPortMemento(int sb, int sc, int serialClocks, boolean serialClockSignal,
                                      int receivedBits, int haltWakeDelay) implements Memento<SerialPort> {
     }

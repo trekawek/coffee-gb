@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.state.ComponentState;
+
 public class SoundMode2 extends AbstractSoundMode {
 
     private int freqDivider;
@@ -167,18 +169,18 @@ public class SoundMode2 extends AbstractSoundMode {
     }
 
     @Override
-    public Memento<AbstractSoundMode> saveToMemento() {
-        return new SoundMode2Memento(super.saveToMemento(), freqDivider, lastOutput, i, sampleSuppressed,
-                activeBeforeTrigger, clock2Mhz, lowFrequencyPhase, volumeEnvelope.saveToMemento(),
+    public ComponentState<AbstractSoundMode> captureState() {
+        return new SoundMode2State(super.captureState(), freqDivider, lastOutput, i, sampleSuppressed,
+                activeBeforeTrigger, clock2Mhz, lowFrequencyPhase, volumeEnvelope.captureState(),
                 justReloadedTicks);
     }
 
     @Override
-    public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
-        if (!(memento instanceof SoundMode2Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<AbstractSoundMode> state) {
+        if (!(state instanceof SoundMode2State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        super.restoreFromMemento(mem.abstractSoundMemento);
+        super.restoreState(mem.abstractSoundMemento);
         this.freqDivider = mem.freqDivider;
         this.lastOutput = mem.lastOutput;
         this.i = mem.i;
@@ -187,9 +189,17 @@ public class SoundMode2 extends AbstractSoundMode {
         this.clock2Mhz = mem.clock2Mhz;
         this.lowFrequencyPhase = mem.lowFrequencyPhase;
         this.justReloadedTicks = mem.justReloadedTicks;
-        this.volumeEnvelope.restoreFromMemento(mem.volumeEnvelopeMemento);
+        this.volumeEnvelope.restoreState(mem.volumeEnvelopeMemento);
     }
 
+    private record SoundMode2State(ComponentState<AbstractSoundMode> abstractSoundMemento, int freqDivider, int lastOutput,
+                                     int i, boolean sampleSuppressed, boolean activeBeforeTrigger,
+                                     boolean clock2Mhz, boolean lowFrequencyPhase,
+                                     ComponentState<VolumeEnvelope> volumeEnvelopeMemento,
+                                     int justReloadedTicks) implements ComponentState<AbstractSoundMode> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SoundMode2Memento(Memento<AbstractSoundMode> abstractSoundMemento, int freqDivider, int lastOutput,
                                      int i, boolean sampleSuppressed, boolean activeBeforeTrigger,
                                      boolean clock2Mhz, boolean lowFrequencyPhase,

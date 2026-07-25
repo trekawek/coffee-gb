@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class FrequencySweep implements Serializable, Originator<FrequencySweep> {
+public class FrequencySweep implements StatefulComponent<FrequencySweep> {
 
     private int period;
 
@@ -165,16 +165,16 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
     }
 
     @Override
-    public Memento<FrequencySweep> saveToMemento() {
-        return new FrequencySweepMemento(period, negate, shift, timer, shadowFreq, nr13, nr14, overflow,
+    public ComponentState<FrequencySweep> captureState() {
+        return new FrequencySweepState(period, negate, shift, timer, shadowFreq, nr13, nr14, overflow,
                 counterEnabled, negging, calculationDelay, unshiftedCalculation, restartHold,
                 frequencyUpdatePending);
     }
 
     @Override
-    public void restoreFromMemento(Memento<FrequencySweep> memento) {
-        if (!(memento instanceof FrequencySweepMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<FrequencySweep> state) {
+        if (!(state instanceof FrequencySweepState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.period = mem.period;
         this.negate = mem.negate;
@@ -192,6 +192,14 @@ public class FrequencySweep implements Serializable, Originator<FrequencySweep> 
         this.frequencyUpdatePending = mem.frequencyUpdatePending;
     }
 
+    private record FrequencySweepState(int period, boolean negate, int shift, int timer, int shadowFreq, int nr13,
+                                         int nr14, boolean overflow, boolean counterEnabled,
+                                         boolean negging, int calculationDelay,
+                                         boolean unshiftedCalculation, int restartHold,
+                                         boolean frequencyUpdatePending) implements ComponentState<FrequencySweep> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record FrequencySweepMemento(int period, boolean negate, int shift, int timer, int shadowFreq, int nr13,
                                          int nr14, boolean overflow, boolean counterEnabled,
                                          boolean negging, int calculationDelay,

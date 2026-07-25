@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -237,14 +239,14 @@ public class Mbc1 implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new Mbc1Memento(battery.saveToMemento(), ram.clone(), selectedRamBank, selectedRomBank, memoryModel, ramWriteEnabled, cachedRomBankFor0x0000, cachedRomBankFor0x4000, ramUpdated, wideBank, upperRegisterUsed);
+    public ComponentState<MemoryController> captureState() {
+        return new Mbc1State(battery.captureState(), ram.clone(), selectedRamBank, selectedRomBank, memoryModel, ramWriteEnabled, cachedRomBankFor0x0000, cachedRomBankFor0x4000, ramUpdated, wideBank, upperRegisterUsed);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new Mbc1Memento(
-                battery.saveToMemento(capture),
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new Mbc1State(
+                battery.captureState(capture),
                 capture.ints(ram),
                 selectedRamBank,
                 selectedRomBank,
@@ -264,14 +266,14 @@ public class Mbc1 implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof Mbc1Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof Mbc1State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.ram.length != mem.ram.length) {
-            throw new IllegalArgumentException("Memento ram length doesn't match");
+            throw new IllegalArgumentException("ComponentState ram length doesn't match");
         }
-        battery.restoreFromMemento(mem.batteryMemento);
+        battery.restoreState(mem.batteryMemento);
         System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
         this.selectedRamBank = mem.selectedRamBank;
         this.selectedRomBank = mem.selectedRomBank;
@@ -284,6 +286,13 @@ public class Mbc1 implements MemoryController {
         this.upperRegisterUsed = mem.upperRegisterUsed;
     }
 
+    private record Mbc1State(ComponentState<Battery> batteryMemento, int[] ram, int selectedRamBank, int selectedRomBank,
+                               int memoryModel, boolean ramWriteEnabled, int cachedRomBankFor0x0000,
+                               int cachedRomBankFor0x4000, boolean ramUpdated, boolean wideBank,
+                               boolean upperRegisterUsed) implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record Mbc1Memento(Memento<Battery> batteryMemento, int[] ram, int selectedRamBank, int selectedRomBank,
                                int memoryModel, boolean ramWriteEnabled, int cachedRomBankFor0x0000,
                                int cachedRomBankFor0x4000, boolean ramUpdated, boolean wideBank,

@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.core.rumble;
 
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.Mmu;
 import org.junit.Before;
 import org.junit.Test;
@@ -48,10 +48,10 @@ public class CodeBreakerRumbleTest {
     @Test
     public void mementoRestoresMotorState() {
         mmu.setByte(0xfffe, 0x80);
-        Memento<CodeBreakerRumble> motorOn = rumble.saveToMemento();
+        ComponentState<CodeBreakerRumble> motorOn = rumble.captureState();
         mmu.setByte(0xfffe, 0x00);
 
-        rumble.restoreFromMemento(motorOn);
+        rumble.restoreState(motorOn);
 
         assertEquals(List.of(true, false, true), motorLog);
     }

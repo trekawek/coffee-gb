@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.core.ir;
 
-import eu.rekawek.coffeegb.core.events.Event;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.events.Event;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 /**
  * The Full Changer, the IR toy bundled with Zok Zok Heroes (issue #94). The player
@@ -24,7 +24,7 @@ import java.io.Serializable;
  *
  * <p>There are 70 Cosmic Characters, IDs 0x01-0x46.
  */
-public class FullChanger implements Serializable, Originator<FullChanger> {
+public class FullChanger implements StatefulComponent<FullChanger> {
 
     /** The player finished drawing a Cosmic Character and pointed the toy at the IR port. */
     public record TransformEvent(int characterId) implements Event {
@@ -111,20 +111,20 @@ public class FullChanger implements Serializable, Originator<FullChanger> {
     }
 
     @Override
-    public Memento<FullChanger> saveToMemento() {
-        return new FullChangerMemento(schedule.clone(), armed, running, index, remaining);
+    public ComponentState<FullChanger> captureState() {
+        return new FullChangerState(schedule.clone(), armed, running, index, remaining);
     }
 
     @Override
-    public Memento<FullChanger> saveToMemento(MachineStateCapture capture) {
-        return new FullChangerMemento(
+    public ComponentState<FullChanger> captureState(MachineStateCapture capture) {
+        return new FullChangerState(
                 capture.ints(schedule), armed, running, index, remaining);
     }
 
     @Override
-    public void restoreFromMemento(Memento<FullChanger> memento) {
-        if (!(memento instanceof FullChangerMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<FullChanger> state) {
+        if (!(state instanceof FullChangerState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.schedule = mem.schedule.clone();
         this.armed = mem.armed;
@@ -133,6 +133,11 @@ public class FullChanger implements Serializable, Originator<FullChanger> {
         this.remaining = mem.remaining;
     }
 
+    private record FullChangerState(int[] schedule, boolean armed, boolean running, int index, int remaining)
+            implements ComponentState<FullChanger> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record FullChangerMemento(int[] schedule, boolean armed, boolean running, int index, int remaining)
             implements Memento<FullChanger> {
     }

@@ -2,10 +2,9 @@ package eu.rekawek.coffeegb.core.cpu.opcode;
 
 import eu.rekawek.coffeegb.core.cpu.op.Op;
 
-import java.io.Serializable;
 import java.util.List;
 
-public class Opcode implements Serializable {
+public class Opcode  {
 
     private final int opcode;
 

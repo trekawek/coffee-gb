@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -99,7 +99,7 @@ public class BungEmsTest {
         mapper.setByte(0x4000, 2);
         mapper.setByte(0xa000, 0x66);
         mapper.setByte(0x0000, 0x00); // save with RAM disabled and config mode active
-        Memento<MemoryController> memento = mapper.saveToMemento();
+        ComponentState<MemoryController> memento = mapper.captureState();
 
         mapper.setByte(0x1000, 0x98);
         mapper.setByte(0x0000, 0x0a);
@@ -107,7 +107,7 @@ public class BungEmsTest {
         mapper.setByte(0x2000, 3);
         mapper.setByte(0x4000, 0);
         mapper.setByte(0xa000, 0x33);
-        mapper.restoreFromMemento(memento);
+        mapper.restoreState(memento);
 
         assertEquals(0x80, mapper.getByte(0x0000));
         assertEquals(0x85, mapper.getByte(0x4000));

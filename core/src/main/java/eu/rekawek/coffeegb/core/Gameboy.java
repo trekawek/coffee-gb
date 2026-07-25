@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
@@ -11,9 +13,9 @@ import eu.rekawek.coffeegb.core.gpu.*;
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.ir.InfraredPort;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
@@ -34,12 +36,11 @@ import eu.rekawek.coffeegb.core.timer.Timer;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.concurrent.CancellationException;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 
-public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Closeable {
+public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable {
 
     public static final int TICKS_PER_SEC = 4_194_304;
 
@@ -862,8 +863,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     /**
-     * Held-button state, snapshotted separately from the memento by rollback netplay so a held
-     * button survives a rebase (the joypad deliberately keeps it out of the memento).
+     * Held-button state, snapshotted separately from machine state by rollback netplay so a held
+     * button survives a rebase (the joypad deliberately keeps it out of component state).
      */
     public java.util.Set<eu.rekawek.coffeegb.core.joypad.Button> getPressedButtons() {
         return joypad.getPressedButtons();
@@ -874,39 +875,39 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
     }
 
     @Override
-    public Memento<Gameboy> saveToMemento() {
-        // Gpu owns the sole display snapshot. Keep the nullable root component in the legacy
-        // record shape so Phase-0 fixtures still decode, but do not clone the two 160x144 buffers
-        // a second time for new captures.
-        return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), null, sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, speedSwitchTailTicks, speedSwitchClockPhaseShifted, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
+    public ComponentState<Gameboy> captureState() {
+        // Gpu owns the sole display snapshot. Keep the nullable root component in the stable
+        // detached layout so imported fixtures and StateFile v1 retain their existing shape, but
+        // do not clone the two 160x144 buffers a second time for new captures.
+        return new GameboyState(biosShadow.captureState(), cartridge.captureState(), gpu.captureState(), statRegister.captureState(), mmu.captureState(), oamRam.captureState(), cpu.captureState(), interruptManager.captureState(), timer.captureState(), dma.captureState(), hdma.captureState(), null, sound.captureState(), serialPort.captureState(), infraredPort.captureState(), codeBreakerRumble.captureState(), joypad.captureState(), speedMode.captureState(), superGameboy.captureState(), background.captureState(), vRamTransfer.captureState(), sgbDisplay.captureState(), gameGenie.captureState(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, speedSwitchTailTicks, speedSwitchClockPhaseShifted, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
     }
 
     @Override
-    public Memento<Gameboy> saveToMemento(MachineStateCapture capture) {
-        return new GameboyMemento(
-                biosShadow.saveToMemento(capture),
-                cartridge.saveToMemento(capture),
-                gpu.saveToMemento(capture),
-                statRegister.saveToMemento(capture),
-                mmu.saveToMemento(capture),
-                oamRam.saveToMemento(capture),
-                cpu.saveToMemento(capture),
-                interruptManager.saveToMemento(capture),
-                timer.saveToMemento(capture),
-                dma.saveToMemento(capture),
-                hdma.saveToMemento(capture),
+    public ComponentState<Gameboy> captureState(MachineStateCapture capture) {
+        return new GameboyState(
+                biosShadow.captureState(capture),
+                cartridge.captureState(capture),
+                gpu.captureState(capture),
+                statRegister.captureState(capture),
+                mmu.captureState(capture),
+                oamRam.captureState(capture),
+                cpu.captureState(capture),
+                interruptManager.captureState(capture),
+                timer.captureState(capture),
+                dma.captureState(capture),
+                hdma.captureState(capture),
                 null,
-                sound.saveToMemento(capture),
-                serialPort.saveToMemento(capture),
-                infraredPort.saveToMemento(capture),
-                codeBreakerRumble.saveToMemento(capture),
-                joypad.saveToMemento(capture),
-                speedMode.saveToMemento(capture),
-                superGameboy.saveToMemento(capture),
-                background.saveToMemento(capture),
-                vRamTransfer.saveToMemento(capture),
-                sgbDisplay.saveToMemento(capture),
-                gameGenie.saveToMemento(capture),
+                sound.captureState(capture),
+                serialPort.captureState(capture),
+                infraredPort.captureState(capture),
+                codeBreakerRumble.captureState(capture),
+                joypad.captureState(capture),
+                speedMode.captureState(capture),
+                superGameboy.captureState(capture),
+                background.captureState(capture),
+                vRamTransfer.captureState(capture),
+                sgbDisplay.captureState(capture),
+                gameGenie.captureState(capture),
                 requestedScreenRefresh,
                 lcdDisabled,
                 lcdOffTicks,
@@ -950,17 +951,17 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
      * contains borrowed live primitive arrays and must not escape the callback.
      */
     public <R> R withMachineStateCapture(
-            BiFunction<Memento<Gameboy>, MachineStateCapture, R> consumer) {
+            BiFunction<ComponentState<Gameboy>, MachineStateCapture, R> consumer) {
         if (consumer == null) {
             throw new IllegalArgumentException("Machine-state consumer is required");
         }
         return MachineStateCapture.withVerifiedView(
-                this::declareMachineStatePayloads, this::saveToMemento, consumer);
+                this::declareMachineStatePayloads, this::captureState, consumer);
     }
 
     @Override
-    public void restoreFromMemento(Memento<Gameboy> memento) {
-        if (!(memento instanceof GameboyMemento mem)) {
+    public void restoreState(ComponentState<Gameboy> state) {
+        if (!(state instanceof GameboyState mem)) {
             throw new IllegalArgumentException();
         }
         restoreMachineState(mem, true);
@@ -973,46 +974,46 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
      * RAM, RTC and mapper state.
      */
     public BootState saveBootState() {
-        return new BootState((GameboyMemento) saveToMemento());
+        return new BootState((GameboyState) captureState());
     }
 
     public void restoreBootState(BootState bootState) {
         if (bootState == null) {
             throw new IllegalArgumentException("Boot state is required");
         }
-        restoreMachineState(bootState.memento, false);
+        restoreMachineState(bootState.state, false);
     }
 
-    private void restoreMachineState(GameboyMemento mem, boolean restoreCartridge) {
-        biosShadow.restoreFromMemento(mem.biosShadowMemento());
+    private void restoreMachineState(GameboyState mem, boolean restoreCartridge) {
+        biosShadow.restoreState(mem.biosShadowMemento());
         if (restoreCartridge) {
-            cartridge.restoreFromMemento(mem.cartridgeMemento());
+            cartridge.restoreState(mem.cartridgeMemento());
         }
-        gpu.restoreFromMemento(mem.gpuMemento());
-        statRegister.restoreFromMemento(mem.statRegisterMemento());
-        mmu.restoreFromMemento(mem.mmuMemento());
-        oamRam.restoreFromMemento(mem.oamRamMemento());
-        cpu.restoreFromMemento(mem.cpuMemento());
-        interruptManager.restoreFromMemento(mem.interruptManagerMemento());
-        timer.restoreFromMemento(mem.timerMemento());
-        dma.restoreFromMemento(mem.dmaMemento());
-        hdma.restoreFromMemento(mem.hdmaMemento());
+        gpu.restoreState(mem.gpuMemento());
+        statRegister.restoreState(mem.statRegisterMemento());
+        mmu.restoreState(mem.mmuMemento());
+        oamRam.restoreState(mem.oamRamMemento());
+        cpu.restoreState(mem.cpuMemento());
+        interruptManager.restoreState(mem.interruptManagerMemento());
+        timer.restoreState(mem.timerMemento());
+        dma.restoreState(mem.dmaMemento());
+        hdma.restoreState(mem.hdmaMemento());
         // Older snapshots contain the former duplicate. Gpu has already restored the same
         // display state; applying this copy preserves byte-for-byte legacy behavior.
         if (mem.displayMemento() != null) {
-            display.restoreFromMemento(mem.displayMemento());
+            display.restoreState(mem.displayMemento());
         }
-        sound.restoreFromMemento(mem.soundMemento());
-        serialPort.restoreFromMemento(mem.serialPortMemento());
-        infraredPort.restoreFromMemento(mem.infraredPortMemento());
-        codeBreakerRumble.restoreFromMemento(mem.codeBreakerRumbleMemento());
-        joypad.restoreFromMemento(mem.joypadMemento());
-        speedMode.restoreFromMemento(mem.speedModeMemento());
-        superGameboy.restoreFromMemento(mem.superGameboyMemento());
-        background.restoreFromMemento(mem.backgroundMemento());
-        vRamTransfer.restoreFromMemento(mem.vRamTransferMemento());
-        sgbDisplay.restoreFromMemento(mem.sgbDisplayMemento());
-        gameGenie.restoreFromMemento(mem.genieMemento());
+        sound.restoreState(mem.soundMemento());
+        serialPort.restoreState(mem.serialPortMemento());
+        infraredPort.restoreState(mem.infraredPortMemento());
+        codeBreakerRumble.restoreState(mem.codeBreakerRumbleMemento());
+        joypad.restoreState(mem.joypadMemento());
+        speedMode.restoreState(mem.speedModeMemento());
+        superGameboy.restoreState(mem.superGameboyMemento());
+        background.restoreState(mem.backgroundMemento());
+        vRamTransfer.restoreState(mem.vRamTransferMemento());
+        sgbDisplay.restoreState(mem.sgbDisplayMemento());
+        gameGenie.restoreState(mem.genieMemento());
         requestedScreenRefresh = mem.requestScreenRefresh();
         lcdDisabled = mem.lcdDisabled();
         lcdOffTicks = mem.lcdOffTicks();
@@ -1040,13 +1041,33 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
     public static final class BootState {
 
-        private final GameboyMemento memento;
+        private final GameboyState state;
 
-        private BootState(GameboyMemento memento) {
-            this.memento = memento;
+        private BootState(GameboyState state) {
+            this.state = state;
         }
     }
 
+    private record GameboyState(ComponentState<BiosShadow> biosShadowMemento, ComponentState<Cartridge> cartridgeMemento,
+                                  ComponentState<Gpu> gpuMemento, ComponentState<StatRegister> statRegisterMemento,
+                                  ComponentState<Mmu> mmuMemento, ComponentState<Ram> oamRamMemento, ComponentState<Cpu> cpuMemento,
+                                  ComponentState<InterruptManager> interruptManagerMemento, ComponentState<Timer> timerMemento,
+                                  ComponentState<Dma> dmaMemento, ComponentState<Hdma> hdmaMemento, ComponentState<Display> displayMemento,
+                                  ComponentState<Sound> soundMemento, ComponentState<SerialPort> serialPortMemento,
+                                  ComponentState<InfraredPort> infraredPortMemento,
+                                  ComponentState<CodeBreakerRumble> codeBreakerRumbleMemento,
+                                  ComponentState<Joypad> joypadMemento, ComponentState<SpeedMode> speedModeMemento,
+                                  ComponentState<SuperGameboy> superGameboyMemento, ComponentState<Background> backgroundMemento,
+                                  ComponentState<VRamTransfer> vRamTransferMemento, ComponentState<SgbDisplay> sgbDisplayMemento,
+                                  ComponentState<Genie> genieMemento, boolean requestScreenRefresh,
+                                  boolean lcdDisabled, int lcdOffTicks, int speedSwitchTailTicks,
+                                  boolean speedSwitchClockPhaseShifted,
+                                  boolean blankCgbBootTilePending,
+                                  boolean clearBootTilemapPending,
+                                  boolean clearCgbBootOamShadowPending) implements ComponentState<Gameboy> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record GameboyMemento(Memento<BiosShadow> biosShadowMemento, Memento<Cartridge> cartridgeMemento,
                                   Memento<Gpu> gpuMemento, Memento<StatRegister> statRegisterMemento,
                                   Memento<Mmu> mmuMemento, Memento<Ram> oamRamMemento, Memento<Cpu> cpuMemento,
@@ -1212,7 +1233,7 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
 
         /**
          * A copy of this configuration that skips the boot sequence, for building a
-         * Gameboy whose state is immediately overwritten by a memento restore. With
+         * Gameboy whose state is immediately overwritten by an explicit state restore. With
          * {@link BootstrapMode#FAST_FORWARD} the constructor would emulate the whole
          * boot ROM (tens of milliseconds) only to have every bit of that state
          * discarded by the restore.

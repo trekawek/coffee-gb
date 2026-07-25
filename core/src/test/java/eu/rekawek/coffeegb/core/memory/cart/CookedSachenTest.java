@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc;
 import org.junit.Test;
@@ -117,11 +117,11 @@ public class CookedSachenTest {
     public void mementoRoundTripPreservesBankAndLogoShim() throws IOException {
         Cartridge cart = build();
         cart.setByte(0x3F00, 0x05);
-        Memento<Cartridge> memento = cart.saveToMemento();
+        ComponentState<Cartridge> memento = cart.captureState();
 
         Cartridge other = build();
         other.setByte(0x3F00, 0x0a); // diverge
-        other.restoreFromMemento(memento);
+        other.restoreState(memento);
         assertEquals(0xA5, other.getByte(0x6000));
         // the logo shim was already off (we wrote before saving); it stays off after restore
         assertEquals(SACHEN_HEADER[0], other.getByte(0x0104));

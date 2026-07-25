@@ -601,7 +601,7 @@ class DetachedStateTest {
     StateSemantics.validate(StateGraph.restore(withPicture))
 
     val barcode = BarcodeBoySerialEndpoint()
-    val idleBarcode = StateGraph.capture(barcode.saveToMemento())
+    val idleBarcode = StateGraph.capture(barcode.captureState())
     repeat(4) {
       barcode.startSending()
       repeat(8) { barcode.sendBit() }
@@ -609,7 +609,7 @@ class DetachedStateTest {
     barcode.scan("4901234567894")
     barcode.setExternalTransfer(true)
     barcode.recvBit()
-    val sendingBarcode = StateGraph.capture(barcode.saveToMemento())
+    val sendingBarcode = StateGraph.capture(barcode.captureState())
     StateGraph.validateCompatible(sendingBarcode, idleBarcode, "active-barcode-data")
     StateSemantics.validate(StateGraph.restore(sendingBarcode))
   }
@@ -658,7 +658,7 @@ class DetachedStateTest {
       endpoint.recvBit()
       val before = session.captureDetachedState()
       val serial = before.serialState as RecordState
-      val idleState = StateGraph.capture(BarcodeBoySerialEndpoint().saveToMemento()) as RecordState
+      val idleState = StateGraph.capture(BarcodeBoySerialEndpoint().captureState()) as RecordState
       val activeData = serial.intArray("data")
       val malformedSerial =
           listOf(
@@ -957,8 +957,8 @@ class DetachedStateTest {
       override fun recvBit(): Int = -1
       override fun startSending() = Unit
       override fun sendBit(): Int = 1
-      override fun saveToMemento() = null
-      override fun restoreFromMemento(memento: eu.rekawek.coffeegb.core.memento.Memento<SerialEndpoint>?) = Unit
+      override fun captureState() = null
+      override fun restoreState(memento: eu.rekawek.coffeegb.core.state.ComponentState<SerialEndpoint>?) = Unit
     }
     session(endpoint).use { session ->
       val failure = assertFailsWith<StateCaptureException> { session.captureDetachedState() }
@@ -1096,7 +1096,7 @@ class DetachedStateTest {
 
   private fun transferCommand(code: Int): RecordState =
       RecordState(
-          eu.rekawek.coffeegb.controller.MementoTypeRegistry.recordClassNames.indexOf(TRANSFER_MEMENTO) + 1,
+          eu.rekawek.coffeegb.controller.StateTypeRegistry.recordClassNames.indexOf(TRANSFER_MEMENTO) + 1,
           listOf(
               StateField("packet", Int32ArrayState(IntArray(16).also { it[0] = (code shl 3) or 1 })),
               StateField("dataTransfer", NullState),
@@ -1186,7 +1186,7 @@ class DetachedStateTest {
 
   private object MementoClassNames {
     fun record(typeId: Int): String =
-        eu.rekawek.coffeegb.controller.MementoTypeRegistry.recordClasses[typeId - 1].name
+        eu.rekawek.coffeegb.controller.StateTypeRegistry.recordClasses[typeId - 1].name
   }
 
   private fun cgbSpeedSwitchRom(): ByteArray {
@@ -1263,37 +1263,37 @@ class DetachedStateTest {
   private class InjectedApplyFailure : RuntimeException()
 
   private companion object {
-    const val DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento"
-    const val GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
-    const val GPU_MEMENTO = "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento"
-    const val DMA_MEMENTO = "eu.rekawek.coffeegb.core.memory.Dma\$DmaMemento"
-    const val HDMA_MEMENTO = "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento"
-    const val SPEED_MEMENTO = "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeMomento"
-    const val SOUND_MODE_MEMENTO = "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeMemento"
-    const val SOUND_MODE3_MEMENTO = "eu.rekawek.coffeegb.core.sound.SoundMode3\$SoundMode3Memento"
+    const val DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState"
+    const val GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.Gameboy\$GameboyState"
+    const val GPU_MEMENTO = "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState"
+    const val DMA_MEMENTO = "eu.rekawek.coffeegb.core.memory.Dma\$DmaState"
+    const val HDMA_MEMENTO = "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaState"
+    const val SPEED_MEMENTO = "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeState"
+    const val SOUND_MODE_MEMENTO = "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeState"
+    const val SOUND_MODE3_MEMENTO = "eu.rekawek.coffeegb.core.sound.SoundMode3\$SoundMode3State"
     const val POLYNOMIAL_COUNTER_MEMENTO =
-        "eu.rekawek.coffeegb.core.sound.PolynomialCounter\$PolynomialCounterMemento"
-    const val SERIAL_PORT_MEMENTO = "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortMemento"
-    const val CARTRIDGE_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeMemento"
-    const val MBC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3Memento"
-    const val INT_QUEUE_MEMENTO = "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueMemento"
-    const val DMG_FIFO_MEMENTO = "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento"
+        "eu.rekawek.coffeegb.core.sound.PolynomialCounter\$PolynomialCounterState"
+    const val SERIAL_PORT_MEMENTO = "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortState"
+    const val CARTRIDGE_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeState"
+    const val MBC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3State"
+    const val INT_QUEUE_MEMENTO = "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueState"
+    const val DMG_FIFO_MEMENTO = "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState"
     const val COLOR_FIFO_MEMENTO =
-        "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento"
+        "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState"
     const val PIXEL_TRANSFER_MEMENTO =
-        "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento"
-    const val SGB_DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento"
-    const val SUPER_GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyMemento"
-    const val BACKGROUND_MEMENTO = "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundMemento"
+        "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState"
+    const val SGB_DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayState"
+    const val SUPER_GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyState"
+    const val BACKGROUND_MEMENTO = "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundState"
     const val TRANSFER_MEMENTO =
-        "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento"
-    const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento"
+        "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState"
+    const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelState"
     const val BASIC_ROM_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomMemento"
-    const val GENIE_MEMENTO = "eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento"
-    const val RTC_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockMemento"
-    const val HUC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3Memento"
-    const val TAMA5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Tama5\$Tama5Memento"
+        "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomState"
+    const val GENIE_MEMENTO = "eu.rekawek.coffeegb.core.genie.Genie\$GenieState"
+    const val RTC_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState"
+    const val HUC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3State"
+    const val TAMA5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Tama5\$Tama5State"
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
   }
 }

@@ -7,7 +7,7 @@ import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.core.gpu.Lcdc;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
@@ -42,12 +42,12 @@ public class PixelTransferWindowTriggerTest {
         h.registers.put(GpuRegister.WY, 42);
         h.lcdc.set(0xb1);
         h.transfer.checkWindowY();
-        Memento<PixelTransfer> triggered = h.transfer.saveToMemento();
+        ComponentState<PixelTransfer> triggered = h.transfer.captureState();
 
         h.transfer.resetWindowLineCounter();
         assertFalse(h.transfer.isWindowYTriggered());
 
-        h.transfer.restoreFromMemento(triggered);
+        h.transfer.restoreState(triggered);
         assertTrue(h.transfer.isWindowYTriggered());
     }
 
@@ -102,14 +102,14 @@ public class PixelTransferWindowTriggerTest {
 
         h.transfer.scheduleWindowYWrite(0xff, 6);
         h.registers.put(GpuRegister.WY, 0xff);
-        Memento<PixelTransfer> beforeLineZeroCheckpoint = h.transfer.saveToMemento();
+        ComponentState<PixelTransfer> beforeLineZeroCheckpoint = h.transfer.captureState();
 
         h.transfer.checkWindowY(153, 454);
         assertTrue("the CGB line-zero checkpoint sees pre-write WY on a collision",
                 h.transfer.isWindowYTriggered());
 
         h.transfer.resetWindowLineCounter();
-        h.transfer.restoreFromMemento(beforeLineZeroCheckpoint);
+        h.transfer.restoreState(beforeLineZeroCheckpoint);
         h.transfer.checkWindowY(153, 454);
         assertTrue("the pending write and collision latch must survive restore",
                 h.transfer.isWindowYTriggered());
@@ -138,7 +138,7 @@ public class PixelTransferWindowTriggerTest {
                 h.transfer.isCgbWindowStartActive());
         assertTrue("the terminal comparator event remains captured through HBlank",
                 h.transfer.hasCgbTerminalWindowStarted());
-        Memento<PixelTransfer> terminalStart = h.transfer.saveToMemento();
+        ComponentState<PixelTransfer> terminalStart = h.transfer.captureState();
 
         h.registers.put(GpuRegister.WX, 167);
         h.lcdc.set(0x91);
@@ -165,7 +165,7 @@ public class PixelTransferWindowTriggerTest {
         assertFalse("the captured terminal event is scanline-local",
                 h.transfer.hasCgbTerminalWindowStarted());
 
-        h.transfer.restoreFromMemento(terminalStart);
+        h.transfer.restoreState(terminalStart);
         assertTrue("the captured terminal event must survive save-state restoration",
                 h.transfer.hasCgbTerminalWindowStarted());
         h.transfer.resetWindowLineCounter();
@@ -218,12 +218,12 @@ public class PixelTransferWindowTriggerTest {
         Harness h = startCgbWindow();
         h.lcdc.set(0x91);
         h.transfer.tick();
-        Memento<PixelTransfer> disabledStart = h.transfer.saveToMemento();
+        ComponentState<PixelTransfer> disabledStart = h.transfer.captureState();
 
         int firstTicks = finishWindowStart(h.transfer);
         int firstPosition = h.transfer.getPosition();
 
-        h.transfer.restoreFromMemento(disabledStart);
+        h.transfer.restoreState(disabledStart);
         int restoredTicks = finishWindowStart(h.transfer);
         assertEquals(firstTicks, restoredTicks);
         assertEquals(firstPosition, h.transfer.getPosition());
@@ -244,13 +244,13 @@ public class PixelTransferWindowTriggerTest {
             h.transfer.tick();
         }
         h.lcdc.set(0xb1);
-        Memento<PixelTransfer> risingEdge = h.transfer.saveToMemento();
+        ComponentState<PixelTransfer> risingEdge = h.transfer.captureState();
 
         h.transfer.tick();
         assertFalse("the comparator dot sees the pre-write LCDC.5 value",
                 h.transfer.hasActivatedWindowOnLine());
 
-        h.transfer.restoreFromMemento(risingEdge);
+        h.transfer.restoreState(risingEdge);
         h.transfer.tick();
         assertFalse("the inhibited edge must survive save-state restoration",
                 h.transfer.hasActivatedWindowOnLine());

@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.phase.*;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.DmaOamAddressSpace;
 import eu.rekawek.coffeegb.core.memory.Ram;
@@ -16,7 +18,7 @@ import java.util.List;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.*;
 
-public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
+public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private static final int LCDC_ADDRESS = 0xff40;
 
@@ -1960,31 +1962,31 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     @Override
-    public Memento<Gpu> saveToMemento() {
-        Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
-        Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
+    public ComponentState<Gpu> captureState() {
+        ComponentState<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.captureState() : null;
+        ComponentState<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.captureState() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+        return new GpuState(videoRam0Memento, videoRam1Memento, display.captureState(), lcdc.captureState(), bgPalette.captureState(), oamPalette.captureState(), oamSearchPhase.captureState(), pixelTransferPhase.captureState(), pixelMachine.captureState(), r.captureState(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
-    public Memento<Gpu> saveToMemento(MachineStateCapture capture) {
-        Memento<Ram> videoRam0Memento =
-                videoRam0 instanceof Ram ? videoRam0.saveToMemento(capture) : null;
-        Memento<Ram> videoRam1Memento =
-                videoRam1 instanceof Ram ? videoRam1.saveToMemento(capture) : null;
+    public ComponentState<Gpu> captureState(MachineStateCapture capture) {
+        ComponentState<Ram> videoRam0Memento =
+                videoRam0 instanceof Ram ? videoRam0.captureState(capture) : null;
+        ComponentState<Ram> videoRam1Memento =
+                videoRam1 instanceof Ram ? videoRam1.captureState(capture) : null;
 
-        return new GpuMemento(
+        return new GpuState(
                 videoRam0Memento,
                 videoRam1Memento,
-                display.saveToMemento(capture),
-                lcdc.saveToMemento(capture),
-                bgPalette.saveToMemento(capture),
-                oamPalette.saveToMemento(capture),
-                oamSearchPhase.saveToMemento(capture),
-                pixelTransferPhase.saveToMemento(capture),
-                pixelMachine.saveToMemento(capture),
-                r.saveToMemento(capture),
+                display.captureState(capture),
+                lcdc.captureState(capture),
+                bgPalette.captureState(capture),
+                oamPalette.captureState(capture),
+                oamSearchPhase.captureState(capture),
+                pixelTransferPhase.captureState(capture),
+                pixelMachine.captureState(capture),
+                r.captureState(capture),
                 lcdEnabled,
                 displayEnabledDelay,
                 line,
@@ -2022,29 +2024,29 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Gpu> memento) {
-        if (!(memento instanceof GpuMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Gpu> state) {
+        if (!(state instanceof GpuState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
 
         if (videoRam0 instanceof Ram) {
-            ((Ram) videoRam0).restoreFromMemento(mem.videoRam0Memento);
+            ((Ram) videoRam0).restoreState(mem.videoRam0Memento);
         }
         if (videoRam1 instanceof Ram) {
-            ((Ram) videoRam1).restoreFromMemento(mem.videoRam1Memento);
+            ((Ram) videoRam1).restoreState(mem.videoRam1Memento);
         }
 
-        display.restoreFromMemento(mem.displayMemento);
-        lcdc.restoreFromMemento(mem.lcdcMemento);
-        bgPalette.restoreFromMemento(mem.bgPaletteMemento);
-        oamPalette.restoreFromMemento(mem.oamPaletteMemento);
-        oamSearchPhase.restoreFromMemento(mem.oamSearchPhaseMemento);
-        pixelTransferPhase.restoreFromMemento(mem.pixelTransferPhaseMemento);
+        display.restoreState(mem.displayMemento);
+        lcdc.restoreState(mem.lcdcMemento);
+        bgPalette.restoreState(mem.bgPaletteMemento);
+        oamPalette.restoreState(mem.oamPaletteMemento);
+        oamSearchPhase.restoreState(mem.oamSearchPhaseMemento);
+        pixelTransferPhase.restoreState(mem.pixelTransferPhaseMemento);
         // snapshots from older versions carry only one dot machine; the pixel machine
         // then restarts from the skeleton's state (one partially wrong line at most)
-        pixelMachine.restoreFromMemento(
+        pixelMachine.restoreState(
                 mem.pixelMachineMemento != null ? mem.pixelMachineMemento : mem.pixelTransferPhaseMemento);
-        r.restoreFromMemento(mem.rMemento);
+        r.restoreState(mem.rMemento);
 
         this.lcdEnabled = mem.lcdEnabled;
         this.displayEnabledDelay = mem.displayEnabledDelay;
@@ -2090,6 +2092,32 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
     }
 
+    private record GpuState(ComponentState<Ram> videoRam0Memento, ComponentState<Ram> videoRam1Memento,
+                              ComponentState<Display> displayMemento, ComponentState<Lcdc> lcdcMemento,
+                              ComponentState<ColorPalette> bgPaletteMemento, ComponentState<ColorPalette> oamPaletteMemento,
+                              ComponentState<OamSearch> oamSearchPhaseMemento,
+                              ComponentState<PixelTransfer> pixelTransferPhaseMemento,
+                              ComponentState<PixelTransfer> pixelMachineMemento,
+                              ComponentState<GpuRegisterValues> rMemento, boolean lcdEnabled, int displayEnabledDelay,
+                              int line, int ticksInLine, boolean firstLine,
+                              boolean lcdEnableClockPhase, boolean firstFrameAfterLcdEnable,
+                              boolean pixelTransferDone,
+                              int hblankIntFrom, int mode0IntFrom,
+                              boolean statModeLatchRephasedBySpeedSwitch,
+                              boolean speedSwitchCompletedThisLine,
+                              boolean lyReadLatchRephasedBySpeedSwitch,
+                              boolean scxWrittenThisLine,
+                              boolean doubleSpeedMode2DispatchStatTailThisLine,
+                              boolean doubleSpeedMode2DispatchCrossedLineEdge,
+                              boolean earlyScxStatTailThisLine,
+                              boolean wyWrittenThisLine,
+                              boolean lateDoubleSpeedLineZeroWindowEnable,
+                              int lastCpuVramWriteTick, Mode mode,
+                              List<PendingPpuWrite> pendingPpuWrites,
+                              int[] cpuVisiblePpuRegisters) implements ComponentState<Gpu> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record GpuMemento(Memento<Ram> videoRam0Memento, Memento<Ram> videoRam1Memento,
                               Memento<Display> displayMemento, Memento<Lcdc> lcdcMemento,
                               Memento<ColorPalette> bgPaletteMemento, Memento<ColorPalette> oamPaletteMemento,
@@ -2115,6 +2143,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                               int[] cpuVisiblePpuRegisters) implements Memento<Gpu> {
     }
 
+    /** Importer-compatible immutable value embedded by released GPU snapshot records. */
     private record PendingPpuWrite(int address, int value, int mask,
                                    int remainingDots) implements Serializable {
     }

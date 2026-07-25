@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.core.cpu.SpeedMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.ir.InfraredPort
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.state.MachineStateCapture
+import eu.rekawek.coffeegb.core.state.ComponentState
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery
@@ -113,9 +113,9 @@ class StateCoverageMatrixTest {
     cases.forEach { case ->
       val controller = case.factory(rom)
       EventBusImpl().use(controller::init)
-      val idle = StateGraph.capture(controller.saveToMemento())
+      val idle = StateGraph.capture(controller.captureState())
       case.setup(controller)
-      val captured = StateGraph.capture(controller.saveToMemento())
+      val captured = StateGraph.capture(controller.captureState())
       val direct = directState(controller)
       assertEquals(
           captured,
@@ -130,22 +130,22 @@ class StateCoverageMatrixTest {
       assertNotEquals(idle, captured, "${case.name} setup did not exercise owned state")
 
       val expectedTrace = continueMapper(controller, case.probes)
-      val expectedState = StateGraph.capture(controller.saveToMemento())
+      val expectedState = StateGraph.capture(controller.captureState())
       disturbMapper(controller)
 
       val restored = StateGraph.restore(captured)
       StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      controller.restoreFromMemento(restored as Memento<MemoryController>)
+      controller.restoreState(restored as ComponentState<MemoryController>)
       val actualTrace = continueMapper(controller, case.probes)
       assertEquals(expectedTrace, actualTrace, "${case.name} continuation trace")
-      assertEquals(expectedState, StateGraph.capture(controller.saveToMemento()), case.name)
+      assertEquals(expectedState, StateGraph.capture(controller.captureState()), case.name)
       covered += case.name
     }
 
     assertEquals(EXPECTED_MAPPER_FAMILIES, covered)
     val registeredMapperRecords =
-        MementoTypeRegistry.recordClassNames.filter {
+        StateTypeRegistry.recordClassNames.filter {
           it.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.")
         }
     assertEquals(24, registeredMapperRecords.size)
@@ -154,7 +154,7 @@ class StateCoverageMatrixTest {
   private fun directState(controller: MemoryController): DirectState =
       MachineStateCapture.withVerifiedView(
           controller::declareMachineStatePayloads,
-          { capture -> controller.saveToMemento(capture) },
+          { capture -> controller.captureState(capture) },
           { view, capture ->
             DirectState(StateGraph.capture(view), capture.verifiedPayloadArrays)
           },
@@ -228,23 +228,23 @@ class StateCoverageMatrixTest {
 
     cases.forEach { case ->
       val endpoint = case.endpoint
-      val idle = StateGraph.capture(endpoint.saveToMemento())
+      val idle = StateGraph.capture(endpoint.captureState())
       case.setup(endpoint)
-      val captured = StateGraph.capture(endpoint.saveToMemento())
+      val captured = StateGraph.capture(endpoint.captureState())
       assertNotEquals(idle, captured, "${case.name} setup did not exercise owned state")
       case.clearObserved()
       val expectedTrace = continuePeripheral(endpoint) + case.observed()
-      val expectedState = StateGraph.capture(endpoint.saveToMemento())
+      val expectedState = StateGraph.capture(endpoint.captureState())
       disturbPeripheral(endpoint)
 
       val restored = StateGraph.restore(captured)
       StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      endpoint.restoreFromMemento(restored as Memento<SerialEndpoint>?)
+      endpoint.restoreState(restored as ComponentState<SerialEndpoint>?)
       case.clearObserved()
       val actualTrace = continuePeripheral(endpoint) + case.observed()
       assertEquals(expectedTrace, actualTrace, "${case.name} continuation trace")
-      assertEquals(expectedState, StateGraph.capture(endpoint.saveToMemento()), case.name)
+      assertEquals(expectedState, StateGraph.capture(endpoint.captureState()), case.name)
     }
 
     assertEquals(EXPECTED_SERIAL_FAMILIES, cases.map { it.name }.toSet())
@@ -254,39 +254,39 @@ class StateCoverageMatrixTest {
   fun activeSgbMultipacketAndInfraredPulsePhasesContinueDeterministically() {
     EventBusImpl().use { sgbBus ->
       val sgb = SuperGameboy(sgbBus)
-      val idle = StateGraph.capture(sgb.saveToMemento())
+      val idle = StateGraph.capture(sgb.captureState())
       val firstPacket = IntArray(16).also {
         it[0] = 2 // first half of a two-packet PAL01 command
         it[1] = 0x34
         it[2] = 0x12
       }
       sgbBus.post(SuperGameboy.PacketReceivedEvent(firstPacket))
-      val partial = StateGraph.capture(sgb.saveToMemento())
+      val partial = StateGraph.capture(sgb.captureState())
       assertNotEquals(idle, partial)
 
       sgbBus.post(SuperGameboy.PacketReceivedEvent(IntArray(16)))
-      val expected = StateGraph.capture(sgb.saveToMemento())
+      val expected = StateGraph.capture(sgb.captureState())
       val restored = StateGraph.restore(partial)
       StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      sgb.restoreFromMemento(restored as Memento<SuperGameboy>)
+      sgb.restoreState(restored as ComponentState<SuperGameboy>)
       sgbBus.post(SuperGameboy.PacketReceivedEvent(IntArray(16)))
-      assertEquals(expected, StateGraph.capture(sgb.saveToMemento()))
+      assertEquals(expected, StateGraph.capture(sgb.captureState()))
     }
 
     EventBusImpl().use { irBus ->
       val infrared = InfraredPort(true, SpeedMode(true))
       infrared.init(irBus)
-      val idle = StateGraph.capture(infrared.saveToMemento())
+      val idle = StateGraph.capture(infrared.captureState())
       infrared.setByte(0xff56, 0xc0)
       irBus.post(FullChanger.TransformEvent(5))
       infrared.getByte(0xff56) // arm the first pulse at the emulated polling edge
       repeat(30) { infrared.tick() }
-      val active = StateGraph.capture(infrared.saveToMemento())
+      val active = StateGraph.capture(infrared.captureState())
       assertNotEquals(idle, active)
 
       val expectedTrace = continueInfrared(infrared, 500)
-      val expected = StateGraph.capture(infrared.saveToMemento())
+      val expected = StateGraph.capture(infrared.captureState())
       infrared.setByte(0xff56, 0xc0)
       irBus.post(FullChanger.TransformEvent(9))
       infrared.getByte(0xff56)
@@ -294,13 +294,13 @@ class StateCoverageMatrixTest {
       val restored = StateGraph.restore(active)
       StateSemantics.validate(restored)
       @Suppress("UNCHECKED_CAST")
-      infrared.restoreFromMemento(restored as Memento<InfraredPort>)
+      infrared.restoreState(restored as ComponentState<InfraredPort>)
       val actualTrace = continueInfrared(infrared, 500)
       assertEquals(expectedTrace, actualTrace)
-      assertEquals(expected, StateGraph.capture(infrared.saveToMemento()))
+      assertEquals(expected, StateGraph.capture(infrared.captureState()))
 
       irBus.post(FullChanger.TransformEvent(12))
-      val armed = StateGraph.capture(infrared.saveToMemento())
+      val armed = StateGraph.capture(infrared.captureState())
       val armedChanger = armed.record(FULL_CHANGER_MEMENTO)
       assertTrue(armedChanger.bool("armed"))
       assertTrue(!armedChanger.bool("running"))
@@ -308,14 +308,14 @@ class StateCoverageMatrixTest {
 
       infrared.getByte(0xff56)
       repeat(30) { infrared.tick() }
-      val running = StateGraph.capture(infrared.saveToMemento())
+      val running = StateGraph.capture(infrared.captureState())
       val runningChanger = running.record(FULL_CHANGER_MEMENTO)
       assertTrue(!runningChanger.bool("armed"))
       assertTrue(runningChanger.bool("running"))
       StateSemantics.validate(StateGraph.restore(running))
 
       repeat(100_000) { infrared.tick() }
-      val completed = StateGraph.capture(infrared.saveToMemento())
+      val completed = StateGraph.capture(infrared.captureState())
       val completedChanger = completed.record(FULL_CHANGER_MEMENTO)
       assertTrue(!completedChanger.bool("armed"))
       assertTrue(!completedChanger.bool("running"))
@@ -328,14 +328,14 @@ class StateCoverageMatrixTest {
       irBus.post(FullChanger.TransformEvent(17))
       infrared.getByte(0xff56)
       val completedContinuation = continueInfrared(infrared, 600)
-      val completedExpected = StateGraph.capture(infrared.saveToMemento())
+      val completedExpected = StateGraph.capture(infrared.captureState())
       @Suppress("UNCHECKED_CAST")
-      infrared.restoreFromMemento(
-          StateGraph.restore(completed) as Memento<InfraredPort>)
+      infrared.restoreState(
+          StateGraph.restore(completed) as ComponentState<InfraredPort>)
       irBus.post(FullChanger.TransformEvent(17))
       infrared.getByte(0xff56)
       assertEquals(completedContinuation, continueInfrared(infrared, 600))
-      assertEquals(completedExpected, StateGraph.capture(infrared.saveToMemento()))
+      assertEquals(completedExpected, StateGraph.capture(infrared.captureState()))
     }
   }
 
@@ -347,7 +347,7 @@ class StateCoverageMatrixTest {
 
     // Capture after AA; the continuation completes the unlock and enters software-ID mode.
     mbc6.setByte(0x5555, 0xaa)
-    val unlock = StateGraph.capture(mbc6.saveToMemento())
+    val unlock = StateGraph.capture(mbc6.captureState())
     assertEquals(1, unlock.record(MBC6_MEMENTO).int("flashCommandState"))
     assertMapperContinuation(
         mbc6,
@@ -358,13 +358,13 @@ class StateCoverageMatrixTest {
       it.setByte(0x5555, 0x90)
       listOf(it.getByte(0x4000), it.getByte(0x4001))
     }
-    assertTrue(StateGraph.capture(mbc6.saveToMemento()).record(MBC6_MEMENTO).bool("flashIdMode"))
+    assertTrue(StateGraph.capture(mbc6.captureState()).record(MBC6_MEMENTO).bool("flashIdMode"))
 
     resetMbc6Flash(mbc6)
     mbc6.setByte(0x5555, 0xaa)
     mbc6.setByte(0x4aaa, 0x55)
     mbc6.setByte(0x5555, 0xa0)
-    val program = StateGraph.capture(mbc6.saveToMemento())
+    val program = StateGraph.capture(mbc6.captureState())
     assertTrue(program.record(MBC6_MEMENTO).bool("flashProgramMode"))
     assertMapperContinuation(
         mbc6,
@@ -387,7 +387,7 @@ class StateCoverageMatrixTest {
     mbc7Command(mbc7, 0b01, 0x12) // WRITE
     mbc7SendBits(mbc7, 0xbe, 8)
 
-    val captured = StateGraph.capture(mbc7.saveToMemento())
+    val captured = StateGraph.capture(mbc7.captureState())
     val eeprom = captured.record(MBC7_EEPROM_MEMENTO)
     assertEquals("WRITING", eeprom.enumName("state"))
     assertEquals(8, eeprom.int("bitsRead"))
@@ -421,7 +421,7 @@ class StateCoverageMatrixTest {
       mbc5.init(bus)
       mbc5.setByte(0x0000, 0x0a)
       mbc5.setByte(0x4000, 0x0b) // RAM bank 3 + motor on
-      val captured = StateGraph.capture(mbc5.saveToMemento())
+      val captured = StateGraph.capture(mbc5.captureState())
       assertTrue(captured.record(MBC5_MEMENTO).bool("motorOn"))
       assertEquals(3, captured.record(MBC5_MEMENTO).int("selectedRamBank"))
 
@@ -430,15 +430,15 @@ class StateCoverageMatrixTest {
         mbc5.setByte(0x4000, 0x03)
         log.toList()
       }
-      val expectedState = StateGraph.capture(mbc5.saveToMemento())
+      val expectedState = StateGraph.capture(mbc5.captureState())
       mbc5.setByte(0x4000, 0x08)
       @Suppress("UNCHECKED_CAST")
-      mbc5.restoreFromMemento(StateGraph.restore(captured) as Memento<MemoryController>)
+      mbc5.restoreState(StateGraph.restore(captured) as ComponentState<MemoryController>)
       log.clear()
       mbc5.setByte(0x4000, 0x03)
       assertEquals(listOf(false), expectedTrace)
       assertEquals(expectedTrace, log)
-      assertEquals(expectedState, StateGraph.capture(mbc5.saveToMemento()))
+      assertEquals(expectedState, StateGraph.capture(mbc5.captureState()))
     }
   }
 
@@ -450,7 +450,7 @@ class StateCoverageMatrixTest {
     datel.setByte(0x5555, 0xaa)
     datel.setByte(0x2aaa, 0x55)
     datel.setByte(0x5555, 0xa0)
-    val program = StateGraph.capture(datel.saveToMemento())
+    val program = StateGraph.capture(datel.captureState())
     assertEquals(3, program.record(DATEL_MEMENTO).int("flashCycle"))
     assertTrue(program.record(DATEL_MEMENTO).field("slotMemento") is RecordState)
     assertMapperContinuation(datel, program, disturb = { resetDatelFlash(it) }) {
@@ -462,7 +462,7 @@ class StateCoverageMatrixTest {
     datel.setByte(0x2aaa, 0x55)
     datel.setByte(0x5555, 0x80)
     datel.setByte(0x5555, 0xaa)
-    val erase = StateGraph.capture(datel.saveToMemento())
+    val erase = StateGraph.capture(datel.captureState())
     val eraseRecord = erase.record(DATEL_MEMENTO)
     assertTrue(eraseRecord.bool("flashErasePending"))
     assertEquals(1, eraseRecord.int("flashCycle"))
@@ -475,7 +475,7 @@ class StateCoverageMatrixTest {
     datel.setByte(0x5555, 0xaa)
     datel.setByte(0x2aaa, 0x55)
     datel.setByte(0x5555, 0x90)
-    val id = StateGraph.capture(datel.saveToMemento())
+    val id = StateGraph.capture(datel.captureState())
     assertTrue(id.record(DATEL_MEMENTO).bool("flashIdMode"))
     assertMapperContinuation(datel, id, disturb = { resetDatelFlash(it) }) {
       listOf(it.getByte(0), it.getByte(1))
@@ -598,15 +598,15 @@ class StateCoverageMatrixTest {
       continuation: (MemoryController) -> List<Int>,
   ) {
     val expectedTrace = continuation(controller)
-    val expectedState = StateGraph.capture(controller.saveToMemento())
+    val expectedState = StateGraph.capture(controller.captureState())
     disturb(controller)
     val restored = StateGraph.restore(captured)
     StateSemantics.validate(restored)
     @Suppress("UNCHECKED_CAST")
-    controller.restoreFromMemento(restored as Memento<MemoryController>)
+    controller.restoreState(restored as ComponentState<MemoryController>)
     val actualTrace = continuation(controller)
     assertEquals(expectedTrace, actualTrace)
-    assertEquals(expectedState, StateGraph.capture(controller.saveToMemento()))
+    assertEquals(expectedState, StateGraph.capture(controller.captureState()))
   }
 
   private fun enableMbc6Flash(controller: MemoryController) {
@@ -657,7 +657,7 @@ class StateCoverageMatrixTest {
     fun find(value: StateValue): RecordState? =
         when (value) {
           is RecordState ->
-              if (MementoTypeRegistry.recordClassNames[value.typeId - 1] == className) value
+              if (StateTypeRegistry.recordClassNames[value.typeId - 1] == className) value
               else value.fields.firstNotNullOfOrNull { find(it.value) }
           is ObjectArrayState -> value.values.firstNotNullOfOrNull(::find)
           is ListState -> value.values.firstNotNullOfOrNull(::find)
@@ -673,7 +673,7 @@ class StateCoverageMatrixTest {
   private fun RecordState.intArray(name: String): IntArray = (field(name) as Int32ArrayState).copyValue()
   private fun RecordState.enumName(name: String): String {
     val enum = field(name) as EnumState
-    return (MementoTypeRegistry.enumClasses[enum.typeId - 1].enumConstants[enum.ordinal] as Enum<*>).name
+    return (StateTypeRegistry.enumClasses[enum.typeId - 1].enumConstants[enum.ordinal] as Enum<*>).name
   }
 
   private fun rtcSetup(seconds: Int) =
@@ -711,12 +711,12 @@ class StateCoverageMatrixTest {
   }
 
   private companion object {
-    const val MBC5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5Memento"
-    const val MBC6_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6Memento"
+    const val MBC5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
+    const val MBC6_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State"
     const val MBC7_EEPROM_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromMemento"
-    const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento"
-    const val FULL_CHANGER_MEMENTO = "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerMemento"
+        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
+    const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelState"
+    const val FULL_CHANGER_MEMENTO = "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState"
     val DEFAULT_MAPPER_PROBES = listOf(0x0100, 0x4000, 0x7000, 0x7fe1, 0xa000, 0xa001)
 
     val EXPECTED_MAPPER_FAMILIES =

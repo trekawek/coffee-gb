@@ -1,14 +1,14 @@
 package eu.rekawek.coffeegb.core.ir;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
-
-import java.io.Serializable;
 
 /**
  * The CGB infrared port - the RP register at 0xFF56 (issue #94).
@@ -21,7 +21,7 @@ import java.io.Serializable;
  * <p>Received light comes from a pluggable external device. Supported sources are another
  * linked Game Boy and the {@link FullChanger} (Zok Zok Heroes).
  */
-public class InfraredPort implements AddressSpace, Serializable, Originator<InfraredPort> {
+public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPort> {
 
     private final boolean gbc;
 
@@ -108,25 +108,30 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
     }
 
     @Override
-    public Memento<InfraredPort> saveToMemento() {
-        return new InfraredPortMemento(rp, fullChanger.saveToMemento());
+    public ComponentState<InfraredPort> captureState() {
+        return new InfraredPortState(rp, fullChanger.captureState());
     }
 
     @Override
-    public Memento<InfraredPort> saveToMemento(MachineStateCapture capture) {
-        return new InfraredPortMemento(rp, fullChanger.saveToMemento(capture));
+    public ComponentState<InfraredPort> captureState(MachineStateCapture capture) {
+        return new InfraredPortState(rp, fullChanger.captureState(capture));
     }
 
     @Override
-    public void restoreFromMemento(Memento<InfraredPort> memento) {
-        if (!(memento instanceof InfraredPortMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<InfraredPort> state) {
+        if (!(state instanceof InfraredPortState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.rp = mem.rp;
         endpoint.setLightOn((rp & 0x01) != 0);
-        fullChanger.restoreFromMemento(mem.fullChangerMemento);
+        fullChanger.restoreState(mem.fullChangerMemento);
     }
 
+    private record InfraredPortState(int rp, ComponentState<FullChanger> fullChangerMemento)
+            implements ComponentState<InfraredPort> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record InfraredPortMemento(int rp, Memento<FullChanger> fullChangerMemento)
             implements Memento<InfraredPort> {
     }

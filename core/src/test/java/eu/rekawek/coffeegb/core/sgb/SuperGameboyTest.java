@@ -60,12 +60,12 @@ public class SuperGameboyTest {
         SuperGameboy superGameboy = new SuperGameboy(sgbBus);
         AtomicReference<Commands.PctTrnCmd> transfer = new AtomicReference<>();
         sgbBus.register(transfer::set, Commands.PctTrnCmd.class);
-        var idleMemento = superGameboy.saveToMemento();
+        var idleMemento = superGameboy.captureState();
 
         int[] packet = new int[16];
         packet[0] = (0x14 << 3) | 1;
         sgbBus.post(new SuperGameboy.PacketReceivedEvent(packet));
-        superGameboy.restoreFromMemento(idleMemento);
+        superGameboy.restoreState(idleMemento);
 
         postFrame(sgbBus, 1);
         postFrame(sgbBus, 2);
@@ -85,7 +85,7 @@ public class SuperGameboyTest {
         firstPacket[1] = 0x34;
         firstPacket[2] = 0x12;
         sgbBus.post(new SuperGameboy.PacketReceivedEvent(firstPacket));
-        var partialMemento = superGameboy.saveToMemento();
+        var partialMemento = superGameboy.captureState();
 
         // Finish that command, then overwrite row zero of the live multipacket buffer.
         sgbBus.post(new SuperGameboy.PacketReceivedEvent(new int[16]));
@@ -95,7 +95,7 @@ public class SuperGameboyTest {
         overwrite[2] = 0x56;
         sgbBus.post(new SuperGameboy.PacketReceivedEvent(overwrite));
 
-        superGameboy.restoreFromMemento(partialMemento);
+        superGameboy.restoreState(partialMemento);
         command.set(null);
         sgbBus.post(new SuperGameboy.PacketReceivedEvent(new int[16]));
 
@@ -111,12 +111,12 @@ public class SuperGameboyTest {
         frame[0] = 7;
         Commands.ChrTrnCmd command = (Commands.ChrTrnCmd) Commands.toCommand(packet);
         command.setDataTransfer(frame);
-        var memento = command.saveToMemento();
+        var memento = command.captureState();
 
         packet[1] = 0;
         frame[0] = 9;
         Commands.ChrTrnCmd restored =
-                (Commands.ChrTrnCmd) Commands.TransferCommand.restoreFromMemento(memento);
+                (Commands.ChrTrnCmd) Commands.TransferCommand.restoreState(memento);
 
         assertEquals(0x80, restored.getTileOffset());
         assertEquals(7, restored.dataTransfer[0]);

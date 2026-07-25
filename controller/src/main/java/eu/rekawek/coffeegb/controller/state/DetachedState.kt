@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.core.gpu.DmgPixelFifo
 import eu.rekawek.coffeegb.core.gpu.Gpu
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.state.ComponentState
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.IOException
@@ -358,30 +359,30 @@ internal enum class ApplyStage {
 }
 
 internal data class PreparedMachineState(
-    val memento: Memento<Gameboy>,
+    val componentState: ComponentState<Gameboy>,
     val rtcRuntime: Gameboy.RtcRuntimeState,
     val dmgFifoRuntime: Gpu.DmgFifoRuntimeState?,
 )
 
 internal data class PreparedSessionState(
     val machine: PreparedMachineState,
-    val serialMemento: Memento<SerialEndpoint>?,
+    val serialState: ComponentState<SerialEndpoint>?,
     val serialRuntime: SerialRuntimeState,
     val heldButtons: Set<Button>,
 )
 
 /**
- * Transitional adapter between the legacy in-memory mementos and the explicit immutable model.
+ * Adapter between explicit component states and the immutable detached model.
  * Apply first checks target-dependent structure and explicit nullability, reconstructs the full
  * candidate, and runs every registered record's semantic policy before the first live mutation.
- * Rollback remains the guard for unexpected failures in legacy restore implementations.
+ * Rollback remains the guard for unexpected live-component failures.
  * This adapter deliberately remains independent of bytes; [StateCodec] wraps it with StateFile v1.
  */
 internal object DetachedStateAdapter {
 
   fun capture(gameboy: Gameboy): MachineState =
       MachineState(
-          StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT),
+          StateGraph.captureRoot(gameboy.captureState(), GAMEBOY_ROOT),
           gameboy.captureRtcRuntimeState().toDetached(),
           MachineHardwareState.valueOf(gameboy.gameboyType.name),
           gameboy.captureDmgFifoRuntimeState().toDetached(),
@@ -396,29 +397,30 @@ internal object DetachedStateAdapter {
    * record, nullability, array, and semantic validation before mutation. Unexpected legacy restore
    * failures roll the whole machine back.
    */
-  fun applyLegacyMemento(
+  fun applyLegacyState(
       gameboy: Gameboy,
-      memento: Memento<Gameboy>,
-      probeAfterMementoMutation: (() -> Unit)? = null,
+      legacyState: Memento<Gameboy>,
+      probeAfterLegacyMutation: (() -> Unit)? = null,
   ) {
     val current = capture(gameboy)
     val legacyRoot =
-        normalizeLegacyFifoOccupancy(StateGraph.captureRoot(memento, GAMEBOY_ROOT)) as RecordState
+        normalizeLegacyFifoOccupancy(
+            StateGraph.captureLegacyRoot(legacyState, LEGACY_GAMEBOY_ROOT)) as RecordState
     StateGraph.validateCompatible(legacyRoot, current.root, "legacy machine")
     val normalized = StateGraph.restoreRoot(legacyRoot, GAMEBOY_ROOT)
     StateSemantics.validate(normalized)
     @Suppress("UNCHECKED_CAST")
-    val normalizedMemento = normalized as Memento<Gameboy>
+    val componentState = normalized as ComponentState<Gameboy>
     val rollback = prepare(gameboy, current)
     val candidate =
         PreparedMachineState(
-            normalizedMemento,
+            componentState,
             current.rtcRuntime.toCore(),
             current.dmgFifoRuntime.toCore(),
         )
     try {
-      gameboy.restoreFromMemento(candidate.memento)
-      probeAfterMementoMutation?.invoke()
+      gameboy.restoreState(candidate.componentState)
+      probeAfterLegacyMutation?.invoke()
       gameboy.restoreDmgFifoRuntimeState(candidate.dmgFifoRuntime)
       gameboy.restoreRtcRuntimeState(candidate.rtcRuntime)
     } catch (failure: Throwable) {
@@ -490,7 +492,7 @@ internal object DetachedStateAdapter {
 
   fun capture(session: Session): SessionState {
     val peripheral = serialPeripheral(session.serialEndpoint)
-    val serial = StateGraph.capture(session.serialEndpoint.saveToMemento())
+    val serial = StateGraph.capture(session.serialEndpoint.captureState())
     return SessionState(
         capture(session.gameboy),
         peripheral,
@@ -550,7 +552,7 @@ internal object DetachedStateAdapter {
       throw StateApplyException(
           "Detached ${state.hardware} state does not match ${gameboy.gameboyType} hardware")
     }
-    val current = StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT)
+    val current = StateGraph.captureRoot(gameboy.captureState(), GAMEBOY_ROOT)
     StateGraph.validateCompatible(state.root, current, "machine")
     try {
       gameboy.validateRtcRuntimeState(state.rtcRuntime.toCore())
@@ -560,7 +562,7 @@ internal object DetachedStateAdapter {
     }
   }
 
-  /** Target-dependent session preflight that does not reconstruct or apply candidate mementos. */
+  /** Target-dependent session preflight that does not reconstruct or apply candidate state. */
   internal fun validateTarget(session: Session, state: SessionState) {
     val currentPeripheral = serialPeripheral(session.serialEndpoint)
     if (currentPeripheral != state.serialPeripheral) {
@@ -568,9 +570,9 @@ internal object DetachedStateAdapter {
           "Session peripheral mismatch: expected ${state.serialPeripheral}, found $currentPeripheral")
     }
     validateTarget(session.gameboy, state.machine)
-    val currentSerialState = StateGraph.capture(session.serialEndpoint.saveToMemento())
+    val currentSerialState = StateGraph.capture(session.serialEndpoint.captureState())
     if ((state.serialState === NullState) != (currentSerialState === NullState)) {
-      throw StateApplyException("Detached serial memento presence does not match the endpoint")
+      throw StateApplyException("Detached serial state presence does not match the endpoint")
     }
     StateGraph.validateCompatible(state.serialState, currentSerialState, "serial")
     validateSerialRuntime(session.serialEndpoint, state.serialRuntime)
@@ -584,12 +586,12 @@ internal object DetachedStateAdapter {
     val machine = reconstructMachine(state.machine)
     val serialValue = StateGraph.restore(state.serialState)
     StateSemantics.validate(serialValue)
-    if (serialValue != null && serialValue !is Memento<*>) {
+    if (serialValue != null && serialValue !is ComponentState<*>) {
       throw StateApplyException("Session serial state has the wrong root type")
     }
-    @Suppress("UNCHECKED_CAST") val serialMemento = serialValue as Memento<SerialEndpoint>?
+    @Suppress("UNCHECKED_CAST") val serialState = serialValue as ComponentState<SerialEndpoint>?
     val heldButtons = state.heldButtons.map { Button.valueOf(it.name) }.toSet()
-    return PreparedSessionState(machine, serialMemento, state.serialRuntime, heldButtons)
+    return PreparedSessionState(machine, serialState, state.serialRuntime, heldButtons)
   }
 
   internal fun commit(
@@ -599,7 +601,7 @@ internal object DetachedStateAdapter {
   ) {
     commit(session.gameboy, prepared.machine)
     probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)
-    session.serialEndpoint.restoreFromMemento(prepared.serialMemento)
+    session.serialEndpoint.restoreState(prepared.serialState)
     applySerialRuntime(session.serialEndpoint, prepared.serialRuntime)
     session.heldButtons = prepared.heldButtons
   }
@@ -612,14 +614,14 @@ internal object DetachedStateAdapter {
   private fun reconstructMachine(state: MachineState): PreparedMachineState {
     val detached = StateGraph.restoreRoot(state.root, GAMEBOY_ROOT)
     StateSemantics.validate(detached)
-    @Suppress("UNCHECKED_CAST") val memento = detached as Memento<Gameboy>
+    @Suppress("UNCHECKED_CAST") val componentState = detached as ComponentState<Gameboy>
     val rtcRuntime = state.rtcRuntime.toCore()
     val dmgFifoRuntime = state.dmgFifoRuntime.toCore()
-    return PreparedMachineState(memento, rtcRuntime, dmgFifoRuntime)
+    return PreparedMachineState(componentState, rtcRuntime, dmgFifoRuntime)
   }
 
   private fun commit(gameboy: Gameboy, prepared: PreparedMachineState) {
-    gameboy.restoreFromMemento(prepared.memento)
+    gameboy.restoreState(prepared.componentState)
     gameboy.restoreDmgFifoRuntimeState(prepared.dmgFifoRuntime)
     gameboy.restoreRtcRuntimeState(prepared.rtcRuntime)
   }
@@ -675,18 +677,19 @@ internal object DetachedStateAdapter {
 
   private val LEGACY_FIFO_RECORD_IDS by lazy {
     listOf(
-            "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento",
-            "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento",
+            "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState",
+            "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState",
         )
         .map { className ->
-          MementoTypeRegistry.recordClassNames.indexOf(className).plus(1).also { id ->
+          StateTypeRegistry.recordClassNames.indexOf(className).plus(1).also { id ->
             check(id > 0) { "State registry has no $className" }
           }
         }
         .toSet()
   }
 
-  private const val GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
+  private const val GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyState"
+  private const val LEGACY_GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
 
   private fun Gameboy.RtcRuntimeState.toDetached(): CartridgeRtcRuntimeState =
       CartridgeRtcRuntimeState(primary.toDetached(), slot.toDetached())
@@ -724,10 +727,13 @@ internal object DetachedStateAdapter {
 
 internal object StateGraph {
   private val recordIds by lazy {
-    MementoTypeRegistry.recordClasses.withIndex().associate { (index, type) -> type to index + 1 }
+    StateTypeRegistry.recordClasses.withIndex().associate { (index, type) -> type to index + 1 }
+  }
+  private val legacyRecordIds by lazy {
+    StateTypeRegistry.legacyRecordClasses.withIndex().associate { (index, type) -> type to index + 1 }
   }
   private val enumIds by lazy {
-    MementoTypeRegistry.enumClasses.withIndex().associate { (index, type) -> type to index + 1 }
+    StateTypeRegistry.enumClasses.withIndex().associate { (index, type) -> type to index + 1 }
   }
 
   fun captureRoot(value: Any, className: String): RecordState {
@@ -738,7 +744,18 @@ internal object StateGraph {
     return root
   }
 
-  fun capture(value: Any?): StateValue = Capture().value(value, 0)
+  fun captureLegacyRoot(value: Any, className: String): RecordState {
+    if (value.javaClass.name != className) {
+      throw StateCaptureException("Legacy state has the wrong root type")
+    }
+    val root = Capture(legacyRecordIds).value(value, 0)
+    if (root !is RecordState) {
+      throw StateCaptureException("Legacy state has the wrong root shape")
+    }
+    return root
+  }
+
+  fun capture(value: Any?): StateValue = Capture(recordIds).value(value, 0)
 
   fun restoreRoot(value: RecordState, className: String): Any {
     if (recordClass(value).name != className) {
@@ -773,10 +790,10 @@ internal object StateGraph {
   }
 
   private fun recordClass(value: RecordState): Class<*> =
-      MementoTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
+      StateTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
           ?: throw StateApplyException("Unknown detached record type ID ${value.typeId}")
 
-  private class Capture {
+  private class Capture(private val admittedRecordIds: Map<Class<*>, Int>) {
     private var references = 0L
 
     fun value(value: Any?, depth: Int): StateValue {
@@ -845,7 +862,7 @@ internal object StateGraph {
 
     private fun captureRecord(value: Any, depth: Int): StateValue {
       val type = value.javaClass
-      val id = recordIds[type]
+      val id = admittedRecordIds[type]
           ?: throw StateCaptureException("Unregistered state record ${type.name}")
       val fields = type.recordComponents.map { component ->
         component.accessor.trySetAccessible()
@@ -908,7 +925,7 @@ internal object StateGraph {
     }
 
     private fun restoreEnum(value: EnumState): Any {
-      val type = MementoTypeRegistry.enumClasses.getOrNull(value.typeId - 1)
+      val type = StateTypeRegistry.enumClasses.getOrNull(value.typeId - 1)
           ?: throw StateApplyException("Unknown detached enum type ID ${value.typeId}")
       return type.enumConstants.getOrNull(value.ordinal)
           ?: throw StateApplyException("Invalid ${type.name} ordinal ${value.ordinal}")
@@ -1003,7 +1020,7 @@ internal object StateGraph {
     ) {
       if (candidate === NullState || target === NullState) {
         if (candidate !== target && !isAuditedNullable(owner, field, element)) {
-          throw StateApplyException("$path has incompatible memento presence")
+          throw StateApplyException("$path has incompatible state presence")
         }
         return
       }
@@ -1111,10 +1128,10 @@ internal object StateGraph {
 
   private val VARIABLE_ARRAY_FIELDS =
       setOf(
-          "eu.rekawek.coffeegb.core.sound.Sound\$SoundMemento" to "buffer",
-          "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento" to "data",
-          "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerMemento" to "schedule",
-          "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento" to
+          "eu.rekawek.coffeegb.core.sound.Sound\$SoundState" to "buffer",
+          "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState" to "data",
+          "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState" to "schedule",
+          "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState" to
               "dataTransfer",
       )
 
@@ -1125,55 +1142,55 @@ internal object StateGraph {
    */
   private val AUDITED_NULLABLE_FIELDS =
       setOf(
-          // Transitional legacy root display copy; new captures use only GpuMemento's display.
-          "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento" to "displayMemento",
+          // Transitional legacy root display copy; new captures use only GpuState's display.
+          "eu.rekawek.coffeegb.core.Gameboy\$GameboyState" to "displayMemento",
           // No interrupt has been selected while the CPU is outside interrupt entry.
-          "eu.rekawek.coffeegb.core.cpu.Cpu\$CpuMemento" to "requestedIrq",
+          "eu.rekawek.coffeegb.core.cpu.Cpu\$CpuState" to "requestedIrq",
           // Old GPU snapshots predate these caches and dot-machine additions.
-          "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento" to "lastFrame",
-          "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesMemento" to
+          "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState" to "lastFrame",
+          "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesState" to
               "mixValues",
-          "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesMemento" to
+          "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesState" to
               "pendingMixValues",
-          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento" to "pixelMachineMemento",
-          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento" to "pendingPpuWrites",
-          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento" to "cpuVisiblePpuRegisters",
-          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento" to "delayEntry",
-          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento" to "delayStamp",
-          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to "delayEntry",
-          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to "delayStamp",
-          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" to "pixelMachineMemento",
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" to "pendingPpuWrites",
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" to "cpuVisiblePpuRegisters",
+          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState" to "delayEntry",
+          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState" to "delayStamp",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState" to "delayEntry",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState" to "delayStamp",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState" to
               "clearedPixels",
-          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState" to
               "clearedPalettes",
-          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento" to
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState" to
               "clearedPriorities",
-          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento" to
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState" to
               "fifoMemento",
-          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento" to
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState" to
               "pendingWindowDisplayWrites",
-          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento" to
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState" to
               "pendingWindowXWrites",
-          // Added after the original HDMA memento; absence selects the legacy derivation.
+          // Added after the original historical HDMA record; absence selects the legacy derivation.
           // GPU mode is also absent until the first PPU mode publication.
-          "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento" to "gpuMode",
-          "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento" to "cpuRequestArbitration",
+          "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaState" to "gpuMode",
+          "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaState" to "cpuRequestArbitration",
           // Barcode data exists only while a scan is actively streaming.
-          "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento" to
+          "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState" to
               "data",
           // These SGB operations are genuinely optional behavior state, not hardware identity.
-          "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyMemento" to
+          "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyState" to
               "waitingTransferCommandMemento",
-          "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundMemento" to
+          "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundState" to
               "pendingPictureMemento",
-          "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento" to
+          "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState" to
               "dataTransfer",
       )
 
   private val AUDITED_NULLABLE_ELEMENTS =
       setOf(
           // Historical SGB snapshots can contain unavailable PAL_TRN entries.
-          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento" to "systemPalettes",
+          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayState" to "systemPalettes",
       )
 }
 

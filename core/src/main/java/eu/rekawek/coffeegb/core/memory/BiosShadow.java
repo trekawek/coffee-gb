@@ -1,11 +1,13 @@
 package eu.rekawek.coffeegb.core.memory;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 
-public class BiosShadow implements AddressSpace, Originator<BiosShadow> {
+public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow> {
 
     private final Bios bios;
 
@@ -51,18 +53,22 @@ public class BiosShadow implements AddressSpace, Originator<BiosShadow> {
     }
 
     @Override
-    public Memento<BiosShadow> saveToMemento() {
-        return new BiosShadowMemento(isEnabled);
+    public ComponentState<BiosShadow> captureState() {
+        return new BiosShadowState(isEnabled);
     }
 
     @Override
-    public void restoreFromMemento(Memento<BiosShadow> memento) {
-        if (!(memento instanceof BiosShadowMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<BiosShadow> state) {
+        if (!(state instanceof BiosShadowState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.isEnabled = mem.isEnabled;
     }
 
+    private record BiosShadowState(boolean isEnabled) implements ComponentState<BiosShadow> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record BiosShadowMemento(boolean isEnabled) implements Memento<BiosShadow> {
     }
 }

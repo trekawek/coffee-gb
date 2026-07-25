@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.core.cpu;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class InterruptManager implements AddressSpace, Serializable, Originator<InterruptManager> {
+public class InterruptManager implements AddressSpace, StatefulComponent<InterruptManager> {
 
     private static final int PPU_INTERRUPT_MASK =
             (1 << InterruptType.VBlank.ordinal()) | (1 << InterruptType.LCDC.ordinal());
@@ -435,8 +435,8 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     }
 
     @Override
-    public Memento<InterruptManager> saveToMemento() {
-        return new InterruptManagerMemento(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts,
+    public ComponentState<InterruptManager> captureState() {
+        return new InterruptManagerState(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts,
                 haltBlockedInterrupts, cpuBlockedInterrupts, cpuPhasedPpuInterrupts,
                 cpuPhasedMode2Interrupts, cpuFirstLineMode2Interrupts,
                 cpuInstructionBlockedInterrupts,
@@ -448,9 +448,9 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     }
 
     @Override
-    public void restoreFromMemento(Memento<InterruptManager> memento) {
-        if (!(memento instanceof InterruptManagerMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<InterruptManager> state) {
+        if (!(state instanceof InterruptManagerState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.ime = mem.ime;
         this.interruptFlag = mem.interruptFlag;
@@ -473,6 +473,26 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         this.lcdcInterruptFlagWriteClear = mem.lcdcInterruptFlagWriteClear;
     }
 
+    private record InterruptManagerState(boolean ime, int interruptFlag, int interruptEnabled,
+                                           int pendingEnableInterrupts,
+                                           int haltBlockedInterrupts,
+                                           int cpuBlockedInterrupts,
+                                           int cpuPhasedPpuInterrupts,
+                                           int cpuPhasedMode2Interrupts,
+                                           int cpuFirstLineMode2Interrupts,
+                                           int cpuInstructionBlockedInterrupts,
+                                           boolean maskVBlankOnNextRead,
+                                           boolean maskLcdcUntilNextPeripheralTick,
+                                           int maskMode0LcdcReadTicks,
+                                           int cpuReadInterruptPreview,
+                                           boolean serialInterruptAcknowledge,
+                                           boolean timerInterruptAcknowledge,
+                                           boolean lcdcInterruptAcknowledge,
+                                           boolean vBlankInterruptAcknowledge,
+                                           boolean lcdcInterruptFlagWriteClear) implements ComponentState<InterruptManager> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record InterruptManagerMemento(boolean ime, int interruptFlag, int interruptEnabled,
                                            int pendingEnableInterrupts,
                                            int haltBlockedInterrupts,

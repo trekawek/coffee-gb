@@ -71,7 +71,7 @@ class SwingEmulator(
     val state = controller.closeWithState()
     controller = BasicController(eventBus, properties, console).also { it.startController() }
     if (state != null) {
-      eventBus.post(Controller.LoadRomEvent(state.rom.file, state.memento))
+      eventBus.post(Controller.LoadRomEvent(state.rom.file, state.state))
     }
   }
 
@@ -80,7 +80,7 @@ class SwingEmulator(
     controller =
         LinkedController(eventBus, properties, console, mode, player).also { it.startController() }
     if (state != null) {
-      eventBus.post(Controller.LoadRomEvent(state.rom.file, state.memento))
+      eventBus.post(Controller.LoadRomEvent(state.rom.file, state.state))
     }
   }
 

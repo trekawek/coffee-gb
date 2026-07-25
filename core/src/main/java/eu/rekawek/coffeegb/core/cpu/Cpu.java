@@ -1,18 +1,19 @@
 package eu.rekawek.coffeegb.core.cpu;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.op.Op;
 import eu.rekawek.coffeegb.core.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.core.gpu.*;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.timer.Timer;
 
-import java.io.Serializable;
 import java.util.List;
 
-public class Cpu implements Serializable, Originator<Cpu> {
+public class Cpu implements StatefulComponent<Cpu> {
 
     public enum State {
         OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_WAIT_1, IRQ_WAIT_2, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED,
@@ -973,11 +974,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     @Override
-    public Memento<Cpu> saveToMemento() {
+    public ComponentState<Cpu> captureState() {
         int[] operand = new int[2];
         operand[0] = this.operand[0];
         operand[1] = this.operand[1];
-        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex,
+        return new CpuState(registers.captureState(), opcode1, opcode2, operand, operandIndex, opIndex,
                 state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
                 haltEntrySampleTicks, synchronousHaltEntryStatPhase, asynchronousHaltEntryStatPhase,
                 ordinaryHaltWakeStatPhase, haltedCpuCycles,
@@ -988,8 +989,8 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     @Override
-    public Memento<Cpu> saveToMemento(MachineStateCapture capture) {
-        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, capture.ints(operand), operandIndex, opIndex,
+    public ComponentState<Cpu> captureState(MachineStateCapture capture) {
+        return new CpuState(registers.captureState(), opcode1, opcode2, capture.ints(operand), operandIndex, opIndex,
                 state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
                 haltEntrySampleTicks, synchronousHaltEntryStatPhase, asynchronousHaltEntryStatPhase,
                 ordinaryHaltWakeStatPhase, haltedCpuCycles,
@@ -1000,11 +1001,11 @@ public class Cpu implements Serializable, Originator<Cpu> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Cpu> memento) {
-        if (!(memento instanceof CpuMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Cpu> state) {
+        if (!(state instanceof CpuState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        this.registers.restoreFromMemento(mem.registersMemento);
+        this.registers.restoreState(mem.registersMemento);
         this.opcode1 = mem.opcode1;
         this.opcode2 = mem.opcode2;
         this.operand[0] = mem.operand[0];
@@ -1039,6 +1040,23 @@ public class Cpu implements Serializable, Originator<Cpu> {
         this.ops = (currentOpcode == null) ? null : currentOpcode.getOps();
     }
 
+    private record CpuState(ComponentState<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
+                              int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
+                              int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
+                              boolean haltBugMode, int haltEntrySampleTicks,
+                              boolean synchronousHaltEntryStatPhase,
+                              boolean asynchronousHaltEntryStatPhase,
+                              boolean ordinaryHaltWakeStatPhase,
+                              int haltedCpuCycles,
+                              boolean hdmaOpcodePrefetched,
+                              int hdmaArbitrationOpcode, boolean hdmaArbitrationOpcodeValid,
+                              int haltPrefetchedOpcode, boolean haltOpcodePrefetchValid,
+                              int speedSwitchPaddingOpcode, boolean speedSwitchPaddingReplayValid,
+                              int speedSwitchTicks, boolean phasedPpuInputHigh,
+                              boolean fastPhasedPpuDispatch) implements ComponentState<Cpu> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record CpuMemento(Memento<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
                               int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
                               int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,

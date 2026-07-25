@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -18,13 +18,13 @@ public class ColorPixelFifoWindowStartTest {
         assertEquals(8, fifo.getClearedBgLength());
         assertEquals(8, fifo.getLength());
 
-        Memento<ColorPixelFifo> windowStart = fifo.saveToMemento();
+        ComponentState<ColorPixelFifo> windowStart = fifo.captureState();
         fifo.dropClearedBgPixel();
         fifo.dropPixel();
         assertEquals(7, fifo.getClearedBgLength());
         assertEquals(7, fifo.getLength());
 
-        fifo.restoreFromMemento(windowStart);
+        fifo.restoreState(windowStart);
         assertEquals(8, fifo.getClearedBgLength());
         assertEquals(8, fifo.getLength());
 

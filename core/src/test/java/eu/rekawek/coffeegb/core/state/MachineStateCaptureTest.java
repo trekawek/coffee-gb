@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.core.memento;
+package eu.rekawek.coffeegb.core.state;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;

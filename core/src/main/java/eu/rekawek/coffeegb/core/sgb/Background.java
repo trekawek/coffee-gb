@@ -1,13 +1,15 @@
 package eu.rekawek.coffeegb.core.sgb;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Display;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class Background implements Originator<Background> {
+public class Background implements StatefulComponent<Background> {
 
     // SGB2 measurement used by SameBoy: wait 41 frames, fade the old border
     // out for 32, swap at black, then fade the new border in for 32.
@@ -120,16 +122,16 @@ public class Background implements Originator<Background> {
     }
 
     @Override
-    public Memento<Background> saveToMemento() {
-        return new BackgroundMemento(tiles.clone(),
-                pendingPicture == null ? null : pendingPicture.saveToMemento(), borderAnimation);
+    public ComponentState<Background> captureState() {
+        return new BackgroundState(tiles.clone(),
+                pendingPicture == null ? null : pendingPicture.captureState(), borderAnimation);
     }
 
     @Override
-    public Memento<Background> saveToMemento(MachineStateCapture capture) {
-        return new BackgroundMemento(
+    public ComponentState<Background> captureState(MachineStateCapture capture) {
+        return new BackgroundState(
                 capture.ints(tiles),
-                pendingPicture == null ? null : pendingPicture.saveToMemento(capture),
+                pendingPicture == null ? null : pendingPicture.captureState(capture),
                 borderAnimation);
     }
 
@@ -142,26 +144,33 @@ public class Background implements Originator<Background> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Background> memento) {
-        if (!(memento instanceof BackgroundMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Background> state) {
+        if (!(state instanceof BackgroundState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.tiles.length != mem.tiles.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         System.arraycopy(mem.tiles, 0, this.tiles, 0, this.tiles.length);
         if (mem.pendingPictureMemento == null) {
             this.pendingPicture = null;
         } else {
-            var restored = Commands.TransferCommand.restoreFromMemento(mem.pendingPictureMemento);
+            var restored = Commands.TransferCommand.restoreState(mem.pendingPictureMemento);
             if (!(restored instanceof Commands.PctTrnCmd picture)) {
-                throw new IllegalArgumentException("Memento does not contain a picture transfer command");
+                throw new IllegalArgumentException("ComponentState does not contain a picture transfer command");
             }
             this.pendingPicture = picture;
         }
         this.borderAnimation = mem.borderAnimation;
     }
 
+    private record BackgroundState(int[] tiles,
+                                     ComponentState<Commands.TransferCommand> pendingPictureMemento,
+                                     int borderAnimation)
+            implements ComponentState<Background> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record BackgroundMemento(int[] tiles,
                                      Memento<Commands.TransferCommand> pendingPictureMemento,
                                      int borderAnimation)

@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.core.sgb;
 
-import eu.rekawek.coffeegb.core.events.Event;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.events.Event;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 
 import java.util.Arrays;
 
@@ -74,16 +76,16 @@ public class Commands {
             super(packet);
         }
 
-        public static TransferCommand restoreFromMemento(Memento<TransferCommand> memento) {
-            if (!(memento instanceof TransferCommandMemento mem)) {
-                throw new IllegalArgumentException("Invalid memento type");
+        public static TransferCommand restoreState(ComponentState<TransferCommand> state) {
+            if (!(state instanceof TransferCommandState mem)) {
+                throw new IllegalArgumentException("Invalid state type");
             }
             var command = Commands.toCommand(mem.packet.clone());
             if (command instanceof TransferCommand transferCommand) {
                 transferCommand.setDataTransfer(mem.dataTransfer == null ? null : mem.dataTransfer.clone());
                 return transferCommand;
             } else {
-                throw new IllegalArgumentException("Memento does not contain a transfer command");
+                throw new IllegalArgumentException("ComponentState does not contain a transfer command");
             }
         }
 
@@ -91,12 +93,12 @@ public class Commands {
             this.dataTransfer = dataTransfer;
         }
 
-        public Memento<TransferCommand> saveToMemento() {
-            return new TransferCommandMemento(packet.clone(), dataTransfer == null ? null : dataTransfer.clone());
+        public ComponentState<TransferCommand> captureState() {
+            return new TransferCommandState(packet.clone(), dataTransfer == null ? null : dataTransfer.clone());
         }
 
-        public Memento<TransferCommand> saveToMemento(MachineStateCapture capture) {
-            return new TransferCommandMemento(
+        public ComponentState<TransferCommand> captureState(MachineStateCapture capture) {
+            return new TransferCommandState(
                     capture.ints(packet),
                     dataTransfer == null ? null : capture.ints(dataTransfer));
         }
@@ -108,6 +110,10 @@ public class Commands {
             }
         }
 
+        private record TransferCommandState(int[] packet, int[] dataTransfer) implements ComponentState<TransferCommand> {
+        }
+
+        /** Importer-only compatibility record for released local snapshots. */
         private record TransferCommandMemento(int[] packet, int[] dataTransfer) implements Memento<TransferCommand> {
         }
     }

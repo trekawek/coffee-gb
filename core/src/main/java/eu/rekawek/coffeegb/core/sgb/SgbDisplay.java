@@ -1,11 +1,13 @@
 package eu.rekawek.coffeegb.core.sgb;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Display.DmgFrameReadyEvent;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.sgb.Commands.MaskEnCmd.GameboyScreenMask;
 
@@ -15,7 +17,7 @@ import static eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent.translateG
 import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
 
-public class SgbDisplay implements Originator<SgbDisplay> {
+public class SgbDisplay implements StatefulComponent<SgbDisplay> {
 
     private static final int DMG_TILES_WIDTH = DISPLAY_WIDTH / 8;
 
@@ -244,15 +246,15 @@ public class SgbDisplay implements Originator<SgbDisplay> {
     }
 
     @Override
-    public Memento<SgbDisplay> saveToMemento() {
-        return new SgbDisplayMemento(sgbBuffer.clone(), sgbMask.clone(), clone2(palettes),
+    public ComponentState<SgbDisplay> captureState() {
+        return new SgbDisplayState(sgbBuffer.clone(), sgbMask.clone(), clone2(palettes),
                 clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask,
                 borderFade);
     }
 
     @Override
-    public Memento<SgbDisplay> saveToMemento(MachineStateCapture capture) {
-        return new SgbDisplayMemento(
+    public ComponentState<SgbDisplay> captureState(MachineStateCapture capture) {
+        return new SgbDisplayState(
                 capture.ints(sgbBuffer),
                 capture.ints(sgbMask),
                 capture.ints2(palettes),
@@ -274,27 +276,27 @@ public class SgbDisplay implements Originator<SgbDisplay> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<SgbDisplay> memento) {
-        if (!(memento instanceof SgbDisplayMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SgbDisplay> state) {
+        if (!(state instanceof SgbDisplayState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.sgbBuffer.length != mem.sgbBuffer.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         if (this.sgbMask.length != mem.sgbMask.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         if (this.palettes.length != mem.palettes.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         if (this.systemPalettes.length != mem.systemPalettes.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         if (this.paletteMap.length != mem.paletteMap.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         if (this.attributeFiles.length != mem.attributeFiles.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         System.arraycopy(mem.sgbBuffer, 0, this.sgbBuffer, 0, this.sgbBuffer.length);
         System.arraycopy(mem.sgbMask, 0, this.sgbMask, 0, this.sgbMask.length);
@@ -332,6 +334,12 @@ public class SgbDisplay implements Originator<SgbDisplay> {
         return clone;
     }
 
+    private record SgbDisplayState(int[] sgbBuffer, int[] sgbMask, int[][] palettes, int[][] systemPalettes,
+                                     int[] paletteMap, int[][] attributeFiles, GameboyScreenMask screenMask,
+                                     int borderFade) implements ComponentState<SgbDisplay> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SgbDisplayMemento(int[] sgbBuffer, int[] sgbMask, int[][] palettes, int[][] systemPalettes,
                                      int[] paletteMap, int[][] attributeFiles, GameboyScreenMask screenMask,
                                      int borderFade) implements Memento<SgbDisplay> {

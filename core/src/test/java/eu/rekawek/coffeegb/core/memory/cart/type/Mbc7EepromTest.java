@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import org.junit.Test;
 
@@ -41,12 +41,12 @@ public class Mbc7EepromTest {
         }
 
         @Override
-        public Memento<Battery> saveToMemento() {
+        public ComponentState<Battery> captureState() {
             return null;
         }
 
         @Override
-        public void restoreFromMemento(Memento<Battery> memento) {
+        public void restoreState(ComponentState<Battery> memento) {
         }
     }
 

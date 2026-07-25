@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.type.Datel;
 
@@ -231,11 +231,11 @@ public class DatelTest {
         Cartridge cart = build();
         cart.setByte(0x7fe1, 7);
         cart.setByte(0x7a00, 0x55);
-        Memento<Cartridge> memento = cart.saveToMemento();
+        ComponentState<Cartridge> memento = cart.captureState();
 
         Cartridge other = build();
         other.setByte(0x7fe1, 3);
-        other.restoreFromMemento(memento);
+        other.restoreState(memento);
         assertEquals(0xA7, other.getByte(0x5000));
         assertEquals(0x55, other.getByte(0x7a00));
     }

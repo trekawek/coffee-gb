@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 
 internal object StateIdentitySectionCodec {
@@ -172,7 +172,7 @@ internal object StatePayloadSectionCodec {
   private const val SERIAL_RUNTIME_NONE = 0
   private const val SERIAL_RUNTIME_BARCODE = 1
   private const val GAMEBOY_ROOT =
-      "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
+      "eu.rekawek.coffeegb.core.Gameboy\$GameboyState"
 
   fun encode(root: StateFileRoot): ByteArray {
     try {
@@ -250,7 +250,7 @@ internal object StatePayloadSectionCodec {
     writeMachine(writer, values, session.machine)
     if ((session.serialPeripheral == SerialPeripheralState.NONE) !=
         (session.serialState === NullState)) {
-      malformed("Serial memento presence does not match peripheral identity")
+      malformed("Serial state presence does not match peripheral identity")
     }
     validateSerialRoot(session.serialPeripheral, session.serialState)
     if ((session.serialPeripheral == SerialPeripheralState.BARCODE_BOY) !=
@@ -299,7 +299,7 @@ internal object StatePayloadSectionCodec {
     val peripheral = serialPeripheral(reader.readByte())
     val serialState = values.read()
     if ((peripheral == SerialPeripheralState.NONE) != (serialState === NullState)) {
-      malformed("Serial memento presence does not match peripheral identity")
+      malformed("Serial state presence does not match peripheral identity")
     }
     validateSerialRoot(peripheral, serialState)
     val runtime =
@@ -492,7 +492,7 @@ internal object StatePayloadSectionCodec {
   }
 
   private fun requireGameboyRoot(root: RecordState) {
-    val expected = MementoTypeRegistry.recordClassNames.indexOf(GAMEBOY_ROOT) + 1
+    val expected = StateTypeRegistry.recordClassNames.indexOf(GAMEBOY_ROOT) + 1
     if (root.typeId != expected) {
       malformed("Machine root type ${root.typeId} is not the Gameboy root $expected")
     }
@@ -503,27 +503,27 @@ internal object StatePayloadSectionCodec {
       state: StateValue,
   ) {
     if (peripheral == SerialPeripheralState.NONE) return
-    val record = state as? RecordState ?: malformed("Serial memento root is not a record")
+    val record = state as? RecordState ?: malformed("Serial state root is not a record")
     val expectedName =
         when (peripheral) {
           SerialPeripheralState.NONE -> return
           SerialPeripheralState.BYTE_RECEIVER ->
-              "eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint\$ByteReceivingSerialEndpointMemento"
+              "eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint\$ByteReceivingSerialEndpointState"
           SerialPeripheralState.PEER_TO_PEER ->
-              "eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointMemento"
+              "eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointState"
           SerialPeripheralState.PRINTER ->
-              "eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint\$PrinterMemento"
+              "eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint\$PrinterState"
           SerialPeripheralState.GPS_RECEIVER ->
-              "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverMemento"
+              "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverState"
           SerialPeripheralState.BARCODE_BOY ->
-              "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento"
+              "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState"
           SerialPeripheralState.FOUR_PLAYER_ADAPTER ->
-              "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterMemento"
+              "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterState"
         }
-    val expected = MementoTypeRegistry.recordClassNames.indexOf(expectedName) + 1
+    val expected = StateTypeRegistry.recordClassNames.indexOf(expectedName) + 1
     if (expected == 0 || record.typeId != expected) {
       malformed(
-          "Serial memento type ${record.typeId} does not match $peripheral ($expected)")
+          "Serial state type ${record.typeId} does not match $peripheral ($expected)")
     }
   }
 

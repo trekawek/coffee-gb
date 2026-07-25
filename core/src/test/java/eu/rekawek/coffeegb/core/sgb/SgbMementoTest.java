@@ -23,7 +23,7 @@ public class SgbMementoTest {
         EventBusImpl eventBus = new EventBusImpl(null, null, false);
         eventBus.register(event -> renderedPictures.incrementAndGet(), Background.SgbBackgroundReadyEvent.class);
         background.init(eventBus);
-        var emptyMemento = background.saveToMemento();
+        var emptyMemento = background.captureState();
 
         Commands.PctTrnCmd picture = (Commands.PctTrnCmd) command(0x14);
         picture.setDataTransfer(new int[0x1000]);
@@ -31,7 +31,7 @@ public class SgbMementoTest {
         advanceFrames(eventBus, 73);
         assertEquals(1, renderedPictures.get());
 
-        background.restoreFromMemento(emptyMemento);
+        background.restoreState(emptyMemento);
         renderedPictures.set(0);
         Commands.ChrTrnCmd characters = (Commands.ChrTrnCmd) command(0x13);
         characters.setDataTransfer(new int[0x1000]);
@@ -57,11 +57,11 @@ public class SgbMementoTest {
         pictureData[0x781] = 0x12;
         picture.setDataTransfer(pictureData);
         sgbBus.post(picture);
-        var memento = background.saveToMemento();
+        var memento = background.captureState();
 
         pictureData[0x780] = 0x78;
         pictureData[0x781] = 0x56;
-        background.restoreFromMemento(memento);
+        background.restoreState(memento);
         rendered.set(null);
         Commands.ChrTrnCmd characters = (Commands.ChrTrnCmd) command(0x13);
         characters.setDataTransfer(new int[0x1000]);
@@ -117,10 +117,10 @@ public class SgbMementoTest {
         Arrays.fill(mask, 1);
         eventBus.post(new Background.SgbBackgroundReadyEvent(border, mask));
         eventBus.post(new Background.SgbBackgroundFadeEvent(1));
-        var memento = display.saveToMemento();
+        var memento = display.captureState();
 
         eventBus.post(new Background.SgbBackgroundFadeEvent(31));
-        display.restoreFromMemento(memento);
+        display.restoreState(memento);
         eventBus.post(new Display.DmgFrameReadyEvent(new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
 
         assertEquals(Display.GbcFrameReadyEvent.translateGbcRgb(0x7bde), frame.get()[0]);
@@ -138,14 +138,14 @@ public class SgbMementoTest {
         int[] attrSetPacket = new int[16];
         attrSetPacket[0] = (0x16 << 3) | 1;
         sgbBus.post(Commands.toCommand(attrSetPacket));
-        var memento = display.saveToMemento();
+        var memento = display.captureState();
 
         Commands.AttrTrnCmd attributes = (Commands.AttrTrnCmd) command(0x15);
         int[] attributeData = new int[0x1000];
         Arrays.fill(attributeData, 0xff);
         attributes.setDataTransfer(attributeData);
         sgbBus.post(attributes);
-        display.restoreFromMemento(memento);
+        display.restoreState(memento);
 
         int[] dmgPixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
         Arrays.fill(dmgPixels, 1);
@@ -171,12 +171,12 @@ public class SgbMementoTest {
         palettes.setDataTransfer(paletteData);
         sgbBus.post(palettes);
         sgbBus.post(paletteSet(0));
-        var memento = display.saveToMemento();
+        var memento = display.captureState();
 
         // All active rows now alias system palette 1. Restoring by copying into these
         // rows would leave the active palette and/or the saved system table corrupted.
         sgbBus.post(paletteSet(1));
-        display.restoreFromMemento(memento);
+        display.restoreState(memento);
 
         int[] dmgPixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
         eventBus.post(new Display.DmgFrameReadyEvent(dmgPixels));

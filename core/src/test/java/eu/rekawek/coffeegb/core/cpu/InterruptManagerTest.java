@@ -15,12 +15,12 @@ public class InterruptManagerTest {
     public void lcdcFlagWriteClearCaptureSurvivesMementoRestore() {
         InterruptManager interrupts = enabledInterrupt(LCDC);
         interrupts.setByteFromCpu(0xff0f, 0);
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
 
         assertTrue(interrupts.consumeLcdcInterruptFlagWriteClear());
         assertFalse(interrupts.consumeLcdcInterruptFlagWriteClear());
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         assertTrue(interrupts.consumeLcdcInterruptFlagWriteClear());
         assertFalse(interrupts.consumeLcdcInterruptFlagWriteClear());
     }
@@ -39,7 +39,7 @@ public class InterruptManagerTest {
         InterruptManager interrupts = enabledInterrupt(LCDC);
 
         interrupts.setCpuReadInterruptPreview(LCDC, true);
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
 
         assertEquals(1 << LCDC.ordinal(), interrupts.getByte(0xff0f) & 0x1f);
         assertFalse(interrupts.isInterruptFlagSet(LCDC));
@@ -49,7 +49,7 @@ public class InterruptManagerTest {
         interrupts.clearCpuReadInterruptPreview();
         assertEquals(0, interrupts.getByte(0xff0f) & 0x1f);
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         assertEquals(1 << LCDC.ordinal(), interrupts.getByte(0xff0f) & 0x1f);
         assertFalse(interrupts.isInterruptFlagSet(LCDC));
     }
@@ -59,12 +59,12 @@ public class InterruptManagerTest {
         InterruptManager interrupts = enabledInterrupt(VBlank);
         interrupts.requestInterrupt(VBlank);
         interrupts.clearInterrupt(VBlank);
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
 
         assertTrue(interrupts.consumeVBlankInterruptAcknowledge());
         assertFalse(interrupts.consumeVBlankInterruptAcknowledge());
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         assertTrue(interrupts.consumeVBlankInterruptAcknowledge());
         assertFalse(interrupts.consumeVBlankInterruptAcknowledge());
     }
@@ -79,12 +79,12 @@ public class InterruptManagerTest {
         assertFalse(interrupts.isInterruptRequested());
         assertFalse(interrupts.isInterruptRequestedForHalt());
 
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
         interrupts.releaseCpuAcceptance(LCDC);
         assertTrue(interrupts.isInterruptRequested());
         assertFalse(interrupts.isUnphasedPpuInterruptRequested());
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         assertFalse(interrupts.isInterruptRequested());
         interrupts.releaseCpuAcceptance(LCDC);
         assertFalse(interrupts.isUnphasedPpuInterruptRequested());
@@ -95,12 +95,12 @@ public class InterruptManagerTest {
         InterruptManager interrupts = enabledInterrupt(LCDC);
         interrupts.requestMode2InterruptBeforeCpuAcceptance(true);
 
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
         interrupts.releaseCpuAcceptance(LCDC);
         assertTrue(interrupts.isPhasedMode2InterruptRequested());
         assertTrue(interrupts.isFirstLineMode2InterruptRequested());
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         assertFalse(interrupts.isPhasedMode2InterruptRequested());
         interrupts.releaseCpuAcceptance(LCDC);
         assertTrue(interrupts.isPhasedMode2InterruptRequested());
@@ -117,12 +117,12 @@ public class InterruptManagerTest {
         assertFalse(interrupts.isInterruptRequested());
         assertFalse(interrupts.isInterruptRequestedForHalt());
 
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
         interrupts.releaseCpuAcceptance(LCDC);
         assertTrue(interrupts.isInterruptRequested());
         assertTrue(interrupts.isUnphasedPpuInterruptRequested());
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         assertFalse(interrupts.isInterruptRequested());
         interrupts.releaseCpuAcceptance(LCDC);
         assertTrue(interrupts.isUnphasedPpuInterruptRequested());
@@ -257,12 +257,12 @@ public class InterruptManagerTest {
         InterruptManager interrupts = new InterruptManager(true);
         interrupts.setByte(0xff0f, 1 << LCDC.ordinal());
         interrupts.maskLcdcUntilNextPeripheralTick();
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
 
         assertEquals(0xe0, interrupts.getByte(0xff0f));
         assertTrue(interrupts.isInterruptFlagSet(LCDC));
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         interrupts.finishLcdcReadMaskWindow();
         assertEquals(0xe2, interrupts.getByte(0xff0f));
     }
@@ -272,14 +272,14 @@ public class InterruptManagerTest {
         InterruptManager interrupts = new InterruptManager(true);
         interrupts.setByte(0xff0f, 1 << LCDC.ordinal());
         interrupts.maskMode0LcdcReadForTicks(3);
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
 
         interrupts.finishLcdcReadMaskWindow();
         interrupts.finishLcdcReadMaskWindow();
         assertEquals(0xe0, interrupts.getByte(0xff0f));
         assertTrue(interrupts.isInterruptFlagSet(LCDC));
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         interrupts.finishLcdcReadMaskWindow();
         interrupts.finishLcdcReadMaskWindow();
         interrupts.finishLcdcReadMaskWindow();
@@ -291,7 +291,7 @@ public class InterruptManagerTest {
         InterruptManager interrupts = enabledInterrupt(LCDC);
         interrupts.enableInterrupts(false);
         interrupts.requestPhasedInterruptAfterInstruction(LCDC);
-        var memento = interrupts.saveToMemento();
+        var memento = interrupts.captureState();
 
         assertTrue(interrupts.isInterruptFlagSet(LCDC));
         assertFalse(interrupts.isInterruptRequested());
@@ -300,7 +300,7 @@ public class InterruptManagerTest {
         interrupts.onInstructionFinished();
         assertTrue(interrupts.isInterruptRequested());
 
-        interrupts.restoreFromMemento(memento);
+        interrupts.restoreState(memento);
         assertFalse(interrupts.isInterruptRequested());
         interrupts.onInstructionFinished();
         assertTrue(interrupts.isInterruptRequested());

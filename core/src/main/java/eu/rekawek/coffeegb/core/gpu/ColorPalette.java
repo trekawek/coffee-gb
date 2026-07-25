@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.core.gpu;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class ColorPalette implements AddressSpace, Serializable, Originator<ColorPalette> {
+public class ColorPalette implements AddressSpace, StatefulComponent<ColorPalette> {
 
     // Object palette RAM observed immediately after the CGB boot ROM. Some early
     // homebrew, including Vila Caldan, relies on these values for its sprites.
@@ -119,30 +119,30 @@ public class ColorPalette implements AddressSpace, Serializable, Originator<Colo
     }
 
     @Override
-    public Memento<ColorPalette> saveToMemento() {
+    public ComponentState<ColorPalette> captureState() {
         int[][] palettesCopy = new int[palettes.length][];
         for (int i = 0; i < palettes.length; i++) {
             palettesCopy[i] = palettes[i].clone();
         }
-        return new ColorPaletteMemento(palettesCopy, index, autoIncrement);
+        return new ColorPaletteState(palettesCopy, index, autoIncrement);
     }
 
     @Override
-    public Memento<ColorPalette> saveToMemento(MachineStateCapture capture) {
-        return new ColorPaletteMemento(capture.ints2(palettes), index, autoIncrement);
+    public ComponentState<ColorPalette> captureState(MachineStateCapture capture) {
+        return new ColorPaletteState(capture.ints2(palettes), index, autoIncrement);
     }
 
     @Override
-    public void restoreFromMemento(Memento<ColorPalette> memento) {
-        if (!(memento instanceof ColorPaletteMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<ColorPalette> state) {
+        if (!(state instanceof ColorPaletteState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.palettes.length != mem.palettes.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         for (int i = 0; i < this.palettes.length; i++) {
             if (this.palettes[i].length != mem.palettes[i].length) {
-                throw new IllegalArgumentException("Memento array length doesn't match");
+                throw new IllegalArgumentException("ComponentState array length doesn't match");
             }
             System.arraycopy(mem.palettes[i], 0, this.palettes[i], 0, this.palettes[i].length);
         }
@@ -150,6 +150,11 @@ public class ColorPalette implements AddressSpace, Serializable, Originator<Colo
         this.autoIncrement = mem.autoIncrement;
     }
 
+    private record ColorPaletteState(int[][] palettes, int index,
+                                       boolean autoIncrement) implements ComponentState<ColorPalette> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record ColorPaletteMemento(int[][] palettes, int index,
                                        boolean autoIncrement) implements Memento<ColorPalette> {
     }

@@ -1,13 +1,14 @@
 package eu.rekawek.coffeegb.core.gpu;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
+
 import java.util.NoSuchElementException;
 
-public class IntQueue implements Serializable, Originator<IntQueue> {
+public class IntQueue implements StatefulComponent<IntQueue> {
 
     private final int[] array;
 
@@ -63,28 +64,32 @@ public class IntQueue implements Serializable, Originator<IntQueue> {
     }
 
     @Override
-    public Memento<IntQueue> saveToMemento() {
-        return new IntQueueMemento(array.clone(), size, offset);
+    public ComponentState<IntQueue> captureState() {
+        return new IntQueueState(array.clone(), size, offset);
     }
 
     @Override
-    public Memento<IntQueue> saveToMemento(MachineStateCapture capture) {
-        return new IntQueueMemento(capture.ints(array), size, offset);
+    public ComponentState<IntQueue> captureState(MachineStateCapture capture) {
+        return new IntQueueState(capture.ints(array), size, offset);
     }
 
     @Override
-    public void restoreFromMemento(Memento<IntQueue> memento) {
-        if (!(memento instanceof IntQueueMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<IntQueue> state) {
+        if (!(state instanceof IntQueueState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.array.length != mem.array.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         System.arraycopy(mem.array, 0, this.array, 0, this.array.length);
         this.size = mem.size;
         this.offset = mem.offset;
     }
 
+    private record IntQueueState(int[] array, int size, int offset) implements ComponentState<IntQueue> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record IntQueueMemento(int[] array, int size, int offset) implements Memento<IntQueue> {
     }
 }

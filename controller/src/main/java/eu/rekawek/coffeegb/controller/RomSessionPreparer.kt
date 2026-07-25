@@ -7,7 +7,8 @@ import eu.rekawek.coffeegb.core.Gameboy.BootState
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.GameboyType
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Mapper
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeType
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -32,7 +33,7 @@ internal class RomSessionPreparer(
             .setBootCancellation { Thread.currentThread().isInterrupted }
     ensureActive()
 
-    event.memento?.let { return PreparedSession.FromMemento(config, it) }
+    event.state?.let { return PreparedSession.FromDetachedState(config, it) }
 
     bootStateCache.getOrCreate(config)?.let {
       return PreparedSession.FromBootState(config, it)
@@ -165,11 +166,11 @@ internal sealed class PreparedSession(open val config: GameboyConfiguration) {
     override fun materialize(): Gameboy = materializeRestored { it.restoreBootState(bootState) }
   }
 
-  data class FromMemento(
+  data class FromDetachedState(
       override val config: GameboyConfiguration,
-      val memento: Memento<Gameboy>,
+      val state: MachineState,
   ) : PreparedSession(config) {
-    override fun materialize(): Gameboy = materializeRestored { it.restoreFromMemento(memento) }
+    override fun materialize(): Gameboy = materializeRestored { DetachedStateAdapter.apply(it, state) }
   }
 
   data class Ready(

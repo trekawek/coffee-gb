@@ -5,13 +5,14 @@
 `MachineState`, `SessionState`, and `LinkedSessionState` are the service-free capture/apply boundary
 used by the portable StateFile v1 codec. A capture owns every array and collection it exposes. Before
 mutation, apply checks the hardware tag, nested record/mapper tree, invariant array dimensions,
-serial endpoint and memento root, cartridge RTC locations, runtime DTO, held input, and linked
+serial endpoint and component-state root, cartridge RTC locations, runtime DTO, held input, and linked
 topology against the already-configured target. Null is admitted only for audited owner/field or
 array-element positions, not inferred from the non-null value's type. The adapter then reconstructs
 the complete replacement and applies the semantic policy registered for each of the 91 admitted
 record types. Those policies reject invalid indices, counts, capacities, command phases, and scalar
-relationships before the first live mutation. If a legacy live restore nevertheless throws, the
-adapter restores the machine, both RTC locations, serial endpoint/runtime, held buttons, and—when
+relationships before the first live mutation. If an unexpected component apply nevertheless
+throws, the adapter restores the machine, both RTC locations, serial endpoint/runtime, held
+buttons, and—when
 linked—the other sessions and controller frame from rollback captures.
 
 The model contains only `Int`, `Long`, `Boolean`, `Double`, `String`, explicit enum/type IDs, and
@@ -19,11 +20,13 @@ deep-owned immutable containers. It cannot represent a thread, callback, event b
 clock service, AWT/Swing object, or live mutable array. The format that encodes this model is
 specified separately in [state-file-v1.md](state-file-v1.md). Local slot snapshots and netplay
 protocol v8 use that format; local legacy migration remains isolated from network decoding.
+The exact remaining compatibility surface and removal policy are documented in
+[legacy-state-retirement.md](legacy-state-retirement.md).
 
 The exact field-by-field inventory of all 91 admitted production record types is committed in
-[state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 97
-production `Originator` declarations and `saveToMemento` owner/call-site files is committed in
-[state-originator-sites.md](state-originator-sites.md). `MementoTypeRegistry` is the executable type
+[state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 99
+production state contracts and capture owner/call-site files is committed in
+[state-originator-sites.md](state-originator-sites.md). `StateTypeRegistry` is the executable type
 allowlist. `StateCoverageMatrixTest` gives every mutable mapper and stateful serial peripheral an
 explicit non-idle setup and compares a fixed continuation trace plus final state;
 `DetachedStateTest` exercises the complete root graph, deep ownership, failure atomicity, display,
@@ -59,7 +62,7 @@ volatiles, monitor state) remain controller services and are not portable machin
 | Boot/memory mapping | BIOS enabled shadow, MMU fixed RAM/WRAM/HRAM banks, SVBK, undocumented registers and OAM echo | BIOS bytes, address-space index and component references are reconstructed from configuration |
 | DMA/HDMA | OAM ownership/restart/source/ticks/bus samples/interrupt collision state; VRAM-DMA registers, mode, block bytes, signed wrapping cumulative source-byte progress since the source-register write, CPU arbitration, HBlank/LCD/speed/halt request history | Source/destination address-space references are wiring; source-byte progress is an emulated `int` counter used for bus/start arbitration, not an allocation or array cursor |
 | GPU/PPU | VRAM banks, registers/mix/write delays, LCDC/STAT, LY/mode/dot (including the LCD-enable `-1` dot), palettes, OAM-search state/sprites, fetcher, pixel and sprite FIFOs, window/object penalties and delayed writes, VRAM transfer | Both dot machines advance their owned eight-slot LCD delay rings; the DMG timing/output FIFOs additionally own `linePixels`, `outCount`, `firstEntry`, `firstBgp`, `firstObp0`, and `firstObp1` in a primitive detached supplement because the pinned legacy record predates them |
-| Display/panel | Exactly one GPU-owned `DisplayMemento`: partial write buffer/index, enabled flag, complete visible frame and first-frame-after-enable state | Root `displayMemento` is null for new captures, retained only as a nullable legacy-fixture input; buses/listeners are services |
+| Display/panel | Exactly one GPU-owned `DisplayState`: partial write buffer/index, enabled flag, complete visible frame and first-frame-after-enable state | Root `displayMemento` is null for new captures, retained as a stable v1 field label and nullable legacy-fixture input; buses/listeners are services |
 | APU/channels | Master registers/output buffer/index, channel masks/enables, frame sequencer and divider phase, pulse/wave/noise phases, length/envelope/sweep/LFSR/polynomial counters and pending clocks | Host audio sink/mixer callback is a service; waveform/output behavior is captured |
 | Joypad | P1, debounced input history/lines, pending edge, SGB multiplayer transfer packet/bit/player state | Physical held buttons are intentionally session-owned and captured separately so rewind policy can differ |
 | Serial port | SB/SC, internal clock phase/count, received bits and HALT-wake delay | Active endpoint reference is session topology, not machine data |
@@ -67,10 +70,10 @@ volatiles, monitor state) remain controller services and are not portable machin
 | Peer cable endpoint | SB, received-bit count and bit index | Peer object pointer is reconstructed by link topology |
 | Printer endpoint | Protocol parser, command/image buffers, checksum/status/reply framing and print delay | `PrintCallback` is a host/UI service |
 | GPS endpoint | Master ticks, startup beacons, UART output queue/bit delay, RX parser/parity and TAIP command | No time/network/location service is retained; emulated response data is deterministic |
-| Barcode Boy endpoint | Handshake/send/receive phase and exact 30-byte active frame in the pinned memento; exact 30-byte queued frame and external-transfer latch in deep-owned `BarcodeBoyRuntimeState` | No callback/service is retained; active data exists exactly in `SENDING`, and pending payload arrays are cloned on capture and access |
+| Barcode Boy endpoint | Handshake/send/receive phase and exact 30-byte active frame in `BarcodeBoyState`; exact 30-byte queued frame and external-transfer latch in deep-owned `BarcodeBoyRuntimeState` | No callback/service is retained; active data exists exactly in `SENDING`, and pending payload arrays are cloned on capture and access |
 | Four-player adapter | Shared SB/armed/connected/pending arrays, reply/transmit buffers, packet/bit/timing/rate/size/phase and restart requests | Endpoint objects and player-slot association are reconstructed from `LinkedTopologyState` |
 | Infrared | RP register plus Full Changer schedule/armed/running/index/remaining phase | Physical/peer IR endpoint callback is topology/service state |
-| Cartridge/battery | Mapper memento, RAM/EEPROM/flash, bank/register/mode gates, write-dirty state; memory/file battery byte buffers, clock-presence and dirty flag | Immutable ROM bytes, file path, atomic-writer/event-bus services and pending user-error diagnostics are host persistence state rather than emulation behavior; BasicRom battery and Datel slot presence must match the configured target |
+| Cartridge/battery | Mapper state, RAM/EEPROM/flash, bank/register/mode gates, write-dirty state; memory/file battery byte buffers, clock-presence and dirty flag | Immutable ROM bytes, file path, atomic-writer/event-bus services and pending user-error diagnostics are host persistence state rather than emulation behavior; BasicRom battery and Datel slot presence must match the configured target |
 | MBC3 RTC | Six-bit seconds/minutes, five-bit hours, day/control, subsecond ticks, latch snapshot, halt/overflow; separately tagged primary and Datel-slot pause flag/reference in `CartridgeRtcRuntimeState` | Injected `TimeSource` is never captured; both physical cartridge constructors receive the configured service |
 | HuC3 RTC/IR | Minute/day/alarm registers, command index/flags/read latch, primitive last-second reference and RAM | Injected `TimeSource` is never captured |
 | TAMA5/TAMA6 | Command registers, RAM, four RTC pages, disable/alarm state and primitive last-second reference | Injected `TimeSource` is never captured |
@@ -81,7 +84,7 @@ volatiles, monitor state) remain controller services and are not portable machin
 
 The repeat DMG FIFO audit found no further mutable behavior state: `pixels`, `spriteFifo`,
 `delayEntry`, `delayStamp`, `delayHead`, `delaySize`, and `outputTicks` remain in the pinned
-memento; the six fields named above are in the detached supplement; and `display`, `lcdc`,
+component state; the six fields named above are in the detached supplement; and `display`, `lcdc`,
 `registers`, and `vRamTransfer` are final reconstructed wiring.
 
 ## Mapper coverage matrix
@@ -121,15 +124,16 @@ Records whose fields are deliberately not range-constrained still have an explic
 rationale in that registry. Examples are raw bus/address/register latches, signed emulated clocks,
 documented `-1`/minimum-value sentinels, and parent records whose only relationship-bearing values
 are validated by nested records. `StateInventoryTest` requires the policy-key set to equal all 91
-admitted record types, so a new memento cannot enter the model without an audited choice. Rollback
+admitted record types, so a new state record cannot enter the model without an audited choice. Rollback
 is retained for unexpected failures in legacy restore code; it is not the validation path for a
 deterministically malformed detached candidate.
 
 ## Compatibility and display ownership
 
-The legacy Java serialization shape and pinned manifest remain unchanged. The six DMG FIFO fields
-introduced after that manifest are captured once per dot machine by `DmgFifoRuntimeState`; adding
-them to `DmgPixelFifoMemento` would change its Java descriptor and break the supported fixtures.
+The importer-only Java serialization shape and pinned manifest remain unchanged. The six DMG FIFO
+fields introduced after that manifest are captured once per dot machine by `DmgFifoRuntimeState`;
+adding them to the compatibility-only `DmgPixelFifoMemento` would change its Java descriptor and
+break the supported fixtures.
 `linePixels` is the inclusive 0..160 LCD position; `outCount` is nonnegative but deliberately has
 no unsound upper bound because it is bookkeeping rather than an array cursor. A pending packed
 6-bit `firstEntry` is created only by the first due output and requires `outCount == 1`; an absent
@@ -137,16 +141,17 @@ entry permits any nonnegative count because the next tick clears the latch befor
 another due entry. Its three palette latches are bytes.
 Existing fixtures may still carry the historical root display copy; restore accepts it after GPU
 restore. New captures set that nullable compatibility component to null, so only
-`GpuMemento.displayMemento` owns the two 160x144 panel arrays. Visible frame, partial scanout/index,
+`GpuState.displayMemento` owns the two 160x144 panel arrays. Visible frame, partial scanout/index,
 LCD enable and repeat behavior therefore remain restorable without duplicate payload.
 
 Rewind now retains internal immutable, structurally shared `MachineSnapshot` generations described
 in [rewind-machine-snapshots.md](rewind-machine-snapshots.md). Its safe-point capture consumes an
 audited, short-lived record view that borrows registered live primitive arrays for synchronous
-comparison; it neither calls the deep-cloning legacy root capture nor retains the borrowed view.
-`ControllerState` and boot-state reuse continue to use their existing in-process mementos until
-#326. Local slot snapshots and netplay protocol v8 use the bounded StateFile codec; their distinct
-disk and network limits do not weaken the graph, queue, frame, or work limits.
+comparison; it neither calls the ordinary deep-owning component capture nor retains the borrowed view.
+`ControllerState`, boot-state reuse, local slot snapshots, and netplay protocol v8 now use explicit
+detached/component state; rewind alone uses `MachineSnapshot`. None of those normal paths can invoke
+the historical importer. Their distinct disk and network limits do not weaken the graph, queue,
+frame, or work limits.
 
 ## Failure and extension policy
 
@@ -160,5 +165,5 @@ rather than type-category exceptions. BasicRom battery and Datel slot presence a
 and cannot cross null/non-null configurations. A serial endpoint outside the enumerated endpoint
 families throws
 `StateCaptureException`; it is never silently serialized as null. Adding mutable production state
-requires all of: a memento/runtime DTO field, registry/schema and capture-site inventory updates,
+requires all of: a component-state/runtime DTO field, registry/schema and capture-site inventory updates,
 deep-ownership rule, and a deterministic-continuation regression.

@@ -1,11 +1,13 @@
 package eu.rekawek.coffeegb.core.sgb;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.VRamTransfer;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.sgb.Commands.TransferCommand;
 import org.slf4j.Logger;
 
@@ -13,7 +15,7 @@ import java.util.Arrays;
 
 import static org.slf4j.LoggerFactory.getLogger;
 
-public class SuperGameboy implements Originator<SuperGameboy> {
+public class SuperGameboy implements StatefulComponent<SuperGameboy> {
 
     private static final Logger LOG = getLogger(SuperGameboy.class);
 
@@ -84,22 +86,22 @@ public class SuperGameboy implements Originator<SuperGameboy> {
     }
 
     @Override
-    public Memento<SuperGameboy> saveToMemento() {
+    public ComponentState<SuperGameboy> captureState() {
         int[][] multipacketCopy = Arrays.stream(multipacket).map(int[]::clone).toArray(int[][]::new);
-        return new SuperGameboyMemento(multipacketCopy, multipacketIndex, multipacketLength, transferCountdown,
-                waitingTransferCommand == null ? null : waitingTransferCommand.saveToMemento());
+        return new SuperGameboyState(multipacketCopy, multipacketIndex, multipacketLength, transferCountdown,
+                waitingTransferCommand == null ? null : waitingTransferCommand.captureState());
     }
 
     @Override
-    public Memento<SuperGameboy> saveToMemento(MachineStateCapture capture) {
-        return new SuperGameboyMemento(
+    public ComponentState<SuperGameboy> captureState(MachineStateCapture capture) {
+        return new SuperGameboyState(
                 capture.ints2(multipacket),
                 multipacketIndex,
                 multipacketLength,
                 transferCountdown,
                 waitingTransferCommand == null
                         ? null
-                        : waitingTransferCommand.saveToMemento(capture));
+                        : waitingTransferCommand.captureState(capture));
     }
 
     @Override
@@ -111,12 +113,12 @@ public class SuperGameboy implements Originator<SuperGameboy> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<SuperGameboy> memento) {
-        if (!(memento instanceof SuperGameboyMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SuperGameboy> state) {
+        if (!(state instanceof SuperGameboyState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.multipacket.length != mem.multipacket.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         this.multipacketIndex = mem.multipacketIndex;
         this.multipacketLength = mem.multipacketLength;
@@ -126,9 +128,15 @@ public class SuperGameboy implements Originator<SuperGameboy> {
         this.transferCountdown = mem.transferCountdown;
         this.waitingTransferCommand = mem.waitingTransferCommandMemento == null
                 ? null
-                : TransferCommand.restoreFromMemento(mem.waitingTransferCommandMemento);
+                : TransferCommand.restoreState(mem.waitingTransferCommandMemento);
     }
 
+    private record SuperGameboyState(int[][] multipacket, int multipacketIndex,
+                                       int multipacketLength, int transferCountdown,
+                                       ComponentState<TransferCommand> waitingTransferCommandMemento) implements ComponentState<SuperGameboy> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SuperGameboyMemento(int[][] multipacket, int multipacketIndex,
                                        int multipacketLength, int transferCountdown,
                                        Memento<TransferCommand> waitingTransferCommandMemento) implements Memento<SuperGameboy> {

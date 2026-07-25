@@ -202,7 +202,7 @@ class BasicControllerTest {
       )
       val portable = directory.resolve("state-test.sn1").toFile().readBytes()
       assertEquals("CGBS", portable.copyOf(4).toString(Charsets.US_ASCII))
-      assertTrue(!LegacyMementoCodec.hasJavaSerializationHeader(portable))
+      assertTrue(!LegacySnapshotImporter.hasJavaSerializationHeader(portable))
 
       eventBus.post(Controller.RestoreSnapshotEvent(1))
       assertEquals(1, assertNotNull(restored.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot)

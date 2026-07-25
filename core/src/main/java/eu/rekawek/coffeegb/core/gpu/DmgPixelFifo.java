@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.core.gpu;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixelFifo> {
+public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> {
 
     private final IntQueue pixels = new IntQueue(16);
 
@@ -296,16 +296,16 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     }
 
     @Override
-    public Memento<DmgPixelFifo> saveToMemento() {
-        return new DmgPixelFifoMemento(pixels.saveToMemento(), spriteFifo.saveToMemento(),
+    public ComponentState<DmgPixelFifo> captureState() {
+        return new DmgPixelFifoState(pixels.captureState(), spriteFifo.captureState(),
                 delayEntry.clone(), delayStamp.clone(), delayHead, delaySize, outputTicks);
     }
 
     @Override
-    public Memento<DmgPixelFifo> saveToMemento(MachineStateCapture capture) {
-        return new DmgPixelFifoMemento(
-                pixels.saveToMemento(capture),
-                spriteFifo.saveToMemento(capture),
+    public ComponentState<DmgPixelFifo> captureState(MachineStateCapture capture) {
+        return new DmgPixelFifoState(
+                pixels.captureState(capture),
+                spriteFifo.captureState(capture),
                 capture.ints(delayEntry),
                 capture.longs(delayStamp),
                 delayHead,
@@ -316,7 +316,7 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     /**
      * Captures fields added after the pinned legacy Java-memento shape was established.
      *
-     * <p>The first-pixel latch is deliberately outside {@link DmgPixelFifoMemento}: changing
+     * <p>The first-pixel latch is deliberately outside {@link DmgPixelFifoState}: changing
      * that record would change its Java serialization descriptor and reject the supported
      * 1.7.13/1.7.14 fixtures. The Phase-1 detached machine seam owns this supplement for both
      * PPU dot machines.
@@ -367,12 +367,12 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     }
 
     @Override
-    public void restoreFromMemento(Memento<DmgPixelFifo> memento) {
-        if (!(memento instanceof DmgPixelFifoMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<DmgPixelFifo> state) {
+        if (!(state instanceof DmgPixelFifoState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        pixels.restoreFromMemento(mem.pixels);
-        spriteFifo.restoreFromMemento(mem.spriteFifo);
+        pixels.restoreState(mem.pixels);
+        spriteFifo.restoreState(mem.spriteFifo);
         // mementos serialized by older versions lack the delay-line fields
         if (mem.delayEntry != null && mem.delayStamp != null) {
             System.arraycopy(mem.delayEntry, 0, delayEntry, 0, delayEntry.length);
@@ -386,6 +386,13 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
         }
     }
 
+    private record DmgPixelFifoState(ComponentState<IntQueue> pixels, ComponentState<SpriteFifo> spriteFifo,
+                                       int[] delayEntry, long[] delayStamp, int delayHead,
+                                       int delaySize, long outputTicks)
+            implements ComponentState<DmgPixelFifo> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record DmgPixelFifoMemento(Memento<IntQueue> pixels, Memento<SpriteFifo> spriteFifo,
                                        int[] delayEntry, long[] delayStamp, int delayHead,
                                        int delaySize, long outputTicks)

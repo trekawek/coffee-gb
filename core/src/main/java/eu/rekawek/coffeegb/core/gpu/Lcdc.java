@@ -1,16 +1,17 @@
 package eu.rekawek.coffeegb.core.gpu;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
+
 import java.util.Arrays;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
+public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
 
     private static final int OAM_SIZE_HISTORY_LENGTH = 8;
 
@@ -208,8 +209,8 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     }
 
     @Override
-    public Memento<Lcdc> saveToMemento() {
-        return new LcdcMemento(value, mixValue, pendingMixValue,
+    public ComponentState<Lcdc> captureState() {
+        return new LcdcState(value, mixValue, pendingMixValue,
                 dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
                 tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
                 tileSelectGlitchHistory.clone(),
@@ -217,8 +218,8 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     }
 
     @Override
-    public Memento<Lcdc> saveToMemento(MachineStateCapture capture) {
-        return new LcdcMemento(value, mixValue, pendingMixValue,
+    public ComponentState<Lcdc> captureState(MachineStateCapture capture) {
+        return new LcdcState(value, mixValue, pendingMixValue,
                 dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
                 tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
                 capture.booleans(tileSelectGlitchHistory),
@@ -226,9 +227,9 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Lcdc> memento) {
-        if (!(memento instanceof LcdcMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Lcdc> state) {
+        if (!(state instanceof LcdcState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.value = mem.value;
         this.mixValue = mem.mixValue;
@@ -238,16 +239,26 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         this.tileSelectGlitchTicks = mem.tileSelectGlitchTicks;
         this.pendingTileSelectGlitchTicks = mem.pendingTileSelectGlitchTicks;
         if (mem.tileSelectGlitchHistory.length != tileSelectGlitchHistory.length) {
-            throw new IllegalArgumentException("Memento tile-select history length doesn't match");
+            throw new IllegalArgumentException("ComponentState tile-select history length doesn't match");
         }
         System.arraycopy(mem.tileSelectGlitchHistory, 0, this.tileSelectGlitchHistory,
                 0, this.tileSelectGlitchHistory.length);
         if (mem.oamSizeHistory.length != oamSizeHistory.length) {
-            throw new IllegalArgumentException("Memento OAM-size history length doesn't match");
+            throw new IllegalArgumentException("ComponentState OAM-size history length doesn't match");
         }
         System.arraycopy(mem.oamSizeHistory, 0, oamSizeHistory, 0, oamSizeHistory.length);
     }
 
+    private record LcdcState(
+            int value, int mixValue, int pendingMixValue,
+            boolean dmgBlobBackgroundEnable, boolean pendingDmgBlobBackgroundEnable,
+            int tileSelectGlitchTicks, int pendingTileSelectGlitchTicks,
+            boolean[] tileSelectGlitchHistory,
+            int[] oamSizeHistory)
+            implements ComponentState<Lcdc> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record LcdcMemento(
             int value, int mixValue, int pendingMixValue,
             boolean dmgBlobBackgroundEnable, boolean pendingDmgBlobBackgroundEnable,

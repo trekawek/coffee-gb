@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.gpu.DmgPixelFifo
 import eu.rekawek.coffeegb.core.gpu.Gpu
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.state.MachineStateCapture
+import eu.rekawek.coffeegb.core.state.ComponentState
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock
 import java.lang.reflect.Array as ReflectArray
 import java.lang.reflect.GenericArrayType
@@ -29,9 +29,9 @@ import kotlin.math.min
  * by a page is exposed.
  *
  * Capture consumes an audited transient record view whose primitive payloads are borrowed directly
- * from the stopped machine. It never calls the legacy deep-cloning capture. The view and its
+ * from the stopped machine. It never calls the ordinary deep-owning capture. The view and its
  * borrow token are invalid after the synchronous graph comparison and never enter rewind history,
- * disk, or network state. The ordinary legacy memento path remains separate for Phase 6.
+ * disk, or network state. Historical serialized input remains isolated in the local importer.
  */
 internal class MachineSnapshot private constructor(
     private val root: SnapshotRecord,
@@ -53,15 +53,15 @@ internal class MachineSnapshot private constructor(
       throw StateApplyException(
           "Internal $hardware snapshot does not match ${gameboy.gameboyType} hardware")
     }
-    val rollbackMemento = gameboy.saveToMemento()
+    val rollbackState = gameboy.captureState()
     if (SnapshotGraph.ownershipSignature(root) !=
-        SnapshotGraph.ownershipSignature(rollbackMemento)) {
+        SnapshotGraph.ownershipSignature(rollbackState)) {
       throw StateApplyException("Internal snapshot mapper/battery ownership does not match target")
     }
     val candidate =
         try {
           @Suppress("UNCHECKED_CAST")
-          (SnapshotGraph.restoreRoot(root) as Memento<Gameboy>).also(StateSemantics::validate)
+          (SnapshotGraph.restoreRoot(root) as ComponentState<Gameboy>).also(StateSemantics::validate)
         } catch (failure: StateApplyException) {
           throw failure
         } catch (failure: Throwable) {
@@ -79,13 +79,13 @@ internal class MachineSnapshot private constructor(
     val rollbackFifo = gameboy.captureDmgFifoRuntimeState()
     try {
       probe?.invoke(ApplyStage.BEFORE_LIVE_MUTATION)
-      gameboy.restoreFromMemento(candidate)
+      gameboy.restoreState(candidate)
       probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)
       gameboy.restoreDmgFifoRuntimeState(candidateFifo)
       gameboy.restoreRtcRuntimeState(candidateRtc)
     } catch (failure: Throwable) {
       try {
-        gameboy.restoreFromMemento(rollbackMemento)
+        gameboy.restoreState(rollbackState)
         gameboy.restoreDmgFifoRuntimeState(rollbackFifo)
         gameboy.restoreRtcRuntimeState(rollbackRtc)
       } catch (rollbackFailure: Throwable) {
@@ -489,10 +489,10 @@ private class SnapshotPagePool(previous: SnapshotRecord?) {
 
 private object SnapshotGraph {
   private val recordIds by lazy {
-    MementoTypeRegistry.recordClasses.withIndex().associate { (index, type) -> type to index + 1 }
+    StateTypeRegistry.recordClasses.withIndex().associate { (index, type) -> type to index + 1 }
   }
   private val enumIds by lazy {
-    MementoTypeRegistry.enumClasses.withIndex().associate { (index, type) -> type to index + 1 }
+    StateTypeRegistry.enumClasses.withIndex().associate { (index, type) -> type to index + 1 }
   }
 
   data class Result(
@@ -515,7 +515,7 @@ private object SnapshotGraph {
   }
 
   fun recordClassName(typeId: Int): String =
-      MementoTypeRegistry.recordClassNames.getOrNull(typeId - 1)
+      StateTypeRegistry.recordClassNames.getOrNull(typeId - 1)
           ?: error("Unknown snapshot record type ID $typeId")
 
   fun restoreRoot(root: SnapshotRecord): Any = Restore().value(root, null, 0)
@@ -600,7 +600,7 @@ private object SnapshotGraph {
 
     private fun restoreEnum(value: SnapshotEnum): Any {
       val type =
-          MementoTypeRegistry.enumClasses.getOrNull(value.typeId - 1)
+          StateTypeRegistry.enumClasses.getOrNull(value.typeId - 1)
               ?: throw StateApplyException("Unknown internal enum type ID ${value.typeId}")
       return type.enumConstants.getOrNull(value.ordinal)
           ?: throw StateApplyException("Invalid ${type.name} ordinal ${value.ordinal}")
@@ -611,7 +611,7 @@ private object SnapshotGraph {
         depth: Int,
     ): Any {
       val type =
-          MementoTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
+          StateTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
               ?: throw StateApplyException("Unknown internal record type ID ${value.typeId}")
       val components = type.recordComponents
       if (components.size != value.fields.size ||
@@ -970,7 +970,7 @@ private object SnapshotGraph {
     }
   }
 
-  private const val GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
+  private const val GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyState"
 }
 
 private fun hash(

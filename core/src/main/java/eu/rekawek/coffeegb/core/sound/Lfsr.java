@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class Lfsr implements Serializable, Originator<Lfsr> {
+public class Lfsr implements StatefulComponent<Lfsr> {
 
     private int lfsr;
 
@@ -36,18 +36,22 @@ public class Lfsr implements Serializable, Originator<Lfsr> {
     }
 
     @Override
-    public Memento<Lfsr> saveToMemento() {
-        return new LfsrMemento(lfsr);
+    public ComponentState<Lfsr> captureState() {
+        return new LfsrState(lfsr);
     }
 
     @Override
-    public void restoreFromMemento(Memento<Lfsr> memento) {
-        if (!(memento instanceof LfsrMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Lfsr> state) {
+        if (!(state instanceof LfsrState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.lfsr = mem.lfsr;
     }
 
+    public record LfsrState(int lfsr) implements ComponentState<Lfsr> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     public record LfsrMemento(int lfsr) implements Memento<Lfsr> {
     }
 }

@@ -837,14 +837,14 @@ public class StatRegisterTest {
         fixture.gpu.onSpeedSwitch();
         fixture.advanceTo(1, 248);
         fixture.gpu.onSpeedSwitchComplete();
-        var completionLine = fixture.gpu.saveToMemento();
+        var completionLine = fixture.gpu.captureState();
 
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
 
         fixture.advanceTo(2, 248);
         assertEquals(Mode.HBlank.ordinal(), fixture.readStatMode());
 
-        fixture.gpu.restoreFromMemento(completionLine);
+        fixture.gpu.restoreState(completionLine);
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
     }
 
@@ -1580,16 +1580,16 @@ public class StatRegisterTest {
         fixture.advanceTo(1, 244);
         fixture.clearInterrupts();
         fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
-        var gpuMemento = fixture.gpu.saveToMemento();
-        var statMemento = fixture.stat.saveToMemento();
-        var interruptMemento = fixture.interrupts.saveToMemento();
+        var gpuMemento = fixture.gpu.captureState();
+        var statMemento = fixture.stat.captureState();
+        var interruptMemento = fixture.interrupts.captureState();
 
         fixture.advanceToHBlank();
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
 
-        fixture.gpu.restoreFromMemento(gpuMemento);
-        fixture.stat.restoreFromMemento(statMemento);
-        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.gpu.restoreState(gpuMemento);
+        fixture.stat.restoreState(statMemento);
+        fixture.interrupts.restoreState(interruptMemento);
         fixture.advanceToHBlank();
 
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
@@ -1602,12 +1602,12 @@ public class StatRegisterTest {
         fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
         fixture.advanceTo(1, 244);
         fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0xff);
-        var gpuMemento = fixture.gpu.saveToMemento();
-        var statMemento = fixture.stat.saveToMemento();
+        var gpuMemento = fixture.gpu.captureState();
+        var statMemento = fixture.stat.captureState();
 
         fixture.advanceTo(1, 250);
-        fixture.gpu.restoreFromMemento(gpuMemento);
-        fixture.stat.restoreFromMemento(statMemento);
+        fixture.gpu.restoreState(gpuMemento);
+        fixture.stat.restoreState(statMemento);
         fixture.clearInterrupts();
         fixture.advanceTo(1, 250);
 
@@ -1883,16 +1883,16 @@ public class StatRegisterTest {
         fixture.advanceTo(153, 453);
         fixture.clearInterrupts();
         fixture.tick();
-        var gpuMemento = fixture.gpu.saveToMemento();
-        var statMemento = fixture.stat.saveToMemento();
-        var interruptMemento = fixture.interrupts.saveToMemento();
+        var gpuMemento = fixture.gpu.captureState();
+        var statMemento = fixture.stat.captureState();
+        var interruptMemento = fixture.interrupts.captureState();
 
         fixture.tick();
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
 
-        fixture.gpu.restoreFromMemento(gpuMemento);
-        fixture.stat.restoreFromMemento(statMemento);
-        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.gpu.restoreState(gpuMemento);
+        fixture.stat.restoreState(statMemento);
+        fixture.interrupts.restoreState(interruptMemento);
         fixture.tick();
 
         assertEquals(455, fixture.gpu.getTicksInLine());
@@ -1930,17 +1930,17 @@ public class StatRegisterTest {
     @Test
     public void retractableDoubleSpeedCgbMode2EventSurvivesMementoRoundTrip() {
         Fixture fixture = publishedDoubleSpeedCgbM2Event();
-        var gpuMemento = fixture.gpu.saveToMemento();
-        var statMemento = fixture.stat.saveToMemento();
-        var interruptMemento = fixture.interrupts.saveToMemento();
+        var gpuMemento = fixture.gpu.captureState();
+        var statMemento = fixture.stat.captureState();
+        var interruptMemento = fixture.interrupts.captureState();
 
         fixture.advanceTo(1, 455);
         fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
 
-        fixture.gpu.restoreFromMemento(gpuMemento);
-        fixture.stat.restoreFromMemento(statMemento);
-        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.gpu.restoreState(gpuMemento);
+        fixture.stat.restoreState(statMemento);
+        fixture.interrupts.restoreState(interruptMemento);
         fixture.advanceTo(1, 454);
         fixture.stat.setByte(StatRegister.ADDRESS, 0x00);
 
@@ -1974,9 +1974,9 @@ public class StatRegisterTest {
     @Test
     public void pendingCgbM2EventSurvivesMementoRoundTrip() {
         Fixture fixture = pendingNormalSpeedCgbM2Event();
-        var gpuMemento = fixture.gpu.saveToMemento();
-        var statMemento = fixture.stat.saveToMemento();
-        var interruptMemento = fixture.interrupts.saveToMemento();
+        var gpuMemento = fixture.gpu.captureState();
+        var statMemento = fixture.stat.captureState();
+        var interruptMemento = fixture.interrupts.captureState();
 
         fixture.stat.preCpuTick();
         fixture.tick();
@@ -1986,9 +1986,9 @@ public class StatRegisterTest {
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
         fixture.clearInterrupts();
 
-        fixture.gpu.restoreFromMemento(gpuMemento);
-        fixture.stat.restoreFromMemento(statMemento);
-        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.gpu.restoreState(gpuMemento);
+        fixture.stat.restoreState(statMemento);
+        fixture.interrupts.restoreState(interruptMemento);
         assertEquals(448, fixture.gpu.getTicksInLine());
         assertEquals(0, fixture.lcdInterruptFlag());
 
@@ -2118,17 +2118,17 @@ public class StatRegisterTest {
         fixture.advanceTo(143, 447);
         fixture.clearInterrupts();
         fixture.advanceTo(143, 454);
-        var gpuMemento = fixture.gpu.saveToMemento();
-        var statMemento = fixture.stat.saveToMemento();
-        var interruptMemento = fixture.interrupts.saveToMemento();
+        var gpuMemento = fixture.gpu.captureState();
+        var statMemento = fixture.stat.captureState();
+        var interruptMemento = fixture.interrupts.captureState();
 
         fixture.tick();
         assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
         fixture.clearInterrupts();
 
-        fixture.gpu.restoreFromMemento(gpuMemento);
-        fixture.stat.restoreFromMemento(statMemento);
-        fixture.interrupts.restoreFromMemento(interruptMemento);
+        fixture.gpu.restoreState(gpuMemento);
+        fixture.stat.restoreState(statMemento);
+        fixture.interrupts.restoreState(interruptMemento);
         assertEquals(454, fixture.gpu.getTicksInLine());
         assertEquals(0, fixture.lcdInterruptFlag());
 

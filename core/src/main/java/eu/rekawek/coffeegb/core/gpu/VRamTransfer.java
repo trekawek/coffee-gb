@@ -1,14 +1,16 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import java.util.Arrays;
 
-public class VRamTransfer implements Originator<VRamTransfer> {
+public class VRamTransfer implements StatefulComponent<VRamTransfer> {
 
     private final EventBus sgbBus;
 
@@ -46,13 +48,13 @@ public class VRamTransfer implements Originator<VRamTransfer> {
     }
 
     @Override
-    public Memento<VRamTransfer> saveToMemento() {
-        return new VRamTransferMemento(buffer.clone(), i);
+    public ComponentState<VRamTransfer> captureState() {
+        return new VRamTransferState(buffer.clone(), i);
     }
 
     @Override
-    public Memento<VRamTransfer> saveToMemento(MachineStateCapture capture) {
-        return new VRamTransferMemento(capture.ints(buffer), i);
+    public ComponentState<VRamTransfer> captureState(MachineStateCapture capture) {
+        return new VRamTransferState(capture.ints(buffer), i);
     }
 
     @Override
@@ -61,14 +63,17 @@ public class VRamTransfer implements Originator<VRamTransfer> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<VRamTransfer> memento) {
-        if (!(memento instanceof VRamTransferMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<VRamTransfer> state) {
+        if (!(state instanceof VRamTransferState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         System.arraycopy(mem.buffer, 0, buffer, 0, mem.buffer.length);
         i = mem.i;
     }
 
+    private record VRamTransferState(int[] buffer, int i) implements ComponentState<VRamTransfer> {}
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record VRamTransferMemento(int[] buffer, int i) implements Memento<VRamTransfer> {}
 
     public record VRamTransferComplete(int[] buffer) implements Event {

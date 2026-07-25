@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.core.ir;
 
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import org.junit.Test;
 
@@ -56,12 +56,12 @@ public class InfraredPortTest {
         }
 
         @Override
-        public Memento<SerialEndpoint> saveToMemento() {
+        public ComponentState<SerialEndpoint> captureState() {
             return null;
         }
 
         @Override
-        public void restoreFromMemento(Memento<SerialEndpoint> memento) {
+        public void restoreState(ComponentState<SerialEndpoint> memento) {
         }
     }
 }

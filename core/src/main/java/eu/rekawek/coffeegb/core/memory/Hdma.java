@@ -1,15 +1,15 @@
 package eu.rekawek.coffeegb.core.memory;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.Mode;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
-
-public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
+public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
 
     private enum HaltHdmaState {
         LOW,
@@ -752,13 +752,13 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     }
 
     @Override
-    public Memento<Hdma> saveToMemento() {
-        return saveToMemento(null);
+    public ComponentState<Hdma> captureState() {
+        return captureState(null);
     }
 
     @Override
-    public Memento<Hdma> saveToMemento(MachineStateCapture capture) {
-        return new HdmaMemento(gpuMode, transferInProgress, hblankTransfer, lcdEnabled, length,
+    public ComponentState<Hdma> captureState(MachineStateCapture capture) {
+        return new HdmaState(gpuMode, transferInProgress, hblankTransfer, lcdEnabled, length,
                 src, dst, tick, capture == null ? blockData.clone() : capture.ints(blockData),
                 hblankRequestTicks, hblankRequestAge, nextHblankRequestTicks,
                 nextHblankRequestAge,
@@ -775,9 +775,9 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Hdma> memento) {
-        if (!(memento instanceof HdmaMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Hdma> state) {
+        if (!(state instanceof HdmaState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.gpuMode = mem.gpuMode;
         this.transferInProgress = mem.transferInProgress;
@@ -822,6 +822,31 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
         this.haltOpcodeRequestLatched = mem.haltOpcodeRequestLatched;
     }
 
+    public record HdmaState(Mode gpuMode, boolean transferInProgress, boolean hblankTransfer, boolean lcdEnabled,
+                              int length, int src, int dst, int tick,
+                              int[] blockData,
+                              int hblankRequestTicks, int hblankRequestAge,
+                              int nextHblankRequestTicks,
+                              int nextHblankRequestAge, int sourceBytesTransferred,
+                              int cpuBusValue, boolean stopAfterCurrentBlock,
+                              boolean preserveLengthAfterCurrentBlock,
+                              boolean speedSwitchInProgress,
+                              boolean speedSwitchStartedWithoutRequest,
+                              boolean pauseOamDmaForSpeedSwitchBurst,
+                              WakeRequestArbitration wakeRequestArbitration,
+                              int gpuLine, int gpuTicksInLine,
+                              boolean gpuCpuClockRephased,
+                              int hblankStartTicksInLine, boolean cpuHalted,
+                              HaltHdmaState haltHdmaState,
+                              boolean haltEnteredThisTick,
+                              boolean requestOverlappedCpuWrite,
+                              boolean interruptEntryWonArbitration,
+                              CpuRequestArbitration cpuRequestArbitration,
+                              boolean cpuRequestAllowsLateInterrupt,
+                              boolean haltOpcodeRequestLatched) implements ComponentState<Hdma> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     public record HdmaMemento(Mode gpuMode, boolean transferInProgress, boolean hblankTransfer, boolean lcdEnabled,
                               int length, int src, int dst, int tick,
                               int[] blockData,

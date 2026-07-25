@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -12,7 +12,7 @@ class StateValueCodecTest {
 
   @Test
   fun everyStateKindHasAnExplicitDeterministicRoundTrip() {
-    val recordType = MementoTypeRegistry.recordClasses.first()
+    val recordType = StateTypeRegistry.recordClasses.first()
     val nan = java.lang.Double.longBitsToDouble(0x7ff8_0000_0000_0042L)
     val values =
         listOf(
@@ -154,7 +154,7 @@ class StateValueCodecTest {
       decode(
           byteArrayOf(
               7,
-              0, 0, 0, (MementoTypeRegistry.recordClasses.size + 1).toByte(),
+              0, 0, 0, (StateTypeRegistry.recordClasses.size + 1).toByte(),
               0, 0, 0, 0,
           ))
     }
@@ -180,7 +180,7 @@ class StateValueCodecTest {
     val firstRecord =
         RecordState(
             1,
-            MementoTypeRegistry.recordClasses.first().recordComponents.map {
+            StateTypeRegistry.recordClasses.first().recordComponents.map {
               StateField(it.name, NullState)
             },
         )

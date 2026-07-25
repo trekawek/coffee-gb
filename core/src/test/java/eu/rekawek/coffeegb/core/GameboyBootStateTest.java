@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import org.junit.Test;
 
@@ -25,7 +25,7 @@ public class GameboyBootStateTest {
             }
 
             Gameboy.BootState bootState = source.saveBootState();
-            Memento<Gameboy> fullState = source.saveToMemento();
+            ComponentState<Gameboy> fullState = source.captureState();
 
             target.getAddressSpace().setByte(0x0000, 0x0a);
             target.getAddressSpace().setByte(0xa000, 0x66);
@@ -37,7 +37,7 @@ public class GameboyBootStateTest {
             assertEquals(0x66, target.getAddressSpace().getByte(0xa000));
 
             // Ordinary save-state restoration must retain its historical whole-machine behavior.
-            target.restoreFromMemento(fullState);
+            target.restoreState(fullState);
             assertEquals(0x11, target.getAddressSpace().getByte(0xa000));
         }
     }

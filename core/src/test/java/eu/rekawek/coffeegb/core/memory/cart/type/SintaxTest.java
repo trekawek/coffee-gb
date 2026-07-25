@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
@@ -54,11 +54,11 @@ public class SintaxTest {
         mapper.setByte(0x7030, 0x22);
         mapper.setByte(0x5010, 0x00);
         mapper.setByte(0x2000, 0x01);
-        Memento<MemoryController> memento = mapper.saveToMemento();
+        ComponentState<MemoryController> memento = mapper.captureState();
 
         mapper.setByte(0x7030, 0x00);
         mapper.setByte(0x2000, 0x02);
-        mapper.restoreFromMemento(memento);
+        mapper.restoreState(memento);
         assertEquals(0x77, mapper.getByte(0x4123));
     }
 

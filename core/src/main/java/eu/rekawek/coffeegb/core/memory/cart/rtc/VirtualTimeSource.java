@@ -1,9 +1,8 @@
 package eu.rekawek.coffeegb.core.memory.cart.rtc;
 
-import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
 
-public class VirtualTimeSource implements TimeSource, Serializable {
+public class VirtualTimeSource implements TimeSource {
 
     private long clock;
 

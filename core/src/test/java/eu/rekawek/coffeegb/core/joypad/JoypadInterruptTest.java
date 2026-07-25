@@ -137,14 +137,14 @@ public class JoypadInterruptTest {
         joypad.tick(); // skip the clock edge on which JOYP changed
         joypad.tick();
         joypad.tick();
-        var memento = joypad.saveToMemento();
+        var memento = joypad.captureState();
 
         joypad.tick();
         joypad.tick();
         assertTrue(interrupts.isInterruptFlagSet(P10_13));
         interrupts.setByte(0xff0f, 0);
 
-        joypad.restoreFromMemento(memento);
+        joypad.restoreState(memento);
         joypad.tick();
         joypad.tick();
 

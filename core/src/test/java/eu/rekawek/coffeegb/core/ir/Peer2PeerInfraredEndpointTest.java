@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.core.ir;
 
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -53,12 +53,12 @@ public class Peer2PeerInfraredEndpointTest {
     @Test
     public void restoringPortStateRestoresEmittedLight() {
         firstPort.setByte(0xff56, 0x01);
-        Memento<InfraredPort> lightOn = firstPort.saveToMemento();
+        ComponentState<InfraredPort> lightOn = firstPort.captureState();
         firstPort.setByte(0xff56, 0x00);
         secondPort.setByte(0xff56, 0xc0);
         assertEquals(0x02, secondPort.getByte(0xff56) & 0x02);
 
-        firstPort.restoreFromMemento(lightOn);
+        firstPort.restoreState(lightOn);
 
         assertEquals(0, secondPort.getByte(0xff56) & 0x02);
     }

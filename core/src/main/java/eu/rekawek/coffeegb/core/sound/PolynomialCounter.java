@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class PolynomialCounter implements Serializable, Originator<PolynomialCounter> {
+public class PolynomialCounter implements StatefulComponent<PolynomialCounter> {
 
     private static final int[] RELOAD_ALIGNMENT_OFFSETS = {2, 1, 0, 3};
 
@@ -97,15 +97,15 @@ public class PolynomialCounter implements Serializable, Originator<PolynomialCou
     }
 
     @Override
-    public Memento<PolynomialCounter> saveToMemento() {
-        return new PolynomialCounterMemento(nr43, counter, counterCountdown, clock2Mhz, alignment, backgroundActive,
+    public ComponentState<PolynomialCounter> captureState() {
+        return new PolynomialCounterState(nr43, counter, counterCountdown, clock2Mhz, alignment, backgroundActive,
                 countdownReloaded);
     }
 
     @Override
-    public void restoreFromMemento(Memento<PolynomialCounter> memento) {
-        if (!(memento instanceof PolynomialCounterMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<PolynomialCounter> state) {
+        if (!(state instanceof PolynomialCounterState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.nr43 = mem.nr43;
         this.counter = mem.counter;
@@ -116,6 +116,12 @@ public class PolynomialCounter implements Serializable, Originator<PolynomialCou
         this.countdownReloaded = mem.countdownReloaded;
     }
 
+    private record PolynomialCounterState(int nr43, int counter, int counterCountdown, boolean clock2Mhz,
+                                             int alignment, boolean backgroundActive,
+                                             boolean countdownReloaded) implements ComponentState<PolynomialCounter> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record PolynomialCounterMemento(int nr43, int counter, int counterCountdown, boolean clock2Mhz,
                                              int alignment, boolean backgroundActive,
                                              boolean countdownReloaded) implements Memento<PolynomialCounter> {

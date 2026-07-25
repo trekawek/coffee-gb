@@ -1,9 +1,9 @@
 package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 /**
  * The frame sequencer taps the same divider chain as DIV: it advances on every falling edge
@@ -12,7 +12,7 @@ import java.io.Serializable;
  * In CGB double speed the divider advances twice per tick, so the sequencer taps the next
  * bit up to stay at 512 Hz of real time (blargg interrupt_time's get_cpu_speed).
  */
-public class FrameSequencer implements Serializable, Originator<FrameSequencer> {
+public class FrameSequencer implements StatefulComponent<FrameSequencer> {
 
     private static final int DIV_BIT = 1 << 12;
 
@@ -74,20 +74,25 @@ public class FrameSequencer implements Serializable, Originator<FrameSequencer> 
     }
 
     @Override
-    public Memento<FrameSequencer> saveToMemento() {
-        return new FrameSequencerMemento(step, previousBit, skipNextEdge);
+    public ComponentState<FrameSequencer> captureState() {
+        return new FrameSequencerState(step, previousBit, skipNextEdge);
     }
 
     @Override
-    public void restoreFromMemento(Memento<FrameSequencer> memento) {
-        if (!(memento instanceof FrameSequencerMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<FrameSequencer> state) {
+        if (!(state instanceof FrameSequencerState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.step = mem.step;
         this.previousBit = mem.previousBit;
         this.skipNextEdge = mem.skipNextEdge;
     }
 
+    private record FrameSequencerState(int step, boolean previousBit,
+                                         boolean skipNextEdge) implements ComponentState<FrameSequencer> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record FrameSequencerMemento(int step, boolean previousBit,
                                          boolean skipNextEdge) implements Memento<FrameSequencer> {
     }

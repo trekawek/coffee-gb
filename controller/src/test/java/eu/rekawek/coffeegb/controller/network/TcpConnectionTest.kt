@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.link.LinkMode
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateRootKind
@@ -960,7 +962,7 @@ class TcpConnectionTest {
     return command
   }
 
-  private fun runningMemento(ticks: Int): eu.rekawek.coffeegb.core.memento.Memento<Gameboy> {
+  private fun runningMemento(ticks: Int): MachineState {
     val bus = EventBusImpl()
     val gameboy =
         Gameboy.GameboyConfiguration(Rom(ROM))
@@ -969,7 +971,7 @@ class TcpConnectionTest {
     gameboy.init(bus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
     return try {
       repeat(ticks) { gameboy.tick() }
-      gameboy.saveToMemento()
+      DetachedStateAdapter.capture(gameboy)
     } finally {
       gameboy.stop()
       gameboy.close()

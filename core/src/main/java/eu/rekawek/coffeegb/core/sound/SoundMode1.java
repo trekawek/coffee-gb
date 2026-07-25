@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.state.ComponentState;
+
 public class SoundMode1 extends AbstractSoundMode {
 
     private int freqDivider;
@@ -214,18 +216,18 @@ public class SoundMode1 extends AbstractSoundMode {
     }
 
     @Override
-    public Memento<AbstractSoundMode> saveToMemento() {
-        return new SoundMode1Memento(super.saveToMemento(), freqDivider, lastOutput, i, sampleSuppressed,
-                activeBeforeTrigger, clock2Mhz, lowFrequencyPhase, frequencySweep.saveToMemento(),
-                justReloadedTicks, justReloadedFromSweep, volumeEnvelope.saveToMemento());
+    public ComponentState<AbstractSoundMode> captureState() {
+        return new SoundMode1State(super.captureState(), freqDivider, lastOutput, i, sampleSuppressed,
+                activeBeforeTrigger, clock2Mhz, lowFrequencyPhase, frequencySweep.captureState(),
+                justReloadedTicks, justReloadedFromSweep, volumeEnvelope.captureState());
     }
 
     @Override
-    public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
-        if (!(memento instanceof SoundMode1Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<AbstractSoundMode> state) {
+        if (!(state instanceof SoundMode1State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        super.restoreFromMemento(mem.abstractSoundMemento);
+        super.restoreState(mem.abstractSoundMemento);
         this.freqDivider = mem.freqDivider;
         this.lastOutput = mem.lastOutput;
         this.i = mem.i;
@@ -235,10 +237,19 @@ public class SoundMode1 extends AbstractSoundMode {
         this.lowFrequencyPhase = mem.lowFrequencyPhase;
         this.justReloadedTicks = mem.justReloadedTicks;
         this.justReloadedFromSweep = mem.justReloadedFromSweep;
-        this.frequencySweep.restoreFromMemento(mem.frequencySweepMemento);
-        this.volumeEnvelope.restoreFromMemento(mem.volumeEnvelopeMemento);
+        this.frequencySweep.restoreState(mem.frequencySweepMemento);
+        this.volumeEnvelope.restoreState(mem.volumeEnvelopeMemento);
     }
 
+    private record SoundMode1State(ComponentState<AbstractSoundMode> abstractSoundMemento, int freqDivider, int lastOutput,
+                                     int i, boolean sampleSuppressed, boolean activeBeforeTrigger,
+                                     boolean clock2Mhz, boolean lowFrequencyPhase,
+                                     ComponentState<FrequencySweep> frequencySweepMemento,
+                                     int justReloadedTicks, boolean justReloadedFromSweep,
+                                     ComponentState<VolumeEnvelope> volumeEnvelopeMemento) implements ComponentState<AbstractSoundMode> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SoundMode1Memento(Memento<AbstractSoundMode> abstractSoundMemento, int freqDivider, int lastOutput,
                                      int i, boolean sampleSuppressed, boolean activeBeforeTrigger,
                                      boolean clock2Mhz, boolean lowFrequencyPhase,

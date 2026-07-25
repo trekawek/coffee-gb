@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import java.lang.reflect.Array as ReflectArray
 import java.util.IdentityHashMap
 
@@ -152,50 +152,50 @@ internal object StateSemantics {
   private val policies: Map<String, Policy> by lazy {
     buildMap {
       // Audio and timer phase/counter relationships.
-      put("eu.rekawek.coffeegb.core.sound.FrameSequencer\$FrameSequencerMemento",
+      put("eu.rekawek.coffeegb.core.sound.FrameSequencer\$FrameSequencerState",
           constrained("The 8-step frame-sequencer index is bounded.") { it.range("step", 0, 7) })
-      put("eu.rekawek.coffeegb.core.sound.FrequencySweep\$FrequencySweepMemento",
+      put("eu.rekawek.coffeegb.core.sound.FrequencySweep\$FrequencySweepState",
           constrained("Sweep register widths and pending pipeline counters are bounded.") {
             it.range("period", 0, 7); it.range("shift", 0, 7); it.range("timer", 0, 8)
             it.range("shadowFreq", 0, 0x7ff); it.nonNegative("calculationDelay")
             it.nonNegative("restartHold")
           })
-      put("eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeMemento",
+      put("eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeState",
           constrained("NR register latches are bytes; the nested length counter is validated separately.") {
             listOf("nr0", "nr1", "nr2", "nr3", "nr4").forEach { name -> it.range(name, 0, 0xff) }
           })
-      put("eu.rekawek.coffeegb.core.sound.Lfsr\$LfsrMemento",
+      put("eu.rekawek.coffeegb.core.sound.Lfsr\$LfsrState",
           constrained("The noise LFSR is a 15-bit register.") { it.range("lfsr", 0, 0x7fff) })
-      put("eu.rekawek.coffeegb.core.sound.PolynomialCounter\$PolynomialCounterMemento",
+      put("eu.rekawek.coffeegb.core.sound.PolynomialCounter\$PolynomialCounterState",
           constrained("Noise register/counter widths, reload alignment, and countdowns are bounded.") {
             it.range("nr43", 0, 0xff); it.range("counter", 0, 0x3fff)
             it.nonNegative("counterCountdown"); it.range("alignment", 0, 3)
           })
-      put("eu.rekawek.coffeegb.core.sound.VolumeEnvelope\$VolumeEnvelopeMemento",
+      put("eu.rekawek.coffeegb.core.sound.VolumeEnvelope\$VolumeEnvelopeState",
           constrained("Envelope volume, direction, sweep, and reload timer have hardware bounds.") {
             it.range("initialVolume", 0, 15); it.oneOf("envelopeDirection", -1, 0, 1)
             it.range("sweep", 0, 7); it.range("volume", 0, 15); it.range("timer", 0, 8)
           })
-      put("eu.rekawek.coffeegb.core.sound.SoundMode1\$SoundMode1Memento",
+      put("eu.rekawek.coffeegb.core.sound.SoundMode1\$SoundMode1State",
           constrained("Pulse-channel waveform and delayed-clock indices are bounded.") {
             it.range("i", 0, 7); it.nonNegative("freqDivider"); it.nonNegative("justReloadedTicks")
           })
-      put("eu.rekawek.coffeegb.core.sound.SoundMode2\$SoundMode2Memento",
+      put("eu.rekawek.coffeegb.core.sound.SoundMode2\$SoundMode2State",
           constrained("Pulse-channel waveform and delayed-clock indices are bounded.") {
             it.range("i", 0, 7); it.nonNegative("freqDivider"); it.nonNegative("justReloadedTicks")
           })
-      put("eu.rekawek.coffeegb.core.sound.SoundMode3\$SoundMode3Memento",
+      put("eu.rekawek.coffeegb.core.sound.SoundMode3\$SoundMode3State",
           constrained("Wave-channel sample index and last physical wave-RAM read address are bounded.") {
             it.range("i", 0, 31); it.nonNegative("freqDivider")
             val lastReadAddress = it.int("lastReadAddr")
             it.require(lastReadAddress == 0 || lastReadAddress in 0xff30..0xff3f,
                 "has invalid lastReadAddr=$lastReadAddress")
           })
-      put("eu.rekawek.coffeegb.core.sound.LengthCounter\$LengthCounterMemento",
+      put("eu.rekawek.coffeegb.core.sound.LengthCounter\$LengthCounterState",
           constrained("All channel length counters are in the shared 0..256 envelope.") {
             it.range("length", 0, 256)
           })
-      put("eu.rekawek.coffeegb.core.sound.Sound\$SoundMemento",
+      put("eu.rekawek.coffeegb.core.sound.Sound\$SoundState",
           constrained("APU collection sizes, sample write index, and sequencer phases are validated together.") {
             it.require(it.objectArray("allModeMementos").size == 4, "must contain four sound modes")
             it.require(it.intArray("channels").size == 4, "must contain four channel outputs")
@@ -210,33 +210,33 @@ internal object StateSemantics {
             it.range("pendingFrameSequencerStep", -1, 7)
             it.range("frameSequencerClockPhase", 0, 3)
           })
-      put("eu.rekawek.coffeegb.core.timer.Timer\$TimerMemento",
+      put("eu.rekawek.coffeegb.core.timer.Timer\$TimerState",
           constrained("Divider/timer registers and delayed edge counters are bounded; MAX_VALUE is a documented sentinel.") {
             it.range("div", 0, 0xffff)
             listOf("tac", "tma", "tima").forEach { name -> it.range(name, 0, 0xff) }
             it.nonNegative("ticksSinceOverflow"); it.nonNegative("haltWakeDelay")
             it.nonNegative("ticksSinceDivReset")
           })
-      put("eu.rekawek.coffeegb.core.memory.GbcRam\$GbcRamMemento",
+      put("eu.rekawek.coffeegb.core.memory.GbcRam\$GbcRamState",
           constrained("The CGB work-RAM bank selector is a three-bit register.") {
             it.range("svbk", 0, 7)
           })
-      put("eu.rekawek.coffeegb.core.memory.UndocumentedGbcRegisters\$UndocumentedGbcRegistersMemento",
+      put("eu.rekawek.coffeegb.core.memory.UndocumentedGbcRegisters\$UndocumentedGbcRegistersState",
           constrained("The FF6C compatibility register is byte-sized.") { it.range("xff6c", 0, 0xff) })
-      put("eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento",
+      put("eu.rekawek.coffeegb.core.Gameboy\$GameboyState",
           constrained("Root LCD-off and speed-switch countdowns cannot be negative.") {
             it.nonNegative("lcdOffTicks"); it.nonNegative("speedSwitchTailTicks")
-            it.recordType("displayMemento", DISPLAY_MEMENTO)
+            it.recordType("displayMemento", DISPLAY_STATE)
           })
 
       // CPU and controller parser indices.
-      put("eu.rekawek.coffeegb.core.cpu.Registers\$RegistersMemento",
+      put("eu.rekawek.coffeegb.core.cpu.Registers\$RegistersState",
           constrained("8-bit registers/flags and 16-bit SP/PC are range checked.") {
             listOf("a", "b", "c", "d", "e", "h", "l").forEach { name -> it.range(name, 0, 0xff) }
             it.range("sp", 0, 0xffff); it.range("pc", 0, 0xffff); it.range("flags", 0, 0xf0)
             it.require((it.int("flags") and 0x0f) == 0, "has non-zero reserved flag bits")
           })
-      put("eu.rekawek.coffeegb.core.cpu.Cpu\$CpuMemento",
+      put("eu.rekawek.coffeegb.core.cpu.Cpu\$CpuState",
           constrained("Opcode, operand, micro-op, and clock-phase indices are bounded before opcode reconstruction.") {
             it.range("opcode1", 0, 0xff); it.range("opcode2", 0, 0xff)
             val operand = it.intArray("operand")
@@ -245,7 +245,7 @@ internal object StateSemantics {
             it.range("clockCycle", -1, 4); it.nonNegative("haltEntrySampleTicks")
             it.nonNegative("haltedCpuCycles"); it.nonNegative("speedSwitchTicks")
           })
-      put("eu.rekawek.coffeegb.core.cpu.InterruptManager\$InterruptManagerMemento",
+      put("eu.rekawek.coffeegb.core.cpu.InterruptManager\$InterruptManagerState",
           constrained("Interrupt registers, delayed-enable sentinel, source masks, and read-mask timers are bounded.") {
             listOf("interruptFlag", "interruptEnabled").forEach { name -> it.range(name, 0, 0xff) }
             it.range("pendingEnableInterrupts", -1, 1)
@@ -255,7 +255,7 @@ internal object StateSemantics {
                 .forEach { name -> it.range(name, 0, 0x1f) }
             it.nonNegative("maskMode0LcdcReadTicks")
           })
-      put("eu.rekawek.coffeegb.core.joypad.Joypad\$JoypadMemento",
+      put("eu.rekawek.coffeegb.core.joypad.Joypad\$JoypadState",
           constrained("SGB packet and multiplayer controller indices are checked against owned buffers.") {
             it.require((it.int("p1") and 0xcf) == 0, "has invalid JOYP selector bits")
             it.range("players", 0, 4); it.range("currentPlayer", 0, it.int("players"))
@@ -265,7 +265,7 @@ internal object StateSemantics {
           })
 
       // SGB, IR, and display/parser schedules.
-      put("eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento",
+      put("eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState",
           constrained("Transfer command packet length/code and optional 4 KiB VRAM payload are coherent.") {
             val packet = it.intArray("packet")
             it.require(packet.isNotEmpty(), "has an empty transfer-command packet")
@@ -278,7 +278,7 @@ internal object StateSemantics {
               it.require(data.size == SGB_TRANSFER_SIZE, "has transfer payload length ${data.size}")
             }
           })
-      put("eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyMemento",
+      put("eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyState",
           constrained("Multipacket assembly indices and delayed transfer countdown are bounded.") {
             val packets = it.objectArray("multipacket")
             it.range("multipacketLength", 0, packets.size)
@@ -287,9 +287,9 @@ internal object StateSemantics {
                 it.int("multipacketIndex") < it.int("multipacketLength"),
                 "has multipacket index beyond the active packet count")
             it.range("transferCountdown", 0, 3)
-            it.recordType("waitingTransferCommandMemento", TRANSFER_COMMAND_MEMENTO)
+            it.recordType("waitingTransferCommandMemento", TRANSFER_COMMAND_STATE)
           })
-      put("eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento",
+      put("eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayState",
           constrained("SGB palette rows, palette IDs, attribute rows, and fade phase are bounded.") {
             checkRows(it, "palettes", 4, nullable = false)
             checkRows(it, "systemPalettes", 4, nullable = true)
@@ -297,17 +297,17 @@ internal object StateSemantics {
             it.intValues("paletteMap", 0, 3)
             it.range("borderFade", 0, 32)
           })
-      put("eu.rekawek.coffeegb.core.sgb.Background\$BackgroundMemento",
+      put("eu.rekawek.coffeegb.core.sgb.Background\$BackgroundState",
           constrained("The 105-frame border animation and optional picture-command type are validated.") {
             it.range("borderAnimation", 0, 105)
             it.value("pendingPictureMemento")?.let { pending ->
-              it.recordType("pendingPictureMemento", TRANSFER_COMMAND_MEMENTO)
+              it.recordType("pendingPictureMemento", TRANSFER_COMMAND_STATE)
               val transfer = RecordFields(pending, "background.pendingPictureMemento")
               it.require(transfer.intArray("packet")[0] / 8 == 0x14,
                   "pending picture is not a PCT_TRN command")
             }
           })
-      put("eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerMemento",
+      put("eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState",
           constrained("Pulse schedule index/remaining duration are coherent with armed/running state.") {
             val schedule = it.intArray("schedule")
             it.require(schedule.all { duration -> duration > 0 }, "contains a non-positive pulse duration")
@@ -333,14 +333,14 @@ internal object StateSemantics {
           })
 
       // DMA/PPU queues, phase indices, and delayed-write collections.
-      put("eu.rekawek.coffeegb.core.memory.Dma\$DmaMemento",
+      put("eu.rekawek.coffeegb.core.memory.Dma\$DmaState",
           constrained("OAM DMA address/clock phases and byte latches are bounded; -1 write byte is a sentinel.") {
             it.range("from", 0, 0xffff); it.nonNegative("ticks"); it.nonNegative("transferClocks")
             it.nonNegative("pauseEntryClocks"); it.range("currentByte", 0, 0xff)
             it.range("regValue", 0, 0xff); it.range("pendingInterruptWriteByte", -1, 0xff)
             it.range("pendingInterruptWriteValue", 0, 0xff)
           })
-      put("eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento",
+      put("eu.rekawek.coffeegb.core.memory.Hdma\$HdmaState",
           constrained("HDMA block length, signed source progress, request ages, and line phases are audited.") {
             it.range("length", 0, 0x7f); it.range("tick", -8, 31)
             it.range("src", 0, 0xffff); it.range("dst", 0, 0xffff)
@@ -350,13 +350,13 @@ internal object StateSemantics {
             listOf("hblankRequestAge", "nextHblankRequestAge").forEach { name -> it.nonNegative(name) }
             it.range("gpuLine", 0, 153); it.range("gpuTicksInLine", 0, 455)
           })
-      put("eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueMemento",
+      put("eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueState",
           constrained("Circular-queue size and offset are checked against capacity.") {
             val capacity = it.intArray("array").size
             it.require(capacity > 0, "has zero queue capacity")
             it.range("size", 0, capacity); it.range("offset", 0, capacity - 1)
           })
-      put("eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento",
+      put("eu.rekawek.coffeegb.core.gpu.Display\$DisplayState",
           constrained("The display write cursor cannot leave the owned scanout buffer.") {
             val buffer = it.intArray("buffer")
             it.range("i", 0, buffer.size)
@@ -365,37 +365,37 @@ internal object StateSemantics {
                   "has last-frame length ${lastFrame.size}, expected ${buffer.size}")
             }
           })
-      put("eu.rekawek.coffeegb.core.gpu.VRamTransfer\$VRamTransferMemento",
+      put("eu.rekawek.coffeegb.core.gpu.VRamTransfer\$VRamTransferState",
           constrained("The SGB frame pixel cursor covers exactly one 160x144 source frame.") {
             it.range("i", 0, 160 * 144)
           })
-      put("eu.rekawek.coffeegb.core.gpu.SpriteFifo\$SpriteFifoMemento",
+      put("eu.rekawek.coffeegb.core.gpu.SpriteFifo\$SpriteFifoState",
           constrained("Object FIFO head/size and rewind underflow are bounded by its eight slots.") {
             it.range("head", 0, 7); it.range("size", 0, 8); it.nonNegative("underflow")
           })
-      put("eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento",
+      put("eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState",
           constrained("Legacy-null or present delay-line arrays must be paired and cursor-bounded.") {
             checkDelayLine(it)
           })
-      put("eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento",
+      put("eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState",
           constrained("CGB delay lines and optional cleared-FIFO triplet have coherent presence and indices.") {
             checkDelayLine(it)
             val cleared = listOf("clearedPixels", "clearedPalettes", "clearedPriorities").map(it::value)
             it.require(cleared.all { value -> value == null } || cleared.all { value -> value != null },
                 "has a partially present cleared-FIFO triplet")
             listOf("clearedPixels", "clearedPalettes", "clearedPriorities")
-                .forEach { name -> it.recordType(name, INT_QUEUE_MEMENTO) }
+                .forEach { name -> it.recordType(name, INT_QUEUE_STATE) }
             it.range("linePixels", 0, 160)
           })
-      put("eu.rekawek.coffeegb.core.gpu.ColorPalette\$ColorPaletteMemento",
+      put("eu.rekawek.coffeegb.core.gpu.ColorPalette\$ColorPaletteState",
           constrained("The CGB palette byte-address register is six bits.") { it.range("index", 0, 63) })
-      put("eu.rekawek.coffeegb.core.gpu.Gpu\$GpuMemento",
+      put("eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState",
           constrained("LCD line/dot and delayed-write phases are bounded.") {
             it.nonNegative("displayEnabledDelay"); it.range("line", 0, 153); it.range("ticksInLine", -1, 455)
             val lastWrite = it.int("lastCpuVramWriteTick")
             it.require(lastWrite == Int.MIN_VALUE || lastWrite in -1..455,
                 "has invalid lastCpuVramWriteTick=$lastWrite")
-            it.recordType("pixelMachineMemento", PIXEL_TRANSFER_MEMENTO)
+            it.recordType("pixelMachineMemento", PIXEL_TRANSFER_STATE)
             if (it.value("pendingPpuWrites") != null) {
               it.recordElements("pendingPpuWrites", PENDING_PPU_WRITE)
             }
@@ -406,14 +406,14 @@ internal object StateSemantics {
                   "has an invalid CPU-visible PPU register")
             }
           })
-      put("eu.rekawek.coffeegb.core.gpu.phase.OamSearch\$OamSearchMemento",
+      put("eu.rekawek.coffeegb.core.gpu.phase.OamSearch\$OamSearchState",
           constrained("Mode-2 OAM reader and selected-sprite indices match their fixed arrays.") {
             it.range("spritePosIndex", 0, it.objectArray("sprites").size)
             it.range("i", 0, it.intArray("oamReaderY").size)
             it.range("spriteHeight", 0, 16); it.range("previousOamSpriteHeight", 0, 16)
             it.nonNegative("oamReaderSourceChangeTicks")
           })
-      put("eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento",
+      put("eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState",
           constrained("Mode-3 sprite/fetch/window indices and nullable legacy lists are coherent.") {
             val spriteOrder = it.intArray("spriteOrder")
             it.range("spriteCount", 0, spriteOrder.size)
@@ -423,7 +423,7 @@ internal object StateSemantics {
             it.range("position", -16, 160); it.range("objAttributesValue", -1, 0xff)
             it.range("objRefreshAttrsValue", -1, 0xff); it.range("objRefreshPops", 0, 8)
             it.nonNegative("entryTicks"); it.nonNegative("windowPendingTicks")
-            it.recordType("fifoMemento", DMG_FIFO_MEMENTO, COLOR_FIFO_MEMENTO)
+            it.recordType("fifoMemento", DMG_FIFO_STATE, COLOR_FIFO_STATE)
             if (it.value("pendingWindowDisplayWrites") != null) {
               it.recordElements("pendingWindowDisplayWrites", DELAYED_WINDOW_WRITE)
             }
@@ -431,7 +431,7 @@ internal object StateSemantics {
               it.recordElements("pendingWindowXWrites", DELAYED_WINDOW_WRITE)
             }
           })
-      put("eu.rekawek.coffeegb.core.gpu.Fetcher\$FetcherMemento",
+      put("eu.rekawek.coffeegb.core.gpu.Fetcher\$FetcherState",
           constrained("Fetcher state and attribute sentinel are bounded to the seven-stage machine.") {
             it.range("state", 0, 6); it.range("tileAttributesValue", -1, 0xff)
             it.nonNegative("data2Delay")
@@ -454,7 +454,7 @@ internal object StateSemantics {
             it.range("value", 0, 0xff); it.range("remainingDots", 0, 4)
           })
 
-      put("eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesMemento",
+      put("eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesState",
           constrained("GPU register arrays, nullable legacy mix arrays, and old-value sentinels are coherent.") {
             val values = it.intArray("values")
             it.intValues("values", 0, 0xff)
@@ -468,31 +468,31 @@ internal object StateSemantics {
             it.range("wxJustChangedTicks", 0, 2)
             it.range("scxOldValue", -1, 0xff); it.range("pendingScxOldValue", -1, 0xff)
           })
-      put("eu.rekawek.coffeegb.core.gpu.Lcdc\$LcdcMemento",
+      put("eu.rekawek.coffeegb.core.gpu.Lcdc\$LcdcState",
           constrained("LCDC latches are bytes or the documented -1 mix sentinel; glitch timers are non-negative.") {
             it.range("value", 0, 0xff); it.range("mixValue", -1, 0xff)
             it.range("pendingMixValue", -1, 0xff); it.nonNegative("tileSelectGlitchTicks")
             it.nonNegative("pendingTileSelectGlitchTicks")
           })
-      put("eu.rekawek.coffeegb.core.gpu.phase.HBlankPhase\$HBlankPhaseMemento",
+      put("eu.rekawek.coffeegb.core.gpu.phase.HBlankPhase\$HBlankPhaseState",
           constrained("HBlank elapsed-dot count cannot be negative.") { it.nonNegative("ticks") })
-      put("eu.rekawek.coffeegb.core.gpu.phase.VBlankPhase\$VBlankPhaseMemento",
+      put("eu.rekawek.coffeegb.core.gpu.phase.VBlankPhase\$VBlankPhaseState",
           constrained("VBlank elapsed-dot count cannot be negative.") { it.nonNegative("ticks") })
-      put("eu.rekawek.coffeegb.core.gpu.phase.OamSearch\$SpritePosition\$SpritePositionMemento",
+      put("eu.rekawek.coffeegb.core.gpu.phase.OamSearch\$SpritePosition\$SpritePositionState",
           constrained("Enabled sprite entries retain byte coordinates and an address inside OAM.") {
             it.range("x", 0, 0xff); it.range("y", 0, 0xff)
             if (it.value("enabled") as Boolean) it.range("address", 0xfe00, 0xfe9c)
           })
 
       // RTC and mapper command-state indices.
-      put("eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockMemento",
+      put("eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState",
           constrained("Live and latched RTC registers plus subsecond phase are hardware-bounded.") {
             listOf("seconds", "minutes", "latchedSeconds", "latchedMinutes").forEach { name -> it.range(name, 0, 0x3f) }
             listOf("hours", "latchedHours").forEach { name -> it.range(name, 0, 0x1f) }
             listOf("days", "latchedDays").forEach { name -> it.range(name, 0, 511) }
             it.range("subSecondTicks", 0L, RTC_TICKS_PER_SECOND - 1L)
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6Memento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State",
           constrained("AMD flash unlock/erase transaction state is one of six stages.") {
             it.range("flashCommandState", 0, 5)
             listOf("ramBankA", "ramBankB", "romBankA", "romBankB")
@@ -502,7 +502,7 @@ internal object StateSemantics {
                   "has program mode without the completed unlock prefix")
             }
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromMemento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState",
           constrained("EEPROM serial phase, bit count, address sentinel, and output bit are coherent.") {
             val state = it.enumName("state")
             val maxBits = when (state) { "COMMAND" -> 9; "READING" -> 16; "WRITING" -> 15; else -> 17 }
@@ -510,30 +510,30 @@ internal object StateSemantics {
             it.range("command", 0, 0x3ff); it.range("writeValue", 0, 0xffff)
             it.intValues("eeprom", 0, 0xff)
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc7\$Mbc7Memento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc7\$Mbc7State",
           constrained("Accelerometer latch, ROM bank, finite input, and EEPROM root are validated.") {
             it.range("selectedRomBank", 0, 0x1ff); it.range("latchState", 0, 2)
             it.require(it.double("x").isFinite() && it.double("y").isFinite(),
                 "has a non-finite accelerometer input")
-            it.recordType("eepromMemento", MBC7_EEPROM_MEMENTO)
+            it.recordType("eepromMemento", MBC7_EEPROM_STATE)
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3Memento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3State",
           constrained("HuC3 command address/flags/read latches are byte-sized.") {
             it.range("romBank", 0, 0x7f); it.range("ramBank", 0, 0x0f); it.range("mode", 0, 0x0f)
             it.range("accessIndex", 0, 0xff); it.range("accessFlags", 0, 0xff); it.range("readValue", 0, 0xff)
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.DuzMulticart\$DuzMulticartMemento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.DuzMulticart\$DuzMulticartState",
           constrained("DÜZ register, ROM, and RAM selectors retain their hardware widths.") {
             it.range("regIndex", 0, 0xff); it.range("selectedBank", 1, 0x7f)
             it.range("selectedRamBank", 0, 0xff); it.nonNegative("baseBank")
             it.intValues("regs", 0, 0xff)
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc\$SachenMemento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc\$SachenState",
           constrained("Sachen lock and boot-logo transition machines have finite stages.") {
             listOf("unmaskedBank", "mask", "base").forEach { name -> it.range(name, 0, 0xff) }
             it.range("lockState", 0, 2); it.range("transition", 0, 0x30)
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart\$SlMulticartMemento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart\$SlMulticartState",
           constrained("SL configuration command is either a byte command or the idle sentinel 0x100.") {
             val command = it.int("configCommand")
             it.require(command in 0..0xff || command == 0x100, "has invalid configCommand=$command")
@@ -544,7 +544,7 @@ internal object StateSemantics {
             it.range("zeroRemap", 0, 1); it.range("baseRamBank", 0, 0x0f)
             it.range("selectedRamBank", 0, 0x0f); it.oneOf("ramBankMask", 0, 3)
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.Tama5\$Tama5Memento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.Tama5\$Tama5State",
           constrained("TAMA5 command selector and nibble register/page values are bounded.") {
             it.range("selectedReg", 0, 15)
             listOf("registers", "rtcTimerPage", "rtcAlarmPage", "rtcFreePage0", "rtcFreePage1")
@@ -552,7 +552,7 @@ internal object StateSemantics {
                   it.require(it.intArray(name).all { value -> value in 0..15 }, "$name contains a non-nibble value")
                 }
           })
-      put("eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento",
+      put("eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelState",
           constrained("Outer Datel flash transaction state is a four-stage JEDEC sequence.") {
             it.range("flashCycle", 0, 3)
           })
@@ -561,7 +561,7 @@ internal object StateSemantics {
       addMapperPolicies(this)
 
       // Serial parser/framing indices.
-      put("eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento",
+      put("eu.rekawek.coffeegb.core.genie.Genie\$GenieState",
           constrained("Cheat map values and elements are non-null registered patch records.") {
             it.map("patches").forEach { (key, value) ->
               it.require(key is Int && key in 0..0xffff, "has invalid patch-map key $key")
@@ -574,15 +574,15 @@ internal object StateSemantics {
               }
             }
           })
-      put("eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointMemento",
+      put("eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointState",
           constrained("Link-cable shift index and pending-bit count cannot underflow.") {
             it.range("sb", 0, 0xff); it.nonNegative("bitsReceived"); it.range("bitIndex", 0, 7)
           })
-      put("eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint\$ByteReceivingSerialEndpointMemento",
+      put("eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint\$ByteReceivingSerialEndpointState",
           constrained("Byte-receiver byte and bit count are bounded.") {
             it.range("sb", 0, 0xff); it.range("bits", 0, 7)
           })
-      put("eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyMemento",
+      put("eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState",
           constrained("Barcode protocol phase and exact scan-frame cursors are validated together.") {
             it.range("handshakeByte", 0, 3); it.range("sendBitIndex", 0, 7)
             it.range("recvBitIndex", 0, 7); it.range("clockDivider", 0, 511)
@@ -596,7 +596,7 @@ internal object StateSemantics {
               it.intValues("data", 0, 0xff); it.range("dataByte", 0, data.lastIndex)
             }
           })
-      put("eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint\$PrinterMemento",
+      put("eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint\$PrinterState",
           constrained("Printer parser, command/image cursors, compression run, and bit phase are bounded.") {
             it.range("state", 0, 10); it.nonNegative("lengthLeft")
             it.range("commandLength", 0, it.intArray("commandData").size)
@@ -607,7 +607,7 @@ internal object StateSemantics {
             it.range("checksum", 0, 0xffff); it.range("compressionRunLength", 0, 128)
             it.range("sendBits", 0, 7)
           })
-      put("eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverMemento",
+      put("eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverState",
           constrained("UART transmit/receive phases, queue bytes, timers, and bounded TAIP parser are checked.") {
             it.range("startupBeacons", 0, 2)
             it.require(it.intArray("outputBytes").all { value -> value in 0..0xff }, "output queue contains a non-byte")
@@ -617,12 +617,12 @@ internal object StateSemantics {
             it.range("receiveOnes", 0, 8)
             it.require(it.string("taipCommand").length <= 64, "has an oversized TAIP command")
           })
-      put("eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortMemento",
+      put("eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortState",
           constrained("Serial byte/register and receive/clock phases are bounded.") {
             it.range("sb", 0, 0xff); it.range("sc", 0, 0xff)
             it.nonNegative("serialClocks"); it.range("receivedBits", 0, 7); it.nonNegative("haltWakeDelay")
           })
-      put("eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterMemento",
+      put("eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterState",
           constrained("DMG-07 player arrays, packet/bit cursors, rate/size, and delayed clock are coherent.") {
             val players = 4
             listOf("sb", "pendingBits", "consecutiveFf").forEach { name ->
@@ -693,41 +693,41 @@ internal object StateSemantics {
   }
 
   private fun addMapperPolicies(target: MutableMap<String, Policy>) {
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc1\$Mbc1Memento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc1\$Mbc1State"] =
         constrained("MBC1 bank/model registers and cached bank sentinels retain their hardware widths.") {
           it.range("selectedRamBank", 0, 3); it.range("selectedRomBank", 0, 0x7f)
           it.range("memoryModel", 0, 1)
           it.range("cachedRomBankFor0x0000", -1, 0x7f)
           it.range("cachedRomBankFor0x4000", -1, 0x7f)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.BungEms\$BungEmsMemento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.BungEms\$BungEmsState"] =
         constrained("Bung/EMS ROM latches are bytes, its high bit is binary, and RAM has four banks.") {
           listOf("romBankLow", "romBankMask", "romBankLatch").forEach { name -> it.range(name, 0, 0xff) }
           it.range("romBankHigh", 0, 1); it.range("selectedRamBank", 0, 3)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc2\$Mbc2Memento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc2\$Mbc2State"] =
         constrained("MBC2's selected ROM bank is the 4-bit value or audited 5-bit compatibility value.") {
           it.range("selectedRomBank", 1, 0x1f)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomMemento"] =
-        constrained("Plain-ROM battery state, when present, must be a registered battery memento.") {
-          it.recordType("batteryMemento", MEMORY_BATTERY_MEMENTO, FILE_BATTERY_MEMENTO)
+    target["eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomState"] =
+        constrained("Plain-ROM battery state, when present, must be a registered battery state.") {
+          it.recordType("batteryMemento", MEMORY_BATTERY_STATE, FILE_BATTERY_STATE)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5Memento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"] =
         constrained("MBC5 exposes a nine-bit ROM bank and four-bit RAM/rumble register.") {
           it.range("selectedRamBank", 0, 0x0f); it.range("selectedRomBank", 0, 0x1ff)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera\$PocketCameraMemento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera\$PocketCameraState"] =
         constrained("Pocket Camera ROM/RAM selectors and camera register bytes are bounded.") {
           it.range("romBank", 0, 0x3f); it.range("ramBank", 0, 0x0f)
           it.intValues("cameraRegisters", 0, 0xff)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.BhgosMulticart\$BhgosMulticartMemento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.BhgosMulticart\$BhgosMulticartState"] =
         constrained("GBOS RAM-bank indexing and non-negative block-selection progress are bounded.") {
           it.range("selectedRomBank", 1, 0xff); it.range("selectedRamBank", 0, 3)
           it.nonNegative("baseRomBank"); it.nonNegative("blockSelectWrites")
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.MakonNtOld2\$MakonNtOld2Memento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.MakonNtOld2\$MakonNtOld2State"] =
         constrained("Makon bank latches and contiguous low-bit game mask are coherent.") {
           it.range("selectedRomBank", 1, 0xff); it.range("mappedRomBank", 0, 0xff)
           it.range("baseRomBank", 0, 0x7e)
@@ -735,34 +735,34 @@ internal object StateSemantics {
           it.require(mask >= 0 && (mask and (mask + 1)) == 0, "has invalid game ROM mask $mask")
           it.require(it.int("mappedRomBank") <= mask, "has mapped bank outside the selected game mask")
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Sintax\$SintaxMemento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Sintax\$SintaxState"] =
         constrained("Sintax table mode, bank byte, XOR bytes, and nested MBC5 root are validated.") {
-          it.recordType("delegateMemento", MBC5_MEMENTO); it.range("mode", 0, 15)
+          it.recordType("delegateMemento", MBC5_STATE); it.range("mode", 0, 15)
           it.range("bankNo", 0, 0xff); it.range("romBankXor", 0, 0xff)
           it.intValues("xorValues", 0, 0xff)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.WisdomTree\$WisdomTreeMemento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.WisdomTree\$WisdomTreeState"] =
         constrained("Wisdom Tree's address-selected 32 KiB bank cannot be negative or overflow its product.") {
           it.range("bank", 0, 0x7fff)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Mani32kMulticart\$Mani32kMemento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Mani32kMulticart\$Mani32kState"] =
         constrained("The Mani block selector originates from an unsigned cartridge write.") {
           it.range("block", 0, 0xff)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Huc1\$Huc1Memento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Huc1\$Huc1State"] =
         constrained("HuC1 ROM/RAM selectors retain their six-bit and three-bit widths.") {
           it.range("romBank", 0, 0x3f); it.range("ramBank", 0, 7)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3Memento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3State"] =
         constrained("MBC3 ROM and RAM/RTC selectors originate from seven-bit and byte registers.") {
           it.range("selectedRomBank", 0, 0x7f); it.range("selectedRamBank", 0, 0xff)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Bbd\$BbdMemento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Bbd\$BbdState"] =
         constrained("BBD data/bank permutation selectors index eight-entry tables.") {
-          it.recordType("delegateMemento", MBC5_MEMENTO)
+          it.recordType("delegateMemento", MBC5_STATE)
           it.range("dataSwapMode", 0, 7); it.range("bankSwapMode", 0, 7)
         }
-    target["eu.rekawek.coffeegb.core.memory.cart.type.Mmm01\$Mmm01Memento"] =
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Mmm01\$Mmm01State"] =
         constrained("MMM01 bank fields and masks retain their documented hardware bit widths.") {
           it.range("romBankLow", 0, 0x1f); it.range("romBankMid", 0, 3)
           it.range("romBankHigh", 0, 3); it.range("romBankMask", 0, 0x0f)
@@ -774,18 +774,18 @@ internal object StateSemantics {
   private fun addPassThroughPolicies(target: MutableMap<String, Policy>) {
     val valueOnly =
         setOf(
-            "eu.rekawek.coffeegb.core.sound.SoundMode4\$SoundMode4Memento",
-            "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeMomento",
-            "eu.rekawek.coffeegb.core.memory.BiosShadow\$BiosShadowMemento",
-            "eu.rekawek.coffeegb.core.memory.Ram\$RamMemento",
-            "eu.rekawek.coffeegb.core.memory.Mmu\$MmuMemento",
-            "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryMemento",
-            "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryMemento",
-            "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeMemento",
-            "eu.rekawek.coffeegb.core.memory.OamEchoRam\$OamEchoRamMemento",
-            "eu.rekawek.coffeegb.core.gpu.StatRegister\$StatRegisterMemento",
-            "eu.rekawek.coffeegb.core.ir.InfraredPort\$InfraredPortMemento",
-            "eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble\$CodeBreakerRumbleMemento",
+            "eu.rekawek.coffeegb.core.sound.SoundMode4\$SoundMode4State",
+            "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeState",
+            "eu.rekawek.coffeegb.core.memory.BiosShadow\$BiosShadowState",
+            "eu.rekawek.coffeegb.core.memory.Ram\$RamState",
+            "eu.rekawek.coffeegb.core.memory.Mmu\$MmuState",
+            "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState",
+            "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState",
+            "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeState",
+            "eu.rekawek.coffeegb.core.memory.OamEchoRam\$OamEchoRamState",
+            "eu.rekawek.coffeegb.core.gpu.StatRegister\$StatRegisterState",
+            "eu.rekawek.coffeegb.core.ir.InfraredPort\$InfraredPortState",
+            "eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble\$CodeBreakerRumbleState",
         )
     valueOnly.forEach { name ->
       target[name] = pass("Fields are direct value/latch state; array dimensions, enum tags, nested records, and nullability are validated elsewhere. Signed clocks and -1 sentinels are intentionally unconstrained.")
@@ -794,7 +794,7 @@ internal object StateSemantics {
   }
 
   private fun verifyPolicyInventory() {
-    val registered = MementoTypeRegistry.recordClassNames.toSet()
+    val registered = StateTypeRegistry.recordClassNames.toSet()
     val missing = registered - policies.keys
     val extra = policies.keys - registered
     if (missing.isNotEmpty() || extra.isNotEmpty()) {
@@ -811,25 +811,25 @@ internal object StateSemantics {
   private const val BARCODE_FRAME_SIZE = 30
   private const val RTC_TICKS_PER_SECOND = 4_194_304L
   private const val CPU_VISIBLE_PPU_REGISTERS = 12
-  private const val DISPLAY_MEMENTO = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento"
-  private const val PIXEL_TRANSFER_MEMENTO =
-      "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferMemento"
-  private const val DMG_FIFO_MEMENTO = "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoMemento"
-  private const val COLOR_FIFO_MEMENTO =
-      "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento"
-  private const val INT_QUEUE_MEMENTO = "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueMemento"
+  private const val DISPLAY_STATE = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState"
+  private const val PIXEL_TRANSFER_STATE =
+      "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState"
+  private const val DMG_FIFO_STATE = "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState"
+  private const val COLOR_FIFO_STATE =
+      "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState"
+  private const val INT_QUEUE_STATE = "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueState"
   private const val PENDING_PPU_WRITE = "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWrite"
   private const val DELAYED_WINDOW_WRITE =
       "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWrite"
-  private const val TRANSFER_COMMAND_MEMENTO =
-      "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandMemento"
-  private const val MEMORY_BATTERY_MEMENTO =
-      "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryMemento"
-  private const val FILE_BATTERY_MEMENTO =
-      "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryMemento"
-  private const val MBC5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5Memento"
-  private const val MBC7_EEPROM_MEMENTO =
-      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromMemento"
+  private const val TRANSFER_COMMAND_STATE =
+      "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState"
+  private const val MEMORY_BATTERY_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"
+  private const val FILE_BATTERY_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
+  private const val MBC5_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
+  private const val MBC7_EEPROM_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
   private val REGISTERED_PATCH_TYPES =
       setOf(
           "eu.rekawek.coffeegb.core.genie.GameGeniePatch",

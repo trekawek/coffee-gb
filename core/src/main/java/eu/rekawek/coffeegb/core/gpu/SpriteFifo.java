@@ -1,17 +1,17 @@
 package eu.rekawek.coffeegb.core.gpu;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 /**
  * The object pixel FIFO. It pops in lockstep with the background FIFO; an object fetch pads
  * it to 8 pixels and merges the object's row into it, so pixels of objects that start left
  * of the screen edge get discarded together with the corresponding background pixels.
  */
-public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
+public class SpriteFifo implements StatefulComponent<SpriteFifo> {
 
     private static final int EMPTY_PRIORITY = 200;
 
@@ -124,14 +124,14 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
     }
 
     @Override
-    public Memento<SpriteFifo> saveToMemento() {
-        return new SpriteFifoMemento(
+    public ComponentState<SpriteFifo> captureState() {
+        return new SpriteFifoState(
                 pixel.clone(), palette.clone(), priority.clone(), bgPriority.clone(), head, size, underflow);
     }
 
     @Override
-    public Memento<SpriteFifo> saveToMemento(MachineStateCapture capture) {
-        return new SpriteFifoMemento(
+    public ComponentState<SpriteFifo> captureState(MachineStateCapture capture) {
+        return new SpriteFifoState(
                 capture.ints(pixel),
                 capture.ints(palette),
                 capture.ints(priority),
@@ -142,9 +142,9 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<SpriteFifo> memento) {
-        if (!(memento instanceof SpriteFifoMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SpriteFifo> state) {
+        if (!(state instanceof SpriteFifoState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         System.arraycopy(mem.pixel, 0, pixel, 0, 8);
         System.arraycopy(mem.palette, 0, palette, 0, 8);
@@ -155,6 +155,12 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
         this.underflow = mem.underflow;
     }
 
+    private record SpriteFifoState(
+            int[] pixel, int[] palette, int[] priority, boolean[] bgPriority, int head, int size, int underflow)
+            implements ComponentState<SpriteFifo> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SpriteFifoMemento(
             int[] pixel, int[] palette, int[] priority, boolean[] bgPriority, int head, int size, int underflow)
             implements Memento<SpriteFifo> {

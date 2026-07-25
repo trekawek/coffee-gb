@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.core.sound;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public abstract class AbstractSoundMode implements AddressSpace, Serializable, Originator<AbstractSoundMode> {
+public abstract class AbstractSoundMode implements AddressSpace, StatefulComponent<AbstractSoundMode> {
 
     protected final int offset;
 
@@ -198,14 +198,14 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
     }
 
     @Override
-    public Memento<AbstractSoundMode> saveToMemento() {
-        return new AbstractSoundModeMemento(channelEnabled, dacEnabled, nr0, nr1, nr2, nr3, nr4, length.saveToMemento());
+    public ComponentState<AbstractSoundMode> captureState() {
+        return new AbstractSoundModeState(channelEnabled, dacEnabled, nr0, nr1, nr2, nr3, nr4, length.captureState());
     }
 
     @Override
-    public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
-        if (!(memento instanceof AbstractSoundModeMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<AbstractSoundMode> state) {
+        if (!(state instanceof AbstractSoundModeState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.channelEnabled = mem.channelEnabled;
         this.dacEnabled = mem.dacEnabled;
@@ -214,9 +214,15 @@ public abstract class AbstractSoundMode implements AddressSpace, Serializable, O
         this.nr2 = mem.nr2;
         this.nr3 = mem.nr3;
         this.nr4 = mem.nr4;
-        this.length.restoreFromMemento(mem.lengthMemento);
+        this.length.restoreState(mem.lengthMemento);
     }
 
+    private record AbstractSoundModeState(boolean channelEnabled, boolean dacEnabled, int nr0, int nr1, int nr2,
+                                            int nr3, int nr4,
+                                            ComponentState<LengthCounter> lengthMemento) implements ComponentState<AbstractSoundMode> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record AbstractSoundModeMemento(boolean channelEnabled, boolean dacEnabled, int nr0, int nr1, int nr2,
                                             int nr3, int nr4,
                                             Memento<LengthCounter> lengthMemento) implements Memento<AbstractSoundMode> {

@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.Session
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.core.Gameboy
@@ -156,7 +156,7 @@ object StateCodec {
 
   /**
    * Validates an already-decoded detached file against an expected network root and target
-   * identities. This performs no memento reconstruction and cannot mutate a machine.
+   * identities. This performs no live-state reconstruction and cannot mutate a machine.
    */
   internal fun validateForTarget(
       file: StateFile,
@@ -547,7 +547,7 @@ object StateCodec {
             ?: PortableBounds.malformed("Gameboy cartridge state is not a record")
     val cartridgeType =
         registeredRecordId(
-            "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeMemento")
+            "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeState")
     if (cartridge.typeId != cartridgeType) {
       PortableBounds.malformed("Gameboy cartridge state has type ${cartridge.typeId}")
     }
@@ -556,7 +556,7 @@ object StateCodec {
             ?: PortableBounds.malformed("Cartridge mapper state is not a record")
     val datelType =
         registeredRecordId(
-            "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelMemento")
+            "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelState")
     if (mapper.typeId != datelType) return false
     return mapper.recordField("slotMemento") !== NullState
   }
@@ -566,7 +566,7 @@ object StateCodec {
           ?: PortableBounds.malformed("Record type $typeId has no $name field")
 
   private fun registeredRecordId(className: String): Int =
-      MementoTypeRegistry.recordClassNames.indexOf(className).plus(1).also {
+      StateTypeRegistry.recordClassNames.indexOf(className).plus(1).also {
         if (it == 0) error("Portable record registry has no $className")
       }
 

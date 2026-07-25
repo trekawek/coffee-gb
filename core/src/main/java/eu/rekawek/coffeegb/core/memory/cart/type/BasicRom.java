@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -63,14 +65,14 @@ public class BasicRom implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new BasicRomMemento(battery.saveToMemento(), ram.clone(), ramUpdated);
+    public ComponentState<MemoryController> captureState() {
+        return new BasicRomState(battery.captureState(), ram.clone(), ramUpdated);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new BasicRomMemento(
-                battery.saveToMemento(capture), capture.ints(ram), ramUpdated);
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new BasicRomState(
+                battery.captureState(capture), capture.ints(ram), ramUpdated);
     }
 
     @Override
@@ -80,25 +82,30 @@ public class BasicRom implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
+    public void restoreState(ComponentState<MemoryController> state) {
         // BasicRom had no mutable state before plain ROM+RAM support was added.
         // Accept its legacy null snapshots as the initial RAM state.
-        if (memento == null) {
+        if (state == null) {
             return;
         }
-        if (!(memento instanceof BasicRomMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+        if (!(state instanceof BasicRomState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (ram.length != mem.ram.length) {
-            throw new IllegalArgumentException("Memento RAM length doesn't match");
+            throw new IllegalArgumentException("ComponentState RAM length doesn't match");
         }
         if (mem.batteryMemento != null) {
-            battery.restoreFromMemento(mem.batteryMemento);
+            battery.restoreState(mem.batteryMemento);
         }
         System.arraycopy(mem.ram, 0, ram, 0, ram.length);
         ramUpdated = mem.ramUpdated;
     }
 
+    private record BasicRomState(ComponentState<Battery> batteryMemento, int[] ram, boolean ramUpdated)
+            implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record BasicRomMemento(Memento<Battery> batteryMemento, int[] ram, boolean ramUpdated)
             implements Memento<MemoryController> {
     }
