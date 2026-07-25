@@ -244,6 +244,12 @@ public class PocketCamera implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(ram);
+        capture.declareInts(cameraRegisters);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof PocketCameraMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

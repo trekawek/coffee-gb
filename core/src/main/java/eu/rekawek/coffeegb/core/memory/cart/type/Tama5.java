@@ -490,6 +490,17 @@ public class Tama5 implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        battery.declareMachineStatePayloads(capture);
+        capture.declareInts(ram);
+        capture.declareInts(registers);
+        capture.declareInts(rtcTimerPage);
+        capture.declareInts(rtcAlarmPage);
+        capture.declareInts(rtcFreePage0);
+        capture.declareInts(rtcFreePage1);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof Tama5Memento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

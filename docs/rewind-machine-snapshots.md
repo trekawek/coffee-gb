@@ -50,19 +50,27 @@ transition and cannot mistake a hash collision for equality. Unchanged scalar/co
 nodes are also reused by identity.
 
 Rewind does not call the ordinary `Gameboy.saveToMemento()` path. At the safe point, array-owning
-machine components build a short-lived typed record view and register their live primitive
-payloads with `MachineStateCapture`. Snapshot construction reads and compares those registered
-arrays synchronously; the token is then closed and the borrowed view cannot escape. Unchanged
-arrays therefore have no source-payload clone and no retained-page copy. A changed page produces
-one private retained payload. The capture rejects any primitive array that was not explicitly
-registered, preventing a component from silently falling back to legacy deep capture.
+machine components first declare the identities and logical lengths of their dominant live
+primitive payloads without constructing a memento. They then build exactly one short-lived typed
+record view and register its live primitive payloads with `MachineStateCapture`. Every dominant
+declaration must be matched by the same array identity and length; registering
+`capture.ints(ram.clone())` leaves the real backing unmatched and rejects the capture. Snapshot
+construction reads and compares the registered arrays synchronously; the token is then closed and
+the borrowed view cannot escape. Unchanged arrays therefore require neither a full source-payload
+copy nor a retained-page copy. A changed page produces one private retained payload. Snapshot graph
+construction also rejects every unregistered primitive array, preventing an owner from silently
+falling back to legacy deep capture.
 
-The audited direct owners include CPU operands; WRAM, VRAM, OAM and MMU/register RAM; both display
-buffers and all PPU queues/FIFOs/fetch history/palettes; pending audio; SGB packet, border, mask,
-palette and attribute buffers; IR schedules; cartridge battery buffers; and every mutable mapper
-RAM/flash/EEPROM implementation, including nested Datel slots. The memento record descriptors are
-unchanged. Ordinary legacy, boot, portable StateFile and netplay capture still use their existing
-deep-owned paths; their retirement remains #326.
+The independently declared dominant owners include WRAM, both VRAM banks, OAM, both display
+buffers, the behavior-relevant pending-audio prefix, SGB packet/border/mask/palette/attribute
+buffers, cartridge battery buffers, and every mutable mapper RAM/flash/EEPROM implementation,
+including MBC6 flash, MBC7 EEPROM, wrapper delegates and nested Datel slots. Smaller CPU, PPU,
+serial, IR and register arrays still use the mandatory token registration and immutable paging
+path. The 24-family mapper matrix asserts that every mapper primitive payload is independently
+declared, and focused tests reject both a copied dominant registration and an unregistered
+primitive fallback. The memento record descriptors are unchanged. Ordinary legacy, boot, portable
+StateFile and netplay capture still use their existing deep-owned paths; their retirement remains
+#326.
 
 A restore always materializes new live arrays from the private pages. Live mutation can therefore
 never write into a snapshot. Branching by restoring an old generation and capturing from it reuses
@@ -128,15 +136,16 @@ Oracle HotSpot 21.0.1, Maven 3.8.6, Linux 6.17.0-41 x86-64, Intel i7-1165G7 (4 c
 | retained arrays/pages | 194,400 arrays | 4,331 pages |
 | unique immutable value nodes | n/a | 36,202 |
 | copied retained page bytes | n/a | 7,967,292 |
-| cloned source-payload bytes | 337,665,600 | 0 |
-| capture allocated bytes | 340,432,880 | 304,800,456 |
-| capture time | 116,675,757 ns | 771,432,075 ns |
-| restore time | 42,101,754 ns | 3,153,219,918 ns |
+| identity-verified dominant source bytes (cumulative) | n/a | 333,717,600 |
+| capture allocated bytes | 340,432,880 | 318,594,760 |
+| capture time | 90,746,351 ns | 777,744,061 ns |
+| restore time | 43,962,026 ns | 1,525,814,700 ns |
 
 Exact retained primitive payload fell by 97.62%; even the final modeled total is 96.25% below the
-baseline's primitive arrays alone. Capture allocation is 10.47% below the identical legacy
-baseline and 58.09% below the rejected transitional implementation's 727,215,224 bytes. Source
-payload cloning is zero by construction and is asserted by the focused capture tests. Capture and
-restore remain slower than the legacy graph; these honest timing costs come primarily from exact
-page comparison and reflection-based immutable graph conversion/reconstruction. They are not
-hidden by copied-page accounting and do not form a normal-test performance threshold.
+baseline's primitive arrays alone. Capture allocation is 6.41% below the identical legacy
+baseline and 56.19% below the rejected transitional implementation's 727,215,224 bytes. The
+deterministic ownership tests prove the no-full-clone property by making a copied dominant
+registration fail; no synthetic "zero clone" counter is reported. Capture and restore remain
+slower than the legacy graph; these honest timing costs come primarily from exact page comparison
+and reflection-based immutable graph conversion/reconstruction. They are not hidden by copied-page
+accounting and do not form a normal-test performance threshold.

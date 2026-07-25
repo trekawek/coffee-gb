@@ -331,6 +331,12 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        r.declareMachineStatePayloads(capture);
+        capture.declareInts(buffer, i);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Sound> memento) {
         if (!(memento instanceof SoundMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

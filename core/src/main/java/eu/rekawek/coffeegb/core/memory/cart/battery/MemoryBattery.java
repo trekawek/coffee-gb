@@ -89,6 +89,11 @@ public class MemoryBattery implements Battery, Originator<Battery> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareBytes(buffer);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Battery> memento) {
         if (memento instanceof MemoryBatteryMemento mem) {
             if (this.buffer.length != mem.buffer.length) {

@@ -235,6 +235,14 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        ramC000.declareMachineStatePayloads(capture);
+        ramD000.declareMachineStatePayloads(capture);
+        ramFF80.declareMachineStatePayloads(capture);
+        gbcRam.declareMachineStatePayloads(capture);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Mmu> memento) {
         if (!(memento instanceof MmuMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

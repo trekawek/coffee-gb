@@ -56,6 +56,11 @@ public class VRamTransfer implements Originator<VRamTransfer> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(buffer);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<VRamTransfer> memento) {
         if (!(memento instanceof VRamTransferMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

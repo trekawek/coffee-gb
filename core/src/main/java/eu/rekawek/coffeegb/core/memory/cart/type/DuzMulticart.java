@@ -121,6 +121,12 @@ public class DuzMulticart implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(ram);
+        capture.declareInts(regs);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof DuzMulticartMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

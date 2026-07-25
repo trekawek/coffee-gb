@@ -200,6 +200,11 @@ public class SlMulticart implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(ram);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof SlMulticartMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

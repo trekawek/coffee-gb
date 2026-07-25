@@ -201,6 +201,10 @@ public class Mbc7Eeprom implements Serializable {
         );
     }
 
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(eeprom);
+    }
+
     public void restoreFromMemento(Memento<Mbc7Eeprom> memento) {
         if (memento instanceof EepromMemento mem) {
             System.arraycopy(mem.eeprom, 0, this.eeprom, 0, 256);

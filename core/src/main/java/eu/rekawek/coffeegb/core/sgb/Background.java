@@ -134,6 +134,14 @@ public class Background implements Originator<Background> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(tiles);
+        if (pendingPicture != null) {
+            pendingPicture.declareMachineStatePayloads(capture);
+        }
+    }
+
+    @Override
     public void restoreFromMemento(Memento<Background> memento) {
         if (!(memento instanceof BackgroundMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

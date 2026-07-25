@@ -22,9 +22,12 @@ class MachineSnapshotTest {
       val first = MachineSnapshot.capture(gameboy)
       assertPagedArray(first, GBC_RAM_MEMENTO, "ram", 7 * 0x1000)
       assertTrue(
-          first.debugArrays(RAM_MEMENTO, "space").map { it.size }.containsAll(
-              listOf(0x2000, 0x00a0),
-          ),
+          first.debugArrays(RAM_MEMENTO, "space").count { it.size == 0x2000 } >= 2,
+          "both VRAM banks must be represented by immutable pages",
+      )
+      assertEquals(
+          1,
+          first.debugArrays(RAM_MEMENTO, "space").count { it.size == 0x00a0 },
           "VRAM and OAM must be represented by immutable pages",
       )
       assertPagedArray(first, DISPLAY_MEMENTO, "buffer", 160 * 144)
@@ -34,10 +37,8 @@ class MachineSnapshotTest {
 
       assertEquals(0, unchanged.captureStats.copiedPages)
       assertEquals(0, unchanged.captureStats.copiedPageBytes)
-      assertEquals(0, unchanged.captureStats.sourcePayloadClones)
-      assertEquals(0, unchanged.captureStats.sourcePayloadCloneBytes)
-      assertTrue(unchanged.captureStats.sourcePayloadArraysRead > 0)
-      assertTrue(unchanged.captureStats.sourcePayloadBytesRead > 0)
+      assertTrue(unchanged.captureStats.identityVerifiedPayloadArrays > 0)
+      assertTrue(unchanged.captureStats.identityVerifiedPayloadBytes > 0)
       assertTrue(unchanged.captureStats.reusedPages > 0)
       assertSamePages(
           first.debugArrays(RAM_MEMENTO, "space"),
@@ -57,8 +58,14 @@ class MachineSnapshotTest {
       assertEquals(1, changedPageCount)
       assertEquals(1, changed.captureStats.copiedPages)
       assertEquals(MachineSnapshot.PAGE_BYTES.toLong(), changed.captureStats.copiedPageBytes)
-      assertEquals(0, changed.captureStats.sourcePayloadClones)
-      assertEquals(0, changed.captureStats.sourcePayloadCloneBytes)
+      assertEquals(
+          unchanged.captureStats.identityVerifiedPayloadArrays,
+          changed.captureStats.identityVerifiedPayloadArrays,
+      )
+      assertEquals(
+          unchanged.captureStats.identityVerifiedPayloadBytes,
+          changed.captureStats.identityVerifiedPayloadBytes,
+      )
 
       // The only debug surface returns opaque immutable page tokens, never backing arrays.
       assertTrue(after.flatMap { it.pageTokens }.none { it.javaClass.isArray })
@@ -175,6 +182,7 @@ class MachineSnapshotTest {
           bus.setByte(0xff12, 0xf3)
           bus.setByte(0xff13, 0x40)
           bus.setByte(0xff14, 0x87)
+          repeat(512) { session.gameboy.tick() }
           bus.setByte(0xff01, 0xa5)
           bus.setByte(0xff02, 0x81)
           bus.setByte(0xff51, 0xc0)
@@ -191,6 +199,10 @@ class MachineSnapshotTest {
 
           val snapshot = MachineSnapshot.capture(session.gameboy)
           val captured = DetachedStateAdapter.capture(session.gameboy)
+          assertTrue(
+              snapshot.debugArrays(SOUND_MEMENTO, "buffer").single().size > 0,
+              "active audio must identity-verify the pending output prefix",
+          )
           assertTrue(captured.record(DMA_MEMENTO).bool("transferInProgress"))
           assertTrue(captured.record(HDMA_MEMENTO).bool("transferInProgress"))
           assertTrue(captured.record(SOUND_MODE_MEMENTO).bool("channelEnabled"))
@@ -222,6 +234,8 @@ class MachineSnapshotTest {
           bus.setByte(0x4aaa, 0x55)
           bus.setByte(0x5555, 0xa0)
           val armed = MachineSnapshot.capture(session.gameboy)
+          assertPagedArray(armed, MBC6_MEMENTO, "ram", 0x8000)
+          assertPagedArray(armed, MBC6_MEMENTO, "flash", 0x100000)
           assertTrue(DetachedStateAdapter.capture(session.gameboy).record(MBC6_MEMENTO)
               .bool("flashProgramMode"))
 
@@ -333,6 +347,7 @@ class MachineSnapshotTest {
           )
           assertPagedArray(snapshot, SGB_DISPLAY_MEMENTO, "sgbBuffer", 256 * 224)
           assertPagedArray(snapshot, SGB_DISPLAY_MEMENTO, "sgbMask", 256 * 224)
+          assertPagedArray(snapshot, SGB_DISPLAY_MEMENTO, "paletteMap", 20 * 18)
 
           val secondPacket = IntArray(16)
           sendSgbPacket(session.gameboy.addressSpace, secondPacket)
@@ -536,6 +551,8 @@ class MachineSnapshotTest {
         "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento"
     private const val SOUND_MODE_MEMENTO =
         "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeMemento"
+    private const val SOUND_MEMENTO =
+        "eu.rekawek.coffeegb.core.sound.Sound\$SoundMemento"
     private const val SERIAL_PORT_MEMENTO =
         "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortMemento"
     private const val FULL_CHANGER_MEMENTO =

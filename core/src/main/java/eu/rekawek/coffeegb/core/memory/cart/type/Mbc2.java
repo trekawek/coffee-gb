@@ -131,6 +131,12 @@ public class Mbc2 implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        battery.declareMachineStatePayloads(capture);
+        capture.declareInts(ram);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof Mbc2Memento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

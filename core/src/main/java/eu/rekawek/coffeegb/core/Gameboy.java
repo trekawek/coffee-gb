@@ -917,6 +917,32 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
                 clearCgbBootOamShadowPending);
     }
 
+    @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        biosShadow.declareMachineStatePayloads(capture);
+        cartridge.declareMachineStatePayloads(capture);
+        gpu.declareMachineStatePayloads(capture);
+        statRegister.declareMachineStatePayloads(capture);
+        mmu.declareMachineStatePayloads(capture);
+        oamRam.declareMachineStatePayloads(capture);
+        cpu.declareMachineStatePayloads(capture);
+        interruptManager.declareMachineStatePayloads(capture);
+        timer.declareMachineStatePayloads(capture);
+        dma.declareMachineStatePayloads(capture);
+        hdma.declareMachineStatePayloads(capture);
+        sound.declareMachineStatePayloads(capture);
+        serialPort.declareMachineStatePayloads(capture);
+        infraredPort.declareMachineStatePayloads(capture);
+        codeBreakerRumble.declareMachineStatePayloads(capture);
+        joypad.declareMachineStatePayloads(capture);
+        speedMode.declareMachineStatePayloads(capture);
+        superGameboy.declareMachineStatePayloads(capture);
+        background.declareMachineStatePayloads(capture);
+        vRamTransfer.declareMachineStatePayloads(capture);
+        sgbDisplay.declareMachineStatePayloads(capture);
+        gameGenie.declareMachineStatePayloads(capture);
+    }
+
     /**
      * Exposes a transient, service-free machine view only for the duration of {@code consumer}.
      *
@@ -928,9 +954,8 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         if (consumer == null) {
             throw new IllegalArgumentException("Machine-state consumer is required");
         }
-        try (MachineStateCapture capture = new MachineStateCapture()) {
-            return consumer.apply(saveToMemento(capture), capture);
-        }
+        return MachineStateCapture.withVerifiedView(
+                this::declareMachineStatePayloads, this::saveToMemento, consumer);
     }
 
     @Override

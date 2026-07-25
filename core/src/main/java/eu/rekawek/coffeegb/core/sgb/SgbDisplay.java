@@ -264,6 +264,16 @@ public class SgbDisplay implements Originator<SgbDisplay> {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(sgbBuffer);
+        capture.declareInts(sgbMask);
+        capture.declareInts2(palettes);
+        capture.declareInts2(systemPalettes);
+        capture.declareInts(paletteMap);
+        capture.declareInts2(attributeFiles);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<SgbDisplay> memento) {
         if (!(memento instanceof SgbDisplayMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

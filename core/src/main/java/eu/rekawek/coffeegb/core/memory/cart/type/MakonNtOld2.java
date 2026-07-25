@@ -188,6 +188,12 @@ public class MakonNtOld2 implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        battery.declareMachineStatePayloads(capture);
+        capture.declareInts(ram);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof MakonNtOld2Memento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

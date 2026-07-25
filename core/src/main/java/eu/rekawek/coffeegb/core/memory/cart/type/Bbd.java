@@ -104,6 +104,11 @@ public class Bbd implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        delegate.declareMachineStatePayloads(capture);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof BbdMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

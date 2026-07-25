@@ -49,15 +49,15 @@ class MachineSnapshotBenchmarkTest {
             "modeledRetainedBytes=${snapshots.modeledRetainedBytes} " +
             "uniquePages=${snapshots.uniquePages} uniqueValueNodes=${snapshots.uniqueValueNodes} " +
             "copiedPageBytes=${snapshots.copiedPageBytes} " +
-            "sourcePayloadCloneBytes=${snapshots.sourcePayloadCloneBytes} " +
+            "identityVerifiedPayloadBytes=${snapshots.identityVerifiedPayloadBytes} " +
             "captureAllocatedBytes=${snapshots.captureAllocatedBytes} " +
             "captureNanos=${snapshots.captureNanos} restoreNanos=${snapshots.restoreNanos}",
     )
     check(snapshots.retainedPrimitiveBytes * 2 < baseline.retainedPrimitiveBytes) {
       "MachineSnapshot retained primitive bytes must be at least 50% below the baseline"
     }
-    check(snapshots.sourcePayloadCloneBytes == 0L) {
-      "Incremental rewind capture must not clone source primitive payloads"
+    check(snapshots.identityVerifiedPayloadBytes > 0L) {
+      "Incremental rewind capture must identity-verify source primitive payloads"
     }
   }
 
@@ -109,7 +109,7 @@ class MachineSnapshotBenchmarkTest {
       var allocatedBytes = 0L
       var captureNanos = 0L
       var copiedPageBytes = 0L
-      var sourcePayloadCloneBytes = 0L
+      var identityVerifiedPayloadBytes = 0L
 
       repeat(RewindManager.CAPACITY * RewindManager.RECORD_INTERVAL) { frame ->
         emulateProductionFrame(gameboy, frame)
@@ -119,7 +119,7 @@ class MachineSnapshotBenchmarkTest {
               measureNanoTime {
                 val snapshot = MachineSnapshot.capture(gameboy, snapshots.lastOrNull())
                 copiedPageBytes += snapshot.captureStats.copiedPageBytes
-                sourcePayloadCloneBytes += snapshot.captureStats.sourcePayloadCloneBytes
+                identityVerifiedPayloadBytes += snapshot.captureStats.identityVerifiedPayloadBytes
                 snapshots += snapshot
               }
           allocatedBytes += (allocation?.current() ?: before) - before
@@ -139,7 +139,7 @@ class MachineSnapshotBenchmarkTest {
           retained.uniquePages,
           retained.uniqueValueNodes,
           copiedPageBytes,
-          sourcePayloadCloneBytes,
+          identityVerifiedPayloadBytes,
           allocatedBytes,
           captureNanos,
           restoreNanos,
@@ -237,7 +237,7 @@ class MachineSnapshotBenchmarkTest {
       val uniquePages: Int,
       val uniqueValueNodes: Int,
       val copiedPageBytes: Long,
-      val sourcePayloadCloneBytes: Long,
+      val identityVerifiedPayloadBytes: Long,
       val captureAllocatedBytes: Long,
       val captureNanos: Long,
       val restoreNanos: Long,

@@ -184,6 +184,12 @@ public class FileBattery implements Battery {
     }
 
     @Override
+    public synchronized void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareBytes(clockBuffer);
+        capture.declareBytes(ramBuffer);
+    }
+
+    @Override
     public synchronized void restoreFromMemento(Memento<Battery> memento) {
         if (!(memento instanceof FileBatteryMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");

@@ -251,6 +251,12 @@ public class Mbc6 implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(ram);
+        capture.declareInts(flash);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (memento instanceof Mbc6Memento mem) {
             System.arraycopy(mem.ram, 0, this.ram, 0, ram.length);

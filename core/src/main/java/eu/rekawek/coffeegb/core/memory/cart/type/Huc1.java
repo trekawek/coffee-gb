@@ -121,6 +121,12 @@ public class Huc1 implements MemoryController {
     }
 
     @Override
+    public void declareMachineStatePayloads(MachineStateCapture capture) {
+        battery.declareMachineStatePayloads(capture);
+        capture.declareInts(ram);
+    }
+
+    @Override
     public void restoreFromMemento(Memento<MemoryController> memento) {
         if (!(memento instanceof Huc1Memento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
