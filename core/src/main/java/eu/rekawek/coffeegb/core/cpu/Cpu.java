@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.op.Op;
 import eu.rekawek.coffeegb.core.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.core.gpu.*;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.timer.Timer;
@@ -977,6 +978,18 @@ public class Cpu implements Serializable, Originator<Cpu> {
         operand[0] = this.operand[0];
         operand[1] = this.operand[1];
         return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, operand, operandIndex, opIndex,
+                state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
+                haltEntrySampleTicks, synchronousHaltEntryStatPhase, asynchronousHaltEntryStatPhase,
+                ordinaryHaltWakeStatPhase, haltedCpuCycles,
+                hdmaOpcodePrefetched, hdmaArbitrationOpcode, hdmaArbitrationOpcodeValid,
+                haltPrefetchedOpcode, haltOpcodePrefetchValid,
+                speedSwitchPaddingOpcode, speedSwitchPaddingReplayValid,
+                speedSwitchTicks, phasedPpuInputHigh, fastPhasedPpuDispatch);
+    }
+
+    @Override
+    public Memento<Cpu> saveToMemento(MachineStateCapture capture) {
+        return new CpuMemento(registers.saveToMemento(), opcode1, opcode2, capture.ints(operand), operandIndex, opIndex,
                 state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
                 haltEntrySampleTicks, synchronousHaltEntryStatPhase, asynchronousHaltEntryStatPhase,
                 ordinaryHaltWakeStatPhase, haltedCpuCycles,

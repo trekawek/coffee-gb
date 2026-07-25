@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.ir;
 
 import eu.rekawek.coffeegb.core.events.Event;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -112,6 +113,12 @@ public class FullChanger implements Serializable, Originator<FullChanger> {
     @Override
     public Memento<FullChanger> saveToMemento() {
         return new FullChangerMemento(schedule.clone(), armed, running, index, remaining);
+    }
+
+    @Override
+    public Memento<FullChanger> saveToMemento(MachineStateCapture capture) {
+        return new FullChangerMemento(
+                capture.ints(schedule), armed, running, index, remaining);
     }
 
     @Override

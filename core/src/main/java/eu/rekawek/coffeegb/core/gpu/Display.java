@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -134,6 +135,12 @@ public class Display implements Serializable, Originator<Display> {
     @Override
     public Memento<Display> saveToMemento() {
         return new DisplayMemento(buffer.clone(), i, enabled, lastFrame.clone(), firstFrameAfterLcdEnable);
+    }
+
+    @Override
+    public Memento<Display> saveToMemento(MachineStateCapture capture) {
+        return new DisplayMemento(
+                capture.ints(buffer), i, enabled, capture.ints(lastFrame), firstFrameAfterLcdEnable);
     }
 
     @Override

@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -251,6 +252,26 @@ public class Huc3 implements MemoryController {
     public Memento<MemoryController> saveToMemento() {
         return new Huc3Memento(battery.saveToMemento(), ram.clone(), romBank, ramBank, mode, minutes, days,
                 alarmMinutes, alarmDays, alarmEnabled, accessIndex, accessFlags, readValue, lastRtcSecond,
+                ramUpdated);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new Huc3Memento(
+                battery.saveToMemento(capture),
+                capture.ints(ram),
+                romBank,
+                ramBank,
+                mode,
+                minutes,
+                days,
+                alarmMinutes,
+                alarmDays,
+                alarmEnabled,
+                accessIndex,
+                accessFlags,
+                readValue,
+                lastRtcSecond,
                 ramUpdated);
     }
 

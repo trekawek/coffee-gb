@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.sgb;
 
 import eu.rekawek.coffeegb.core.events.Event;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import java.util.Arrays;
@@ -92,6 +93,12 @@ public class Commands {
 
         public Memento<TransferCommand> saveToMemento() {
             return new TransferCommandMemento(packet.clone(), dataTransfer == null ? null : dataTransfer.clone());
+        }
+
+        public Memento<TransferCommand> saveToMemento(MachineStateCapture capture) {
+            return new TransferCommandMemento(
+                    capture.ints(packet),
+                    dataTransfer == null ? null : capture.ints(dataTransfer));
         }
 
         private record TransferCommandMemento(int[] packet, int[] dataTransfer) implements Memento<TransferCommand> {

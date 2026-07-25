@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -171,6 +172,17 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
     public Memento<GpuRegisterValues> saveToMemento() {
         return new GpuRegisterValuesMemento(values.clone(), mixValues.clone(), pendingMixValues.clone(),
                 wxJustChangedTicks, scxOldValue, pendingScxOldValue);
+    }
+
+    @Override
+    public Memento<GpuRegisterValues> saveToMemento(MachineStateCapture capture) {
+        return new GpuRegisterValuesMemento(
+                capture.ints(values),
+                capture.ints(mixValues),
+                capture.ints(pendingMixValues),
+                wxJustChangedTicks,
+                scxOldValue,
+                pendingScxOldValue);
     }
 
     @Override

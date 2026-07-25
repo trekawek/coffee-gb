@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.memory;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.Mode;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -752,8 +753,14 @@ public class Hdma implements AddressSpace, Serializable, Originator<Hdma> {
 
     @Override
     public Memento<Hdma> saveToMemento() {
+        return saveToMemento(null);
+    }
+
+    @Override
+    public Memento<Hdma> saveToMemento(MachineStateCapture capture) {
         return new HdmaMemento(gpuMode, transferInProgress, hblankTransfer, lcdEnabled, length,
-                src, dst, tick, blockData.clone(), hblankRequestTicks, hblankRequestAge, nextHblankRequestTicks,
+                src, dst, tick, capture == null ? blockData.clone() : capture.ints(blockData),
+                hblankRequestTicks, hblankRequestAge, nextHblankRequestTicks,
                 nextHblankRequestAge,
                 sourceBytesTransferred, cpuBusValue,
                 stopAfterCurrentBlock, preserveLengthAfterCurrentBlock, speedSwitchInProgress,

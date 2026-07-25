@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -72,6 +73,11 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     @Override
     public Memento<GbcRam> saveToMemento() {
         return new GbcRamMemento(ram.clone(), svbk);
+    }
+
+    @Override
+    public Memento<GbcRam> saveToMemento(MachineStateCapture capture) {
+        return new GbcRamMemento(capture.ints(ram), svbk);
     }
 
     @Override

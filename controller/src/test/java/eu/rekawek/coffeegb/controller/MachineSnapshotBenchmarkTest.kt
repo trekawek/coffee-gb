@@ -49,11 +49,15 @@ class MachineSnapshotBenchmarkTest {
             "modeledRetainedBytes=${snapshots.modeledRetainedBytes} " +
             "uniquePages=${snapshots.uniquePages} uniqueValueNodes=${snapshots.uniqueValueNodes} " +
             "copiedPageBytes=${snapshots.copiedPageBytes} " +
+            "sourcePayloadCloneBytes=${snapshots.sourcePayloadCloneBytes} " +
             "captureAllocatedBytes=${snapshots.captureAllocatedBytes} " +
             "captureNanos=${snapshots.captureNanos} restoreNanos=${snapshots.restoreNanos}",
     )
     check(snapshots.retainedPrimitiveBytes * 2 < baseline.retainedPrimitiveBytes) {
       "MachineSnapshot retained primitive bytes must be at least 50% below the baseline"
+    }
+    check(snapshots.sourcePayloadCloneBytes == 0L) {
+      "Incremental rewind capture must not clone source primitive payloads"
     }
   }
 
@@ -66,9 +70,9 @@ class MachineSnapshotBenchmarkTest {
       var allocatedBytes = 0L
       var captureNanos = 0L
 
-      repeat(RewindManager.CAPACITY * RewindManager.RECORD_INTERVAL) { step ->
-        exercise(gameboy, step)
-        if (step % RewindManager.RECORD_INTERVAL == 0) {
+      repeat(RewindManager.CAPACITY * RewindManager.RECORD_INTERVAL) { frame ->
+        emulateProductionFrame(gameboy, frame)
+        if (frame % RewindManager.RECORD_INTERVAL == 0) {
           val before = allocation?.current() ?: 0L
           captureNanos += measureNanoTime { snapshots += gameboy.saveToMemento() }
           allocatedBytes += (allocation?.current() ?: before) - before
@@ -88,6 +92,7 @@ class MachineSnapshotBenchmarkTest {
           retained.arrays.toInt(),
           0,
           0,
+          0,
           allocatedBytes,
           captureNanos,
           restoreNanos,
@@ -104,15 +109,17 @@ class MachineSnapshotBenchmarkTest {
       var allocatedBytes = 0L
       var captureNanos = 0L
       var copiedPageBytes = 0L
+      var sourcePayloadCloneBytes = 0L
 
-      repeat(RewindManager.CAPACITY * RewindManager.RECORD_INTERVAL) { step ->
-        exercise(gameboy, step)
-        if (step % RewindManager.RECORD_INTERVAL == 0) {
+      repeat(RewindManager.CAPACITY * RewindManager.RECORD_INTERVAL) { frame ->
+        emulateProductionFrame(gameboy, frame)
+        if (frame % RewindManager.RECORD_INTERVAL == 0) {
           val before = allocation?.current() ?: 0L
           captureNanos +=
               measureNanoTime {
                 val snapshot = MachineSnapshot.capture(gameboy, snapshots.lastOrNull())
                 copiedPageBytes += snapshot.captureStats.copiedPageBytes
+                sourcePayloadCloneBytes += snapshot.captureStats.sourcePayloadCloneBytes
                 snapshots += snapshot
               }
           allocatedBytes += (allocation?.current() ?: before) - before
@@ -132,6 +139,7 @@ class MachineSnapshotBenchmarkTest {
           retained.uniquePages,
           retained.uniqueValueNodes,
           copiedPageBytes,
+          sourcePayloadCloneBytes,
           allocatedBytes,
           captureNanos,
           restoreNanos,
@@ -142,19 +150,19 @@ class MachineSnapshotBenchmarkTest {
   private fun configuration(rom: ByteArray) =
       StateCodecTestSupport.configuration(rom, GameboyType.CGB).setSupportBatterySave(false)
 
-  private fun exercise(
+  private fun emulateProductionFrame(
       gameboy: Gameboy,
-      step: Int,
+      frame: Int,
   ) {
-    repeat(TICKS_PER_STEP) { gameboy.tick() }
-    val value = step and 0xff
-    gameboy.addressSpace.setByte(0xc000 + (step * 37 and 0xfff), value)
-    gameboy.addressSpace.setByte(0xd000 + (step * 53 and 0xfff), value xor 0x5a)
-    gameboy.gpu.videoRam0.setByte(0x8000 + (step * 29 and 0x1fff), value xor 0xa5)
-    gameboy.gpu.videoRam1.setByte(0x8000 + (step * 31 and 0x1fff), value xor 0x3c)
-    gameboy.addressSpace.setByte(0xfe00 + (step % 0xa0), value)
-    gameboy.addressSpace.setByte(0x4000, step ushr 5 and 0x03)
-    gameboy.addressSpace.setByte(0xa000 + (step * 43 and 0x1fff), value xor 0xc3)
+    repeat(Gameboy.TICKS_PER_FRAME) { gameboy.tick() }
+    val value = frame and 0xff
+    gameboy.addressSpace.setByte(0xc000 + (frame * 37 and 0xfff), value)
+    gameboy.addressSpace.setByte(0xd000 + (frame * 53 and 0xfff), value xor 0x5a)
+    gameboy.gpu.videoRam0.setByte(0x8000 + (frame * 29 and 0x1fff), value xor 0xa5)
+    gameboy.gpu.videoRam1.setByte(0x8000 + (frame * 31 and 0x1fff), value xor 0x3c)
+    gameboy.addressSpace.setByte(0xfe00 + (frame % 0xa0), value)
+    gameboy.addressSpace.setByte(0x4000, frame ushr 5 and 0x03)
+    gameboy.addressSpace.setByte(0xa000 + (frame * 43 and 0x1fff), value xor 0xc3)
   }
 
   private fun threadAllocation(): AllocationCounter? {
@@ -229,6 +237,7 @@ class MachineSnapshotBenchmarkTest {
       val uniquePages: Int,
       val uniqueValueNodes: Int,
       val copiedPageBytes: Long,
+      val sourcePayloadCloneBytes: Long,
       val captureAllocatedBytes: Long,
       val captureNanos: Long,
       val restoreNanos: Long,
@@ -236,7 +245,6 @@ class MachineSnapshotBenchmarkTest {
 
   companion object {
     private const val BENCHMARK_PROPERTY = "coffeegb.rewind.benchmark"
-    private const val TICKS_PER_STEP = 2_048
     private const val ARRAY_HEADER_BYTES = 16L
   }
 }

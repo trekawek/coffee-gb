@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.core.gpu.Lcdc;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.Dma;
@@ -297,11 +298,17 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
 
     @Override
     public Memento<OamSearch> saveToMemento() {
+        return saveToMemento(null);
+    }
+
+    @Override
+    public Memento<OamSearch> saveToMemento(MachineStateCapture capture) {
         Memento<?>[] spriteMementos =
                 Arrays.stream(sprites).map(SpritePosition::saveToMemento).toArray(Memento[]::new);
         return new OamSearchMemento(
-                spriteMementos, Arrays.copyOf(oamReaderY, oamReaderY.length),
-                Arrays.copyOf(oamReaderX, oamReaderX.length),
+                spriteMementos,
+                capture == null ? Arrays.copyOf(oamReaderY, oamReaderY.length) : capture.ints(oamReaderY),
+                capture == null ? Arrays.copyOf(oamReaderX, oamReaderX.length) : capture.ints(oamReaderX),
                 oamReaderInitialized, oamReaderBusY, oamReaderBusX,
                 oamReaderDmaSource, oamReaderSourceChangeTicks,
                 spritePosIndex, state, spriteY, spriteHeight,

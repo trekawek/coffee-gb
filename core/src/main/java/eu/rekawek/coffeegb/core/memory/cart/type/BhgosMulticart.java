@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -94,6 +95,18 @@ public class BhgosMulticart implements MemoryController {
     public Memento<MemoryController> saveToMemento() {
         return new BhgosMulticartMemento(battery.saveToMemento(), ram.clone(), selectedRomBank,
                 selectedRamBank, baseRomBank, blockSelectWrites, ramUpdated);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new BhgosMulticartMemento(
+                battery.saveToMemento(capture),
+                capture.ints(ram),
+                selectedRomBank,
+                selectedRamBank,
+                baseRomBank,
+                blockSelectWrites,
+                ramUpdated);
     }
 
     @Override

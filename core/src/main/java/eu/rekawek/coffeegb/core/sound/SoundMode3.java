@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.sound;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.timer.Timer;
@@ -242,6 +243,21 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public Memento<AbstractSoundMode> saveToMemento() {
         return new SoundMode3Memento(super.saveToMemento(), waveRam.saveToMemento(), freqDivider, lastOutput, i, ticksSinceRead, lastReadAddr, buffer, triggered, clock2Mhz);
+    }
+
+    @Override
+    public Memento<AbstractSoundMode> saveToMemento(MachineStateCapture capture) {
+        return new SoundMode3Memento(
+                super.saveToMemento(),
+                waveRam.saveToMemento(capture),
+                freqDivider,
+                lastOutput,
+                i,
+                ticksSinceRead,
+                lastReadAddr,
+                buffer,
+                triggered,
+                clock2Mhz);
     }
 
     @Override

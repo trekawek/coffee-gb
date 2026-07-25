@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -124,6 +125,11 @@ public class ColorPalette implements AddressSpace, Serializable, Originator<Colo
             palettesCopy[i] = palettes[i].clone();
         }
         return new ColorPaletteMemento(palettesCopy, index, autoIncrement);
+    }
+
+    @Override
+    public Memento<ColorPalette> saveToMemento(MachineStateCapture capture) {
+        return new ColorPaletteMemento(capture.ints2(palettes), index, autoIncrement);
     }
 
     @Override

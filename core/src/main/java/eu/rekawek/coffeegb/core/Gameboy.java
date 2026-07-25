@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.core.gpu.*;
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.ir.InfraredPort;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.*;
@@ -35,6 +36,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.concurrent.CancellationException;
+import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 
 public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Closeable {
@@ -877,6 +879,58 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         // record shape so Phase-0 fixtures still decode, but do not clone the two 160x144 buffers
         // a second time for new captures.
         return new GameboyMemento(biosShadow.saveToMemento(), cartridge.saveToMemento(), gpu.saveToMemento(), statRegister.saveToMemento(), mmu.saveToMemento(), oamRam.saveToMemento(), cpu.saveToMemento(), interruptManager.saveToMemento(), timer.saveToMemento(), dma.saveToMemento(), hdma.saveToMemento(), null, sound.saveToMemento(), serialPort.saveToMemento(), infraredPort.saveToMemento(), codeBreakerRumble.saveToMemento(), joypad.saveToMemento(), speedMode.saveToMemento(), superGameboy.saveToMemento(), background.saveToMemento(), vRamTransfer.saveToMemento(), sgbDisplay.saveToMemento(), gameGenie.saveToMemento(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, speedSwitchTailTicks, speedSwitchClockPhaseShifted, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
+    }
+
+    @Override
+    public Memento<Gameboy> saveToMemento(MachineStateCapture capture) {
+        return new GameboyMemento(
+                biosShadow.saveToMemento(capture),
+                cartridge.saveToMemento(capture),
+                gpu.saveToMemento(capture),
+                statRegister.saveToMemento(capture),
+                mmu.saveToMemento(capture),
+                oamRam.saveToMemento(capture),
+                cpu.saveToMemento(capture),
+                interruptManager.saveToMemento(capture),
+                timer.saveToMemento(capture),
+                dma.saveToMemento(capture),
+                hdma.saveToMemento(capture),
+                null,
+                sound.saveToMemento(capture),
+                serialPort.saveToMemento(capture),
+                infraredPort.saveToMemento(capture),
+                codeBreakerRumble.saveToMemento(capture),
+                joypad.saveToMemento(capture),
+                speedMode.saveToMemento(capture),
+                superGameboy.saveToMemento(capture),
+                background.saveToMemento(capture),
+                vRamTransfer.saveToMemento(capture),
+                sgbDisplay.saveToMemento(capture),
+                gameGenie.saveToMemento(capture),
+                requestedScreenRefresh,
+                lcdDisabled,
+                lcdOffTicks,
+                speedSwitchTailTicks,
+                speedSwitchClockPhaseShifted,
+                blankCgbBootTilePending,
+                clearBootTilemapPending,
+                clearCgbBootOamShadowPending);
+    }
+
+    /**
+     * Exposes a transient, service-free machine view only for the duration of {@code consumer}.
+     *
+     * <p>The owning emulator thread must be stopped at its documented frame boundary. The view
+     * contains borrowed live primitive arrays and must not escape the callback.
+     */
+    public <R> R withMachineStateCapture(
+            BiFunction<Memento<Gameboy>, MachineStateCapture, R> consumer) {
+        if (consumer == null) {
+            throw new IllegalArgumentException("Machine-state consumer is required");
+        }
+        try (MachineStateCapture capture = new MachineStateCapture()) {
+            return consumer.apply(saveToMemento(capture), capture);
+        }
     }
 
     @Override

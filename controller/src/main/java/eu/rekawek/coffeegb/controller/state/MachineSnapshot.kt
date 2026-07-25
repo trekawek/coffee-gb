@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.gpu.DmgPixelFifo
 import eu.rekawek.coffeegb.core.gpu.Gpu
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock
 import java.lang.reflect.Array as ReflectArray
@@ -27,9 +28,10 @@ import kotlin.math.min
  * copies only changed pages; equal pages retain the same immutable page identity. No array owned
  * by a page is exposed.
  *
- * The transitional capture source remains the complete audited memento graph so Phase 6 can
- * retire that plumbing independently. The memento is discarded after this immutable graph is
- * built and never enters rewind history, disk, or network state.
+ * Capture consumes an audited transient record view whose primitive payloads are borrowed directly
+ * from the stopped machine. It never calls the legacy deep-cloning capture. The view and its
+ * borrow token are invalid after the synchronous graph comparison and never enter rewind history,
+ * disk, or network state. The ordinary legacy memento path remains separate for Phase 6.
  */
 internal class MachineSnapshot private constructor(
     private val root: SnapshotRecord,
@@ -126,6 +128,10 @@ internal class MachineSnapshot private constructor(
       val copiedPageBytes: Long,
       val reusedPages: Int,
       val newValueNodes: Int,
+      val sourcePayloadArraysRead: Int,
+      val sourcePayloadBytesRead: Long,
+      val sourcePayloadClones: Int,
+      val sourcePayloadCloneBytes: Long,
   )
 
   internal data class RetainedStats(
@@ -141,10 +147,13 @@ internal class MachineSnapshot private constructor(
 
     fun capture(
         gameboy: Gameboy,
-        previous: MachineSnapshot? = null,
+      previous: MachineSnapshot? = null,
     ): MachineSnapshot {
       val compatiblePrevious = previous?.takeIf { it.hardware == gameboy.gameboyType }
-      val graph = SnapshotGraph.capture(gameboy.saveToMemento(), compatiblePrevious?.root)
+      val graph =
+          gameboy.withMachineStateCapture { view, source ->
+            SnapshotGraph.capture(view, compatiblePrevious?.root, source)
+          }
       val rtc = gameboy.captureRtcRuntimeState()
       val fifo = gameboy.captureDmgFifoRuntimeState()
       return MachineSnapshot(
@@ -493,8 +502,12 @@ private object SnapshotGraph {
       val stats: MachineSnapshot.CaptureStats,
   )
 
-  fun capture(value: Any, previous: SnapshotRecord?): Result {
-    val capture = Capture(previous)
+  fun capture(
+      value: Any,
+      previous: SnapshotRecord?,
+      source: MachineStateCapture,
+  ): Result {
+    val capture = Capture(previous, source)
     val root = capture.value(value, previous, 0) as? SnapshotRecord
         ?: error("Machine snapshot root is not a record")
     if (recordClassName(root.typeId) != GAMEBOY_ROOT) {
@@ -694,7 +707,10 @@ private object SnapshotGraph {
     }
   }
 
-  private class Capture(previous: SnapshotRecord?) {
+  private class Capture(
+      previous: SnapshotRecord?,
+      private val sourceCapture: MachineStateCapture,
+  ) {
     private val pool = SnapshotPagePool(previous)
     private var references = 0L
     private var copiedPages = 0
@@ -708,6 +724,10 @@ private object SnapshotGraph {
             copiedPageBytes,
             reusedPages,
             newValueNodes,
+            sourceCapture.borrowedPayloadArrays,
+            sourceCapture.borrowedPayloadBytes,
+            sourceCapture.sourcePayloadClones,
+            sourceCapture.sourcePayloadCloneBytes,
         )
 
     fun value(
@@ -750,7 +770,7 @@ private object SnapshotGraph {
 
     private fun captureBytes(source: ByteArray, previous: SnapshotBytes?): SnapshotValue =
         capturePrimitive(
-            source.size,
+            sourceCapture.requireLength(source),
             PageKind.BYTE,
             previous,
             { offset, length -> hash(source, offset, length) },
@@ -761,7 +781,7 @@ private object SnapshotGraph {
 
     private fun captureInts(source: IntArray, previous: SnapshotInts?): SnapshotValue =
         capturePrimitive(
-            source.size,
+            sourceCapture.requireLength(source),
             PageKind.INT,
             previous,
             { offset, length -> hash(source, offset, length) },
@@ -772,7 +792,7 @@ private object SnapshotGraph {
 
     private fun captureLongs(source: LongArray, previous: SnapshotLongs?): SnapshotValue =
         capturePrimitive(
-            source.size,
+            sourceCapture.requireLength(source),
             PageKind.LONG,
             previous,
             { offset, length -> hash(source, offset, length) },
@@ -783,7 +803,7 @@ private object SnapshotGraph {
 
     private fun captureBooleans(source: BooleanArray, previous: SnapshotBooleans?): SnapshotValue =
         capturePrimitive(
-            source.size,
+            sourceCapture.requireLength(source),
             PageKind.BOOLEAN,
             previous,
             { offset, length -> hash(source, offset, length) },
@@ -922,7 +942,17 @@ private object SnapshotGraph {
                     ?.getOrNull(index)
                     ?.takeIf { it.name == component.name }
                     ?.value
-            SnapshotField(component.name, value(component.accessor.invoke(source), old, depth + 1))
+            try {
+              SnapshotField(
+                  component.name,
+                  value(component.accessor.invoke(source), old, depth + 1),
+              )
+            } catch (failure: IllegalStateException) {
+              throw IllegalStateException(
+                  "${type.name}.${component.name}: ${failure.message}",
+                  failure,
+              )
+            }
           }
       if (sameType != null &&
           sameType.fields.size == fields.size &&

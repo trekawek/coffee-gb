@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -213,6 +214,15 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
                 tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
                 tileSelectGlitchHistory.clone(),
                 oamSizeHistory.clone());
+    }
+
+    @Override
+    public Memento<Lcdc> saveToMemento(MachineStateCapture capture) {
+        return new LcdcMemento(value, mixValue, pendingMixValue,
+                dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
+                tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
+                capture.booleans(tileSelectGlitchHistory),
+                capture.ints(oamSizeHistory));
     }
 
     @Override

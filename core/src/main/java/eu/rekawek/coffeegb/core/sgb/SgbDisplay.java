@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.sgb;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Display.DmgFrameReadyEvent;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -246,6 +247,19 @@ public class SgbDisplay implements Originator<SgbDisplay> {
     public Memento<SgbDisplay> saveToMemento() {
         return new SgbDisplayMemento(sgbBuffer.clone(), sgbMask.clone(), clone2(palettes),
                 clone2(systemPalettes), paletteMap.clone(), clone2(attributeFiles), screenMask,
+                borderFade);
+    }
+
+    @Override
+    public Memento<SgbDisplay> saveToMemento(MachineStateCapture capture) {
+        return new SgbDisplayMemento(
+                capture.ints(sgbBuffer),
+                capture.ints(sgbMask),
+                capture.ints2(palettes),
+                capture.ints2(systemPalettes),
+                capture.ints(paletteMap),
+                capture.ints2(attributeFiles),
+                screenMask,
                 borderFade);
     }
 

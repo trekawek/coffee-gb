@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -298,6 +299,18 @@ public class DmgPixelFifo implements PixelFifo, Serializable, Originator<DmgPixe
     public Memento<DmgPixelFifo> saveToMemento() {
         return new DmgPixelFifoMemento(pixels.saveToMemento(), spriteFifo.saveToMemento(),
                 delayEntry.clone(), delayStamp.clone(), delayHead, delaySize, outputTicks);
+    }
+
+    @Override
+    public Memento<DmgPixelFifo> saveToMemento(MachineStateCapture capture) {
+        return new DmgPixelFifoMemento(
+                pixels.saveToMemento(capture),
+                spriteFifo.saveToMemento(capture),
+                capture.ints(delayEntry),
+                capture.longs(delayStamp),
+                delayHead,
+                delaySize,
+                outputTicks);
     }
 
     /**

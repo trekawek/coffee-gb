@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.ir;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
@@ -109,6 +110,11 @@ public class InfraredPort implements AddressSpace, Serializable, Originator<Infr
     @Override
     public Memento<InfraredPort> saveToMemento() {
         return new InfraredPortMemento(rp, fullChanger.saveToMemento());
+    }
+
+    @Override
+    public Memento<InfraredPort> saveToMemento(MachineStateCapture capture) {
+        return new InfraredPortMemento(rp, fullChanger.saveToMemento(capture));
     }
 
     @Override

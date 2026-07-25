@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -105,6 +106,18 @@ public class DuzMulticart implements MemoryController {
     public Memento<MemoryController> saveToMemento() {
         return new DuzMulticartMemento(ram.clone(), regs.clone(), selectedBank, selectedRamBank,
                 baseBank, regIndex, ramWriteEnabled);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new DuzMulticartMemento(
+                capture.ints(ram),
+                capture.ints(regs),
+                selectedBank,
+                selectedRamBank,
+                baseBank,
+                regIndex,
+                ramWriteEnabled);
     }
 
     @Override

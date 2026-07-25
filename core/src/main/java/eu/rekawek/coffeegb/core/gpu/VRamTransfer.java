@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -47,6 +48,11 @@ public class VRamTransfer implements Originator<VRamTransfer> {
     @Override
     public Memento<VRamTransfer> saveToMemento() {
         return new VRamTransferMemento(buffer.clone(), i);
+    }
+
+    @Override
+    public Memento<VRamTransfer> saveToMemento(MachineStateCapture capture) {
+        return new VRamTransferMemento(capture.ints(buffer), i);
     }
 
     @Override

@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.Ram;
@@ -303,17 +304,29 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     @Override
     public Memento<Sound> saveToMemento() {
+        return saveToMemento(null);
+    }
+
+    @Override
+    public Memento<Sound> saveToMemento(MachineStateCapture capture) {
         var allModeMementos = new Memento[allModes.length];
         for (int i = 0; i < allModes.length; i++) {
-            allModeMementos[i] = allModes[i].saveToMemento();
+            allModeMementos[i] = capture == null
+                    ? allModes[i].saveToMemento()
+                    : allModes[i].saveToMemento(capture);
         }
         // Only the prefix before i has been written. The rest is overwritten before the
         // next SoundSampleEvent can expose it, so retaining the full ~546 KiB frame buffer
         // in every rewind state wastes memory and creates a G1 humongous allocation.
-        int[] pendingSamples = Arrays.copyOf(buffer, i);
-        return new SoundMemento(allModeMementos, r.saveToMemento(),
-                frameSequencer.saveToMemento(), channels.clone(), enabled,
-                overriddenEnabled.clone(), pendingSamples, i, pendingFrameSequencerStep,
+        int[] pendingSamples = capture == null ? Arrays.copyOf(buffer, i) : capture.ints(buffer, i);
+        return new SoundMemento(
+                allModeMementos,
+                capture == null ? r.saveToMemento() : r.saveToMemento(capture),
+                frameSequencer.saveToMemento(),
+                capture == null ? channels.clone() : capture.ints(channels),
+                enabled,
+                capture == null ? overriddenEnabled.clone() : capture.booleans(overriddenEnabled),
+                pendingSamples, i, pendingFrameSequencerStep,
                 frameSequencerClockPhase, frameSequencerDivOffset);
     }
 

@@ -57,7 +57,7 @@ class StateInventoryTest {
             }
             .sorted()
 
-    assertEquals(96, discovered.size)
+    assertEquals(97, discovered.size)
     assertEquals(discovered, documented)
   }
 

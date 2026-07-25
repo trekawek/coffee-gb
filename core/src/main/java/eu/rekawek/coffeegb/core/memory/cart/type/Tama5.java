@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -470,6 +471,22 @@ public class Tama5 implements MemoryController {
         return new Tama5Memento(battery.saveToMemento(), ram.clone(), selectedReg, registers.clone(),
                 rtcTimerPage.clone(), rtcAlarmPage.clone(), rtcFreePage0.clone(), rtcFreePage1.clone(),
                 rtcDisabled, lastRtcSecond, ramUpdated);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new Tama5Memento(
+                battery.saveToMemento(capture),
+                capture.ints(ram),
+                selectedReg,
+                capture.ints(registers),
+                capture.ints(rtcTimerPage),
+                capture.ints(rtcAlarmPage),
+                capture.ints(rtcFreePage0),
+                capture.ints(rtcFreePage1),
+                rtcDisabled,
+                lastRtcSecond,
+                ramUpdated);
     }
 
     @Override

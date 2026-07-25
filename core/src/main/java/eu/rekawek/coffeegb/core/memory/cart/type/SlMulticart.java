@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -178,6 +179,24 @@ public class SlMulticart implements MemoryController {
         return new SlMulticartMemento(ram.clone(), configCommand, baseRomBank,
                 selectedRomBank, romBankMask, zeroRemap, configurationMode, mbc5Mode,
                 ramAllowed, ramEnabled, baseRamBank, selectedRamBank, ramBankMask);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new SlMulticartMemento(
+                capture.ints(ram),
+                configCommand,
+                baseRomBank,
+                selectedRomBank,
+                romBankMask,
+                zeroRemap,
+                configurationMode,
+                mbc5Mode,
+                ramAllowed,
+                ramEnabled,
+                baseRamBank,
+                selectedRamBank,
+                ramBankMask);
     }
 
     @Override

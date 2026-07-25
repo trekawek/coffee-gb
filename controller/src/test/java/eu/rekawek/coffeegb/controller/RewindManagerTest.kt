@@ -70,11 +70,18 @@ class RewindManagerTest {
     StateCodecTestSupport.session(configuration()).use { session ->
       val manager = RewindManager()
       session.gameboy.addressSpace.setByte(0x0000, 0x0a)
-      repeat(RewindManager.CAPACITY * RewindManager.RECORD_INTERVAL) { step ->
-        exercise(session.gameboy, step)
+      repeat(RewindManager.CAPACITY * RewindManager.RECORD_INTERVAL) { frame ->
+        emulateProductionFrame(session.gameboy, frame)
         manager.record(session.gameboy)
       }
       assertEquals(RewindManager.CAPACITY, manager.historySize)
+      assertTrue(
+          manager.snapshotsForTesting().all {
+            it.captureStats.sourcePayloadClones == 0 &&
+                it.captureStats.sourcePayloadCloneBytes == 0L
+          },
+          "production-cadence captures must borrow source payloads without cloning",
+      )
       val retained = MachineSnapshot.retainedStats(manager.snapshotsForTesting())
       assertTrue(
           retained.retainedPrimitiveBytes * 2 < MASTER_BASELINE_RETAINED_PRIMITIVE_BYTES,
@@ -84,19 +91,19 @@ class RewindManagerTest {
     }
   }
 
-  private fun exercise(
+  private fun emulateProductionFrame(
       gameboy: Gameboy,
-      step: Int,
+      frame: Int,
   ) {
-    repeat(TICKS_PER_STEP) { gameboy.tick() }
-    val value = step and 0xff
-    gameboy.addressSpace.setByte(0xc000 + (step * 37 and 0xfff), value)
-    gameboy.addressSpace.setByte(0xd000 + (step * 53 and 0xfff), value xor 0x5a)
-    gameboy.gpu.videoRam0.setByte(0x8000 + (step * 29 and 0x1fff), value xor 0xa5)
-    gameboy.gpu.videoRam1.setByte(0x8000 + (step * 31 and 0x1fff), value xor 0x3c)
-    gameboy.addressSpace.setByte(0xfe00 + (step % 0xa0), value)
-    gameboy.addressSpace.setByte(0x4000, step ushr 5 and 0x03)
-    gameboy.addressSpace.setByte(0xa000 + (step * 43 and 0x1fff), value xor 0xc3)
+    repeat(Gameboy.TICKS_PER_FRAME) { gameboy.tick() }
+    val value = frame and 0xff
+    gameboy.addressSpace.setByte(0xc000 + (frame * 37 and 0xfff), value)
+    gameboy.addressSpace.setByte(0xd000 + (frame * 53 and 0xfff), value xor 0x5a)
+    gameboy.gpu.videoRam0.setByte(0x8000 + (frame * 29 and 0x1fff), value xor 0xa5)
+    gameboy.gpu.videoRam1.setByte(0x8000 + (frame * 31 and 0x1fff), value xor 0x3c)
+    gameboy.addressSpace.setByte(0xfe00 + (frame % 0xa0), value)
+    gameboy.addressSpace.setByte(0x4000, frame ushr 5 and 0x03)
+    gameboy.addressSpace.setByte(0xa000 + (frame * 43 and 0x1fff), value xor 0xc3)
   }
 
   private fun configuration() =
@@ -110,10 +117,9 @@ class RewindManagerTest {
           .setSupportBatterySave(false)
 
   companion object {
-    /** Exact primitive-array retained baseline measured on master 195d9172. */
-    private const val MASTER_BASELINE_RETAINED_PRIMITIVE_BYTES = 420_760_640L
+    /** Exact production-cadence primitive-array baseline measured on master 195d9172. */
+    private const val MASTER_BASELINE_RETAINED_PRIMITIVE_BYTES = 337_665_600L
     private const val EXTRA_CAPTURES = 2
     private const val TEST_ADDRESS = 0xc100
-    private const val TICKS_PER_STEP = 2_048
   }
 }

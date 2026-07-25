@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.sgb;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -122,6 +123,14 @@ public class Background implements Originator<Background> {
     public Memento<Background> saveToMemento() {
         return new BackgroundMemento(tiles.clone(),
                 pendingPicture == null ? null : pendingPicture.saveToMemento(), borderAnimation);
+    }
+
+    @Override
+    public Memento<Background> saveToMemento(MachineStateCapture capture) {
+        return new BackgroundMemento(
+                capture.ints(tiles),
+                pendingPicture == null ? null : pendingPicture.saveToMemento(capture),
+                borderAnimation);
     }
 
     @Override
