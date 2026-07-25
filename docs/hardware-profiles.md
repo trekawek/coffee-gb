@@ -86,6 +86,12 @@ four-player adapter timing, and Gameboy frame-derived thresholds. Deprecated
 production path reads them. Linked candidate groups are preflighted before construction/replay or
 live replacement and reject differing master/tick budgets before partial execution.
 
+State prepare is also clock-owned. Generic detached decoding keeps arrays and graphs bounded without
+assuming a built-in rate; before machine/session, legacy-import, or rewind mutation, semantic
+preflight derives the exact Sound stereo capacity and MBC3 subsecond upper bound from the target
+profile's `ClockSpec`. A custom-clock state valid for that target is therefore accepted, while the
+same shape or phase is rejected for an incompatible target before any component restore begins.
+
 ## Boot and capability parity
 
 BIOS resource selection, CGB/SGB construction, CGB0 MMU/OAM behavior, authentic-boot divider

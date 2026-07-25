@@ -93,6 +93,11 @@ runtime supplements. It retains a rollback capture for unexpected failures while
 machine, FIFO runtime, and RTC runtime. Snapshot pages are private and the test/benchmark probe
 returns only opaque page-identity tokens.
 
+The semantic stage receives the restored target profile's exact `ClockSpec`: its Sound pending
+prefix/full-buffer and write index must fit that clock's stereo controller-frame capacity, and each
+MBC3 subsecond phase must be below that clock's tick rate. This target-dependent validation occurs
+before the rewind apply callback, not inside a partially mutating component restore.
+
 Each snapshot also retains the immutable canonical hardware-profile ID. Capture chains reuse pages
 only within the same ID, and restore rejects `dmg`/`cgb`/`cgb0`/`sgb` mismatches before materializing
 or mutating live arrays. The profile scalar adds no shared mutable state and does not change the

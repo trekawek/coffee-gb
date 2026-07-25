@@ -60,7 +60,9 @@ internal class MachineSnapshot private constructor(
     val candidate =
         try {
           @Suppress("UNCHECKED_CAST")
-          (SnapshotGraph.restoreRoot(root) as ComponentState<Gameboy>).also(StateSemantics::validate)
+          (SnapshotGraph.restoreRoot(root) as ComponentState<Gameboy>).also {
+            StateSemantics.validateForClock(it, gameboy.clockSpec)
+          }
         } catch (failure: StateApplyException) {
           throw failure
         } catch (failure: Throwable) {

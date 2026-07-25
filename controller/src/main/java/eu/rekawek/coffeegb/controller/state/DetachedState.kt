@@ -408,7 +408,7 @@ internal object DetachedStateAdapter {
             StateGraph.captureLegacyRoot(legacyState, LEGACY_GAMEBOY_ROOT)) as RecordState
     StateGraph.validateCompatible(legacyRoot, current.root, "legacy machine")
     val normalized = StateGraph.restoreRoot(legacyRoot, GAMEBOY_ROOT)
-    StateSemantics.validate(normalized)
+    StateSemantics.validateForClock(normalized, gameboy.clockSpec)
     @Suppress("UNCHECKED_CAST")
     val componentState = normalized as ComponentState<Gameboy>
     val rollback = prepare(gameboy, current)
@@ -590,7 +590,7 @@ internal object DetachedStateAdapter {
 
   internal fun prepare(session: Session, state: SessionState): PreparedSessionState {
     validateTarget(session, state)
-    val machine = reconstructMachine(state.machine)
+    val machine = reconstructMachine(state.machine, session.gameboy.clockSpec)
     val serialValue = StateGraph.restore(state.serialState)
     StateSemantics.validate(serialValue)
     if (serialValue != null && serialValue !is ComponentState<*>) {
@@ -615,12 +615,15 @@ internal object DetachedStateAdapter {
 
   private fun prepare(gameboy: Gameboy, state: MachineState): PreparedMachineState {
     validateTarget(gameboy, state)
-    return reconstructMachine(state)
+    return reconstructMachine(state, gameboy.clockSpec)
   }
 
-  private fun reconstructMachine(state: MachineState): PreparedMachineState {
+  private fun reconstructMachine(
+      state: MachineState,
+      clockSpec: eu.rekawek.coffeegb.core.hardware.ClockSpec,
+  ): PreparedMachineState {
     val detached = StateGraph.restoreRoot(state.root, GAMEBOY_ROOT)
-    StateSemantics.validate(detached)
+    StateSemantics.validateForClock(detached, clockSpec)
     @Suppress("UNCHECKED_CAST") val componentState = detached as ComponentState<Gameboy>
     val rtcRuntime = state.rtcRuntime.toCore()
     val dmgFifoRuntime = state.dmgFifoRuntime.toCore()
