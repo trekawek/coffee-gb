@@ -17,7 +17,7 @@ controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateFile.kt	a8586
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSectionCodecs.kt	4ab40907a290077481a9f037aa54cce1c37051a05baa8a236ef0a10095c5671c
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSemantics.kt	46e9546a97752a0b60401a00924adfc39fb6e6a1bdd37783278a10b32a1cf718
 core/src/main/java/eu/rekawek/coffeegb/core/CartridgeOptions.java	0b02e1356777223d6504598b01970bbc1b9212e5c506336092d13641489dd527
-core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	85f216068fac56c8841a5aab6bfaa573fce90d2b1f513dfe26ce134c1924a8de
+core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	750c24e362469a2604e15abc9f7ce85c5c8482736215e2c91c40adb63873e50d
 core/src/main/java/eu/rekawek/coffeegb/core/GameboyType.java	827ad1d3d4f719fa35e5a7fe5c4fe9a8015ede64ff2c8e3882f6c4bb4bf26f9c
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/Cpu.java	1674586181415f65aaf57ff6ce3a4d36478a27bcfb25966403a4341303378fc8
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/InterruptManager.java	b717f6185cb210c09f05860061dec3686a527ee0de4b5faccef1d835f8fcc057
@@ -39,7 +39,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/gpu/StatRegister.java	65b82ba13dc22e
 core/src/main/java/eu/rekawek/coffeegb/core/gpu/phase/OamSearch.java	ef7b0b9556ecc89b7586de1e0d0e61b10085378f836eb6f00ad6c47d5585074c
 core/src/main/java/eu/rekawek/coffeegb/core/gpu/phase/PixelTransfer.java	5d57750895b3b16c6125fd19747aac5ed6dab8e52980385ec58cbd2ba41f6531
 core/src/main/java/eu/rekawek/coffeegb/core/ir/InfraredPort.java	1a58d8c07d46912040d734b2a18fd0f3a17be76b3c6e7c1d4f10a3df6a05b16d
-core/src/main/java/eu/rekawek/coffeegb/core/joypad/Joypad.java	39c4709699d399fbb6f97f3c28f816e4defe2f30dd6ab9df175da34d21546d5a
+core/src/main/java/eu/rekawek/coffeegb/core/joypad/Joypad.java	6ee5046307cc119b6a25bc52a40fdf322e10d03e89654c7b05f0be94a42d68c4
 core/src/main/java/eu/rekawek/coffeegb/core/memory/Bios.java	cea26d7b98d669da4cc49fde6d94a27f150becee09792c0318f77de10ac04e91
 core/src/main/java/eu/rekawek/coffeegb/core/memory/Dma.java	c0d12923e92a50e16aa16a1221876e8de5b1b8dcc575f569a15fad01d761533c
 core/src/main/java/eu/rekawek/coffeegb/core/memory/DmaAddressSpace.java	44789a622be098ac3e68eeb8f22758d7acee59207253e3f7656e5108e4ddecb2

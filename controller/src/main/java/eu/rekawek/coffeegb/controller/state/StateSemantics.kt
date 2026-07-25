@@ -87,6 +87,7 @@ internal object StateSemantics {
     fun int(name: String): Int = value(name) as Int
     fun long(name: String): Long = value(name) as Long
     fun double(name: String): Double = value(name) as Double
+    fun boolean(name: String): Boolean = value(name) as Boolean
     fun string(name: String): String = value(name) as String
     fun enumName(name: String): String = (value(name) as Enum<*>).name
     fun intArray(name: String): IntArray = value(name) as IntArray
@@ -259,10 +260,33 @@ internal object StateSemantics {
       put("eu.rekawek.coffeegb.core.joypad.Joypad\$JoypadState",
           constrained("SGB packet and multiplayer controller indices are checked against owned buffers.") {
             it.require((it.int("p1") and 0xcf) == 0, "has invalid JOYP selector bits")
-            it.range("players", 0, 4); it.range("currentPlayer", 0, it.int("players"))
+            val control = it.int("players")
+            val current = it.int("currentPlayer")
+            it.range("players", 0, 3)
+            it.require(when (control) {
+              0 -> current == 0
+              1 -> current in 0..1
+              2 -> current == 0 || current == 2
+              3 -> current in 0..3
+              else -> false
+            }, "has an invalid selected player for MLT_REQ control $control")
+            it.range("inputHistory", 0, 0xffff)
+            it.range("filteredInputLines", 0, 0x0f)
             it.range("pendingTransferBit", -1, 1); it.range("currentByte", 0, 0xff)
             it.range("currentByteIndex", 0, 7)
-            it.range("currentPacketIndex", 0, it.intArray("currentPacket").size)
+            val packet = it.intArray("currentPacket")
+            it.require(packet.size == 16, "must own exactly one 16-byte ICD2 packet")
+            packet.forEachIndexed { index, value ->
+              it.require(value in 0..0xff, "has invalid packet byte $index=$value")
+            }
+            it.range("currentPacketIndex", 0, packet.size)
+            val active = it.boolean("transferInProgress")
+            val ready = it.boolean("transferReadyForData")
+            val pending = it.int("pendingTransferBit")
+            it.require(active || (!ready && pending == -1),
+                "has receiver data while no transfer is active")
+            it.require(pending == -1 || ready,
+                "has a pending receiver bit before the start pulse")
           })
 
       // SGB, IR, and display/parser schedules.

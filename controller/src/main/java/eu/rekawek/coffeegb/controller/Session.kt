@@ -43,7 +43,7 @@ class Session(
   // Held buttons live outside machine state (the joypad keeps physical input across a
   // single-player rewind); netplay snapshots them separately so a held button survives a rebase
   var heldButtons: Set<Button>
-    get() = gameboy.pressedButtons
+    get() = gameboy.legacyPressedButtons
     set(value) {
       gameboy.setPressedButtons(value)
     }

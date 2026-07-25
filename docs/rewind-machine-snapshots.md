@@ -12,7 +12,8 @@ importer is a separate migration boundary and is never reachable from rewind.
 dispatched and before the next frame starts. Restore occurs at the same owner-thread boundary
 before the normal frame ticks that make the rewound frame visible and audible. Calling capture or
 restore concurrently with `Gameboy.tick`, cartridge flushing, or endpoint mutation is unsupported.
-Physical held buttons remain session input and are deliberately not rewound.
+The live four-slot physical-input service is deliberately not rewound. The event/protocol-owned P1
+subset remains session input for linked rollback history.
 
 `RewindManager` keeps the existing 300 entries and records every sixth emulated frame. A successful
 ROM load/reset or disk-state load clears the history and resets capture cadence. The default
@@ -77,6 +78,13 @@ never write into a snapshot. Branching by restoring an old generation and captur
 only content that is still equal. Removing an entry, clearing the queue, or evicting the oldest
 entry merely drops references; it does not modify pages shared by surviving or externally held
 snapshots.
+
+Joypad machine state includes the SGB `MLT_REQ` mode, selected logical player, selectors, glitch
+filter, and packet receiver, so those phases rewind exactly. Physical input is a separate immutable
+four-slot service sampled at the next Joypad tick. It is not a snapshot page: restoring an older
+machine cannot resurrect a released P1-P4 host button, while a button that is still physically held
+remains held. Linked rollback replays legacy P1 from its established input history and freezes one
+P2-P4 service sample for the duration of a rebase so desktop polling cannot change mid-replay.
 
 Before live mutation, restore reconstructs the complete registered machine record, checks hardware
 and mapper/battery ownership, runs the Phase-1 semantic validation, and validates both primitive

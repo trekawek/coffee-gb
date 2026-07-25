@@ -15,6 +15,7 @@ import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingGamepad
+import eu.rekawek.coffeegb.swing.io.DesktopPlayerInput
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -27,6 +28,7 @@ class SwingEmulator(
   private val display: SwingDisplay
   private val joypad: SwingJoypad
   private val gamepad: SwingGamepad
+  private val gamepadThread: Thread
   private val sound: AudioSystemSound
   private val accelerometer: SwingAccelerometer
 
@@ -41,8 +43,9 @@ class SwingEmulator(
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
     sound = AudioSystemSound(properties.sound, eventBus, "main")
-    joypad = SwingJoypad(properties.controllerMapping, eventBus)
-    gamepad = SwingGamepad(eventBus)
+    val playerInput = DesktopPlayerInput(properties.playerInputSource, eventBus)
+    joypad = SwingJoypad(properties.playerInputMapping, eventBus, playerInput)
+    gamepad = SwingGamepad(properties.playerInputMapping, playerInput, eventBus)
     accelerometer = SwingAccelerometer(eventBus, display.preferredSize)
     tiltKeys = SwingTiltKeys(eventBus)
     printer = SwingPrinter(eventBus)
@@ -50,7 +53,7 @@ class SwingEmulator(
 
     Thread(display).start()
     Thread(sound).start()
-    Thread(gamepad, "gamepad").apply { isDaemon = true }.start()
+    gamepadThread = Thread(gamepad, "gamepad").apply { isDaemon = true; start() }
 
     controller = BasicController(eventBus, properties, console).also { it.startController() }
 
@@ -65,6 +68,8 @@ class SwingEmulator(
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
       startBasicController()
     }
+    eventBus.register<Controller.RomLoadingEvent> { joypad.releaseForLifecycleChange() }
+    eventBus.register<Controller.EmulationStoppedEvent> { joypad.releaseForLifecycleChange() }
   }
 
   private fun startBasicController() {
@@ -85,6 +90,10 @@ class SwingEmulator(
   }
 
   fun stop() {
+    joypad.stop()
+    gamepad.stop()
+    gamepadThread.interrupt()
+    gamepadThread.join(1000)
     controller.close()
     sound.stopThread()
     display.stop()
@@ -98,6 +107,7 @@ class SwingEmulator(
 
     jFrame.contentPane = mainPanel
     jFrame.addKeyListener(joypad)
+    jFrame.addWindowFocusListener(joypad)
     jFrame.addKeyListener(tiltKeys)
     jFrame.addMouseMotionListener(accelerometer)
 

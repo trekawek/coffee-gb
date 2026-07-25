@@ -300,7 +300,7 @@ enum class SerialPeripheralState {
   FOUR_PLAYER_ADAPTER,
 }
 
-/** Detached state owned by one controller Session, including physical held input. */
+/** Detached state owned by one controller Session, including event/protocol-owned P1 input. */
 class SessionState internal constructor(
     val machine: MachineState,
     val serialPeripheral: SerialPeripheralState,
