@@ -140,9 +140,12 @@ restore. New captures set that nullable compatibility component to null, so only
 `GpuMemento.displayMemento` owns the two 160x144 panel arrays. Visible frame, partial scanout/index,
 LCD enable and repeat behavior therefore remain restorable without duplicate payload.
 
-Rewind, `ControllerState`, and boot-state reuse continue to use their existing in-process mementos.
-Local slot snapshots and netplay protocol v8 use the bounded StateFile codec; their distinct disk
-and network limits do not weaken the graph, queue, frame, or work limits.
+Rewind now retains internal immutable, structurally shared `MachineSnapshot` generations described
+in [rewind-machine-snapshots.md](rewind-machine-snapshots.md). Its transitional capture source is
+the audited memento graph, but no memento is retained in rewind history. `ControllerState` and
+boot-state reuse continue to use their existing in-process mementos until #326. Local slot
+snapshots and netplay protocol v8 use the bounded StateFile codec; their distinct disk and network
+limits do not weaken the graph, queue, frame, or work limits.
 
 ## Failure and extension policy
 

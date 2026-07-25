@@ -31,6 +31,45 @@ import org.junit.Test
 class BasicControllerTest {
 
   @Test
+  fun disabledRewindCreatesNoFrameCapturesAndCannotFreezeForwardEmulation() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<GbcFrameReadyEvent> { frames.add(it) }
+    val rewind = RewindManager(enabled = false)
+    val controller =
+        BasicController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory.DEFAULT,
+            rewind,
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertNotNull(frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(0, rewind.captureCount)
+
+      frames.clear()
+      eventBus.post(Controller.RewindEvent(true))
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "a disabled rewind request must not stop normal frame progress",
+      )
+      assertEquals(0, rewind.captureCount)
+      assertEquals(0, rewind.historySize)
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun failedSnapshotSaveEmitsOnlyFailureRetainsOldFileAndControllerLaterSaves() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
