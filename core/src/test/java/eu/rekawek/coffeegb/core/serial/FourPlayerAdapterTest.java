@@ -2,9 +2,11 @@ package eu.rekawek.coffeegb.core.serial;
 
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 
 public class FourPlayerAdapterTest {
@@ -107,6 +109,16 @@ public class FourPlayerAdapterTest {
         }
     }
 
+    @Test
+    public void adapterBitClockScalesFromTheOwningSessionClock() {
+        Rig legacy = new Rig(ClockSpec.LEGACY);
+        Rig doubleClock = new Rig(new ClockSpec(8_388_608, 60, 1));
+
+        assertArrayEquals(legacy.transfer(0, 0, 0, 0),
+                doubleClock.transfer(0, 0, 0, 0));
+        assertEquals(legacy.lastTransferTicks * 2 - 1, doubleClock.lastTransferTicks);
+    }
+
     private static void enterTransmission(Rig rig, int size) {
         enterTransmission(rig, size, 0x10);
     }
@@ -139,7 +151,11 @@ public class FourPlayerAdapterTest {
         private int lastTransferTicks;
 
         private Rig() {
-            FourPlayerAdapter adapter = new FourPlayerAdapter();
+            this(ClockSpec.LEGACY);
+        }
+
+        private Rig(ClockSpec clockSpec) {
+            FourPlayerAdapter adapter = new FourPlayerAdapter(clockSpec);
             for (int i = 0; i < ports.length; i++) {
                 ports[i] = new SerialPort(new InterruptManager(false), false, new SpeedMode(false));
                 ports[i].init(adapter.endpoint(i));

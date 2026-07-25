@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.timer.Timer;
 import org.junit.Test;
@@ -57,6 +58,25 @@ public class SoundMementoTest {
         tick(sound, Gameboy.TICKS_PER_FRAME - prefixTicks);
 
         assertArrayEquals(expected, frames.remove(0));
+    }
+
+    @Test
+    public void sampleChunkUsesTheOwningCustomClockInsteadOfLegacyGlobals() {
+        ClockSpec clock = new ClockSpec(96_000, 60, 1);
+        SpeedMode speedMode = new SpeedMode(true);
+        Sound sound = new Sound(new Timer(new InterruptManager(true), speedMode), speedMode, true, clock);
+        EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        List<Sound.SoundSampleEvent> frames = new ArrayList<>();
+        eventBus.register(frames::add, Sound.SoundSampleEvent.class);
+        sound.init(eventBus);
+
+        tick(sound, clock.controllerTicksPerFrame() - 1);
+        assertEquals(0, frames.size());
+        tick(sound, 1);
+
+        assertEquals(1, frames.size());
+        assertEquals(clock, frames.get(0).clockSpec());
+        assertEquals(clock.controllerTicksPerFrame() * 2, frames.get(0).buffer().length);
     }
 
     private static Sound newSound() {

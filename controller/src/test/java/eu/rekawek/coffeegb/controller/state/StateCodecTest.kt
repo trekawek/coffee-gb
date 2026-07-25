@@ -118,6 +118,7 @@ class StateCodecTest {
       StateCodecTestSupport.session(configuration).use { session ->
         val encoded = StateCodec.encode(StateCodec.capture(session))
         val identity = assertNotNull(StateCodec.decode(encoded).identities.single().identity)
+        assertEquals(configuration.hardwareProfile.id(), identity.profile.canonicalProfileId)
         assertEquals(MachineHardwareState.valueOf(configuration.gameboyType.name), identity.profile.hardware)
         assertEquals(
             configuration.gameboyType == GameboyType.CGB && configuration.isCgb0Revision,
@@ -137,6 +138,7 @@ class StateCodecTest {
         // The public identity carries only the digest; StateCodec never accepts ROM contents as a
         // section value. Mapper mementos contain mutable controller state, not cartridge ROM.
         assertEquals(32, identity.primaryRom.copyBytes().size)
+        assertTrue(StateCodec.inspect(encoded).render().contains("profile=${configuration.hardwareProfile.id()}"))
       }
     }
   }

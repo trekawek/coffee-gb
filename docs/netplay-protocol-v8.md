@@ -70,6 +70,12 @@ and bit 3 SGB-border behavior. Other bits and hardware-inapplicable combinations
 StateFile identity section must agree with the received primary ROM, optional Datel slot ROM,
 hardware, bootstrap mode, and every profile bit.
 
+Phase 3 deliberately does not reinterpret these bytes. The pinned `GameboyType` plus CGB0 flag
+canonicalizes to permanent profile ID `dmg`, `cgb`, `cgb0`, or `sgb` before candidate construction;
+the remaining flags stay accessory/boot compatibility policy. Protocol v8 has no free-form profile
+string and cannot negotiate an unknown future profile. Such an addition requires a new explicit
+capability/version rather than display-name or ordinal guessing.
+
 An ordinary initial transfer may omit state or carry one MACHINE root. A running four-player
 checkpoint record must carry a SESSION root. The host emits one record for each active player,
 then command `09` plus the checkpoint frame. An empty set followed by synchronization represents
@@ -109,6 +115,11 @@ sessions, configurations, ROM/battery buffers, frame floor, history, or topology
 checkpoints use one fresh shared adapter and commit as a group. Any decode, identity, construction,
 preparation, or commit failure rejects only the source and leaves the live group unchanged;
 unexpected commit failures restore the captured controller/history transaction.
+
+Each candidate retains its registered profile and immutable `ClockSpec`. The complete linked group
+is preflighted before construction/replay or replacement; differing master rates or controller tick
+budgets are rejected before partial execution. All current v8-representable profiles intentionally
+share the legacy 4,194,304-Hz, 69,905-tick controller budget, so this adds no wire or timing change.
 
 Network `AC ED 00 05`, retired `CGBN`, unknown magic, corrupt/truncated/future StateFile data,
 wrong roots, and identity/profile mismatches are protocol errors. They are never sent to the local

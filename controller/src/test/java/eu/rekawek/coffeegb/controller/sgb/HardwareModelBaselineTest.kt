@@ -3,7 +3,8 @@ package eu.rekawek.coffeegb.controller.sgb
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
-import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -20,10 +21,10 @@ class HardwareModelBaselineTest {
   fun currentModelsHaveStableRomIndependentFrameAndStateBaselines() {
     val actual =
         listOf(
-                ModelCase("DMG", GameboyType.DMG, false),
-                ModelCase("CGB", GameboyType.CGB, false),
-                ModelCase("CGB0", GameboyType.CGB, true),
-                ModelCase("SGB", GameboyType.SGB, false),
+                ModelCase("DMG", HardwareProfileRegistry.DMG),
+                ModelCase("CGB", HardwareProfileRegistry.CGB),
+                ModelCase("CGB0", HardwareProfileRegistry.CGB0),
+                ModelCase("SGB", HardwareProfileRegistry.SGB),
             )
             .map(::measure)
 
@@ -40,8 +41,7 @@ class HardwareModelBaselineTest {
     val romBytes = syntheticRom()
     val configuration =
         Gameboy.GameboyConfiguration(Rom(romBytes))
-            .setGameboyType(case.type)
-            .setCgb0Revision(case.cgb0)
+            .setHardwareProfile(case.profile)
             .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
             .setSupportBatterySave(false)
     val eventBus = EventBusImpl(null, null, false)
@@ -71,16 +71,16 @@ class HardwareModelBaselineTest {
       val sp = registers.sp
       val pc = registers.pc
       var tickFrameSignals = 0
-      repeat(Gameboy.TICKS_PER_FRAME) {
+      repeat(session.gameboy.clockSpec.controllerTicksPerFrame()) {
         if (session.gameboy.tick()) tickFrameSignals++
       }
       val stateBytes = StateCodec.encode(StateCodec.capture(session))
       val inspection = StateCodec.inspect(stateBytes)
-      assertEquals(case.type.name, inspection.identities.single().identity!!.profile.hardware.name)
+      assertEquals(case.profile.id(), inspection.identities.single().identity!!.profile.canonicalProfileId)
       assertEquals(case.cgb0, inspection.identities.single().identity!!.profile.cgb0Revision)
       return Baseline(
           case.name,
-          case.cgb0,
+          case.profile == HardwareProfileRegistry.CGB0,
           "%04x".format(af),
           "%04x".format(bc),
           "%04x".format(de),
@@ -128,7 +128,10 @@ class HardwareModelBaselineTest {
     }
   }
 
-  private data class ModelCase(val name: String, val type: GameboyType, val cgb0: Boolean)
+  private data class ModelCase(val name: String, val profile: HardwareProfile) {
+    val cgb0: Boolean
+      get() = profile == HardwareProfileRegistry.CGB0
+  }
 
   private data class Baseline(
       val model: String,

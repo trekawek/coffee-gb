@@ -1,10 +1,11 @@
 # SGB conformance baselines and practical-command contract
 
 Issue #340 established the observational Phase 0 evidence and deterministic fixtures. Issue #341
-used those artifacts to complete the platform-neutral practical command set. Issue #342 now adds
-independent SGB P1-P4 host input while preserving that command/framing contract. It does not change
-clocks, boot values, hardware profiles, SGB2, or MGB. The existing StateFile-v1 record registry and
-field schema remain unchanged.
+used those artifacts to complete the platform-neutral practical command set, and issue #342 added
+independent local SGB P1-P4 host input. Issue #343 now resolves immutable per-session hardware
+profiles and clocks while preserving every locked DMG/CGB/CGB0/SGB behavior. It does not implement
+real SGB/SGB2 timing or MGB. The existing StateFile-v1 record registry and field schema remain
+unchanged.
 
 ## Checked-in sources of truth
 
@@ -32,7 +33,7 @@ and any drift between the matrix and the production command registry.
 
 The model/clock decision inventory is
 [`controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv`](../controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv).
-Its 67 rows classify every matching production source file by stable symbol/context, current
+Its 79 rows classify every matching production source file by stable symbol/context, current
 consumer, model set, evidence, uncertainty, and the earliest owning #317 phase. The scanner covers
 `core`, `controller`, and `swing` production Java/Kotlin sources, ignores only package/import/comment
 lines, and compares the complete `(category, path, occurrence count)` map. A new match cannot be
@@ -43,24 +44,25 @@ part of the contract.
 
 | Category | Files | Normalized occurrences |
 | --- | ---: | ---: |
-| `GAMEBOY_TYPE` | 12 | 58 |
+| `HARDWARE_PROFILE` | 23 | 168 |
+| `GAMEBOY_TYPE` | 9 | 42 |
 | `CGB_FLAG` | 37 | 412 |
-| `SGB_FLAG` | 8 | 38 |
-| `CGB0` | 9 | 44 |
-| `BOOTSTRAP` | 11 | 77 |
-| `CLOCK` | 12 | 27 |
-| `SGB_BORDER` | 7 | 41 |
-| `MEALYBUG` | 9 | 43 |
-| `CODEBREAKER` | 8 | 52 |
-| `ROM_MODEL` | 8 | 41 |
-| `PORTABLE_PROFILE` | 3 | 22 |
+| `SGB_FLAG` | 10 | 42 |
+| `CGB0` | 9 | 40 |
+| `BOOTSTRAP` | 11 | 79 |
+| `CLOCK` | 21 | 183 |
+| `SGB_BORDER` | 7 | 43 |
+| `MEALYBUG` | 9 | 45 |
+| `CODEBREAKER` | 8 | 54 |
+| `ROM_MODEL` | 8 | 55 |
+| `PORTABLE_PROFILE` | 4 | 33 |
 
-The 67 files comprise 32 hardware-policy, 15 compatibility-adapter, 7 configuration, 5
-portable-state-adapter, 4 platform-adapter, and 4 legacy-importer rows. Fifty-nine rows belong first
-to profile migration (#343), five clock/serial/audio rows to SGB2 timing (#344), two SGB display or
-palette rows to command completion (#341), and Joypad multiplayer to #342. No current decision is
-owned solely by #345 because MGB is not representable yet; #345 extends the registry produced by
-#343 rather than changing an existing MGB branch.
+The 79 files comprise 41 hardware-policy, 15 compatibility-adapter, 7 configuration, 7
+portable-state-adapter, 5 platform-adapter, and 4 legacy-importer rows. Seventy-five rows are owned
+by the completed profile/clock migration (#343), two SGB display or palette rows by command
+completion (#341), Joypad multiplayer by #342, and the remaining coarse SerialPort capability branch
+by SGB2 timing (#344). No current decision is owned solely by #345 because MGB is not representable
+yet; #345 extends the registry rather than changing an existing MGB branch.
 
 ## Public technical evidence
 
@@ -113,10 +115,12 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
 - Skip boot currently gives SGB the DMG `BC=0x0013` value; Pan Docs' pinned
   [power-up table](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/Power_Up_Sequence.md)
   documents SGB `C=0x14`. Phase 0 locks the current value without changing it.
-- `TICKS_PER_SEC`, `TICKS_PER_FRAME`, host pacing, audio conversion, serial delays, and state bounds
-  use the current global clock. Pan Docs' pinned
+- Deprecated `TICKS_PER_SEC`/`TICKS_PER_FRAME` constants and protocol-v8 coarse fields remain source
+  or wire compatibility adapters. Production controllers, rollback, host pacing, audio conversion,
+  RTC, and serial delays use the resolved session `ClockSpec`. Pan Docs' pinned
   [timer discussion](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/Timer_and_Divider_Registers.md)
-  is reference evidence; exact per-session clock ownership remains #343/#344.
+  is reference evidence; all Phase-3 profiles intentionally retain the legacy 4,194,304-Hz and
+  60-Hz controller policy. Real SGB/SGB2 timing remains #344.
 
 ## Phase 1 framing, mutation, and state contract
 
@@ -231,8 +235,9 @@ locale, `hashCode`, clock, or unordered iteration.
 | color-zero output | `75e7f7358eff1c7b2e9f61e91f279f8a302ac7b1562898326ea33b93055d780d` |
 | restored continuation | `c78c334dbeb2a0cc9aab7f087fe0d9cdb46d292417eedb222355108880bd73ae` |
 
-The model fixture builds one valid-checksum, 32 KiB synthetic ROM and runs exactly
-`Gameboy.TICKS_PER_FRAME` ticks under DMG, CGB, CGB0, and SGB with skip boot. The synthetic ROM SHA
+The model fixture builds one valid-checksum, 32 KiB synthetic ROM and runs exactly each profile's
+`ClockSpec.controllerTicksPerFrame()` (currently 69,905) under DMG, CGB, CGB0, and SGB with skip
+boot. The synthetic ROM SHA
 is `f89f3802d47dd31da0db6b5656ed5098194e85020ba735fb44c1c9d4f9043eee`. The exact register,
 frame-event, frame-hash, and uncompressed StateFile-v1 hashes are reviewable in
 `model-baselines.tsv`; notably SGB currently starts with the same DMG registers and emits both one
@@ -256,11 +261,18 @@ snapshot, and source-union hub are exercised directly with four non-overlapping 
 indices, alias attempts, disconnects, mode transitions, tick sampling, rewind/StateFile restore,
 rollback replay, keyboard mappings, and fake no-SDL devices.
 
-## Deferred work
+## Profile ownership and deferred work
 
-- #343 introduces stable immutable profiles and per-session `ClockSpec` with exact current parity.
+The exact registry/capability/boot/clock matrix is
+[`hardware-profile-matrix.tsv`](../controller/src/test/resources/sgb-baselines/hardware-profile-matrix.tsv)
+and is enforced against production by `HardwareProfileMatrixTest`. Permanent IDs are `dmg`, `cgb`,
+`cgb0`, and `sgb`; all baseline register, frame, and StateFile hashes above remain unchanged. The
+full ownership, CLI, state-v1, protocol-v8, evidence, and extension contract is documented in
+[hardware-profiles.md](hardware-profiles.md).
+
 - #344 adds SGB2 only after model/timing evidence and long-run clock tests.
 - #345 adds MGB and the repeatable profile-extension process.
+- #315 may consume the service-free profile identity seam, but no replay format is implemented here.
 
 No Phase-0 artifact is real-hardware proof by itself. Synthetic hashes are implementation behavior
 locks; external technical references and redistributable conformance inputs remain separately

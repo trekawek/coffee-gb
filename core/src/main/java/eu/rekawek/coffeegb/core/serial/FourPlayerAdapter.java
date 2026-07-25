@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.serial;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.cpu.BitUtils;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 
 import java.util.Arrays;
@@ -20,13 +21,25 @@ public final class FourPlayerAdapter {
     public static final int PLAYER_COUNT = 4;
 
     // The measured DMG-07 serial clock is 62.66 kHz, or about 66.9 DMG T-cycles per bit.
-    private static final int CLOCK_TICKS_PER_BIT = 67;
+    private static final int LEGACY_CLOCK_TICKS_PER_BIT = 67;
 
     private static final int PING_BYTE_GAP_TICKS = 5_956;
 
     private static final int PING_PACKET_GAP_TICKS = 51_548;
 
-    private static final int TICKS_PER_MILLISECOND = 4_194;
+    private final int clockTicksPerBit;
+
+    private final int pingByteGapTicks;
+
+    private final int pingPacketGapTicks;
+
+    private final int ticksPerMillisecond;
+
+    private final int transmissionByteGapBaseTicks;
+
+    private final int transmissionByteGapRateTicks;
+
+    private final int minimumPacketGapTicks;
 
     private final Endpoint[] endpoints = new Endpoint[PLAYER_COUNT];
 
@@ -61,6 +74,18 @@ public final class FourPlayerAdapter {
     private boolean restartPingRequested;
 
     public FourPlayerAdapter() {
+        this(ClockSpec.LEGACY);
+    }
+
+    public FourPlayerAdapter(ClockSpec clockSpec) {
+        clockTicksPerBit = scaleLegacyTicks(clockSpec, LEGACY_CLOCK_TICKS_PER_BIT);
+        pingByteGapTicks = scaleLegacyTicks(clockSpec, PING_BYTE_GAP_TICKS);
+        pingPacketGapTicks = scaleLegacyTicks(clockSpec, PING_PACKET_GAP_TICKS);
+        ticksPerMillisecond = requirePositive("ticks per millisecond", Math.toIntExact(
+                clockSpec.ticksForMilliseconds(1, ClockSpec.Rounding.FLOOR)));
+        transmissionByteGapBaseTicks = scaleLegacyTicks(clockSpec, 3_720);
+        transmissionByteGapRateTicks = scaleLegacyTicks(clockSpec, 445);
+        minimumPacketGapTicks = scaleLegacyTicks(clockSpec, 1_510);
         Arrays.fill(pendingBits, -1);
         for (int i = 0; i < PLAYER_COUNT; i++) {
             endpoints[i] = new Endpoint(i);
@@ -110,20 +135,25 @@ public final class FourPlayerAdapter {
 
     private int byteGapTicks() {
         if (phase == Phase.PING || phase == Phase.TRANSMISSION_INDICATOR) {
-            return PING_BYTE_GAP_TICKS;
+            return pingByteGapTicks;
         }
-        return 3_720 + ((rate >>> 4) & 0x0f) * 445;
+        return Math.addExact(
+                transmissionByteGapBaseTicks,
+                Math.multiplyExact((rate >>> 4) & 0x0f, transmissionByteGapRateTicks));
     }
 
     private int packetGapTicks(int packetLength) {
         if (phase == Phase.PING || phase == Phase.TRANSMISSION_INDICATOR) {
-            return PING_PACKET_GAP_TICKS + (rate & 0x0f) * TICKS_PER_MILLISECOND;
+            return Math.addExact(
+                    pingPacketGapTicks,
+                    Math.multiplyExact(rate & 0x0f, ticksPerMillisecond));
         }
         int byteGap = byteGapTicks();
-        int elapsed = packetLength * 8 * CLOCK_TICKS_PER_BIT + (packetLength - 1) * byteGap;
-        int minimumPeriod = 17 * TICKS_PER_MILLISECOND
-                + (rate & 0x0f) * TICKS_PER_MILLISECOND;
-        return Math.max(1_510, minimumPeriod - elapsed);
+        int elapsed = Math.addExact(
+                Math.multiplyExact(packetLength * 8, clockTicksPerBit),
+                Math.multiplyExact(packetLength - 1, byteGap));
+        int minimumPeriod = Math.multiplyExact(17 + (rate & 0x0f), ticksPerMillisecond);
+        return Math.max(minimumPacketGapTicks, Math.subtractExact(minimumPeriod, elapsed));
     }
 
     private void finishPacket() {
@@ -291,7 +321,7 @@ public final class FourPlayerAdapter {
             for (int p = 0; p < PLAYER_COUNT; p++) {
                 pendingBits[p] = BitUtils.getBit(outgoingByte(p), bit) ? 1 : 0;
             }
-            ticksUntilBit = CLOCK_TICKS_PER_BIT - 1;
+            ticksUntilBit = clockTicksPerBit - 1;
             if (--bit < 0) {
                 bit = 7;
                 observeReplyByte();
@@ -335,5 +365,19 @@ public final class FourPlayerAdapter {
             }
             FourPlayerAdapter.this.restoreState(adapterState);
         }
+    }
+
+    private static int scaleLegacyTicks(ClockSpec clockSpec, int legacyTicks) {
+        return requirePositive("scaled serial timing", Math.toIntExact(clockSpec.ticksForRateUnits(
+                legacyTicks,
+                ClockSpec.LEGACY.ticksPerSecond(),
+                ClockSpec.Rounding.NEAREST)));
+    }
+
+    private static int requirePositive(String label, int value) {
+        if (value <= 0) {
+            throw new IllegalArgumentException(label + " must be positive for the session clock");
+        }
+        return value;
     }
 }

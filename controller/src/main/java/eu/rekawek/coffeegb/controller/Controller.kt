@@ -4,6 +4,9 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.SystemProperties
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileIdentity
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
@@ -60,6 +63,12 @@ interface Controller : AutoCloseable {
 
   data class GameboyTypeEvent(val gameboyType: GameboyType) : Event
 
+  /** Canonical stable profile identity for diagnostics and future replay metadata. */
+  data class HardwareProfileEvent(
+      val profile: HardwareProfile,
+      val identity: HardwareProfileIdentity = profile.identity(),
+  ) : Event
+
   /** Posted while the rewind key is held; the emulation plays backwards while active. */
   data class RewindEvent(val active: Boolean) : Event
 
@@ -108,11 +117,11 @@ interface Controller : AutoCloseable {
           }
         }
       }
-      val gameboyType = getGameboyType(properties.system, rom)
-      config.setGameboyType(gameboyType)
+      val hardwareProfile = getHardwareProfile(properties.system, rom)
+      config.setHardwareProfile(hardwareProfile)
       config.setBootstrapMode(properties.system.bootstrapMode)
       config.setPlayerInputSource(properties.playerInputSource)
-      if (config.gameboyType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
+      if (config.hardwareProfile.capabilities().superGameboyCommands() && !rom.isSuperGameboyFlag) {
         config.setDisplaySgbBorder(false)
       } else {
         config.setDisplaySgbBorder(properties.display.showSgbBorder)
@@ -121,20 +130,37 @@ interface Controller : AutoCloseable {
       return config
     }
 
-    fun getGameboyType(properties: SystemProperties, rom: Rom): GameboyType {
-      if (
-          rom.gameboyColorFlag == Rom.GameboyColorFlag.CGB ||
-              rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL ||
-              // the Action Replay dumps carry a garbage CGB flag; the real cart's ASIC
-              // presents a colour header to the console
-              rom.cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER)
+    fun getHardwareProfile(properties: SystemProperties, rom: Rom): HardwareProfile {
+      val selected =
+          properties.profileOverride
+              ?: if (
+              rom.gameboyColorFlag == Rom.GameboyColorFlag.CGB ||
+                  rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL ||
+                  rom.cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER)
+          ) {
+            if (properties.cgbGamesProfile.capabilities().superGameboyCommands() &&
+                !rom.isSuperGameboyFlag) {
+              HardwareProfileRegistry.CGB
+            } else {
+              properties.cgbGamesProfile
+            }
+          } else {
+            properties.dmgGamesProfile
+          }
+      return if (
+          selected == HardwareProfileRegistry.CGB &&
+              rom.cartridgeProperties.has(CartridgeProperties.Feature.CGB0_REVISION)
       ) {
-        if (properties.cgbGamesType == GameboyType.SGB && !rom.isSuperGameboyFlag) {
-          return GameboyType.CGB
-        }
-        return properties.cgbGamesType
+        HardwareProfileRegistry.CGB0
+      } else {
+        selected
       }
-      return properties.dmgGamesType
+    }
+
+    /** @deprecated Use getHardwareProfile. */
+    @Deprecated("Use getHardwareProfile")
+    fun getGameboyType(properties: SystemProperties, rom: Rom): GameboyType {
+      return GameboyType.fromHardwareProfile(getHardwareProfile(properties, rom))
     }
   }
 }

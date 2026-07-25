@@ -2,17 +2,35 @@ package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 
 class SystemProperties(private val properties: EmulatorProperties) {
-  val dmgGamesType
-    get() =
-        GameboyType.valueOf(
-            properties.getProperty(EmulatorProperties.Key.DmgGamesType, GameboyType.SGB.name))
+  val profileOverride
+    get() = properties.profileOverride
 
-  val cgbGamesType
+  val dmgGamesProfile
     get() =
-        GameboyType.valueOf(
-            properties.getProperty(EmulatorProperties.Key.CgbGamesType, GameboyType.CGB.name))
+        HardwareProfileRegistry.resolveSetting(
+            properties.getProperty(
+                EmulatorProperties.Key.DmgGamesType,
+                HardwareProfileRegistry.SGB.id(),
+            ))
+
+  val cgbGamesProfile
+    get() =
+        HardwareProfileRegistry.resolveSetting(
+            properties.getProperty(
+                EmulatorProperties.Key.CgbGamesType,
+                HardwareProfileRegistry.CGB.id(),
+            ))
+
+  @Deprecated("Use dmgGamesProfile")
+  val dmgGamesType
+    get() = GameboyType.fromHardwareProfile(dmgGamesProfile)
+
+  @Deprecated("Use cgbGamesProfile")
+  val cgbGamesType
+    get() = GameboyType.fromHardwareProfile(cgbGamesProfile)
 
   val bootstrapMode
     get() =

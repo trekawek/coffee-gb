@@ -3,8 +3,11 @@ package eu.rekawek.coffeegb.controller.properties
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.nio.file.Paths
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class SystemPropertiesTest {
@@ -36,5 +39,47 @@ class SystemPropertiesTest {
       properties.properties[EmulatorProperties.Key.BootstrapMode.propertyName] = mode.name
       assertEquals(mode, Controller.createGameboyConfig(properties, rom).bootstrapMode)
     }
+  }
+
+  @Test
+  fun `profile settings default to registry ids and migrate finite legacy values`() {
+    val properties = EmulatorProperties()
+    properties.properties.remove(EmulatorProperties.Key.DmgGamesType.propertyName)
+    properties.properties.remove(EmulatorProperties.Key.CgbGamesType.propertyName)
+    assertEquals(HardwareProfileRegistry.SGB, properties.system.dmgGamesProfile)
+    assertEquals(HardwareProfileRegistry.CGB, properties.system.cgbGamesProfile)
+
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "DMG"
+    properties.properties[EmulatorProperties.Key.CgbGamesType.propertyName] = "CGB0"
+    assertEquals(HardwareProfileRegistry.DMG, properties.system.dmgGamesProfile)
+    assertEquals(HardwareProfileRegistry.CGB0, properties.system.cgbGamesProfile)
+
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "dmg"
+    assertEquals(HardwareProfileRegistry.DMG, properties.system.dmgGamesProfile)
+  }
+
+  @Test
+  fun `unknown persisted profile fails actionably before configuration construction`() {
+    val properties = EmulatorProperties()
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "ordinal-0"
+    properties.properties[EmulatorProperties.Key.CgbGamesType.propertyName] = "ordinal-0"
+
+    val rom = Rom(Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile())
+    val failure =
+        assertFailsWith<IllegalArgumentException> {
+          Controller.createGameboyConfig(properties, rom)
+        }
+    assertTrue(failure.message!!.contains("[dmg, cgb, cgb0, sgb]"))
+  }
+
+  @Test
+  fun `explicit profile override reaches constructed configuration`() {
+    val properties = EmulatorProperties(HardwareProfileRegistry.DMG)
+    val rom = Rom(Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile())
+
+    assertEquals(
+        HardwareProfileRegistry.DMG,
+        Controller.createGameboyConfig(properties, rom).hardwareProfile,
+    )
   }
 }

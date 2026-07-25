@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import org.junit.Test;
 
 import java.io.File;
@@ -8,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public class CgbAcidHellCompatibilityTest {
@@ -22,6 +24,8 @@ public class CgbAcidHellCompatibilityTest {
         assertTrue(rom.getCartridgeProperties().has(
                 CartridgeProperties.Feature.CGB0_REVISION));
         assertTrue(new GameboyConfiguration(rom).isCgb0Revision());
+        assertSame(HardwareProfileRegistry.CGB0,
+                new GameboyConfiguration(rom).getHardwareProfile());
     }
 
     @Test
@@ -31,6 +35,7 @@ public class CgbAcidHellCompatibilityTest {
                 .setCgb0Revision(false);
 
         assertFalse(configuration.isCgb0Revision());
+        assertSame(HardwareProfileRegistry.CGB, configuration.getHardwareProfile());
     }
 
     @Test

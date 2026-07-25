@@ -88,6 +88,14 @@ not participate in compatibility. Every active linked player has its own identit
 slots have no identity. Inapplicable configuration bits are canonical zero: CGB0 exists only on
 CGB, Mealybug DMG-blob timing only on non-CGB hardware, and the border flag only on SGB.
 
+Phase 3 assigns permanent canonical profile IDs without changing this v1 layout: hardware DMG is
+`dmg`, hardware CGB with CGB0 clear is `cgb`, hardware CGB with CGB0 set is `cgb0`, and hardware SGB
+is `sgb`. The mapping is total and unambiguous. Bootstrap and the remaining behavior flags stay
+separate compatibility identity. `StateFileInspector` reports the canonical ID plus the fixed v1
+details. An ID not representable by this table cannot be smuggled through a display name or enum
+ordinal; a future profile requires an explicitly versioned optional section or a new format
+version under the extension rules below.
+
 ### Section 2: root payload
 
 A machine payload contains:
@@ -229,11 +237,12 @@ Session, or LinkedController. It performs, in order:
 
 1. bounded envelope/checksum/decompression/section parsing;
 2. detached structural and runtime validation;
-3. primary/slot ROM and full profile comparison for every active machine;
+3. primary/slot ROM and canonical profile plus full behavior-flag comparison for every active machine;
 4. Phase-1 target-aware graph, nullability, semantic, mapper, endpoint, and hardware validation;
 5. the Phase-1 safe-point prepare-and-commit transaction.
 
-No live-mutation callback occurs before all deterministic validation succeeds. Unexpected restore
+An incompatible canonical ID is reported as typed `HARDWARE_PROFILE_MISMATCH` before any target
+capture/apply callback. No live-mutation callback occurs before all deterministic validation succeeds. Unexpected restore
 failures use an explicit deep-owned rollback capture. Linked preparation covers every player before the first
 commit and rollback remains group-atomic.
 

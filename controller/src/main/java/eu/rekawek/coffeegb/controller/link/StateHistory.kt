@@ -6,10 +6,10 @@ import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
-import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.ir.Peer2PeerInfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
@@ -82,7 +82,10 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
         states.firstOrNull { it.frame == baseFrame }
             ?: throw IllegalStateException("No frame $baseFrame")
 
-    val links = createLinks(mode)
+    // Reject a future incompatible profile group before constructing or replaying any machine.
+    val clockSpec = requireCompatibleLinkedClock(configs)
+
+    val links = createLinks(mode, clockSpec)
     val sessions =
         configs.mapIndexed { player, config ->
           val eventBus = EventBusImpl(null, null, false)
@@ -135,7 +138,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
         for (player in sessions.indices) {
           inputs[player].send(sessions[player]?.eventBus ?: continue)
         }
-        repeat(TICKS_PER_FRAME) { sessions.forEach { it?.gameboy?.tick() } }
+        repeat(clockSpec.controllerTicksPerFrame()) { sessions.forEach { it?.gameboy?.tick() } }
       }
     }
 
@@ -229,9 +232,12 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
     val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)
     private val MAX_HISTORY_STATES = StateLimits.NETPLAY_ROLLBACK_FRAMES.toInt()
 
-    internal fun createLinks(mode: LinkMode): Links {
+    internal fun createLinks(
+        mode: LinkMode,
+        clockSpec: ClockSpec = ClockSpec.LEGACY,
+    ): Links {
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-        val adapter = FourPlayerAdapter()
+        val adapter = FourPlayerAdapter(clockSpec)
         return Links(
             List(mode.playerCount) { adapter.endpoint(it) },
             List(mode.playerCount) { InfraredEndpoint.NULL_ENDPOINT },

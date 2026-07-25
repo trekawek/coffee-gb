@@ -203,12 +203,14 @@ class SgbInventoryGuardTest {
 
     val DECISION_PATTERNS =
         linkedMapOf(
+            "HARDWARE_PROFILE" to
+                Regex("HardwareProfile(?:Registry|Identity)?|HardwareCapabilities|BootSpec|profileId"),
             "GAMEBOY_TYPE" to Regex("GameboyType"),
             "CGB_FLAG" to Regex("\\b(gbc|isCgb|isGbc)\\b"),
             "SGB_FLAG" to Regex("\\b(sgb|isSgb)\\b"),
             "CGB0" to Regex("cgb0Revision|CGB0_REVISION|PROFILE_CGB0"),
             "BOOTSTRAP" to Regex("BootstrapMode|bootstrapMode"),
-            "CLOCK" to Regex("TICKS_PER_SEC|TICKS_PER_FRAME|FRAME_DURATION_NANOS"),
+            "CLOCK" to Regex("ClockSpec|clockSpec|TICKS_PER_SEC|TICKS_PER_FRAME|FRAME_DURATION_NANOS"),
             "SGB_BORDER" to Regex("displaySgbBorder|sgbBorder|PROFILE_SGB_BORDER"),
             "MEALYBUG" to Regex("mealybugDmgBlob|MEALYBUG_DMG_BLOB|PROFILE_MEALYBUG_DMG_BLOB"),
             "CODEBREAKER" to Regex("codeBreakerRumble|CODEBREAKER_RUMBLE|PROFILE_CODEBREAKER_RUMBLE"),
@@ -216,7 +218,7 @@ class SgbInventoryGuardTest {
                 Regex(
                     "GameboyColorFlag|isSuperGameboyFlag|DmgGamesType|CgbGamesType|" +
                         "forceDmg|forceCgb|force-dmg|force-cgb"),
-            "PORTABLE_PROFILE" to Regex("MachineHardwareState|StateHardwareProfile"),
+            "PORTABLE_PROFILE" to Regex("MachineHardwareState|StateHardwareProfile|canonicalProfileId"),
         )
 
     val PRODUCTION_ROOTS =

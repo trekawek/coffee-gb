@@ -10,6 +10,10 @@ import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.genie.Genie;
 import eu.rekawek.coffeegb.core.gpu.*;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileIdentity;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.ir.InfraredPort;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
@@ -43,9 +47,12 @@ import java.util.function.BooleanSupplier;
 
 public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable {
 
+    /** @deprecated Use the owning Gameboy's {@link #getClockSpec()}. */
+    @Deprecated
     public static final int TICKS_PER_SEC = 4_194_304;
 
-    // 60 frames per second
+    /** @deprecated Use the owning Gameboy's {@link #getClockSpec()}. */
+    @Deprecated
     public static final int TICKS_PER_FRAME = Gameboy.TICKS_PER_SEC / 60;
 
     // Keep very short LCD-off VRAM rewrites on the previous panel image, but do not
@@ -67,11 +74,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     // short clock-mux half-phase. The ordinary long half-phase still wins when
     // both conditions coincide.
     static final int HBLANK_SPEED_SWITCH_TAIL_TICKS = 7;
-
-    // The native CGB boot ROM hands control to the cartridge before its final
-    // peripheral-clock handoff has propagated. The CPU is already at $0100 while
-    // the serial port and PPU finish these independently clocked ticks.
-    static final int CGB_BOOT_HANDOFF_TICKS = 12;
 
     // A pending HBlank request advances the resumed CPU phase when no OAM transfer
     // owns the shared DMA clock. An active OAM transfer instead retains the delayed
@@ -164,13 +166,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final boolean gbc;
 
-    private final GameboyType gameboyType;
+    private final HardwareProfile hardwareProfile;
+
+    private final ClockSpec clockSpec;
 
     public Gameboy(GameboyConfiguration configuration) {
-        this.gameboyType = configuration.gameboyType;
-        this.gbc = configuration.gameboyType == GameboyType.CGB;
+        this.hardwareProfile = HardwareProfileRegistry.requireRegistered(configuration.hardwareProfile);
+        this.clockSpec = hardwareProfile.clockSpec();
+        this.gbc = hardwareProfile.capabilities().cgbMode();
         boolean gbc = this.gbc;
-        boolean sgb = configuration.gameboyType == GameboyType.SGB;
+        boolean sgb = hardwareProfile.capabilities().superGameboyCommands();
+        boolean cgb0Revision = hardwareProfile == HardwareProfileRegistry.CGB0;
         CartridgeProperties cartridgeProperties = configuration.rom.getCartridgeProperties();
         blankCgbBootTilePending = cartridgeProperties.has(
                 CartridgeProperties.Feature.BLANK_CGB_BOOT_TILE);
@@ -184,7 +190,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         speedMode = new SpeedMode(gbc, legacySpeedSwitchRequired);
         interruptManager = new InterruptManager(gbc);
         timer = new Timer(interruptManager, speedMode);
-        mmu = new Mmu(gbc, configuration.cgb0Revision);
+        mmu = new Mmu(gbc, cgb0Revision);
         display = new Display(gbc);
         gameGenie = new Genie(mmu, gbc);
 
@@ -201,7 +207,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         mmu.setGpu(gpu);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace(), speedMode);
-        sound = new Sound(timer, speedMode, gbc);
+        sound = new Sound(timer, speedMode, gbc, clockSpec);
         joypad = new Joypad(interruptManager, sgbBus, sgb, configuration.playerInputSource);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
         infraredPort = new InfraredPort(gbc, speedMode);
@@ -215,21 +221,21 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
-                    configuration.rtcTimeSource);
+                    configuration.rtcTimeSource, clockSpec);
         } else {
             cartridge = new Cartridge(configuration.rom, configuration.supportBatterySave,
-                    configuration.rtcTimeSource);
+                    configuration.rtcTimeSource, clockSpec);
         }
         if (configuration.slotRom != null && cartridge.getDatel() != null) {
             // the game cartridge in the Action Replay's pass-through slot
             slotCartridge = new Cartridge(configuration.slotRom, configuration.supportBatterySave,
-                    configuration.rtcTimeSource);
+                    configuration.rtcTimeSource, clockSpec);
             cartridge.getDatel().setSlotCartridge(slotCartridge.getMemoryController(),
                     configuration.slotRom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB);
         } else {
             slotCartridge = null;
         }
-        Bios bios = new Bios(configuration.gameboyType);
+        Bios bios = new Bios(hardwareProfile);
         biosShadow = new BiosShadow(bios, cartridge);
         speedMode.setBiosShadow(biosShadow);
         mmu.setSpeedMode(speedMode);
@@ -275,8 +281,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // divider preset includes the equivalent 12-T offset: 536 T, which is
             // 512 T at its first test read after three fewer NOPs
             // (boot_div-cgbABCDE, boot_div-cgb0).
-            timer.presetDiv(gbc ? (configuration.cgb0Revision
-                    ? 524 + CGB_BOOT_HANDOFF_TICKS : 10) : 4);
+            timer.presetDiv(hardwareProfile.bootSpec().authenticDivPreset());
             gpu.setByte(0xff40, 0x00);
         }
         boolean bootTimedOut = false;
@@ -298,8 +303,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     throw new CancellationException("Boot cancelled");
                 }
             }
-            if (gbc && !configuration.cgb0Revision && cpu.getRegisters().getPC() == 0x100) {
-                for (int i = 0; i < CGB_BOOT_HANDOFF_TICKS; i++) {
+            if (hardwareProfile.bootSpec().cgbBootHandoffTicks() > 0
+                    && cpu.getRegisters().getPC() == 0x100) {
+                for (int i = 0; i < hardwareProfile.bootSpec().cgbBootHandoffTicks(); i++) {
                     serialPort.tick();
                     gpu.tick();
                     statRegister.tick();
@@ -358,19 +364,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         speedMode.setDmgCompat(gbc && nonCgbCart);
         biosShadow.setByte(0xff50, 0);
         // DIV counter value at PC=0x0100 after the boot ROM (mooneye boot_div tests)
-        timer.presetDiv(gbc ? 0xb644 : 0xabcc);
+        timer.presetDiv(hardwareProfile.bootSpec().postBootDivPreset());
         var r = cpu.getRegisters();
-        if (gbc) {
-            r.setAF(0x1180);
-            r.setBC(0x0000);
-            r.setDE(0xff56);
-            r.setHL(0x000d);
-        } else {
-            r.setAF(0x01b0);
-            r.setBC(0x0013);
-            r.setDE(0x00d8);
-            r.setHL(0x014d);
-        }
+        r.setAF(hardwareProfile.bootSpec().postBootAf());
+        r.setBC(hardwareProfile.bootSpec().postBootBc());
+        r.setDE(hardwareProfile.bootSpec().postBootDe());
+        r.setHL(hardwareProfile.bootSpec().postBootHl());
         r.setSP(0xfffe);
         r.setPC(0x0100);
     }
@@ -518,8 +517,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // the normal cadence.
             lcdOffTicks++;
             if (lcdOffTicks == LCD_OFF_BLANK_DELAY
-                    || lcdOffTicks >= LCD_OFF_BLANK_DELAY + TICKS_PER_FRAME) {
-                if (lcdOffTicks >= LCD_OFF_BLANK_DELAY + TICKS_PER_FRAME) {
+                    || lcdOffTicks >= LCD_OFF_BLANK_DELAY + clockSpec.controllerTicksPerFrame()) {
+                if (lcdOffTicks >= LCD_OFF_BLANK_DELAY + clockSpec.controllerTicksPerFrame()) {
                     lcdOffTicks = LCD_OFF_BLANK_DELAY;
                 }
                 display.blankFrame();
@@ -851,8 +850,22 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                                   RealTimeClock.RuntimeState slot) {
     }
 
+    public HardwareProfile getHardwareProfile() {
+        return hardwareProfile;
+    }
+
+    public HardwareProfileIdentity getHardwareProfileIdentity() {
+        return hardwareProfile.identity();
+    }
+
+    public ClockSpec getClockSpec() {
+        return clockSpec;
+    }
+
+    /** @deprecated Use {@link #getHardwareProfile()}. */
+    @Deprecated
     public GameboyType getGameboyType() {
-        return gameboyType;
+        return GameboyType.fromHardwareProfile(hardwareProfile);
     }
 
     /** Flushes persistent cartridge state without closing the running machine. */
@@ -1106,7 +1119,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         private final Rom rom;
 
-        private GameboyType gameboyType;
+        private HardwareProfile hardwareProfile;
 
         private BootstrapMode bootstrapMode = BootstrapMode.SKIP;
 
@@ -1117,8 +1130,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         private boolean supportBatterySave = true;
 
         private boolean displaySgbBorder = true;
-
-        private boolean cgb0Revision;
 
         private boolean mealybugDmgBlob;
 
@@ -1137,21 +1148,35 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         public GameboyConfiguration(Rom rom) {
             this.rom = rom;
-            cgb0Revision = rom.getCartridgeProperties().has(
+            boolean cgb0Revision = rom.getCartridgeProperties().has(
                     CartridgeProperties.Feature.CGB0_REVISION);
             mealybugDmgBlob = rom.getCartridgeProperties().has(
                     CartridgeProperties.Feature.MEALYBUG_DMG_BLOB);
             codeBreakerRumble = rom.getCartridgeProperties().has(
                     CartridgeProperties.Feature.CODEBREAKER_RUMBLE);
             if (rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB) {
-                gameboyType = GameboyType.DMG;
+                hardwareProfile = HardwareProfileRegistry.DMG;
             } else {
-                gameboyType = GameboyType.CGB;
+                hardwareProfile = cgb0Revision
+                        ? HardwareProfileRegistry.CGB0 : HardwareProfileRegistry.CGB;
             }
         }
 
+        /** @deprecated Use {@link #setHardwareProfile(HardwareProfile)}. */
+        @Deprecated
         public GameboyConfiguration setGameboyType(GameboyType gameboyType) {
-            this.gameboyType = gameboyType;
+            HardwareProfile selected = HardwareProfileRegistry.fromGameboyType(gameboyType);
+            // Historical callers set CGB after the cartridge-derived CGB0 bit was initialized.
+            // Preserve that exact order-dependent compatibility behavior.
+            if (gameboyType == GameboyType.CGB && hardwareProfile == HardwareProfileRegistry.CGB0) {
+                return this;
+            }
+            this.hardwareProfile = selected;
+            return this;
+        }
+
+        public GameboyConfiguration setHardwareProfile(HardwareProfile hardwareProfile) {
+            this.hardwareProfile = HardwareProfileRegistry.requireRegistered(hardwareProfile);
             return this;
         }
 
@@ -1161,16 +1186,33 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
          * decoding.
          */
         public GameboyConfiguration setCgb0Revision(boolean cgb0Revision) {
-            this.cgb0Revision = cgb0Revision;
+            if (cgb0Revision) {
+                if (hardwareProfile.family() != HardwareProfile.Family.CGB) {
+                    throw new IllegalArgumentException("CGB0 revision requires a CGB hardware profile");
+                }
+                hardwareProfile = HardwareProfileRegistry.CGB0;
+            } else if (hardwareProfile == HardwareProfileRegistry.CGB0) {
+                hardwareProfile = HardwareProfileRegistry.CGB;
+            }
             return this;
         }
 
+        /** @deprecated Use {@link #getHardwareProfile()}. */
+        @Deprecated
         public GameboyType getGameboyType() {
-            return gameboyType;
+            return GameboyType.fromHardwareProfile(hardwareProfile);
         }
 
         public boolean isCgb0Revision() {
-            return cgb0Revision;
+            return hardwareProfile == HardwareProfileRegistry.CGB0;
+        }
+
+        public HardwareProfile getHardwareProfile() {
+            return hardwareProfile;
+        }
+
+        public ClockSpec getClockSpec() {
+            return hardwareProfile.clockSpec();
         }
 
         /** Selects the DMG-blob timing expected by the Mealybug Shootout references. */
@@ -1289,13 +1331,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         private GameboyConfiguration copy() {
             GameboyConfiguration copy = new GameboyConfiguration(rom);
-            copy.gameboyType = gameboyType;
+            copy.hardwareProfile = hardwareProfile;
             copy.bootstrapMode = bootstrapMode;
             copy.slotRom = slotRom;
             copy.batteryData = batteryData;
             copy.supportBatterySave = supportBatterySave;
             copy.displaySgbBorder = displaySgbBorder;
-            copy.cgb0Revision = cgb0Revision;
             copy.mealybugDmgBlob = mealybugDmgBlob;
             copy.codeBreakerRumble = codeBreakerRumble;
             copy.rtcTimeSource = rtcTimeSource;

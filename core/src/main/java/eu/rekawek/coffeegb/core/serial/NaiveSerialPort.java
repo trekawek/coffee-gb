@@ -1,9 +1,9 @@
 package eu.rekawek.coffeegb.core.serial;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 
 /**
  * Simplified SerialPort implementation in which the bytes are immediately send to the other side,
@@ -27,14 +27,24 @@ public class NaiveSerialPort implements AddressSpace {
 
     private final SpeedMode speedMode;
 
+    private final ClockSpec clockSpec;
+
     private int speed;
+
+    private int byteTicks;
 
     private int divider;
 
     public NaiveSerialPort(InterruptManager interruptManager, boolean gbc, SpeedMode speedMode) {
+        this(interruptManager, gbc, speedMode, ClockSpec.LEGACY);
+    }
+
+    public NaiveSerialPort(InterruptManager interruptManager, boolean gbc, SpeedMode speedMode,
+                           ClockSpec clockSpec) {
         this.interruptManager = interruptManager;
         this.speedMode = speedMode;
         this.gbc = gbc;
+        this.clockSpec = clockSpec;
     }
 
     public void init(SerialEndpoint serialEndpoint) {
@@ -47,7 +57,7 @@ public class NaiveSerialPort implements AddressSpace {
         if (clockType == ClockType.EXTERNAL) {
             incomingByte = serialEndpoint.recvByte();
         } else if (transferInProgress) {
-            if (divider++ == 8 * Gameboy.TICKS_PER_SEC / speed) {
+            if (divider++ == byteTicks) {
                 incomingByte = serialEndpoint.sendByte();
                 transferInProgress = false;
             }
@@ -98,6 +108,11 @@ public class NaiveSerialPort implements AddressSpace {
             speed = 8192;
         }
         speed *= speedMode.getSpeedMode();
+        byteTicks = Math.toIntExact(
+                clockSpec.ticksForRateUnits(8, speed, ClockSpec.Rounding.FLOOR));
+        if (byteTicks <= 0) {
+            throw new IllegalArgumentException("Serial byte timing requires at least one tick");
+        }
         serialEndpoint.startSending();
     }
 }

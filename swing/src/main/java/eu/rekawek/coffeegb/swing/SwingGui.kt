@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEve
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import java.awt.Cursor
@@ -22,7 +23,11 @@ import javax.swing.JFrame
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 
-class SwingGui private constructor(debug: Boolean, private val initialRom: File?) {
+class SwingGui private constructor(
+    debug: Boolean,
+    private val initialRom: File?,
+    profileOverride: HardwareProfile?,
+) {
 
   private val eventBus: EventBus
 
@@ -30,7 +35,7 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
 
   private val console: Console? = if (debug) Console() else null
 
-  private val properties: EmulatorProperties = EmulatorProperties()
+  private val properties: EmulatorProperties = EmulatorProperties(profileOverride)
 
   private lateinit var mainWindow: JFrame
 
@@ -119,8 +124,8 @@ class SwingGui private constructor(debug: Boolean, private val initialRom: File?
   }
 
   companion object {
-    fun run(debug: Boolean, initialRom: File?) {
-      SwingUtilities.invokeLater { SwingGui(debug, initialRom).startGui() }
+    fun run(debug: Boolean, initialRom: File?, profileOverride: HardwareProfile? = null) {
+      SwingUtilities.invokeLater { SwingGui(debug, initialRom, profileOverride).startGui() }
     }
   }
 }

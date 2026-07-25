@@ -20,6 +20,9 @@ deep-owned immutable containers. It cannot represent a thread, callback, event b
 clock service, AWT/Swing object, or live mutable array. The format that encodes this model is
 specified separately in [state-file-v1.md](state-file-v1.md). Local slot snapshots and netplay
 protocol v8 use that format; local legacy migration remains isolated from network decoding.
+The owning immutable hardware profile and exact `ClockSpec` are construction identity rather than
+mutable machine data: MachineSnapshot retains the canonical ID, while StateFile v1 derives that ID
+from its fixed hardware/CGB0 identity fields and verifies the complete profile before apply.
 The exact remaining compatibility surface and removal policy are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 

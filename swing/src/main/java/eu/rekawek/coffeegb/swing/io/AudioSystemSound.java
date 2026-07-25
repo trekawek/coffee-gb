@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.swing.io;
 
-import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.sound.Sound;
 import eu.rekawek.coffeegb.controller.properties.SoundProperties;
 import org.slf4j.Logger;
@@ -43,13 +43,6 @@ public class AudioSystemSound implements Runnable {
      */
     private static final double HIGHPASS_CUTOFF = 28.0;
 
-    private static final double TICKS_PER_SAMPLE = (double) Gameboy.TICKS_PER_SEC / SAMPLE_RATE;
-
-    /**
-     * Samples produced by one frame's worth of ticks, rounded up.
-     */
-    private static final int MAX_FRAME_SAMPLES = Gameboy.TICKS_PER_FRAME / 95 + 2;
-
     /**
      * Line buffer of about 45 ms; the frame queue adds at most three frames (50 ms).
      */
@@ -61,7 +54,12 @@ public class AudioSystemSound implements Runnable {
 
     private final BlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(3);
 
-    private double resamplePos;
+    private ClockSpec activeClock = ClockSpec.LEGACY;
+
+    private ClockSpec.RateAccumulator sampleAccumulator =
+            activeClock.newTickRateAccumulator(SAMPLE_RATE);
+
+    private volatile int silenceBytes = frameOutputBytes(activeClock);
 
     private long sumL, sumR, prevSumL, prevSumR;
 
@@ -92,7 +90,7 @@ public class AudioSystemSound implements Runnable {
             return;
         }
         line.start();
-        byte[] silence = new byte[MAX_FRAME_SAMPLES * 4];
+        byte[] silence = new byte[silenceBytes];
         while (!doStop) {
             byte[] buffer;
             try {
@@ -103,6 +101,9 @@ public class AudioSystemSound implements Runnable {
             if (buffer != null) {
                 line.write(buffer, 0, buffer.length);
             } else if (line.available() >= line.getBufferSize() - 4) {
+                if (silence.length != silenceBytes) {
+                    silence = new byte[silenceBytes];
+                }
                 // nothing is playing and the line has drained: keep it warm with silence
                 // instead of letting it underrun (a transiently late producer does not
                 // cause a silence gap this way)
@@ -133,8 +134,10 @@ public class AudioSystemSound implements Runnable {
     private void play(Sound.SoundSampleEvent event) {
         int[] source = event.buffer();
         int ticks = source.length / 2;
+        selectClock(event.clockSpec());
 
-        byte[] out = new byte[MAX_FRAME_SAMPLES * 4];
+        int maximumSamples = Math.toIntExact(activeClock.maximumOutputUnits(ticks, SAMPLE_RATE));
+        byte[] out = new byte[Math.multiplyExact(maximumSamples, 4)];
         int j = 0;
         // moving average over two output periods (a width-2 box filter): near-Nyquist
         // content is attenuated ~38 dB, so games parking a channel on an ultrasonic
@@ -144,8 +147,11 @@ public class AudioSystemSound implements Runnable {
             sumL += source[t * 2];
             sumR += source[t * 2 + 1];
             cnt++;
-            if (++resamplePos >= TICKS_PER_SAMPLE) {
-                resamplePos -= TICKS_PER_SAMPLE;
+            long produced = sampleAccumulator.advance(1);
+            if (produced > 1) {
+                throw new IllegalStateException("Audio output rate exceeds the emulated tick rate");
+            }
+            if (produced == 1) {
                 int total = prevCnt + cnt;
                 double rawL = (double) (prevSumL + sumL) / total;
                 double rawR = (double) (prevSumR + sumR) / total;
@@ -173,5 +179,25 @@ public class AudioSystemSound implements Runnable {
             queue.poll();
             queue.offer(trimmed);
         }
+    }
+
+    private void selectClock(ClockSpec clockSpec) {
+        if (activeClock.equals(clockSpec)) {
+            return;
+        }
+        activeClock = clockSpec;
+        sampleAccumulator = clockSpec.newTickRateAccumulator(SAMPLE_RATE);
+        silenceBytes = frameOutputBytes(clockSpec);
+        sumL = 0;
+        sumR = 0;
+        prevSumL = 0;
+        prevSumR = 0;
+        cnt = 0;
+        prevCnt = 0;
+    }
+
+    private static int frameOutputBytes(ClockSpec clockSpec) {
+        long samples = clockSpec.maximumOutputUnits(clockSpec.controllerTicksPerFrame(), SAMPLE_RATE);
+        return Math.toIntExact(Math.multiplyExact(samples, 4));
     }
 }

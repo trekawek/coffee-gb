@@ -798,7 +798,7 @@ class Connection(
           }
         }
         is SessionStateRoot -> {
-          val links = StateHistory.createLinks(mode)
+          val links = StateHistory.createLinks(mode, configuration.clockSpec)
           val probeBus = EventBusImpl(null, null, false)
           val probe =
               Session(

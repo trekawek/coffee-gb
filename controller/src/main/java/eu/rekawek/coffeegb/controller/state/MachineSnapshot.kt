@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb.controller.state
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
-import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.gpu.DmgPixelFifo
 import eu.rekawek.coffeegb.core.gpu.Gpu
 import eu.rekawek.coffeegb.core.state.MachineStateCapture
@@ -36,7 +35,7 @@ import kotlin.math.min
 internal class MachineSnapshot private constructor(
     private val root: SnapshotRecord,
     private val rtcRuntime: SnapshotRtcRuntime,
-    private val hardware: GameboyType,
+    private val profileId: String,
     private val dmgFifoRuntime: SnapshotDmgFifoRuntime?,
     internal val captureStats: CaptureStats,
 ) {
@@ -49,9 +48,9 @@ internal class MachineSnapshot private constructor(
       gameboy: Gameboy,
       probe: ((ApplyStage) -> Unit)? = null,
   ) {
-    if (gameboy.gameboyType != hardware) {
+    if (gameboy.hardwareProfile.id() != profileId) {
       throw StateApplyException(
-          "Internal $hardware snapshot does not match ${gameboy.gameboyType} hardware")
+          "Internal $profileId snapshot does not match ${gameboy.hardwareProfile.id()} profile")
     }
     val rollbackState = gameboy.captureState()
     if (SnapshotGraph.ownershipSignature(root) !=
@@ -147,7 +146,7 @@ internal class MachineSnapshot private constructor(
         gameboy: Gameboy,
       previous: MachineSnapshot? = null,
     ): MachineSnapshot {
-      val compatiblePrevious = previous?.takeIf { it.hardware == gameboy.gameboyType }
+      val compatiblePrevious = previous?.takeIf { it.profileId == gameboy.hardwareProfile.id() }
       val graph =
           gameboy.withMachineStateCapture { view, source ->
             SnapshotGraph.capture(view, compatiblePrevious?.root, source)
@@ -160,7 +159,7 @@ internal class MachineSnapshot private constructor(
               rtc.primary()?.let { SnapshotMbc3Runtime(it.emulationPaused(), it.pauseStartedMillis()) },
               rtc.slot()?.let { SnapshotMbc3Runtime(it.emulationPaused(), it.pauseStartedMillis()) },
           ),
-          gameboy.gameboyType,
+          gameboy.hardwareProfile.id(),
           fifo?.let {
             SnapshotDmgFifoRuntime(
                 it.timing().toSnapshot(),

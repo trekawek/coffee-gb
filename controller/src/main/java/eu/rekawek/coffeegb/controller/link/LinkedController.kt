@@ -48,7 +48,6 @@ import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
-import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.Event
@@ -294,6 +293,10 @@ class LinkedController(
     require(localPlayer in 0 until mode.playerCount)
 
     eventQueue.register<LoadedLocalConfigEvent> { e ->
+      requireCompatibleLinkedClock(configs.toMutableList().also { it[localPlayer] = e.config })
+      if (sessions.all { it == null }) {
+        links = StateHistory.createLinks(mode, e.config.clockSpec)
+      }
       val checkpoint = isFourPlayerHost()
       if (checkpoint) reconcileHistory()
       sessions[localPlayer]?.close()
@@ -471,6 +474,7 @@ class LinkedController(
       val rom = Rom(it.rom)
       val config = createGameboyConfig(properties, rom)
       eventBus.post(Controller.GameboyTypeEvent(config.gameboyType))
+      eventBus.post(Controller.HardwareProfileEvent(config.hardwareProfile))
       eventBus.post(Controller.SessionPauseSupportEvent(false))
       eventBus.post(Controller.SessionSnapshotSupportEvent(null))
       eventBus.post(Controller.EmulationStartedEvent(rom.title))
@@ -483,9 +487,9 @@ class LinkedController(
 
     eventBus.register<UpdatedSystemMappingEvent> {
       sessions[localPlayer]?.config?.let { config ->
-        val newType = Controller.getGameboyType(properties.system, config.rom)
+        val newProfile = Controller.getHardwareProfile(properties.system, config.rom)
         val newBootstrapMode = properties.system.bootstrapMode
-        if (newType != config.gameboyType || newBootstrapMode != config.bootstrapMode) {
+        if (newProfile != config.hardwareProfile || newBootstrapMode != config.bootstrapMode) {
           eventBus.post(LoadRomEvent(config.rom.file))
         }
       }
@@ -547,9 +551,10 @@ class LinkedController(
       lastSync = TimeSource.Monotonic.markNow()
     }
 
-    repeat(TICKS_PER_FRAME) {
+    val clockSpec = requireCompatibleLinkedClock(configs)
+    repeat(clockSpec.controllerTicksPerFrame()) {
       sessions.forEach { it?.gameboy?.tick() }
-      timingTicker.run()
+      timingTicker.run(clockSpec)
     }
 
     frame++
@@ -592,7 +597,7 @@ class LinkedController(
     var current = sessionFrame
     while (current < frame) {
       stateHistory.setPlayerState(player, current, session.captureDetachedState(), session.heldButtons)
-      repeat(TICKS_PER_FRAME) { session.gameboy.tick() }
+      repeat(session.gameboy.clockSpec.controllerTicksPerFrame()) { session.gameboy.tick() }
       current++
     }
     sessions[player] = session
@@ -614,6 +619,13 @@ class LinkedController(
           rejectPeerState(e.source, e.player, failure)
           return false
         }
+    try {
+      requireCompatibleLinkedClock(configs.toMutableList().also { it[e.player] = prepared.config })
+    } catch (failure: Throwable) {
+      prepared.session.close()
+      rejectPeerState(e.source, e.player, failure)
+      return false
+    }
     val previous = sessions[e.player]
     val oldConfig = configs[e.player]
     val oldRom = romBuffers[e.player]
@@ -639,7 +651,9 @@ class LinkedController(
             prepared.session.captureDetachedState(),
             prepared.session.heldButtons,
         )
-        repeat(TICKS_PER_FRAME) { prepared.session.gameboy.tick() }
+        repeat(prepared.session.gameboy.clockSpec.controllerTicksPerFrame()) {
+          prepared.session.gameboy.tick()
+        }
         current++
       }
     } catch (failure: Throwable) {
@@ -672,19 +686,26 @@ class LinkedController(
   }
 
   private fun applyPeerCheckpoint(event: SessionCheckpointEvent): Boolean {
-    val candidateLinks = StateHistory.createLinks(mode)
     val prepared = arrayOfNulls<PreparedPeerReplacement>(mode.playerCount)
+    lateinit var candidateLinks: StateHistory.Links
     try {
+      val candidateConfigs = arrayOfNulls<GameboyConfiguration>(mode.playerCount)
       event.states.forEach { state ->
-        if (state.player !in prepared.indices || prepared[state.player] != null) {
+        if (state.player !in candidateConfigs.indices || candidateConfigs[state.player] != null) {
           throw StateApplyException("Checkpoint has duplicate or invalid player ${state.player}")
         }
+        candidateConfigs[state.player] = peerConfiguration(state)
+      }
+      val clockSpec = requireCompatibleLinkedClock(candidateConfigs.toList())
+      candidateLinks = StateHistory.createLinks(mode, clockSpec)
+      event.states.forEach { state ->
         prepared[state.player] =
             preparePeerReplacement(
                 state,
                 candidateLinks,
                 requireSession = true,
                 hotPlug = true,
+                config = requireNotNull(candidateConfigs[state.player]),
             )
       }
       val adapterStates =
@@ -757,6 +778,7 @@ class LinkedController(
       candidateLinks: StateHistory.Links,
       requireSession: Boolean,
       hotPlug: Boolean,
+      config: GameboyConfiguration = peerConfiguration(event),
   ): PreparedPeerReplacement {
     var candidate: Session? = null
     try {
@@ -767,18 +789,6 @@ class LinkedController(
       if (!requireSession && root != null && root !is MachineStateRoot) {
         throw StateApplyException("Initial player state requires a MACHINE StateFile")
       }
-      val config =
-          Connection.peerConfiguration(
-              event.rom,
-              event.slotRom,
-              event.battery,
-              event.gameboyType,
-              event.bootstrapMode,
-              event.cgb0Revision,
-              event.mealybugDmgBlob,
-              event.codeBreakerRumble,
-              event.displaySgbBorder,
-          ).setPlayerInputSource(PlayerInputSource.RELEASED)
       candidate =
           Session(
               if (root != null) config.forRestore() else config,
@@ -812,6 +822,20 @@ class LinkedController(
       )
     }
   }
+
+  private fun peerConfiguration(event: PeerLoadedGameEvent): GameboyConfiguration =
+      Connection.peerConfiguration(
+              event.rom,
+              event.slotRom,
+              event.battery,
+              event.gameboyType,
+              event.bootstrapMode,
+              event.cgb0Revision,
+              event.mealybugDmgBlob,
+              event.codeBreakerRumble,
+              event.displaySgbBorder,
+          )
+          .setPlayerInputSource(PlayerInputSource.RELEASED)
 
   private fun createSessionEventBus(player: Int): EventBusImpl =
       EventBusImpl(null, null, false).also { sessionEventBus ->

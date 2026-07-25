@@ -3,9 +3,9 @@ package eu.rekawek.coffeegb.core.sound;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -40,13 +40,15 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     private final boolean[] overriddenEnabled = {true, true, true, true};
 
-    private final int[] buffer = new int[Gameboy.TICKS_PER_FRAME * 2];
+    private final int[] buffer;
 
     private int i = 0;
 
     private final Timer timer;
 
     private final boolean gbc;
+
+    private final ClockSpec clockSpec;
 
     private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
@@ -70,9 +72,16 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     private int frameSequencerDivOffset;
 
     public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc) {
+        this(timer, speedMode, gbc, ClockSpec.LEGACY);
+    }
+
+    public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc,
+                 ClockSpec clockSpec) {
         this.timer = timer;
         this.speedMode = speedMode;
         this.gbc = gbc;
+        this.clockSpec = clockSpec;
+        this.buffer = new int[Math.multiplyExact(clockSpec.controllerTicksPerFrame(), 2)];
         frameSequencerDivOffset = gbc ? CGB_BOOT_DIV_APU_OFFSET : 0;
         allModes[0] = new SoundMode1(frameSequencer, gbc);
         allModes[1] = new SoundMode2(frameSequencer, gbc);
@@ -178,7 +187,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         buffer[i + 1] = right;
         i += 2;
         if (i == buffer.length) {
-            eventBus.post(new SoundSampleEvent(buffer));
+            eventBus.post(new SoundSampleEvent(buffer, clockSpec));
             i = 0;
         }
     }
@@ -375,7 +384,10 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     }
 
-    public record SoundSampleEvent(int[] buffer) implements Event {
+    public record SoundSampleEvent(int[] buffer, ClockSpec clockSpec) implements Event {
+        public SoundSampleEvent(int[] buffer) {
+            this(buffer, ClockSpec.LEGACY);
+        }
     }
 
     public record SoundEnabledEvent(boolean enabled) implements Event {

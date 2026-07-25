@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -24,25 +25,36 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && rom.getFile() != null ? createBattery(rom) : Battery.NULL_BATTERY,
-                new SystemTimeSource());
+                new SystemTimeSource(), ClockSpec.LEGACY);
     }
 
     public Cartridge(Rom rom, Battery battery) {
-        this(rom, battery, new SystemTimeSource());
+        this(rom, battery, new SystemTimeSource(), ClockSpec.LEGACY);
     }
 
     public Cartridge(Rom rom, boolean supportBatterySaves, TimeSource rtcTimeSource) {
         this(rom, supportBatterySaves && rom.getFile() != null ? createBattery(rom) : Battery.NULL_BATTERY,
-                rtcTimeSource);
+                rtcTimeSource, ClockSpec.LEGACY);
     }
 
     public Cartridge(Rom rom, Battery battery, TimeSource rtcTimeSource) {
+        this(rom, battery, rtcTimeSource, ClockSpec.LEGACY);
+    }
+
+    public Cartridge(Rom rom, boolean supportBatterySaves, TimeSource rtcTimeSource,
+                     ClockSpec clockSpec) {
+        this(rom, supportBatterySaves && rom.getFile() != null ? createBattery(rom) : Battery.NULL_BATTERY,
+                rtcTimeSource, clockSpec);
+    }
+
+    public Cartridge(Rom rom, Battery battery, TimeSource rtcTimeSource, ClockSpec clockSpec) {
         this.battery = battery;
-        this.addressSpace = createMemoryController(rom, battery, rtcTimeSource);
+        this.addressSpace = createMemoryController(rom, battery, rtcTimeSource, clockSpec);
     }
 
     private static MemoryController createMemoryController(Rom rom, Battery battery,
-                                                           TimeSource rtcTimeSource) {
+                                                           TimeSource rtcTimeSource,
+                                                           ClockSpec clockSpec) {
         return switch (rom.getCartridgeProperties().getMapper()) {
             case BUNG_EMS -> new BungEms(rom, battery);
             case HIDDEN_MMM01 -> new Mmm01(rom, battery, false);
@@ -62,12 +74,13 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             case MBC1 -> new Mbc1(rom, battery);
             case POCKET_CAMERA -> new PocketCamera(rom, battery);
             case MBC5 -> new Mbc5(rom, battery);
-            case STANDARD -> createStandardMemoryController(rom, battery, rtcTimeSource);
+            case STANDARD -> createStandardMemoryController(rom, battery, rtcTimeSource, clockSpec);
         };
     }
 
     private static MemoryController createStandardMemoryController(Rom rom, Battery battery,
-                                                                   TimeSource rtcTimeSource) {
+                                                                   TimeSource rtcTimeSource,
+                                                                   ClockSpec clockSpec) {
         var type = rom.getType();
         if (type.isMmm01()) {
             // The dump has the menu program first; the mapper wants it last.
@@ -83,7 +96,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         } else if (type.isMbc2()) {
             return new Mbc2(rom, battery);
         } else if (type.isMbc3()) {
-            return new Mbc3(rom, battery, rtcTimeSource);
+            return new Mbc3(rom, battery, rtcTimeSource, clockSpec);
         } else if (type.isMbc5()) {
             return new Mbc5(rom, battery);
         } else if (type.isMbc6()) {

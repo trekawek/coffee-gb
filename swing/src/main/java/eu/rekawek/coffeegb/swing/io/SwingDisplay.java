@@ -1,7 +1,8 @@
 package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.controller.Controller;
-import eu.rekawek.coffeegb.core.GameboyType;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Display;
@@ -57,7 +58,7 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private int[] previousFrame;
 
-    private GameboyType gameboyType;
+    private HardwareProfile hardwareProfile = HardwareProfileRegistry.DMG;
 
     // while a rumble motor runs, jiggle the picture by a pixel each frame as a
     // dependency-free stand-in for a vibrating console
@@ -79,7 +80,7 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
         eventBus.register(this::onSgbFrame, SgbDisplay.SgbFrameReadyEvent.class, callerId);
-        eventBus.register(this::onGameboyType, Controller.GameboyTypeEvent.class, callerId);
+        eventBus.register(this::onHardwareProfile, Controller.HardwareProfileEvent.class, callerId);
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
         eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
         eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
@@ -105,8 +106,8 @@ public class SwingDisplay extends JPanel implements Runnable {
         setScale(properties.getScale());
     }
 
-    private synchronized void onGameboyType(Controller.GameboyTypeEvent e) {
-        this.gameboyType = e.getGameboyType();
+    private synchronized void onHardwareProfile(Controller.HardwareProfileEvent e) {
+        this.hardwareProfile = e.getProfile();
     }
 
     private synchronized void onGbcFrame(Display.GbcFrameReadyEvent e) {
@@ -116,7 +117,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private synchronized void onDmgFrame(Display.DmgFrameReadyEvent e) {
-        if (gameboyType == GameboyType.SGB) {
+        if (hardwareProfile.capabilities().superGameboyBorder()) {
             return;
         }
         e.toRgb(waitingFrame, grayscale);

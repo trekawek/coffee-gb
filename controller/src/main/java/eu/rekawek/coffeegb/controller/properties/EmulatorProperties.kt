@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.core.joypad.PlayerInputHub
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -9,7 +10,7 @@ import java.io.FileWriter
 import java.io.IOException
 import java.util.*
 
-class EmulatorProperties() {
+class EmulatorProperties(val profileOverride: HardwareProfile? = null) {
 
   internal val properties = loadProperties()
 

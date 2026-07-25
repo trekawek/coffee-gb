@@ -46,6 +46,24 @@ also requires SDL2 (`brew install sdl2`); keyboard input works without it.
 For netplay, one player chooses **Link > Start server** and the other chooses
 **Link > Connect to server**.
 
+### Hardware profiles and command-line selection
+
+Each emulation session resolves one immutable hardware profile before construction. The permanent
+profile IDs are `dmg`, `cgb`, `cgb0`, and `sgb`. Automatic selection preserves the desktop defaults;
+an exact profile can be selected with:
+
+```bash
+java -jar coffee-gb-VERSION.jar --profile=cgb0 path/to/game.gbc
+```
+
+The legacy `--force-dmg`/`-d` and `--force-cgb`/`-c` flags remain available and map to `dmg` and
+`cgb`. `--profile` cannot be combined with either force flag, and the two force flags cannot be
+combined with each other. Unknown or malformed profile IDs fail before a core session is created
+and report all supported IDs. Persisted uppercase `DMG`, `CGB`, `CGB0`, and `SGB` values are migrated
+as finite compatibility aliases; new settings use canonical lowercase IDs. See
+[`docs/hardware-profiles.md`](docs/hardware-profiles.md) for clocks, boot policy, state identity,
+and extension rules.
+
 ### Default controls
 
 | Action | Key |
