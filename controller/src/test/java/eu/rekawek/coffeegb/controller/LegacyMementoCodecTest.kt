@@ -32,6 +32,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.junit.Test
 
+private fun eu.rekawek.coffeegb.core.memento.Memento<Gameboy>.serialize(): ByteArray =
+    LegacyMementoCodec.serializeGameboy(this)
+
+private fun ByteArray.deserializeToGameboyMemento() =
+    LegacyMementoCodec.deserializeGameboy(this)
+
 class LegacyMementoCodecTest {
 
   @Test

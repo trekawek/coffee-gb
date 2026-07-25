@@ -356,7 +356,7 @@ class BasicController private constructor(
     val session = session ?: return
 
     isPaused = false
-    snapshotManager = SnapshotManager(session.config.rom.file)
+    snapshotManager = SnapshotManager(session.config)
 
     session.eventBus.post(AddPatches(patches))
     session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))

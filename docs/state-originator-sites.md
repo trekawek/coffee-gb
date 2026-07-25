@@ -18,7 +18,6 @@ is admitted to the detached graph.
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/RewindManager.kt`
 - COMPOSITE `controller/src/main/java/eu/rekawek/coffeegb/controller/Session.kt`
-- WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/SnapshotManager.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/link/StateHistory.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/DetachedState.kt`
