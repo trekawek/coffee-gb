@@ -16,11 +16,11 @@ by subsystem in [`state-machine-inventory.md`](state-machine-inventory.md); none
 is admitted to the detached graph.
 
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt`
-- WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/RewindManager.kt`
 - COMPOSITE `controller/src/main/java/eu/rekawek/coffeegb/controller/Session.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/link/StateHistory.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/DetachedState.kt`
+- WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/MachineSnapshot.kt`
 - COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/cpu/Cpu.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/cpu/InterruptManager.java`

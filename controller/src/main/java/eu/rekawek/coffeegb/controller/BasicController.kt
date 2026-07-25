@@ -32,6 +32,7 @@ class BasicController private constructor(
     private val sessionPreparer: SessionPreparer,
     private val loadExecutor: ExecutorService,
     private val snapshotManagerFactory: SnapshotManagerFactory,
+    private val rewindManager: RewindManager,
 ) : Controller, SnapshotSupport {
 
   constructor(
@@ -45,6 +46,7 @@ class BasicController private constructor(
       RomSessionPreparer(),
       createLoadExecutor(),
       SnapshotManagerFactory.DEFAULT,
+      RewindManager(),
   )
 
   internal constructor(
@@ -59,6 +61,7 @@ class BasicController private constructor(
       sessionPreparer,
       createLoadExecutor(),
       SnapshotManagerFactory.DEFAULT,
+      RewindManager(),
   )
 
   internal constructor(
@@ -74,6 +77,24 @@ class BasicController private constructor(
       sessionPreparer,
       createLoadExecutor(),
       snapshotManagerFactory,
+      RewindManager(),
+  )
+
+  internal constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      sessionPreparer: SessionPreparer,
+      snapshotManagerFactory: SnapshotManagerFactory,
+      rewindManager: RewindManager,
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      sessionPreparer,
+      createLoadExecutor(),
+      snapshotManagerFactory,
+      rewindManager,
   )
 
   private val timingTicker = TimingTicker()
@@ -91,8 +112,6 @@ class BasicController private constructor(
   private var isPaused = false
 
   private var isRewinding = false
-
-  private val rewindManager = RewindManager()
 
   private val patches = mutableListOf<Patch>()
 
@@ -138,7 +157,11 @@ class BasicController private constructor(
         setPaused(false)
       }
     }
-    eventQueue.register<Controller.RewindEvent> { isRewinding = it.active }
+    eventQueue.register<Controller.RewindEvent> {
+      // Disabled rewind is a real no-work mode: the key cannot freeze forward emulation and
+      // runFrame never reaches a machine capture.
+      isRewinding = rewindManager.enabled && it.active
+    }
     eventQueue.register<Controller.ResetEmulationEvent> {
       session?.config?.rom?.file?.let {
         requestLoad(properties, Controller.LoadRomEvent(it), clearPatches = false)

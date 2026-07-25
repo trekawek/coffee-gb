@@ -11,8 +11,9 @@ runs when `BasicController` dispatches the save event at its emulation-thread fr
 normalized primary-ROM SHA-256, optional Datel slot-ROM SHA-256, and complete stable hardware
 profile. ROM bytes and host services are not written.
 
-Rewind states and `ControllerState` remain in memory on their existing memento path. Netplay
-protocol v8 independently uses StateFile v1 and cannot invoke this local legacy importer; see
+Rewind states remain in memory as internal, structurally shared `MachineSnapshot` values;
+`ControllerState` remains on its existing memento path. Netplay protocol v8 independently uses
+StateFile v1 and cannot invoke this local legacy importer; see
 [netplay-protocol-v8.md](netplay-protocol-v8.md).
 
 ## Bounded format detection

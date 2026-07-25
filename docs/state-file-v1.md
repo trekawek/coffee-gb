@@ -5,8 +5,9 @@ independent of Coffee GB's Maven/application version and of Java serialization. 
 integers are big-endian, all lengths are nonnegative, and all strings are strict UTF-8.
 
 The codec and explicit decode-then-apply seam are used by local slot snapshots and protocol-v8
-netplay. Rewind and `ControllerState` retain their existing in-memory mementos until their assigned
-phases. Network state has no Java-memento compatibility path.
+netplay. Rewind uses its separate internal, structurally shared `MachineSnapshot` representation;
+`ControllerState` retains its existing in-memory memento until #326. Network state has no
+Java-memento compatibility path.
 
 ## Envelope
 
