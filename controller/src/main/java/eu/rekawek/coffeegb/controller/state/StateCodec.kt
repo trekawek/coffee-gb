@@ -598,10 +598,11 @@ object StateCodec {
                 (expected.slotRom ?: "absent"),
         )
       }
-      if (actual.profile != expected.profile) {
+      if (!actual.profile.isCompatibleWith(expected.profile)) {
         throw StateDecodeException(
             StateDecodeReason.HARDWARE_PROFILE_MISMATCH,
-            "Player $player profile ${actual.profile} does not match target ${expected.profile}",
+            "Player $player profile ${actual.profile.canonicalProfileId} ${actual.profile} " +
+                "does not match target ${expected.profile.canonicalProfileId} ${expected.profile}",
         )
       }
     }

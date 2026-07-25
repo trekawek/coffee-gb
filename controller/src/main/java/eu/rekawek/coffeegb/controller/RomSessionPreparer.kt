@@ -6,7 +6,6 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootState
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
-import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Mapper
@@ -105,9 +104,8 @@ internal class BootStateCache(private val capacity: Int = DEFAULT_CAPACITY) {
 
   private data class BootKey(
       val romDigest: String,
-      val gameboyType: GameboyType,
+      val profileId: String,
       val displaySgbBorder: Boolean,
-      val cgb0Revision: Boolean,
       val mealybugDmgBlob: Boolean,
       val codeBreakerRumble: Boolean,
   ) {
@@ -122,9 +120,8 @@ internal class BootStateCache(private val capacity: Int = DEFAULT_CAPACITY) {
         }
         return BootKey(
             digest(rom),
-            config.gameboyType,
+            config.hardwareProfile.id(),
             config.isDisplaySgbBorder,
-            config.isCgb0Revision,
             config.isMealybugDmgBlob,
             config.isCodeBreakerRumble,
         )

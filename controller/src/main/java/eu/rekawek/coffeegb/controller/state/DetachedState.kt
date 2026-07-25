@@ -384,7 +384,7 @@ internal object DetachedStateAdapter {
       MachineState(
           StateGraph.captureRoot(gameboy.captureState(), GAMEBOY_ROOT),
           gameboy.captureRtcRuntimeState().toDetached(),
-          MachineHardwareState.valueOf(gameboy.gameboyType.name),
+          gameboy.hardwareProfile.toMachineHardware(),
           gameboy.captureDmgFifoRuntimeState().toDetached(),
       )
 
@@ -548,9 +548,9 @@ internal object DetachedStateAdapter {
    * the owning controller still performs the complete prepare step at its frame safe point.
    */
   internal fun validateTarget(gameboy: Gameboy, state: MachineState) {
-    if (state.hardware != MachineHardwareState.valueOf(gameboy.gameboyType.name)) {
+    if (state.hardware != gameboy.hardwareProfile.toMachineHardware()) {
       throw StateApplyException(
-          "Detached ${state.hardware} state does not match ${gameboy.gameboyType} hardware")
+          "Detached ${state.hardware} state does not match ${gameboy.hardwareProfile.id()} profile")
     }
     val current = StateGraph.captureRoot(gameboy.captureState(), GAMEBOY_ROOT)
     StateGraph.validateCompatible(state.root, current, "machine")
@@ -561,6 +561,13 @@ internal object DetachedStateAdapter {
       throw StateApplyException("Detached machine runtime layout is incompatible", failure)
     }
   }
+
+  private fun eu.rekawek.coffeegb.core.hardware.HardwareProfile.toMachineHardware() =
+      when (family()) {
+        eu.rekawek.coffeegb.core.hardware.HardwareProfile.Family.DMG -> MachineHardwareState.DMG
+        eu.rekawek.coffeegb.core.hardware.HardwareProfile.Family.CGB -> MachineHardwareState.CGB
+        eu.rekawek.coffeegb.core.hardware.HardwareProfile.Family.SGB -> MachineHardwareState.SGB
+      }
 
   /** Target-dependent session preflight that does not reconstruct or apply candidate state. */
   internal fun validateTarget(session: Session, state: SessionState) {

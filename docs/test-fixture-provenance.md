@@ -45,6 +45,10 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
 - Phase #342 replaces the test-only four-player gap fixture with production-contract tests using
   synthetic button sets and fake in-memory SDL descriptors. It adds no byte fixture or external
   device capture and changes none of the hashes listed here.
+- Phase #343 adds the reviewable ASCII `hardware-profile-matrix.tsv`, authored from the existing
+  Coffee GB constants/baselines and pinned public Pan Docs power-up evidence. It is not a ROM,
+  firmware dump, trace, screenshot, or hardware capture. No binary fixture is added or regenerated;
+  model, legacy-migration, StateFile-v1, and protocol-v8 bytes remain unchanged.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

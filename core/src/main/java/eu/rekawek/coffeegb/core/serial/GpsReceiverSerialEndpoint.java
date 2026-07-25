@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.core.serial;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
-import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 
 import java.nio.charset.StandardCharsets;
@@ -22,13 +22,27 @@ import java.util.ArrayDeque;
  */
 public class GpsReceiverSerialEndpoint implements SerialEndpoint {
 
+    /** @deprecated Use an endpoint instance configured from the owning session clock. */
+    @Deprecated
     static final int UART_BIT_TICKS = 437;
 
-    static final int STARTUP_DELAY_TICKS = Gameboy.TICKS_PER_SEC / 4;
+    /** @deprecated Use an endpoint instance configured from the owning session clock. */
+    @Deprecated
+    static final int STARTUP_DELAY_TICKS = 4_194_304 / 4;
 
-    static final int STARTUP_BEACON_INTERVAL_TICKS = Gameboy.TICKS_PER_SEC;
+    /** @deprecated Use an endpoint instance configured from the owning session clock. */
+    @Deprecated
+    static final int STARTUP_BEACON_INTERVAL_TICKS = 4_194_304;
 
+    /** @deprecated Use an endpoint instance configured from the owning session clock. */
+    @Deprecated
     static final int RESPONSE_TURNAROUND_TICKS = UART_BIT_TICKS * 4;
+
+    private final int uartBitTicks;
+
+    private final int startupBeaconIntervalTicks;
+
+    private final int responseTurnaroundTicks;
 
     private static final String VERSION_RESPONSE = ">RVRGPSBOY<";
 
@@ -45,7 +59,7 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
 
     private long ticks;
 
-    private long nextStartupBeacon = STARTUP_DELAY_TICKS;
+    private long nextStartupBeacon;
 
     private int startupBeacons;
 
@@ -75,6 +89,20 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
 
     private final StringBuilder taipCommand = new StringBuilder();
 
+    public GpsReceiverSerialEndpoint() {
+        this(ClockSpec.LEGACY);
+    }
+
+    public GpsReceiverSerialEndpoint(ClockSpec clockSpec) {
+        uartBitTicks = Math.toIntExact(clockSpec.ticksPerRateUnit(9_600, ClockSpec.Rounding.NEAREST));
+        if (uartBitTicks <= 0) {
+            throw new IllegalArgumentException("GPS UART timing requires at least one tick per bit");
+        }
+        nextStartupBeacon = clockSpec.ticksForRateUnits(1, 4, ClockSpec.Rounding.FLOOR);
+        startupBeaconIntervalTicks = clockSpec.ticksPerSecondInt();
+        responseTurnaroundTicks = Math.multiplyExact(uartBitTicks, 4);
+    }
+
     @Override
     public void tick() {
         ticks++;
@@ -83,7 +111,7 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
             // that two non-empty bursts arrive before it configures TAIP.
             queueAscii("GPS\r");
             startupBeacons++;
-            nextStartupBeacon += STARTUP_BEACON_INTERVAL_TICKS;
+            nextStartupBeacon += startupBeaconIntervalTicks;
         }
 
         if (outputDelayTicks > 0) {
@@ -187,7 +215,7 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
         if (outputByte == -1) {
             // GPS Boy finishes one more bit-time of its send routine before it starts polling
             // the input. A real receiver also needs time to turn the half-duplex exchange around.
-            outputDelayTicks = RESPONSE_TURNAROUND_TICKS;
+            outputDelayTicks = responseTurnaroundTicks;
         }
     }
 
@@ -200,7 +228,7 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
             outputByte = outputBytes.removeFirst();
             outputBit = 0;
             serialInputHigh = false;
-            outputTicksRemaining = UART_BIT_TICKS;
+            outputTicksRemaining = uartBitTicks;
             return;
         }
 
@@ -218,7 +246,7 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
             advanceOutputBit();
             return;
         }
-        outputTicksRemaining = UART_BIT_TICKS;
+        outputTicksRemaining = uartBitTicks;
     }
 
     @Override

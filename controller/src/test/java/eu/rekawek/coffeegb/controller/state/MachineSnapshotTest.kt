@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -14,6 +15,29 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class MachineSnapshotTest {
+
+  @Test
+  fun stableProfileIdentityRejectsCgbAndCgb0CrossRestoreBeforeMutation() {
+    val bytes = StateCodecTestSupport.rom(cgb = true)
+    val cgbConfig =
+        StateCodecTestSupport.configuration(bytes, GameboyType.CGB)
+            .setHardwareProfile(HardwareProfileRegistry.CGB)
+    val cgb0Config =
+        StateCodecTestSupport.configuration(bytes, GameboyType.CGB)
+            .setHardwareProfile(HardwareProfileRegistry.CGB0)
+    StateCodecTestSupport.session(cgbConfig).use { source ->
+      StateCodecTestSupport.session(cgb0Config).use { target ->
+        val snapshot = MachineSnapshot.capture(source.gameboy)
+        val before = DetachedStateAdapter.capture(target.gameboy)
+        val stages = mutableListOf<ApplyStage>()
+
+        assertFailsWith<StateApplyException> { snapshot.restore(target.gameboy) { stages += it } }
+
+        assertTrue(stages.isEmpty())
+        assertEquals(before, DetachedStateAdapter.capture(target.gameboy))
+      }
+    }
+  }
 
   @Test
   fun unchangedPagesReuseIdentityAndOneWramWriteCopiesOnlyItsPage() {

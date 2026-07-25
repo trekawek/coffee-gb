@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.core.memory.cart.rtc;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
-import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
@@ -13,6 +13,8 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
     private static final long SECONDS_PER_CYCLE = 512 * SECONDS_PER_DAY;
 
     private final TimeSource timeSource;
+
+    private final ClockSpec clockSpec;
 
     private int seconds;
 
@@ -47,7 +49,12 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
     private boolean latchedCounterOverflow;
 
     public RealTimeClock(TimeSource timeSource) {
+        this(timeSource, ClockSpec.LEGACY);
+    }
+
+    public RealTimeClock(TimeSource timeSource, ClockSpec clockSpec) {
         this.timeSource = timeSource;
+        this.clockSpec = clockSpec;
     }
 
     public void latch() {
@@ -130,7 +137,7 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         if (halt || emulationPaused) {
             return;
         }
-        if (++subSecondTicks == Gameboy.TICKS_PER_SEC) {
+        if (++subSecondTicks == clockSpec.ticksPerSecond()) {
             subSecondTicks = 0;
             advanceSeconds(1);
         }
@@ -166,10 +173,11 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         }
 
         advanceSeconds(elapsedMillis / 1000);
-        long elapsedTicks = (elapsedMillis % 1000) * Gameboy.TICKS_PER_SEC / 1000;
+        long elapsedTicks = clockSpec.ticksForMilliseconds(
+                elapsedMillis % 1000, ClockSpec.Rounding.FLOOR);
         long ticks = subSecondTicks + elapsedTicks;
-        advanceSeconds(ticks / Gameboy.TICKS_PER_SEC);
-        subSecondTicks = ticks % Gameboy.TICKS_PER_SEC;
+        advanceSeconds(ticks / clockSpec.ticksPerSecond());
+        subSecondTicks = ticks % clockSpec.ticksPerSecond();
     }
 
     private void advanceSeconds(long count) {

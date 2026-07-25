@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile as CoreHardwareProfile
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import java.io.IOException
@@ -133,6 +135,23 @@ data class HardwareProfile(
     require(version == VERSION) { "Unsupported hardware profile version $version" }
   }
 
+  /** Stable Phase-3 identity derived without changing the StateFile-v1 byte layout. */
+  val canonicalProfileId: String
+    get() =
+        when (hardware) {
+          MachineHardwareState.DMG -> HardwareProfileRegistry.DMG.id()
+          MachineHardwareState.CGB ->
+              HardwareProfileRegistry.cgbRevision(cgb0Revision).id()
+          MachineHardwareState.SGB -> HardwareProfileRegistry.SGB.id()
+        }
+
+  fun isCompatibleWith(other: HardwareProfile): Boolean =
+      canonicalProfileId == other.canonicalProfileId &&
+          bootstrapMode == other.bootstrapMode &&
+          mealybugDmgBlob == other.mealybugDmgBlob &&
+          codeBreakerRumble == other.codeBreakerRumble &&
+          displaySgbBorder == other.displaySgbBorder
+
   companion object {
     const val VERSION = 1
   }
@@ -219,7 +238,7 @@ data class StateFileInspection(
       } else {
         appendLine(
             "player=${entry.player} rom=${identity.primaryRom.hex()} slot=${identity.slotRom?.hex() ?: "absent"} " +
-                "profile=${identity.profile}")
+                "profile=${identity.profile.canonicalProfileId} details=${identity.profile}")
       }
     }
     sections.forEach {
@@ -232,7 +251,13 @@ data class StateFileInspection(
 /** ROM/profile identity helpers shared by capture and pre-apply validation. */
 object StateIdentity {
   fun from(configuration: Gameboy.GameboyConfiguration): MachineIdentity =
-      MachineHardwareState.valueOf(configuration.gameboyType.name).let { hardware ->
+      configuration.hardwareProfile.let { resolvedProfile ->
+        val hardware =
+            when (resolvedProfile.family()) {
+              CoreHardwareProfile.Family.DMG -> MachineHardwareState.DMG
+              CoreHardwareProfile.Family.CGB -> MachineHardwareState.CGB
+              CoreHardwareProfile.Family.SGB -> MachineHardwareState.SGB
+            }
         val datel =
             configuration.rom.cartridgeProperties.mapper == CartridgeProperties.Mapper.DATEL
         MachineIdentity(
@@ -242,7 +267,7 @@ object StateIdentity {
                 HardwareProfile.VERSION,
                 hardware,
                 StateBootstrapMode.fromCore(configuration.bootstrapMode),
-                hardware == MachineHardwareState.CGB && configuration.isCgb0Revision,
+                resolvedProfile == HardwareProfileRegistry.CGB0,
                 hardware != MachineHardwareState.CGB && configuration.isMealybugDmgBlob,
                 configuration.isCodeBreakerRumble,
                 hardware == MachineHardwareState.SGB && configuration.isDisplaySgbBorder,

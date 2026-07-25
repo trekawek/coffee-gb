@@ -24,6 +24,7 @@ class StateFileGoldenTest {
     assertEquals("golden-v1", decoded.diagnostics?.buildId)
     val identity = assertNotNull(decoded.identities.single().identity)
     assertEquals(MachineHardwareState.DMG, identity.profile.hardware)
+    assertEquals("dmg", identity.profile.canonicalProfileId)
     val session = assertIs<SessionStateRoot>(decoded.root).session
     assertEquals(
         listOf(HeldButtonState.RIGHT, HeldButtonState.A, HeldButtonState.START),
@@ -38,6 +39,7 @@ class StateFileGoldenTest {
     val inspection = StateFileInspector.inspect(bytes)
     assertEquals(listOf(1, 2, 3), inspection.sections.map { it.id })
     assertTrue(inspection.checksumValid)
+    assertTrue(inspection.render().contains("profile=dmg"))
   }
 
   private fun sha256(bytes: ByteArray): String =

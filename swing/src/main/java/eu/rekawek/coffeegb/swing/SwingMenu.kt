@@ -33,7 +33,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGames
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.FAST_FORWARD
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.NORMAL
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.SKIP
-import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatDatabase
@@ -716,19 +716,19 @@ class SwingMenu(
     for (gameType in listOf(DmgGamesType, CgbGamesType)) {
       val (title, value) =
           when (gameType) {
-            DmgGamesType -> "DMG games" to properties.system.dmgGamesType
-            CgbGamesType -> "CGB games" to properties.system.cgbGamesType
+            DmgGamesType -> "DMG games" to properties.system.dmgGamesProfile
+            CgbGamesType -> "CGB games" to properties.system.cgbGamesProfile
             else -> throw IllegalStateException()
           }
 
       val menu = JMenu(title)
       systemMenu.add(menu)
 
-      for (systemType in GameboyType.entries) {
-        val item = JCheckBoxMenuItem(systemType.name, systemType == value)
+      for (profile in HardwareProfileRegistry.supportedProfiles()) {
+        val item = JCheckBoxMenuItem(profile.displayName(), profile == value)
         menu.add(item)
         item.addActionListener {
-          properties.setProperty(gameType, systemType.name)
+          properties.setProperty(gameType, profile.id())
           uncheckAllBut(menu, item)
           eventBus.post(Controller.UpdatedSystemMappingEvent())
         }

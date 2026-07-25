@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
@@ -32,14 +33,18 @@ public class Mbc3 implements MemoryController {
     private boolean ramEnabled;
 
     public Mbc3(Rom rom, Battery battery) {
-        this(rom, battery, new SystemTimeSource());
+        this(rom, battery, new SystemTimeSource(), ClockSpec.LEGACY);
     }
 
     public Mbc3(Rom rom, Battery battery, TimeSource timeSource) {
+        this(rom, battery, timeSource, ClockSpec.LEGACY);
+    }
+
+    public Mbc3(Rom rom, Battery battery, TimeSource timeSource, ClockSpec clockSpec) {
         this.cartridge = rom.getRom();
         this.ram = new int[0x2000 * Math.max(rom.getRamBanks(), 1)];
         Arrays.fill(ram, 0xff);
-        this.clock = new RealTimeClock(timeSource);
+        this.clock = new RealTimeClock(timeSource, clockSpec);
         this.battery = battery;
         this.mbc30 = rom.getRomBanks() > 128 || rom.getRamBanks() > 4;
 

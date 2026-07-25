@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.core.Gameboy
-import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
+import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
@@ -207,9 +207,9 @@ class BasicController private constructor(
     }
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
-        val newType = Controller.getGameboyType(properties.system, config.rom)
+        val newProfile = Controller.getHardwareProfile(properties.system, config.rom)
         val newBootstrapMode = properties.system.bootstrapMode
-        if (newType != config.gameboyType || newBootstrapMode != config.bootstrapMode) {
+        if (newProfile != config.hardwareProfile || newBootstrapMode != config.bootstrapMode) {
           eventBus.post(Controller.LoadRomEvent(config.rom.file))
         }
       }
@@ -229,12 +229,13 @@ class BasicController private constructor(
     val rewound = isRewinding && session?.gameboy?.let { rewindManager.rewindOneStep(it) } == true
 
     var emulated = false
-    repeat(TICKS_PER_FRAME) {
+    val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
+    repeat(clockSpec.controllerTicksPerFrame()) {
       if (rewound || (!isPaused && !isRewinding)) {
         session?.gameboy?.tick()
         emulated = true
       }
-      timingTicker.run()
+      timingTicker.run(clockSpec)
     }
     if (emulated && !rewound) {
       session?.gameboy?.let { rewindManager.record(it) }
@@ -251,7 +252,7 @@ class BasicController private constructor(
           config,
           sessionBus,
           console,
-          createLinkDevice(sessionBus),
+          createLinkDevice(sessionBus, config.clockSpec),
           prebuiltGameboy = prebuiltGameboy,
       )
     } catch (e: Exception) {
@@ -381,7 +382,7 @@ class BasicController private constructor(
     setPaused(restorePaused)
   }
 
-  private fun createLinkDevice(sessionBus: EventBus): SerialEndpoint =
+  private fun createLinkDevice(sessionBus: EventBus, clockSpec: ClockSpec): SerialEndpoint =
       if (printerEnabled) {
         barcodeBoy = null
         GameboyPrinterSerialEndpoint { argb, width, height, top, bottom, exposure ->
@@ -391,7 +392,7 @@ class BasicController private constructor(
         BarcodeBoySerialEndpoint().also { barcodeBoy = it }
       } else if (gpsReceiverEnabled) {
         barcodeBoy = null
-        GpsReceiverSerialEndpoint()
+        GpsReceiverSerialEndpoint(clockSpec)
       } else {
         barcodeBoy = null
         Peer2PeerSerialEndpoint()
@@ -403,7 +404,7 @@ class BasicController private constructor(
    */
   private fun reconnectLinkDevice() {
     val session = session ?: return
-    session.setSerialEndpoint(createLinkDevice(session.eventBus))
+    session.setSerialEndpoint(createLinkDevice(session.eventBus, session.config.clockSpec))
   }
 
   private fun start() {
@@ -414,6 +415,7 @@ class BasicController private constructor(
 
     session.eventBus.post(AddPatches(patches))
     session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))
+    session.eventBus.post(Controller.HardwareProfileEvent(session.config.hardwareProfile))
     session.eventBus.post(Controller.SessionPauseSupportEvent(true))
     session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
     session.eventBus.post(Controller.EmulationStartedEvent(session.config.rom.title))

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
@@ -122,13 +123,34 @@ public class RtcTimeSourceTest {
         assertEquals(5, readTama5Minutes(fromBattery));
     }
 
+    @Test
+    public void mbc3TickOscillatorUsesTheOwningCustomClock() throws Exception {
+        VirtualTimeSource time = new VirtualTimeSource(120_000);
+        ClockSpec clock = new ClockSpec(1_000, 10, 1);
+        Mbc3 mbc3 = (Mbc3) cartridge(
+                0x13, 0x03, new MemoryBattery(new byte[0]), time, clock).getMemoryController();
+        enableMbc3(mbc3);
+
+        for (int i = 0; i < 999; i++) {
+            mbc3.tick();
+        }
+        assertEquals(0, component(component(mbc3.captureState(), "clockMemento"), "seconds"));
+        mbc3.tick();
+        assertEquals(1, component(component(mbc3.captureState(), "clockMemento"), "seconds"));
+    }
+
     private static Cartridge cartridge(int type, int ramSize, MemoryBattery battery,
                                        VirtualTimeSource time) throws IOException {
+        return cartridge(type, ramSize, battery, time, ClockSpec.LEGACY);
+    }
+
+    private static Cartridge cartridge(int type, int ramSize, MemoryBattery battery,
+                                       VirtualTimeSource time, ClockSpec clock) throws IOException {
         byte[] data = new byte[0x200000];
         data[0x147] = (byte) type;
         data[0x148] = 0x06;
         data[0x149] = (byte) ramSize;
-        return new Cartridge(new Rom(data), battery, time);
+        return new Cartridge(new Rom(data), battery, time, clock);
     }
 
     private static void enableMbc3(Mbc3 mbc3) {

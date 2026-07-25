@@ -29,6 +29,7 @@ class StateFileInspectorTest {
     assertTrue(output.contains("compression=DEFLATE"))
     assertTrue(output.contains("checksum=true"))
     assertTrue(output.contains("section=2 version=1 required=true"))
+    assertTrue(output.contains("profile=dmg"))
     assertFalse(output.contains("GameboyState"))
   }
 }

@@ -6,7 +6,8 @@ import eu.rekawek.coffeegb.controller.state.MachineSnapshot
 /**
  * Rolling history of emulation states for the rewind feature. A state is recorded every
  * [RECORD_INTERVAL] frames and the buffer holds [CAPACITY] entries, giving about
- * CAPACITY * RECORD_INTERVAL / 60 seconds of history. Rewinding restores one recorded
+ * CAPACITY entries at one capture per RECORD_INTERVAL controller frames (30 seconds with the
+ * current 60-Hz profile cadence). Rewinding restores one recorded
  * state per rendered frame, so it plays backwards at RECORD_INTERVAL times the game speed.
  */
 internal class RewindManager(

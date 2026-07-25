@@ -60,7 +60,7 @@ class Agent(romFile: File) {
         }
     }
 
-    fun runUntilFrame(maxTicks: Int = Gameboy.TICKS_PER_SEC) {
+    fun runUntilFrame(maxTicks: Int = gameboy.clockSpec.ticksPerSecondInt()) {
         var ticks = 0
         while (!gameboy.tick() && ticks < maxTicks) {
             ticks++

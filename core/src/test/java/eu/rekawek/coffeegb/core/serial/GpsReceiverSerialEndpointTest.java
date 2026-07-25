@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.serial;
 
 import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -52,6 +53,23 @@ public class GpsReceiverSerialEndpointTest {
             original.tick();
             restored.tick();
         }
+    }
+
+    @Test
+    public void startupAndUartTimingUseTheOwningCustomClock() {
+        ClockSpec clock = new ClockSpec(96_000, 60, 1);
+        GpsReceiverSerialEndpoint gps = new GpsReceiverSerialEndpoint(clock);
+
+        tick(gps, 23_999);
+        assertTrue(gps.isSerialInputHigh());
+        gps.tick();
+        assertFalse(gps.isSerialInputHigh());
+
+        // 96,000 / 9,600 is exactly ten master ticks for every UART bit.
+        tick(gps, 9);
+        assertFalse(gps.isSerialInputHigh());
+        gps.tick();
+        assertTrue(gps.isSerialInputHigh());
     }
 
     private static void sendAscii(GpsReceiverSerialEndpoint gps, String value) {
