@@ -11,9 +11,12 @@ runs when `BasicController` dispatches the save event at its emulation-thread fr
 normalized primary-ROM SHA-256, optional Datel slot-ROM SHA-256, and complete stable hardware
 profile. ROM bytes and host services are not written.
 
+The live/runtime state contracts and the exact native-serialization allowlist are documented in
+[legacy-state-retirement.md](legacy-state-retirement.md).
+
 Rewind states remain in memory as internal, structurally shared `MachineSnapshot` values;
-`ControllerState` remains on its existing memento path. Netplay protocol v8 independently uses
-StateFile v1 and cannot invoke this local legacy importer; see
+`ControllerState` and boot/reset handoff use explicit non-serializable component/detached state.
+Netplay protocol v8 independently uses StateFile v1 and cannot invoke this local legacy importer; see
 [netplay-protocol-v8.md](netplay-protocol-v8.md).
 
 ## Bounded format detection
@@ -23,7 +26,7 @@ The first four bytes are authoritative and mutually exclusive:
 | Prefix | Route | Streaming file limit |
 |---|---|---:|
 | ASCII `CGBS` | `StateCodec` only | 134,348,800 bytes |
-| `AC ED 00 05` | strict local `LegacyMementoCodec` only | 33,554,432 bytes |
+| `AC ED 00 05` | strict local `LegacySnapshotImporter` only | 33,554,432 bytes |
 | anything else, including fewer than four bytes | reject | no decoder |
 
 The reader counts bytes while streaming and checks every capacity increase before allocation. It
@@ -72,8 +75,10 @@ platform limitations.
 
 ## Compatibility window
 
-The strict local importer continues to admit the committed Coffee GB 1.7.13 and 1.7.14 fixtures.
+The strict local importer supports only the committed Coffee GB 1.7.13 and 1.7.14 fixture shapes;
+it is a migration promise for those releases, not a general Java-object or cross-emulator format.
 It is not reachable from netplay decoding. Network prefixes other than `CGBS`, including `AC ED 00
 05` and the retired `CGBN`, are rejected as unsupported network state without format probing.
 Adding another legacy descriptor requires a reviewed manifest update and a committed real-release
-fixture.
+fixture. The importer may be removed only in a future major release after a separately announced
+deprecation window; compatibility is not promised indefinitely.

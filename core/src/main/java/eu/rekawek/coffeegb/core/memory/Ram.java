@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.core.memory;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class Ram implements AddressSpace, Serializable, Originator<Ram> {
+public class Ram implements AddressSpace, StatefulComponent<Ram> {
 
     private final int[] space;
 
@@ -45,13 +45,13 @@ public class Ram implements AddressSpace, Serializable, Originator<Ram> {
     }
 
     @Override
-    public Memento<Ram> saveToMemento() {
-        return new RamMemento(space.clone());
+    public ComponentState<Ram> captureState() {
+        return new RamState(space.clone());
     }
 
     @Override
-    public Memento<Ram> saveToMemento(MachineStateCapture capture) {
-        return new RamMemento(capture.ints(space));
+    public ComponentState<Ram> captureState(MachineStateCapture capture) {
+        return new RamState(capture.ints(space));
     }
 
     @Override
@@ -60,16 +60,20 @@ public class Ram implements AddressSpace, Serializable, Originator<Ram> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Ram> memento) {
-        if (!(memento instanceof RamMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Ram> state) {
+        if (!(state instanceof RamState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.space.length != mem.space.length) {
-            throw new IllegalArgumentException("Memento space length doesn't match");
+            throw new IllegalArgumentException("ComponentState space length doesn't match");
         }
         System.arraycopy(mem.space, 0, this.space, 0, this.space.length);
     }
 
+    public record RamState(int[] space) implements ComponentState<Ram> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     public record RamMemento(int[] space) implements Memento<Ram> {
     }
 }

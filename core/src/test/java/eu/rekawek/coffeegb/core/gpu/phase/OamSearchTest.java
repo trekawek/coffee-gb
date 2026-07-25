@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.core.gpu.Lcdc;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
@@ -184,14 +184,14 @@ public class OamSearchTest {
         fixture.dmaTickAtReaderPosition(0);
         fixture.search.start();
         fixture.readerPosition = 1;
-        Memento<OamSearch> searchState = fixture.search.saveToMemento();
-        Memento<Dma> dmaState = fixture.dma.saveToMemento();
+        ComponentState<OamSearch> searchState = fixture.search.captureState();
+        ComponentState<Dma> dmaState = fixture.dma.captureState();
 
         Fixture restored = new Fixture();
         restored.oam.setByte(0xfe00, 0);
         restored.oam.setByte(0xfe01, 24);
-        restored.search.restoreFromMemento(searchState);
-        restored.dma.restoreFromMemento(dmaState);
+        restored.search.restoreState(searchState);
+        restored.dma.restoreState(dmaState);
         restored.readerPosition = 1;
         restored.tickSearch();
         restored.tickSearch();
@@ -252,13 +252,13 @@ public class OamSearchTest {
         fixture.settleLcdc();
         fixture.beginSearchLine();
         fixture.tickSearch();
-        Memento<OamSearch> state = fixture.search.saveToMemento();
+        ComponentState<OamSearch> state = fixture.search.captureState();
 
         Fixture restored = new Fixture(true);
         restored.registers.put(GpuRegister.LY, 8);
         restored.lcdc.set(0x93);
         restored.settleLcdc();
-        restored.search.restoreFromMemento(state);
+        restored.search.restoreState(state);
         restored.tickSearch();
 
         assertTrue(restored.search.getSprites()[0].isEnabled());
@@ -335,9 +335,9 @@ public class OamSearchTest {
         fixture.tickSearch();
         assertTrue(fixture.search.hadSpriteHeightTransition());
 
-        Memento<OamSearch> state = fixture.search.saveToMemento();
+        ComponentState<OamSearch> state = fixture.search.captureState();
         Fixture restored = new Fixture(true);
-        restored.search.restoreFromMemento(state);
+        restored.search.restoreState(state);
         assertTrue(restored.search.hadSpriteHeightTransition());
 
         restored.beginSearchLine();

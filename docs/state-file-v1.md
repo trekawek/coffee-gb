@@ -6,8 +6,8 @@ integers are big-endian, all lengths are nonnegative, and all strings are strict
 
 The codec and explicit decode-then-apply seam are used by local slot snapshots and protocol-v8
 netplay. Rewind uses its separate internal, structurally shared `MachineSnapshot` representation;
-`ControllerState` retains its existing in-memory memento until #326. Network state has no
-Java-memento compatibility path.
+`ControllerState` and boot/reset use explicit detached/component state. Network state has no
+Java-serialization compatibility path.
 
 ## Envelope
 
@@ -145,7 +145,7 @@ Every value starts with a one-byte tag:
 
 Float NaN payloads and signed zero are preserved with `doubleToRawLongBits`. Int32-map keys are
 strictly increasing and unique. Record type IDs are the one-based stable entries of the audited
-91-record `MementoTypeRegistry`; field count, name, and declaration order are encoded and checked.
+91-record `StateTypeRegistry`; field count, name, and declaration order are encoded and checked.
 The 11 enum type IDs use the same audited ordering, while enum value IDs are an explicit v1
 one-based registry verified against the production enum names. Class names from input are never
 loaded or instantiated.
@@ -174,7 +174,7 @@ class names supplied by the file.
 
 ## Limits
 
-StateFile limits are independent of the Phase-0 legacy importer:
+StateFile limits are independent of the local historical importer:
 
 | Limit | v1 value |
 |---|---:|
@@ -231,7 +231,7 @@ Session, or LinkedController. It performs, in order:
 5. the Phase-1 safe-point prepare-and-commit transaction.
 
 No live-mutation callback occurs before all deterministic validation succeeds. Unexpected restore
-failures use the Phase-1 rollback record. Linked preparation covers every player before the first
+failures use an explicit deep-owned rollback capture. Linked preparation covers every player before the first
 commit and rollback remains group-atomic.
 
 ## Local slot integration and legacy dispatch

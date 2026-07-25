@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.core.memory;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
+public class GbcRam implements AddressSpace, StatefulComponent<GbcRam> {
 
     public static final int SVBK = 0xff70;
 
@@ -71,13 +71,13 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     }
 
     @Override
-    public Memento<GbcRam> saveToMemento() {
-        return new GbcRamMemento(ram.clone(), svbk);
+    public ComponentState<GbcRam> captureState() {
+        return new GbcRamState(ram.clone(), svbk);
     }
 
     @Override
-    public Memento<GbcRam> saveToMemento(MachineStateCapture capture) {
-        return new GbcRamMemento(capture.ints(ram), svbk);
+    public ComponentState<GbcRam> captureState(MachineStateCapture capture) {
+        return new GbcRamState(capture.ints(ram), svbk);
     }
 
     @Override
@@ -86,17 +86,21 @@ public class GbcRam implements AddressSpace, Serializable, Originator<GbcRam> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<GbcRam> memento) {
-        if (!(memento instanceof GbcRamMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<GbcRam> state) {
+        if (!(state instanceof GbcRamState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.ram.length != mem.ram.length) {
-            throw new IllegalArgumentException("Memento ram length doesn't match");
+            throw new IllegalArgumentException("ComponentState ram length doesn't match");
         }
         System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
         this.svbk = mem.svbk;
     }
 
+    public record GbcRamState(int[] ram, int svbk) implements ComponentState<GbcRam> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     public record GbcRamMemento(int[] ram, int svbk) implements Memento<GbcRam> {
     }
 

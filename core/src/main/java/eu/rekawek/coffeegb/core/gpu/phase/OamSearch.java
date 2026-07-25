@@ -1,25 +1,26 @@
 package eu.rekawek.coffeegb.core.gpu.phase;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.core.gpu.Lcdc;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.Dma;
 
-import java.io.Serializable;
 import java.util.Arrays;
 
-public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> {
+public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
 
     private enum State {
         READING_Y,
         READING_X
     }
 
-    public static class SpritePosition implements Serializable, Originator<SpritePosition> {
+    public static class SpritePosition implements StatefulComponent<SpritePosition> {
 
         private int x;
 
@@ -57,14 +58,14 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         }
 
         @Override
-        public Memento<SpritePosition> saveToMemento() {
-            return new SpritePositionMemento(x, y, address, enabled);
+        public ComponentState<SpritePosition> captureState() {
+            return new SpritePositionState(x, y, address, enabled);
         }
 
         @Override
-        public void restoreFromMemento(Memento<SpritePosition> memento) {
-            if (!(memento instanceof SpritePositionMemento mem)) {
-                throw new IllegalArgumentException("Invalid memento type");
+        public void restoreState(ComponentState<SpritePosition> state) {
+            if (!(state instanceof SpritePositionState mem)) {
+                throw new IllegalArgumentException("Invalid state type");
             }
             this.x = mem.x;
             this.y = mem.y;
@@ -72,6 +73,11 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
             this.enabled = mem.enabled;
         }
 
+        private record SpritePositionState(int x, int y, int address, boolean enabled)
+                implements ComponentState<SpritePosition> {
+        }
+
+        /** Importer-only compatibility record for released local snapshots. */
         private record SpritePositionMemento(int x, int y, int address, boolean enabled)
                 implements Memento<SpritePosition> {
         }
@@ -297,15 +303,15 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
     }
 
     @Override
-    public Memento<OamSearch> saveToMemento() {
-        return saveToMemento(null);
+    public ComponentState<OamSearch> captureState() {
+        return captureState(null);
     }
 
     @Override
-    public Memento<OamSearch> saveToMemento(MachineStateCapture capture) {
-        Memento<?>[] spriteMementos =
-                Arrays.stream(sprites).map(SpritePosition::saveToMemento).toArray(Memento[]::new);
-        return new OamSearchMemento(
+    public ComponentState<OamSearch> captureState(MachineStateCapture capture) {
+        ComponentState<?>[] spriteMementos =
+                Arrays.stream(sprites).map(SpritePosition::captureState).toArray(ComponentState[]::new);
+        return new OamSearchState(
                 spriteMementos,
                 capture == null ? Arrays.copyOf(oamReaderY, oamReaderY.length) : capture.ints(oamReaderY),
                 capture == null ? Arrays.copyOf(oamReaderX, oamReaderX.length) : capture.ints(oamReaderX),
@@ -319,15 +325,15 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
     }
 
     @Override
-    public void restoreFromMemento(Memento<OamSearch> memento) {
-        if (!(memento instanceof OamSearchMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<OamSearch> state) {
+        if (!(state instanceof OamSearchState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.sprites.length != mem.sprites.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         for (int j = 0; j < sprites.length; j++) {
-            sprites[j].restoreFromMemento((Memento<SpritePosition>) mem.sprites[j]);
+            sprites[j].restoreState((ComponentState<SpritePosition>) mem.sprites[j]);
         }
         System.arraycopy(mem.oamReaderY, 0, oamReaderY, 0, oamReaderY.length);
         System.arraycopy(mem.oamReaderX, 0, oamReaderX, 0, oamReaderX.length);
@@ -349,6 +355,20 @@ public class OamSearch implements GpuPhase, Serializable, Originator<OamSearch> 
         this.spriteCandidateSeen = mem.spriteCandidateSeen;
     }
 
+    private record OamSearchState(
+            ComponentState<?>[] sprites, int[] oamReaderY, int[] oamReaderX,
+            boolean oamReaderInitialized, int oamReaderBusY, int oamReaderBusX,
+            boolean oamReaderDmaSource,
+            int oamReaderSourceChangeTicks,
+            int spritePosIndex, State state, int spriteY, int spriteHeight,
+            int previousOamSpriteHeight,
+            boolean spriteHeightTransitionThisLine, int spriteX,
+            boolean dmaBlockedThisLine, int i,
+            boolean selectSprites, boolean spriteCandidateSeen)
+            implements ComponentState<OamSearch> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record OamSearchMemento(
             Memento<?>[] sprites, int[] oamReaderY, int[] oamReaderX,
             boolean oamReaderInitialized, int oamReaderBusY, int oamReaderBusX,

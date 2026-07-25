@@ -84,7 +84,7 @@ class MachineSnapshotTest {
       bus.setByte(0xa123, 0x44)
       repeat(8_765) { gameboy.tick() }
       val expected = DetachedStateAdapter.capture(gameboy)
-      val legacy = gameboy.saveToMemento()
+      val legacy = gameboy.captureState()
 
       bus.setByte(0xc321, 0xaa)
       gameboy.gpu.videoRam0.setByte(0x8123, 0xbb)
@@ -92,7 +92,7 @@ class MachineSnapshotTest {
       bus.setByte(0xa123, 0xdd)
       repeat(2_048) { gameboy.tick() }
 
-      gameboy.restoreFromMemento(legacy)
+      gameboy.restoreState(legacy)
       assertEquals(expected, DetachedStateAdapter.capture(gameboy))
       assertEquals(0x11, bus.getByte(0xc321))
       assertEquals(0x22, gameboy.gpu.videoRam0.getByte(0x8123))
@@ -535,39 +535,39 @@ class MachineSnapshotTest {
 
   private object MementoClassNames {
     fun record(typeId: Int): String =
-        eu.rekawek.coffeegb.controller.MementoTypeRegistry.recordClasses[typeId - 1].name
+        eu.rekawek.coffeegb.controller.StateTypeRegistry.recordClasses[typeId - 1].name
   }
 
   private class InjectedFailure : RuntimeException()
 
   companion object {
     private const val RAM_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.Ram\$RamMemento"
+        "eu.rekawek.coffeegb.core.memory.Ram\$RamState"
     private const val DISPLAY_MEMENTO =
-        "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento"
+        "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState"
     private const val DMA_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.Dma\$DmaMemento"
+        "eu.rekawek.coffeegb.core.memory.Dma\$DmaState"
     private const val HDMA_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaMemento"
+        "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaState"
     private const val SOUND_MODE_MEMENTO =
-        "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeMemento"
+        "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeState"
     private const val SOUND_MEMENTO =
-        "eu.rekawek.coffeegb.core.sound.Sound\$SoundMemento"
+        "eu.rekawek.coffeegb.core.sound.Sound\$SoundState"
     private const val SERIAL_PORT_MEMENTO =
-        "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortMemento"
+        "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortState"
     private const val FULL_CHANGER_MEMENTO =
-        "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerMemento"
+        "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState"
     private const val MBC6_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6Memento"
+        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State"
     private const val MBC7_EEPROM_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromMemento"
+        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
     private const val MBC5_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5Memento"
+        "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
     private const val GBC_RAM_MEMENTO =
-        "eu.rekawek.coffeegb.core.memory.GbcRam\$GbcRamMemento"
+        "eu.rekawek.coffeegb.core.memory.GbcRam\$GbcRamState"
     private const val SUPER_GAMEBOY_MEMENTO =
-        "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyMemento"
+        "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyState"
     private const val SGB_DISPLAY_MEMENTO =
-        "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayMemento"
+        "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayState"
   }
 }

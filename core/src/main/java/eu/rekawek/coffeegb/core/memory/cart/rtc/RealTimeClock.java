@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.core.memory.cart.rtc;
 
-import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
+public class RealTimeClock implements StatefulComponent<RealTimeClock> {
 
     private static final long SECONDS_PER_DAY = 24 * 60 * 60;
 
@@ -264,17 +264,17 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
     }
 
     @Override
-    public Memento<RealTimeClock> saveToMemento() {
+    public ComponentState<RealTimeClock> captureState() {
         catchUpPausedTime();
-        return new RealTimeClockMemento(seconds, minutes, hours, days, halt, counterOverflow,
+        return new RealTimeClockState(seconds, minutes, hours, days, halt, counterOverflow,
                 subSecondTicks, latched, latchedSeconds, latchedMinutes, latchedHours, latchedDays, latchedHalt,
                 latchedCounterOverflow);
     }
 
     @Override
-    public void restoreFromMemento(Memento<RealTimeClock> memento) {
-        if (!(memento instanceof RealTimeClockMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<RealTimeClock> state) {
+        if (!(state instanceof RealTimeClockState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         seconds = mem.seconds;
         minutes = mem.minutes;
@@ -312,6 +312,14 @@ public class RealTimeClock implements Serializable, Originator<RealTimeClock> {
     public record RuntimeState(boolean emulationPaused, long pauseStartedMillis) {
     }
 
+    private record RealTimeClockState(int seconds, int minutes, int hours, int days, boolean halt,
+                                        boolean counterOverflow, long subSecondTicks,
+                                        boolean latched, int latchedSeconds, int latchedMinutes, int latchedHours,
+                                        int latchedDays, boolean latchedHalt,
+                                        boolean latchedCounterOverflow) implements ComponentState<RealTimeClock> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record RealTimeClockMemento(int seconds, int minutes, int hours, int days, boolean halt,
                                         boolean counterOverflow, long subSecondTicks,
                                         boolean latched, int latchedSeconds, int latchedMinutes, int latchedHours,

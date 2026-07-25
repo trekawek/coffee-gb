@@ -1,9 +1,11 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -309,15 +311,15 @@ public class Datel implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new DatelMemento(ram.clone(), regs.clone(), ramWritten.clone(), regsB.clone(),
+    public ComponentState<MemoryController> captureState() {
+        return new DatelState(ram.clone(), regs.clone(), ramWritten.clone(), regsB.clone(),
                 flash.clone(), flashCycle, flashErasePending, flashIdMode, launched,
-                slot == null ? null : slot.saveToMemento());
+                slot == null ? null : slot.captureState());
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new DatelMemento(
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new DatelState(
                 capture.ints(ram),
                 capture.ints(regs),
                 capture.booleans(ramWritten),
@@ -327,7 +329,7 @@ public class Datel implements MemoryController {
                 flashErasePending,
                 flashIdMode,
                 launched,
-                slot == null ? null : slot.saveToMemento(capture));
+                slot == null ? null : slot.captureState(capture));
     }
 
     @Override
@@ -343,9 +345,9 @@ public class Datel implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof DatelMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof DatelState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         System.arraycopy(mem.ram, 0, ram, 0, ram.length);
         System.arraycopy(mem.regs, 0, regs, 0, regs.length);
@@ -357,10 +359,18 @@ public class Datel implements MemoryController {
         this.flashIdMode = mem.flashIdMode;
         this.launched = mem.launched;
         if (slot != null && mem.slotMemento != null) {
-            slot.restoreFromMemento(mem.slotMemento);
+            slot.restoreState(mem.slotMemento);
         }
     }
 
+    private record DatelState(int[] ram, int[] regs, boolean[] ramWritten, int[] regsB,
+                                int[] flash, int flashCycle, boolean flashErasePending,
+                                boolean flashIdMode, boolean launched,
+                                ComponentState<MemoryController> slotMemento)
+            implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record DatelMemento(int[] ram, int[] regs, boolean[] ramWritten, int[] regsB,
                                 int[] flash, int flashCycle, boolean flashErasePending,
                                 boolean flashIdMode, boolean launched,

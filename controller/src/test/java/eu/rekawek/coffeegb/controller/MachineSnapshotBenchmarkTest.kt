@@ -5,7 +5,7 @@ import eu.rekawek.coffeegb.controller.state.MachineSnapshot
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.state.ComponentState
 import java.lang.management.ManagementFactory
 import java.lang.reflect.Array as ReflectArray
 import java.util.IdentityHashMap
@@ -65,7 +65,7 @@ class MachineSnapshotBenchmarkTest {
     StateCodecTestSupport.session(configuration(rom)).use { session ->
       val gameboy = session.gameboy
       gameboy.addressSpace.setByte(0x0000, 0x0a)
-      val snapshots = ArrayList<Memento<Gameboy>>(RewindManager.CAPACITY)
+      val snapshots = ArrayList<ComponentState<Gameboy>>(RewindManager.CAPACITY)
       val allocation = threadAllocation()
       var allocatedBytes = 0L
       var captureNanos = 0L
@@ -74,7 +74,7 @@ class MachineSnapshotBenchmarkTest {
         emulateProductionFrame(gameboy, frame)
         if (frame % RewindManager.RECORD_INTERVAL == 0) {
           val before = allocation?.current() ?: 0L
-          captureNanos += measureNanoTime { snapshots += gameboy.saveToMemento() }
+          captureNanos += measureNanoTime { snapshots += gameboy.captureState() }
           allocatedBytes += (allocation?.current() ?: before) - before
         }
       }
@@ -82,7 +82,7 @@ class MachineSnapshotBenchmarkTest {
       val retained = PrimitiveArrayRetainedBytes.measure(snapshots)
       var restoreNanos = 0L
       snapshots.forEach { snapshot ->
-        restoreNanos += measureNanoTime { gameboy.restoreFromMemento(snapshot) }
+        restoreNanos += measureNanoTime { gameboy.restoreState(snapshot) }
       }
       return BenchmarkResult(
           snapshots.size,

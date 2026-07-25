@@ -1,13 +1,14 @@
 package eu.rekawek.coffeegb.core.serial;
 
-import eu.rekawek.coffeegb.core.cpu.BitUtils;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.cpu.BitUtils;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
+
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Originator<SerialEndpoint> {
+public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponent<SerialEndpoint> {
 
     private Peer2PeerSerialEndpoint peer;
 
@@ -70,20 +71,25 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, Serializable, Or
     }
 
     @Override
-    public Memento<SerialEndpoint> saveToMemento() {
-        return new Peer2PeerSerialEndpointMemento(sb, bitsReceived.get(), bitIndex);
+    public ComponentState<SerialEndpoint> captureState() {
+        return new Peer2PeerSerialEndpointState(sb, bitsReceived.get(), bitIndex);
     }
 
     @Override
-    public void restoreFromMemento(Memento<SerialEndpoint> memento) {
-        if (!(memento instanceof Peer2PeerSerialEndpointMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SerialEndpoint> state) {
+        if (!(state instanceof Peer2PeerSerialEndpointState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.sb = mem.sb;
         this.bitsReceived.set(mem.bitsReceived);
         this.bitIndex = mem.bitIndex;
     }
 
+    private record Peer2PeerSerialEndpointState(int sb, int bitsReceived,
+                                                  int bitIndex) implements ComponentState<SerialEndpoint> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record Peer2PeerSerialEndpointMemento(int sb, int bitsReceived,
                                                   int bitIndex) implements Memento<SerialEndpoint> {
     }

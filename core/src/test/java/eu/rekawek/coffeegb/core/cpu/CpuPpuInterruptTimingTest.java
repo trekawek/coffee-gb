@@ -244,14 +244,14 @@ public class CpuPpuInterruptTimingTest {
         h.interrupts.requestMode2InterruptBeforeCpuAcceptance(false);
         h.interrupts.releaseCpuAcceptance(LCDC);
         h.tickCpuTicks(1);
-        var cpuMemento = h.cpu.saveToMemento();
-        var interruptMemento = h.interrupts.saveToMemento();
+        var cpuMemento = h.cpu.captureState();
+        var interruptMemento = h.interrupts.captureState();
 
         h.tickCpuTicks(2);
         assertEquals(Cpu.State.IRQ_PUSH_1, h.cpu.getState());
 
-        h.cpu.restoreFromMemento(cpuMemento);
-        h.interrupts.restoreFromMemento(interruptMemento);
+        h.cpu.restoreState(cpuMemento);
+        h.interrupts.restoreState(interruptMemento);
         h.tickCpuTicks(2);
         assertEquals(Cpu.State.IRQ_PUSH_1, h.cpu.getState());
     }
@@ -280,14 +280,14 @@ public class CpuPpuInterruptTimingTest {
         h.tickMachineCycle();
         assertEquals(Cpu.State.HALTED, h.cpu.getState());
 
-        var blockedCpu = h.cpu.saveToMemento();
-        var blockedInterrupt = h.interrupts.saveToMemento();
+        var blockedCpu = h.cpu.captureState();
+        var blockedInterrupt = h.interrupts.captureState();
         h.interrupts.releaseHaltWake(LCDC);
         h.tickMachineCycle();
         assertEquals(Cpu.State.IRQ_WAIT_2, h.cpu.getState());
 
-        h.cpu.restoreFromMemento(blockedCpu);
-        h.interrupts.restoreFromMemento(blockedInterrupt);
+        h.cpu.restoreState(blockedCpu);
+        h.interrupts.restoreState(blockedInterrupt);
         h.tickMachineCycle();
         assertEquals(Cpu.State.HALTED, h.cpu.getState());
         h.interrupts.releaseHaltWake(LCDC);
@@ -359,9 +359,9 @@ public class CpuPpuInterruptTimingTest {
             h.cpu.getRegisters().setA(8);
             h.enable(LCDC);
             h.enterHalt();
-            var entryWindow = h.cpu.saveToMemento();
+            var entryWindow = h.cpu.captureState();
             h.tickMachineCycle();
-            h.cpu.restoreFromMemento(entryWindow);
+            h.cpu.restoreState(entryWindow);
 
             h.cpu.tick();
             h.interrupts.requestInterrupt(LCDC);
@@ -386,14 +386,14 @@ public class CpuPpuInterruptTimingTest {
         h.cpu.tick();
         h.interrupts.requestInterrupt(LCDC);
         h.cpu.onPeripheralsTicked();
-        var asynchronousPhase = h.cpu.saveToMemento();
+        var asynchronousPhase = h.cpu.captureState();
 
         h.memory.setByte(PROGRAM + 1, 0x76);
         h.interrupts.clearInterrupt(LCDC);
         h.tickCpuTicks(8);
         assertFalse(h.cpu.isAsynchronousHaltEntryStatPhase());
 
-        h.cpu.restoreFromMemento(asynchronousPhase);
+        h.cpu.restoreState(asynchronousPhase);
         assertFalse(h.cpu.isSynchronousHaltEntryStatPhase());
         assertTrue(h.cpu.isAsynchronousHaltEntryStatPhase());
     }
@@ -407,7 +407,7 @@ public class CpuPpuInterruptTimingTest {
         h.interrupts.requestInterrupt(LCDC);
         h.tickMachineCycle();
         assertTrue(h.cpu.isOrdinaryHaltWakeStatPhase());
-        var ordinaryWakePhase = h.cpu.saveToMemento();
+        var ordinaryWakePhase = h.cpu.captureState();
 
         h.memory.setByte(h.cpu.getRegisters().getPC(), 0x76);
         h.interrupts.clearInterrupt(LCDC);
@@ -415,7 +415,7 @@ public class CpuPpuInterruptTimingTest {
         assertEquals(Cpu.State.HALTED, h.cpu.getState());
         assertFalse(h.cpu.isOrdinaryHaltWakeStatPhase());
 
-        h.cpu.restoreFromMemento(ordinaryWakePhase);
+        h.cpu.restoreState(ordinaryWakePhase);
         assertTrue(h.cpu.isOrdinaryHaltWakeStatPhase());
     }
 
@@ -430,12 +430,12 @@ public class CpuPpuInterruptTimingTest {
 
         assertTrue(firstSlot.cpu.isOrdinaryHaltWakeStatPhase());
         assertTrue(firstSlot.cpu.isOneCycleOrdinaryHaltWakeStatPhase());
-        var firstSlotWake = firstSlot.cpu.saveToMemento();
+        var firstSlotWake = firstSlot.cpu.captureState();
         firstSlot.memory.setByte(firstSlot.cpu.getRegisters().getPC(), 0x76);
         firstSlot.interrupts.clearInterrupt(LCDC);
         firstSlot.tickMachineCycle();
         assertFalse(firstSlot.cpu.isOneCycleOrdinaryHaltWakeStatPhase());
-        firstSlot.cpu.restoreFromMemento(firstSlotWake);
+        firstSlot.cpu.restoreState(firstSlotWake);
         assertTrue(firstSlot.cpu.isOneCycleOrdinaryHaltWakeStatPhase());
 
         Harness laterSlot = new Harness(false);
@@ -555,9 +555,9 @@ public class CpuPpuInterruptTimingTest {
         h.tickCpuTicks(2);
 
         assertTrue(h.cpu.claimCpuRequestSlotForHdma());
-        var latched = h.cpu.saveToMemento();
+        var latched = h.cpu.captureState();
         h.cpu.tick();
-        h.cpu.restoreFromMemento(latched);
+        h.cpu.restoreState(latched);
 
         assertEquals(Cpu.State.OPCODE, h.cpu.getState());
         assertEquals(PROGRAM, h.cpu.getRegisters().getPC());

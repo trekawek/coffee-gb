@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateIdentityEntry
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.StateApplyException
@@ -58,7 +59,6 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
-import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
@@ -438,7 +438,7 @@ class LinkedController(
       eventBus.post(
           LoadedLocalConfigEvent(
               config = config,
-              snapshot = it.memento,
+              snapshot = it.state,
           ))
     }
 
@@ -497,7 +497,7 @@ class LinkedController(
     stateHistory.addState(
         frame,
         inputs,
-        sessions.map { it?.saveToMemento() },
+        sessions.map { it?.captureDetachedState() },
         sessions.map { it?.heldButtons ?: emptySet() },
     )
 
@@ -520,7 +520,7 @@ class LinkedController(
   private fun initSession(
       player: Int,
       sessionFrame: Long,
-      state: Memento<Gameboy>?,
+      state: MachineState?,
   ) {
     val config = configs[player] ?: return
     val sessionEventBus = EventBusImpl(null, null, false)
@@ -547,12 +547,12 @@ class LinkedController(
             links.infrared[player],
         )
     if (state != null) {
-      session.gameboy.restoreFromMemento(state)
+      DetachedStateAdapter.apply(session.gameboy, state)
     }
 
     var current = sessionFrame
     while (current < frame) {
-      stateHistory.setPlayerState(player, current, session.saveToMemento(), session.heldButtons)
+      stateHistory.setPlayerState(player, current, session.captureDetachedState(), session.heldButtons)
       repeat(TICKS_PER_FRAME) { session.gameboy.tick() }
       current++
     }
@@ -583,7 +583,7 @@ class LinkedController(
     val oldFrame = frame
     val oldRuntimeFloor = runtimeFrameFloor
     val oldHistory = stateHistory.captureSnapshot()
-    val oldSessionMementos = sessions.map { it?.saveToMemento() }
+    val oldSessionStates = sessions.map { it?.captureDetachedState() }
     val oldHeldButtons = sessions.map { it?.heldButtons ?: emptySet() }
     try {
       if (reconcileBeforeCommit) reconcileHistory()
@@ -597,7 +597,7 @@ class LinkedController(
         stateHistory.setPlayerState(
             e.player,
             current,
-            prepared.session.saveToMemento(),
+            prepared.session.captureDetachedState(),
             prepared.session.heldButtons,
         )
         repeat(TICKS_PER_FRAME) { prepared.session.gameboy.tick() }
@@ -615,9 +615,9 @@ class LinkedController(
       try {
         sessions.indices.forEach { player ->
           val session = sessions[player]
-          val memento = oldSessionMementos[player]
-          if (session != null && memento != null) {
-            session.restoreFromMemento(memento)
+          val state = oldSessionStates[player]
+          if (session != null && state != null) {
+            session.restoreDetachedState(state)
             session.heldButtons = oldHeldButtons[player]
           }
         }
@@ -661,8 +661,8 @@ class LinkedController(
       return false
     }
 
-    val replacementMementos =
-        prepared.map { replacement -> replacement?.session?.saveToMemento() }
+    val replacementStates =
+        prepared.map { replacement -> replacement?.session?.captureDetachedState() }
     val replacementButtons =
         prepared.map { replacement -> replacement?.session?.heldButtons ?: emptySet() }
     val oldSessions = sessions.toList()
@@ -686,7 +686,7 @@ class LinkedController(
       }
       frame = event.frame
       runtimeFrameFloor = event.frame
-      stateHistory.replaceWithState(frame, replacementMementos, replacementButtons)
+      stateHistory.replaceWithState(frame, replacementStates, replacementButtons)
     } catch (failure: Throwable) {
       links = oldLinks
       sessions.indices.forEach { player ->
@@ -1006,9 +1006,9 @@ class LinkedController(
     val head = stateHistory.getHead()
     for (player in sessions.indices) {
       val session = sessions[player]
-      val memento = head.mementos[player]
-      if (session != null && memento != null) {
-        session.restoreFromMemento(memento)
+      val state = head.sessionStates[player]
+      if (session != null && state != null) {
+        session.restoreDetachedState(state)
         session.heldButtons = head.buttons[player]
       }
     }
@@ -1037,13 +1037,13 @@ class LinkedController(
   }
 
   private fun rebaseHistoryToLiveState() {
-    val mementos = sessions.map { it?.saveToMemento() }
+    val sessionStates = sessions.map { it?.captureDetachedState() }
     val heldButtons = sessions.map { it?.heldButtons ?: emptySet() }
     stateHistory.clear()
     stateHistory.addState(
         frame,
         List(mode.playerCount) { Input(emptyList(), emptyList()) },
-        mementos,
+        sessionStates,
         heldButtons,
     )
   }
@@ -1084,7 +1084,7 @@ class LinkedController(
 
     val localSession = sessions[localPlayer]
     val state =
-        localSession?.let { Controller.ControllerState(it.gameboy.saveToMemento(), it.config.rom) }
+        localSession?.let { Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom) }
 
     localSession?.eventBus?.post(Controller.EmulationStoppedEvent())
     sessions.forEach { it?.close() }
@@ -1126,7 +1126,7 @@ class LinkedController(
 
   data class LoadedLocalConfigEvent(
       val config: GameboyConfiguration,
-      val snapshot: Memento<Gameboy>?,
+      val snapshot: MachineState?,
   ) : Event
 
   private data class PreparedPeerReplacement(

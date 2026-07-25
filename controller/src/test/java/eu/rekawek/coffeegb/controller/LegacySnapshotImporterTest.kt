@@ -2,13 +2,13 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.events.EventBusImpl
-import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.GameGeniePatch
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Rom
-import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
@@ -28,30 +28,37 @@ import java.util.ArrayList
 import java.util.HashMap
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.junit.Test
 
-private fun eu.rekawek.coffeegb.core.memento.Memento<Gameboy>.serialize(): ByteArray =
-    LegacyMementoCodec.serializeGameboy(this)
-
 private fun ByteArray.deserializeToGameboyMemento() =
-    LegacyMementoCodec.deserializeGameboy(this)
+    LegacySnapshotImporter.importGameboyState(this)
 
-class LegacyMementoCodecTest {
+class LegacySnapshotImporterTest {
 
   @Test
-  fun knownGameboyMementoRoundTripsThroughAllowlist() {
+  fun committedLegacyFixturesImportAndContinueDeterministically() {
     val eventBus = EventBusImpl()
-    val gameboy = configuration().build()
+    val configuration = configuration()
+    val gameboy = configuration.build()
     gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
     try {
-      eventBus.post(AddPatches(listOf(GameGeniePatch(0x42, 0x1234, 0x24))))
-      repeat(100) { gameboy.tick() }
-      val serialized = gameboy.saveToMemento().serialize()
-      val restored = serialized.deserializeToGameboyMemento()
+      LEGACY_FIXTURES.forEach { fixture ->
+        val restored = fixture.readBytes().deserializeToGameboyMemento()
+        DetachedStateAdapter.applyLegacyState(gameboy, restored)
+        repeat(512) { gameboy.tick() }
+        val expected = StateCodec.encode(StateCodec.capture(configuration, gameboy))
 
-      gameboy.restoreFromMemento(restored)
+        DetachedStateAdapter.applyLegacyState(gameboy, restored)
+        repeat(512) { gameboy.tick() }
+        assertContentEquals(
+            expected,
+            StateCodec.encode(StateCodec.capture(configuration, gameboy)),
+            fixture.name,
+        )
+      }
     } finally {
       gameboy.stop()
       gameboy.close()
@@ -75,23 +82,14 @@ class LegacyMementoCodecTest {
 
   @Test
   fun alteredAllowedClassShapeIsRejected() {
-    val eventBus = EventBusImpl()
-    val gameboy = configuration().build()
-    gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
-    try {
-      val serialized = gameboy.saveToMemento().serialize()
-      val field = "biosShadowMemento".toByteArray()
-      val index = serialized.indexOf(field)
-      assertTrue(index >= 0, "fixture should contain the root record descriptor")
-      val altered = serialized.clone()
-      altered[index] = 'x'.code.toByte()
+    val serialized = LEGACY_FIXTURES.last().readBytes()
+    val field = "biosShadowMemento".toByteArray()
+    val index = serialized.indexOf(field)
+    assertTrue(index >= 0, "fixture should contain the root record descriptor")
+    val altered = serialized.clone()
+    altered[index] = 'x'.code.toByte()
 
-      assertFailsWith<InvalidClassException> { altered.deserializeToGameboyMemento() }
-    } finally {
-      gameboy.stop()
-      gameboy.close()
-      eventBus.close()
-    }
+    assertFailsWith<InvalidClassException> { altered.deserializeToGameboyMemento() }
   }
 
   @Test
@@ -103,7 +101,7 @@ class LegacyMementoCodecTest {
             arrayOf(Memento::class.java),
             SerializableHandler(),
         ) as Memento<Gameboy>
-    val serialized = LegacyMementoCodec.serializeGameboy(proxy)
+    val serialized = rawSerialize(proxy)
 
     assertFailsWith<InvalidClassException> { serialized.deserializeToGameboyMemento() }
   }
@@ -130,8 +128,7 @@ class LegacyMementoCodecTest {
 
   @Test
   fun oversizedLegacyArrayIsRejectedByGraphFilter() {
-    val battery = MemoryBattery(ByteArray(StateLimits.LEGACY_MAX_ARRAY_LENGTH.toInt() + 1))
-    val serialized = rawSerialize(battery.saveToMemento())
+    val serialized = rawSerialize(ByteArray(StateLimits.LEGACY_MAX_ARRAY_LENGTH.toInt() + 1))
 
     assertFailsWith<IOException> { serialized.deserializeToGameboyMemento() }
   }
@@ -192,7 +189,9 @@ class LegacyMementoCodecTest {
       )
     }
 
-    val mementoType = MemoryBattery(ByteArray(0)).saveToMemento().javaClass
+    val mementoType =
+        Class.forName(
+            "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryMemento")
     val constructor = mementoType.declaredConstructors.single().also { it.isAccessible = true }
     val nullBufferMemento = constructor.newInstance(null)
     LegacySerializationPreflight.validate(
@@ -366,7 +365,7 @@ class LegacyMementoCodecTest {
         arrayLength: Long = -1,
         objectArray: Boolean = false,
     ) =
-        LegacyMementoCodec.isWithinGraphLimits(
+        LegacySnapshotImporter.isWithinGraphLimits(
             depth,
             references,
             streamBytes,
@@ -402,21 +401,16 @@ class LegacyMementoCodecTest {
 
   @Test
   fun legacyCollectionLimitAcceptsBoundaryAndRejectsBoundaryPlusOne() {
-    val eventBus = EventBusImpl()
-    val gameboy = configuration().build()
-    gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
     val patch = GameGeniePatch(0x42, 0x1234, 0x24)
-    try {
-      eventBus.post(AddPatches(List(StateLimits.LEGACY_MAX_COLLECTION_ENTRIES) { patch }))
-      gameboy.saveToMemento().serialize().deserializeToGameboyMemento()
-
-      eventBus.post(AddPatches(listOf(patch)))
-      val oversized = gameboy.saveToMemento().serialize()
-      assertFailsWith<IOException> { oversized.deserializeToGameboyMemento() }
-    } finally {
-      gameboy.stop()
-      gameboy.close()
-      eventBus.close()
+    LegacySerializationPreflight.validate(
+        rawSerialize(ArrayList(List(StateLimits.LEGACY_MAX_COLLECTION_ENTRIES) { patch })),
+        StateLimits.GAME_SNAPSHOT.decodedBytes,
+    )
+    assertFailsWith<InvalidObjectException> {
+      LegacySerializationPreflight.validate(
+          rawSerialize(ArrayList(List(StateLimits.LEGACY_MAX_COLLECTION_ENTRIES + 1) { patch })),
+          StateLimits.GAME_SNAPSHOT.decodedBytes,
+      )
     }
   }
 
@@ -447,17 +441,8 @@ class LegacyMementoCodecTest {
       byteArrayOf(1, 2, 3, 4).deserializeToGameboyMemento()
     }
 
-    val eventBus = EventBusImpl()
-    val gameboy = configuration().build()
-    gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
-    try {
-      val serialized = gameboy.saveToMemento().serialize() + 0x7f.toByte()
-      assertFailsWith<IOException> { serialized.deserializeToGameboyMemento() }
-    } finally {
-      gameboy.stop()
-      gameboy.close()
-      eventBus.close()
-    }
+    val serialized = LEGACY_FIXTURES.last().readBytes() + 0x7f.toByte()
+    assertFailsWith<IOException> { serialized.deserializeToGameboyMemento() }
   }
 
   private fun configuration(): Gameboy.GameboyConfiguration =
@@ -522,5 +507,13 @@ class LegacyMementoCodecTest {
 
   private companion object {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
+    val LEGACY_FIXTURES =
+        listOf("1.7.13", "1.7.14").map { version ->
+          Paths.get(
+                  "src/test/resources/legacy",
+                  "coffee-gb-$version-cpu-instrs.sn",
+              )
+              .toFile()
+        }
   }
 }

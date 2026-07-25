@@ -125,13 +125,13 @@ public class GpuCpuWriteSynchronizationTest {
         fixture.gpu.setByteFromCpu(GpuRegister.WX.getAddress(), 0x55);
         fixture.gpu.setByteFromCpu(0xff40, 0x91);
         fixture.tick(2);
-        var saved = fixture.gpu.saveToMemento();
+        var saved = fixture.gpu.captureState();
 
         fixture.tick(3);
         assertEquals(0x55, fixture.gpu.getPixelWindowXVisible());
         assertFalse(fixture.gpu.isPixelWindowDisplayVisible());
 
-        fixture.gpu.restoreFromMemento(saved);
+        fixture.gpu.restoreState(saved);
         assertEquals(0x10, fixture.gpu.getPixelWindowXVisible());
         assertTrue(fixture.gpu.isPixelWindowDisplayVisible());
         fixture.tick(2);
@@ -226,12 +226,12 @@ public class GpuCpuWriteSynchronizationTest {
         fixture.advanceTo(1, 100);
         fixture.gpu.setByte(0xff40, 0x91);
         fixture.gpu.setByteFromCpu(0xff40, 0xb1);
-        var saved = fixture.gpu.saveToMemento();
+        var saved = fixture.gpu.captureState();
 
         fixture.tick(2);
         assertEquals(0xb1, fixture.gpu.getLcdc().get());
 
-        fixture.gpu.restoreFromMemento(saved);
+        fixture.gpu.restoreState(saved);
         assertEquals(0xb1, fixture.gpu.getByte(0xff40));
         assertEquals(0x91, fixture.gpu.getLcdc().get());
         fixture.tick();
@@ -285,12 +285,12 @@ public class GpuCpuWriteSynchronizationTest {
         fixture.gpu.setByte(GpuRegister.BGP.getAddress(), 0xe4);
         fixture.gpu.setByteFromCpu(GpuRegister.BGP.getAddress(), 0x1b);
         fixture.tick(2);
-        var saved = fixture.gpu.saveToMemento();
+        var saved = fixture.gpu.captureState();
 
         fixture.tick(3);
         assertEquals(0x1b, fixture.gpu.getRegisters().get(GpuRegister.BGP));
 
-        fixture.gpu.restoreFromMemento(saved);
+        fixture.gpu.restoreState(saved);
         assertEquals(0x1b, fixture.gpu.getByte(GpuRegister.BGP.getAddress()));
         assertEquals(0xe4, fixture.gpu.getRegisters().get(GpuRegister.BGP));
         fixture.tick(2);

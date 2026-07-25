@@ -21,12 +21,12 @@ public class GameboyMementoTest {
             for (int i = 0; i < elapsedBeforeSave; i++) {
                 gameboy.tick();
             }
-            var memento = gameboy.saveToMemento();
+            var memento = gameboy.captureState();
 
             for (int i = 0; i < 456; i++) {
                 gameboy.tick();
             }
-            gameboy.restoreFromMemento(memento);
+            gameboy.restoreState(memento);
 
             int ticksUntilBlank = 0;
             do {
@@ -88,12 +88,12 @@ public class GameboyMementoTest {
             gameboy.getAddressSpace().setByte(0xff04, 0);
             gameboy.getAddressSpace().setByte(0xff05, 0);
             gameboy.getAddressSpace().setByte(0xff07, 0x05);
-            var memento = gameboy.saveToMemento();
+            var memento = gameboy.captureState();
 
             for (int i = 0; i < 3; i++) {
                 gameboy.tick();
             }
-            gameboy.restoreFromMemento(memento);
+            gameboy.restoreState(memento);
 
             assertEquals(Gameboy.LONG_SPEED_SWITCH_TAIL_TICKS,
                     drainSpeedSwitchTail(gameboy));
@@ -172,13 +172,13 @@ public class GameboyMementoTest {
             advanceToSpeedSwitchTail(gameboy);
             drainSpeedSwitchTail(gameboy);
             assertEquals(1, gameboy.getSpeedMode().getSpeedMode());
-            var memento = gameboy.saveToMemento();
+            var memento = gameboy.captureState();
 
             advanceToSpeedSwitchTail(gameboy);
             assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS + 1,
                     drainSpeedSwitchTail(gameboy));
 
-            gameboy.restoreFromMemento(memento);
+            gameboy.restoreState(memento);
             advanceToSpeedSwitchTail(gameboy);
             assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS + 1,
                     drainSpeedSwitchTail(gameboy));

@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.core.memento;
+package eu.rekawek.coffeegb.core.state;
 
 import java.util.IdentityHashMap;
 import java.util.function.BiFunction;
@@ -10,7 +10,7 @@ import java.util.function.Function;
  * payloads.
  *
  * <p>Dominant array owners first declare their live backing identities and logical lengths through
- * {@link Originator#declareMachineStatePayloads(MachineStateCapture)}. Their token-aware mementos
+ * {@link StatefulComponent#declareMachineStatePayloads(MachineStateCapture)}. Their token-aware states
  * must then register those exact identities. A helper clone such as {@code
  * capture.ints(ram.clone())} leaves the declared live backing unmatched and therefore fails
  * deterministically. Every primitive array in the transient view, including smaller non-dominant
@@ -19,8 +19,8 @@ import java.util.function.Function;
  * <p>The consumer must copy or compare the verified arrays synchronously while the emulator is
  * stopped at its frame boundary. The token is closed before the capture call returns, and neither
  * it nor the transient view may be retained. This is deliberately separate from the normal {@link
- * Originator#saveToMemento()} contract. Legacy, portable-state, boot-state and other callers
- * continue to receive deep-owned arrays.
+ * StatefulComponent#captureState()} contract. Portable-state, boot-state and other standalone
+ * callers continue to receive deep-owned arrays.
  */
 public final class MachineStateCapture implements AutoCloseable {
 
@@ -39,7 +39,7 @@ public final class MachineStateCapture implements AutoCloseable {
     /**
      * Builds and consumes one verified transient machine view.
      *
-     * <p>Declaration reads only explicit owner fields and does not build a memento graph. The
+     * <p>Declaration reads only explicit owner fields and does not build a component-state graph. The
      * source then builds exactly one short-lived record view.
      */
     public static <V, R> R withVerifiedView(
@@ -134,7 +134,7 @@ public final class MachineStateCapture implements AutoCloseable {
     /**
      * Returns the registered logical length for a primitive payload.
      *
-     * <p>An unregistered array means an originator fell back to the legacy deep-copy path. The
+     * <p>An unregistered array means an owner fell back to the ordinary deep-copy path. The
      * incremental consumer rejects that mistake instead of silently hiding its allocation.
      */
     public int requireLength(Object source) {

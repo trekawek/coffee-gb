@@ -1,16 +1,18 @@
 package eu.rekawek.coffeegb.core.genie;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class Genie implements AddressSpace, Originator<Genie> {
+public class Genie implements AddressSpace, StatefulComponent<Genie> {
 
     private final AddressSpace delegate;
 
@@ -70,21 +72,25 @@ public class Genie implements AddressSpace, Originator<Genie> {
     }
 
     @Override
-    public Memento<Genie> saveToMemento() {
+    public ComponentState<Genie> captureState() {
         var map = new HashMap<Integer, List<Patch>>();
         patches.forEach((k, v) -> map.put(k, new ArrayList<>(v)));
-        return new GenieMemento(map);
+        return new GenieState(map);
     }
 
     @Override
-    public void restoreFromMemento(Memento<Genie> memento) {
-        if (!(memento instanceof GenieMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Genie> state) {
+        if (!(state instanceof GenieState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         patches.clear();
         mem.patches.forEach((k, v) -> patches.put(k, new ArrayList<>(v)));
     }
 
+    private record GenieState(Map<Integer, List<Patch>> patches) implements ComponentState<Genie> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record GenieMemento(Map<Integer, List<Patch>> patches) implements Memento<Genie> {
     }
 }

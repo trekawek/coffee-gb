@@ -135,12 +135,12 @@ public class DisplayTest {
         display.frameIsReady();
         display.disableLcd();
         display.enableLcd();
-        var memento = display.saveToMemento();
+        var memento = display.captureState();
 
         // Destroy both pieces of display state before restoring: blankFrame clears the
         // cached picture and cancels the pending first-frame repeat.
         display.blankFrame();
-        display.restoreFromMemento(memento);
+        display.restoreState(memento);
         fillCgb(display, 0x4321);
         display.frameIsReady();
 

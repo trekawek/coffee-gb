@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.core.serial;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.state.ComponentState;
+
 /**
  * Emulates the Game Boy Printer (MGB-007), the thermal printer used by Game Boy Camera,
  * Pokemon Trading Card Game, the Pokedex print feature and many others (issue #77). The
@@ -288,19 +290,19 @@ public class GameboyPrinterSerialEndpoint implements SerialEndpoint {
     }
 
     @Override
-    public Memento<SerialEndpoint> saveToMemento() {
-        return new PrinterMemento(state, commandId, compression, lengthLeft, commandData.clone(),
+    public ComponentState<SerialEndpoint> captureState() {
+        return new PrinterState(state, commandId, compression, lengthLeft, commandData.clone(),
                 commandLength, checksum, status, byteToSend, image.clone(), imageOffset,
                 compressionRunLength, compressionRunIsCompressed, printCountdown, currentReply,
                 sendBits, sb);
     }
 
     @Override
-    public void restoreFromMemento(Memento<SerialEndpoint> memento) {
-        if (!(memento instanceof PrinterMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SerialEndpoint> state) {
+        if (!(state instanceof PrinterState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        state = mem.state;
+        this.state = mem.state;
         commandId = mem.commandId;
         compression = mem.compression;
         lengthLeft = mem.lengthLeft;
@@ -319,6 +321,15 @@ public class GameboyPrinterSerialEndpoint implements SerialEndpoint {
         sb = mem.sb;
     }
 
+    private record PrinterState(int state, int commandId, boolean compression, int lengthLeft,
+                                  int[] commandData, int commandLength, int checksum, int status,
+                                  int byteToSend, int[] image, int imageOffset,
+                                  int compressionRunLength, boolean compressionRunIsCompressed,
+                                  int printCountdown, int currentReply, int sendBits, int sb)
+            implements ComponentState<SerialEndpoint> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record PrinterMemento(int state, int commandId, boolean compression, int lengthLeft,
                                   int[] commandData, int commandLength, int checksum, int status,
                                   int byteToSend, int[] image, int imageOffset,

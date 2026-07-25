@@ -3,12 +3,10 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.memento.Memento
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.InvalidClassException
 import java.io.InvalidObjectException
 import java.io.ObjectInputFilter
 import java.io.ObjectInputStream
-import java.io.ObjectOutputStream
 import java.io.ObjectStreamConstants
 import java.io.ObjectStreamClass
 import java.lang.reflect.Proxy
@@ -35,7 +33,10 @@ internal data class LegacySerialField(
  * file format. They are deliberately excluded instead of implying a compatibility contract that
  * cannot be pinned to a released local-state fixture.
  */
-internal object LegacyMementoCodec {
+internal object LegacySnapshotImporter {
+
+  /** Test-only reachability probe; incremented only after exact local legacy format dispatch. */
+  @Volatile internal var importObserver: (() -> Unit)? = null
 
   // SHA-256 of every accepted descriptor name, SUID, flag byte, and ordered field shape below.
   // Updating a memento class cannot silently broaden legacy migration; this value must be changed
@@ -89,11 +90,10 @@ internal object LegacyMementoCodec {
               ),
       )
 
-  fun serializeGameboy(memento: Memento<Gameboy>): ByteArray =
-      serialize(memento, StateLimits.GAME_SNAPSHOT)
-
-  fun deserializeGameboy(bytes: ByteArray): Memento<Gameboy> =
-      deserialize(bytes, StateLimits.GAME_SNAPSHOT, GAMEBOY_MEMENTO)
+  fun importGameboyState(bytes: ByteArray): Memento<Gameboy> {
+    importObserver?.invoke()
+    return deserialize(bytes, StateLimits.GAME_SNAPSHOT, GAMEBOY_MEMENTO)
+  }
 
   fun hasJavaSerializationHeader(bytes: ByteArray): Boolean =
       bytes.size >= 4 &&
@@ -101,16 +101,6 @@ internal object LegacyMementoCodec {
           bytes[1] == 0xed.toByte() &&
           bytes[2] == 0x00.toByte() &&
           bytes[3] == 0x05.toByte()
-
-  private fun serialize(value: Any, limit: StateLimits.Payload): ByteArray {
-    val output = ByteArrayOutputStream()
-    ObjectOutputStream(output).use { it.writeObject(value) }
-    return output.toByteArray().also {
-      require(it.size <= limit.decodedBytes) {
-        "${limit.description} exceeds the ${limit.decodedBytes}-byte legacy limit"
-      }
-    }
-  }
 
   private fun <T> deserialize(
       bytes: ByteArray,
@@ -238,7 +228,7 @@ internal object LegacyMementoCodec {
     if (allowedSupportClasses.contains(type) || allowedSupportClassNames.contains(type.name)) {
       return true
     }
-    return type.name in MementoTypeRegistry.legacyApplicationClassNames
+    return type.name in StateTypeRegistry.legacyApplicationClassNames
   }
 
   /** Rejects added, removed, renamed, or retyped fields even when the class name is allowed. */
@@ -324,7 +314,7 @@ internal object LegacyMementoCodec {
             Number::class.java,
         )
     val application =
-        (MementoTypeRegistry.recordClassNames + MementoTypeRegistry.enumClassNames)
+        (StateTypeRegistry.legacyRecordClassNames + StateTypeRegistry.enumClassNames)
             .map { Class.forName(it, false, javaClass.classLoader) }
     val arrays = LegacyArrayShapes.descriptors.map { Class.forName(it, false, javaClass.classLoader) }
     (support + application + arrays).associateBy { it.name }

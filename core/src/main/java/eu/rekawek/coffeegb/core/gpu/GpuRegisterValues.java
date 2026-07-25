@@ -1,14 +1,14 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
-
-public class GpuRegisterValues implements AddressSpace, Serializable, Originator<GpuRegisterValues> {
+public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuRegisterValues> {
 
     private static final GpuRegister[] ADDRESS_TO_REG = new GpuRegister[0xf];
 
@@ -169,14 +169,14 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
     }
 
     @Override
-    public Memento<GpuRegisterValues> saveToMemento() {
-        return new GpuRegisterValuesMemento(values.clone(), mixValues.clone(), pendingMixValues.clone(),
+    public ComponentState<GpuRegisterValues> captureState() {
+        return new GpuRegisterValuesState(values.clone(), mixValues.clone(), pendingMixValues.clone(),
                 wxJustChangedTicks, scxOldValue, pendingScxOldValue);
     }
 
     @Override
-    public Memento<GpuRegisterValues> saveToMemento(MachineStateCapture capture) {
-        return new GpuRegisterValuesMemento(
+    public ComponentState<GpuRegisterValues> captureState(MachineStateCapture capture) {
+        return new GpuRegisterValuesState(
                 capture.ints(values),
                 capture.ints(mixValues),
                 capture.ints(pendingMixValues),
@@ -186,12 +186,12 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
     }
 
     @Override
-    public void restoreFromMemento(Memento<GpuRegisterValues> memento) {
-        if (!(memento instanceof GpuRegisterValuesMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<GpuRegisterValues> state) {
+        if (!(state instanceof GpuRegisterValuesState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.values.length != mem.values.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         System.arraycopy(mem.values, 0, this.values, 0, this.values.length);
         if (mem.mixValues != null && mem.pendingMixValues != null) {
@@ -206,6 +206,13 @@ public class GpuRegisterValues implements AddressSpace, Serializable, Originator
         this.pendingScxOldValue = mem.pendingScxOldValue;
     }
 
+    private record GpuRegisterValuesState(int[] values, int[] mixValues, int[] pendingMixValues,
+                                            int wxJustChangedTicks, int scxOldValue,
+                                            int pendingScxOldValue)
+            implements ComponentState<GpuRegisterValues> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record GpuRegisterValuesMemento(int[] values, int[] mixValues, int[] pendingMixValues,
                                             int wxJustChangedTicks, int scxOldValue,
                                             int pendingScxOldValue)

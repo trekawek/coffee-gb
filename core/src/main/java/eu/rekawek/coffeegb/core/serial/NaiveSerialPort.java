@@ -5,13 +5,11 @@ import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 
-import java.io.Serializable;
-
 /**
  * Simplified SerialPort implementation in which the bytes are immediately send to the other side,
  * without any bit-by-bit handling or the timing.
  */
-public class NaiveSerialPort implements AddressSpace, Serializable {
+public class NaiveSerialPort implements AddressSpace {
 
     private transient SerialEndpoint serialEndpoint;
 

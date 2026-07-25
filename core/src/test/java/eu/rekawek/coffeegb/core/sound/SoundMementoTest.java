@@ -4,31 +4,32 @@ import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.timer.Timer;
 import org.junit.Test;
 
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
 
 public class SoundMementoTest {
 
     @Test
-    public void frameBoundaryMementoDoesNotRetainTheEmittedFrameBuffer() throws Exception {
+    public void frameBoundaryStateDoesNotRetainTheEmittedFrameBuffer() {
         Sound sound = newSound();
         tick(sound, Gameboy.TICKS_PER_FRAME);
 
-        var bytes = new ByteArrayOutputStream();
-        try (var output = new ObjectOutputStream(bytes)) {
-            output.writeObject(sound.saveToMemento());
-        }
+        long retainedBytes = MachineStateCapture.withVerifiedView(
+                sound::declareMachineStatePayloads,
+                sound::captureState,
+                (state, capture) -> capture.getVerifiedPayloadBytes());
 
-        assertTrue("An empty sound memento should not contain the 546 KiB output buffer",
-                bytes.size() < 32 * 1024);
+        // Sound owns three integer register values plus the behavior-relevant prefix of its large
+        // output buffer. At a frame boundary that prefix is empty, so the 546 KiB frame buffer
+        // contributes zero bytes to the explicit state view.
+        assertEquals(3L * Integer.BYTES, retainedBytes);
     }
 
     @Test
@@ -45,14 +46,14 @@ public class SoundMementoTest {
         sound.setByte(0xff25, 0x11);
         int prefixTicks = 127;
         tick(sound, prefixTicks);
-        var memento = sound.saveToMemento();
+        var memento = sound.captureState();
 
         tick(sound, Gameboy.TICKS_PER_FRAME - prefixTicks);
         int[] expected = frames.remove(0);
 
         sound.setByte(0xff12, 0);
         tick(sound, prefixTicks);
-        sound.restoreFromMemento(memento);
+        sound.restoreState(memento);
         tick(sound, Gameboy.TICKS_PER_FRAME - prefixTicks);
 
         assertArrayEquals(expected, frames.remove(0));

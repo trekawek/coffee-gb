@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.core.gpu;
 
-import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class ColorPixelFifo implements PixelFifo, Serializable, Originator<ColorPixelFifo> {
+public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFifo> {
 
     // Like on the DMG, the CGB resolves pixels at the LCD interface after the FIFO pop.
     // CGB palette writes do not produce the DMG's old|new mix, and Daid's scanline palette
@@ -270,56 +270,56 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
     }
 
     @Override
-    public Memento<ColorPixelFifo> saveToMemento() {
-        return new ColorPixelFifoMemento(
-                pixels.saveToMemento(),
-                palettes.saveToMemento(),
-                priorities.saveToMemento(),
-                spriteFifo.saveToMemento(),
+    public ComponentState<ColorPixelFifo> captureState() {
+        return new ColorPixelFifoState(
+                pixels.captureState(),
+                palettes.captureState(),
+                priorities.captureState(),
+                spriteFifo.captureState(),
                 delayEntry.clone(),
                 delayStamp.clone(),
                 delayHead,
                 delaySize,
                 outputTicks,
                 linePixels,
-                clearedPixels.saveToMemento(),
-                clearedPalettes.saveToMemento(),
-                clearedPriorities.saveToMemento());
+                clearedPixels.captureState(),
+                clearedPalettes.captureState(),
+                clearedPriorities.captureState());
     }
 
     @Override
-    public Memento<ColorPixelFifo> saveToMemento(MachineStateCapture capture) {
-        return new ColorPixelFifoMemento(
-                pixels.saveToMemento(capture),
-                palettes.saveToMemento(capture),
-                priorities.saveToMemento(capture),
-                spriteFifo.saveToMemento(capture),
+    public ComponentState<ColorPixelFifo> captureState(MachineStateCapture capture) {
+        return new ColorPixelFifoState(
+                pixels.captureState(capture),
+                palettes.captureState(capture),
+                priorities.captureState(capture),
+                spriteFifo.captureState(capture),
                 capture.ints(delayEntry),
                 capture.longs(delayStamp),
                 delayHead,
                 delaySize,
                 outputTicks,
                 linePixels,
-                clearedPixels.saveToMemento(capture),
-                clearedPalettes.saveToMemento(capture),
-                clearedPriorities.saveToMemento(capture));
+                clearedPixels.captureState(capture),
+                clearedPalettes.captureState(capture),
+                clearedPriorities.captureState(capture));
     }
 
     @Override
-    public void restoreFromMemento(Memento<ColorPixelFifo> memento) {
-        if (!(memento instanceof ColorPixelFifoMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<ColorPixelFifo> state) {
+        if (!(state instanceof ColorPixelFifoState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        pixels.restoreFromMemento(mem.pixels);
-        palettes.restoreFromMemento(mem.palettes);
-        priorities.restoreFromMemento(mem.priorities);
-        spriteFifo.restoreFromMemento(mem.spriteFifo);
+        pixels.restoreState(mem.pixels);
+        palettes.restoreState(mem.palettes);
+        priorities.restoreState(mem.priorities);
+        spriteFifo.restoreState(mem.spriteFifo);
         if (mem.clearedPixels != null
                 && mem.clearedPalettes != null
                 && mem.clearedPriorities != null) {
-            clearedPixels.restoreFromMemento(mem.clearedPixels);
-            clearedPalettes.restoreFromMemento(mem.clearedPalettes);
-            clearedPriorities.restoreFromMemento(mem.clearedPriorities);
+            clearedPixels.restoreState(mem.clearedPixels);
+            clearedPalettes.restoreState(mem.clearedPalettes);
+            clearedPriorities.restoreState(mem.clearedPriorities);
         } else {
             discardClearedBg();
         }
@@ -337,6 +337,24 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         }
     }
 
+    private record ColorPixelFifoState(
+            ComponentState<IntQueue> pixels,
+            ComponentState<IntQueue> palettes,
+            ComponentState<IntQueue> priorities,
+            ComponentState<SpriteFifo> spriteFifo,
+            int[] delayEntry,
+            long[] delayStamp,
+            int delayHead,
+            int delaySize,
+            long outputTicks,
+            int linePixels,
+            ComponentState<IntQueue> clearedPixels,
+            ComponentState<IntQueue> clearedPalettes,
+            ComponentState<IntQueue> clearedPriorities)
+            implements ComponentState<ColorPixelFifo> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record ColorPixelFifoMemento(
             Memento<IntQueue> pixels,
             Memento<IntQueue> palettes,

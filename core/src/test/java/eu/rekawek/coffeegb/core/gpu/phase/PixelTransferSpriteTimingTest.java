@@ -7,7 +7,7 @@ import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.core.gpu.Lcdc;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
@@ -90,13 +90,13 @@ public class PixelTransferSpriteTimingTest {
             colliding.transfer.tick();
         }
         colliding.registers.put(GpuRegister.SCX, 4);
-        Memento<PixelTransfer> collisionState = colliding.transfer.saveToMemento();
+        ComponentState<PixelTransfer> collisionState = colliding.transfer.captureState();
         colliding.transfer.tick();
         assertEquals(-7, colliding.transfer.getPosition());
 
         Harness restored = doubleSpeedStartupHarness();
         restored.registers.put(GpuRegister.SCX, 4);
-        restored.transfer.restoreFromMemento(collisionState);
+        restored.transfer.restoreState(collisionState);
         restored.transfer.tick();
         assertEquals(-7, restored.transfer.getPosition());
     }
@@ -105,18 +105,18 @@ public class PixelTransferSpriteTimingTest {
     public void everySpriteFetchStateRoundTripsThroughMemento() {
         Harness reference = new Harness(false, true, 16, 24, 32);
         reference.transfer.start();
-        List<Memento<PixelTransfer>> states = new ArrayList<>();
+        List<ComponentState<PixelTransfer>> states = new ArrayList<>();
         int totalTicks = 0;
         boolean active;
         do {
-            states.add(reference.transfer.saveToMemento());
+            states.add(reference.transfer.captureState());
             active = reference.transfer.tick();
             totalTicks++;
         } while (active);
 
         for (int i = 0; i < states.size(); i++) {
             Harness restored = new Harness(false, true, 16, 24, 32);
-            restored.transfer.restoreFromMemento(states.get(i));
+            restored.transfer.restoreState(states.get(i));
             int remainingTicks = runToEnd(restored.transfer);
             assertEquals("state before tick " + i, totalTicks - i, remainingTicks);
         }

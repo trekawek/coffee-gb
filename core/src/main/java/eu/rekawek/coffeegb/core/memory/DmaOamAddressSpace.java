@@ -2,10 +2,8 @@ package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 
-import java.io.Serializable;
-
 /** OAM view used by the PPU, including the row driven by an active OAM DMA. */
-public class DmaOamAddressSpace implements AddressSpace, Serializable {
+public class DmaOamAddressSpace implements AddressSpace {
 
     private final AddressSpace oam;
 

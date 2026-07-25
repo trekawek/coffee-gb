@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -92,15 +94,15 @@ public class BhgosMulticart implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new BhgosMulticartMemento(battery.saveToMemento(), ram.clone(), selectedRomBank,
+    public ComponentState<MemoryController> captureState() {
+        return new BhgosMulticartState(battery.captureState(), ram.clone(), selectedRomBank,
                 selectedRamBank, baseRomBank, blockSelectWrites, ramUpdated);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new BhgosMulticartMemento(
-                battery.saveToMemento(capture),
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new BhgosMulticartState(
+                battery.captureState(capture),
                 capture.ints(ram),
                 selectedRomBank,
                 selectedRamBank,
@@ -116,11 +118,11 @@ public class BhgosMulticart implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof BhgosMulticartMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof BhgosMulticartState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        battery.restoreFromMemento(mem.batteryMemento);
+        battery.restoreState(mem.batteryMemento);
         System.arraycopy(mem.ram, 0, ram, 0, ram.length);
         selectedRomBank = mem.selectedRomBank;
         selectedRamBank = mem.selectedRamBank;
@@ -129,6 +131,13 @@ public class BhgosMulticart implements MemoryController {
         ramUpdated = mem.ramUpdated;
     }
 
+    private record BhgosMulticartState(ComponentState<Battery> batteryMemento, int[] ram,
+                                         int selectedRomBank, int selectedRamBank,
+                                         int baseRomBank, int blockSelectWrites,
+                                         boolean ramUpdated) implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record BhgosMulticartMemento(Memento<Battery> batteryMemento, int[] ram,
                                          int selectedRomBank, int selectedRamBank,
                                          int baseRomBank, int blockSelectWrites,

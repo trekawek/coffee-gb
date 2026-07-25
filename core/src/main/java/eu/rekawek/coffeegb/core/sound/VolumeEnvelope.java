@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> {
+public class VolumeEnvelope implements StatefulComponent<VolumeEnvelope> {
 
     private int initialVolume;
 
@@ -124,15 +124,15 @@ public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> 
     }
 
     @Override
-    public Memento<VolumeEnvelope> saveToMemento() {
-        return new VolumeEnvelopeMemento(initialVolume, envelopeDirection, sweep, volume, timer, finished,
+    public ComponentState<VolumeEnvelope> captureState() {
+        return new VolumeEnvelopeState(initialVolume, envelopeDirection, sweep, volume, timer, finished,
                 pendingEnvelopeClock);
     }
 
     @Override
-    public void restoreFromMemento(Memento<VolumeEnvelope> memento) {
-        if (!(memento instanceof VolumeEnvelopeMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<VolumeEnvelope> state) {
+        if (!(state instanceof VolumeEnvelopeState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.initialVolume = mem.initialVolume;
         this.envelopeDirection = mem.envelopeDirection;
@@ -143,6 +143,11 @@ public class VolumeEnvelope implements Serializable, Originator<VolumeEnvelope> 
         this.pendingEnvelopeClock = mem.pendingEnvelopeClock;
     }
 
+    private record VolumeEnvelopeState(int initialVolume, int envelopeDirection, int sweep, int volume, int timer,
+                                         boolean finished, boolean pendingEnvelopeClock) implements ComponentState<VolumeEnvelope> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record VolumeEnvelopeMemento(int initialVolume, int envelopeDirection, int sweep, int volume, int timer,
                                          boolean finished, boolean pendingEnvelopeClock) implements Memento<VolumeEnvelope> {
     }

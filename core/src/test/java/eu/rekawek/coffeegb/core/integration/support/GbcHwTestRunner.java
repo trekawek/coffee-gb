@@ -8,7 +8,7 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent;
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 
@@ -29,7 +29,7 @@ public final class GbcHwTestRunner {
 
     private static final int HDMA_HALT_CHECKPOINT_BYTES = 14;
 
-    private static final Map<BootKey, Memento<Gameboy>> BOOT_MEMENTOS = new HashMap<>();
+    private static final Map<BootKey, ComponentState<Gameboy>> BOOT_MEMENTOS = new HashMap<>();
 
     private final Gameboy gameboy;
 
@@ -64,7 +64,7 @@ public final class GbcHwTestRunner {
                 .build();
         eventBus = new EventBusImpl(null, null, false);
         gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
-        gameboy.restoreFromMemento(getBootMemento(rom, gameboyType));
+        gameboy.restoreState(getBootMemento(rom, gameboyType));
         for (Button button : initialButtons) {
             // Use the normal input event path so the joypad's electrical input/filter
             // state is initialized exactly as it is for a real held controller button.
@@ -80,16 +80,16 @@ public final class GbcHwTestRunner {
                 .setBatteryData(new byte[Math.max(rom.getRamSize(), 0x2000)]);
     }
 
-    private static synchronized Memento<Gameboy> getBootMemento(byte[] rom, GameboyType gameboyType)
+    private static synchronized ComponentState<Gameboy> getBootMemento(byte[] rom, GameboyType gameboyType)
             throws IOException {
         BootKey key = bootKey(rom, gameboyType);
-        Memento<Gameboy> memento = BOOT_MEMENTOS.get(key);
+        ComponentState<Gameboy> memento = BOOT_MEMENTOS.get(key);
         if (memento == null) {
             Gameboy booted = configuration(new Rom(rom), gameboyType)
                     .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
                     .build();
             booted.init(new EventBusImpl(null, null, false), SerialEndpoint.NULL_ENDPOINT, null);
-            memento = booted.saveToMemento();
+            memento = booted.captureState();
             BOOT_MEMENTOS.put(key, memento);
             booted.close();
         }

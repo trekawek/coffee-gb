@@ -1,12 +1,14 @@
 package eu.rekawek.coffeegb.core.gpu.phase;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.*;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -28,7 +30,7 @@ import static eu.rekawek.coffeegb.core.gpu.GpuRegister.*;
  * edge get fetched during the discard phase and their off-screen pixels are discarded
  * together with the background pixels they were merged with.
  */
-public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTransfer> {
+public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer> {
 
     private static final int[] JUNK_PIXEL_LINE = new int[8];
 
@@ -1098,25 +1100,25 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     @Override
-    public Memento<PixelTransfer> saveToMemento() {
-        return saveToMemento(null);
+    public ComponentState<PixelTransfer> captureState() {
+        return captureState(null);
     }
 
     @Override
-    public Memento<PixelTransfer> saveToMemento(MachineStateCapture capture) {
-        Memento<?> fifoMemento = null;
+    public ComponentState<PixelTransfer> captureState(MachineStateCapture capture) {
+        ComponentState<?> fifoMemento = null;
         if (fifo instanceof DmgPixelFifo) {
             fifoMemento = capture == null
-                    ? ((DmgPixelFifo) fifo).saveToMemento()
-                    : ((DmgPixelFifo) fifo).saveToMemento(capture);
+                    ? ((DmgPixelFifo) fifo).captureState()
+                    : ((DmgPixelFifo) fifo).captureState(capture);
         } else if (fifo instanceof ColorPixelFifo) {
             fifoMemento = capture == null
-                    ? ((ColorPixelFifo) fifo).saveToMemento()
-                    : ((ColorPixelFifo) fifo).saveToMemento(capture);
+                    ? ((ColorPixelFifo) fifo).captureState()
+                    : ((ColorPixelFifo) fifo).captureState(capture);
         }
 
-        return new PixelTransferMemento(
-                capture == null ? fetcher.saveToMemento() : fetcher.saveToMemento(capture),
+        return new PixelTransferState(
+                capture == null ? fetcher.captureState() : fetcher.captureState(capture),
                 fifoMemento,
                 entryTicks,
                 lcdEnableFirstLine,
@@ -1166,17 +1168,17 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     @Override
-    public void restoreFromMemento(Memento<PixelTransfer> memento) {
-        if (!(memento instanceof PixelTransferMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<PixelTransfer> state) {
+        if (!(state instanceof PixelTransferState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
 
-        fetcher.restoreFromMemento(mem.fetcherMemento);
+        fetcher.restoreState(mem.fetcherMemento);
 
         if (fifo instanceof DmgPixelFifo && mem.fifoMemento != null) {
-            ((DmgPixelFifo) fifo).restoreFromMemento((Memento<DmgPixelFifo>) mem.fifoMemento);
+            ((DmgPixelFifo) fifo).restoreState((ComponentState<DmgPixelFifo>) mem.fifoMemento);
         } else if (fifo instanceof ColorPixelFifo && mem.fifoMemento != null) {
-            ((ColorPixelFifo) fifo).restoreFromMemento((Memento<ColorPixelFifo>) mem.fifoMemento);
+            ((ColorPixelFifo) fifo).restoreState((ComponentState<ColorPixelFifo>) mem.fifoMemento);
         }
 
         this.entryTicks = mem.entryTicks;
@@ -1247,6 +1249,58 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         fetcher.setWindowYTriggered(windowYTriggered);
     }
 
+    private record PixelTransferState(
+            ComponentState<Fetcher> fetcherMemento,
+            ComponentState<?> fifoMemento,
+            int entryTicks,
+            boolean lcdEnableFirstLine,
+            int position,
+            boolean window,
+            boolean windowBeingFetched,
+            int windowLineCounter,
+            int[] spriteOrder,
+            int spriteCount,
+            int spriteHead,
+            int objStep,
+            int objTileId,
+            int objAttributesValue,
+            int objData0,
+            int objTileLine,
+            boolean objData1Pending,
+            int objRefreshAge,
+            int objRefreshPops,
+            int objRefreshD0,
+            int objRefreshTileId,
+            int objRefreshLine,
+            int objRefreshAttrsValue,
+            int[] objRefreshZip,
+            boolean objWaiting,
+            int objectTimingPenalty,
+            int previousScx,
+            boolean fineScxRephasedThisLine,
+            boolean machineActive,
+            int windowPendingTicks,
+            int windowPendingWx,
+            int windowPendingPos,
+            boolean windowActivatedThisLine,
+            boolean previousWindowDisplay,
+            int cgbWindowStartTicks,
+            boolean cgbTerminalWindowStartedThisLine,
+            boolean insertBgPixel,
+            int machineStall,
+            boolean windowYTriggered,
+            int windowWy,
+            int pendingWindowWy,
+            int windowWyDelay,
+            int windowWyOldOnWriteTick,
+            int windowDisplayOverride,
+            List<DelayedWindowWrite> pendingWindowDisplayWrites,
+            int windowXOverride,
+            List<DelayedWindowWrite> pendingWindowXWrites)
+            implements ComponentState<PixelTransfer> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record PixelTransferMemento(
             Memento<Fetcher> fetcherMemento,
             Memento<?> fifoMemento,
@@ -1298,6 +1352,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             implements Memento<PixelTransfer> {
     }
 
+    /** Importer-compatible immutable value embedded by released pixel-transfer records. */
     private record DelayedWindowWrite(int value, int remainingDots) implements Serializable {
 
         private DelayedWindowWrite advance() {

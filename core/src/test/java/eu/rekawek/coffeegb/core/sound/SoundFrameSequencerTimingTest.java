@@ -58,13 +58,13 @@ public class SoundFrameSequencerTimingTest {
         triggerChannel2WithLengthOne(rig.sound);
         rig.timer.presetDiv(0x7fee);
         tickFrameSequencer(rig.sound);
-        var soundMemento = rig.sound.saveToMemento();
-        var timerMemento = rig.timer.saveToMemento();
+        var soundMemento = rig.sound.captureState();
+        var timerMemento = rig.timer.captureState();
 
         rig.timer.setByte(0xff04, 0);
         tickFrameSequencer(rig.sound);
-        rig.sound.restoreFromMemento(soundMemento);
-        rig.timer.restoreFromMemento(timerMemento);
+        rig.sound.restoreState(soundMemento);
+        rig.timer.restoreState(timerMemento);
 
         rig.timer.presetDiv(0x7ffd);
         tickFrameSequencer(rig.sound);

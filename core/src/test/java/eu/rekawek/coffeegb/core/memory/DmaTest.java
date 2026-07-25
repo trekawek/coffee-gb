@@ -80,10 +80,10 @@ public class DmaTest {
         Fixture fixture = new Fixture();
         fixture.start();
         fixture.tick(8);
-        var state = fixture.dma.saveToMemento();
+        var state = fixture.dma.captureState();
 
         Fixture restored = new Fixture();
-        restored.dma.restoreFromMemento(state);
+        restored.dma.restoreState(state);
 
         assertFalse(restored.dma.ownedOamForPpuBeforeTick());
         assertTrue(restored.dma.ownsOamForPpu());
@@ -175,10 +175,10 @@ public class DmaTest {
         Fixture fixture = new Fixture();
         fixture.start();
         fixture.tick(51);
-        var beforeCollision = fixture.dma.saveToMemento();
+        var beforeCollision = fixture.dma.captureState();
         fixture.dma.setVramDmaBusSample(new Hdma.SourceBusSample(0x0001, 0x9e));
 
-        fixture.dma.restoreFromMemento(beforeCollision);
+        fixture.dma.restoreState(beforeCollision);
         fixture.dma.tick();
 
         assertEquals(0x41, fixture.oam.getByte(0xfe01));
@@ -192,11 +192,11 @@ public class DmaTest {
         fixture.tick(51);
         fixture.dma.setVramDmaBusSample(new Hdma.SourceBusSample(0x0001, 0x9e));
         fixture.dma.tick();
-        var afterCollision = fixture.dma.saveToMemento();
+        var afterCollision = fixture.dma.captureState();
 
         assertEquals(0x4a, fixture.dma.getCpuBusValue());
         fixture.start();
-        fixture.dma.restoreFromMemento(afterCollision);
+        fixture.dma.restoreState(afterCollision);
 
         assertEquals(0x4a, fixture.dma.getCpuBusValue());
     }

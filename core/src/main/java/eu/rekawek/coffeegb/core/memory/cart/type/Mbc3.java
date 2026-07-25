@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -192,17 +194,17 @@ public class Mbc3 implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new Mbc3Memento(ram.clone(), clock.saveToMemento(), battery.saveToMemento(), selectedRamBank,
+    public ComponentState<MemoryController> captureState() {
+        return new Mbc3State(ram.clone(), clock.captureState(), battery.captureState(), selectedRamBank,
                 selectedRomBank, ramEnabled);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new Mbc3Memento(
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new Mbc3State(
                 capture.ints(ram),
-                clock.saveToMemento(capture),
-                battery.saveToMemento(capture),
+                clock.captureState(capture),
+                battery.captureState(capture),
                 selectedRamBank,
                 selectedRomBank,
                 ramEnabled);
@@ -215,21 +217,27 @@ public class Mbc3 implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof Mbc3Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof Mbc3State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.ram.length != mem.ram.length) {
-            throw new IllegalArgumentException("Memento ram length doesn't match");
+            throw new IllegalArgumentException("ComponentState ram length doesn't match");
         }
-        clock.restoreFromMemento(mem.clockMemento);
-        battery.restoreFromMemento(mem.batteryMemento);
+        clock.restoreState(mem.clockMemento);
+        battery.restoreState(mem.batteryMemento);
         System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
         this.selectedRamBank = mem.selectedRamBank;
         this.selectedRomBank = mem.selectedRomBank;
         this.ramEnabled = mem.ramEnabled;
     }
 
+    private record Mbc3State(int[] ram, ComponentState<RealTimeClock> clockMemento, ComponentState<Battery> batteryMemento,
+                               int selectedRamBank, int selectedRomBank,
+                               boolean ramEnabled) implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record Mbc3Memento(int[] ram, Memento<RealTimeClock> clockMemento, Memento<Battery> batteryMemento,
                                int selectedRamBank, int selectedRomBank,
                                boolean ramEnabled) implements Memento<MemoryController> {

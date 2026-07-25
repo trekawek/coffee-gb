@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -103,14 +105,14 @@ public class DuzMulticart implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new DuzMulticartMemento(ram.clone(), regs.clone(), selectedBank, selectedRamBank,
+    public ComponentState<MemoryController> captureState() {
+        return new DuzMulticartState(ram.clone(), regs.clone(), selectedBank, selectedRamBank,
                 baseBank, regIndex, ramWriteEnabled);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new DuzMulticartMemento(
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new DuzMulticartState(
                 capture.ints(ram),
                 capture.ints(regs),
                 selectedBank,
@@ -127,9 +129,9 @@ public class DuzMulticart implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof DuzMulticartMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof DuzMulticartState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         System.arraycopy(mem.ram, 0, ram, 0, ram.length);
         System.arraycopy(mem.regs, 0, regs, 0, regs.length);
@@ -140,6 +142,12 @@ public class DuzMulticart implements MemoryController {
         ramWriteEnabled = mem.ramWriteEnabled;
     }
 
+    private record DuzMulticartState(int[] ram, int[] regs, int selectedBank, int selectedRamBank,
+                                       int baseBank, int regIndex, boolean ramWriteEnabled)
+            implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record DuzMulticartMemento(int[] ram, int[] regs, int selectedBank, int selectedRamBank,
                                        int baseBank, int regIndex, boolean ramWriteEnabled)
             implements Memento<MemoryController> {

@@ -5,7 +5,7 @@ import eu.rekawek.coffeegb.controller.properties.SystemProperties
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.Event
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.io.File
@@ -20,7 +20,7 @@ interface Controller : AutoCloseable {
 
   class EmulationStoppedEvent : Event
 
-  data class LoadRomEvent(val rom: File, val memento: Memento<Gameboy>? = null) : Event
+  data class LoadRomEvent(val rom: File, val state: MachineState? = null) : Event
 
   data class RomLoadingEvent(val rom: File) : Event
 
@@ -90,7 +90,7 @@ interface Controller : AutoCloseable {
       val exposure: Int,
   ) : Event
 
-  data class ControllerState(val memento: Memento<Gameboy>, val rom: Rom)
+  data class ControllerState(val state: MachineState, val rom: Rom)
 
   companion object {
     fun createGameboyConfig(

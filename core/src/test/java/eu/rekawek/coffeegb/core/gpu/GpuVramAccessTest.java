@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import static eu.rekawek.coffeegb.core.events.EventBus.NULL_EVENT_BUS;
@@ -110,13 +110,13 @@ public class GpuVramAccessTest {
         fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 3);
         fixture.advanceTo(1, 242);
         fixture.gpu.setByte(0x8000, 0x99);
-        Memento<Gpu> memento = fixture.gpu.saveToMemento();
+        ComponentState<Gpu> memento = fixture.gpu.captureState();
 
         fixture.advanceTo(1, 250);
         assertEquals(0x42, fixture.gpu.getByte(0x8000));
         fixture.advanceTo(2, 0);
 
-        fixture.gpu.restoreFromMemento(memento);
+        fixture.gpu.restoreState(memento);
         fixture.advanceTo(1, 250);
         assertEquals(0x42, fixture.gpu.getByte(0x8000));
     }

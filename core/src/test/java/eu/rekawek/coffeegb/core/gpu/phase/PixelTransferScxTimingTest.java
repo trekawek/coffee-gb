@@ -7,7 +7,7 @@ import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
 import eu.rekawek.coffeegb.core.gpu.Lcdc;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
@@ -42,13 +42,13 @@ public class PixelTransferScxTimingTest {
         harness.registers.put(GpuRegister.SCX, 3);
         harness.transfer.start(0, true);
         advanceToPosition(harness.transfer, -7);
-        Memento<PixelTransfer> startupState = harness.transfer.saveToMemento();
+        ComponentState<PixelTransfer> startupState = harness.transfer.captureState();
 
         harness.registers.put(GpuRegister.SCX, 7);
         int firstRun = finish(harness.transfer);
 
         harness.registers.put(GpuRegister.SCX, 3);
-        harness.transfer.restoreFromMemento(startupState);
+        harness.transfer.restoreState(startupState);
         harness.registers.put(GpuRegister.SCX, 7);
         assertEquals(firstRun, finish(harness.transfer));
     }

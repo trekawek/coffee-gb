@@ -1,9 +1,11 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -175,15 +177,15 @@ public class SlMulticart implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new SlMulticartMemento(ram.clone(), configCommand, baseRomBank,
+    public ComponentState<MemoryController> captureState() {
+        return new SlMulticartState(ram.clone(), configCommand, baseRomBank,
                 selectedRomBank, romBankMask, zeroRemap, configurationMode, mbc5Mode,
                 ramAllowed, ramEnabled, baseRamBank, selectedRamBank, ramBankMask);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new SlMulticartMemento(
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new SlMulticartState(
                 capture.ints(ram),
                 configCommand,
                 baseRomBank,
@@ -205,9 +207,9 @@ public class SlMulticart implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof SlMulticartMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof SlMulticartState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         System.arraycopy(mem.ram, 0, ram, 0, ram.length);
         configCommand = mem.configCommand;
@@ -224,6 +226,15 @@ public class SlMulticart implements MemoryController {
         ramBankMask = mem.ramBankMask;
     }
 
+    private record SlMulticartState(int[] ram, int configCommand, int baseRomBank,
+                                      int selectedRomBank, int romBankMask, int zeroRemap,
+                                      boolean configurationMode, boolean mbc5Mode,
+                                      boolean ramAllowed, boolean ramEnabled, int baseRamBank,
+                                      int selectedRamBank, int ramBankMask)
+            implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SlMulticartMemento(int[] ram, int configCommand, int baseRomBank,
                                       int selectedRomBank, int romBankMask, int zeroRemap,
                                       boolean configurationMode, boolean mbc5Mode,

@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 
@@ -45,18 +47,22 @@ public class WisdomTree implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new WisdomTreeMemento(bank);
+    public ComponentState<MemoryController> captureState() {
+        return new WisdomTreeState(bank);
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof WisdomTreeMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof WisdomTreeState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.bank = mem.bank;
     }
 
+    private record WisdomTreeState(int bank) implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record WisdomTreeMemento(int bank) implements Memento<MemoryController> {
     }
 }

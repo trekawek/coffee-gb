@@ -1,10 +1,10 @@
 package eu.rekawek.coffeegb.core.rumble;
 
-import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 /**
  * The vibration motor built into the Game Boy CodeBreaker pass-through accessory.
@@ -12,7 +12,7 @@ import java.io.Serializable;
  * <p>CodeBreaker-aware games drive the motor with bit 7 of writes to HRAM address
  * 0xFFFE. The other seven bits may carry a duration counter and remain ordinary HRAM.
  */
-public class CodeBreakerRumble implements Serializable, Originator<CodeBreakerRumble> {
+public class CodeBreakerRumble implements StatefulComponent<CodeBreakerRumble> {
 
     private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
@@ -43,18 +43,23 @@ public class CodeBreakerRumble implements Serializable, Originator<CodeBreakerRu
     }
 
     @Override
-    public Memento<CodeBreakerRumble> saveToMemento() {
-        return new CodeBreakerRumbleMemento(motorOn);
+    public ComponentState<CodeBreakerRumble> captureState() {
+        return new CodeBreakerRumbleState(motorOn);
     }
 
     @Override
-    public void restoreFromMemento(Memento<CodeBreakerRumble> memento) {
-        if (!(memento instanceof CodeBreakerRumbleMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<CodeBreakerRumble> state) {
+        if (!(state instanceof CodeBreakerRumbleState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         setMotorOn(mem.motorOn);
     }
 
+    private record CodeBreakerRumbleState(boolean motorOn)
+            implements ComponentState<CodeBreakerRumble> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record CodeBreakerRumbleMemento(boolean motorOn)
             implements Memento<CodeBreakerRumble> {
     }

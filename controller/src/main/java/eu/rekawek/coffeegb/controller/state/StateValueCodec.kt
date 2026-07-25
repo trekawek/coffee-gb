@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.controller.state
 
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 
 /** Explicit numeric v1 codec for every Phase-1 [StateKind]. */
@@ -91,7 +91,7 @@ internal object StateValueCodec {
 
     private fun writeEnum(value: EnumState) {
       val type =
-          MementoTypeRegistry.enumClasses.getOrNull(value.typeId - 1)
+          StateTypeRegistry.enumClasses.getOrNull(value.typeId - 1)
               ?: throw StateEncodeException("Unknown detached enum type ID ${value.typeId}")
       val values = PortableEnumValues.values(value.typeId, type)
       if (value.ordinal !in values.indices) {
@@ -105,7 +105,7 @@ internal object StateValueCodec {
 
     private fun writeRecord(value: RecordState, depth: Int) {
       val type =
-          MementoTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
+          StateTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
               ?: throw StateEncodeException("Unknown detached record type ID ${value.typeId}")
       val components = type.recordComponents
       if (value.fields.size != components.size ||
@@ -205,8 +205,8 @@ internal object StateValueCodec {
     }
 
     private fun readEnum(): EnumState {
-      val typeId = requireTypeId(reader.readU32(), MementoTypeRegistry.enumClasses.size, "enum")
-      val type = MementoTypeRegistry.enumClasses[typeId - 1]
+      val typeId = requireTypeId(reader.readU32(), StateTypeRegistry.enumClasses.size, "enum")
+      val type = StateTypeRegistry.enumClasses[typeId - 1]
       val values = PortableEnumValues.values(typeId, type)
       val valueId = reader.readU32()
       if (valueId !in 1..values.size.toLong()) {
@@ -219,8 +219,8 @@ internal object StateValueCodec {
     }
 
     private fun readRecord(depth: Int): RecordState {
-      val typeId = requireTypeId(reader.readU32(), MementoTypeRegistry.recordClasses.size, "record")
-      val components = MementoTypeRegistry.recordClasses[typeId - 1].recordComponents
+      val typeId = requireTypeId(reader.readU32(), StateTypeRegistry.recordClasses.size, "record")
+      val components = StateTypeRegistry.recordClasses[typeId - 1].recordComponents
       val count =
           PortableBounds.requireCount(
               reader.readU32(),

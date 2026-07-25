@@ -1,12 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.battery;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
-
-public interface Battery extends Serializable, Originator<Battery> {
+public interface Battery extends StatefulComponent<Battery> {
 
     void loadRam(int[] ram);
 
@@ -25,12 +23,12 @@ public interface Battery extends Serializable, Originator<Battery> {
     Battery NULL_BATTERY =
             new Battery() {
                 @Override
-                public Memento<Battery> saveToMemento() {
+                public ComponentState<Battery> captureState() {
                     return null;
                 }
 
                 @Override
-                public void restoreFromMemento(Memento<Battery> memento) {
+                public void restoreState(ComponentState<Battery> state) {
                 }
 
                 @Override

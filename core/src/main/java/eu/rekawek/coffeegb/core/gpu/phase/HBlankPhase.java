@@ -1,15 +1,15 @@
 package eu.rekawek.coffeegb.core.gpu.phase;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
-
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.LY;
 
-public class HBlankPhase implements GpuPhase, Serializable, Originator<HBlankPhase> {
+public class HBlankPhase implements GpuPhase, StatefulComponent<HBlankPhase> {
 
     private final GpuRegisterValues r;
 
@@ -34,18 +34,22 @@ public class HBlankPhase implements GpuPhase, Serializable, Originator<HBlankPha
     }
 
     @Override
-    public Memento<HBlankPhase> saveToMemento() {
-        return new HBlankPhaseMemento(ticks);
+    public ComponentState<HBlankPhase> captureState() {
+        return new HBlankPhaseState(ticks);
     }
 
     @Override
-    public void restoreFromMemento(Memento<HBlankPhase> memento) {
-        if (!(memento instanceof HBlankPhaseMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<HBlankPhase> state) {
+        if (!(state instanceof HBlankPhaseState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.ticks = mem.ticks;
     }
 
+    private record HBlankPhaseState(int ticks) implements ComponentState<HBlankPhase> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record HBlankPhaseMemento(int ticks) implements Memento<HBlankPhase> {
     }
 }

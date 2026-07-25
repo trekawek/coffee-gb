@@ -25,7 +25,7 @@ internal object StateLimits {
   // This covers supported cartridge RAM/RTC payloads with ample mapper-specific headroom.
   val BATTERY = Payload("battery", 2 * MIB)
 
-  // Current Java mementos are allocation-heavy, so the migration reader needs temporary headroom.
+  // Historical Java graphs are allocation-heavy, so the migration reader needs temporary headroom.
   val GAME_SNAPSHOT = Payload("game snapshot", 32 * MIB)
   val SESSION_SNAPSHOT = Payload("session snapshot", 32 * MIB)
 

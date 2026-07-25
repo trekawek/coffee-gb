@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.serial;
 
-import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
@@ -220,18 +222,18 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
     }
 
     @Override
-    public Memento<SerialEndpoint> saveToMemento() {
+    public ComponentState<SerialEndpoint> captureState() {
         int[] queued = outputBytes.stream().mapToInt(Integer::intValue).toArray();
-        return new GpsReceiverMemento(ticks, nextStartupBeacon, startupBeacons, queued,
+        return new GpsReceiverState(ticks, nextStartupBeacon, startupBeacons, queued,
                 outputByte, outputBit, outputTicksRemaining, outputDelayTicks, serialInputHigh, sb,
                 receiveBit, receiveByte, receiveOnes, receiveParityValid, capturingTaip,
                 taipCommand.toString());
     }
 
     @Override
-    public void restoreFromMemento(Memento<SerialEndpoint> memento) {
-        if (!(memento instanceof GpsReceiverMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SerialEndpoint> state) {
+        if (!(state instanceof GpsReceiverState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         ticks = mem.ticks;
         nextStartupBeacon = mem.nextStartupBeacon;
@@ -255,6 +257,16 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
         taipCommand.append(mem.taipCommand);
     }
 
+    private record GpsReceiverState(long ticks, long nextStartupBeacon, int startupBeacons,
+                                      int[] outputBytes, int outputByte, int outputBit,
+                                      int outputTicksRemaining, int outputDelayTicks,
+                                      boolean serialInputHigh, int sb,
+                                      int receiveBit, int receiveByte, int receiveOnes,
+                                      boolean receiveParityValid, boolean capturingTaip,
+                                      String taipCommand) implements ComponentState<SerialEndpoint> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record GpsReceiverMemento(long ticks, long nextStartupBeacon, int startupBeacons,
                                       int[] outputBytes, int outputByte, int outputBit,
                                       int outputTicksRemaining, int outputDelayTicks,

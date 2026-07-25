@@ -1,15 +1,17 @@
 package eu.rekawek.coffeegb.core.memory.cart.battery;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
-import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery.FileBatteryMemento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
+import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery.FileBatteryState;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
 
-public class MemoryBattery implements Battery, Originator<Battery> {
+public class MemoryBattery implements Battery, StatefulComponent<Battery> {
 
     private byte[] buffer;
 
@@ -79,13 +81,13 @@ public class MemoryBattery implements Battery, Originator<Battery> {
     }
 
     @Override
-    public Memento<Battery> saveToMemento() {
-        return new MemoryBatteryMemento(buffer.clone());
+    public ComponentState<Battery> captureState() {
+        return new MemoryBatteryState(buffer.clone());
     }
 
     @Override
-    public Memento<Battery> saveToMemento(MachineStateCapture capture) {
-        return new MemoryBatteryMemento(capture.bytes(buffer));
+    public ComponentState<Battery> captureState(MachineStateCapture capture) {
+        return new MemoryBatteryState(capture.bytes(buffer));
     }
 
     @Override
@@ -94,22 +96,26 @@ public class MemoryBattery implements Battery, Originator<Battery> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Battery> memento) {
-        if (memento instanceof MemoryBatteryMemento mem) {
+    public void restoreState(ComponentState<Battery> state) {
+        if (state instanceof MemoryBatteryState mem) {
             if (this.buffer.length != mem.buffer.length) {
-                throw new IllegalArgumentException("Memento buffer length doesn't match");
+                throw new IllegalArgumentException("ComponentState buffer length doesn't match");
             }
             System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
-        } else if (memento instanceof FileBatteryMemento mem) {
+        } else if (state instanceof FileBatteryState mem) {
             System.arraycopy(mem.ramBuffer(), 0, this.buffer, 0, mem.ramBuffer().length);
             if (mem.isClockPresent()) {
                 System.arraycopy(mem.clockBuffer(), 0, this.buffer, mem.ramBuffer().length, mem.clockBuffer().length);
             }
         } else {
-            throw new IllegalArgumentException("Invalid memento type");
+            throw new IllegalArgumentException("Invalid state type");
         }
     }
 
+    private record MemoryBatteryState(byte[] buffer) implements ComponentState<Battery> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record MemoryBatteryMemento(byte[] buffer) implements Memento<Battery> {
     }
 }

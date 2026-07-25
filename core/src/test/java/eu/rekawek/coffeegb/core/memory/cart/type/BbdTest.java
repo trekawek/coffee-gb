@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
@@ -55,10 +55,10 @@ public class BbdTest {
         data[4 * 0x4000 + 0x0123] = 0x04;
         Bbd mapper = new Bbd(new Rom(data), Battery.NULL_BATTERY);
         mapper.setByte(0x2001, 0x04);
-        Memento<MemoryController> memento = mapper.saveToMemento();
+        ComponentState<MemoryController> memento = mapper.captureState();
 
         mapper.setByte(0x2001, 0x00);
-        mapper.restoreFromMemento(memento);
+        mapper.restoreState(memento);
         assertEquals(0x20, mapper.getByte(0x4123));
     }
 

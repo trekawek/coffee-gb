@@ -1,15 +1,15 @@
 package eu.rekawek.coffeegb.core.gpu.phase;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.gpu.GpuRegister;
 import eu.rekawek.coffeegb.core.gpu.GpuRegisterValues;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
-
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.LY;
 
-public class VBlankPhase implements GpuPhase, Serializable, Originator<VBlankPhase> {
+public class VBlankPhase implements GpuPhase, StatefulComponent<VBlankPhase> {
 
     private final GpuRegisterValues r;
 
@@ -34,18 +34,22 @@ public class VBlankPhase implements GpuPhase, Serializable, Originator<VBlankPha
     }
 
     @Override
-    public Memento<VBlankPhase> saveToMemento() {
-        return new VBlankPhaseMemento(ticks);
+    public ComponentState<VBlankPhase> captureState() {
+        return new VBlankPhaseState(ticks);
     }
 
     @Override
-    public void restoreFromMemento(Memento<VBlankPhase> memento) {
-        if (!(memento instanceof VBlankPhaseMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<VBlankPhase> state) {
+        if (!(state instanceof VBlankPhaseState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.ticks = mem.ticks;
     }
 
+    private record VBlankPhaseState(int ticks) implements ComponentState<VBlankPhase> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record VBlankPhaseMemento(int ticks) implements Memento<VBlankPhase> {
     }
 }

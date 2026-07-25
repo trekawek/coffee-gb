@@ -1,11 +1,11 @@
 package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public class LengthCounter implements Serializable, Originator<LengthCounter> {
+public class LengthCounter implements StatefulComponent<LengthCounter> {
 
     private final int fullLength;
 
@@ -87,19 +87,23 @@ public class LengthCounter implements Serializable, Originator<LengthCounter> {
     }
 
     @Override
-    public Memento<LengthCounter> saveToMemento() {
-        return new LengthCounterMemento(length, enabled);
+    public ComponentState<LengthCounter> captureState() {
+        return new LengthCounterState(length, enabled);
     }
 
     @Override
-    public void restoreFromMemento(Memento<LengthCounter> memento) {
-        if (!(memento instanceof LengthCounterMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<LengthCounter> state) {
+        if (!(state instanceof LengthCounterState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.length = mem.length;
         this.enabled = mem.enabled;
     }
 
+    private record LengthCounterState(int length, boolean enabled) implements ComponentState<LengthCounter> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record LengthCounterMemento(int length, boolean enabled) implements Memento<LengthCounter> {
     }
 }

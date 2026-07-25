@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 
@@ -234,14 +236,14 @@ public class SachenMmc implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new SachenMemento(unmaskedBank, mask, base, lockState, transition, serveBootLogo);
+    public ComponentState<MemoryController> captureState() {
+        return new SachenState(unmaskedBank, mask, base, lockState, transition, serveBootLogo);
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof SachenMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof SachenState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.unmaskedBank = mem.unmaskedBank;
         this.mask = mem.mask;
@@ -251,6 +253,11 @@ public class SachenMmc implements MemoryController {
         this.serveBootLogo = mem.serveBootLogo;
     }
 
+    private record SachenState(int unmaskedBank, int mask, int base, int lockState,
+                                 int transition, boolean serveBootLogo) implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SachenMemento(int unmaskedBank, int mask, int base, int lockState,
                                  int transition, boolean serveBootLogo) implements Memento<MemoryController> {
     }

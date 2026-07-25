@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -106,15 +108,15 @@ public class Sintax implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new SintaxMemento(delegate.saveToMemento(), xorValues.clone(), mode, bankNo,
+    public ComponentState<MemoryController> captureState() {
+        return new SintaxState(delegate.captureState(), xorValues.clone(), mode, bankNo,
                 romBankXor);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new SintaxMemento(
-                delegate.saveToMemento(capture),
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new SintaxState(
+                delegate.captureState(capture),
                 capture.ints(xorValues),
                 mode,
                 bankNo,
@@ -128,20 +130,26 @@ public class Sintax implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof SintaxMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof SintaxState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (mem.xorValues.length != xorValues.length) {
-            throw new IllegalArgumentException("Memento XOR values length doesn't match");
+            throw new IllegalArgumentException("ComponentState XOR values length doesn't match");
         }
-        delegate.restoreFromMemento(mem.delegateMemento);
+        delegate.restoreState(mem.delegateMemento);
         System.arraycopy(mem.xorValues, 0, xorValues, 0, xorValues.length);
         mode = mem.mode;
         bankNo = mem.bankNo;
         romBankXor = mem.romBankXor;
     }
 
+    private record SintaxState(ComponentState<MemoryController> delegateMemento, int[] xorValues,
+                                 int mode, int bankNo, int romBankXor)
+            implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SintaxMemento(Memento<MemoryController> delegateMemento, int[] xorValues,
                                  int mode, int bankNo, int romBankXor)
             implements Memento<MemoryController> {

@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.core.sound;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.state.ComponentState;
+
 public class SoundMode4 extends AbstractSoundMode {
 
     private final VolumeEnvelope volumeEnvelope;
@@ -96,22 +98,29 @@ public class SoundMode4 extends AbstractSoundMode {
     }
 
     @Override
-    public Memento<AbstractSoundMode> saveToMemento() {
-        return new SoundMode4Memento(super.saveToMemento(), volumeEnvelope.saveToMemento(), polynomialCounter.saveToMemento(), lastResult, lfsr.saveToMemento());
+    public ComponentState<AbstractSoundMode> captureState() {
+        return new SoundMode4State(super.captureState(), volumeEnvelope.captureState(), polynomialCounter.captureState(), lastResult, lfsr.captureState());
     }
 
     @Override
-    public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
-        if (!(memento instanceof SoundMode4Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<AbstractSoundMode> state) {
+        if (!(state instanceof SoundMode4State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        super.restoreFromMemento(mem.abstractSoundMemento);
-        this.volumeEnvelope.restoreFromMemento(mem.volumeEnvelopeMemento);
-        this.polynomialCounter.restoreFromMemento(mem.polynomialCounterMemento);
+        super.restoreState(mem.abstractSoundMemento);
+        this.volumeEnvelope.restoreState(mem.volumeEnvelopeMemento);
+        this.polynomialCounter.restoreState(mem.polynomialCounterMemento);
         this.lastResult = mem.lastResult;
-        this.lfsr.restoreFromMemento(mem.lfsrMemento);
+        this.lfsr.restoreState(mem.lfsrMemento);
     }
 
+    private record SoundMode4State(ComponentState<AbstractSoundMode> abstractSoundMemento,
+                                     ComponentState<VolumeEnvelope> volumeEnvelopeMemento,
+                                     ComponentState<PolynomialCounter> polynomialCounterMemento, int lastResult,
+                                     ComponentState<Lfsr> lfsrMemento) implements ComponentState<AbstractSoundMode> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SoundMode4Memento(Memento<AbstractSoundMode> abstractSoundMemento,
                                      Memento<VolumeEnvelope> volumeEnvelopeMemento,
                                      Memento<PolynomialCounter> polynomialCounterMemento, int lastResult,

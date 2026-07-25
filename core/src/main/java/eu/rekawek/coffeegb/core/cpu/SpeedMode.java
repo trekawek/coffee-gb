@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.core.cpu;
 
-import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.BiosShadow;
 
-import java.io.Serializable;
-
-public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMode> {
+public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
 
     private final boolean gbc;
 
@@ -95,20 +95,25 @@ public class SpeedMode implements AddressSpace, Serializable, Originator<SpeedMo
     }
 
     @Override
-    public Memento<SpeedMode> saveToMemento() {
-        return new SpeedModeMomento(currentSpeed, prepareSpeedSwitch, dmgCompat);
+    public ComponentState<SpeedMode> captureState() {
+        return new SpeedModeState(currentSpeed, prepareSpeedSwitch, dmgCompat);
     }
 
     @Override
-    public void restoreFromMemento(Memento<SpeedMode> memento) {
-        if (!(memento instanceof SpeedModeMomento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SpeedMode> state) {
+        if (!(state instanceof SpeedModeState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.currentSpeed = mem.currentSpeed;
         this.prepareSpeedSwitch = mem.prepareSpeedSwitch;
         this.dmgCompat = mem.dmgCompat;
     }
 
+    private record SpeedModeState(boolean currentSpeed, boolean prepareSpeedSwitch, boolean dmgCompat)
+            implements ComponentState<SpeedMode> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SpeedModeMomento(boolean currentSpeed, boolean prepareSpeedSwitch, boolean dmgCompat)
             implements Memento<SpeedMode> {
     }

@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
-
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import static eu.rekawek.coffeegb.core.cpu.BitUtils.toSigned;
 
@@ -16,7 +16,7 @@ import static eu.rekawek.coffeegb.core.cpu.BitUtils.toSigned;
  * The PUSH state waits until the pixel FIFO is empty and completes in the same T-cycle as
  * GET_TILE_DATA_HIGH_T2 when possible.
  */
-public class Fetcher implements Serializable, Originator<Fetcher> {
+public class Fetcher implements StatefulComponent<Fetcher> {
 
 
 
@@ -467,8 +467,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     }
 
     @Override
-    public Memento<Fetcher> saveToMemento() {
-        return new FetcherMemento(
+    public ComponentState<Fetcher> captureState() {
+        return new FetcherState(
                 pixelLine.clone(),
                 state,
                 windowTileX,
@@ -485,8 +485,8 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     }
 
     @Override
-    public Memento<Fetcher> saveToMemento(MachineStateCapture capture) {
-        return new FetcherMemento(
+    public ComponentState<Fetcher> captureState(MachineStateCapture capture) {
+        return new FetcherState(
                 capture.ints(pixelLine),
                 state,
                 windowTileX,
@@ -503,9 +503,9 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Fetcher> memento) {
-        if (!(memento instanceof FetcherMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Fetcher> state) {
+        if (!(state instanceof FetcherState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
 
         System.arraycopy(mem.pixelLine, 0, this.pixelLine, 0, this.pixelLine.length);
@@ -527,6 +527,24 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
         this.data2TileSelectGlitch = mem.data2TileSelectGlitch;
     }
 
+    private record FetcherState(
+            int[] pixelLine,
+            int state,
+            int windowTileX,
+            int fetcherY,
+            int tileMapAddress,
+            int tileId,
+            int tileAttributesValue,
+            int tileData1,
+            int tileData2,
+            boolean insertionGlitchDisabled,
+            boolean data2Pending,
+            int data2Delay,
+            boolean data2TileSelectGlitch)
+            implements ComponentState<Fetcher> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record FetcherMemento(
             int[] pixelLine,
             int state,

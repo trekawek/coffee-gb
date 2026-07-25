@@ -1,14 +1,14 @@
 package eu.rekawek.coffeegb.core.memory;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
-
-public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Originator<UndocumentedGbcRegisters> {
+public class UndocumentedGbcRegisters implements AddressSpace, StatefulComponent<UndocumentedGbcRegisters> {
 
     // FF76/FF77 are the PCM12/PCM34 sound registers, handled by the APU
     private final Ram ram = new Ram(0xff72, 4);
@@ -68,24 +68,29 @@ public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Ori
     }
 
     @Override
-    public Memento<UndocumentedGbcRegisters> saveToMemento() {
-        return new UndocumentedGbcRegistersMemento(ram.saveToMemento(), xff6c);
+    public ComponentState<UndocumentedGbcRegisters> captureState() {
+        return new UndocumentedGbcRegistersState(ram.captureState(), xff6c);
     }
 
     @Override
-    public Memento<UndocumentedGbcRegisters> saveToMemento(MachineStateCapture capture) {
-        return new UndocumentedGbcRegistersMemento(ram.saveToMemento(capture), xff6c);
+    public ComponentState<UndocumentedGbcRegisters> captureState(MachineStateCapture capture) {
+        return new UndocumentedGbcRegistersState(ram.captureState(capture), xff6c);
     }
 
     @Override
-    public void restoreFromMemento(Memento<UndocumentedGbcRegisters> memento) {
-        if (!(memento instanceof UndocumentedGbcRegistersMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<UndocumentedGbcRegisters> state) {
+        if (!(state instanceof UndocumentedGbcRegistersState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        ram.restoreFromMemento(mem.ramMemento);
+        ram.restoreState(mem.ramMemento);
         xff6c = mem.xff6c;
     }
 
+    public record UndocumentedGbcRegistersState(ComponentState<Ram> ramMemento,
+                                                  int xff6c) implements ComponentState<UndocumentedGbcRegisters> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     public record UndocumentedGbcRegistersMemento(Memento<Ram> ramMemento,
                                                   int xff6c) implements Memento<UndocumentedGbcRegisters> {
     }

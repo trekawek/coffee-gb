@@ -4,7 +4,7 @@ import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import static eu.rekawek.coffeegb.core.events.EventBus.NULL_EVENT_BUS;
@@ -157,15 +157,15 @@ public class GpuOamAccessTest {
     public void predictedMode0EdgeCanPrecedePhysicalHblankAndSurvivesMemento() {
         Fixture fixture = new Fixture(true, 1);
         fixture.putTenSpritesAt(167);
-        Memento<Gpu> immediatelyBeforeEdge = null;
+        ComponentState<Gpu> immediatelyBeforeEdge = null;
 
         while (!fixture.gpu.isMode0IntWindow()) {
-            immediatelyBeforeEdge = fixture.gpu.saveToMemento();
+            immediatelyBeforeEdge = fixture.gpu.captureState();
             fixture.tick();
         }
 
         assertEquals(Mode.PixelTransfer, fixture.gpu.getMode());
-        fixture.gpu.restoreFromMemento(immediatelyBeforeEdge);
+        fixture.gpu.restoreState(immediatelyBeforeEdge);
         assertFalse(fixture.gpu.isMode0IntWindow());
         fixture.tick();
         assertTrue(fixture.gpu.isMode0IntWindow());

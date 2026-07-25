@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.sound;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.timer.Timer;
 
@@ -241,15 +243,15 @@ public class SoundMode3 extends AbstractSoundMode {
     }
 
     @Override
-    public Memento<AbstractSoundMode> saveToMemento() {
-        return new SoundMode3Memento(super.saveToMemento(), waveRam.saveToMemento(), freqDivider, lastOutput, i, ticksSinceRead, lastReadAddr, buffer, triggered, clock2Mhz);
+    public ComponentState<AbstractSoundMode> captureState() {
+        return new SoundMode3State(super.captureState(), waveRam.captureState(), freqDivider, lastOutput, i, ticksSinceRead, lastReadAddr, buffer, triggered, clock2Mhz);
     }
 
     @Override
-    public Memento<AbstractSoundMode> saveToMemento(MachineStateCapture capture) {
-        return new SoundMode3Memento(
-                super.saveToMemento(),
-                waveRam.saveToMemento(capture),
+    public ComponentState<AbstractSoundMode> captureState(MachineStateCapture capture) {
+        return new SoundMode3State(
+                super.captureState(),
+                waveRam.captureState(capture),
                 freqDivider,
                 lastOutput,
                 i,
@@ -261,12 +263,12 @@ public class SoundMode3 extends AbstractSoundMode {
     }
 
     @Override
-    public void restoreFromMemento(Memento<AbstractSoundMode> memento) {
-        if (!(memento instanceof SoundMode3Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<AbstractSoundMode> state) {
+        if (!(state instanceof SoundMode3State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        super.restoreFromMemento(mem.abstractSoundMemento);
-        this.waveRam.restoreFromMemento(mem.waveRamMemento);
+        super.restoreState(mem.abstractSoundMemento);
+        this.waveRam.restoreState(mem.waveRamMemento);
         this.freqDivider = mem.freqDivider;
         this.lastOutput = mem.lastOutput;
         this.i = mem.i;
@@ -277,6 +279,13 @@ public class SoundMode3 extends AbstractSoundMode {
         this.clock2Mhz = mem.clock2Mhz;
     }
 
+    private record SoundMode3State(ComponentState<AbstractSoundMode> abstractSoundMemento, ComponentState<Ram> waveRamMemento,
+                                     int freqDivider, int lastOutput, int i, int ticksSinceRead, int lastReadAddr,
+                                     int buffer, boolean triggered,
+                                     boolean clock2Mhz) implements ComponentState<AbstractSoundMode> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record SoundMode3Memento(Memento<AbstractSoundMode> abstractSoundMemento, Memento<Ram> waveRamMemento,
                                      int freqDivider, int lastOutput, int i, int ticksSinceRead, int lastReadAddr,
                                      int buffer, boolean triggered,

@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.LYC;
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.SCX;
@@ -24,7 +26,7 @@ import static eu.rekawek.coffeegb.core.gpu.GpuRegister.SCX;
  * enabled before data settles"), which can produce spurious interrupts.</li>
  * </ul>
  */
-public class StatRegister implements AddressSpace, Originator<StatRegister> {
+public class StatRegister implements AddressSpace, StatefulComponent<StatRegister> {
 
     public static final int ADDRESS = 0xff41;
 
@@ -1770,8 +1772,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     @Override
-    public Memento<StatRegister> saveToMemento() {
-        return new StatRegisterMemento(enableBits, registeredLy, coincidence, intCoincidence, intLine,
+    public ComponentState<StatRegister> captureState() {
+        return new StatRegisterState(enableBits, registeredLy, coincidence, intCoincidence, intLine,
                 lycWriteSuppressed, suppressedLycIrqLine, modeBlockedLycIrqLine,
                 lycIrqStatSource, lycIrqValueSource, lycIrqStatLatch,
                 lycIrqValueLatch, lycIrqClock, nextLycIrqEvent, pendingLycWriteIrq,
@@ -1803,9 +1805,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<StatRegister> memento) {
-        if (!(memento instanceof StatRegisterMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<StatRegister> state) {
+        if (!(state instanceof StatRegisterState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.enableBits = mem.enableBits;
         this.registeredLy = mem.registeredLy;
@@ -1863,6 +1865,53 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.scxChangedSinceMode0Event = mem.scxChangedSinceMode0Event;
     }
 
+    private record StatRegisterState(int enableBits, int registeredLy, boolean coincidence,
+                                       boolean intCoincidence, boolean intLine,
+                                       boolean lycWriteSuppressed, int suppressedLycIrqLine,
+                                       int modeBlockedLycIrqLine,
+                                       int lycIrqStatSource,
+                                       int lycIrqValueSource, int lycIrqStatLatch,
+                                       int lycIrqValueLatch, long lycIrqClock,
+                                       long nextLycIrqEvent,
+                                       long pendingLycWriteIrq,
+                                       long pendingLycComparatorIrq,
+                                       long lastLycIrqRegisterChangeClock,
+                                       long lastLcdcInterruptAcknowledgeClock,
+                                       long lastVBlankInterruptAcknowledgeClock,
+                                       boolean releaseTailLycCpuAcceptance,
+                                       boolean lycComparatorSignal,
+                                       int modeIrqStatLatch, int modeIrqLycLatch,
+                                       int pendingModeIrqStat, int pendingModeIrqLyc,
+                                       long pendingModeIrqStatClock,
+                                       long pendingModeIrqLycClock,
+                                       int mode0IrqStatLatch, int mode0IrqLycLatch,
+                                       int pendingMode0IrqStat, int pendingMode0IrqLyc,
+                                       long pendingMode0IrqStatClock,
+                                       long pendingMode0IrqLycClock,
+                                       long lastModeIrqStatWriteClock,
+                                       int lastModeIrqStatWriteLineTick,
+                                       int lastModeIrqStatWriteOld,
+                                       boolean cgbMode1IfClearAtCapture,
+                                       boolean pendingCgbMode1Interrupt,
+                                       long dmgLyc143Mode1CaptureClock,
+                                       boolean mode0EventArmed,
+                                       boolean previousMode0Window,
+                                       boolean previousMode1Window,
+                                       boolean previousMode2Window,
+                                       boolean pendingCgbMode0Interrupt,
+                                       boolean pendingCgbMode2Interrupt,
+                                       boolean pendingCgbMode2IfHighAtCapture,
+                                       boolean pendingCgbMode2LateReplay,
+                                       long pendingCgbMode2PublicationClock,
+                                       boolean cgbMode2CapturedAtLineEdge,
+                                       boolean pendingCgbFrameMode2Interrupt,
+                                       boolean retractableCgbMode2Interrupt,
+                                       long ordinaryHaltWakeStatClock,
+                                       boolean previousOrdinaryHaltWakePhase,
+                                       boolean scxChangedSinceMode0Event) implements ComponentState<StatRegister> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,
                                        boolean intCoincidence, boolean intLine,
                                        boolean lycWriteSuppressed, int suppressedLycIrqLine,

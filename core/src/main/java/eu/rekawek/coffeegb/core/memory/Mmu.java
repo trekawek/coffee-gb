@@ -1,22 +1,23 @@
 package eu.rekawek.coffeegb.core.memory;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.Gpu;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
 import static eu.rekawek.coffeegb.core.cpu.BitUtils.checkByteArgument;
 import static eu.rekawek.coffeegb.core.cpu.BitUtils.checkWordArgument;
 
-public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
+public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mmu.class);
 
@@ -185,7 +186,7 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         return addressToSpace[address];
     }
 
-    private static class Void implements AddressSpace, Serializable {
+    private static class Void implements AddressSpace {
         @Override
         public boolean accepts(int address) {
             return true;
@@ -217,21 +218,21 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     }
 
     @Override
-    public Memento<Mmu> saveToMemento() {
-        return new MmuMemento(ramC000.saveToMemento(), ramD000.saveToMemento(), ramFF80.saveToMemento(),
-                gbcRam.saveToMemento(), undocumentedGbcRegisters.saveToMemento(),
-                oamEchoRam.saveToMemento());
+    public ComponentState<Mmu> captureState() {
+        return new MmuState(ramC000.captureState(), ramD000.captureState(), ramFF80.captureState(),
+                gbcRam.captureState(), undocumentedGbcRegisters.captureState(),
+                oamEchoRam.captureState());
     }
 
     @Override
-    public Memento<Mmu> saveToMemento(MachineStateCapture capture) {
-        return new MmuMemento(
-                ramC000.saveToMemento(capture),
-                ramD000.saveToMemento(capture),
-                ramFF80.saveToMemento(capture),
-                gbcRam.saveToMemento(capture),
-                undocumentedGbcRegisters.saveToMemento(capture),
-                oamEchoRam.saveToMemento(capture));
+    public ComponentState<Mmu> captureState(MachineStateCapture capture) {
+        return new MmuState(
+                ramC000.captureState(capture),
+                ramD000.captureState(capture),
+                ramFF80.captureState(capture),
+                gbcRam.captureState(capture),
+                undocumentedGbcRegisters.captureState(capture),
+                oamEchoRam.captureState(capture));
     }
 
     @Override
@@ -243,18 +244,26 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Mmu> memento) {
-        if (!(memento instanceof MmuMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Mmu> state) {
+        if (!(state instanceof MmuState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        this.ramC000.restoreFromMemento(mem.ramC000Memento);
-        this.ramD000.restoreFromMemento(mem.ramD000Memento);
-        this.ramFF80.restoreFromMemento(mem.ramFF80Memento);
-        this.gbcRam.restoreFromMemento(mem.gbcRamMemento);
-        this.undocumentedGbcRegisters.restoreFromMemento(mem.undocumentedGbcRegistersMemento);
-        this.oamEchoRam.restoreFromMemento(mem.oamEchoRamMemento);
+        this.ramC000.restoreState(mem.ramC000Memento);
+        this.ramD000.restoreState(mem.ramD000Memento);
+        this.ramFF80.restoreState(mem.ramFF80Memento);
+        this.gbcRam.restoreState(mem.gbcRamMemento);
+        this.undocumentedGbcRegisters.restoreState(mem.undocumentedGbcRegistersMemento);
+        this.oamEchoRam.restoreState(mem.oamEchoRamMemento);
     }
 
+    private record MmuState(ComponentState<Ram> ramC000Memento, ComponentState<Ram> ramD000Memento, ComponentState<Ram> ramFF80Memento,
+                              ComponentState<GbcRam> gbcRamMemento,
+                              ComponentState<UndocumentedGbcRegisters> undocumentedGbcRegistersMemento,
+                              ComponentState<OamEchoRam> oamEchoRamMemento
+    ) implements ComponentState<Mmu> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record MmuMemento(Memento<Ram> ramC000Memento, Memento<Ram> ramD000Memento, Memento<Ram> ramFF80Memento,
                               Memento<GbcRam> gbcRamMemento,
                               Memento<UndocumentedGbcRegisters> undocumentedGbcRegistersMemento,

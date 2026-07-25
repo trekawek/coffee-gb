@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
@@ -14,9 +16,7 @@ import eu.rekawek.coffeegb.core.memory.cart.type.*;
 import org.apache.commons.io.FilenameUtils;
 
 import java.io.File;
-import java.io.Serializable;
-
-public class Cartridge implements AddressSpace, Serializable, Originator<Cartridge> {
+public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     private final MemoryController addressSpace;
 
@@ -215,15 +215,15 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     }
 
     @Override
-    public Memento<Cartridge> saveToMemento() {
-        return new CartridgeMemento(addressSpace.saveToMemento(), battery.saveToMemento());
+    public ComponentState<Cartridge> captureState() {
+        return new CartridgeState(addressSpace.captureState(), battery.captureState());
     }
 
     @Override
-    public Memento<Cartridge> saveToMemento(MachineStateCapture capture) {
-        return new CartridgeMemento(
-                addressSpace.saveToMemento(capture),
-                battery.saveToMemento(capture));
+    public ComponentState<Cartridge> captureState(MachineStateCapture capture) {
+        return new CartridgeState(
+                addressSpace.captureState(capture),
+                battery.captureState(capture));
     }
 
     @Override
@@ -233,14 +233,19 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     }
 
     @Override
-    public void restoreFromMemento(Memento<Cartridge> memento) {
-        if (!(memento instanceof CartridgeMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Cartridge> state) {
+        if (!(state instanceof CartridgeState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        this.addressSpace.restoreFromMemento(mem.memoryControllerMemento);
-        this.battery.restoreFromMemento(mem.batteryMemento);
+        this.addressSpace.restoreState(mem.memoryControllerMemento);
+        this.battery.restoreState(mem.batteryMemento);
     }
 
+    private record CartridgeState(ComponentState<MemoryController> memoryControllerMemento,
+                                    ComponentState<Battery> batteryMemento) implements ComponentState<Cartridge> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record CartridgeMemento(Memento<MemoryController> memoryControllerMemento,
                                     Memento<Battery> batteryMemento) implements Memento<Cartridge> {
     }

@@ -1,24 +1,25 @@
 package eu.rekawek.coffeegb.core.joypad;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.BitUtils;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.sgb.Commands;
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
-public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
+public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private static final Logger LOG = LoggerFactory.getLogger(Joypad.class);
 
@@ -100,8 +101,8 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     }
 
     /**
-     * The set of currently-held buttons. Intentionally not part of the memento (see
-     * {@link #saveToMemento()}); rollback netplay snapshots and restores it separately so a
+     * The set of currently-held buttons. Intentionally not part of machine state (see
+     * {@link #captureState()}); rollback netplay snapshots and restores it separately so a
      * held button survives a rebase whose base frame is past the original press.
      */
     public Set<Button> getPressedButtons() {
@@ -261,31 +262,31 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     }
 
     @Override
-    public Memento<Joypad> saveToMemento() {
+    public ComponentState<Joypad> captureState() {
         // the pressed-buttons set is live physical input, not machine state - it is
-        // deliberately left out of the memento so that restoring a state (rewind, save
+        // deliberately left out of component state so that restoring a state (rewind, save
         // slot) keeps whatever the player is physically holding right now. Otherwise a
         // button held in a rewound-past frame would be re-applied and, with no matching
         // release event ever arriving, stick when forward emulation resumes (issue: rewind
         // replays past button presses).
-        return new JoypadMemento(p1, tick, inputHistory, filteredInputLines,
+        return new JoypadState(p1, tick, inputHistory, filteredInputLines,
                 inputChangedSinceLastTick, players, currentPlayer, transferInProgress,
                 transferReadyForData, pendingTransferBit, currentByte, currentPacket.clone(),
                 currentByteIndex, currentPacketIndex);
     }
 
     @Override
-    public Memento<Joypad> saveToMemento(MachineStateCapture capture) {
-        return new JoypadMemento(p1, tick, inputHistory, filteredInputLines,
+    public ComponentState<Joypad> captureState(MachineStateCapture capture) {
+        return new JoypadState(p1, tick, inputHistory, filteredInputLines,
                 inputChangedSinceLastTick, players, currentPlayer, transferInProgress,
                 transferReadyForData, pendingTransferBit, currentByte, capture.ints(currentPacket),
                 currentByteIndex, currentPacketIndex);
     }
 
     @Override
-    public void restoreFromMemento(Memento<Joypad> memento) {
-        if (!(memento instanceof JoypadMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Joypad> state) {
+        if (!(state instanceof JoypadState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.p1 = mem.p1;
         this.tick = mem.tick;
@@ -299,7 +300,7 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         this.pendingTransferBit = mem.pendingTransferBit;
         this.currentByte = mem.currentByte;
         if (mem.currentPacket.length != this.currentPacket.length) {
-            throw new IllegalArgumentException("Invalid memento length");
+            throw new IllegalArgumentException("Invalid state length");
         }
         System.arraycopy(mem.currentPacket, 0, this.currentPacket, 0, mem.currentPacket.length);
         this.currentByteIndex = mem.currentByteIndex;
@@ -307,6 +308,16 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
 
     }
 
+    private record JoypadState(int p1, long tick, int inputHistory,
+                                int filteredInputLines,
+                                boolean inputChangedSinceLastTick,
+                                int players, int currentPlayer,
+                                boolean transferInProgress, boolean transferReadyForData,
+                                int pendingTransferBit, int currentByte, int[] currentPacket,
+                                int currentByteIndex, int currentPacketIndex) implements ComponentState<Joypad> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record JoypadMemento(int p1, long tick, int inputHistory,
                                 int filteredInputLines,
                                 boolean inputChangedSinceLastTick,

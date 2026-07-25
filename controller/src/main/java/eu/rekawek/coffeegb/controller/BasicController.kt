@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.TICKS_PER_FRAME
 import eu.rekawek.coffeegb.core.debug.Console
@@ -485,7 +486,9 @@ class BasicController private constructor(
     restorePauseStateAfterLoading()
 
     val state =
-        session?.let { Controller.ControllerState(it.gameboy.saveToMemento(), it.config.rom) }
+        session?.let {
+          Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
+        }
 
     stop()
     eventBus.close()

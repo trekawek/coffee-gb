@@ -1,15 +1,16 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
 import java.util.Arrays;
 
-public class Display implements Serializable, Originator<Display> {
+public class Display implements StatefulComponent<Display> {
 
     public static final int DISPLAY_WIDTH = 160;
 
@@ -20,7 +21,7 @@ public class Display implements Serializable, Originator<Display> {
     private final int[] buffer = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
     // the last complete frame that was shown, re-emitted for the one-frame repeat after a
-    // CGB LCD-on. It is panel/output state rather than PPU state, but must be in the memento
+    // CGB LCD-on. It is panel/output state rather than PPU state, but must be in machine state
     // so restoring during the enable delay does not repeat a frame from the abandoned timeline.
     private final transient int[] lastFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 
@@ -133,13 +134,13 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     @Override
-    public Memento<Display> saveToMemento() {
-        return new DisplayMemento(buffer.clone(), i, enabled, lastFrame.clone(), firstFrameAfterLcdEnable);
+    public ComponentState<Display> captureState() {
+        return new DisplayState(buffer.clone(), i, enabled, lastFrame.clone(), firstFrameAfterLcdEnable);
     }
 
     @Override
-    public Memento<Display> saveToMemento(MachineStateCapture capture) {
-        return new DisplayMemento(
+    public ComponentState<Display> captureState(MachineStateCapture capture) {
+        return new DisplayState(
                 capture.ints(buffer), i, enabled, capture.ints(lastFrame), firstFrameAfterLcdEnable);
     }
 
@@ -150,12 +151,12 @@ public class Display implements Serializable, Originator<Display> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Display> memento) {
-        if (!(memento instanceof DisplayMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Display> state) {
+        if (!(state instanceof DisplayState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.buffer.length != mem.buffer.length) {
-            throw new IllegalArgumentException("Memento array length doesn't match");
+            throw new IllegalArgumentException("ComponentState array length doesn't match");
         }
         System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
         this.i = mem.i;
@@ -166,7 +167,7 @@ public class Display implements Serializable, Originator<Display> {
             System.arraycopy(mem.buffer, 0, this.lastFrame, 0, this.lastFrame.length);
         } else {
             if (this.lastFrame.length != mem.lastFrame.length) {
-                throw new IllegalArgumentException("Memento last frame length doesn't match");
+                throw new IllegalArgumentException("ComponentState last frame length doesn't match");
             }
             System.arraycopy(mem.lastFrame, 0, this.lastFrame, 0, this.lastFrame.length);
         }
@@ -268,6 +269,11 @@ public class Display implements Serializable, Originator<Display> {
         }
     }
 
+    private record DisplayState(int[] buffer, int i, boolean enabled, int[] lastFrame,
+                                  boolean firstFrameAfterLcdEnable) implements ComponentState<Display> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record DisplayMemento(int[] buffer, int i, boolean enabled, int[] lastFrame,
                                   boolean firstFrameAfterLcdEnable) implements Memento<Display> {
     }

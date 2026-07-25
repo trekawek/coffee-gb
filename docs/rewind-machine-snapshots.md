@@ -4,9 +4,9 @@
 
 `MachineSnapshot` is Coffee GB's internal rewind representation. It is immutable, service-free, and
 owned by the emulator thread. It is not a StateFile root, has no byte codec, is not serializable,
-and must never cross a disk or network boundary. Disk snapshots and netplay continue to use
-StateFile v1. The local-only legacy importer and the remaining `ControllerState`/boot-state memento
-uses are intentionally left for issue #326.
+and must never cross a disk or network boundary. Disk snapshots and netplay use StateFile v1;
+`ControllerState` and boot/reset use explicit detached/component state. The local-only historical
+importer is a separate migration boundary and is never reachable from rewind.
 
 `BasicController` captures only after a completed forward frame, after its queued events have been
 dispatched and before the next frame starts. Restore occurs at the same owner-thread boundary
@@ -49,9 +49,9 @@ generation); only a changed retained page payload is copied. This content compar
 transition and cannot mistake a hash collision for equality. Unchanged scalar/container/record
 nodes are also reused by identity.
 
-Rewind does not call the ordinary `Gameboy.saveToMemento()` path. At the safe point, array-owning
+Rewind does not call the ordinary deep-owned `Gameboy.captureState()` path. At the safe point, array-owning
 machine components first declare the identities and logical lengths of their dominant live
-primitive payloads without constructing a memento. They then build exactly one short-lived typed
+primitive payloads without constructing a detached graph. They then build exactly one short-lived typed
 record view and register its live primitive payloads with `MachineStateCapture`. Every dominant
 declaration must be matched by the same array identity and length; registering
 `capture.ints(ram.clone())` leaves the real backing unmatched and rejects the capture. Snapshot
@@ -59,7 +59,7 @@ construction reads and compares the registered arrays synchronously; the token i
 the borrowed view cannot escape. Unchanged arrays therefore require neither a full source-payload
 copy nor a retained-page copy. A changed page produces one private retained payload. Snapshot graph
 construction also rejects every unregistered primitive array, preventing an owner from silently
-falling back to legacy deep capture.
+falling back to an array-owning deep capture.
 
 The independently declared dominant owners include WRAM, both VRAM banks, OAM, both display
 buffers, the behavior-relevant pending-audio prefix, SGB packet/border/mask/palette/attribute
@@ -68,9 +68,9 @@ including MBC6 flash, MBC7 EEPROM, wrapper delegates and nested Datel slots. Sma
 serial, IR and register arrays still use the mandatory token registration and immutable paging
 path. The 24-family mapper matrix asserts that every mapper primitive payload is independently
 declared, and focused tests reject both a copied dominant registration and an unregistered
-primitive fallback. The memento record descriptors are unchanged. Ordinary legacy, boot, portable
-StateFile and netplay capture still use their existing deep-owned paths; their retirement remains
-#326.
+primitive fallback. The importer-only record descriptors are unchanged. Boot, portable StateFile,
+controller handoff and netplay use the explicit deep-owned component-state path; no normal capture
+constructs an importer compatibility graph.
 
 A restore always materializes new live arrays from the private pages. Live mutation can therefore
 never write into a snapshot. Branching by restoring an old generation and capturing from it reuses

@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.core.cpu;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
 
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 import static eu.rekawek.coffeegb.core.cpu.BitUtils.*;
 
-public class Registers implements Serializable, Originator<Registers> {
+public class Registers implements StatefulComponent<Registers> {
     private int a, b, c, d, e, h, l;
 
     private int sp;
@@ -157,14 +157,14 @@ public class Registers implements Serializable, Originator<Registers> {
     }
 
     @Override
-    public Memento<Registers> saveToMemento() {
-        return new RegistersMemento(a, b, c, d, e, h, l, sp, pc, flags.getFlagsByte());
+    public ComponentState<Registers> captureState() {
+        return new RegistersState(a, b, c, d, e, h, l, sp, pc, flags.getFlagsByte());
     }
 
     @Override
-    public void restoreFromMemento(Memento<Registers> memento) {
-        if (!(memento instanceof RegistersMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Registers> state) {
+        if (!(state instanceof RegistersState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.a = mem.a;
         this.b = mem.b;
@@ -178,6 +178,11 @@ public class Registers implements Serializable, Originator<Registers> {
         this.flags.setFlagsByte(mem.flags);
     }
 
+    private record RegistersState(int a, int b, int c, int d, int e, int h, int l, int sp, int pc,
+                                    int flags) implements ComponentState<Registers> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record RegistersMemento(int a, int b, int c, int d, int e, int h, int l, int sp, int pc,
                                     int flags) implements Memento<Registers> {
     }

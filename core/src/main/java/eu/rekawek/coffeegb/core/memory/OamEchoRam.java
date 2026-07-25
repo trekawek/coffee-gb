@@ -1,15 +1,15 @@
 package eu.rekawek.coffeegb.core.memory;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.Gpu;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
-
-import java.io.Serializable;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 /** The model-dependent $FEA0-$FEFF area immediately after OAM. */
-final class OamEchoRam implements AddressSpace, Serializable, Originator<OamEchoRam> {
+final class OamEchoRam implements AddressSpace, StatefulComponent<OamEchoRam> {
 
     private static final int OFFSET = 0xfea0;
 
@@ -68,23 +68,27 @@ final class OamEchoRam implements AddressSpace, Serializable, Originator<OamEcho
     }
 
     @Override
-    public Memento<OamEchoRam> saveToMemento() {
-        return new OamEchoRamMemento(ram.clone());
+    public ComponentState<OamEchoRam> captureState() {
+        return new OamEchoRamState(ram.clone());
     }
 
     @Override
-    public Memento<OamEchoRam> saveToMemento(MachineStateCapture capture) {
-        return new OamEchoRamMemento(capture.ints(ram));
+    public ComponentState<OamEchoRam> captureState(MachineStateCapture capture) {
+        return new OamEchoRamState(capture.ints(ram));
     }
 
     @Override
-    public void restoreFromMemento(Memento<OamEchoRam> memento) {
-        if (!(memento instanceof OamEchoRamMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<OamEchoRam> state) {
+        if (!(state instanceof OamEchoRamState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         System.arraycopy(mem.ram, 0, ram, 0, ram.length);
     }
 
+    private record OamEchoRamState(int[] ram) implements ComponentState<OamEchoRam> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record OamEchoRamMemento(int[] ram) implements Memento<OamEchoRam> {
     }
 }

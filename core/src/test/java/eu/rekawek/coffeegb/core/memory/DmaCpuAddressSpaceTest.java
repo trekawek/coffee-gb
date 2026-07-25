@@ -189,7 +189,7 @@ public class DmaCpuAddressSpaceTest {
         fixture.dma.setCpuInterruptStackWrite(true);
         fixture.cpu.setByte(0x0001, 0xff);
         Dma restored = new Dma(fixture.memory, fixture.oam, new SpeedMode(false));
-        restored.restoreFromMemento(fixture.dma.saveToMemento());
+        restored.restoreState(fixture.dma.captureState());
         DmaCpuAddressSpace restoredCpu =
                 new DmaCpuAddressSpace(fixture.memory, restored, false);
         for (int i = 0; i < 4; i++) {

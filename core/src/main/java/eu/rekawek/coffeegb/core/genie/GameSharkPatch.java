@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.genie;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.memory.GbcRam;
 
+/** Importer-compatible immutable cheat value; see {@link GameGeniePatch}. */
 public record GameSharkPatch(int mode, int bank, int address, int data) implements Patch {
     @Override
     public int getAddress() {

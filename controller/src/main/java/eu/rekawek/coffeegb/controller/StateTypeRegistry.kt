@@ -1,16 +1,111 @@
 package eu.rekawek.coffeegb.controller
 
 /**
- * Audited concrete types present in Coffee GB 1.7.14 legacy snapshots.
+ * Audited explicit component-state types paired with Coffee GB 1.7.14 compatibility records.
  *
  * IDs are the one-based position in each list for portable StateFile v1. The codec deliberately
  * uses this exact audited inventory so a future record or enum cannot silently become decodable.
  * Entries are append-only for v1; a reorder/removal requires a new StateFile section schema
  * version.
  */
-internal object MementoTypeRegistry {
+internal object StateTypeRegistry {
 
   val recordClassNames =
+      listOf(
+          "eu.rekawek.coffeegb.core.genie.Genie\$GenieState",
+          "eu.rekawek.coffeegb.core.sound.FrameSequencer\$FrameSequencerState",
+          "eu.rekawek.coffeegb.core.sound.FrequencySweep\$FrequencySweepState",
+          "eu.rekawek.coffeegb.core.sound.AbstractSoundMode\$AbstractSoundModeState",
+          "eu.rekawek.coffeegb.core.sound.Lfsr\$LfsrState",
+          "eu.rekawek.coffeegb.core.sound.PolynomialCounter\$PolynomialCounterState",
+          "eu.rekawek.coffeegb.core.sound.VolumeEnvelope\$VolumeEnvelopeState",
+          "eu.rekawek.coffeegb.core.sound.SoundMode4\$SoundMode4State",
+          "eu.rekawek.coffeegb.core.sound.SoundMode3\$SoundMode3State",
+          "eu.rekawek.coffeegb.core.sound.SoundMode2\$SoundMode2State",
+          "eu.rekawek.coffeegb.core.sound.SoundMode1\$SoundMode1State",
+          "eu.rekawek.coffeegb.core.sound.LengthCounter\$LengthCounterState",
+          "eu.rekawek.coffeegb.core.sound.Sound\$SoundState",
+          "eu.rekawek.coffeegb.core.timer.Timer\$TimerState",
+          "eu.rekawek.coffeegb.core.cpu.SpeedMode\$SpeedModeState",
+          "eu.rekawek.coffeegb.core.cpu.InterruptManager\$InterruptManagerState",
+          "eu.rekawek.coffeegb.core.cpu.Registers\$RegistersState",
+          "eu.rekawek.coffeegb.core.cpu.Cpu\$CpuState",
+          "eu.rekawek.coffeegb.core.joypad.Joypad\$JoypadState",
+          "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState",
+          "eu.rekawek.coffeegb.core.sgb.SuperGameboy\$SuperGameboyState",
+          "eu.rekawek.coffeegb.core.sgb.SgbDisplay\$SgbDisplayState",
+          "eu.rekawek.coffeegb.core.sgb.Background\$BackgroundState",
+          "eu.rekawek.coffeegb.core.memory.Hdma\$HdmaState",
+          "eu.rekawek.coffeegb.core.memory.GbcRam\$GbcRamState",
+          "eu.rekawek.coffeegb.core.memory.BiosShadow\$BiosShadowState",
+          "eu.rekawek.coffeegb.core.memory.Ram\$RamState",
+          "eu.rekawek.coffeegb.core.memory.Mmu\$MmuState",
+          "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState",
+          "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc1\$Mbc1State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.BungEms\$BungEmsState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc2\$Mbc2State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera\$PocketCameraState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.BhgosMulticart\$BhgosMulticartState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7\$Mbc7State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.MakonNtOld2\$MakonNtOld2State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Sintax\$SintaxState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.WisdomTree\$WisdomTreeState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.DuzMulticart\$DuzMulticartState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mani32kMulticart\$Mani32kState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Huc1\$Huc1State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.SachenMmc\$SachenState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Bbd\$BbdState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart\$SlMulticartState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mmm01\$Mmm01State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Tama5\$Tama5State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelState",
+          "eu.rekawek.coffeegb.core.memory.cart.Cartridge\$CartridgeState",
+          "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState",
+          "eu.rekawek.coffeegb.core.memory.UndocumentedGbcRegisters\$UndocumentedGbcRegistersState",
+          "eu.rekawek.coffeegb.core.memory.Dma\$DmaState",
+          "eu.rekawek.coffeegb.core.memory.OamEchoRam\$OamEchoRamState",
+          "eu.rekawek.coffeegb.core.Gameboy\$GameboyState",
+          "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueState",
+          "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesState",
+          "eu.rekawek.coffeegb.core.gpu.Lcdc\$LcdcState",
+          "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState",
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState",
+          "eu.rekawek.coffeegb.core.gpu.StatRegister\$StatRegisterState",
+          "eu.rekawek.coffeegb.core.gpu.VRamTransfer\$VRamTransferState",
+          "eu.rekawek.coffeegb.core.gpu.SpriteFifo\$SpriteFifoState",
+          "eu.rekawek.coffeegb.core.gpu.ColorPalette\$ColorPaletteState",
+          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState",
+          "eu.rekawek.coffeegb.core.gpu.phase.HBlankPhase\$HBlankPhaseState",
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState",
+          "eu.rekawek.coffeegb.core.gpu.phase.OamSearch\$SpritePosition\$SpritePositionState",
+          "eu.rekawek.coffeegb.core.gpu.phase.VBlankPhase\$VBlankPhaseState",
+          "eu.rekawek.coffeegb.core.gpu.phase.OamSearch\$OamSearchState",
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState",
+          "eu.rekawek.coffeegb.core.gpu.Fetcher\$FetcherState",
+          "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState",
+          "eu.rekawek.coffeegb.core.ir.InfraredPort\$InfraredPortState",
+          "eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointState",
+          "eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint\$PrinterState",
+          "eu.rekawek.coffeegb.core.serial.SerialPort\$SerialPortState",
+          "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverState",
+          "eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint\$ByteReceivingSerialEndpointState",
+          "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState",
+          "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterState",
+          "eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble\$CodeBreakerRumbleState",
+          "eu.rekawek.coffeegb.core.genie.GameGeniePatch",
+          "eu.rekawek.coffeegb.core.genie.GameSharkPatch",
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWrite",
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWrite",
+      )
+
+  val legacyRecordClassNames =
       listOf(
           "eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento",
           "eu.rekawek.coffeegb.core.sound.FrameSequencer\$FrameSequencerMemento",
@@ -121,11 +216,17 @@ internal object MementoTypeRegistry {
       )
 
   val legacyApplicationClassNames: Set<String> =
-      (recordClassNames + enumClassNames).toSet()
+      (legacyRecordClassNames + enumClassNames).toSet()
 
   val recordClasses: List<Class<*>> by lazy {
     recordClassNames.map(::loadAuditedClass).also { classes ->
       classes.forEach { require(it.isRecord) { "Audited portable type is no longer a record: $it" } }
+    }
+  }
+
+  val legacyRecordClasses: List<Class<*>> by lazy {
+    legacyRecordClassNames.map(::loadAuditedClass).also { classes ->
+      classes.forEach { require(it.isRecord) { "Audited legacy type is no longer a record: $it" } }
     }
   }
 

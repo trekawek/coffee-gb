@@ -1,9 +1,9 @@
 package eu.rekawek.coffeegb.core.serial;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-public interface SerialEndpoint extends Originator<SerialEndpoint> {
+public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
     /** Advances external-device wall-clock state by one Game Boy master tick. */
     default void tick() {
     }
@@ -64,12 +64,12 @@ public interface SerialEndpoint extends Originator<SerialEndpoint> {
     SerialEndpoint NULL_ENDPOINT =
             new SerialEndpoint() {
                 @Override
-                public Memento<SerialEndpoint> saveToMemento() {
+                public ComponentState<SerialEndpoint> captureState() {
                     return null;
                 }
 
                 @Override
-                public void restoreFromMemento(Memento<SerialEndpoint> memento) {
+                public void restoreState(ComponentState<SerialEndpoint> state) {
                 }
 
                 @Override

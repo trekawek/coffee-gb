@@ -172,7 +172,7 @@ public class TimerTest {
         timer.tick();
 
         Timer restored = new Timer(interruptManager, new SpeedMode(true));
-        restored.restoreFromMemento(timer.saveToMemento());
+        restored.restoreState(timer.captureState());
         tick(restored, 7);
 
         assertFalse(interruptManager.isInterruptFlagSet(InterruptManager.InterruptType.Timer));

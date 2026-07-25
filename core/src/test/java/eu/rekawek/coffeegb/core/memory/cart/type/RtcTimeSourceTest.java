@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.Gameboy;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -32,7 +32,7 @@ public class RtcTimeSourceTest {
         mbc3.setByte(0x6000, 1); // latch at 7.25 seconds
         mbc3.setClockPaused(true);
         time.forward(1500, TimeUnit.MILLISECONDS);
-        Memento<MemoryController> captured = mbc3.saveToMemento();
+        ComponentState<MemoryController> captured = mbc3.captureState();
         var capturedRuntime = mbc3.captureRtcRuntimeState();
 
         Object capturedClock = component(captured, "clockMemento");
@@ -45,22 +45,22 @@ public class RtcTimeSourceTest {
         writeMbc3(mbc3, 0x08, 33);
         writeMbc3(mbc3, 0x0c, 0x40);
         mbc3.setClockPaused(false);
-        mbc3.restoreFromMemento(captured);
+        mbc3.restoreState(captured);
         mbc3.restoreRtcRuntimeState(capturedRuntime);
 
         time.forward(250, TimeUnit.MILLISECONDS);
         mbc3.setClockPaused(false);
-        Object continuedClock = component(mbc3.saveToMemento(), "clockMemento");
+        Object continuedClock = component(mbc3.captureState(), "clockMemento");
         assertEquals(9, component(continuedClock, "seconds"));
         assertEquals(0L, component(continuedClock, "subSecondTicks"));
         assertEquals(7, readMbc3(mbc3, 0x08)); // the captured latch remains authoritative
         assertFalse(mbc3.captureRtcRuntimeState().emulationPaused());
 
         writeMbc3(mbc3, 0x0c, 0x40);
-        Memento<MemoryController> halted = mbc3.saveToMemento();
+        ComponentState<MemoryController> halted = mbc3.captureState();
         writeMbc3(mbc3, 0x0c, 0);
-        mbc3.restoreFromMemento(halted);
-        assertTrue((boolean) component(component(mbc3.saveToMemento(), "clockMemento"), "halt"));
+        mbc3.restoreState(halted);
+        assertTrue((boolean) component(component(mbc3.captureState(), "clockMemento"), "halt"));
     }
 
     @Test
@@ -74,7 +74,7 @@ public class RtcTimeSourceTest {
 
         time.forward(5, TimeUnit.SECONDS);
         Mbc3 restored = (Mbc3) cartridge(0x13, 0x03, battery, time).getMemoryController();
-        assertEquals(15, component(component(restored.saveToMemento(), "clockMemento"), "seconds"));
+        assertEquals(15, component(component(restored.captureState(), "clockMemento"), "seconds"));
     }
 
     @Test
@@ -85,20 +85,20 @@ public class RtcTimeSourceTest {
 
         time.forward(2, TimeUnit.MINUTES);
         readHuc3Register(huc3, 0);
-        Memento<MemoryController> captured = huc3.saveToMemento();
+        ComponentState<MemoryController> captured = huc3.captureState();
         assertEquals(2, component(captured, "minutes"));
 
         time.forward(3, TimeUnit.MINUTES);
         readHuc3Register(huc3, 0);
-        assertEquals(5, component(huc3.saveToMemento(), "minutes"));
-        huc3.restoreFromMemento(captured);
+        assertEquals(5, component(huc3.captureState(), "minutes"));
+        huc3.restoreState(captured);
         readHuc3Register(huc3, 0);
-        assertEquals(5, component(huc3.saveToMemento(), "minutes"));
+        assertEquals(5, component(huc3.captureState(), "minutes"));
 
         huc3.flushRam();
         time.forward(2, TimeUnit.MINUTES);
         Huc3 fromBattery = (Huc3) cartridge(0xfe, 0x03, battery, time).getMemoryController();
-        assertEquals(7, component(fromBattery.saveToMemento(), "minutes"));
+        assertEquals(7, component(fromBattery.captureState(), "minutes"));
     }
 
     @Test
@@ -109,11 +109,11 @@ public class RtcTimeSourceTest {
 
         time.forward(65, TimeUnit.SECONDS);
         assertEquals(1, readTama5Minutes(tama5));
-        Memento<MemoryController> captured = tama5.saveToMemento();
+        ComponentState<MemoryController> captured = tama5.captureState();
 
         time.forward(125, TimeUnit.SECONDS);
         assertEquals(3, readTama5Minutes(tama5));
-        tama5.restoreFromMemento(captured);
+        tama5.restoreState(captured);
         assertEquals(3, readTama5Minutes(tama5));
 
         tama5.flushRam();

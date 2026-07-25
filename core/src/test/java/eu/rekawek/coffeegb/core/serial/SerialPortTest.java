@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.core.serial;
 
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -184,15 +184,15 @@ public class SerialPortTest {
         assertTrue(interruptManager.isInterruptRequested());
         assertFalse(interruptManager.isInterruptRequestedForHalt());
 
-        Memento<InterruptManager> interruptMemento = interruptManager.saveToMemento();
-        Memento<SerialPort> serialMemento = serialPort.saveToMemento();
+        ComponentState<InterruptManager> interruptMemento = interruptManager.captureState();
+        ComponentState<SerialPort> serialMemento = serialPort.captureState();
         for (int i = 0; i < 4; i++) {
             serialPort.tick();
         }
         assertTrue(interruptManager.isInterruptRequestedForHalt());
 
-        interruptManager.restoreFromMemento(interruptMemento);
-        serialPort.restoreFromMemento(serialMemento);
+        interruptManager.restoreState(interruptMemento);
+        serialPort.restoreState(serialMemento);
         for (int i = 0; i < 3; i++) {
             serialPort.tick();
             assertFalse(interruptManager.isInterruptRequestedForHalt());
@@ -241,12 +241,12 @@ public class SerialPortTest {
         }
 
         @Override
-        public Memento<SerialEndpoint> saveToMemento() {
+        public ComponentState<SerialEndpoint> captureState() {
             return null;
         }
 
         @Override
-        public void restoreFromMemento(Memento<SerialEndpoint> memento) {
+        public void restoreState(ComponentState<SerialEndpoint> memento) {
         }
     }
 }

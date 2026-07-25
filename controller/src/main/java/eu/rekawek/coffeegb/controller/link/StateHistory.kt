@@ -14,7 +14,7 @@ import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.ir.Peer2PeerInfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.Joypad
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.controller.state.SessionState
 import eu.rekawek.coffeegb.core.serial.FourPlayerAdapter
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
@@ -35,13 +35,13 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
   fun addState(
       frame: Long,
       inputs: List<Input>,
-      mementos: List<Memento<Session>?>,
+      sessionStates: List<SessionState?>,
       buttons: List<Set<Button>>,
   ) {
     require(inputs.size == mode.playerCount)
-    require(mementos.size == mode.playerCount)
+    require(sessionStates.size == mode.playerCount)
     require(buttons.size == mode.playerCount)
-    states.add(State(frame, inputs, mementos, buttons))
+    states.add(State(frame, inputs, sessionStates, buttons))
     LOG.atDebug().log("Adding state on frame {}; state size {}", frame, states.size)
     trimHistory()
   }
@@ -91,7 +91,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
           }
           config?.let {
             Session(
-                if (baseState.mementos[player] != null) it.forRestore() else it,
+                if (baseState.sessionStates[player] != null) it.forRestore() else it,
                 eventBus,
                 null,
                 links.serial[player],
@@ -102,9 +102,9 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
 
     for (player in sessions.indices) {
       val session = sessions[player]
-      val memento = baseState.mementos[player]
-      if (session != null && memento != null) {
-        session.restoreFromMemento(memento)
+      val state = baseState.sessionStates[player]
+      if (session != null && state != null) {
+        session.restoreDetachedState(state)
         session.heldButtons = baseState.buttons[player]
       }
     }
@@ -125,7 +125,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
           State(
               frame,
               inputs,
-              sessions.map { it?.saveToMemento() },
+              sessions.map { it?.captureDetachedState() },
               sessions.map { it?.heldButtons ?: emptySet() },
           ))
 
@@ -150,16 +150,16 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
   fun setPlayerState(
       player: Int,
       frame: Long,
-      state: Memento<Session>,
+      state: SessionState,
       buttons: Set<Button>,
   ) {
     val index = states.indexOfFirst { it.frame == frame }
     if (index == -1) {
       return
     }
-    val mementos = states[index].mementos.toMutableList().also { it[player] = state }
+    val sessionStates = states[index].sessionStates.toMutableList().also { it[player] = state }
     val heldButtons = states[index].buttons.toMutableList().also { it[player] = buttons }
-    states[index] = states[index].copy(mementos = mementos, buttons = heldButtons)
+    states[index] = states[index].copy(sessionStates = sessionStates, buttons = heldButtons)
   }
 
   @Synchronized
@@ -172,14 +172,14 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
   @Synchronized
   internal fun replaceWithState(
       frame: Long,
-      mementos: List<Memento<Session>?>,
+      sessionStates: List<SessionState?>,
       buttons: List<Set<Button>>,
   ) {
-    require(mementos.size == mode.playerCount)
+    require(sessionStates.size == mode.playerCount)
     require(buttons.size == mode.playerCount)
     states.clear()
     patches.clear()
-    states.add(State(frame, emptyInputs(), mementos.toList(), buttons.map { it.toSet() }))
+    states.add(State(frame, emptyInputs(), sessionStates.toList(), buttons.map { it.toSet() }))
   }
 
   @Synchronized
@@ -205,7 +205,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
   data class State(
       val frame: Long,
       val inputs: List<Input>,
-      val mementos: List<Memento<Session>?>,
+      val sessionStates: List<SessionState?>,
       val buttons: List<Set<Button>>,
   )
 

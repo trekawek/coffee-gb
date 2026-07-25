@@ -1,12 +1,12 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 
-import java.io.Serializable;
-
-public class Mbc7Eeprom implements Serializable {
+public class Mbc7Eeprom  {
 
     private enum State {
         IDLE, COMMAND, READING, WRITING
@@ -173,8 +173,8 @@ public class Mbc7Eeprom implements Serializable {
         return doBit;
     }
 
-    public Memento<Mbc7Eeprom> saveToMemento() {
-        return new EepromMemento(
+    public ComponentState<Mbc7Eeprom> captureState() {
+        return new EepromState(
                 eeprom.clone(),
                 state,
                 bitsRead,
@@ -187,8 +187,8 @@ public class Mbc7Eeprom implements Serializable {
         );
     }
 
-    public Memento<Mbc7Eeprom> saveToMemento(MachineStateCapture capture) {
-        return new EepromMemento(
+    public ComponentState<Mbc7Eeprom> captureState(MachineStateCapture capture) {
+        return new EepromState(
                 capture.ints(eeprom),
                 state,
                 bitsRead,
@@ -205,8 +205,8 @@ public class Mbc7Eeprom implements Serializable {
         capture.declareInts(eeprom);
     }
 
-    public void restoreFromMemento(Memento<Mbc7Eeprom> memento) {
-        if (memento instanceof EepromMemento mem) {
+    public void restoreState(ComponentState<Mbc7Eeprom> state) {
+        if (state instanceof EepromState mem) {
             System.arraycopy(mem.eeprom, 0, this.eeprom, 0, 256);
             this.state = mem.state;
             this.bitsRead = mem.bitsRead;
@@ -219,6 +219,20 @@ public class Mbc7Eeprom implements Serializable {
         }
     }
 
+    private record EepromState(
+            int[] eeprom,
+            State state,
+            int bitsRead,
+            int command,
+            int address,
+            int writeValue,
+            boolean writeEnabled,
+            boolean sk,
+            int doBit
+    ) implements ComponentState<Mbc7Eeprom> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record EepromMemento(
             int[] eeprom,
             State state,

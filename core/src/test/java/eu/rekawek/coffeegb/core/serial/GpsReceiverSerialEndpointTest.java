@@ -1,6 +1,6 @@
 package eu.rekawek.coffeegb.core.serial;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -43,9 +43,9 @@ public class GpsReceiverSerialEndpointTest {
         waitForStart(original, GpsReceiverSerialEndpoint.RESPONSE_TURNAROUND_TICKS + 10);
         tick(original, 123);
 
-        Memento<SerialEndpoint> memento = original.saveToMemento();
+        ComponentState<SerialEndpoint> memento = original.captureState();
         GpsReceiverSerialEndpoint restored = new GpsReceiverSerialEndpoint();
-        restored.restoreFromMemento(memento);
+        restored.restoreState(memento);
 
         for (int i = 0; i < 20_000; i++) {
             assertEquals(original.isSerialInputHigh(), restored.isSerialInputHigh());

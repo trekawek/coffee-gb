@@ -1,32 +1,35 @@
 # Production capture-site audit
 
-This manifest accounts for every production source file that declares an `Originator` contract or
-contains a `saveToMemento` site. `StateInventoryTest` scans the production trees and requires an
+This manifest accounts for every production source file that declares the explicit
+`StatefulComponent` contract or participates in `captureState`/detached capture. `StateInventoryTest`
+scans the production trees and requires an
 exact path match, so a new capture owner or call site cannot be omitted from review.
 
 `OWNER` means that the file owns behavior fields in the record(s) named in
 [`state-memento-schema.md`](state-memento-schema.md); those record-component lists are the exact
-legacy-memento fields. `DmgPixelFifo` additionally exposes the six primitive fields listed there
+non-serializable component-state fields. `DmgPixelFifo` additionally exposes the six primitive fields listed there
 through the detached runtime supplement, preserving its pinned record descriptor. Arrays and
 collections become deep-owned at the detached boundary. `COMPOSITE`
-means that the owner captures child mementos and any root fields listed in that schema. `WORKFLOW`
+means that the owner captures child states and any root fields listed in that schema. `WORKFLOW`
 is a controller call site which retains no additional machine field. `CONTRACT` is an interface and
 owns no instance state. Derived caches and external services omitted by each owner are documented
 by subsystem in [`state-machine-inventory.md`](state-machine-inventory.md); none of those services
 is admitted to the detached graph.
 
 For internal rewind only, array-owning sites additionally implement the
-`saveToMemento(MachineStateCapture)` safe-point overload. That overload constructs a transient
+`captureState(MachineStateCapture)` safe-point overload. That overload constructs a transient
 record view with registered borrowed primitive arrays; `MachineSnapshot` compares/copies it
 synchronously and rejects any unregistered array. It does not alter the listed record components,
-the ordinary deep-owned `saveToMemento()` contract, or any portable/legacy byte schema.
+the ordinary deep-owned `captureState()` contract, or any portable/legacy byte schema.
 
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt`
+- WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/RewindManager.kt`
 - COMPOSITE `controller/src/main/java/eu/rekawek/coffeegb/controller/Session.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/link/StateHistory.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/DetachedState.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/MachineSnapshot.kt`
+- WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateCodec.kt`
 - COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/cpu/Cpu.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/cpu/InterruptManager.java`
@@ -52,8 +55,8 @@ the ordinary deep-owned `saveToMemento()` contract, or any portable/legacy byte 
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/ir/FullChanger.java`
 - COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/ir/InfraredPort.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/joypad/Joypad.java`
-- CONTRACT `core/src/main/java/eu/rekawek/coffeegb/core/memento/MachineStateCapture.java`
-- CONTRACT `core/src/main/java/eu/rekawek/coffeegb/core/memento/Originator.java`
+- CONTRACT `core/src/main/java/eu/rekawek/coffeegb/core/state/MachineStateCapture.java`
+- CONTRACT `core/src/main/java/eu/rekawek/coffeegb/core/state/StatefulComponent.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/BiosShadow.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/Dma.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/GbcRam.java`

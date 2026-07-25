@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.core.ir;
 
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -140,10 +140,10 @@ public class FullChangerTest {
         for (int i = 0; i < 30; i++) {
             port.tick();
         }
-        Memento<InfraredPort> memento = port.saveToMemento();
+        ComponentState<InfraredPort> memento = port.captureState();
 
         InfraredPort other = new InfraredPort(true, speedMode);
-        other.restoreFromMemento(memento);
+        other.restoreState(memento);
         // both ports continue the same pulse train in lockstep
         for (int i = 0; i < 5000; i++) {
             assertEquals(port.getByte(0xff56), other.getByte(0xff56));

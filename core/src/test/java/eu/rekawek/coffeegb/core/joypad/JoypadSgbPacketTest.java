@@ -2,7 +2,7 @@ package eu.rekawek.coffeegb.core.joypad;
 
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.sgb.Commands;
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy;
 import org.junit.Before;
@@ -116,13 +116,13 @@ public class JoypadSgbPacketTest {
         int[] packet = patternedPacket();
         startPacket();
         writeDataBits(packet, 0, 37, false);
-        Memento<Joypad> memento = joypad.saveToMemento();
+        ComponentState<Joypad> memento = joypad.captureState();
 
         // Mutate every receiver field, including the packet array retained by the
         // snapshot, before restoring the partial transfer.
         startPacket();
         writeDataBits(new int[16], 0, 19, false);
-        joypad.restoreFromMemento(memento);
+        joypad.restoreState(memento);
 
         writeDataBits(packet, 37, 128, false);
         writeSelector(0x20);
@@ -138,10 +138,10 @@ public class JoypadSgbPacketTest {
         startPacket();
         writeDataBits(packet, 0, 37, false);
         writeSelector(selectorForBit(packet, 37));
-        Memento<Joypad> memento = joypad.saveToMemento();
+        ComponentState<Joypad> memento = joypad.captureState();
 
         startPacket();
-        joypad.restoreFromMemento(memento);
+        joypad.restoreState(memento);
         writeSelector(0x30);
         writeDataBits(packet, 38, 128, false);
         writeSelector(0x20);
@@ -156,10 +156,10 @@ public class JoypadSgbPacketTest {
         int[] packet = patternedPacket();
         startPacket();
         writeDataBits(packet, 0, 128, false);
-        Memento<Joypad> memento = joypad.saveToMemento();
+        ComponentState<Joypad> memento = joypad.captureState();
 
         startPacket();
-        joypad.restoreFromMemento(memento);
+        joypad.restoreState(memento);
         writeSelector(0x20);
         writeSelector(0x30);
 

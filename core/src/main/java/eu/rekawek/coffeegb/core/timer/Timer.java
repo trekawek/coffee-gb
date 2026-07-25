@@ -1,14 +1,14 @@
 package eu.rekawek.coffeegb.core.timer;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
-
-public class Timer implements AddressSpace, Serializable, Originator<Timer> {
+public class Timer implements AddressSpace, StatefulComponent<Timer> {
 
     private final SpeedMode speedMode;
 
@@ -259,16 +259,16 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     }
 
     @Override
-    public Memento<Timer> saveToMemento() {
-        return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow, divReset,
+    public ComponentState<Timer> captureState() {
+        return new TimerState(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow, divReset,
                 haltWakeDelay, ticksSinceDivReset, haltBugDivRipplePending, haltBugDivRippleVisible,
                 suppressNextInterruptRequest);
     }
 
     @Override
-    public void restoreFromMemento(Memento<Timer> memento) {
-        if (!(memento instanceof TimerMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Timer> state) {
+        if (!(state instanceof TimerState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.div = mem.div;
         this.tac = mem.tac;
@@ -285,6 +285,15 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         this.suppressNextInterruptRequest = mem.suppressNextInterruptRequest;
     }
 
+    public record TimerState(int div, int tac, int tma, int tima, boolean previousBit, boolean overflow,
+                               int ticksSinceOverflow, boolean divReset,
+                               int haltWakeDelay, int ticksSinceDivReset,
+                               boolean haltBugDivRipplePending,
+                               boolean haltBugDivRippleVisible,
+                               boolean suppressNextInterruptRequest) implements ComponentState<Timer> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     public record TimerMemento(int div, int tac, int tma, int tima, boolean previousBit, boolean overflow,
                                int ticksSinceOverflow, boolean divReset,
                                int haltWakeDelay, int ticksSinceDivReset,

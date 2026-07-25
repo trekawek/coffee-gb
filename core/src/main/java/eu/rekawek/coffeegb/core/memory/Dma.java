@@ -1,13 +1,13 @@
 package eu.rekawek.coffeegb.core.memory;
 
+import eu.rekawek.coffeegb.core.memento.Memento;
+
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
-import eu.rekawek.coffeegb.core.memento.Memento;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.ComponentState;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
-
-public class Dma implements AddressSpace, Serializable, Originator<Dma> {
+public class Dma implements AddressSpace, StatefulComponent<Dma> {
 
     private static final int PAUSE_ENTRY_CLOCKS = 8;
 
@@ -414,8 +414,8 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     @Override
-    public Memento<Dma> saveToMemento() {
-        return new DmaMemento(transferInProgress, restarted, from, ticks, transferClocks,
+    public ComponentState<Dma> captureState() {
+        return new DmaState(transferInProgress, restarted, from, ticks, transferClocks,
                 oamOwnedForPpuBeforeTick, oamOwnedForPpu, ppuOamOwnedThroughRestart,
                 cpuClockPaused, pauseEntryClocks, currentByte, regValue,
                 pendingInterruptWriteByte, pendingInterruptWriteValue,
@@ -423,9 +423,9 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
     }
 
     @Override
-    public void restoreFromMemento(Memento<Dma> memento) {
-        if (!(memento instanceof DmaMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<Dma> state) {
+        if (!(state instanceof DmaState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.transferInProgress = mem.transferInProgress;
         this.restarted = mem.restarted;
@@ -446,6 +446,17 @@ public class Dma implements AddressSpace, Serializable, Originator<Dma> {
         this.cpuInterruptStackWrite = false;
     }
 
+    public record DmaState(boolean transferInProgress, boolean restarted, int from, int ticks,
+                             int transferClocks, boolean oamOwnedForPpuBeforeTick,
+                             boolean oamOwnedForPpu, boolean ppuOamOwnedThroughRestart,
+                             boolean cpuClockPaused, int pauseEntryClocks,
+                             int currentByte,
+                             int regValue, int pendingInterruptWriteByte,
+                             int pendingInterruptWriteValue,
+                             boolean vramDmaBusCollisionObserved) implements ComponentState<Dma> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     public record DmaMemento(boolean transferInProgress, boolean restarted, int from, int ticks,
                              int transferClocks, boolean oamOwnedForPpuBeforeTick,
                              boolean oamOwnedForPpu, boolean ppuOamOwnedThroughRestart,

@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.battery;
 
-import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
@@ -170,13 +172,13 @@ public class FileBattery implements Battery {
     }
 
     @Override
-    public synchronized Memento<Battery> saveToMemento() {
-        return new FileBatteryMemento(clockBuffer.clone(), ramBuffer.clone(), isClockPresent, isDirty);
+    public synchronized ComponentState<Battery> captureState() {
+        return new FileBatteryState(clockBuffer.clone(), ramBuffer.clone(), isClockPresent, isDirty);
     }
 
     @Override
-    public synchronized Memento<Battery> saveToMemento(MachineStateCapture capture) {
-        return new FileBatteryMemento(
+    public synchronized ComponentState<Battery> captureState(MachineStateCapture capture) {
+        return new FileBatteryState(
                 capture.bytes(clockBuffer),
                 capture.bytes(ramBuffer),
                 isClockPresent,
@@ -190,15 +192,15 @@ public class FileBattery implements Battery {
     }
 
     @Override
-    public synchronized void restoreFromMemento(Memento<Battery> memento) {
-        if (!(memento instanceof FileBatteryMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public synchronized void restoreState(ComponentState<Battery> state) {
+        if (!(state instanceof FileBatteryState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         if (this.clockBuffer.length != mem.clockBuffer.length) {
-            throw new IllegalArgumentException("Memento clockBuffer length doesn't match");
+            throw new IllegalArgumentException("ComponentState clockBuffer length doesn't match");
         }
         if (this.ramBuffer.length != mem.ramBuffer.length) {
-            throw new IllegalArgumentException("Memento ramBuffer length doesn't match");
+            throw new IllegalArgumentException("ComponentState ramBuffer length doesn't match");
         }
         System.arraycopy(mem.clockBuffer, 0, this.clockBuffer, 0, this.clockBuffer.length);
         System.arraycopy(mem.ramBuffer, 0, this.ramBuffer, 0, this.ramBuffer.length);
@@ -244,6 +246,11 @@ public class FileBattery implements Battery {
     private record LoadedBattery(int[] ram, long[] clock) {
     }
 
+    record FileBatteryState(byte[] clockBuffer, byte[] ramBuffer, boolean isClockPresent,
+                                      boolean isDirty) implements ComponentState<Battery> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     record FileBatteryMemento(byte[] clockBuffer, byte[] ramBuffer, boolean isClockPresent,
                                       boolean isDirty) implements Memento<Battery> {
     }

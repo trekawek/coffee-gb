@@ -1,8 +1,6 @@
 package eu.rekawek.coffeegb.core.gpu;
 
-import java.io.Serializable;
-
-public class TileAttributes implements Serializable {
+public class TileAttributes  {
 
     public static final TileAttributes EMPTY;
 

@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.core.serial;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.state.ComponentState;
+
 /**
  * Emulates the Namco Barcode Boy (バーコードボーイ) link-port barcode scanner used by
  * Battle Space and Barcode Taisen Bardigun (issue #70). Protocol reverse-engineered by
@@ -184,15 +186,15 @@ public class BarcodeBoySerialEndpoint implements SerialEndpoint {
     }
 
     @Override
-    public Memento<SerialEndpoint> saveToMemento() {
-        return new BarcodeBoyMemento(state, handshakeByte, sendBitIndex,
+    public ComponentState<SerialEndpoint> captureState() {
+        return new BarcodeBoyState(state, handshakeByte, sendBitIndex,
                 data == null ? null : data.clone(), dataByte, recvBitIndex, clockDivider);
     }
 
     @Override
-    public void restoreFromMemento(Memento<SerialEndpoint> memento) {
-        if (!(memento instanceof BarcodeBoyMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<SerialEndpoint> state) {
+        if (!(state instanceof BarcodeBoyState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.state = mem.state;
         this.handshakeByte = mem.handshakeByte;
@@ -203,6 +205,12 @@ public class BarcodeBoySerialEndpoint implements SerialEndpoint {
         this.clockDivider = mem.clockDivider;
     }
 
+    private record BarcodeBoyState(State state, int handshakeByte, int sendBitIndex, int[] data,
+                                     int dataByte, int recvBitIndex, int clockDivider)
+            implements ComponentState<SerialEndpoint> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record BarcodeBoyMemento(State state, int handshakeByte, int sendBitIndex, int[] data,
                                      int dataByte, int recvBitIndex, int clockDivider)
             implements Memento<SerialEndpoint> {

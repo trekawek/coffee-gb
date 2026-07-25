@@ -2,10 +2,8 @@ package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 
-import java.io.Serializable;
-
 /** Applies OAM DMA bus conflicts to memory accesses made by the CPU. */
-public class DmaCpuAddressSpace implements AddressSpace, Serializable {
+public class DmaCpuAddressSpace implements AddressSpace {
 
     private final AddressSpace addressSpace;
 

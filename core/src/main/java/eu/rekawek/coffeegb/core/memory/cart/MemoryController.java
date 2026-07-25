@@ -2,11 +2,9 @@ package eu.rekawek.coffeegb.core.memory.cart;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.Originator;
+import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
-import java.io.Serializable;
-
-public interface MemoryController extends AddressSpace, Serializable, Originator<MemoryController> {
+public interface MemoryController extends AddressSpace, StatefulComponent<MemoryController> {
     default void tick() {
     }
 

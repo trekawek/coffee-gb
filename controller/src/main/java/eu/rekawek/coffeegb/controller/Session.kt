@@ -5,8 +5,6 @@ import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
-import eu.rekawek.coffeegb.core.memento.Memento
-import eu.rekawek.coffeegb.core.memento.Originator
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.SessionState
@@ -18,7 +16,7 @@ class Session(
     serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
     infraredEndpoint: InfraredEndpoint = InfraredEndpoint.NULL_ENDPOINT,
     prebuiltGameboy: Gameboy? = null,
-) : AutoCloseable, Originator<Session> {
+) : AutoCloseable {
 
   internal val gameboy: Gameboy = prebuiltGameboy ?: config.build()
 
@@ -42,7 +40,7 @@ class Session(
     eventBus.close()
   }
 
-  // held buttons live outside the memento (the joypad keeps physical input across a
+  // Held buttons live outside machine state (the joypad keeps physical input across a
   // single-player rewind); netplay snapshots them separately so a held button survives a rebase
   var heldButtons: Set<Button>
     get() = gameboy.pressedButtons
@@ -50,26 +48,10 @@ class Session(
       gameboy.setPressedButtons(value)
     }
 
-  override fun saveToMemento(): Memento<Session> {
-    return SessionMemento(gameboy.saveToMemento(), serialEndpoint.saveToMemento())
-  }
-
   /** Captures a detached, deeply owned session state at the controller frame safe point. */
   internal fun captureDetachedState(): SessionState = DetachedStateAdapter.capture(this)
 
   /** Applies a fully validated detached state or rolls the complete session back on failure. */
   internal fun restoreDetachedState(state: SessionState) = DetachedStateAdapter.apply(this, state)
 
-  override fun restoreFromMemento(memento: Memento<Session>) {
-    if (memento !is SessionMemento) {
-      throw IllegalArgumentException("Invalid memento")
-    }
-    gameboy.restoreFromMemento(memento.gameboyMemento)
-    serialEndpoint.restoreFromMemento(memento.serialEndpointMemento)
-  }
-
-  internal data class SessionMemento(
-      val gameboyMemento: Memento<Gameboy>,
-      val serialEndpointMemento: Memento<SerialEndpoint>?
-  ) : Memento<Session>
 }

@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.serial;
 
-import eu.rekawek.coffeegb.core.cpu.BitUtils;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.cpu.BitUtils;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 
 import java.util.Arrays;
 
@@ -198,18 +200,18 @@ public final class FourPlayerAdapter {
         }
     }
 
-    private AdapterMemento saveState() {
+    private AdapterState saveState() {
         int[][] repliesCopy = new int[PLAYER_COUNT][];
         for (int i = 0; i < PLAYER_COUNT; i++) {
             repliesCopy[i] = replies[i].clone();
         }
-        return new AdapterMemento(sb.clone(), transferArmed.clone(), pendingBits.clone(),
+        return new AdapterState(sb.clone(), transferArmed.clone(), pendingBits.clone(),
                 connected.clone(), consecutiveFf.clone(), repliesCopy,
                 transmissionBuffer.clone(), packetByte, bit, ticksUntilBit, rate, size, phase,
                 transmissionRequested, restartPingRequested);
     }
 
-    private void restoreState(AdapterMemento state) {
+    private void restoreState(AdapterState state) {
         System.arraycopy(state.sb, 0, sb, 0, PLAYER_COUNT);
         System.arraycopy(state.transferArmed, 0, transferArmed, 0, PLAYER_COUNT);
         System.arraycopy(state.pendingBits, 0, pendingBits, 0, PLAYER_COUNT);
@@ -236,6 +238,15 @@ public final class FourPlayerAdapter {
         PING_INDICATOR
     }
 
+    private record AdapterState(int[] sb, boolean[] transferArmed, int[] pendingBits,
+                                  boolean[] connected, int[] consecutiveFf, int[][] replies,
+                                  int[] transmissionBuffer, int packetByte, int bit,
+                                  int ticksUntilBit, int rate, int size, Phase phase,
+                                  boolean transmissionRequested, boolean restartPingRequested)
+            implements ComponentState<SerialEndpoint> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record AdapterMemento(int[] sb, boolean[] transferArmed, int[] pendingBits,
                                   boolean[] connected, int[] consecutiveFf, int[][] replies,
                                   int[] transmissionBuffer, int packetByte, int bit,
@@ -313,16 +324,16 @@ public final class FourPlayerAdapter {
         }
 
         @Override
-        public Memento<SerialEndpoint> saveToMemento() {
+        public ComponentState<SerialEndpoint> captureState() {
             return saveState();
         }
 
         @Override
-        public void restoreFromMemento(Memento<SerialEndpoint> memento) {
-            if (!(memento instanceof AdapterMemento state)) {
-                throw new IllegalArgumentException("Invalid memento type");
+        public void restoreState(ComponentState<SerialEndpoint> state) {
+            if (!(state instanceof AdapterState adapterState)) {
+                throw new IllegalArgumentException("Invalid state type");
             }
-            restoreState(state);
+            FourPlayerAdapter.this.restoreState(adapterState);
         }
     }
 }

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.nio.file.Paths
@@ -37,18 +38,18 @@ class RomSessionPreparerTest {
   }
 
   @Test
-  fun suppliedMementoSkipsBootAndRestoresDirectly() {
+  fun suppliedDetachedStateSkipsBootAndRestoresDirectly() {
     val config =
         Controller.createGameboyConfig(PROPERTIES, Rom(ROM)).setBootstrapMode(BootstrapMode.SKIP)
     val source = config.build()
     source.addressSpace.setByte(0xc123, 0x5a)
-    val memento = source.saveToMemento()
+    val state = DetachedStateAdapter.capture(source)
     source.discardUnstarted()
 
     val cache = BootStateCache(2)
     val prepared =
-        assertIs<PreparedSession.FromMemento>(
-            RomSessionPreparer(cache).prepare(PROPERTIES, LoadRomEvent(ROM, memento)))
+        assertIs<PreparedSession.FromDetachedState>(
+            RomSessionPreparer(cache).prepare(PROPERTIES, LoadRomEvent(ROM, state)))
     val restored = prepared.materialize()
     try {
       assertEquals(0x5a, restored.addressSpace.getByte(0xc123))

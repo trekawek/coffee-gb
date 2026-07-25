@@ -324,9 +324,9 @@ class SnapshotManager private constructor(
       target: MachineIdentity,
       gameboy: Gameboy,
   ) {
-    val memento =
+    val legacyState =
         try {
-          LegacyMementoCodec.deserializeGameboy(bytes)
+          LegacySnapshotImporter.importGameboyState(bytes)
         } catch (failure: Exception) {
           throw loadFailure(
               SnapshotFileFormat.LEGACY_JAVA,
@@ -338,7 +338,7 @@ class SnapshotManager private constructor(
           )
         }
     try {
-      DetachedStateAdapter.applyLegacyMemento(gameboy, memento, legacyApplyProbe)
+      DetachedStateAdapter.applyLegacyState(gameboy, legacyState, legacyApplyProbe)
     } catch (failure: Exception) {
       throw loadFailure(
           SnapshotFileFormat.LEGACY_JAVA,

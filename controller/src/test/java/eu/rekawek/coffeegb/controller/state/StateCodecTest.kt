@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.Session
-import eu.rekawek.coffeegb.controller.MementoTypeRegistry
+import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
@@ -298,7 +298,7 @@ class StateCodecTest {
       val root = (file.root as SessionStateRoot).session
       val invalidRoot =
           root.machine.root.replaceRecordField(
-              "eu.rekawek.coffeegb.core.gpu.Display\$DisplayMemento",
+              "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState",
               "i",
               Int32State(-1),
           )
@@ -372,7 +372,7 @@ class StateCodecTest {
               RecordState(
                   value.typeId,
                   value.fields.map { field ->
-                    val owner = MementoTypeRegistry.recordClassNames[value.typeId - 1] == ownerClass
+                    val owner = StateTypeRegistry.recordClassNames[value.typeId - 1] == ownerClass
                     StateField(
                         field.name,
                         if (owner && field.name == fieldName) replacement

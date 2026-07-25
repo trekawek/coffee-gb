@@ -1,8 +1,10 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.state.MachineStateCapture;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -166,16 +168,16 @@ public class MakonNtOld2 implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new MakonNtOld2Memento(battery.saveToMemento(), ram.clone(), selectedRomBank,
+    public ComponentState<MemoryController> captureState() {
+        return new MakonNtOld2State(battery.captureState(), ram.clone(), selectedRomBank,
                 mappedRomBank, baseRomBank, gameRomBankMask, weirdMode, rumbleEnabled,
                 motorOn, ramUpdated);
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
-        return new MakonNtOld2Memento(
-                battery.saveToMemento(capture),
+    public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
+        return new MakonNtOld2State(
+                battery.captureState(capture),
                 capture.ints(ram),
                 selectedRomBank,
                 mappedRomBank,
@@ -194,11 +196,11 @@ public class MakonNtOld2 implements MemoryController {
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof MakonNtOld2Memento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof MakonNtOld2State mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
-        battery.restoreFromMemento(mem.batteryMemento);
+        battery.restoreState(mem.batteryMemento);
         System.arraycopy(mem.ram, 0, ram, 0, ram.length);
         selectedRomBank = mem.selectedRomBank;
         mappedRomBank = mem.mappedRomBank;
@@ -210,6 +212,15 @@ public class MakonNtOld2 implements MemoryController {
         ramUpdated = mem.ramUpdated;
     }
 
+    private record MakonNtOld2State(ComponentState<Battery> batteryMemento, int[] ram,
+                                       int selectedRomBank, int mappedRomBank,
+                                       int baseRomBank, int gameRomBankMask,
+                                       boolean weirdMode, boolean rumbleEnabled,
+                                       boolean motorOn, boolean ramUpdated)
+            implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record MakonNtOld2Memento(Memento<Battery> batteryMemento, int[] ram,
                                        int selectedRomBank, int mappedRomBank,
                                        int baseRomBank, int gameRomBankMask,

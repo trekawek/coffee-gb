@@ -138,7 +138,7 @@ class Connection(
 
     eventBus.register<LinkedController.LocalRomLoadedEvent> {
       // Four-player host state is sent as an atomic SessionStateReadyEvent checkpoint. Sending the
-      // ordinary host ROM event as well would let clients run before the adapter memento arrives.
+      // ordinary host ROM event as well would let clients run before the adapter state arrives.
       if (shouldSendLocal(it.player) && (!server || mode != LinkMode.FOUR_PLAYER_ADAPTER)) {
         sendSafely { sendRom(it, StateRootKind.MACHINE) }
       }

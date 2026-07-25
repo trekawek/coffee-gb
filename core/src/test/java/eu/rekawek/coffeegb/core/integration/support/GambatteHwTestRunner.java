@@ -5,7 +5,7 @@ import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
-import eu.rekawek.coffeegb.core.memento.Memento;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 
@@ -36,7 +36,7 @@ public final class GambatteHwTestRunner {
      * the exact BIOS-produced CPU/PPU/peripheral phase without replaying 13-24 million
      * boot ticks for thousands of parameterized cases.
      */
-    private static final Map<BootStateKey, Memento<Gameboy>> POST_BOOT_STATES =
+    private static final Map<BootStateKey, ComponentState<Gameboy>> POST_BOOT_STATES =
             new HashMap<>();
 
     private final Gameboy gameboy;
@@ -56,14 +56,14 @@ public final class GambatteHwTestRunner {
     private static Gameboy buildAtPostBoot(
             Gameboy.GameboyConfiguration configuration, String bootHeader) {
         BootStateKey key = new BootStateKey(configuration.getGameboyType(), bootHeader);
-        Memento<Gameboy> postBoot;
+        ComponentState<Gameboy> postBoot;
         synchronized (POST_BOOT_STATES) {
             postBoot = POST_BOOT_STATES.get(key);
             if (postBoot == null) {
                 Gameboy booted = configuration
                         .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
                         .build();
-                POST_BOOT_STATES.put(key, booted.saveToMemento());
+                POST_BOOT_STATES.put(key, booted.captureState());
                 return booted;
             }
         }
@@ -71,7 +71,7 @@ public final class GambatteHwTestRunner {
         // Construction and restore are parameter-local and relatively expensive.
         // Keep them outside the cache lock so independent ROMs can start in parallel.
         Gameboy restored = configuration.forRestore().build();
-        restored.restoreFromMemento(postBoot);
+        restored.restoreState(postBoot);
         return restored;
     }
 

@@ -89,7 +89,7 @@ internal object LegacySerializationPreflight {
           ?: throw InvalidClassException("Legacy class descriptor name is too long")
       val serialVersionUid = input.readLong()
       var candidates =
-          LegacyMementoCodec.expectedSerialShapes(name).filterTo(mutableSetOf()) {
+          LegacySnapshotImporter.expectedSerialShapes(name).filterTo(mutableSetOf()) {
             it.serialVersionUid == serialVersionUid
           }
       if (candidates.isEmpty()) {

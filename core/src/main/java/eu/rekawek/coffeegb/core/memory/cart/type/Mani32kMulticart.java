@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
+
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 
@@ -45,18 +47,22 @@ public class Mani32kMulticart implements MemoryController {
     }
 
     @Override
-    public Memento<MemoryController> saveToMemento() {
-        return new Mani32kMemento(block);
+    public ComponentState<MemoryController> captureState() {
+        return new Mani32kState(block);
     }
 
     @Override
-    public void restoreFromMemento(Memento<MemoryController> memento) {
-        if (!(memento instanceof Mani32kMemento mem)) {
-            throw new IllegalArgumentException("Invalid memento type");
+    public void restoreState(ComponentState<MemoryController> state) {
+        if (!(state instanceof Mani32kState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
         }
         this.block = mem.block;
     }
 
+    private record Mani32kState(int block) implements ComponentState<MemoryController> {
+    }
+
+    /** Importer-only compatibility record for released local snapshots. */
     private record Mani32kMemento(int block) implements Memento<MemoryController> {
     }
 }

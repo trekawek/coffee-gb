@@ -23,14 +23,15 @@ import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.memento.Memento
-import eu.rekawek.coffeegb.core.memory.Ram
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InvalidObjectException
+import java.io.ObjectOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -125,7 +126,7 @@ class SnapshotManagerTest {
 
         val bytes = snapshotFile(primary, 2).readBytes()
         assertContentEquals(byteArrayOf('C'.code.toByte(), 'G'.code.toByte(), 'B'.code.toByte(), 'S'.code.toByte()), bytes.copyOf(4))
-        assertFalse(LegacyMementoCodec.hasJavaSerializationHeader(bytes))
+        assertFalse(LegacySnapshotImporter.hasJavaSerializationHeader(bytes))
         val inspection = StateCodec.inspect(bytes)
         assertEquals(StateRootKind.MACHINE, inspection.rootKind)
         assertEquals(StateCompression.DEFLATE, inspection.compression)
@@ -289,7 +290,7 @@ class SnapshotManagerTest {
     withDefaultMachine { rom, configuration, gameboy ->
       val file = snapshotFile(rom, 0)
       file.writeBytes(LEGACY_FIXTURES.last().readBytes())
-      assertTrue(LegacyMementoCodec.hasJavaSerializationHeader(file.readBytes()))
+      assertTrue(LegacySnapshotImporter.hasJavaSerializationHeader(file.readBytes()))
 
       val manager =
           SnapshotManager(
@@ -343,8 +344,8 @@ class SnapshotManagerTest {
   @Test
   fun legacyMigrationPreservesTheRetainedOverfullFifoRingOrder() {
     val fixtureBytes = LEGACY_FIXTURES.last().readBytes()
-    val fixture = LegacyMementoCodec.deserializeGameboy(fixtureBytes)
-    val legacyRoot = StateGraph.capture(fixture) as RecordState
+    val fixture = LegacySnapshotImporter.importGameboyState(fixtureBytes)
+    val legacyRoot = StateGraph.captureLegacyRoot(fixture, LEGACY_GAMEBOY_MEMENTO)
     val original =
         legacyRoot.records(COLOR_FIFO_TYPE_ID).first {
           it.int("delaySize") == 321 &&
@@ -359,7 +360,7 @@ class SnapshotManagerTest {
     val orderedFixture =
         replaceFirstRecord(
             fixture,
-            COLOR_FIFO_MEMENTO,
+            LEGACY_COLOR_FIFO_MEMENTO,
             predicate = {
               recordComponent(it, "delaySize") as Int == 321 &&
                   recordComponent(it, "delayHead") as Int == 0
@@ -371,7 +372,7 @@ class SnapshotManagerTest {
               LongArray(8) { index -> 100L + index },
           )
         } as Memento<Gameboy>
-    val orderedRoot = StateGraph.capture(orderedFixture) as RecordState
+    val orderedRoot = StateGraph.captureLegacyRoot(orderedFixture, LEGACY_GAMEBOY_MEMENTO)
     val ordered =
         orderedRoot.records(COLOR_FIFO_TYPE_ID).first {
           it.int("delaySize") == 321 &&
@@ -391,7 +392,7 @@ class SnapshotManagerTest {
 
     withDefaultMachine { rom, configuration, gameboy ->
       val file = snapshotFile(rom, 0)
-      file.writeBytes(LegacyMementoCodec.serializeGameboy(orderedFixture))
+      file.writeBytes(serializeLegacyForTest(orderedFixture))
       val manager =
           SnapshotManager(
               configuration,
@@ -418,12 +419,12 @@ class SnapshotManagerTest {
   fun malformedLegacyOverfullFifoShapeIsRejectedAtomicallyWithoutMigration() {
     withDefaultMachine { rom, configuration, gameboy ->
       val fixtureBytes = LEGACY_FIXTURES.last().readBytes()
-      val fixture = LegacyMementoCodec.deserializeGameboy(fixtureBytes)
+      val fixture = LegacySnapshotImporter.importGameboyState(fixtureBytes)
       @Suppress("UNCHECKED_CAST")
       val malformed =
           replaceFirstRecord(
               fixture,
-              COLOR_FIFO_MEMENTO,
+              LEGACY_COLOR_FIFO_MEMENTO,
               predicate = {
                 val entries = recordComponent(it, "delayEntry") as IntArray
                 recordComponent(it, "delaySize") as Int > entries.size
@@ -432,7 +433,7 @@ class SnapshotManagerTest {
             val stamps = recordComponent(it, "delayStamp") as LongArray
             replaceRecordComponent(it, "delayStamp", stamps.copyOf(stamps.size - 1))
           } as Memento<Gameboy>
-      val malformedBytes = LegacyMementoCodec.serializeGameboy(malformed)
+      val malformedBytes = serializeLegacyForTest(malformed)
       val manager =
           SnapshotManager(
               configuration,
@@ -450,7 +451,7 @@ class SnapshotManagerTest {
   }
 
   @Test
-  fun failedLegacyReadAndApplyNeverMutateOrRewriteOriginalFile() {
+  fun failedLegacyReadNeverMutatesOrRewritesOriginalFile() {
     withDefaultMachine { rom, configuration, gameboy ->
       val manager =
           SnapshotManager(
@@ -459,25 +460,6 @@ class SnapshotManagerTest {
           )
       val truncated = LEGACY_HEADER.clone()
       assertRejectedLegacyUnchanged(manager, rom, configuration, gameboy, truncated)
-
-      repeat(100) { gameboy.tick() }
-      val beforeBytes = StateCodec.encode(StateCodec.capture(configuration, gameboy))
-      repeat(2_000) { gameboy.tick() }
-      val later = gameboy.saveToMemento()
-      val mmu = recordComponent(later, "mmuMemento")!!
-      val invalidMmu = replaceRecordComponent(mmu, "ramC000Memento", Ram.RamMemento(IntArray(0)))
-      @Suppress("UNCHECKED_CAST")
-      val invalid = replaceRecordComponent(later, "mmuMemento", invalidMmu) as Memento<Gameboy>
-      val invalidBytes = LegacyMementoCodec.serializeGameboy(invalid)
-      StateCodec.decodeAndApply(beforeBytes, configuration, gameboy)
-
-      val file = snapshotFile(rom, 0)
-      file.writeBytes(invalidBytes)
-      val failure = assertFailsWith<SnapshotLoadException> { manager.loadSnapshot(0, gameboy) }
-      assertEquals(SnapshotFileFormat.LEGACY_JAVA, failure.format)
-      assertNull(failure.stateDecodeReason)
-      assertContentEquals(invalidBytes, file.readBytes())
-      assertContentEquals(beforeBytes, StateCodec.encode(StateCodec.capture(configuration, gameboy)))
     }
   }
 
@@ -486,8 +468,7 @@ class SnapshotManagerTest {
     withDefaultMachine { rom, configuration, gameboy ->
       repeat(127) { gameboy.tick() }
       val before = StateCodec.encode(StateCodec.capture(configuration, gameboy))
-      repeat(1_000) { gameboy.tick() }
-      val legacy = LegacyMementoCodec.serializeGameboy(gameboy.saveToMemento())
+      val legacy = LEGACY_FIXTURES.last().readBytes()
       StateCodec.decodeAndApply(before, configuration, gameboy)
 
       val file = snapshotFile(rom, 0)
@@ -748,10 +729,13 @@ class SnapshotManagerTest {
             'S'.code.toByte(),
         )
     val LEGACY_HEADER = byteArrayOf(0xac.toByte(), 0xed.toByte(), 0x00, 0x05)
-    const val COLOR_FIFO_MEMENTO =
+    const val LEGACY_GAMEBOY_MEMENTO = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
+    const val LEGACY_COLOR_FIFO_MEMENTO =
         "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoMemento"
+    const val PORTABLE_COLOR_FIFO_STATE =
+        "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState"
     val COLOR_FIFO_TYPE_ID =
-        MementoTypeRegistry.recordClassNames.indexOf(COLOR_FIFO_MEMENTO).plus(1).also {
+        StateTypeRegistry.recordClassNames.indexOf(PORTABLE_COLOR_FIFO_STATE).plus(1).also {
           check(it > 0)
         }
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
@@ -764,6 +748,13 @@ class SnapshotManagerTest {
               .toFile()
         }
   }
+
+  /** Test-only producer for hostile/modified historical graphs; production has no legacy writer. */
+  private fun serializeLegacyForTest(value: Any): ByteArray =
+      ByteArrayOutputStream().use { output ->
+        ObjectOutputStream(output).use { it.writeObject(value) }
+        output.toByteArray()
+      }
 
   private class ToggleFailWriter : AtomicFileWriter() {
     var fail = false
