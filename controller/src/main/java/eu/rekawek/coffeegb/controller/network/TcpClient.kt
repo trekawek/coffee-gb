@@ -33,8 +33,9 @@ class TcpClient(
       LOG.info("Connection rejected: {}", e.reason.userMessage)
       eventBus.post(ConnectionController.ClientConnectionRejectedEvent(e.reason.userMessage))
     } catch (e: Connection.ProtocolException) {
-      LOG.info("Netplay protocol error: {}", e.reason.userMessage)
-      eventBus.post(ConnectionController.ClientProtocolErrorEvent(e.reason.userMessage))
+      val message = e.message ?: e.reason.userMessage
+      LOG.info("Netplay protocol error: {}", message)
+      eventBus.post(ConnectionController.ClientProtocolErrorEvent(message))
     } catch (e: Connection.CompatibilityException) {
       LOG.info("Netplay compatibility error: {}", e.message)
       eventBus.post(ConnectionController.ClientProtocolErrorEvent(e.message ?: "Incompatible peer"))

@@ -540,29 +540,54 @@ internal object DetachedStateAdapter {
     }
   }
 
-  internal fun prepare(session: Session, state: SessionState): PreparedSessionState {
+  /**
+   * Performs target-dependent mapper, array-layout, hardware, and runtime preflight without
+   * reconstructing the candidate record graph. Network readers use this against an isolated probe;
+   * the owning controller still performs the complete prepare step at its frame safe point.
+   */
+  internal fun validateTarget(gameboy: Gameboy, state: MachineState) {
+    if (state.hardware != MachineHardwareState.valueOf(gameboy.gameboyType.name)) {
+      throw StateApplyException(
+          "Detached ${state.hardware} state does not match ${gameboy.gameboyType} hardware")
+    }
+    val current = StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT)
+    StateGraph.validateCompatible(state.root, current, "machine")
+    try {
+      gameboy.validateRtcRuntimeState(state.rtcRuntime.toCore())
+      gameboy.validateDmgFifoRuntimeState(state.dmgFifoRuntime.toCore())
+    } catch (failure: IllegalArgumentException) {
+      throw StateApplyException("Detached machine runtime layout is incompatible", failure)
+    }
+  }
+
+  /** Target-dependent session preflight that does not reconstruct or apply candidate mementos. */
+  internal fun validateTarget(session: Session, state: SessionState) {
     val currentPeripheral = serialPeripheral(session.serialEndpoint)
     if (currentPeripheral != state.serialPeripheral) {
       throw StateApplyException(
           "Session peripheral mismatch: expected ${state.serialPeripheral}, found $currentPeripheral")
     }
-
-    val machine = prepare(session.gameboy, state.machine)
+    validateTarget(session.gameboy, state.machine)
     val currentSerialState = StateGraph.capture(session.serialEndpoint.saveToMemento())
     if ((state.serialState === NullState) != (currentSerialState === NullState)) {
       throw StateApplyException("Detached serial memento presence does not match the endpoint")
     }
     StateGraph.validateCompatible(state.serialState, currentSerialState, "serial")
+    validateSerialRuntime(session.serialEndpoint, state.serialRuntime)
+    if (state.heldButtons.distinct().size != state.heldButtons.size) {
+      throw StateApplyException("Detached held-button state contains duplicates")
+    }
+  }
+
+  internal fun prepare(session: Session, state: SessionState): PreparedSessionState {
+    validateTarget(session, state)
+    val machine = reconstructMachine(state.machine)
     val serialValue = StateGraph.restore(state.serialState)
     StateSemantics.validate(serialValue)
     if (serialValue != null && serialValue !is Memento<*>) {
       throw StateApplyException("Session serial state has the wrong root type")
     }
     @Suppress("UNCHECKED_CAST") val serialMemento = serialValue as Memento<SerialEndpoint>?
-    validateSerialRuntime(session.serialEndpoint, state.serialRuntime)
-    if (state.heldButtons.distinct().size != state.heldButtons.size) {
-      throw StateApplyException("Detached held-button state contains duplicates")
-    }
     val heldButtons = state.heldButtons.map { Button.valueOf(it.name) }.toSet()
     return PreparedSessionState(machine, serialMemento, state.serialRuntime, heldButtons)
   }
@@ -580,23 +605,16 @@ internal object DetachedStateAdapter {
   }
 
   private fun prepare(gameboy: Gameboy, state: MachineState): PreparedMachineState {
-    if (state.hardware != MachineHardwareState.valueOf(gameboy.gameboyType.name)) {
-      throw StateApplyException(
-          "Detached ${state.hardware} state does not match ${gameboy.gameboyType} hardware")
-    }
-    val current = StateGraph.captureRoot(gameboy.saveToMemento(), GAMEBOY_ROOT)
-    StateGraph.validateCompatible(state.root, current, "machine")
+    validateTarget(gameboy, state)
+    return reconstructMachine(state)
+  }
+
+  private fun reconstructMachine(state: MachineState): PreparedMachineState {
     val detached = StateGraph.restoreRoot(state.root, GAMEBOY_ROOT)
     StateSemantics.validate(detached)
     @Suppress("UNCHECKED_CAST") val memento = detached as Memento<Gameboy>
     val rtcRuntime = state.rtcRuntime.toCore()
     val dmgFifoRuntime = state.dmgFifoRuntime.toCore()
-    try {
-      gameboy.validateRtcRuntimeState(rtcRuntime)
-      gameboy.validateDmgFifoRuntimeState(dmgFifoRuntime)
-    } catch (failure: IllegalArgumentException) {
-      throw StateApplyException("Detached machine runtime layout is incompatible", failure)
-    }
     return PreparedMachineState(memento, rtcRuntime, dmgFifoRuntime)
   }
 

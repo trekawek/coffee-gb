@@ -4,9 +4,9 @@ StateFile v1 is the portable byte representation of the detached machine/session
 independent of Coffee GB's Maven/application version and of Java serialization. All multibyte
 integers are big-endian, all lengths are nonnegative, and all strings are strict UTF-8.
 
-The codec and explicit decode-then-apply seam are used by local slot snapshots as of issue #323A.
-Rewind, `ControllerState`, netplay `Connection`, and `NetplayMementoCodec` retain their existing
-in-memory/transport formats until their explicitly assigned phases.
+The codec and explicit decode-then-apply seam are used by local slot snapshots and protocol-v8
+netplay. Rewind and `ControllerState` retain their existing in-memory mementos until their assigned
+phases. Network state has no Java-memento compatibility path.
 
 ## Envelope
 
@@ -254,6 +254,20 @@ transaction. Rewind history is cleared only after `SnapshotManager` returns succ
 
 The detailed local migration policy, diagnostics, compatibility window, and non-atomic replacement
 boundary are documented in [snapshot-migration.md](snapshot-migration.md).
+
+## Netplay protocol v8 integration
+
+Protocol v8 negotiates StateFile format version 1 and the MACHINE, SESSION, and LINKED_SESSION root
+capability set in both directions before START or any state-bearing command is accepted. Protocol
+v7 has no downgrade path. Every non-null network state is the exact `CGBS` file sequence: the
+StateFile envelope owns compression and Connection adds no snapshot compression layer.
+
+An initial console transfer carries an optional MACHINE root. A four-player running checkpoint
+carries one required SESSION root per active player followed by a synchronization record; all
+sessions must identify the four-player endpoint and contain the same shared-adapter state. The
+complete set is validated and prepared before one frame-boundary group commit. Detailed handshake,
+command layout, limits, and failure behavior are specified in
+[netplay-protocol-v8.md](netplay-protocol-v8.md).
 
 ## Fixture and evolution policy
 

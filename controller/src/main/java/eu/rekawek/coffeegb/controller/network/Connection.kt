@@ -1,8 +1,6 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
-import eu.rekawek.coffeegb.controller.LegacyMementoCodec
-import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.EventQueue
@@ -10,6 +8,15 @@ import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.link.StateHistory
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.SessionStateRoot
+import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateDecodeException
+import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.controller.state.StateIdentity
+import eu.rekawek.coffeegb.controller.state.StateIdentityEntry
+import eu.rekawek.coffeegb.controller.state.StateRootKind
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
@@ -18,7 +25,7 @@ import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
-import eu.rekawek.coffeegb.core.memento.Memento
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.BufferedInputStream
@@ -133,7 +140,7 @@ class Connection(
       // Four-player host state is sent as an atomic SessionStateReadyEvent checkpoint. Sending the
       // ordinary host ROM event as well would let clients run before the adapter memento arrives.
       if (shouldSendLocal(it.player) && (!server || mode != LinkMode.FOUR_PLAYER_ADAPTER)) {
-        sendSafely { sendRom(it) }
+        sendSafely { sendRom(it, StateRootKind.MACHINE) }
       }
     }
     eventBus.register<LinkedController.LocalButtonStateEvent> {
@@ -175,7 +182,7 @@ class Connection(
           // A checkpoint is one output transaction. Runtime traffic cannot split its state
           // records from the synchronization marker that commits them.
           synchronized(outputLock) {
-            it.states.forEach(::sendRom)
+            it.states.forEach { state -> sendRom(state, StateRootKind.SESSION) }
             sendSynchronization(it.frame)
           }
         }
@@ -202,52 +209,61 @@ class Connection(
     }
   }
 
-  private fun sendRom(event: LinkedController.LocalRomLoadedEvent) {
+  private fun sendRom(
+      event: LinkedController.LocalRomLoadedEvent,
+      expectedRoot: StateRootKind,
+  ) {
+    if (expectedRoot == StateRootKind.SESSION && event.portableState == null) {
+      throw IOException("A running-session checkpoint requires a SESSION StateFile")
+    }
+    val stateDeclaration =
+        event.portableState?.let { validateOutgoingState(it, expectedRoot) }
     checkedDecodedMessageSize(
         event.romFile.size,
+        event.slotRomFile?.size ?: 0,
         event.batteryFile?.size ?: 0,
-        event.snapshot?.size ?: 0,
-        event.sessionSnapshot?.size ?: 0,
+        stateDeclaration?.decodedBytes ?: 0,
     )
     val rom = deflate(event.romFile, StateLimits.ROM)
+    val slotRom = event.slotRomFile?.let { deflate(it, StateLimits.ROM) }
     val battery = event.batteryFile?.let { deflate(it, StateLimits.BATTERY) }
-    val snapshot = event.snapshot?.let { deflate(it, StateLimits.GAME_SNAPSHOT) }
-    val sessionSnapshot =
-        event.sessionSnapshot?.let { deflate(it, StateLimits.SESSION_SNAPSHOT) }
     val heldButtons = event.heldButtons.sorted()
     val messageSize =
         checkedMessageSize(
             1L + ROM_HEADER_SIZE + heldButtons.size,
             rom,
+            slotRom,
             battery,
-            snapshot,
-            sessionSnapshot,
+            event.portableState,
         )
-    val buf =
-        ByteBuffer.allocate(messageSize)
+    val buf = ByteBuffer.allocate(messageSize)
     buf.put(ROM)
     buf.put(event.player.toByte())
     buf.putLong(event.frame)
     buf.put(event.gameboyType.ordinal.toByte())
     buf.put(event.bootstrapMode.ordinal.toByte())
-    buf.put(if (event.cgb0Revision) 1.toByte() else 0.toByte())
+    buf.putInt(profileFlags(event))
     buf.put(heldButtons.size.toByte())
     buf.putInt(event.romFile.size)
-    buf.putInt(event.batteryFile?.size ?: 0)
-    buf.putInt(event.snapshot?.size ?: 0)
-    buf.putInt(event.sessionSnapshot?.size ?: 0)
     buf.putInt(rom.size)
+    buf.putInt(event.slotRomFile?.size ?: 0)
+    buf.putInt(slotRom?.size ?: 0)
+    buf.putInt(event.batteryFile?.size ?: 0)
     buf.putInt(battery?.size ?: 0)
-    buf.putInt(snapshot?.size ?: 0)
-    buf.putInt(sessionSnapshot?.size ?: 0)
+    buf.putInt(event.portableState?.size ?: 0)
     heldButtons.forEach { buf.put(it.ordinal.toByte()) }
+    event.portableState?.let(buf::put)
     buf.put(rom)
+    slotRom?.let(buf::put)
     battery?.let(buf::put)
-    snapshot?.let(buf::put)
-    sessionSnapshot?.let(buf::put)
     sendMessage(buf, OutboundMessage.BOOTSTRAP)
-    LOG.atInfo().log("Sent player {} ROM ({} -> {} bytes compressed)", event.player + 1,
-        event.romFile.size, rom.size)
+    LOG.atInfo().log(
+        "Sent player {} ROM ({} -> {} bytes compressed, state root {})",
+        event.player + 1,
+        event.romFile.size,
+        rom.size,
+        expectedRoot,
+    )
   }
 
   private fun sendButtons(event: LinkedController.LocalButtonStateEvent) {
@@ -430,6 +446,7 @@ class Connection(
               val states = pendingCheckpointStates.toList()
               pendingCheckpointStates.clear()
               pendingCheckpointBytes = 0
+              validateCheckpointStates(states)
               deliver(SessionCheckpointEvent(frame, states, peerSource))
             } else {
               throw IOException("Client sent a server-only synchronization command")
@@ -473,110 +490,120 @@ class Connection(
     val frame = PeerFrameWindow.validateAbsolute(buf.getLong())
     val gameboyType = enumValue<GameboyType>(buf.get(), "Game Boy type")
     val bootstrapMode = enumValue<BootstrapMode>(buf.get(), "bootstrap mode")
-    val cgb0RevisionValue = buf.get().toInt() and 0xff
-    if (cgb0RevisionValue !in 0..1) {
-      throw IOException("Invalid CGB0 revision flag $cgb0RevisionValue")
-    }
-    val cgb0Revision = cgb0RevisionValue == 1
+    val profileFlags = validateProfileFlags(buf.getInt(), gameboyType)
     val heldCount = buf.get().toInt() and 0xff
     if (heldCount > Button.entries.size) throw IOException("Invalid held button count $heldCount")
     val romSize = buf.getInt()
-    val batterySize = buf.getInt()
-    val snapshotSize = buf.getInt()
-    val sessionSnapshotSize = buf.getInt()
     val romCompressed = buf.getInt()
+    val slotRomSize = buf.getInt()
+    val slotRomCompressed = buf.getInt()
+    val batterySize = buf.getInt()
     val batteryCompressed = buf.getInt()
-    val snapshotCompressed = buf.getInt()
-    val sessionSnapshotCompressed = buf.getInt()
+    val stateSize = buf.getInt()
     val romDeclaration =
         validateDeclaration(romSize, romCompressed, StateLimits.ROM, required = true)
+    val slotRomDeclaration =
+        validateDeclaration(slotRomSize, slotRomCompressed, StateLimits.ROM)
     val batteryDeclaration =
         validateDeclaration(batterySize, batteryCompressed, StateLimits.BATTERY)
-    val snapshotDeclaration =
-        validateDeclaration(snapshotSize, snapshotCompressed, StateLimits.GAME_SNAPSHOT)
-    val sessionSnapshotDeclaration =
-        validateDeclaration(
-            sessionSnapshotSize,
-            sessionSnapshotCompressed,
-            StateLimits.SESSION_SNAPSHOT,
-        )
+    val stateDeclaration = validateStateFileDeclaration(stateSize)
+    val checkpointRecord = !server && mode == LinkMode.FOUR_PLAYER_ADAPTER
+    val expectedStateRoot =
+        if (checkpointRecord) StateRootKind.SESSION else StateRootKind.MACHINE
+    if (checkpointRecord && stateDeclaration == null) {
+      throw IOException("Four-player checkpoint record is missing its SESSION StateFile")
+    }
     checkedMessageSize(
         1L + ROM_HEADER_SIZE + heldCount,
-        romDeclaration,
-        batteryDeclaration,
-        snapshotDeclaration,
-        sessionSnapshotDeclaration,
+        romDeclaration.encodedBytes,
+        slotRomDeclaration.encodedBytes,
+        batteryDeclaration.encodedBytes,
+        stateDeclaration?.wireBytes ?: 0,
     )
     checkedDecodedMessageSize(
         romDeclaration.decodedBytes,
+        slotRomDeclaration.decodedBytes,
         batteryDeclaration.decodedBytes,
-        snapshotDeclaration.decodedBytes,
-        sessionSnapshotDeclaration.decodedBytes,
+        stateDeclaration?.wireBytes ?: 0,
     )
+    val preStateRetained =
+        checkedDecodedMessageTotal(
+            romDeclaration.decodedBytes,
+            slotRomDeclaration.decodedBytes,
+            batteryDeclaration.decodedBytes,
+            stateDeclaration?.wireBytes ?: 0,
+        )
+    preflightPendingRetention(preStateRetained, checkpointRecord)
     val heldButtons = ByteArray(heldCount).also(input::readFully).map {
       val ordinal = it.toInt() and 0xff
       if (ordinal !in Button.entries.indices) throw IOException("Invalid held button $ordinal")
       Button.entries[ordinal]
     }.toSet()
+    val decodedState =
+        stateDeclaration?.let {
+          readNetworkState(
+              it,
+              expectedStateRoot,
+              checkedDecodedMessageTotal(
+                  romDeclaration.decodedBytes,
+                  slotRomDeclaration.decodedBytes,
+                  batteryDeclaration.decodedBytes,
+              ),
+          )
+        }
     val rom = inflate(readPayload(romDeclaration), romDeclaration, StateLimits.ROM)!!
+    val slotRom =
+        inflate(readPayload(slotRomDeclaration), slotRomDeclaration, StateLimits.ROM)
     val battery =
         inflate(readPayload(batteryDeclaration), batteryDeclaration, StateLimits.BATTERY)
-    val snapshotBytes =
-        inflate(
-            readPayload(snapshotDeclaration),
-            snapshotDeclaration,
-            StateLimits.GAME_SNAPSHOT,
-        )
-    val sessionSnapshotBytes =
-        inflate(
-            readPayload(sessionSnapshotDeclaration),
-            sessionSnapshotDeclaration,
-            StateLimits.SESSION_SNAPSHOT,
-        )
-    val snapshot = snapshotBytes?.let(::decodePeerGameState)
-    val sessionSnapshot = sessionSnapshotBytes?.let(::decodePeerSessionState)
     val configuration =
         validatePeerConfiguration(
             rom,
+            slotRom,
             battery,
             gameboyType,
             bootstrapMode,
-            cgb0Revision,
+            profileFlags,
         )
-    if (sessionSnapshot != null) {
-      validatePeerSessionState(configuration, sessionSnapshot, eventPlayer)
-    } else {
-      validatePeerGameState(configuration, snapshot)
-    }
-    // A message carrying both forms is unusual but must validate both detached roots.
-    if (sessionSnapshot != null && snapshot != null) {
-      validatePeerGameState(configuration, snapshot)
+    decodedState?.let {
+      validatePeerState(configuration, it.file, expectedStateRoot, eventPlayer)
+      val session = it.file.root as? SessionStateRoot
+      if (session != null) {
+        val stateHeld = session.session.heldButtons.map { button -> Button.valueOf(button.name) }.toSet()
+        if (stateHeld != heldButtons) {
+          failProtocol(
+              ProtocolErrorReason.INVALID_PORTABLE_STATE,
+              IOException("Checkpoint held-button header disagrees with its SESSION StateFile"),
+          )
+        }
+      }
     }
     val event =
         PeerLoadedGameEvent(
             rom = rom,
+            slotRom = slotRom,
             battery = battery,
-            snapshot = snapshotBytes,
             gameboyType = gameboyType,
             bootstrapMode = bootstrapMode,
             frame = frame,
-            cgb0Revision = cgb0Revision,
+            cgb0Revision = profileFlags and PROFILE_CGB0 != 0,
+            mealybugDmgBlob = profileFlags and PROFILE_MEALYBUG_DMG_BLOB != 0,
+            codeBreakerRumble = profileFlags and PROFILE_CODEBREAKER_RUMBLE != 0,
+            displaySgbBorder = profileFlags and PROFILE_SGB_BORDER != 0,
             player = eventPlayer,
-            sessionSnapshot = sessionSnapshotBytes,
             heldButtons = heldButtons,
-            decodedSnapshot = snapshot,
-            decodedSessionSnapshot = sessionSnapshot,
+            portableState = decodedState?.file,
+            stateWireBytes = decodedState?.wireBytes ?: 0,
+            stateDecodedBytes = decodedState?.decodedBytes ?: 0,
             source = peerSource,
         )
-    if (!server && mode == LinkMode.FOUR_PLAYER_ADAPTER && event.sessionSnapshot != null) {
+    if (checkpointRecord) {
       if (pendingCheckpointStates.size >= mode.playerCount ||
           pendingCheckpointStates.any { it.player == event.player }) {
         throw IOException("Duplicate or excessive four-player checkpoint state")
       }
       val eventBytes = peerStateBytes(event)
-      if (eventBytes > StateLimits.NETPLAY_DECODED_MESSAGE_BYTES - pendingCheckpointBytes) {
-        throw IOException("Four-player checkpoint exceeds the cumulative state limit")
-      }
+      checkedPendingStateBytes(pendingCheckpointBytes, eventBytes)
       pendingCheckpointStates += event
       pendingCheckpointBytes += eventBytes
     } else {
@@ -678,18 +705,18 @@ class Connection(
                 }
             else -> 0L
           }
-      if (eventBytes > StateLimits.NETPLAY_DECODED_MESSAGE_BYTES - pendingEventBytes) {
-        throw IOException("Pending netplay state exceeds the cumulative limit")
-      }
+      checkedPendingStateBytes(pendingEventBytes, eventBytes)
       pendingEvents += event
       pendingEventBytes += eventBytes
     }
   }
 
   private fun peerStateBytes(event: PeerLoadedGameEvent): Long =
-      listOf(event.rom, event.battery, event.snapshot, event.sessionSnapshot)
+      listOf(event.rom, event.slotRom, event.battery)
           .filterNotNull()
-          .fold(0L) { total, bytes -> Math.addExact(total, bytes.size.toLong()) }
+          .fold(event.stateDecodedBytes.toLong()) { total, bytes ->
+            Math.addExact(total, bytes.size.toLong())
+          }
 
   private fun readPayload(declaration: PayloadDeclaration): ByteArray? {
     if (declaration.encodedBytes == 0) return null
@@ -709,38 +736,26 @@ class Connection(
     return values[ordinal]
   }
 
-  private fun decodePeerGameState(bytes: ByteArray): Memento<eu.rekawek.coffeegb.core.Gameboy> {
-    validatePeerStateHeader(bytes)
-    return try {
-      NetplayMementoCodec.decodeGameboy(bytes)
-    } catch (e: NetplayMementoCodec.DecodeException) {
-      failProtocol(ProtocolErrorReason.INVALID_PORTABLE_STATE, e)
-    }
-  }
-
-  private fun decodePeerSessionState(bytes: ByteArray): Memento<Session> {
-    validatePeerStateHeader(bytes)
-    return try {
-      NetplayMementoCodec.decodeSession(bytes)
-    } catch (e: NetplayMementoCodec.DecodeException) {
-      failProtocol(ProtocolErrorReason.INVALID_PORTABLE_STATE, e)
-    }
-  }
-
   private fun validatePeerConfiguration(
       rom: ByteArray,
+      slotRom: ByteArray?,
       battery: ByteArray?,
       gameboyType: GameboyType,
       bootstrapMode: BootstrapMode,
-      cgb0Revision: Boolean,
+      profileFlags: Int,
   ): Gameboy.GameboyConfiguration =
       try {
-        Gameboy.GameboyConfiguration(Rom(rom))
-            .setGameboyType(gameboyType)
-            .setBootstrapMode(bootstrapMode)
-            .setCgb0Revision(cgb0Revision)
-            .setBatteryData(battery?.clone())
-            .setSupportBatterySave(false)
+        peerConfiguration(
+            rom,
+            slotRom,
+            battery,
+            gameboyType,
+            bootstrapMode,
+            profileFlags and PROFILE_CGB0 != 0,
+            profileFlags and PROFILE_MEALYBUG_DMG_BLOB != 0,
+            profileFlags and PROFILE_CODEBREAKER_RUMBLE != 0,
+            profileFlags and PROFILE_SGB_BORDER != 0,
+        )
       } catch (e: Exception) {
         failProtocol(
             ProtocolErrorReason.MALFORMED_MESSAGE,
@@ -748,72 +763,250 @@ class Connection(
         )
       }
 
-  /** Restores only into a detached probe so invalid dimensions cannot reach the live session. */
-  private fun validatePeerGameState(
+  /**
+   * Checks identity and target-dependent structure against an isolated probe. Candidate records
+   * remain detached; complete reconstruction/application occurs only in LinkedController.
+   */
+  private fun validatePeerState(
       configuration: Gameboy.GameboyConfiguration,
-      snapshot: Memento<Gameboy>?,
-  ) {
-    val probeBus = EventBusImpl(null, null, false)
-    var probe: Gameboy? = null
-    try {
-      probe = configuration.forRestore().build()
-      probe.init(
-          probeBus,
-          SerialEndpoint.NULL_ENDPOINT,
-          InfraredEndpoint.NULL_ENDPOINT,
-          null,
-      )
-      snapshot?.let(probe::restoreFromMemento)
-    } catch (e: Exception) {
-      failProtocol(
-          ProtocolErrorReason.INVALID_PORTABLE_STATE,
-          IOException("Peer game state cannot be restored safely", e),
-      )
-    } finally {
-      probe?.stop()
-      probe?.close()
-      probeBus.close()
-    }
-  }
-
-  private fun validatePeerSessionState(
-      configuration: Gameboy.GameboyConfiguration,
-      snapshot: Memento<Session>,
+      file: StateFile,
+      expectedRoot: StateRootKind,
       eventPlayer: Int,
   ) {
-    val links = StateHistory.createLinks(mode)
-    val probeBus = EventBusImpl(null, null, false)
-    var probe: Session? = null
     try {
-      probe =
-          Session(
-              configuration.forRestore(),
-              probeBus,
-              null,
-              links.serial[eventPlayer],
-              links.infrared[eventPlayer],
-          )
-      probe.restoreFromMemento(snapshot)
+      StateCodec.validateForTarget(
+          file,
+          expectedRoot,
+          listOf(StateIdentityEntry(0, StateIdentity.from(configuration))),
+      )
+      when (val root = file.root) {
+        is MachineStateRoot -> {
+          val probeBus = EventBusImpl(null, null, false)
+          val probe = configuration.forRestore().build()
+          try {
+            probe.init(
+                probeBus,
+                SerialEndpoint.NULL_ENDPOINT,
+                InfraredEndpoint.NULL_ENDPOINT,
+                null,
+            )
+            DetachedStateAdapter.validateTarget(probe, root.machine)
+          } finally {
+            probe.stop()
+            probe.close()
+            probeBus.close()
+          }
+        }
+        is SessionStateRoot -> {
+          val links = StateHistory.createLinks(mode)
+          val probeBus = EventBusImpl(null, null, false)
+          val probe =
+              Session(
+                  configuration.forRestore(),
+                  probeBus,
+                  null,
+                  links.serial[eventPlayer],
+                  links.infrared[eventPlayer],
+              )
+          try {
+            DetachedStateAdapter.validateTarget(probe, root.session)
+          } finally {
+            probe.close()
+          }
+        }
+        else -> throw IOException("Unexpected network StateFile root ${file.root.kind}")
+      }
     } catch (e: Exception) {
       failProtocol(
           ProtocolErrorReason.INVALID_PORTABLE_STATE,
-          IOException("Peer session state cannot be restored safely", e),
+          IOException(
+              "Peer ${expectedRoot.name} StateFile does not match its ROM/profile or endpoint",
+              e,
+          ),
       )
-    } finally {
-      probe?.close() ?: probeBus.close()
     }
   }
 
-  private fun validatePeerStateHeader(bytes: ByteArray) {
-    val reason =
-        when {
-          LegacyMementoCodec.hasJavaSerializationHeader(bytes) ->
-              ProtocolErrorReason.LEGACY_JAVA_STATE
-          !NetplayMementoCodec.hasHeader(bytes) -> ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT
-          else -> return
+  private fun readNetworkState(
+      declaration: StateFileDeclaration,
+      expectedRoot: StateRootKind,
+      otherDecodedBytes: Long,
+  ): DecodedNetworkState {
+    val prefixSize = minOf(STATE_MAGIC.size, declaration.wireBytes)
+    val prefix = ByteArray(prefixSize).also(input::readFully)
+    if (prefixSize < STATE_MAGIC.size) {
+      val cgbPrefix = prefix.indices.all { prefix[it] == STATE_MAGIC[it] }
+      if (cgbPrefix) {
+        return failProtocol(
+            ProtocolErrorReason.INVALID_PORTABLE_STATE,
+            IOException("Truncated CGBS StateFile prefix"),
+        )
+      }
+      return failProtocol(
+          ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT,
+          IOException("Network state does not begin with CGBS"),
+      )
+    }
+    if (!prefix.contentEquals(STATE_MAGIC)) {
+      return failProtocol(
+          ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT,
+          IOException("Network state does not begin with CGBS"),
+      )
+    }
+
+    val bytes: ByteArray
+    val decodedBytes: Int
+    if (declaration.wireBytes < StateCodec.HEADER_SIZE) {
+      bytes = ByteArray(declaration.wireBytes)
+      prefix.copyInto(bytes)
+      input.readFully(bytes, prefix.size, bytes.size - prefix.size)
+      decodedBytes = 0
+    } else {
+      val header = ByteArray(StateCodec.HEADER_SIZE)
+      prefix.copyInto(header)
+      input.readFully(header, prefix.size, header.size - prefix.size)
+      decodedBytes = validateNetworkStateEnvelope(header, declaration)
+      val retained = Math.addExact(otherDecodedBytes, decodedBytes.toLong())
+      checkedDecodedMessageSizeLong(retained)
+      preflightPendingRetention(
+          retained,
+          !server && mode == LinkMode.FOUR_PLAYER_ADAPTER,
+      )
+      bytes = ByteArray(declaration.wireBytes)
+      header.copyInto(bytes)
+      input.readFully(bytes, header.size, bytes.size - header.size)
+    }
+
+    val file =
+        try {
+          StateCodec.decode(bytes)
+        } catch (failure: StateDecodeException) {
+          failProtocol(
+              ProtocolErrorReason.INVALID_PORTABLE_STATE,
+              IOException(
+                  "Invalid CGBS StateFile (${failure.reason}): ${failure.message}",
+                  failure,
+              ),
+          )
         }
-    sendProtocolError(reason)
-    throw ProtocolException(reason)
+    if (file.root.kind != expectedRoot) {
+      failProtocol(
+          ProtocolErrorReason.INVALID_PORTABLE_STATE,
+          IOException(
+              "Network StateFile root ${file.root.kind} does not match expected $expectedRoot"),
+      )
+    }
+    return DecodedNetworkState(file, declaration.wireBytes, decodedBytes)
+  }
+
+  private fun validateCheckpointStates(states: List<PeerLoadedGameEvent>) {
+    try {
+      val sessions =
+          states.map { state ->
+            (state.portableState?.root as? SessionStateRoot)?.session
+                ?: throw IOException("Four-player checkpoint contains a non-SESSION state")
+          }
+      if (sessions.any {
+            it.serialPeripheral !=
+                eu.rekawek.coffeegb.controller.state.SerialPeripheralState.FOUR_PLAYER_ADAPTER
+          }) {
+        throw IOException("Four-player checkpoint contains the wrong serial endpoint identity")
+      }
+      if (sessions.map { it.serialState }.distinct().size > 1) {
+        throw IOException("Four-player checkpoint disagrees on shared adapter state")
+      }
+    } catch (e: Exception) {
+      failProtocol(
+          ProtocolErrorReason.INVALID_PORTABLE_STATE,
+          IOException("Four-player checkpoint is not a coherent atomic group", e),
+      )
+    }
+  }
+
+  private fun preflightPendingRetention(
+      declaredBytes: Long,
+      checkpointRecord: Boolean,
+  ) {
+    val retained =
+        when {
+          checkpointRecord -> pendingCheckpointBytes
+          !sessionActive -> pendingEventBytes
+          else -> 0L
+        }
+    checkedPendingStateBytes(retained, declaredBytes)
+  }
+
+  private fun validateOutgoingState(
+      bytes: ByteArray,
+      expectedRoot: StateRootKind,
+  ): StateFileDeclaration {
+    val declaration =
+        validateStateFileDeclaration(bytes.size)
+            ?: throw IOException("A non-null StateFile cannot have zero bytes")
+    val file =
+        try {
+          StateCodec.decode(bytes)
+        } catch (failure: StateDecodeException) {
+          throw IOException(
+              "Local $expectedRoot StateFile is invalid (${failure.reason}): ${failure.message}",
+              failure,
+          )
+        }
+    if (file.root.kind != expectedRoot) {
+      throw IOException(
+          "Local StateFile root ${file.root.kind} does not match expected $expectedRoot")
+    }
+    val inspection = StateCodec.inspect(bytes)
+    if (inspection.decodedPayloadLength > StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES) {
+      throw IOException(
+          "Local StateFile decoded payload ${inspection.decodedPayloadLength} exceeds " +
+              "${StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES} network bytes")
+    }
+    return StateFileDeclaration(bytes.size, inspection.decodedPayloadLength.toInt())
+  }
+
+  private fun validateNetworkStateEnvelope(
+      header: ByteArray,
+      declaration: StateFileDeclaration,
+  ): Int {
+    val buffer = ByteBuffer.wrap(header)
+    val magic = ByteArray(STATE_MAGIC.size).also(buffer::get)
+    check(magic.contentEquals(STATE_MAGIC))
+    val version = buffer.short.toInt() and 0xffff
+    if (version != StateCodec.FORMAT_VERSION) {
+      failProtocol(
+          ProtocolErrorReason.INVALID_PORTABLE_STATE,
+          IOException(
+              "Unsupported network StateFile version $version; supported " +
+                  "${StateCodec.FORMAT_VERSION}",
+              StateDecodeException(
+                  eu.rekawek.coffeegb.controller.state.StateDecodeReason
+                      .UNSUPPORTED_FORMAT_VERSION,
+                  "Unsupported StateFile version $version",
+              ),
+          ),
+      )
+    }
+    val headerSize = buffer.short.toInt() and 0xffff
+    if (headerSize != StateCodec.HEADER_SIZE) {
+      failProtocol(
+          ProtocolErrorReason.INVALID_PORTABLE_STATE,
+          IOException(
+              "Unsupported network StateFile header size $headerSize; expected " +
+                  "${StateCodec.HEADER_SIZE}"),
+      )
+    }
+    buffer.position(20)
+    val encoded = buffer.long
+    val decoded = buffer.long
+    return try {
+      validateNetworkStateLengths(encoded, decoded, declaration.wireBytes)
+    } catch (failure: IOException) {
+      failProtocol(
+          ProtocolErrorReason.INVALID_PORTABLE_STATE,
+          failure,
+      )
+    }
   }
 
   private fun sendProtocolError(reason: ProtocolErrorReason) {
@@ -925,7 +1118,7 @@ class Connection(
       buf[PROTOCOL_NAME.length + 1] = requestedMode.ordinal.toByte()
       buf[PROTOCOL_NAME.length + 2] = assignedPlayer.toByte()
       output.write(buf)
-      output.writeByte(NETPLAY_STATE_CAPABILITY)
+      writeCapabilities()
       output.flush()
       return Handshake(requestedMode, assignedPlayer)
     }
@@ -935,11 +1128,11 @@ class Connection(
     if (receivedProtocolName != PROTOCOL_NAME) {
       throw IOException("Protocol mismatch: expected $PROTOCOL_NAME, received $receivedProtocolName")
     }
-    val receivedVersion = buf[PROTOCOL_NAME.length]
-    if (receivedVersion != PROTOCOL_VERSION) {
+    val receivedVersion = buf[PROTOCOL_NAME.length].toInt() and 0xff
+    if (receivedVersion != PROTOCOL_VERSION.toInt()) {
       throw CompatibilityException(
           "Incompatible netplay protocol: expected version " +
-              "${PROTOCOL_VERSION.toInt()}, received ${receivedVersion.toInt()}.")
+              "${PROTOCOL_VERSION.toInt()}, received $receivedVersion.")
     }
     val modeOrdinal = buf[PROTOCOL_NAME.length + 1].toInt() and 0xff
     if (modeOrdinal == REJECTION_MARKER) {
@@ -955,12 +1148,8 @@ class Connection(
     if (receivedPlayer !in 1 until receivedMode.playerCount) {
       throw IOException("Invalid assigned player $receivedPlayer for $receivedMode")
     }
-    val capabilities = input.read()
-    if (capabilities == -1) throw IOException("Truncated netplay capability handshake")
-    if (capabilities and NETPLAY_STATE_CAPABILITY == 0) {
-      throw CompatibilityException("The server does not support the protocol-v7 netplay state codec.")
-    }
-    output.writeByte(NETPLAY_STATE_CAPABILITY)
+    readCapabilities("server")
+    writeCapabilities()
     output.flush()
     LOG.atInfo().log("Connected as player {} in {} mode", receivedPlayer + 1, receivedMode)
     return Handshake(receivedMode, receivedPlayer)
@@ -970,11 +1159,7 @@ class Connection(
     synchronized(outputLock) {
       if (outboundPhase != OutboundPhase.HANDSHAKE) return
     }
-    val capabilities = input.read()
-    if (capabilities == -1) throw CompatibilityException("Truncated netplay capability handshake")
-    if (capabilities and NETPLAY_STATE_CAPABILITY == 0) {
-      throw CompatibilityException("The client does not support the protocol-v7 netplay state codec.")
-    }
+    readCapabilities("client")
     synchronized(outputLock) {
       if (outboundPhase != OutboundPhase.HANDSHAKE) return
       outboundPhase = OutboundPhase.BOOTSTRAP
@@ -986,6 +1171,68 @@ class Connection(
       if (startRequested) {
         finishStartLocked()
       }
+    }
+  }
+
+  private fun writeCapabilities() {
+    output.write(
+        byteArrayOf(
+            PROTOCOL_VERSION,
+            STATE_NEGOTIATION_VERSION,
+            StateCodec.FORMAT_VERSION.toByte(),
+            STATE_ROOT_CAPABILITIES,
+        ))
+  }
+
+  /**
+   * Reads the peer's version byte first. A protocol-v7 client sends its old one-byte capability
+   * marker here, so it is rejected without consuming the following v7 command as v8 negotiation.
+   */
+  private fun readCapabilities(peer: String) {
+    val peerProtocol = input.read()
+    if (peerProtocol == -1) {
+      throw CompatibilityException(
+          "Truncated $peer netplay negotiation: expected protocol v${PROTOCOL_VERSION.toInt()} " +
+              "and StateFile v${StateCodec.FORMAT_VERSION}.")
+    }
+    if (peerProtocol != PROTOCOL_VERSION.toInt()) {
+      val detected =
+          if (peerProtocol == V7_STATE_CAPABILITY) {
+            "legacy protocol-v7 capability marker"
+          } else {
+            "protocol version $peerProtocol"
+          }
+      throw CompatibilityException(
+          "Incompatible $peer netplay negotiation: detected $detected; expected protocol " +
+              "v${PROTOCOL_VERSION.toInt()} with StateFile v${StateCodec.FORMAT_VERSION}.")
+    }
+    val rest = ByteArray(STATE_CAPABILITY_BYTES - 1)
+    try {
+      input.readFully(rest)
+    } catch (failure: IOException) {
+      throw CompatibilityException(
+          "Truncated $peer StateFile negotiation: expected negotiation v" +
+              "$STATE_NEGOTIATION_VERSION, StateFile v${StateCodec.FORMAT_VERSION}, " +
+              "and root capabilities 0x${STATE_ROOT_CAPABILITIES.toString(16)}.",
+      )
+    }
+    val negotiationVersion = rest[0].toInt() and 0xff
+    if (negotiationVersion != STATE_NEGOTIATION_VERSION.toInt()) {
+      throw CompatibilityException(
+          "Unsupported $peer StateFile negotiation version $negotiationVersion; supported " +
+              "${STATE_NEGOTIATION_VERSION.toInt()}.")
+    }
+    val stateVersion = rest[1].toInt() and 0xff
+    if (stateVersion != StateCodec.FORMAT_VERSION) {
+      throw CompatibilityException(
+          "Unsupported $peer StateFile format version $stateVersion; supported " +
+              "${StateCodec.FORMAT_VERSION}.")
+    }
+    val roots = rest[2].toInt() and 0xff
+    if (roots != STATE_ROOT_CAPABILITIES.toInt()) {
+      throw CompatibilityException(
+          "Unsupported $peer StateFile root capabilities 0x${roots.toString(16)}; expected " +
+              "0x${STATE_ROOT_CAPABILITIES.toString(16)} (MACHINE, SESSION, LINKED_SESSION).")
     }
   }
 
@@ -1031,30 +1278,26 @@ class Connection(
       val wireCode: Int,
       val userMessage: String,
   ) {
-    LEGACY_JAVA_STATE(
-        1,
-        "The peer sent an unsafe legacy Java save state. " +
-            "Network state transfer requires the portable state format.",
-    ),
     MALFORMED_MESSAGE(
-        2,
+        1,
         "The peer sent malformed or oversized netplay data. The connection was closed safely.",
     ),
     UNSUPPORTED_STATE_FORMAT(
-        3,
-        "The peer sent an unsupported state format. The connection was closed safely.",
+        2,
+        "The peer sent an unsupported network state format; protocol v8 requires CGBS " +
+            "StateFile v1. The connection was closed safely.",
     ),
     INVALID_PORTABLE_STATE(
-        4,
-        "The peer sent an invalid portable state. The connection was closed safely.",
+        3,
+        "The peer sent an invalid CGBS StateFile v1. The connection was closed safely.",
     ),
     INVALID_FRAME(
-        5,
+        4,
         "The peer sent a frame outside the safe rollback window. " +
             "The connection was closed safely.",
     ),
     EXCESSIVE_REPLAY_WORK(
-        6,
+        5,
         "The peer requested excessive rollback replay work. The connection was closed safely.",
     ),
   }
@@ -1062,7 +1305,12 @@ class Connection(
   internal class ProtocolException(
       val reason: ProtocolErrorReason,
       cause: Throwable? = null,
-  ) : IOException(reason.userMessage, cause)
+  ) :
+      IOException(
+          if (cause?.message.isNullOrBlank()) reason.userMessage
+          else "${reason.userMessage} ${cause.message}",
+          cause,
+      )
 
   class PeerEventSource internal constructor(
       val player: Int,
@@ -1075,16 +1323,19 @@ class Connection(
   data class PeerLoadedGameEvent(
       val rom: ByteArray,
       val battery: ByteArray?,
-      val snapshot: ByteArray?,
+      val portableState: StateFile?,
       val gameboyType: GameboyType,
       val bootstrapMode: BootstrapMode,
       val frame: Long,
       val cgb0Revision: Boolean = false,
       val player: Int = 1,
-      val sessionSnapshot: ByteArray? = null,
       val heldButtons: Set<Button> = emptySet(),
-      internal val decodedSnapshot: Memento<eu.rekawek.coffeegb.core.Gameboy>? = null,
-      internal val decodedSessionSnapshot: Memento<Session>? = null,
+      val slotRom: ByteArray? = null,
+      val mealybugDmgBlob: Boolean = false,
+      val codeBreakerRumble: Boolean = false,
+      val displaySgbBorder: Boolean = false,
+      internal val stateWireBytes: Int = 0,
+      internal val stateDecodedBytes: Int = 0,
       internal val source: PeerEventSource? = null,
   ) : Event
 
@@ -1127,8 +1378,11 @@ class Connection(
   companion object {
     private val LOG: Logger = LoggerFactory.getLogger(Connection::class.java)
     private const val PROTOCOL_NAME = "CoffeeGB NETPLAY"
-    private const val PROTOCOL_VERSION: Byte = 0x07
-    private const val NETPLAY_STATE_CAPABILITY = 0x01
+    internal const val PROTOCOL_VERSION: Byte = 0x08
+    internal const val STATE_NEGOTIATION_VERSION: Byte = 0x01
+    internal const val STATE_CAPABILITY_BYTES = 4
+    internal const val STATE_ROOT_CAPABILITIES: Byte = 0x07
+    private const val V7_STATE_CAPABILITY = 0x01
     private const val REJECTION_MARKER = 0xff
     private const val ROM: Byte = 0x01
     private const val INPUT: Byte = 0x03
@@ -1137,7 +1391,23 @@ class Connection(
     private const val START: Byte = 0x08
     private const val SYNCHRONIZE: Byte = 0x09
     private const val PROTOCOL_ERROR: Byte = 0x0a
-    private const val ROM_HEADER_SIZE = 45
+    internal const val ROM_HEADER_SIZE = 44
+    private val STATE_MAGIC =
+        byteArrayOf(
+            'C'.code.toByte(),
+            'G'.code.toByte(),
+            'B'.code.toByte(),
+            'S'.code.toByte(),
+        )
+    private const val PROFILE_CGB0 = 1
+    private const val PROFILE_MEALYBUG_DMG_BLOB = 1 shl 1
+    private const val PROFILE_CODEBREAKER_RUMBLE = 1 shl 2
+    private const val PROFILE_SGB_BORDER = 1 shl 3
+    private const val KNOWN_PROFILE_FLAGS =
+        PROFILE_CGB0 or
+            PROFILE_MEALYBUG_DMG_BLOB or
+            PROFILE_CODEBREAKER_RUMBLE or
+            PROFILE_SGB_BORDER
 
     internal fun reject(outputStream: OutputStream, reason: RejectionReason) {
       val output = DataOutputStream(BufferedOutputStream(outputStream))
@@ -1148,6 +1418,105 @@ class Connection(
       buf[PROTOCOL_NAME.length + 2] = reason.wireCode.toByte()
       output.write(buf)
       output.flush()
+    }
+
+    private fun profileFlags(event: LinkedController.LocalRomLoadedEvent): Int {
+      var flags = 0
+      if (event.cgb0Revision) flags = flags or PROFILE_CGB0
+      if (event.mealybugDmgBlob) flags = flags or PROFILE_MEALYBUG_DMG_BLOB
+      if (event.codeBreakerRumble) flags = flags or PROFILE_CODEBREAKER_RUMBLE
+      if (event.displaySgbBorder) flags = flags or PROFILE_SGB_BORDER
+      return validateProfileFlags(flags, event.gameboyType)
+    }
+
+    internal fun validateProfileFlags(flags: Int, hardware: GameboyType): Int {
+      if (flags and KNOWN_PROFILE_FLAGS.inv() != 0) {
+        throw IOException("Undefined netplay hardware profile flags 0x${flags.toString(16)}")
+      }
+      if (flags and PROFILE_CGB0 != 0 && hardware != GameboyType.CGB) {
+        throw IOException("CGB0 profile flag is invalid for $hardware")
+      }
+      if (flags and PROFILE_MEALYBUG_DMG_BLOB != 0 && hardware == GameboyType.CGB) {
+        throw IOException("Mealybug DMG-blob profile flag is invalid for native CGB")
+      }
+      if (flags and PROFILE_SGB_BORDER != 0 && hardware != GameboyType.SGB) {
+        throw IOException("SGB-border profile flag is invalid for $hardware")
+      }
+      return flags
+    }
+
+    internal fun peerConfiguration(
+        rom: ByteArray,
+        slotRom: ByteArray?,
+        battery: ByteArray?,
+        gameboyType: GameboyType,
+        bootstrapMode: BootstrapMode,
+        cgb0Revision: Boolean,
+        mealybugDmgBlob: Boolean,
+        codeBreakerRumble: Boolean,
+        displaySgbBorder: Boolean,
+    ): Gameboy.GameboyConfiguration {
+      val primary = Rom(rom)
+      if (slotRom != null &&
+          primary.cartridgeProperties.mapper != CartridgeProperties.Mapper.DATEL) {
+        throw IOException("A slot ROM is valid only for a Datel pass-through cartridge")
+      }
+      return Gameboy.GameboyConfiguration(primary)
+          .setGameboyType(gameboyType)
+          .setBootstrapMode(bootstrapMode)
+          .setCgb0Revision(cgb0Revision)
+          .setMealybugDmgBlob(mealybugDmgBlob)
+          .setCodeBreakerRumble(codeBreakerRumble)
+          .setDisplaySgbBorder(displaySgbBorder)
+          .setSlotRom(slotRom?.let(::Rom))
+          .setBatteryData(battery?.clone())
+          .setSupportBatterySave(false)
+    }
+
+    internal fun validateStateFileDeclaration(size: Int): StateFileDeclaration? {
+      if (size == 0) return null
+      if (size < 0 || size > StateLimits.NETPLAY_STATE_FILE_BYTES) {
+        throw IOException(
+            "Direct network StateFile exceeds ${StateLimits.NETPLAY_STATE_FILE_BYTES} bytes: $size")
+      }
+      return StateFileDeclaration(size, 0)
+    }
+
+    internal fun validateNetworkStateLengths(
+        encoded: Long,
+        decoded: Long,
+        wireBytes: Int,
+    ): Int {
+      if (encoded < 0 ||
+          encoded > StateLimits.NETPLAY_STATE_FILE_BYTES - StateCodec.HEADER_SIZE ||
+          decoded < 0 ||
+          decoded > StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES) {
+        throw IOException(
+            "Network StateFile declares $encoded encoded/$decoded decoded bytes; limits are " +
+                "${StateLimits.NETPLAY_STATE_FILE_BYTES - StateCodec.HEADER_SIZE}/" +
+                "${StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES}")
+      }
+      val expectedWire =
+          try {
+            Math.addExact(StateCodec.HEADER_SIZE.toLong(), encoded)
+          } catch (failure: ArithmeticException) {
+            throw IOException("Network StateFile encoded length overflows", failure)
+          }
+      if (expectedWire != wireBytes.toLong()) {
+        throw IOException(
+            "Network StateFile wire length $wireBytes disagrees with envelope $expectedWire")
+      }
+      return decoded.toInt()
+    }
+
+    internal fun checkedPendingStateBytes(retained: Long, incoming: Long): Long {
+      if (retained < 0 ||
+          incoming < 0 ||
+          retained > StateLimits.NETPLAY_DECODED_MESSAGE_BYTES ||
+          incoming > StateLimits.NETPLAY_DECODED_MESSAGE_BYTES - retained) {
+        throw IOException("Pending netplay state exceeds the cumulative limit")
+      }
+      return retained + incoming
     }
 
     fun deflate(data: ByteArray): ByteArray = deflate(data, StateLimits.GAME_SNAPSHOT)
@@ -1303,12 +1672,21 @@ class Connection(
     }
 
     internal fun checkedDecodedMessageSize(vararg decodedSizes: Int) {
-      val total =
-          try {
-            decodedSizes.fold(0L) { sum, size -> Math.addExact(sum, size.toLong()) }
-          } catch (e: ArithmeticException) {
-            throw IOException("Decoded netplay ROM message size overflow", e)
+      checkedDecodedMessageSizeLong(checkedDecodedMessageTotal(*decodedSizes))
+    }
+
+    internal fun checkedDecodedMessageTotal(vararg decodedSizes: Int): Long =
+        try {
+          decodedSizes.fold(0L) { sum, size ->
+            if (size < 0) throw IOException("Decoded netplay size is negative: $size")
+            Math.addExact(sum, size.toLong())
           }
+        } catch (e: ArithmeticException) {
+          throw IOException("Decoded netplay ROM message size overflow", e)
+        }
+
+    internal fun checkedDecodedMessageSizeLong(total: Long) {
+      if (total < 0) throw IOException("Decoded netplay ROM message size is negative")
       if (total > StateLimits.NETPLAY_DECODED_MESSAGE_BYTES) {
         throw IOException(
             "Decoded netplay ROM message exceeds " +
@@ -1318,4 +1696,10 @@ class Connection(
   }
 
   internal data class PayloadDeclaration(val decodedBytes: Int, val encodedBytes: Int)
+  internal data class StateFileDeclaration(val wireBytes: Int, val decodedBytes: Int)
+  private data class DecodedNetworkState(
+      val file: StateFile,
+      val wireBytes: Int,
+      val decodedBytes: Int,
+  )
 }

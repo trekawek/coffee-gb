@@ -154,6 +154,21 @@ object StateCodec {
           diagnostics,
       )
 
+  /**
+   * Validates an already-decoded detached file against an expected network root and target
+   * identities. This performs no memento reconstruction and cannot mutate a machine.
+   */
+  internal fun validateForTarget(
+      file: StateFile,
+      expectedRoot: StateRootKind,
+      targetIdentities: List<StateIdentityEntry>,
+  ) {
+    if (file.root.kind != expectedRoot) {
+      targetMismatch("StateFile root ${file.root.kind} is not $expectedRoot")
+    }
+    validateTargetIdentities(file.identities, targetIdentities)
+  }
+
   fun decodeAndApply(
       bytes: ByteArray,
       configuration: Gameboy.GameboyConfiguration,

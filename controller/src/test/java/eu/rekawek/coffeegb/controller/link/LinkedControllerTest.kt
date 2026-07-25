@@ -30,6 +30,7 @@ import eu.rekawek.coffeegb.controller.state.RecordState
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.SessionState
 import eu.rekawek.coffeegb.controller.state.StateApplyException
+import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateField
 import eu.rekawek.coffeegb.controller.state.StateValue
 import eu.rekawek.coffeegb.core.Gameboy
@@ -117,7 +118,10 @@ class LinkedControllerTest {
     val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
     assertTrue(checkpoint.frame > StateLimits.NETPLAY_FUTURE_FRAMES)
     assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
-    assertTrue(checkpoint.states.all { it.sessionSnapshot != null })
+    assertTrue(
+        checkpoint.states.all {
+          it.portableState?.copyOfRange(0, 4)?.contentEquals("CGBS".toByteArray()) == true
+        })
 
     val clientBus = EventBusImpl()
     val client =
@@ -1254,6 +1258,77 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun malformedPeerCheckpointPreparationLeavesControllerGroupAndHistoryUnchanged() {
+    val eventBus = EventBusImpl()
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        )
+    sut.timingTicker.disabled = true
+    eventBus.post(LoadRomEvent(ROM))
+    sut.runFrame()
+    for (player in listOf(0, 2)) {
+      eventBus.post(
+          PeerLoadedGameEvent(
+              ROM_BYTES,
+              null,
+              null,
+              GAMEBOY_TYPE,
+              BOOTSTRAP_MODE,
+              sut.currentFrame(),
+              player = player,
+          ))
+      sut.runFrame()
+    }
+    assertEquals(3, sut.activeSessionCount())
+
+    val failures = mutableListOf<ProtocolErrorReason>()
+    val source = PeerEventSource(0) { reason, _ -> failures += reason }
+    val states =
+        sut.encodedSessionStates().mapIndexedNotNull { player, bytes ->
+          bytes?.let {
+            PeerLoadedGameEvent(
+                rom = if (player == 2) byteArrayOf(1) else ROM_BYTES,
+                battery = null,
+                portableState = StateCodec.decode(it),
+                gameboyType = GAMEBOY_TYPE,
+                bootstrapMode = BOOTSTRAP_MODE,
+                frame = sut.currentFrame(),
+                player = player,
+                heldButtons = sut.heldButtonStates()[player] ?: emptySet(),
+                source = source,
+            )
+          }
+        }
+    val beforeState = sut.captureDetachedState()
+    val beforeEncoded = sut.encodedSessionStates()
+    val beforeHistory = sut.stateHistory.captureSnapshot()
+    val beforeConfigs = privateList(sut, "configs")
+    val beforeRoms = privateByteArrays(sut, "romBuffers")
+    val beforeSlots = privateByteArrays(sut, "slotRomBuffers")
+    val beforeBatteries = privateByteArrays(sut, "batteryBuffers")
+
+    eventBus.post(SessionCheckpointEvent(sut.currentFrame(), states, source))
+    dispatchOnly(sut)
+
+    assertEquals(listOf(ProtocolErrorReason.INVALID_PORTABLE_STATE), failures)
+    assertEquals(beforeState, sut.captureDetachedState())
+    assertEncodedStatesEqual(beforeEncoded, sut.encodedSessionStates())
+    assertEquals(beforeHistory, sut.stateHistory.captureSnapshot())
+    beforeConfigs.zip(privateList(sut, "configs")).forEach { (expected, actual) ->
+      assertTrue(expected === actual)
+    }
+    assertByteArraysEqual(beforeRoms, privateByteArrays(sut, "romBuffers"))
+    assertByteArraysEqual(beforeSlots, privateByteArrays(sut, "slotRomBuffers"))
+    assertByteArraysEqual(beforeBatteries, privateByteArrays(sut, "batteryBuffers"))
+    eventBus.close()
+  }
+
+  @Test
   fun linkedStateRejectsMalformedTopologyBeforeMutation() {
     val (eventBus, sut) = configuredController(LinkMode.FOUR_PLAYER_ADAPTER, 2)
     val valid = sut.captureDetachedState()
@@ -1349,6 +1424,38 @@ class LinkedControllerTest {
       }
     }
 
+    fun dispatchOnly(controller: LinkedController) {
+      LinkedController::class.java.getDeclaredField("eventQueue").also { field ->
+        field.isAccessible = true
+        (field.get(controller) as EventQueue).dispatch()
+      }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun privateList(controller: LinkedController, name: String): List<Any?> =
+        LinkedController::class.java.getDeclaredField(name).let { field ->
+          field.isAccessible = true
+          (field.get(controller) as List<Any?>).toList()
+        }
+
+    fun privateByteArrays(controller: LinkedController, name: String): List<ByteArray?> =
+        privateList(controller, name).map { (it as ByteArray?)?.clone() }
+
+    fun assertByteArraysEqual(expected: List<ByteArray?>, actual: List<ByteArray?>) {
+      expected.indices.forEach { index ->
+        val expectedBytes = expected[index]
+        val actualBytes = actual[index]
+        if (expectedBytes == null || actualBytes == null) {
+          assertEquals(expectedBytes, actualBytes)
+        } else {
+          assertContentEquals(expectedBytes, actualBytes)
+        }
+      }
+    }
+
+    fun assertEncodedStatesEqual(expected: List<ByteArray?>, actual: List<ByteArray?>) =
+        assertByteArraysEqual(expected, actual)
+
     fun configuredController(
         mode: LinkMode,
         activePlayers: Int,
@@ -1419,14 +1526,17 @@ class LinkedControllerTest {
               PeerLoadedGameEvent(
                   rom = state.romFile,
                   battery = state.batteryFile,
-                  snapshot = state.snapshot,
+                  portableState = state.portableState?.let(StateCodec::decode),
                   gameboyType = state.gameboyType,
                   bootstrapMode = state.bootstrapMode,
                   frame = state.frame,
                   cgb0Revision = state.cgb0Revision,
                   player = state.player,
-                  sessionSnapshot = state.sessionSnapshot,
                   heldButtons = state.heldButtons,
+                  slotRom = state.slotRomFile,
+                  mealybugDmgBlob = state.mealybugDmgBlob,
+                  codeBreakerRumble = state.codeBreakerRumble,
+                  displaySgbBorder = state.displaySgbBorder,
                   source = source,
               )
             },

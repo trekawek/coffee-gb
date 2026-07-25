@@ -1,13 +1,18 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
-import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
+import eu.rekawek.coffeegb.controller.state.MachineState
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateCompression
+import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.controller.state.StateGraph
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
@@ -33,11 +38,35 @@ import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ConnectionTest {
+
+  /** Fails the test if the connection attempts to read beyond the supplied declaration bytes. */
+  private class PayloadTripwireInputStream(private val prefix: ByteArray) : InputStream() {
+    private var offset = 0
+
+    override fun read(): Int {
+      if (offset == prefix.size) {
+        throw AssertionError("payload read occurred after a rejected declaration")
+      }
+      return prefix[offset++].toInt() and 0xff
+    }
+
+    override fun read(bytes: ByteArray, off: Int, len: Int): Int {
+      if (len == 0) return 0
+      if (offset == prefix.size) {
+        throw AssertionError("payload read occurred after a rejected declaration")
+      }
+      val count = minOf(len, prefix.size - offset)
+      prefix.copyInto(bytes, off, offset, offset + count)
+      offset += count
+      return count
+    }
+  }
 
   /** Delivers at most one byte per read, like a heavily fragmented TCP stream. */
   private class TrickleInputStream(private val delegate: InputStream) : InputStream() {
@@ -195,7 +224,18 @@ class ConnectionTest {
     val rom = ROM.readBytes()
     val battery = ByteArray(8 * 1024) { (it % 7).toByte() }
     val snapshot =
-        portableStates(battery, GameboyType.CGB, cgb0Revision = true).first
+        portableStates(
+                battery,
+                GameboyType.CGB,
+                cgb0Revision = true,
+                bootstrapMode = Gameboy.BootstrapMode.FAST_FORWARD,
+            )
+            .first
+    assertContentEquals("CGBS".toByteArray(), snapshot.copyOfRange(0, 4))
+    assertEquals(
+        eu.rekawek.coffeegb.controller.state.StateRootKind.MACHINE,
+        StateCodec.inspect(snapshot).rootKind,
+    )
 
     senderBus.post(
         LinkedController.LocalRomLoadedEvent(
@@ -214,8 +254,7 @@ class ConnectionTest {
     assertNotNull(event)
     assertContentEquals(rom, event.rom)
     assertContentEquals(battery, event.battery)
-    assertContentEquals(snapshot, event.snapshot)
-    assertEquals(null, event.sessionSnapshot)
+    assertEquals(StateCodec.decode(snapshot), event.portableState)
     assertEquals(GameboyType.CGB, event.gameboyType)
     assertEquals(Gameboy.BootstrapMode.FAST_FORWARD, event.bootstrapMode)
     assertTrue(event.cgb0Revision)
@@ -235,21 +274,28 @@ class ConnectionTest {
         LinkedController.LocalRomLoadedEvent(
             romFile = ROM.readBytes(),
             batteryFile = null,
-            snapshot = null,
+            portableState = portableStates(heldButtons = setOf(Button.START)).second,
             gameboyType = GameboyType.DMG,
             bootstrapMode = Gameboy.BootstrapMode.SKIP,
             frame = 73,
             player = 0,
-            sessionSnapshot = portableStates().second,
             heldButtons = setOf(Button.START),
         )
+    assertContentEquals(
+        "CGBS".toByteArray(),
+        checkNotNull(state.portableState).copyOfRange(0, 4),
+    )
+    assertEquals(
+        eu.rekawek.coffeegb.controller.state.StateRootKind.SESSION,
+        StateCodec.inspect(state.portableState).rootKind,
+    )
     senderBus.post(LinkedController.SessionStateReadyEvent(73, listOf(state)))
 
     assertEquals(null, received.poll(200, TimeUnit.MILLISECONDS))
     val checkpoint = assertNotNull(synchronized.poll(5, TimeUnit.SECONDS))
     assertEquals(1, checkpoint.states.size)
     val game = checkpoint.states.single()
-    assertContentEquals(state.sessionSnapshot, game.sessionSnapshot)
+    assertEquals(StateCodec.decode(checkNotNull(state.portableState)), game.portableState)
     assertEquals(setOf(Button.START), game.heldButtons)
     assertEquals(73, checkpoint.frame)
   }
@@ -365,7 +411,7 @@ class ConnectionTest {
     val destinationOutput = ToggleFailingOutputStream()
     val destination =
         Connection(
-            ByteArrayInputStream(byteArrayOf(0x01)),
+            ByteArrayInputStream(capabilities()),
             destinationOutput,
             receiverBus,
             true,
@@ -377,10 +423,11 @@ class ConnectionTest {
     val romBytes = ROM.readBytes()
     val rom = Connection.deflate(romBytes, StateLimits.ROM)
     val inputMessage =
-        byteArrayOf(0x01, 0x01) +
+        capabilities() +
+            byteArrayOf(0x01) +
             romHeader(
-                decodedSizes = intArrayOf(romBytes.size, 0, 0, 0),
-                encodedSizes = intArrayOf(rom.size, 0, 0, 0),
+                romDecoded = romBytes.size,
+                romEncoded = rom.size,
             ) +
             rom +
             byteArrayOf(
@@ -438,7 +485,7 @@ class ConnectionTest {
         byteArrayOf(0x03, 0x00) + ByteBuffer.allocate(8).putLong(0).array() + byteArrayOf(0, 0)
     val offender =
         Connection(
-            ByteArrayInputStream(byteArrayOf(0x01) + inputMessage + inputMessage + inputMessage),
+            ByteArrayInputStream(capabilities() + inputMessage + inputMessage + inputMessage),
             ByteArrayOutputStream(),
             receiverBus,
             true,
@@ -447,7 +494,7 @@ class ConnectionTest {
         )
     val honest =
         Connection(
-            ByteArrayInputStream(byteArrayOf(0x01) + inputMessage),
+            ByteArrayInputStream(capabilities() + inputMessage),
             ByteArrayOutputStream(),
             receiverBus,
             true,
@@ -473,15 +520,15 @@ class ConnectionTest {
     val romBytes = ROM.readBytes()
     val rom = Connection.deflate(romBytes, StateLimits.ROM)
     val sessionBytes = portableStates().second
-    val session = Connection.deflate(sessionBytes, StateLimits.SESSION_SNAPSHOT)
     val checkpoint =
         byteArrayOf(0x01) +
             romHeader(
-                decodedSizes = intArrayOf(romBytes.size, 0, 0, sessionBytes.size),
-                encodedSizes = intArrayOf(rom.size, 0, 0, session.size),
+                romDecoded = romBytes.size,
+                romEncoded = rom.size,
+                stateBytes = sessionBytes.size,
             ) +
+            sessionBytes +
             rom +
-            session +
             byteArrayOf(0x09) +
             ByteBuffer.allocate(8).putLong(0).array()
     val connection =
@@ -524,10 +571,11 @@ class ConnectionTest {
   }
 
   @Test
-  fun handshakeRequiresPortableStateCapabilityInBothDirections() {
+  fun handshakeRequiresStateFileV1CapabilityInBothDirections() {
     val serverHandshake =
         "CoffeeGB NETPLAY".toByteArray() +
-            byteArrayOf(0x07, LinkMode.NORMAL.ordinal.toByte(), 0x01, 0x00)
+            byteArrayOf(0x08, LinkMode.NORMAL.ordinal.toByte(), 0x01) +
+            capabilities(stateFile = 2)
     assertFailsWith<Connection.CompatibilityException> {
       Connection(
           ByteArrayInputStream(serverHandshake),
@@ -539,12 +587,91 @@ class ConnectionTest {
 
     val server =
         Connection(
-            ByteArrayInputStream(byteArrayOf(0x00)),
+            ByteArrayInputStream(capabilities(stateFile = 2)),
             ByteArrayOutputStream(),
             receiverBus,
             true,
         )
     assertFailsWith<Connection.CompatibilityException> { server.run() }
+  }
+
+  @Test
+  fun handshakeRejectsV7AndTruncatedCapabilitiesBeforeCommandsInBothDirections() {
+    val clientPreambles =
+        listOf(
+            "CoffeeGB NETPLAY".toByteArray() +
+                byteArrayOf(0x07, LinkMode.NORMAL.ordinal.toByte(), 0x01),
+            "CoffeeGB NETPLAY".toByteArray() +
+                byteArrayOf(0x08, LinkMode.NORMAL.ordinal.toByte(), 0x01, 0x08, 0x01),
+        )
+    clientPreambles.forEach { preamble ->
+      assertFailsWith<Connection.CompatibilityException> {
+        Connection(
+            ByteArrayInputStream(preamble),
+            ByteArrayOutputStream(),
+            receiverBus,
+            false,
+        )
+      }
+    }
+
+    listOf(byteArrayOf(0x01, 0x03), byteArrayOf(0x08, 0x01)).forEach { response ->
+      val server =
+          Connection(
+              ByteArrayInputStream(response),
+              ByteArrayOutputStream(),
+              receiverBus,
+              true,
+          )
+      assertFailsWith<Connection.CompatibilityException> { server.run() }
+    }
+  }
+
+  @Test
+  fun directStateDeclarationBoundaryAndPayloadTripwire() {
+    assertEquals(
+        StateLimits.NETPLAY_STATE_FILE_BYTES,
+        Connection.validateStateFileDeclaration(StateLimits.NETPLAY_STATE_FILE_BYTES)!!.wireBytes,
+    )
+    for (invalid in listOf(-1, StateLimits.NETPLAY_STATE_FILE_BYTES + 1, Int.MAX_VALUE)) {
+      assertFailsWith<IOException> { Connection.validateStateFileDeclaration(invalid) }
+    }
+    val maxEncoded = StateLimits.NETPLAY_STATE_FILE_BYTES - StateCodec.HEADER_SIZE
+    assertEquals(
+        StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES,
+        Connection.validateNetworkStateLengths(
+            maxEncoded.toLong(),
+            StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES.toLong(),
+            StateLimits.NETPLAY_STATE_FILE_BYTES,
+        ),
+    )
+    listOf(
+            Triple(maxEncoded.toLong() + 1, 1L, StateLimits.NETPLAY_STATE_FILE_BYTES),
+            Triple(1L, StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES.toLong() + 1, 69),
+            Triple(Long.MAX_VALUE, 1L, StateLimits.NETPLAY_STATE_FILE_BYTES),
+            Triple(1L, 1L, StateCodec.HEADER_SIZE),
+        )
+        .forEach { (encoded, decoded, wire) ->
+          assertFailsWith<IOException> {
+            Connection.validateNetworkStateLengths(encoded, decoded, wire)
+          }
+        }
+
+    val prefix =
+        "CoffeeGB NETPLAY".toByteArray() +
+            byteArrayOf(0x08, LinkMode.NORMAL.ordinal.toByte(), 0x01) +
+            capabilities() +
+            byteArrayOf(0x01) +
+            romHeader(stateBytes = StateLimits.NETPLAY_STATE_FILE_BYTES + 1)
+    val connection =
+        Connection(
+            PayloadTripwireInputStream(prefix),
+            ByteArrayOutputStream(),
+            receiverBus,
+            false,
+        )
+    val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
+    assertEquals(Connection.ProtocolErrorReason.MALFORMED_MESSAGE, error.reason)
   }
 
   @Test
@@ -652,16 +779,14 @@ class ConnectionTest {
   fun aggregateRomMessageLimitIsCheckedBeforePayloadReads() {
     val header =
         romHeader(
-            decodedSizes = intArrayOf(1, 1, 1, 1),
-            encodedSizes =
-                intArrayOf(
-                    StateLimits.ROM.encodedBytes,
-                    StateLimits.BATTERY.encodedBytes,
-                    StateLimits.GAME_SNAPSHOT.encodedBytes,
-                    StateLimits.SESSION_SNAPSHOT.encodedBytes,
-                ),
+            romEncoded = StateLimits.ROM.encodedBytes,
+            slotDecoded = 1,
+            slotEncoded = StateLimits.ROM.encodedBytes,
+            batteryDecoded = 1,
+            batteryEncoded = StateLimits.BATTERY.encodedBytes,
+            stateBytes = StateLimits.NETPLAY_STATE_FILE_BYTES,
         )
-    val connection = clientConnection(byteArrayOf(0x01) + header)
+    val connection = tripwireClient(byteArrayOf(0x01) + header)
 
     val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
     assertTrue(error.cause!!.message!!.contains("message exceeds"))
@@ -671,16 +796,14 @@ class ConnectionTest {
   fun aggregateDecodedRomMessageLimitIsCheckedBeforePayloadReads() {
     val header =
         romHeader(
-            decodedSizes =
-                intArrayOf(
-                    StateLimits.ROM.decodedBytes,
-                    StateLimits.BATTERY.decodedBytes,
-                    StateLimits.GAME_SNAPSHOT.decodedBytes,
-                    StateLimits.SESSION_SNAPSHOT.decodedBytes,
-                ),
-            encodedSizes = intArrayOf(1, 1, 1, 1),
+            romDecoded = StateLimits.ROM.decodedBytes,
+            slotDecoded = StateLimits.ROM.decodedBytes,
+            slotEncoded = 1,
+            batteryDecoded = StateLimits.BATTERY.decodedBytes,
+            batteryEncoded = 1,
+            stateBytes = 1,
         )
-    val connection = clientConnection(byteArrayOf(0x01) + header)
+    val connection = tripwireClient(byteArrayOf(0x01) + header)
 
     val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
     assertTrue(error.cause!!.message!!.contains("Decoded netplay ROM message exceeds"))
@@ -704,6 +827,25 @@ class ConnectionTest {
     assertFailsWith<IOException> {
       Connection.checkedDecodedMessageSize(StateLimits.NETPLAY_DECODED_MESSAGE_BYTES, 1)
     }
+
+    assertEquals(
+        StateLimits.NETPLAY_DECODED_MESSAGE_BYTES.toLong(),
+        Connection.checkedPendingStateBytes(
+            StateLimits.NETPLAY_DECODED_MESSAGE_BYTES.toLong() - 1,
+            1,
+        ),
+    )
+    listOf(
+            -1L to 0L,
+            0L to -1L,
+            StateLimits.NETPLAY_DECODED_MESSAGE_BYTES.toLong() to 1L,
+            Long.MAX_VALUE to 1L,
+        )
+        .forEach { (retained, incoming) ->
+          assertFailsWith<IOException> {
+            Connection.checkedPendingStateBytes(retained, incoming)
+          }
+        }
   }
 
   @Test
@@ -711,7 +853,7 @@ class ConnectionTest {
     val invalidEnum = romHeader(gameboyType = 0xff)
     assertFailsWith<IOException> { clientConnection(byteArrayOf(0x01) + invalidEnum).run() }
 
-    val invalidFlag = romHeader(cgb0Revision = 2)
+    val invalidFlag = romHeader(profileFlags = 1 shl 4)
     assertFailsWith<IOException> { clientConnection(byteArrayOf(0x01) + invalidFlag).run() }
   }
 
@@ -721,39 +863,30 @@ class ConnectionTest {
     receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
     val rom = Connection.deflate(byteArrayOf(1), StateLimits.ROM)
     val legacyState = byteArrayOf(0xac.toByte(), 0xed.toByte(), 0x00, 0x05)
-    val snapshot = Connection.deflate(legacyState, StateLimits.GAME_SNAPSHOT)
     val header =
         romHeader(
-            decodedSizes = intArrayOf(1, 0, legacyState.size, 0),
-            encodedSizes = intArrayOf(rom.size, 0, snapshot.size, 0),
+            romEncoded = rom.size,
+            stateBytes = legacyState.size,
         )
-    val connection = clientConnection(byteArrayOf(0x01) + header + rom + snapshot)
+    val connection = clientConnection(byteArrayOf(0x01) + header + legacyState + rom)
 
     val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
-    assertTrue(error.message!!.contains("unsafe legacy Java save state"))
+    assertEquals(Connection.ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT, error.reason)
     assertEquals(null, received.poll())
   }
 
   @Test
   fun headerlessPeerSnapshotsAreRejectedBeforeEventDelivery() {
-    for (sessionState in listOf(false, true)) {
+    for (unsupported in listOf(byteArrayOf(1, 2, 3, 4), "CGBN".toByteArray())) {
       val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
       receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
       val rom = Connection.deflate(byteArrayOf(1), StateLimits.ROM)
-      val unsupported = byteArrayOf(1, 2, 3, 4)
-      val stateLimit = if (sessionState) StateLimits.SESSION_SNAPSHOT else StateLimits.GAME_SNAPSHOT
-      val state = Connection.deflate(unsupported, stateLimit)
-      val decodedSizes = intArrayOf(1, 0, 0, 0)
-      val encodedSizes = intArrayOf(rom.size, 0, 0, 0)
-      val index = if (sessionState) 3 else 2
-      decodedSizes[index] = unsupported.size
-      encodedSizes[index] = state.size
       val connection =
           clientConnection(
               byteArrayOf(0x01) +
-                  romHeader(decodedSizes = decodedSizes, encodedSizes = encodedSizes) +
-                  rom +
-                  state)
+                  romHeader(romEncoded = rom.size, stateBytes = unsupported.size) +
+                  unsupported +
+                  rom)
 
       val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
       assertEquals(Connection.ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT, error.reason)
@@ -768,13 +901,13 @@ class ConnectionTest {
     val romBytes = ROM.readBytes()
     val rom = Connection.deflate(romBytes, StateLimits.ROM)
     val invalidState = invalidPortableGameSnapshot()
-    val snapshot = Connection.deflate(invalidState, StateLimits.GAME_SNAPSHOT)
     val header =
         romHeader(
-            decodedSizes = intArrayOf(romBytes.size, 0, invalidState.size, 0),
-            encodedSizes = intArrayOf(rom.size, 0, snapshot.size, 0),
+            romDecoded = romBytes.size,
+            romEncoded = rom.size,
+            stateBytes = invalidState.size,
         )
-    val connection = clientConnection(byteArrayOf(0x01) + header + rom + snapshot)
+    val connection = clientConnection(byteArrayOf(0x01) + header + invalidState + rom)
 
     val error = assertFailsWith<Connection.ProtocolException> { connection.run() }
     assertEquals(Connection.ProtocolErrorReason.INVALID_PORTABLE_STATE, error.reason)
@@ -782,13 +915,124 @@ class ConnectionTest {
   }
 
   @Test
+  fun corruptTruncatedFutureAndWrongRootStateFilesAreRejectedBeforeDelivery() {
+    val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
+    val (machine, session) = portableStates()
+    val cases =
+        listOf(
+            "truncated" to "CGBS".toByteArray(),
+            "future version" to machine.clone().also { it[5] = 2 },
+            "corrupt checksum" to machine.clone().also {
+              it[it.lastIndex] = (it.last().toInt() xor 0x55).toByte()
+            },
+            "wrong root" to session,
+        )
+
+    cases.forEach { (description, state) ->
+      val connection = clientConnection(networkRomMessage(state))
+      val error = assertFailsWith<Connection.ProtocolException>(description) { connection.run() }
+      assertEquals(Connection.ProtocolErrorReason.INVALID_PORTABLE_STATE, error.reason, description)
+      if (description == "future version") {
+        assertTrue(error.message!!.contains("version 2; supported 1"))
+      }
+      assertEquals(null, received.poll(), description)
+    }
+  }
+
+  @Test
+  fun romAndHardwareProfileIdentityMismatchAreRejectedBeforeDelivery() {
+    val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
+    val machine = portableStates().first
+    val wrongRom = ROM.readBytes().clone().also { it[it.lastIndex] = (it.last() + 1).toByte() }
+    val wrongRomError =
+        assertFailsWith<Connection.ProtocolException> {
+          clientConnection(networkRomMessage(machine, wrongRom)).run()
+        }
+    assertEquals(Connection.ProtocolErrorReason.INVALID_PORTABLE_STATE, wrongRomError.reason)
+
+    val cgb0Machine = portableStates(gameboyType = GameboyType.CGB, cgb0Revision = true).first
+    val wrongProfileError =
+        assertFailsWith<Connection.ProtocolException> {
+          clientConnection(
+                  networkRomMessage(
+                      cgb0Machine,
+                      gameboyType = GameboyType.CGB,
+                      profileFlags = 0,
+                  ))
+              .run()
+        }
+    assertEquals(Connection.ProtocolErrorReason.INVALID_PORTABLE_STATE, wrongProfileError.reason)
+    assertEquals(null, received.poll())
+  }
+
+  @Test
+  fun datelSlotPresenceAndHashMismatchAreRejectedBeforeDelivery() {
+    val datel = datelRom()
+    val slot = slotRom(seed = 3)
+    val configuration =
+        Gameboy.GameboyConfiguration(Rom(datel))
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setGameboyType(GameboyType.CGB)
+            .setSlotRom(Rom(slot))
+            .setSupportBatterySave(false)
+    val state = portableMachine(configuration)
+
+    for (wrongSlot in listOf(null, slotRom(seed = 4))) {
+      val error =
+          assertFailsWith<Connection.ProtocolException> {
+            clientConnection(
+                    networkRomMessage(
+                        state,
+                        datel,
+                        gameboyType = GameboyType.CGB,
+                        slotRomBytes = wrongSlot,
+                    ))
+                .run()
+          }
+      assertEquals(Connection.ProtocolErrorReason.INVALID_PORTABLE_STATE, error.reason)
+    }
+  }
+
+  @Test
   fun peerProtocolErrorHasAUserFacingReason() {
     val error =
         assertFailsWith<Connection.ProtocolException> {
-          clientConnection(byteArrayOf(0x0a, 0x01)).run()
+          clientConnection(byteArrayOf(0x0a, 0x02)).run()
         }
 
-    assertTrue(error.message!!.contains("portable state format"))
+    assertEquals(Connection.ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT, error.reason)
+  }
+
+  @Test
+  fun productionPeerStatePathHasNoLegacyOrNativeDecoderReachability() {
+    val networkSources =
+        listOf(
+            Paths.get(
+                "src/main/java/eu/rekawek/coffeegb/controller/network/Connection.kt"),
+            Paths.get(
+                "src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt"),
+        )
+    val forbidden =
+        listOf(
+            "LegacyMementoCodec",
+            "NetplayMementoCodec",
+            "ObjectInputStream",
+            "ObjectOutputStream",
+            "CGBN",
+        )
+    networkSources.forEach { path ->
+      val source = path.toFile().readText()
+      forbidden.forEach { token ->
+        assertFalse(source.contains(token), "$path reaches forbidden peer decoder token $token")
+      }
+    }
+    assertFalse(
+        Paths.get(
+                "src/main/java/eu/rekawek/coffeegb/controller/NetplayMementoCodec.kt")
+            .toFile()
+            .exists())
   }
 
   @Test
@@ -808,9 +1052,26 @@ class ConnectionTest {
   ): Connection {
     val handshake =
         "CoffeeGB NETPLAY".toByteArray() +
-            byteArrayOf(0x07, mode.ordinal.toByte(), 0x01, 0x01)
+            byteArrayOf(0x08, mode.ordinal.toByte(), 0x01) +
+            capabilities()
     return Connection(
         ByteArrayInputStream(handshake + messages),
+        ByteArrayOutputStream(),
+        receiverBus,
+        false,
+    )
+  }
+
+  private fun tripwireClient(
+      messages: ByteArray,
+      mode: LinkMode = LinkMode.NORMAL,
+  ): Connection {
+    val handshake =
+        "CoffeeGB NETPLAY".toByteArray() +
+            byteArrayOf(0x08, mode.ordinal.toByte(), 0x01) +
+            capabilities()
+    return Connection(
+        PayloadTripwireInputStream(handshake + messages),
         ByteArrayOutputStream(),
         receiverBus,
         false,
@@ -829,14 +1090,53 @@ class ConnectionTest {
         ))
   }
 
+  private fun networkRomMessage(
+      state: ByteArray,
+      romBytes: ByteArray = ROM.readBytes(),
+      gameboyType: GameboyType = GameboyType.DMG,
+      profileFlags: Int = 0,
+      slotRomBytes: ByteArray? = null,
+  ): ByteArray {
+    val rom = Connection.deflate(romBytes, StateLimits.ROM)
+    val slot = slotRomBytes?.let { Connection.deflate(it, StateLimits.ROM) }
+    return byteArrayOf(0x01) +
+        romHeader(
+            gameboyType = gameboyType.ordinal,
+            profileFlags = profileFlags,
+            romDecoded = romBytes.size,
+            romEncoded = rom.size,
+            slotDecoded = slotRomBytes?.size ?: 0,
+            slotEncoded = slot?.size ?: 0,
+            stateBytes = state.size,
+        ) +
+        state +
+        rom +
+        (slot ?: byteArrayOf())
+  }
+
+  private fun capabilities(
+      protocol: Int = 8,
+      negotiation: Int = 1,
+      stateFile: Int = 1,
+      roots: Int = 7,
+  ) =
+      byteArrayOf(
+          protocol.toByte(),
+          negotiation.toByte(),
+          stateFile.toByte(),
+          roots.toByte(),
+      )
+
   private fun portableStates(
       battery: ByteArray? = null,
       gameboyType: GameboyType = GameboyType.DMG,
       cgb0Revision: Boolean = false,
+      heldButtons: Set<Button> = emptySet(),
+      bootstrapMode: Gameboy.BootstrapMode = Gameboy.BootstrapMode.SKIP,
   ): Pair<ByteArray, ByteArray> {
     val config =
         Gameboy.GameboyConfiguration(Rom(ROM))
-            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setBootstrapMode(bootstrapMode)
             .setBatteryData(battery)
             .setGameboyType(gameboyType)
             .setCgb0Revision(cgb0Revision)
@@ -850,7 +1150,10 @@ class ConnectionTest {
     )
     val game =
         try {
-          NetplayMementoCodec.encodeGameboy(gameboy.saveToMemento())
+          StateCodec.encode(
+              StateCodec.capture(config, gameboy),
+              StateCompression.DEFLATE,
+          )
         } finally {
           gameboy.stop()
           gameboy.close()
@@ -858,9 +1161,13 @@ class ConnectionTest {
         }
     val sessionBus = EventBusImpl()
     val session = Session(config, sessionBus, null, FourPlayerAdapter().endpoint(0))
+    session.heldButtons = heldButtons
     val sessionState =
         try {
-          NetplayMementoCodec.encodeSession(session.saveToMemento())
+          StateCodec.encode(
+              StateCodec.capture(session),
+              StateCompression.DEFLATE,
+          )
         } finally {
           session.close()
           sessionBus.close()
@@ -868,20 +1175,78 @@ class ConnectionTest {
     return game to sessionState
   }
 
-  private fun invalidPortableGameSnapshot(): ByteArray {
+  private fun portableMachine(configuration: Gameboy.GameboyConfiguration): ByteArray {
     val bus = EventBusImpl()
-    val gameboy =
-        Gameboy.GameboyConfiguration(Rom(ROM))
-            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-            .build()
+    val gameboy = configuration.build()
     gameboy.init(bus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
     return try {
+      StateCodec.encode(
+          StateCodec.capture(configuration, gameboy),
+          StateCompression.DEFLATE,
+      )
+    } finally {
+      gameboy.stop()
+      gameboy.close()
+      bus.close()
+    }
+  }
+
+  private fun datelRom(): ByteArray =
+      ByteArray(0x20000).also {
+        it[0x100] = 0x00
+        it[0x101] = 0xc3.toByte()
+        it[0x104] = 0x44
+        it[0x147] = 0x00
+        it[0x148] = 0x02
+      }
+
+  private fun slotRom(seed: Int): ByteArray =
+      ByteArray(0x8000).also {
+        intArrayOf(0xce, 0xed, 0x66, 0x66, 0xcc, 0x0d).forEachIndexed { index, value ->
+          it[0x104 + index] = value.toByte()
+        }
+        it[0x100] = 0x18
+        it[0x101] = 0xfe.toByte()
+        it[0x134] = seed.toByte()
+        it[0x147] = 0x08
+        it[0x148] = 0x00
+        it[0x149] = 0x02
+      }
+
+  private fun invalidPortableGameSnapshot(): ByteArray {
+    val bus = EventBusImpl()
+    val config =
+        Gameboy.GameboyConfiguration(Rom(ROM))
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+    val gameboy = config.build()
+    gameboy.init(bus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    return try {
+      val validFile = StateCodec.capture(config, gameboy)
+      val validMachine = (validFile.root as MachineStateRoot).machine
       val memento = gameboy.saveToMemento()
       val mmu = recordComponent(memento, "mmuMemento")!!
       val invalidMmu = replaceRecordComponent(mmu, "ramC000Memento", Ram.RamMemento(IntArray(0)))
       @Suppress("UNCHECKED_CAST")
-      NetplayMementoCodec.encodeGameboy(
-          replaceRecordComponent(memento, "mmuMemento", invalidMmu) as Memento<Gameboy>)
+      val invalid =
+          replaceRecordComponent(memento, "mmuMemento", invalidMmu) as Memento<Gameboy>
+      val invalidRoot =
+          StateGraph.captureRoot(
+              invalid,
+              "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento",
+          )
+      StateCodec.encode(
+          StateFile(
+              validFile.identities,
+              MachineStateRoot(
+                  MachineState(
+                      invalidRoot,
+                      validMachine.rtcRuntime,
+                      validMachine.hardware,
+                      validMachine.dmgFifoRuntime,
+                  )),
+          ),
+          StateCompression.DEFLATE,
+      )
     } finally {
       gameboy.stop()
       gameboy.close()
@@ -917,19 +1282,29 @@ class ConnectionTest {
 
   private fun romHeader(
       gameboyType: Int = GameboyType.DMG.ordinal,
-      cgb0Revision: Int = 0,
-      decodedSizes: IntArray = intArrayOf(1, 0, 0, 0),
-      encodedSizes: IntArray = intArrayOf(1, 0, 0, 0),
+      profileFlags: Int = 0,
+      romDecoded: Int = 1,
+      romEncoded: Int = 1,
+      slotDecoded: Int = 0,
+      slotEncoded: Int = 0,
+      batteryDecoded: Int = 0,
+      batteryEncoded: Int = 0,
+      stateBytes: Int = 0,
   ): ByteArray {
-    val header = ByteBuffer.allocate(45)
+    val header = ByteBuffer.allocate(Connection.ROM_HEADER_SIZE)
     header.put(0)
     header.putLong(0)
     header.put(gameboyType.toByte())
     header.put(Gameboy.BootstrapMode.SKIP.ordinal.toByte())
-    header.put(cgb0Revision.toByte())
+    header.putInt(profileFlags)
     header.put(0)
-    decodedSizes.forEach(header::putInt)
-    encodedSizes.forEach(header::putInt)
+    header.putInt(romDecoded)
+    header.putInt(romEncoded)
+    header.putInt(slotDecoded)
+    header.putInt(slotEncoded)
+    header.putInt(batteryDecoded)
+    header.putInt(batteryEncoded)
+    header.putInt(stateBytes)
     return header.array()
   }
 
