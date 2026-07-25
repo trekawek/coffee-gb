@@ -3,7 +3,7 @@
 ## Invariant established by Phase 1
 
 `MachineState`, `SessionState`, and `LinkedSessionState` are the service-free capture/apply boundary
-for the future portable state format. A capture owns every array and collection it exposes. Before
+used by the portable StateFile v1 codec. A capture owns every array and collection it exposes. Before
 mutation, apply checks the hardware tag, nested record/mapper tree, invariant array dimensions,
 serial endpoint and memento root, cartridge RTC locations, runtime DTO, held input, and linked
 topology against the already-configured target. Null is admitted only for audited owner/field or
@@ -16,8 +16,9 @@ linked—the other sessions and controller frame from rollback captures.
 
 The model contains only `Int`, `Long`, `Boolean`, `Double`, `String`, explicit enum/type IDs, and
 deep-owned immutable containers. It cannot represent a thread, callback, event bus, stream, file,
-clock service, AWT/Swing object, or live mutable array. The Phase 2 byte envelope and section codec
-are deliberately not part of this phase.
+clock service, AWT/Swing object, or live mutable array. The format that encodes this model is
+specified separately in [state-file-v1.md](state-file-v1.md); disk/netplay integration remains
+deferred to issue #323.
 
 The exact field-by-field inventory of all 91 admitted production record types is committed in
 [state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 97
