@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -469,6 +470,24 @@ public class Fetcher implements Serializable, Originator<Fetcher> {
     public Memento<Fetcher> saveToMemento() {
         return new FetcherMemento(
                 pixelLine.clone(),
+                state,
+                windowTileX,
+                fetcherY,
+                tileMapAddress,
+                tileId,
+                tileAttributes == null ? -1 : tileAttributes.getValue(),
+                tileData1,
+                tileData2,
+                insertionGlitchDisabled,
+                data2Pending,
+                data2Delay,
+                data2TileSelectGlitch);
+    }
+
+    @Override
+    public Memento<Fetcher> saveToMemento(MachineStateCapture capture) {
+        return new FetcherMemento(
+                capture.ints(pixelLine),
                 state,
                 windowTileX,
                 fetcherY,

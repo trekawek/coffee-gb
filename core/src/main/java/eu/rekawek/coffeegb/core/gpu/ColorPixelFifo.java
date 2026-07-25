@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -284,6 +285,24 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
                 clearedPixels.saveToMemento(),
                 clearedPalettes.saveToMemento(),
                 clearedPriorities.saveToMemento());
+    }
+
+    @Override
+    public Memento<ColorPixelFifo> saveToMemento(MachineStateCapture capture) {
+        return new ColorPixelFifoMemento(
+                pixels.saveToMemento(capture),
+                palettes.saveToMemento(capture),
+                priorities.saveToMemento(capture),
+                spriteFifo.saveToMemento(capture),
+                capture.ints(delayEntry),
+                capture.longs(delayStamp),
+                delayHead,
+                delaySize,
+                outputTicks,
+                linePixels,
+                clearedPixels.saveToMemento(capture),
+                clearedPalettes.saveToMemento(capture),
+                clearedPriorities.saveToMemento(capture));
     }
 
     @Override

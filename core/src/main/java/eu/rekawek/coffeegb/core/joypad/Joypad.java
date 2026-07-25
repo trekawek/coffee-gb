@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.BitUtils;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.sgb.Commands;
@@ -270,6 +271,14 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
         return new JoypadMemento(p1, tick, inputHistory, filteredInputLines,
                 inputChangedSinceLastTick, players, currentPlayer, transferInProgress,
                 transferReadyForData, pendingTransferBit, currentByte, currentPacket.clone(),
+                currentByteIndex, currentPacketIndex);
+    }
+
+    @Override
+    public Memento<Joypad> saveToMemento(MachineStateCapture capture) {
+        return new JoypadMemento(p1, tick, inputHistory, filteredInputLines,
+                inputChangedSinceLastTick, players, currentPlayer, transferInProgress,
+                transferReadyForData, pendingTransferBit, currentByte, capture.ints(currentPacket),
                 currentByteIndex, currentPacketIndex);
     }
 

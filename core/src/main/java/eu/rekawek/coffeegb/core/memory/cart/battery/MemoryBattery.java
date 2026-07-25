@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.battery;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery.FileBatteryMemento;
@@ -80,6 +81,11 @@ public class MemoryBattery implements Battery, Originator<Battery> {
     @Override
     public Memento<Battery> saveToMemento() {
         return new MemoryBatteryMemento(buffer.clone());
+    }
+
+    @Override
+    public Memento<Battery> saveToMemento(MachineStateCapture capture) {
+        return new MemoryBatteryMemento(capture.bytes(buffer));
     }
 
     @Override

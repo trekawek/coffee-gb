@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
@@ -229,6 +230,17 @@ public class PocketCamera implements MemoryController {
     public Memento<MemoryController> saveToMemento() {
         return new PocketCameraMemento(
                 ram.clone(), cameraRegisters.clone(), romBank, ramBank, ramEnabled, cameraMapped);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new PocketCameraMemento(
+                capture.ints(ram),
+                capture.ints(cameraRegisters),
+                romBank,
+                ramBank,
+                ramEnabled,
+                cameraMapped);
     }
 
     @Override

@@ -33,6 +33,11 @@ class MachineSnapshotTest {
       val unchanged = MachineSnapshot.capture(gameboy, first)
 
       assertEquals(0, unchanged.captureStats.copiedPages)
+      assertEquals(0, unchanged.captureStats.copiedPageBytes)
+      assertEquals(0, unchanged.captureStats.sourcePayloadClones)
+      assertEquals(0, unchanged.captureStats.sourcePayloadCloneBytes)
+      assertTrue(unchanged.captureStats.sourcePayloadArraysRead > 0)
+      assertTrue(unchanged.captureStats.sourcePayloadBytesRead > 0)
       assertTrue(unchanged.captureStats.reusedPages > 0)
       assertSamePages(
           first.debugArrays(RAM_MEMENTO, "space"),
@@ -52,9 +57,39 @@ class MachineSnapshotTest {
       assertEquals(1, changedPageCount)
       assertEquals(1, changed.captureStats.copiedPages)
       assertEquals(MachineSnapshot.PAGE_BYTES.toLong(), changed.captureStats.copiedPageBytes)
+      assertEquals(0, changed.captureStats.sourcePayloadClones)
+      assertEquals(0, changed.captureStats.sourcePayloadCloneBytes)
 
       // The only debug surface returns opaque immutable page tokens, never backing arrays.
       assertTrue(after.flatMap { it.pageTokens }.none { it.javaClass.isArray })
+    }
+  }
+
+  @Test
+  fun legacyGameboyMementoStillDeepOwnsPrimitivePayloads() {
+    StateCodecTestSupport.session(cgbMbc5Configuration()).use { session ->
+      val gameboy = session.gameboy
+      val bus = gameboy.addressSpace
+      bus.setByte(0x0000, 0x0a)
+      bus.setByte(0xc321, 0x11)
+      gameboy.gpu.videoRam0.setByte(0x8123, 0x22)
+      bus.setByte(0xfe23, 0x33)
+      bus.setByte(0xa123, 0x44)
+      repeat(8_765) { gameboy.tick() }
+      val expected = DetachedStateAdapter.capture(gameboy)
+      val legacy = gameboy.saveToMemento()
+
+      bus.setByte(0xc321, 0xaa)
+      gameboy.gpu.videoRam0.setByte(0x8123, 0xbb)
+      bus.setByte(0xfe23, 0xcc)
+      bus.setByte(0xa123, 0xdd)
+      repeat(2_048) { gameboy.tick() }
+
+      gameboy.restoreFromMemento(legacy)
+      assertEquals(expected, DetachedStateAdapter.capture(gameboy))
+      assertEquals(0x11, bus.getByte(0xc321))
+      assertEquals(0x22, gameboy.gpu.videoRam0.getByte(0x8123))
+      assertEquals(0x44, bus.getByte(0xa123))
     }
   }
 

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -312,6 +313,21 @@ public class Datel implements MemoryController {
         return new DatelMemento(ram.clone(), regs.clone(), ramWritten.clone(), regsB.clone(),
                 flash.clone(), flashCycle, flashErasePending, flashIdMode, launched,
                 slot == null ? null : slot.saveToMemento());
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new DatelMemento(
+                capture.ints(ram),
+                capture.ints(regs),
+                capture.booleans(ramWritten),
+                capture.ints(regsB),
+                capture.ints(flash),
+                flashCycle,
+                flashErasePending,
+                flashIdMode,
+                launched,
+                slot == null ? null : slot.saveToMemento(capture));
     }
 
     @Override

@@ -47,9 +47,22 @@ capture computes a deterministic content hash and then performs an exact primiti
 Equal content reuses an immutable predecessor page (or an equal page already seen in the same
 generation); only a changed retained page payload is copied. This content comparison is the dirty
 transition and cannot mistake a hash collision for equality. Unchanged scalar/container/record
-nodes are also reused by identity. The temporary Phase-1 memento used as the audited capture source
-is discarded immediately and is never stored in rewind history; eliminating that transitional
-capture allocation belongs to the broader memento retirement in #326.
+nodes are also reused by identity.
+
+Rewind does not call the ordinary `Gameboy.saveToMemento()` path. At the safe point, array-owning
+machine components build a short-lived typed record view and register their live primitive
+payloads with `MachineStateCapture`. Snapshot construction reads and compares those registered
+arrays synchronously; the token is then closed and the borrowed view cannot escape. Unchanged
+arrays therefore have no source-payload clone and no retained-page copy. A changed page produces
+one private retained payload. The capture rejects any primitive array that was not explicitly
+registered, preventing a component from silently falling back to legacy deep capture.
+
+The audited direct owners include CPU operands; WRAM, VRAM, OAM and MMU/register RAM; both display
+buffers and all PPU queues/FIFOs/fetch history/palettes; pending audio; SGB packet, border, mask,
+palette and attribute buffers; IR schedules; cartridge battery buffers; and every mutable mapper
+RAM/flash/EEPROM implementation, including nested Datel slots. The memento record descriptors are
+unchanged. Ordinary legacy, boot, portable StateFile and netplay capture still use their existing
+deep-owned paths; their retirement remains #326.
 
 A restore always materializes new live arrays from the private pages. Live mutation can therefore
 never write into a snapshot. Branching by restoring an old generation and capturing from it reuses
@@ -89,15 +102,19 @@ with:
   -Dcoffeegb.rewind.benchmark=true test
 ```
 
-Method: use one synthetic CGB MBC5+32 KiB RAM machine, run 1800 deterministic workload steps,
-capture every sixth step, and retain 300 entries. Each step advances 2048 master ticks and changes
-scattered WRAM, both VRAM banks, OAM, mapper RAM, and display state. Then restore all 300 entries.
+Method: use one synthetic CGB MBC5+32 KiB RAM machine, run 1800 complete forward frames, and retain
+the 300 states selected by `RewindManager`'s first-capture/every-sixth-frame cadence. Each frame
+executes exactly `Gameboy.TICKS_PER_FRAME` (69,905) emulator ticks before the record point, then
+applies the same deterministic scattered WRAM, both-VRAM-bank, OAM and mapper-RAM workload to the
+legacy and MachineSnapshot machines. The harness then restores all 300 entries.
 The legacy baseline counts every distinct reachable primitive array using the measured 64-bit
 HotSpot layout model (16-byte array header, element width, eight-byte alignment). The new exact
 primitive payload figure counts each immutable page identity once. `modeledRetainedBytes` also adds
 deterministic shallow estimates for snapshot/value/container nodes. Thread allocation comes from
 HotSpot's `ThreadMXBean`; capture/restore times use `System.nanoTime`. Allocation and time are
-reported for diagnosis only and have no flaky CI threshold.
+reported for diagnosis only and have no flaky CI threshold. The normal deterministic guard repeats
+the final 1800-frame MachineSnapshot workload and compares retained bytes to the recorded legacy
+baseline; it does not assert time or allocation.
 
 Environment: Coffee GB master `195d9172f27d707934f631fa64c08803b18776a4`, final Phase-5 branch,
 Oracle HotSpot 21.0.1, Maven 3.8.6, Linux 6.17.0-41 x86-64, Intel i7-1165G7 (4 cores/8 threads),
@@ -106,17 +123,20 @@ Oracle HotSpot 21.0.1, Maven 3.8.6, Linux 6.17.0-41 x86-64, Intel i7-1165G7 (4 c
 | Measurement | Legacy master | MachineSnapshot final |
 |---|---:|---:|
 | entries | 300 | 300 |
-| retained primitive bytes | 420,760,640 | 8,118,616 |
-| modeled retained bytes | not measured (object graph excluded) | 12,310,608 |
-| retained arrays/pages | 194,400 arrays | 4,090 pages |
-| unique immutable value nodes | n/a | 31,872 |
-| copied retained page bytes | n/a | 8,053,164 |
-| capture allocated bytes | 423,527,328 | 727,215,224 |
-| capture time | 125,434,035 ns | 954,542,780 ns |
-| restore time | 52,817,678 ns | 1,503,275,044 ns |
+| retained primitive bytes | 337,665,600 | 8,036,600 |
+| modeled retained bytes | not measured (object graph excluded) | 12,672,880 |
+| retained arrays/pages | 194,400 arrays | 4,331 pages |
+| unique immutable value nodes | n/a | 36,202 |
+| copied retained page bytes | n/a | 7,967,292 |
+| cloned source-payload bytes | 337,665,600 | 0 |
+| capture allocated bytes | 340,432,880 | 304,800,456 |
+| capture time | 116,675,757 ns | 771,432,075 ns |
+| restore time | 42,101,754 ns | 3,153,219,918 ns |
 
-Exact retained primitive payload fell by 98.07%; even the final modeled total is 97.07% below the
-baseline's primitive arrays alone. The normal test asserts the deterministic primitive retained
-total stays below half of the recorded master baseline. The higher transient allocation and timing
-are explicit limitations of the Phase-1 memento bridge and reflection-based reconstruction; they
-are not hidden by the retained-memory result and do not form a normal-test performance assertion.
+Exact retained primitive payload fell by 97.62%; even the final modeled total is 96.25% below the
+baseline's primitive arrays alone. Capture allocation is 10.47% below the identical legacy
+baseline and 58.09% below the rejected transitional implementation's 727,215,224 bytes. Source
+payload cloning is zero by construction and is asserted by the focused capture tests. Capture and
+restore remain slower than the legacy graph; these honest timing costs come primarily from exact
+page comparison and reflection-based immutable graph conversion/reconstruction. They are not
+hidden by copied-page accounting and do not form a normal-test performance threshold.

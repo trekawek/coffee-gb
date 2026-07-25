@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.battery;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter;
 import org.apache.commons.io.IOUtils;
@@ -171,6 +172,15 @@ public class FileBattery implements Battery {
     @Override
     public synchronized Memento<Battery> saveToMemento() {
         return new FileBatteryMemento(clockBuffer.clone(), ramBuffer.clone(), isClockPresent, isDirty);
+    }
+
+    @Override
+    public synchronized Memento<Battery> saveToMemento(MachineStateCapture capture) {
+        return new FileBatteryMemento(
+                capture.bytes(clockBuffer),
+                capture.bytes(ramBuffer),
+                isClockPresent,
+                isDirty);
     }
 
     @Override

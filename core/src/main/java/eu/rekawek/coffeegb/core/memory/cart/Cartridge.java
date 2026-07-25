@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory.cart;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -216,6 +217,13 @@ public class Cartridge implements AddressSpace, Serializable, Originator<Cartrid
     @Override
     public Memento<Cartridge> saveToMemento() {
         return new CartridgeMemento(addressSpace.saveToMemento(), battery.saveToMemento());
+    }
+
+    @Override
+    public Memento<Cartridge> saveToMemento(MachineStateCapture capture) {
+        return new CartridgeMemento(
+                addressSpace.saveToMemento(capture),
+                battery.saveToMemento(capture));
     }
 
     @Override

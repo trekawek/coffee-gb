@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -126,6 +127,18 @@ public class SpriteFifo implements Serializable, Originator<SpriteFifo> {
     public Memento<SpriteFifo> saveToMemento() {
         return new SpriteFifoMemento(
                 pixel.clone(), palette.clone(), priority.clone(), bgPriority.clone(), head, size, underflow);
+    }
+
+    @Override
+    public Memento<SpriteFifo> saveToMemento(MachineStateCapture capture) {
+        return new SpriteFifoMemento(
+                capture.ints(pixel),
+                capture.ints(palette),
+                capture.ints(priority),
+                capture.booleans(bgPriority),
+                head,
+                size,
+                underflow);
     }
 
     @Override

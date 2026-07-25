@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.Gpu;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
@@ -220,6 +221,17 @@ public class Mmu implements AddressSpace, Serializable, Originator<Mmu> {
         return new MmuMemento(ramC000.saveToMemento(), ramD000.saveToMemento(), ramFF80.saveToMemento(),
                 gbcRam.saveToMemento(), undocumentedGbcRegisters.saveToMemento(),
                 oamEchoRam.saveToMemento());
+    }
+
+    @Override
+    public Memento<Mmu> saveToMemento(MachineStateCapture capture) {
+        return new MmuMemento(
+                ramC000.saveToMemento(capture),
+                ramD000.saveToMemento(capture),
+                ramFF80.saveToMemento(capture),
+                gbcRam.saveToMemento(capture),
+                undocumentedGbcRegisters.saveToMemento(capture),
+                oamEchoRam.saveToMemento(capture));
     }
 
     @Override

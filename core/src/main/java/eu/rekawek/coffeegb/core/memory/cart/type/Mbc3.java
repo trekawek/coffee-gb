@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -194,6 +195,17 @@ public class Mbc3 implements MemoryController {
     public Memento<MemoryController> saveToMemento() {
         return new Mbc3Memento(ram.clone(), clock.saveToMemento(), battery.saveToMemento(), selectedRamBank,
                 selectedRomBank, ramEnabled);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new Mbc3Memento(
+                capture.ints(ram),
+                clock.saveToMemento(capture),
+                battery.saveToMemento(capture),
+                selectedRamBank,
+                selectedRomBank,
+                ramEnabled);
     }
 
     @Override

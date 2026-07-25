@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.phase.*;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.memory.Dma;
@@ -1964,6 +1965,49 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
         return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+    }
+
+    @Override
+    public Memento<Gpu> saveToMemento(MachineStateCapture capture) {
+        Memento<Ram> videoRam0Memento =
+                videoRam0 instanceof Ram ? videoRam0.saveToMemento(capture) : null;
+        Memento<Ram> videoRam1Memento =
+                videoRam1 instanceof Ram ? videoRam1.saveToMemento(capture) : null;
+
+        return new GpuMemento(
+                videoRam0Memento,
+                videoRam1Memento,
+                display.saveToMemento(capture),
+                lcdc.saveToMemento(capture),
+                bgPalette.saveToMemento(capture),
+                oamPalette.saveToMemento(capture),
+                oamSearchPhase.saveToMemento(capture),
+                pixelTransferPhase.saveToMemento(capture),
+                pixelMachine.saveToMemento(capture),
+                r.saveToMemento(capture),
+                lcdEnabled,
+                displayEnabledDelay,
+                line,
+                ticksInLine,
+                firstLine,
+                lcdEnableClockPhase,
+                firstFrameAfterLcdEnable,
+                pixelTransferDone,
+                hblankIntFrom,
+                mode0IntFrom,
+                statModeLatchRephasedBySpeedSwitch,
+                speedSwitchCompletedThisLine,
+                lyReadLatchRephasedBySpeedSwitch,
+                scxWrittenThisLine,
+                doubleSpeedMode2DispatchStatTailThisLine,
+                doubleSpeedMode2DispatchCrossedLineEdge,
+                earlyScxStatTailThisLine,
+                wyWrittenThisLine,
+                lateDoubleSpeedLineZeroWindowEnable,
+                lastCpuVramWriteTick,
+                mode,
+                new ArrayList<>(pendingPpuWrites),
+                capture.ints(cpuVisiblePpuRegisters));
     }
 
     @Override

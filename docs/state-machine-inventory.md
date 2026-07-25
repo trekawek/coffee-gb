@@ -141,11 +141,12 @@ restore. New captures set that nullable compatibility component to null, so only
 LCD enable and repeat behavior therefore remain restorable without duplicate payload.
 
 Rewind now retains internal immutable, structurally shared `MachineSnapshot` generations described
-in [rewind-machine-snapshots.md](rewind-machine-snapshots.md). Its transitional capture source is
-the audited memento graph, but no memento is retained in rewind history. `ControllerState` and
-boot-state reuse continue to use their existing in-process mementos until #326. Local slot
-snapshots and netplay protocol v8 use the bounded StateFile codec; their distinct disk and network
-limits do not weaken the graph, queue, frame, or work limits.
+in [rewind-machine-snapshots.md](rewind-machine-snapshots.md). Its safe-point capture consumes an
+audited, short-lived record view that borrows registered live primitive arrays for synchronous
+comparison; it neither calls the deep-cloning legacy root capture nor retains the borrowed view.
+`ControllerState` and boot-state reuse continue to use their existing in-process mementos until
+#326. Local slot snapshots and netplay protocol v8 use the bounded StateFile codec; their distinct
+disk and network limits do not weaken the graph, queue, frame, or work limits.
 
 ## Failure and extension policy
 

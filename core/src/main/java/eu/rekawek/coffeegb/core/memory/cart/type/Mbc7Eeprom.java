@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 
@@ -175,6 +176,20 @@ public class Mbc7Eeprom implements Serializable {
     public Memento<Mbc7Eeprom> saveToMemento() {
         return new EepromMemento(
                 eeprom.clone(),
+                state,
+                bitsRead,
+                command,
+                address,
+                writeValue,
+                writeEnabled,
+                sk,
+                doBit
+        );
+    }
+
+    public Memento<Mbc7Eeprom> saveToMemento(MachineStateCapture capture) {
+        return new EepromMemento(
+                capture.ints(eeprom),
                 state,
                 bitsRead,
                 command,

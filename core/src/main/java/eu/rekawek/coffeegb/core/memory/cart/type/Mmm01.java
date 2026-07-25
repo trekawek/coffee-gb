@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -204,6 +205,26 @@ public class Mmm01 implements MemoryController {
         return new Mmm01Memento(battery.saveToMemento(), ram.clone(), ramEnabled, romBankLow, romBankMid,
                 romBankHigh, romBankMask, ramBankLow, ramBankHigh, ramBankMask, locked, mbc1Mode,
                 mbc1ModeDisable, multiplexMode, ramUpdated);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new Mmm01Memento(
+                battery.saveToMemento(capture),
+                capture.ints(ram),
+                ramEnabled,
+                romBankLow,
+                romBankMid,
+                romBankHigh,
+                romBankMask,
+                ramBankLow,
+                ramBankHigh,
+                ramBankMask,
+                locked,
+                mbc1Mode,
+                mbc1ModeDisable,
+                multiplexMode,
+                ramUpdated);
     }
 
     @Override

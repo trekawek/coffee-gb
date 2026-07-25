@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
@@ -94,6 +95,12 @@ public class Bbd implements MemoryController {
     @Override
     public Memento<MemoryController> saveToMemento() {
         return new BbdMemento(delegate.saveToMemento(), dataSwapMode, bankSwapMode);
+    }
+
+    @Override
+    public Memento<MemoryController> saveToMemento(MachineStateCapture capture) {
+        return new BbdMemento(
+                delegate.saveToMemento(capture), dataSwapMode, bankSwapMode);
     }
 
     @Override

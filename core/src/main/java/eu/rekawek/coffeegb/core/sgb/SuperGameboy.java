@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.sgb;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.VRamTransfer;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 import eu.rekawek.coffeegb.core.sgb.Commands.TransferCommand;
@@ -87,6 +88,18 @@ public class SuperGameboy implements Originator<SuperGameboy> {
         int[][] multipacketCopy = Arrays.stream(multipacket).map(int[]::clone).toArray(int[][]::new);
         return new SuperGameboyMemento(multipacketCopy, multipacketIndex, multipacketLength, transferCountdown,
                 waitingTransferCommand == null ? null : waitingTransferCommand.saveToMemento());
+    }
+
+    @Override
+    public Memento<SuperGameboy> saveToMemento(MachineStateCapture capture) {
+        return new SuperGameboyMemento(
+                capture.ints2(multipacket),
+                multipacketIndex,
+                multipacketLength,
+                transferCountdown,
+                waitingTransferCommand == null
+                        ? null
+                        : waitingTransferCommand.saveToMemento(capture));
     }
 
     @Override

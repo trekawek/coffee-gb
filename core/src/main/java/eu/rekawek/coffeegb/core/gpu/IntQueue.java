@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -64,6 +65,11 @@ public class IntQueue implements Serializable, Originator<IntQueue> {
     @Override
     public Memento<IntQueue> saveToMemento() {
         return new IntQueueMemento(array.clone(), size, offset);
+    }
+
+    @Override
+    public Memento<IntQueue> saveToMemento(MachineStateCapture capture) {
+        return new IntQueueMemento(capture.ints(array), size, offset);
     }
 
     @Override

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -69,6 +70,11 @@ public class UndocumentedGbcRegisters implements AddressSpace, Serializable, Ori
     @Override
     public Memento<UndocumentedGbcRegisters> saveToMemento() {
         return new UndocumentedGbcRegistersMemento(ram.saveToMemento(), xff6c);
+    }
+
+    @Override
+    public Memento<UndocumentedGbcRegisters> saveToMemento(MachineStateCapture capture) {
+        return new UndocumentedGbcRegistersMemento(ram.saveToMemento(capture), xff6c);
     }
 
     @Override

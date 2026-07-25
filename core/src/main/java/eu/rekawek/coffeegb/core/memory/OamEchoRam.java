@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.memory;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.Gpu;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -69,6 +70,11 @@ final class OamEchoRam implements AddressSpace, Serializable, Originator<OamEcho
     @Override
     public Memento<OamEchoRam> saveToMemento() {
         return new OamEchoRamMemento(ram.clone());
+    }
+
+    @Override
+    public Memento<OamEchoRam> saveToMemento(MachineStateCapture capture) {
+        return new OamEchoRamMemento(capture.ints(ram));
     }
 
     @Override

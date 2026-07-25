@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.*;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
+import eu.rekawek.coffeegb.core.memento.MachineStateCapture;
 import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
@@ -1098,15 +1099,24 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     @Override
     public Memento<PixelTransfer> saveToMemento() {
+        return saveToMemento(null);
+    }
+
+    @Override
+    public Memento<PixelTransfer> saveToMemento(MachineStateCapture capture) {
         Memento<?> fifoMemento = null;
         if (fifo instanceof DmgPixelFifo) {
-            fifoMemento = ((DmgPixelFifo) fifo).saveToMemento();
+            fifoMemento = capture == null
+                    ? ((DmgPixelFifo) fifo).saveToMemento()
+                    : ((DmgPixelFifo) fifo).saveToMemento(capture);
         } else if (fifo instanceof ColorPixelFifo) {
-            fifoMemento = ((ColorPixelFifo) fifo).saveToMemento();
+            fifoMemento = capture == null
+                    ? ((ColorPixelFifo) fifo).saveToMemento()
+                    : ((ColorPixelFifo) fifo).saveToMemento(capture);
         }
 
         return new PixelTransferMemento(
-                fetcher.saveToMemento(),
+                capture == null ? fetcher.saveToMemento() : fetcher.saveToMemento(capture),
                 fifoMemento,
                 entryTicks,
                 lcdEnableFirstLine,
@@ -1114,7 +1124,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 window,
                 windowBeingFetched,
                 windowLineCounter,
-                spriteOrder.clone(),
+                capture == null ? spriteOrder.clone() : capture.ints(spriteOrder),
                 spriteCount,
                 spriteHead,
                 objStep,
@@ -1129,7 +1139,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 objRefreshTileId,
                 objRefreshLine,
                 objRefreshAttrs == null ? -1 : objRefreshAttrs.getValue(),
-                objRefreshZip.clone(),
+                capture == null ? objRefreshZip.clone() : capture.ints(objRefreshZip),
                 objWaiting,
                 objectTimingPenalty,
                 previousScx,
