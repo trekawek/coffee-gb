@@ -22,15 +22,15 @@ internal object StateValueCodec {
   private const val INT32_MAP = 14
 
   class Encoder(private val writer: PortableWriter) {
-    private var references = 0
+    private var occurrences = 0
 
     fun write(value: StateValue, depth: Int = 0) {
       checkDepth(depth)
+      countOccurrence()
       if (value === NullState) {
         writer.writeByte(NULL)
         return
       }
-      countReference()
       when (value) {
         is Int32State -> {
           writer.writeByte(INT32)
@@ -145,10 +145,10 @@ internal object StateValueCodec {
       }
     }
 
-    private fun countReference() {
-      references++
-      if (references > StateLimits.PORTABLE_MAX_REFERENCES) {
-        throw StateEncodeException("Portable state has too many value references")
+    private fun countOccurrence() {
+      occurrences++
+      if (occurrences > StateLimits.PORTABLE_MAX_VALUE_OCCURRENCES) {
+        throw StateEncodeException("Portable state has too many value occurrences")
       }
     }
 
@@ -174,13 +174,13 @@ internal object StateValueCodec {
   }
 
   class Decoder(private val reader: PortableReader) {
-    private var references = 0
+    private var occurrences = 0
 
     fun read(depth: Int = 0): StateValue {
       checkDepth(depth)
       val tag = reader.readByte()
+      countOccurrence()
       if (tag == NULL) return NullState
-      countReference()
       return when (tag) {
         INT32 -> Int32State(reader.readInt())
         INT64 -> Int64State(reader.readLong())
@@ -302,10 +302,10 @@ internal object StateValueCodec {
             "Portable collection count",
         )
 
-    private fun countReference() {
-      references++
-      if (references > StateLimits.PORTABLE_MAX_REFERENCES) {
-        PortableBounds.limit("Portable state has too many value references")
+    private fun countOccurrence() {
+      occurrences++
+      if (occurrences > StateLimits.PORTABLE_MAX_VALUE_OCCURRENCES) {
+        PortableBounds.limit("Portable state has too many value occurrences")
       }
     }
 

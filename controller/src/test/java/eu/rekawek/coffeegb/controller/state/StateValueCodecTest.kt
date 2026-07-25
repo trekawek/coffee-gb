@@ -196,21 +196,19 @@ class StateValueCodecTest {
   }
 
   @Test
-  fun referenceBudgetRejectsBoundaryPlusOne() {
-    fun tree(references: Int): StateValue {
-      var remaining = references - 1
-      val children = ArrayList<StateValue>()
-      while (remaining > 0) {
-        val count = minOf(StateLimits.PORTABLE_MAX_COLLECTION_ENTRIES, remaining - 1)
-        children += ListState(List(count) { Int32State(it) })
-        remaining -= count + 1
-      }
-      return ListState(children)
-    }
-    val exact = tree(StateLimits.PORTABLE_MAX_REFERENCES)
-    decode(encode(exact))
+  fun totalValueOccurrenceBudgetAcceptsBoundaryAndRejectsBoundaryPlusOneBothWays() {
+    val exact = nullHeavyTree(StateLimits.PORTABLE_MAX_VALUE_OCCURRENCES)
+    assertEquals(exact, decode(encode(exact)))
     assertFailsWith<StateEncodeException> {
-      encode(tree(StateLimits.PORTABLE_MAX_REFERENCES + 1))
+      encode(nullHeavyTree(StateLimits.PORTABLE_MAX_VALUE_OCCURRENCES + 1))
+    }
+
+    // Construct bytes without StateValueCodec.Encoder so decoder rejection cannot be inherited
+    // from the encoder. The graph has depth two and each bucket remains below the collection
+    // ceiling; only the total occurrence budget distinguishes these two inputs.
+    decode(manualNullHeavyBytes(StateLimits.PORTABLE_MAX_VALUE_OCCURRENCES))
+    assertReason(StateDecodeReason.LIMIT_EXCEEDED) {
+      decode(manualNullHeavyBytes(StateLimits.PORTABLE_MAX_VALUE_OCCURRENCES + 1))
     }
   }
 
@@ -223,6 +221,38 @@ class StateValueCodecTest {
   private fun decode(bytes: ByteArray): StateValue {
     val reader = PortableReader(bytes)
     return StateValueCodec.Decoder(reader).read().also { reader.requireExhausted() }
+  }
+
+  private fun nullHeavyTree(occurrences: Int): StateValue =
+      ListState(
+          nullBucketSizes(occurrences).map { count ->
+            ListState(List(count) { NullState })
+          })
+
+  private fun manualNullHeavyBytes(occurrences: Int): ByteArray {
+    val buckets = nullBucketSizes(occurrences)
+    return PortableWriter(StateLimits.PORTABLE_MAX_DECODED_PAYLOAD_BYTES).let { writer ->
+      writer.writeByte(13)
+      writer.writeU32(buckets.size.toLong())
+      buckets.forEach { count ->
+        writer.writeByte(13)
+        writer.writeU32(count.toLong())
+        repeat(count) { writer.writeByte(0) }
+      }
+      writer.toByteArray()
+    }
+  }
+
+  private fun nullBucketSizes(occurrences: Int): List<Int> {
+    require(occurrences > 0)
+    var remaining = occurrences - 1 // root list
+    return buildList {
+      while (remaining > 0) {
+        val nulls = minOf(StateLimits.PORTABLE_MAX_COLLECTION_ENTRIES, remaining - 1)
+        add(nulls)
+        remaining -= nulls + 1 // child list plus its null slots
+      }
+    }
   }
 
   private fun encodeWithoutEncoderDepthCheck(value: StateValue): ByteArray {

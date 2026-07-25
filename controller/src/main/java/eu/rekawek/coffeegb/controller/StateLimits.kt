@@ -88,7 +88,8 @@ internal object StateLimits {
   const val PORTABLE_MAX_SECTION_BYTES = PORTABLE_MAX_DECODED_PAYLOAD_BYTES
   const val PORTABLE_MAX_SECTIONS = 64
   const val PORTABLE_MAX_GRAPH_DEPTH = 96
-  const val PORTABLE_MAX_REFERENCES = 100_000
+  // Counts every encoded StateValue position, including NullState collection/map/record slots.
+  const val PORTABLE_MAX_VALUE_OCCURRENCES = 100_000
   const val PORTABLE_MAX_COLLECTION_ENTRIES = 16_384
   const val PORTABLE_MAX_ARRAY_ELEMENTS = 16 * MIB
   const val PORTABLE_MAX_ARRAY_BYTES = 32 * MIB

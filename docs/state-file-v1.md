@@ -183,7 +183,7 @@ StateFile limits are independent of the Phase-0 legacy importer:
 | one section body | 134,217,728 |
 | section count | 64 |
 | graph depth | 96 |
-| non-null value references | 100,000 |
+| StateValue occurrences, including nulls | 100,000 |
 | collection/map entries | 16,384 |
 | primitive-array elements | 16,777,216 |
 | primitive-array bytes | 33,554,432 |
@@ -193,9 +193,10 @@ StateFile limits are independent of the Phase-0 legacy importer:
 
 Checked addition, subtraction, multiplication, element widths, and declared counts are validated
 before allocation, copying, slicing, skipping, string decode, checksum retention, or inflation.
-The decoded aggregate limit is intentionally the netplay aggregate ceiling, while the independent
-array/reference/collection limits prevent a small encoded input from creating an unbounded object
-graph.
+The decoded aggregate limit is intentionally the netplay aggregate ceiling. Every StateValue
+position consumes the occurrence budget, including null record fields and null list, object-array,
+or map values. The independent occurrence/array/collection limits therefore prevent a small
+encoded input from creating an unbounded object graph or null-heavy collection backing storage.
 
 ## Typed failures
 
