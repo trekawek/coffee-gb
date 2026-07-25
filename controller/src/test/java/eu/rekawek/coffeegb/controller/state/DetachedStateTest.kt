@@ -416,6 +416,11 @@ class DetachedStateTest {
       val invalidAttributeFile =
           Int32ArrayState(firstAttributeFile.copyValue().also { it[0] = 4 })
       val paletteMap = sgbDisplay.intArray("paletteMap").also { it[0] = 4 }
+      val malformedTransfer =
+          transferCommand(0x14).let { transfer ->
+            val packet = transfer.intArray("packet").also { it[1] = 1 }
+            transfer.replaceField("packet", Int32ArrayState(packet))
+          }
 
       val invalidRoots =
           listOf(
@@ -477,6 +482,33 @@ class DetachedStateTest {
                         if (index == 0) NullState else value
                       }),
               ),
+              before.machine.root.replaceRecordField(
+                  SGB_DISPLAY_MEMENTO,
+                  "borderFade",
+                  Int32State(0x200),
+              ),
+              before.machine.root
+                  .replaceRecordField(
+                      SUPER_GAMEBOY_MEMENTO,
+                      "waitingTransferCommandMemento",
+                      malformedTransfer,
+                  )
+                  .replaceRecordField(
+                      SUPER_GAMEBOY_MEMENTO,
+                      "transferCountdown",
+                      Int32State(3),
+                  ),
+              before.machine.root
+                  .replaceRecordField(
+                      SUPER_GAMEBOY_MEMENTO,
+                      "multipacketLength",
+                      Int32State(2),
+                  )
+                  .replaceRecordField(
+                      SUPER_GAMEBOY_MEMENTO,
+                      "multipacketIndex",
+                      Int32State(0),
+                  ),
               before.machine.root.replaceRecordField(
                   GENIE_MEMENTO,
                   "patches",
@@ -591,7 +623,10 @@ class DetachedStateTest {
     StateSemantics.validate(StateGraph.restore(transferWithPayload))
 
     val superGameboy = session().use { it.captureDetachedState().machine.record(SUPER_GAMEBOY_MEMENTO) }
-    val withWaiting = superGameboy.replaceField("waitingTransferCommandMemento", transfer)
+    val withWaiting =
+        superGameboy
+            .replaceField("waitingTransferCommandMemento", transfer)
+            .replaceField("transferCountdown", Int32State(3))
     StateGraph.validateCompatible(withWaiting, superGameboy, "optional-waiting-transfer")
     StateSemantics.validate(StateGraph.restore(withWaiting))
 

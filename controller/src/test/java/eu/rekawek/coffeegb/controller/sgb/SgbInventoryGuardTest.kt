@@ -25,14 +25,14 @@ class SgbInventoryGuardTest {
     val statuses = setOf("implemented", "partial", "intentionally-unsupported", "unknown")
     rows.forEach { row ->
       val id = row.getValue("id").removePrefix("0x").toInt(16)
-      val packet = IntArray(16)
-      packet[0] = (id shl 3) or 1
-      val command = Commands.toCommand(packet)
       val recognized = row.getValue("recognized").toBooleanStrict()
-      assertEquals("Production recognition drift for ${row.getValue("id")}", recognized, command != null)
+      val commandClass = Commands.commandClass(id)
+      assertEquals("Production recognition drift for ${row.getValue("id")}", recognized,
+          Commands.isRecognizedCommandId(id))
       if (recognized) {
-        assertEquals(row.getValue("production_class"), command!!::class.java.simpleName)
+        assertEquals(row.getValue("production_class"), commandClass!!.simpleName)
       } else {
+        assertEquals(null, commandClass)
         assertEquals("-", row.getValue("production_class"))
       }
       assertTrue("Invalid status for ${row.getValue("id")}", row.getValue("status") in statuses)

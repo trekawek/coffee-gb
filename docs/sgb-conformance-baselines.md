@@ -1,9 +1,9 @@
-# SGB and hardware-profile Phase 0 baselines
+# SGB conformance baselines and practical-command contract
 
-This document describes the evidence and deterministic fixtures established by issue #340. The
-phase is observational: no emulator behavior, clock, boot value, packet parser, renderer, input
-contract, or portable-state schema is changed. Known differences are recorded for the later phases
-of #317 rather than repaired here.
+Issue #340 established the observational Phase 0 evidence and deterministic fixtures. Issue #341
+uses those artifacts to complete and validate the platform-neutral practical command set. It does
+not change clocks, boot values, independent player input, hardware profiles, SGB2, or MGB. The
+existing StateFile-v1 record registry and field schema remain unchanged.
 
 ## Checked-in sources of truth
 
@@ -18,8 +18,8 @@ The status breakdown is:
 
 | Status | Rows | Meaning in this matrix |
 | --- | ---: | --- |
-| `implemented` | 13 | State and an observable Coffee GB effect are exercised; parser presence alone is insufficient. |
-| `partial` | 4 | Some packet/state behavior exists but a documented effect is missing. |
+| `implemented` | 15 | Validated production parsing, an observable Coffee GB effect, malformed-input atomicity, and state continuation are exercised. |
+| `partial` | 2 | Safe validated behavior exists, but a platform service assigned to a later phase is missing. |
 | `intentionally-unsupported` | 9 | The command depends on an SNES CPU/APU/PPU or firmware service Coffee GB does not emulate. The row still records packet consumption. |
 | `unknown` | 6 | Reserved IDs whose behavior is only partially known from one firmware revision. |
 
@@ -84,16 +84,29 @@ licensed under Expat outside its documented exceptions. SameBoy labels the measu
 allows approximately two frames of uncertainty. It is evidence for the origin of Coffee GB's
 current approximation, not proof that SGB and SGB2 are identical.
 
-Known source/implementation disagreements are deliberately visible:
+The Phase 1 interpretations and remaining disagreements are deliberately visible:
 
-- `ATTR_LIN`, `ATTR_DIV`, and `PAL_PRI` have parser classes but no display-side effect.
-- Independent player input is absent. `MLT_REQ` rotates IDs, while selected players above one read
-  released button lines even when the test fixture has independent input ready.
-- An incomplete multi-packet command consumes the next complete packet as continuation. A header
-  with packet count zero leaves the collector unable to complete until its state is reset. These are
-  baselines, not desired validation semantics.
-- Reserved `0x1a..0x1f` inputs are forced to one packet by Coffee GB. Public disassembly evidence is
-  SGB1v2-specific and does not justify a generic implementation.
+- `ATTR_LIN` implements Pan Docs' x `0..19`, y `0..17`, and last-entry-wins rules. `ATTR_DIV`
+  assigns lower coordinates to above/left, the named coordinate to the line palette, and higher
+  coordinates to below/right. These choices also agree with the pinned SameBoy implementation;
+  Pan Docs supplies the authoritative coordinate bounds where SameBoy's guard is permissive.
+- `PAL_PRI` is stored and restored, and every later game `PAL_*` update remains deterministic. Its
+  documented visible effect requires an SNES firmware palette selected by the user. Coffee GB has
+  no such UI/source, so the command remains `partial`: no fictitious override is invented.
+- Pan Docs says bytes without an indicated purpose are ignored, while several command tables label
+  specific fields “not used (zero)”. The validator accepts arbitrary values only in the former
+  category and requires zero in the latter. This distinction is table-driven in the matrix tests.
+- A PCT map entry should select palette `4..6` in Pan Docs. Coffee GB retains its prior safe use of
+  the complete three-bit palette field and the real-game `0x2ff` transparent-tile workaround from
+  issue #174; narrowing either would break established continuation tests. The documented priority
+  bit must be zero and is rejected before a new border transfer changes state.
+- Independent player input is absent. `MLT_REQ` now validates `0..3` before Joypad mutation and
+  retains the current ID rotation/value-2 fallback, while selected players above one still read
+  released button lines. Independent sources remain #342.
+- Reserved `0x1a..0x1f` preserve Coffee GB's conformance-tested ICD behavior: each physical row is
+  ignored independently even when its untrusted count bits advertise more rows. This keeps the
+  CasualPokePlayer extended-protocol result unchanged. Public disassembly evidence is
+  SGB1v2-specific and does not justify an effect or a generic multi-packet schema.
 - Skip boot currently gives SGB the DMG `BC=0x0013` value; Pan Docs' pinned
   [power-up table](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/Power_Up_Sequence.md)
   documents SGB `C=0x14`. Phase 0 locks the current value without changing it.
@@ -102,13 +115,49 @@ Known source/implementation disagreements are deliberately visible:
   [timer discussion](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/Timer_and_Divider_Registers.md)
   is reference evidence; exact per-session clock ownership remains #343/#344.
 
+## Phase 1 framing, mutation, and state contract
+
+The production path is still `JOYP -> Joypad -> SuperGameboy -> Commands -> component event`.
+`Commands.parse` is total and side-effect-free. It accepts only one to seven complete 16-byte rows,
+requires byte-valued fields and an exact header count, and validates all command-specific counts,
+payload arithmetic, indices, enums, documented reserved bits/bytes, and coordinates before an
+event is constructed. Malformed, unsupported, and unknown commands produce no component event and
+therefore cannot partially mutate display, input, border, or transfer state. They are logged once
+per completely collected command, never from a frame loop.
+
+Count zero is rejected immediately and resets the collector. A complete continuation packet has no
+distinguishing header, so the collector does not guess whether its payload begins a new command.
+Instead, a second JOYP start/reset while a physical packet is already active emits an explicit
+receiver-restart signal. This clears the incomplete multi-packet collector; a following valid
+packet starts cleanly. A normal start after a completed row continues the declared command. Both
+the Joypad bit phase and SuperGameboy collector rows are detached state, so a captured valid
+in-progress transfer resumes exactly.
+
+Only practical transfer commands (`PAL_TRN`, `CHR_TRN`, `PCT_TRN`, and `ATTR_TRN`) start the existing
+three-frame ICD2 capture. A later valid practical transfer atomically replaces an older pending
+one and restarts its countdown. Malformed, unsupported, and receiver-restart inputs do not disturb
+an already accepted transfer. The third frame must contain exactly 4096 byte-valued entries and is
+validated before delivery; invalid data clears only that attempted transfer. Consumers prepare
+complete palette/attribute tables before committing them. Command packet rows, transfer payloads,
+active rows, and emitted frame arrays are cloned or newly allocated at their ownership boundary.
+
+`MASK_EN` is defined at produced-frame boundaries: cancel resumes newly rendered frames, freeze
+emits nothing and leaves the frontend's last owned frame visible, black emits black game-window
+pixels, and color-zero renders palette-0 color zero. The current border remains visible in all four
+modes. `PAL_SET` and `ATTR_SET` cancel the mask only when their documented flag is set.
+
+PAL_PRI reuses bit `0x100` of the existing non-negative `SgbDisplayState.borderFade` scalar; the
+actual fade stays in its original low-byte range `0..32`. This is a compatible value supplement,
+not a StateFile schema or record-ID change: old values decode with priority disabled, and legacy
+Java descriptors are unchanged.
+
 ## Deterministic ROM-independent fixtures
 
 The packet builder creates 16-byte packets and one-to-seven-packet commands, then drives the real
 `Joypad` JOYP pulse decoder and `SuperGameboy` collector. It covers maximum payload assembly,
-fixture-side invalid counts/lengths/bytes, incomplete bit transfer and restart, incomplete
-multi-packet continuation, zero-count poisoning, reserved IDs, and a following valid command. No ROM
-or host input/rendering API is involved.
+fixture-side invalid counts/lengths/bytes, incomplete bit transfer and explicit restart, abandoned
+multi-packet recovery, count-zero recovery, unsupported/reserved IDs, and a following valid command.
+No ROM or host input/rendering API is involved.
 
 The renderer fixture synthesizes all 160x144 DMG pixels, both 4 KiB character halves, the 32x28
 picture map and border palettes, all 512 four-color system palettes, all 45 20x18 attribute files,
@@ -137,16 +186,17 @@ frame-event, frame-hash, and uncompressed StateFile-v1 hashes are reviewable in
 `model-baselines.tsv`; notably SGB currently starts with the same DMG registers and emits both one
 DMG and one SGB event.
 
-The StateFile harness drives real PAL/ATTR/CHR/PCT/MASK/MLT commands, performs production VRAM
-transfers and border progress, holds `A+START`, then captures with one packet waiting in the
-two-packet collector and the next JOYP transfer 43 bits complete. Decode/apply reproduces the exact
-portable bytes and continuation:
+The StateFile harness drives real PAL/ATTR/CHR/PCT/MASK/MLT commands plus `ATTR_LIN`, `ATTR_DIV`, and
+`PAL_PRI`. It performs the production three-frame VRAM transfer and border progress, holds
+`A+START`, then captures with one packet waiting in a valid
+two-packet `ATTR_LIN` collector and the next JOYP transfer 43 bits complete. Decode/apply reproduces
+the exact portable bytes and continuation:
 
 | State fixture value | SHA-256 |
 | --- | --- |
-| capture StateFile | `d4dedf96ac60775f14b15c3a88909313e948f85ccc71a378448e0d68af418323` |
+| capture StateFile | `bd4c452080e8dcb183460f5dad1f80681b101125075f716bb314d57e12d94b0e` |
 | capture frame | `089c22de4291e57ff45098eb3bfbdaa71b81aecc30b5fa6c1d72a58ea7e6d063` |
-| continuation StateFile | `f49abe625aebac7d698ee5ecee0100da50083f5f128dd4db613516ff026fd9d0` |
+| continuation StateFile | `044ffd6c83983693c7bb4c75e180e2b108c02b7ff8e9a52c08484cd3f039e92d` |
 | continuation frame | `51dd2ed6cf24f04a64ea81af4e9768056ea48074445476c96d6dca015fd2e342` |
 
 The fake four-player source is test-only and platform-neutral. It provides independently mutable
@@ -155,7 +205,6 @@ It documents the gap without introducing the production `PlayerInputSource` assi
 
 ## Deferred work
 
-- #341 validates and completes the practical command set; none of its semantics are changed here.
 - #342 introduces independent production player input and desktop mapping.
 - #343 introduces stable immutable profiles and per-session `ClockSpec` with exact current parity.
 - #344 adds SGB2 only after model/timing evidence and long-run clock tests.

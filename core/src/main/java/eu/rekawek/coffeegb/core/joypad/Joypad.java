@@ -182,6 +182,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     private void receiveSgbPacketPulse(int input) {
         if (input == 0x00) {
             // Both lines low reset the receiver and start a fresh 16-byte packet.
+            // If a packet was already in progress, this is also an unambiguous transport abort.
+            // The command collector needs that explicit signal because a complete continuation
+            // packet's payload header is otherwise indistinguishable from a new command header.
+            boolean abortedTransfer = transferInProgress;
             transferInProgress = true;
             transferReadyForData = false;
             pendingTransferBit = -1;
@@ -189,6 +193,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             currentByteIndex = 0;
             currentPacketIndex = 0;
             Arrays.fill(currentPacket, 0);
+            if (abortedTransfer) {
+                sgbBus.post(new SuperGameboy.PacketTransferAbortedEvent());
+            }
             return;
         }
         if (!transferInProgress) {

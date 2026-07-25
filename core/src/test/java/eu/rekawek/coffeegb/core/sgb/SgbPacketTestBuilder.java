@@ -133,6 +133,10 @@ public final class SgbPacketTestBuilder implements AutoCloseable {
         return joypad;
     }
 
+    EventBusImpl sgbBus() {
+        return sgbBus;
+    }
+
     public List<int[]> receivedPackets() {
         List<int[]> copy = new ArrayList<>(receivedPackets.size());
         receivedPackets.forEach(packet -> copy.add(packet.clone()));

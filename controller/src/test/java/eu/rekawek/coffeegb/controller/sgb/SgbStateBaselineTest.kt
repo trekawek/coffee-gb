@@ -56,12 +56,22 @@ class SgbStateBaselineTest {
       driver.writeSelector(0x30)
       assertEquals(0x0e, session.gameboy.addressSpace.getByte(0xff00) and 0x0f)
 
+      // Phase-1 practical attributes and palette priority are part of the same detached SGB
+      // display state without changing the stable StateFile-v1 record schema.
+      driver.sendCommand(0x05, 1, 2, 0x80 or (1 shl 5) or 4, (2 shl 5) or 7)
+      driver.sendCommand(0x06, 1, 3 or (1 shl 2) or (2 shl 4), 10)
+      driver.sendCommand(0x19, 1, 1)
+
       // One packet waits in SuperGameboy's two-packet collector while JOYP is 43 bits into a
       // second transfer. Both phases must survive StateFile capture and resume exactly.
-      val twoPacket = JoypDriver.command(0x05, 2, IntArray(20) { (it * 11 + 7) and 0xff })
+      val validLines = IntArray(16)
+      validLines[0] = 15
+      repeat(15) { index -> validLines[index + 1] = (index and 3) shl 5 or (index % 20) }
+      val twoPacket = JoypDriver.command(0x05, 2, validLines)
       driver.sendPacket(twoPacket.first())
-      val partialPacket = IntArray(16)
+      val partialPacket = twoPacket[1]
       driver.sendIncomplete(partialPacket, 43)
+      val playerIdAtCapture = session.gameboy.addressSpace.getByte(0xff00) and 0x0f
 
       val snapshotFile = StateCodec.capture(session)
       val snapshotBytes = StateCodec.encode(snapshotFile)
@@ -80,7 +90,7 @@ class SgbStateBaselineTest {
       StateCodec.decodeAndApply(snapshotBytes, session)
       assertArrayEquals(snapshotBytes, StateCodec.encode(StateCodec.capture(session)))
       assertEquals(setOf(Button.A, Button.START), session.heldButtons)
-      assertEquals(0x0e, session.gameboy.addressSpace.getByte(0xff00) and 0x0f)
+      assertEquals(playerIdAtCapture, session.gameboy.addressSpace.getByte(0xff00) and 0x0f)
 
       val actualContinuation = continueFromPartial(session, driver, partialPacket, syntheticDmg, eventBus, frames)
       assertArrayEquals(expectedContinuation.stateBytes, actualContinuation.stateBytes)
@@ -108,6 +118,8 @@ class SgbStateBaselineTest {
       frames: MutableList<IntArray>,
   ): Continuation {
     driver.writeRemaining(partialPacket, 43)
+    driver.sendCommand(0x19, 1, 0)
+    driver.sendCommand(0x19, 1, 1)
     driver.sendCommand(0x01, 1, 0x11, 0x01, 0x22, 0x02, 0x33, 0x03,
         0x44, 0x04, 0x55, 0x05, 0x66, 0x06, 0x77, 0x07)
     repeat(2) { eventBus.post(Display.DmgFrameReadyEvent(syntheticDmg)) }

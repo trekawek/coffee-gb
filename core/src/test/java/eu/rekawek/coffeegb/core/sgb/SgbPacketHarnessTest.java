@@ -7,7 +7,6 @@ import java.util.List;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
 
 public class SgbPacketHarnessTest {
 
@@ -50,8 +49,11 @@ public class SgbPacketHarnessTest {
     @Test
     public void realJoypPathAssemblesSevenPacketsDeterministically() {
         int[] payload = new int[SgbPacketTestBuilder.MAX_PAYLOAD_BYTES];
-        for (int i = 0; i < payload.length; i++) {
-            payload[i] = (i * 73 + 19) & 0xff;
+        payload[0] = 110;
+        for (int i = 0; i < 110; i++) {
+            boolean horizontal = (i & 1) != 0;
+            int line = i % (horizontal ? 18 : 20);
+            payload[i + 1] = (horizontal ? 0x80 : 0) | (i % 4) << 5 | line;
         }
         try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
             fixture.sendCommand(0x05, 7, payload);
@@ -82,29 +84,24 @@ public class SgbPacketHarnessTest {
     }
 
     @Test
-    public void incompleteMultipacketConsumesFollowingPacketThenRecovers() {
+    public void explicitReceiverRestartAbortsIncompleteMultipacketBeforeFollowingCommand() {
         try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
             List<int[]> incomplete = SgbPacketTestBuilder.command(0x00, 2, 0x11, 0x22);
             fixture.sendPacket(incomplete.get(0));
+            fixture.restartReceiver();
             fixture.sendCommand(0x01, 1, 0x33, 0x44);
 
-            // Current behavior treats the next complete packet as packet two, regardless of its
-            // own header. This is a Phase-0 lock, not an endorsement of the missing validation.
             assertEquals(1, fixture.commands().size());
-            assertEquals(0x00, fixture.commands().get(0).getCode());
-
-            fixture.sendCommand(0x02, 1, 0x55, 0x66);
-            assertEquals(2, fixture.commands().size());
-            assertEquals(0x02, fixture.commands().get(1).getCode());
+            assertEquals(0x01, fixture.commands().get(0).getCode());
         }
     }
 
     @Test
-    public void reservedUnknownCommandDoesNotHideFollowingValidCommand() {
+    public void reservedUnknownCountBitsDoNotHideFollowingValidCommand() {
         try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
-            // Reserved IDs force one-packet consumption in the current collector even if the
-            // low header bits advertise seven packets.
-            fixture.sendPacket(SgbPacketTestBuilder.rawPacket((0x1a << 3) | 7, 0xaa));
+            // The established SGB compatibility rule consumes reserved IDs one physical row at a
+            // time, even when their otherwise-untrusted header advertises more rows.
+            fixture.sendPacket(SgbPacketTestBuilder.command(0x1a, 7, 0xaa).get(0));
             fixture.sendCommand(0x03, 1, 0x78, 0x56);
 
             assertEquals(2, fixture.receivedPackets().size());
@@ -114,16 +111,43 @@ public class SgbPacketHarnessTest {
     }
 
     @Test
-    public void zeroPacketCountPoisonsCollectorUntilExplicitStateRestore() {
+    public void zeroPacketCountIsRejectedWithoutPoisoningFollowingCommand() {
         try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
-            var idle = fixture.captureCollectorState();
             fixture.sendPacket(SgbPacketTestBuilder.rawPacket(0));
             fixture.sendCommand(0x00, 1, 0x34, 0x12);
-            assertTrue(fixture.commands().isEmpty());
-
-            fixture.restoreCollectorState(idle);
-            fixture.sendCommand(0x00, 1, 0x34, 0x12);
             assertEquals(1, fixture.commands().size());
+            assertEquals(0x1234, ((Commands.Pal01Cmd) fixture.commands().get(0)).getPalette0()[0]);
+        }
+    }
+
+    @Test
+    public void completeMalformedPacketCountIsRejectedBeforeFollowingCommand() {
+        try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
+            fixture.sendCommand(0x00, 2, new int[31]);
+            fixture.sendCommand(0x02, 1, 0x55, 0x66);
+
+            assertEquals(1, fixture.commands().size());
+            assertEquals(0x02, fixture.commands().get(0).getCode());
+        }
+    }
+
+    @Test
+    public void unsupportedFamiliesAreConsumedWithoutEventsAndFollowingCommandSurvives() {
+        try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
+            fixture.sendCommand(0x08, 1, 0x80, 0x80, 0, 0);
+            fixture.sendCommand(0x09, 1);
+            fixture.sendCommand(0x0c, 1, 0);
+            fixture.sendCommand(0x0d, 1, 0);
+            fixture.sendCommand(0x0e, 1, 0);
+            fixture.sendCommand(0x0f, 1, 0, 0x18, 0, 1, 0xaa);
+            fixture.sendCommand(0x10, 1, 0, 0x18, 0);
+            fixture.sendCommand(0x12, 1, 0, 0x18, 0, 0, 0, 0);
+            fixture.sendCommand(0x18, 1, 0xff);
+            assertEquals(0, fixture.commands().size());
+
+            fixture.sendCommand(0x03, 1, 0x78, 0x56);
+            assertEquals(1, fixture.commands().size());
+            assertEquals(0x03, fixture.commands().get(0).getCode());
         }
     }
 }
