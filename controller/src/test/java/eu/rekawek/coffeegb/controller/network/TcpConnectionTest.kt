@@ -1,12 +1,16 @@
 package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.link.LinkMode
+import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateCompression
+import eu.rekawek.coffeegb.controller.state.StateRootKind
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
@@ -14,6 +18,7 @@ import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.core.serial.FourPlayerAdapter
 import org.junit.After
 import org.junit.Test
 import java.io.DataInputStream
@@ -272,7 +277,7 @@ class TcpConnectionTest {
     Socket("localhost", port).use { silent ->
       // Read the server greeting but deliberately withhold the capability byte.
       DataInputStream(silent.getInputStream()).readFully(
-          ByteArray("CoffeeGB NETPLAY".length + 4))
+          ByteArray("CoffeeGB NETPLAY".length + 7))
 
       val client = TcpClient("localhost:$port", clientBus)
       this.client = client
@@ -286,6 +291,60 @@ class TcpConnectionTest {
       serverThread.join(1_000)
       assertNotNull(serverStopped.poll(1, TimeUnit.SECONDS), "pending handshake blocked shutdown")
     }
+  }
+
+  @Test
+  fun rawV7PeersAreRejectedInBothRolesBeforeAnyCommandIsDelivered() {
+    val port = ServerSocket(0).use { it.localPort }
+    val started = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val serverErrors = LinkedBlockingQueue<ConnectionController.ServerProtocolErrorEvent>()
+    val delivered = LinkedBlockingQueue<LinkedController.RemoteButtonStateEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { started.add(it) }
+    serverBus.register<ConnectionController.ServerProtocolErrorEvent> { serverErrors.add(it) }
+    serverBus.register<LinkedController.RemoteButtonStateEvent> { delivered.add(it) }
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(started.poll(5, TimeUnit.SECONDS))
+
+    Socket("localhost", port).use { socket ->
+      val input = DataInputStream(socket.getInputStream())
+      val output = DataOutputStream(socket.getOutputStream())
+      input.readFully(ByteArray("CoffeeGB NETPLAY".length + 7))
+      // A v7 peer's one-byte temporary-codec marker is followed by a valid-looking v7 INPUT.
+      output.write(byteArrayOf(0x01, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+      output.flush()
+      val error = assertNotNull(serverErrors.poll(5, TimeUnit.SECONDS))
+      assertTrue(error.message.contains("legacy protocol-v7 capability marker"))
+      assertEquals(null, delivered.poll(200, TimeUnit.MILLISECONDS))
+    }
+
+    server.stop()
+    val fakeServer = ServerSocket(0)
+    val fakeThread =
+        Thread {
+          fakeServer.use { listener ->
+            listener.accept().use { socket ->
+              socket.getOutputStream().also { output ->
+                output.write(
+                    "CoffeeGB NETPLAY".toByteArray() +
+                        byteArrayOf(0x07, LinkMode.NORMAL.ordinal.toByte(), 0x01))
+                output.flush()
+              }
+            }
+          }
+        }.also {
+          threads += it
+          it.start()
+        }
+    val clientErrors = LinkedBlockingQueue<ConnectionController.ClientProtocolErrorEvent>()
+    clientBus.register<ConnectionController.ClientProtocolErrorEvent> { clientErrors.add(it) }
+    val oldServerClient = TcpClient("localhost:${fakeServer.localPort}", clientBus)
+    this.client = oldServerClient
+    threads += Thread(oldServerClient).also { it.start() }
+    val error = assertNotNull(clientErrors.poll(5, TimeUnit.SECONDS))
+    assertTrue(error.message.contains("expected version 8, received 7"))
+    fakeThread.join(5_000)
   }
 
   @Test
@@ -304,7 +363,7 @@ class TcpConnectionTest {
         val socket = Socket("localhost", port).also(silent::add)
         socket.soTimeout = 5_000
         DataInputStream(socket.getInputStream()).readFully(
-            ByteArray("CoffeeGB NETPLAY".length + 4))
+            ByteArray("CoffeeGB NETPLAY".length + 7))
       }
       awaitCondition { server.pendingHandshakeCount() == StateLimits.NETPLAY_PENDING_HANDSHAKES }
       assertTrue(server.handshakeWorkerCount() <= StateLimits.NETPLAY_HANDSHAKE_WORKERS)
@@ -340,7 +399,7 @@ class TcpConnectionTest {
           (1..3).map {
             val socket = Socket("localhost", port).also(pending::add)
             socket.soTimeout = 5_000
-            val greeting = ByteArray("CoffeeGB NETPLAY".length + 4)
+            val greeting = ByteArray("CoffeeGB NETPLAY".length + 7)
             DataInputStream(socket.getInputStream()).readFully(greeting)
             greeting["CoffeeGB NETPLAY".length + 2].toInt()
           }
@@ -360,7 +419,7 @@ class TcpConnectionTest {
       awaitCondition { server.pendingHandshakeCount() == 2 }
       val replacement = Socket("localhost", port).also(pending::add)
       replacement.soTimeout = 5_000
-      val greeting = ByteArray("CoffeeGB NETPLAY".length + 4)
+      val greeting = ByteArray("CoffeeGB NETPLAY".length + 7)
       DataInputStream(replacement.getInputStream()).readFully(greeting)
       assertEquals(1, greeting["CoffeeGB NETPLAY".length + 2].toInt())
     } finally {
@@ -382,7 +441,7 @@ class TcpConnectionTest {
       socket.soTimeout = 5_000
       val input = DataInputStream(socket.getInputStream())
       val output = DataOutputStream(socket.getOutputStream())
-      input.readFully(ByteArray("CoffeeGB NETPLAY".length + 4))
+      input.readFully(ByteArray("CoffeeGB NETPLAY".length + 7))
       awaitCondition { server.pendingConnectionCount() == 1 }
 
       serverBus.post(
@@ -391,7 +450,7 @@ class TcpConnectionTest {
               Input(listOf(Button.A), emptyList()),
               player = 0,
           ))
-      output.writeByte(0x01)
+      output.write(byteArrayOf(0x08, 0x01, 0x01, 0x07))
       output.flush()
 
       assertEquals(0x08, readWireCommand(input), "runtime traffic preceded START")
@@ -413,23 +472,23 @@ class TcpConnectionTest {
       socket.soTimeout = 10_000
       val input = DataInputStream(socket.getInputStream())
       val output = DataOutputStream(socket.getOutputStream())
-      input.readFully(ByteArray("CoffeeGB NETPLAY".length + 4))
-      output.writeByte(0x01)
+      input.readFully(ByteArray("CoffeeGB NETPLAY".length + 7))
+      output.write(byteArrayOf(0x08, 0x01, 0x01, 0x07))
       output.flush()
       assertEquals(0x08, readWireCommand(input))
 
       val noisyRom = ByteArray(8 * 1024 * 1024) { ((it * 31 + it / 17) and 0xff).toByte() }
+      ROM.readBytes().copyInto(noisyRom)
       val states =
           listOf(0, 1).map { player ->
             LinkedController.LocalRomLoadedEvent(
                 noisyRom,
                 null,
-                null,
+                portableSession(noisyRom, player),
                 GameboyType.DMG,
                 Gameboy.BootstrapMode.SKIP,
                 73,
                 player = player,
-                sessionSnapshot = byteArrayOf(1, 2, 3),
             )
           }
       val startedWrite = CountDownLatch(1)
@@ -472,12 +531,16 @@ class TcpConnectionTest {
     threads += serverThread
     assertNotNull(started.poll(5, TimeUnit.SECONDS))
 
-    val noisyRom = ByteArray(16 * 1024 * 1024).also { java.util.Random(314).nextBytes(it) }
+    val noisyRom = ByteArray(16 * 1024 * 1024)
+    ROM.readBytes().copyInto(noisyRom)
+    ByteArray(noisyRom.size - 0x8000)
+        .also { java.util.Random(314).nextBytes(it) }
+        .copyInto(noisyRom, destinationOffset = 0x8000)
     val state =
         LinkedController.LocalRomLoadedEvent(
             noisyRom,
             null,
-            null,
+            portableSession(noisyRom, 0),
             GameboyType.DMG,
             Gameboy.BootstrapMode.SKIP,
             73,
@@ -567,7 +630,7 @@ class TcpConnectionTest {
                   LinkedController.LocalRomLoadedEvent(
                       noisyRom,
                       null,
-                      null,
+                      portableSession(noisyRom, 0),
                       GameboyType.DMG,
                       Gameboy.BootstrapMode.SKIP,
                       host.currentFrame(),
@@ -655,7 +718,7 @@ class TcpConnectionTest {
   }
 
   @Test
-  fun legacyPeerSnapshotClosesConnectionWithAUserFacingProtocolError() {
+  fun localLegacySnapshotIsRejectedBeforeNetworkWrite() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
     val serverGotConnection = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
@@ -667,8 +730,10 @@ class TcpConnectionTest {
     threads += Thread(server).also { it.start() }
     assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
 
-    val protocolErrors = LinkedBlockingQueue<ConnectionController.ClientProtocolErrorEvent>()
-    clientBus.register<ConnectionController.ClientProtocolErrorEvent> { protocolErrors.add(it) }
+    val disconnected = LinkedBlockingQueue<ConnectionController.ClientDisconnectedFromServerEvent>()
+    clientBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
+      disconnected.add(it)
+    }
     val client = TcpClient("localhost:$port", clientBus)
     this.client = client
     threads += Thread(client).also { it.start() }
@@ -684,12 +749,7 @@ class TcpConnectionTest {
             0,
         ))
 
-    val error = assertNotNull(protocolErrors.poll(5, TimeUnit.SECONDS))
-    assertEquals(
-        "The peer sent an unsafe legacy Java save state. " +
-            "Network state transfer requires the portable state format.",
-        error.message,
-    )
+    assertNotNull(disconnected.poll(5, TimeUnit.SECONDS))
   }
 
   @Test
@@ -759,7 +819,7 @@ class TcpConnectionTest {
     assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
     assertTrue(
         checkpoint.states.all { state ->
-          state.sessionSnapshot?.copyOfRange(0, 4)?.contentEquals("CGBN".toByteArray()) == true
+          state.portableState?.root?.kind == StateRootKind.SESSION
         })
     assertEquals(2, hostController.activeSessionCount())
     assertEquals(2, clientController.activeSessionCount())
@@ -783,39 +843,39 @@ class TcpConnectionTest {
       TcpClient.configure(socket)
       val input = DataInputStream(socket.getInputStream())
       val output = DataOutputStream(socket.getOutputStream())
-      val handshake = ByteArray("CoffeeGB NETPLAY".length + 4)
+      val handshake = ByteArray("CoffeeGB NETPLAY".length + 7)
       input.readFully(handshake)
-      assertEquals(0x07, handshake["CoffeeGB NETPLAY".length].toInt())
-      assertEquals(0x01, handshake.last().toInt())
-      output.writeByte(0x01)
+      assertEquals(0x08, handshake["CoffeeGB NETPLAY".length].toInt())
+      assertContentEquals(
+          byteArrayOf(0x08, 0x01, 0x01, 0x07),
+          handshake.copyOfRange(handshake.size - 4, handshake.size),
+      )
+      output.write(byteArrayOf(0x08, 0x01, 0x01, 0x07))
       output.flush()
       assertEquals(0x08, input.readUnsignedByte())
 
       val rom = Connection.deflate(byteArrayOf(1))
       val legacy = byteArrayOf(0xac.toByte(), 0xed.toByte(), 0x00, 0x05)
-      val snapshot = Connection.deflate(legacy)
-      val header = ByteBuffer.allocate(45)
+      val header = ByteBuffer.allocate(Connection.ROM_HEADER_SIZE)
       header.put(1)
       header.putLong(0)
       header.put(GameboyType.DMG.ordinal.toByte())
       header.put(Gameboy.BootstrapMode.SKIP.ordinal.toByte())
+      header.putInt(0)
       header.put(0)
-      header.put(0)
-      intArrayOf(1, 0, legacy.size, 0).forEach(header::putInt)
-      intArrayOf(rom.size, 0, snapshot.size, 0).forEach(header::putInt)
+      intArrayOf(1, rom.size, 0, 0, 0, 0, legacy.size).forEach(header::putInt)
       output.writeByte(0x01)
       output.write(header.array())
+      output.write(legacy)
       output.write(rom)
-      output.write(snapshot)
       output.flush()
 
       val error = assertNotNull(protocolErrors.poll(5, TimeUnit.SECONDS))
       assertEquals(1, error.player)
-      assertEquals(
-          "The peer sent an unsafe legacy Java save state. " +
-              "Network state transfer requires the portable state format.",
-          error.message,
-      )
+      assertTrue(
+          error.message.startsWith(
+              Connection.ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT.userMessage))
+      assertTrue(error.message.contains("does not begin with CGBS"))
       assertEquals(null, delivered.poll(200, TimeUnit.MILLISECONDS))
     }
   }
@@ -859,23 +919,32 @@ class TcpConnectionTest {
     socket.connect(java.net.InetSocketAddress("localhost", port))
     val input = DataInputStream(socket.getInputStream())
     val output = DataOutputStream(socket.getOutputStream())
-    input.readFully(ByteArray("CoffeeGB NETPLAY".length + 4))
-    output.writeByte(0x01)
+    input.readFully(ByteArray("CoffeeGB NETPLAY".length + 7))
+    output.write(byteArrayOf(0x08, 0x01, 0x01, 0x07))
     output.flush()
     assertEquals(0x08, readWireCommand(input))
     socket.soTimeout = 0
     return socket
   }
 
-  /** Reads and consumes one protocol-v7 command, returning its command byte. */
+  /** Reads and consumes one protocol-v8 command, returning its command byte. */
   private fun readWireCommand(input: DataInputStream): Int {
     val command = input.readUnsignedByte()
     when (command) {
       0x01 -> {
-        val header = ByteArray(45).also(input::readFully)
-        val heldButtons = header[12].toInt() and 0xff
-        val encoded = ByteBuffer.wrap(header, 29, 16)
-        val payloadBytes = (0 until 4).sumOf { encoded.getInt().toLong() }
+        val header = ByteArray(Connection.ROM_HEADER_SIZE).also(input::readFully)
+        val heldButtons = header[15].toInt() and 0xff
+        val payloadBytes =
+            ByteBuffer.wrap(header).let { buffer ->
+              buffer.position(20)
+              val rom = buffer.int.toLong()
+              buffer.position(28)
+              val slot = buffer.int.toLong()
+              buffer.position(36)
+              val battery = buffer.int.toLong()
+              val state = buffer.int.toLong()
+              rom + slot + battery + state
+            }
         require(payloadBytes <= Int.MAX_VALUE)
         input.readFully(ByteArray(heldButtons + payloadBytes.toInt()))
       }
@@ -904,6 +973,21 @@ class TcpConnectionTest {
     } finally {
       gameboy.stop()
       gameboy.close()
+      bus.close()
+    }
+  }
+
+  private fun portableSession(rom: ByteArray, player: Int): ByteArray {
+    val bus = EventBusImpl()
+    val configuration =
+        Gameboy.GameboyConfiguration(Rom(rom))
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setGameboyType(GameboyType.DMG)
+    val session = Session(configuration, bus, null, FourPlayerAdapter().endpoint(player))
+    return try {
+      StateCodec.encode(StateCodec.capture(session), StateCompression.DEFLATE)
+    } finally {
+      session.close()
       bus.close()
     }
   }

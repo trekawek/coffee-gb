@@ -17,8 +17,8 @@ linked—the other sessions and controller frame from rollback captures.
 The model contains only `Int`, `Long`, `Boolean`, `Double`, `String`, explicit enum/type IDs, and
 deep-owned immutable containers. It cannot represent a thread, callback, event bus, stream, file,
 clock service, AWT/Swing object, or live mutable array. The format that encodes this model is
-specified separately in [state-file-v1.md](state-file-v1.md); disk/netplay integration remains
-deferred to issue #323.
+specified separately in [state-file-v1.md](state-file-v1.md). Local slot snapshots and netplay
+protocol v8 use that format; local legacy migration remains isolated from network decoding.
 
 The exact field-by-field inventory of all 91 admitted production record types is committed in
 [state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 97
@@ -140,9 +140,9 @@ restore. New captures set that nullable compatibility component to null, so only
 `GpuMemento.displayMemento` owns the two 160x144 panel arrays. Visible frame, partial scanout/index,
 LCD enable and repeat behavior therefore remain restorable without duplicate payload.
 
-Disk snapshots, rewind, boot-state reuse, and current netplay continue to use their existing bounded
-legacy/netplay adapters in this phase. The detached model is a new internal seam for Phase 2; it
-does not change payload, graph, queue, frame, or work limits.
+Rewind, `ControllerState`, and boot-state reuse continue to use their existing in-process mementos.
+Local slot snapshots and netplay protocol v8 use the bounded StateFile codec; their distinct disk
+and network limits do not weaken the graph, queue, frame, or work limits.
 
 ## Failure and extension policy
 

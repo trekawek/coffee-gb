@@ -11,9 +11,9 @@ runs when `BasicController` dispatches the save event at its emulation-thread fr
 normalized primary-ROM SHA-256, optional Datel slot-ROM SHA-256, and complete stable hardware
 profile. ROM bytes and host services are not written.
 
-Rewind states and `ControllerState` remain in memory on their existing memento path. Netplay state
-transport is also unchanged in this PR; capability negotiation and portable transport are the
-remaining half of issue #323.
+Rewind states and `ControllerState` remain in memory on their existing memento path. Netplay
+protocol v8 independently uses StateFile v1 and cannot invoke this local legacy importer; see
+[netplay-protocol-v8.md](netplay-protocol-v8.md).
 
 ## Bounded format detection
 
@@ -68,5 +68,7 @@ Crash-safe temporary-file writing, synchronization, fsync, and atomic rename bel
 ## Compatibility window
 
 The strict local importer continues to admit the committed Coffee GB 1.7.13 and 1.7.14 fixtures.
-It is not reachable from netplay decoding. Adding another legacy descriptor requires a reviewed
-manifest update and a committed real-release fixture.
+It is not reachable from netplay decoding. Network prefixes other than `CGBS`, including `AC ED 00
+05` and the retired `CGBN`, are rejected as unsupported network state without format probing.
+Adding another legacy descriptor requires a reviewed manifest update and a committed real-release
+fixture.

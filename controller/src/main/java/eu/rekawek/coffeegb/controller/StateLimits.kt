@@ -32,6 +32,12 @@ internal object StateLimits {
   // A ROM message contains all four payload types. Cap both wire retention and inflated heap use.
   const val NETPLAY_ENCODED_MESSAGE_BYTES = 128 * MIB
   const val NETPLAY_DECODED_MESSAGE_BYTES = 128 * MIB
+  // Protocol v8 carries one complete StateFile directly, without the legacy outer compression.
+  // Both the wire file and its declared decoded section stream are capped at 32 MiB before the
+  // payload is retained or inflated. Current machine and four-player session records remain well
+  // below this boundary; a larger future state requires a deliberate protocol review.
+  const val NETPLAY_STATE_FILE_BYTES = 32 * MIB
+  const val NETPLAY_STATE_FILE_DECODED_BYTES = 32 * MIB
   const val NETPLAY_ROLLBACK_FRAMES = 60L * 5
   const val NETPLAY_REPLAY_WORK_FRAMES = NETPLAY_ROLLBACK_FRAMES
   const val NETPLAY_STATE_CHANGE_FIXED_WORK = 60L
@@ -58,8 +64,8 @@ internal object StateLimits {
   const val NETPLAY_EVENT_QUEUE_EVENTS = 512
   // Four-player hosting has one local producer and three remote connections. Reserve one equal
   // protocol-sized message for each so saturated peers cannot make the next honest producer trip
-  // the global cap. Queue admission charges the exact retained payload byte arrays; decoded
-  // memento graphs have their own per-payload and aggregate decode limits above.
+  // the global cap. Queue admission charges the retained ROM/battery arrays plus the StateFile's
+  // encoded and decoded sizes; detached graphs retain their own portable-codec limits below.
   const val NETPLAY_EVENT_QUEUE_SOURCES = 4
   const val NETPLAY_EVENT_QUEUE_SOURCE_BYTES = NETPLAY_DECODED_MESSAGE_BYTES.toLong()
   const val NETPLAY_EVENT_QUEUE_BYTES =

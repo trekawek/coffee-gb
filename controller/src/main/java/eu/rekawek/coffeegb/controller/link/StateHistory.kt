@@ -168,6 +168,32 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
     patches.clear()
   }
 
+  /** Replaces the rollback generation with one already-captured safe-point state. */
+  @Synchronized
+  internal fun replaceWithState(
+      frame: Long,
+      mementos: List<Memento<Session>?>,
+      buttons: List<Set<Button>>,
+  ) {
+    require(mementos.size == mode.playerCount)
+    require(buttons.size == mode.playerCount)
+    states.clear()
+    patches.clear()
+    states.add(State(frame, emptyInputs(), mementos.toList(), buttons.map { it.toSet() }))
+  }
+
+  @Synchronized
+  internal fun captureSnapshot(): Snapshot =
+      Snapshot(states.toList(), patches.toList())
+
+  @Synchronized
+  internal fun restoreSnapshot(snapshot: Snapshot) {
+    states.clear()
+    states.addAll(snapshot.states)
+    patches.clear()
+    patches.addAll(snapshot.patches)
+  }
+
   private fun emptyInputs() = List(mode.playerCount) { Input(emptyList(), emptyList()) }
 
   private fun trimHistory() {
@@ -183,7 +209,12 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
       val buttons: List<Set<Button>>,
   )
 
-  private data class Patch(val player: Int, val frame: Long, val input: Input)
+  internal data class Patch(val player: Int, val frame: Long, val input: Input)
+
+  internal data class Snapshot(
+      val states: List<State>,
+      val patches: List<Patch>,
+  )
 
   @VisibleForTesting
   internal data class GameboyJoypadPressEvent(

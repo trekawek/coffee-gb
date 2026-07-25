@@ -217,11 +217,12 @@ class TcpServer(
       handle.connection.use { it.run() }
     } catch (e: Connection.ProtocolException) {
       if (!doStop) {
-        LOG.info("Player {} protocol error: {}", handle.player + 1, e.reason.userMessage)
+        val message = e.message ?: e.reason.userMessage
+        LOG.info("Player {} protocol error: {}", handle.player + 1, message)
         eventBus.post(
             ConnectionController.ServerProtocolErrorEvent(
                 handle.player,
-                e.reason.userMessage,
+                message,
           ))
       }
     } catch (e: Connection.CompatibilityException) {

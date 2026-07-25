@@ -8,7 +8,6 @@ import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
-import eu.rekawek.coffeegb.controller.NetplayMementoCodec
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
@@ -19,8 +18,12 @@ import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateIdentityEntry
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.StateApplyException
+import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateCompression
+import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.funnel
 import eu.rekawek.coffeegb.controller.events.register
@@ -38,6 +41,7 @@ import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerCheckpoint
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStateEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
+import eu.rekawek.coffeegb.controller.network.Connection
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
 import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
@@ -100,9 +104,11 @@ class LinkedController(
 
   private val romBuffers = MutableList<ByteArray?>(mode.playerCount) { null }
 
+  private val slotRomBuffers = MutableList<ByteArray?>(mode.playerCount) { null }
+
   private val batteryBuffers = MutableList<ByteArray?>(mode.playerCount) { null }
 
-  private val links = StateHistory.createLinks(mode)
+  private var links = StateHistory.createLinks(mode)
 
   @VisibleForTesting internal val stateHistory: StateHistory = StateHistory(mode)
 
@@ -117,7 +123,11 @@ class LinkedController(
 
   @VisibleForTesting
   internal fun encodedSessionStates(): List<ByteArray?> =
-      sessions.map { session -> session?.let { NetplayMementoCodec.encodeSession(it.saveToMemento()) } }
+      sessions.map { session ->
+        session?.let {
+          StateCodec.encode(StateCodec.capture(it), StateCompression.DEFLATE)
+        }
+      }
 
   @VisibleForTesting
   internal fun heldButtonStates(): List<Set<Button>?> = sessions.map { it?.heldButtons }
@@ -276,8 +286,8 @@ class LinkedController(
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
       configs[localPlayer] = e.config
-      initSession(localPlayer, frame, e.snapshot?.let(NetplayMementoCodec::decodeGameboy), null)
-      sendLocalRom(e.snapshot)
+      initSession(localPlayer, frame, e.snapshot)
+      sendLocalRom(includeState = e.snapshot != null)
       if (checkpoint) commitHostCheckpoint()
     }
 
@@ -297,7 +307,7 @@ class LinkedController(
       reconcileHistory()
       sessions[localPlayer]?.close()
       sessions[localPlayer] = null
-      initSession(localPlayer, frame, null, null)
+      initSession(localPlayer, frame, null)
       if (isFourPlayerHost()) {
         commitHostCheckpoint()
       } else {
@@ -310,9 +320,8 @@ class LinkedController(
     eventQueue.register<PeerLoadedGameEvent> { e ->
       val validated = validatePeerStateFrame(e) ?: return@register
       if (!consumeReplayWork(validated.frame, validated.source)) return@register
-      val checkpoint = isFourPlayerHost() && validated.sessionSnapshot == null
-      if (checkpoint) reconcileHistory()
-      if (!loadPeerState(validated)) return@register
+      val checkpoint = isFourPlayerHost()
+      if (!loadPeerState(validated, reconcileBeforeCommit = checkpoint)) return@register
       eventBus.post(ValidatedPeerStateEvent(validated))
       if (checkpoint) {
         // The new physical port is now attached at this frame. Publish one checkpoint containing
@@ -334,18 +343,7 @@ class LinkedController(
         if (!consumeCheckpointWork(e.source)) {
           return@register
         }
-        runtimeFrameFloor = e.frame
-        val activePlayers = e.states.mapTo(mutableSetOf()) { it.player }
-        sessions.indices.filterNot(activePlayers::contains).forEach { player ->
-          sessions[player]?.close()
-          sessions[player] = null
-          configs[player] = null
-          romBuffers[player] = null
-          batteryBuffers[player] = null
-        }
-        e.states.forEach(::loadPeerState)
-        frame = e.frame
-        rebaseHistoryToLiveState()
+        if (!applyPeerCheckpoint(e)) return@register
         initialStateSynchronized = true
         eventBus.post(ValidatedPeerCheckpointEvent(e))
       }
@@ -358,6 +356,7 @@ class LinkedController(
         sessions[e.player] = null
         configs[e.player] = null
         romBuffers[e.player] = null
+        slotRomBuffers[e.player] = null
         batteryBuffers[e.player] = null
         commitHostCheckpoint()
       }
@@ -380,7 +379,7 @@ class LinkedController(
         reconcileHistory()
         sessions[e.player]?.close()
         sessions[e.player] = null
-        initSession(e.player, e.frame, null, null)
+        initSession(e.player, e.frame, null)
         if (isFourPlayerHost()) {
           commitHostCheckpoint()
         } else {
@@ -439,7 +438,7 @@ class LinkedController(
       eventBus.post(
           LoadedLocalConfigEvent(
               config = config,
-              snapshot = it.memento?.let(NetplayMementoCodec::encodeGameboy),
+              snapshot = it.memento,
           ))
     }
 
@@ -522,9 +521,6 @@ class LinkedController(
       player: Int,
       sessionFrame: Long,
       state: Memento<Gameboy>?,
-      sessionState: Memento<Session>?,
-      heldButtons: Set<Button> = emptySet(),
-      hotPlug: Boolean = false,
   ) {
     val config = configs[player] ?: return
     val sessionEventBus = EventBusImpl(null, null, false)
@@ -544,25 +540,18 @@ class LinkedController(
     }
     val session =
         Session(
-            if (state != null || sessionState != null) config.forRestore() else config,
+            if (state != null) config.forRestore() else config,
             sessionEventBus,
             if (player == localPlayer) console else null,
             links.serial[player],
             links.infrared[player],
         )
-    if (sessionState != null) {
-      session.restoreFromMemento(sessionState)
-      session.heldButtons = heldButtons
-    } else if (state != null) {
+    if (state != null) {
       session.gameboy.restoreFromMemento(state)
     }
 
-    // A four-player ROM arriving at the host is a hot-plug at the current adapter phase. Session
-    // checkpoints are already at their advertised frame. Other late reset/reload events retain
-    // the historical catch-up path.
     var current = sessionFrame
-    val alreadyAtSharedPhase = sessionState != null || hotPlug
-    while (!alreadyAtSharedPhase && current < frame) {
+    while (current < frame) {
       stateHistory.setPlayerState(player, current, session.saveToMemento(), session.heldButtons)
       repeat(TICKS_PER_FRAME) { session.gameboy.tick() }
       current++
@@ -570,36 +559,252 @@ class LinkedController(
     sessions[player] = session
   }
 
-  private fun loadPeerState(e: PeerLoadedGameEvent): Boolean {
-    if (e.player !in sessions.indices ||
-        (e.player == localPlayer && e.sessionSnapshot == null)) {
+  private fun loadPeerState(
+      e: PeerLoadedGameEvent,
+      reconcileBeforeCommit: Boolean = false,
+  ): Boolean {
+    if (e.player !in sessions.indices || e.player == localPlayer) return false
+    val hotPlug =
+        mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+            localPlayer == 0 &&
+            configs[e.player] == null
+    val prepared =
+        try {
+          preparePeerReplacement(e, links, requireSession = false, hotPlug = hotPlug)
+        } catch (failure: Throwable) {
+          rejectPeerState(e.source, e.player, failure)
+          return false
+        }
+    val previous = sessions[e.player]
+    val oldConfig = configs[e.player]
+    val oldRom = romBuffers[e.player]
+    val oldSlotRom = slotRomBuffers[e.player]
+    val oldBattery = batteryBuffers[e.player]
+    val oldFrame = frame
+    val oldRuntimeFloor = runtimeFrameFloor
+    val oldHistory = stateHistory.captureSnapshot()
+    val oldSessionMementos = sessions.map { it?.saveToMemento() }
+    val oldHeldButtons = sessions.map { it?.heldButtons ?: emptySet() }
+    try {
+      if (reconcileBeforeCommit) reconcileHistory()
+      sessions[e.player] = prepared.session
+      configs[e.player] = prepared.config
+      romBuffers[e.player] = prepared.rom
+      slotRomBuffers[e.player] = prepared.slotRom
+      batteryBuffers[e.player] = prepared.battery
+      var current = prepared.frame
+      while (!prepared.hotPlug && current < frame) {
+        stateHistory.setPlayerState(
+            e.player,
+            current,
+            prepared.session.saveToMemento(),
+            prepared.session.heldButtons,
+        )
+        repeat(TICKS_PER_FRAME) { prepared.session.gameboy.tick() }
+        current++
+      }
+    } catch (failure: Throwable) {
+      sessions[e.player] = previous
+      configs[e.player] = oldConfig
+      romBuffers[e.player] = oldRom
+      slotRomBuffers[e.player] = oldSlotRom
+      batteryBuffers[e.player] = oldBattery
+      frame = oldFrame
+      runtimeFrameFloor = oldRuntimeFloor
+      stateHistory.restoreSnapshot(oldHistory)
+      try {
+        sessions.indices.forEach { player ->
+          val session = sessions[player]
+          val memento = oldSessionMementos[player]
+          if (session != null && memento != null) {
+            session.restoreFromMemento(memento)
+            session.heldButtons = oldHeldButtons[player]
+          }
+        }
+      } catch (rollbackFailure: Throwable) {
+        failure.addSuppressed(rollbackFailure)
+      }
+      prepared.session.close()
+      rejectPeerState(e.source, e.player, failure)
       return false
     }
-    val newPort = configs[e.player] == null
-    configs[e.player] =
-        createGameboyConfig(properties, Rom(e.rom))
-            .setGameboyType(e.gameboyType)
-            .setBootstrapMode(e.bootstrapMode)
-            .setCgb0Revision(e.cgb0Revision)
-            .setBatteryData(e.battery)
-    romBuffers[e.player] = e.rom
-    batteryBuffers[e.player] = e.battery
-    sessions[e.player]?.close()
-    sessions[e.player] = null
-    initSession(
-        e.player,
-        e.frame,
-        e.decodedSnapshot ?: e.snapshot?.let(NetplayMementoCodec::decodeGameboy),
-        e.decodedSessionSnapshot
-            ?: e.sessionSnapshot?.let(NetplayMementoCodec::decodeSession),
-        e.heldButtons,
-        hotPlug =
-            mode == LinkMode.FOUR_PLAYER_ADAPTER &&
-                localPlayer == 0 &&
-                e.player != localPlayer &&
-                newPort,
-    )
+    previous?.close()
     return true
+  }
+
+  private fun applyPeerCheckpoint(event: SessionCheckpointEvent): Boolean {
+    val candidateLinks = StateHistory.createLinks(mode)
+    val prepared = arrayOfNulls<PreparedPeerReplacement>(mode.playerCount)
+    try {
+      event.states.forEach { state ->
+        if (state.player !in prepared.indices || prepared[state.player] != null) {
+          throw StateApplyException("Checkpoint has duplicate or invalid player ${state.player}")
+        }
+        prepared[state.player] =
+            preparePeerReplacement(
+                state,
+                candidateLinks,
+                requireSession = true,
+                hotPlug = true,
+            )
+      }
+      val adapterStates =
+          event.states.map {
+            (it.portableState?.root as SessionStateRoot).session.serialState
+          }
+      if (adapterStates.isNotEmpty() && adapterStates.distinct().size != 1) {
+        throw StateApplyException("Checkpoint sessions disagree on shared adapter state")
+      }
+    } catch (failure: Throwable) {
+      prepared.filterNotNull().forEach { replacement -> replacement.session.close() }
+      rejectPeerState(event.source, event.source?.player ?: -1, failure)
+      return false
+    }
+
+    val replacementMementos =
+        prepared.map { replacement -> replacement?.session?.saveToMemento() }
+    val replacementButtons =
+        prepared.map { replacement -> replacement?.session?.heldButtons ?: emptySet() }
+    val oldSessions = sessions.toList()
+    val oldConfigs = configs.toList()
+    val oldRoms = romBuffers.toList()
+    val oldSlotRoms = slotRomBuffers.toList()
+    val oldBatteries = batteryBuffers.toList()
+    val oldLinks = links
+    val oldFrame = frame
+    val oldRuntimeFloor = runtimeFrameFloor
+    val oldHistory = stateHistory.captureSnapshot()
+    try {
+      links = candidateLinks
+      sessions.indices.forEach { player ->
+        val replacement = prepared[player]
+        sessions[player] = replacement?.session
+        configs[player] = replacement?.config
+        romBuffers[player] = replacement?.rom
+        slotRomBuffers[player] = replacement?.slotRom
+        batteryBuffers[player] = replacement?.battery
+      }
+      frame = event.frame
+      runtimeFrameFloor = event.frame
+      stateHistory.replaceWithState(frame, replacementMementos, replacementButtons)
+    } catch (failure: Throwable) {
+      links = oldLinks
+      sessions.indices.forEach { player ->
+        sessions[player] = oldSessions[player]
+        configs[player] = oldConfigs[player]
+        romBuffers[player] = oldRoms[player]
+        slotRomBuffers[player] = oldSlotRoms[player]
+        batteryBuffers[player] = oldBatteries[player]
+      }
+      frame = oldFrame
+      runtimeFrameFloor = oldRuntimeFloor
+      stateHistory.restoreSnapshot(oldHistory)
+      prepared.filterNotNull().forEach { replacement -> replacement.session.close() }
+      rejectPeerState(event.source, event.source?.player ?: -1, failure)
+      return false
+    }
+    oldSessions.forEach { old ->
+      try {
+        old?.close()
+      } catch (failure: Throwable) {
+        LOG.warn("Unable to close replaced linked session", failure)
+      }
+    }
+    return true
+  }
+
+  private fun preparePeerReplacement(
+      event: PeerLoadedGameEvent,
+      candidateLinks: StateHistory.Links,
+      requireSession: Boolean,
+      hotPlug: Boolean,
+  ): PreparedPeerReplacement {
+    var candidate: Session? = null
+    try {
+      val root = event.portableState?.root
+      if (requireSession && root !is SessionStateRoot) {
+        throw StateApplyException("Checkpoint player ${event.player} requires a SESSION StateFile")
+      }
+      if (!requireSession && root != null && root !is MachineStateRoot) {
+        throw StateApplyException("Initial player state requires a MACHINE StateFile")
+      }
+      val config =
+          Connection.peerConfiguration(
+              event.rom,
+              event.slotRom,
+              event.battery,
+              event.gameboyType,
+              event.bootstrapMode,
+              event.cgb0Revision,
+              event.mealybugDmgBlob,
+              event.codeBreakerRumble,
+              event.displaySgbBorder,
+          )
+      candidate =
+          Session(
+              if (root != null) config.forRestore() else config,
+              createSessionEventBus(event.player),
+              if (event.player == localPlayer) console else null,
+              candidateLinks.serial[event.player],
+              candidateLinks.infrared[event.player],
+          )
+      when (root) {
+        is MachineStateRoot -> DetachedStateAdapter.apply(candidate.gameboy, root.machine)
+        is SessionStateRoot -> DetachedStateAdapter.apply(candidate, root.session)
+        null -> candidate.heldButtons = event.heldButtons
+        else -> throw StateApplyException("Unsupported peer state root ${root.kind}")
+      }
+      if (root !is SessionStateRoot) candidate.heldButtons = event.heldButtons
+
+      return PreparedPeerReplacement(
+          candidate,
+          config,
+          event.rom,
+          event.slotRom,
+          event.battery,
+          event.frame,
+          hotPlug,
+      )
+    } catch (failure: Throwable) {
+      candidate?.close()
+      throw StateApplyException(
+          "Checkpoint player ${event.player + 1} failed preparation",
+          failure,
+      )
+    }
+  }
+
+  private fun createSessionEventBus(player: Int): EventBusImpl =
+      EventBusImpl(null, null, false).also { sessionEventBus ->
+        if (player == localPlayer) {
+          funnel(
+              sessionEventBus,
+              eventBus.fork("main"),
+              setOf(
+                  Display.DmgFrameReadyEvent::class,
+                  Display.GbcFrameReadyEvent::class,
+                  SgbDisplay.SgbFrameReadyEvent::class,
+                  Sound.SoundSampleEvent::class,
+                  RumbleEvent::class,
+                  Joypad.JoypadPressEvent::class,
+              ),
+          )
+        }
+      }
+
+  private fun rejectPeerState(
+      source: PeerEventSource?,
+      player: Int,
+      failure: Throwable,
+  ) {
+    val error =
+        IOException(
+            "Player ${player + 1} portable state could not be prepared atomically",
+            failure,
+        )
+    LOG.info("Rejecting player {} state: {}", player + 1, failure.message)
+    source?.let(eventQueue::discardSource)
+    source?.reject(ProtocolErrorReason.INVALID_PORTABLE_STATE, error)
   }
 
   private fun validatePeerStateFrame(event: PeerLoadedGameEvent): PeerLoadedGameEvent? {
@@ -726,23 +931,39 @@ class LinkedController(
         false
       }
 
-  private fun sendLocalRom(snapshot: ByteArray?) {
+  private fun sendLocalRom(includeState: Boolean) {
     val config = configs[localPlayer] ?: return
+    val session = sessions[localPlayer] ?: return
     val romBuffer = config.rom.file.toPath().readBytes()
+    val slotRomBuffer = config.slotRom?.file?.toPath()?.readBytes()
     val saveFile = Cartridge.getSaveName(config.rom.file)
     val batteryBuffer = if (saveFile.exists()) saveFile.toPath().readBytes() else null
     romBuffers[localPlayer] = romBuffer
+    slotRomBuffers[localPlayer] = slotRomBuffer
     batteryBuffers[localPlayer] = batteryBuffer
+    val portableState =
+        if (includeState) {
+          StateCodec.encode(
+              StateCodec.capture(config, session.gameboy),
+              StateCompression.DEFLATE,
+          )
+        } else {
+          null
+        }
 
     eventBus.post(
         LocalRomLoadedEvent(
             romFile = romBuffer,
+            slotRomFile = slotRomBuffer,
             batteryFile = batteryBuffer,
-            snapshot = snapshot,
+            portableState = portableState,
             gameboyType = config.gameboyType,
             bootstrapMode = config.bootstrapMode,
             frame = frame,
             cgb0Revision = config.isCgb0Revision,
+            mealybugDmgBlob = config.isMealybugDmgBlob,
+            codeBreakerRumble = config.isCodeBreakerRumble,
+            displaySgbBorder = config.isDisplaySgbBorder,
             player = localPlayer,
         ))
   }
@@ -755,14 +976,21 @@ class LinkedController(
           val romBuffer = romBuffers[player] ?: return@mapIndexedNotNull null
           LocalRomLoadedEvent(
               romFile = romBuffer,
+              slotRomFile = slotRomBuffers[player],
               batteryFile = batteryBuffers[player],
-              snapshot = null,
+              portableState =
+                  StateCodec.encode(
+                      StateCodec.capture(session),
+                      StateCompression.DEFLATE,
+                  ),
               gameboyType = config.gameboyType,
               bootstrapMode = config.bootstrapMode,
               frame = frame,
               cgb0Revision = config.isCgb0Revision,
+              mealybugDmgBlob = config.isMealybugDmgBlob,
+              codeBreakerRumble = config.isCodeBreakerRumble,
+              displaySgbBorder = config.isDisplaySgbBorder,
               player = player,
-              sessionSnapshot = NetplayMementoCodec.encodeSession(session.saveToMemento()),
               heldButtons = session.heldButtons,
           )
         }
@@ -843,9 +1071,11 @@ class LinkedController(
       }
 
   private fun peerStateWeight(event: PeerLoadedGameEvent): Long {
-    return listOf(event.rom, event.battery, event.snapshot, event.sessionSnapshot)
+    return listOf(event.rom, event.slotRom, event.battery)
         .filterNotNull()
-        .fold(0L) { total, value -> Math.addExact(total, value.size.toLong()) }
+        .fold(event.stateDecodedBytes.toLong()) { total, value ->
+          Math.addExact(total, value.size.toLong())
+        }
   }
 
   override fun closeWithState(): Controller.ControllerState? {
@@ -866,14 +1096,17 @@ class LinkedController(
   data class LocalRomLoadedEvent(
       val romFile: ByteArray,
       val batteryFile: ByteArray?,
-      val snapshot: ByteArray?,
+      val portableState: ByteArray?,
       val gameboyType: GameboyType,
       val bootstrapMode: Gameboy.BootstrapMode,
       val frame: Long,
       val cgb0Revision: Boolean = false,
       val player: Int = 0,
-      val sessionSnapshot: ByteArray? = null,
       val heldButtons: Set<Button> = emptySet(),
+      val slotRomFile: ByteArray? = null,
+      val mealybugDmgBlob: Boolean = false,
+      val codeBreakerRumble: Boolean = false,
+      val displaySgbBorder: Boolean = false,
   ) : Event
 
   data class SessionStateReadyEvent(val frame: Long, val states: List<LocalRomLoadedEvent>) : Event
@@ -891,8 +1124,20 @@ class LinkedController(
       internal val source: PeerEventSource? = null,
   ) : Event
 
-  data class LoadedLocalConfigEvent(val config: GameboyConfiguration, val snapshot: ByteArray?) :
-      Event
+  data class LoadedLocalConfigEvent(
+      val config: GameboyConfiguration,
+      val snapshot: Memento<Gameboy>?,
+  ) : Event
+
+  private data class PreparedPeerReplacement(
+      val session: Session,
+      val config: GameboyConfiguration,
+      val rom: ByteArray,
+      val slotRom: ByteArray?,
+      val battery: ByteArray?,
+      val frame: Long,
+      val hotPlug: Boolean,
+  )
 
   private data class PeerWorkBudget(
       var replayAvailable: Long,
