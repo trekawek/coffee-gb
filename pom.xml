@@ -80,8 +80,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.12.1</version>
                 <configuration>
-                    <source>16</source>
-                    <target>16</target>
+                    <!-- Enforce both Java 16 syntax and its API surface when CI runs on a newer JDK. -->
+                    <release>16</release>
                 </configuration>
             </plugin>
             <plugin>

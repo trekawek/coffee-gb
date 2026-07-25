@@ -174,6 +174,8 @@ public class SwingGamepadTest {
     @Test
     public void sdlIdentityIsCanonicalAndSensitiveToStableDescriptorFields() {
         String one = SdlGamepadBackend.stableId("guid", "/dev/input/a", "Pad");
+        assertEquals("sdl-eccc3d8673d9b710c9274225ee4b44baba12f760dcd506549d655e96356d583a",
+                one);
         assertTrue(one.matches("sdl-[0-9a-f]{64}"));
         assertEquals(one, SdlGamepadBackend.stableId("guid", "/dev/input/a", "Pad"));
         assertFalse(one.equals(SdlGamepadBackend.stableId("guid", "/dev/input/b", "Pad")));
