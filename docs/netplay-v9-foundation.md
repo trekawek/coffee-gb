@@ -66,7 +66,9 @@ Server ownership includes pending candidates and every handed-off `AWAITING_PAIR
 A close listener removes a handed-off connection from the registry when its later owner closes it.
 Candidate construction, start, and callback failures close/remove the candidate and leave the
 accept loop available. Server shutdown and callback delivery share one gate, so shutdown cannot
-leave a post-close callback or retained candidate.
+leave a post-close callback. Accepted-candidate admission shares a shutdown gate: an accept that
+has not yet registered is closed immediately after shutdown begins, while `shutdownNow` return
+values and the tracked pending set are both drained so no queued candidate is retained.
 
 The cancellable client connector owns a channel/connection only until a successful started
 connection is atomically handed to its callback. Cancellation is exactly once at every earlier

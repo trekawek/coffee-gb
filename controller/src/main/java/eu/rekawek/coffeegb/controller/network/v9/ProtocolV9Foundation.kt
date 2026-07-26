@@ -583,8 +583,9 @@ class V9FoundationServer(
   private val stopped = AtomicBoolean(false)
   private val startStopLock = Any()
   private val callbackLock = Any()
+  private val candidateLock = Any()
   private val connections = ConcurrentHashMap.newKeySet<V9FoundationConnection>()
-  private val pending = ConcurrentHashMap.newKeySet<Socket>()
+  private val pending = ConcurrentHashMap.newKeySet<V9PendingCandidate>()
   private val workers =
       ThreadPoolExecutor(
           V9Limit.HANDSHAKE_WORKERS.value.toInt(),
@@ -609,11 +610,17 @@ class V9FoundationServer(
         )
       }
 
+  internal var candidateHooks = V9ServerCandidateHooks()
+
   val localPort: Int get() = listener?.localPort ?: 0
 
   internal fun activeConnectionCount(): Int = connections.size
 
   internal fun pendingCandidateCount(): Int = pending.size
+
+  internal fun acceptThreadAlive(): Boolean = acceptThread?.isAlive == true
+
+  internal fun workerPoolTerminated(): Boolean = workers.isTerminated
 
   fun start() {
     synchronized(startStopLock) {
@@ -630,7 +637,9 @@ class V9FoundationServer(
   override fun close() {
     synchronized(callbackLock) {
       synchronized(startStopLock) {
-        if (!stopped.compareAndSet(false, true)) return
+        synchronized(candidateLock) {
+          if (!stopped.compareAndSet(false, true)) return
+        }
       }
     }
     try {
@@ -638,15 +647,10 @@ class V9FoundationServer(
     } catch (_: IOException) {
       // Best-effort listener shutdown.
     }
-    pending.forEach {
-      try {
-        it.close()
-      } catch (_: IOException) {
-        // Best-effort candidate shutdown.
-      }
-    }
-    connections.forEach(V9FoundationConnection::close)
-    workers.shutdownNow()
+    val neverStarted = workers.shutdownNow()
+    neverStarted.filterIsInstance<V9PendingCandidate>().forEach(V9PendingCandidate::close)
+    pending.toList().forEach(V9PendingCandidate::close)
+    connections.toList().forEach(V9FoundationConnection::close)
     acceptThread?.interrupt()
   }
 
@@ -654,16 +658,15 @@ class V9FoundationServer(
     while (!stopped.get()) {
       try {
         val socket = server.accept()
-        if (pending.size >= V9Limit.PENDING_HANDSHAKES.value) {
-          socket.close()
-          continue
-        }
-        pending += socket
+        val candidate = V9PendingCandidate(socket)
         try {
-          workers.execute { negotiate(socket) }
-        } catch (_: RejectedExecutionException) {
-          pending.remove(socket)
-          socket.close()
+          candidateHooks.afterAcceptBeforeAdmission(socket)
+          admit(candidate)
+        } catch (_: InterruptedException) {
+          Thread.currentThread().interrupt()
+          candidate.close()
+        } catch (_: RuntimeException) {
+          candidate.close()
         }
       } catch (_: SocketTimeoutException) {
         // Poll stop.
@@ -671,6 +674,22 @@ class V9FoundationServer(
         if (!stopped.get()) continue
       } catch (_: IOException) {
         if (!stopped.get()) continue
+      }
+    }
+  }
+
+  private fun admit(candidate: V9PendingCandidate) {
+    synchronized(candidateLock) {
+      if (stopped.get() ||
+          pending.size >= V9Limit.PENDING_HANDSHAKES.value) {
+        candidate.close()
+        return
+      }
+      pending += candidate
+      try {
+        workers.execute(candidate)
+      } catch (_: RejectedExecutionException) {
+        candidate.close()
       }
     }
   }
@@ -733,11 +752,48 @@ class V9FoundationServer(
       } catch (_: IOException) {
         // Candidate construction/start/callback failures remain isolated to this socket.
       }
-    } finally {
-      pending.remove(socket)
+    }
+  }
+
+  private inner class V9PendingCandidate(
+      private val socket: Socket,
+  ) : Runnable, Closeable {
+    private val candidateClosed = AtomicBoolean(false)
+
+    override fun run() {
+      try {
+        candidateHooks.beforeWorkerNegotiation(socket)
+        if (stopped.get()) {
+          close()
+          return
+        }
+        negotiate(socket)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        close()
+      } catch (_: RuntimeException) {
+        close()
+      } finally {
+        pending.remove(this)
+      }
+    }
+
+    override fun close() {
+      pending.remove(this)
+      if (!candidateClosed.compareAndSet(false, true)) return
+      try {
+        socket.close()
+      } catch (_: IOException) {
+        // Candidate cleanup remains best effort and never affects another accept.
+      }
     }
   }
 }
+
+internal class V9ServerCandidateHooks(
+    var afterAcceptBeforeAdmission: (Socket) -> Unit = {},
+    var beforeWorkerNegotiation: (Socket) -> Unit = {},
+)
 
 object V9FoundationClient {
   fun connect(
