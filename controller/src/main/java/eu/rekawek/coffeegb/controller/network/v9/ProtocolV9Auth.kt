@@ -115,28 +115,33 @@ object V9AuthCodec {
  * Client-side one-shot proof source. Token material never appears in public accessors or text.
  */
 class V9ClientInvitation internal constructor(
-    invitation: V9Invitation,
+    val mode: V9LinkMode,
+    val slot: Int,
+    private val secret: V9InvitationSecretLease,
 ) : AutoCloseable {
-  val mode: V9LinkMode = invitation.mode
-  val slot: Int = invitation.slot
-  private val token = invitation.copyToken()
   private var closed = false
 
   @Synchronized
   internal fun createAuth(serverNonce: ByteArray, clientNonce: ByteArray): V9Auth {
     check(!closed) { "v9 invitation proof source is closed" }
-    return V9Auth(slot, V9AuthCodec.proof(token, serverNonce, clientNonce, slot))
+    return secret.use { token ->
+      V9Auth(slot, V9AuthCodec.proof(token, serverNonce, clientNonce, slot))
+    }
   }
 
   @Synchronized
   override fun close() {
     if (!closed) {
       closed = true
-      token.fill(0)
+      secret.close()
     }
   }
+
+  internal fun isSecretAvailable(): Boolean =
+      synchronized(this) { !closed && secret.isAvailable() }
 
   override fun toString(): String = "V9ClientInvitation([redacted])"
 }
 
-fun V9Invitation.forClientAuthentication(): V9ClientInvitation = V9ClientInvitation(this)
+fun V9Invitation.forClientAuthentication(): V9ClientInvitation =
+    V9ClientInvitation(mode, slot, transferSecret())

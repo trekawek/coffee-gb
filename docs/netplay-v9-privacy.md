@@ -17,6 +17,14 @@ attempts all receive the same generic failure. Host expiry uses an injected mono
 the URI's UTC `exp` value is display-only. Successful proof consumption and slot reservation are
 one atomic decision.
 
+Token bytes have explicit transfer ownership. Parsing creates one wipeable buffer; transferring
+to client authentication makes the parsed invitation unusable without copying the token.
+Host-generated invitation views share their buffer with the host ledger so use, expiry,
+replacement, host stop, or explicit close invalidates every retained view. Rendering and clipboard
+copy are explicit disclosure operations and fail after invalidation. A URI `String` already
+returned to caller or clipboard code is immutable and cannot be zeroized; from that disclosure
+point the caller owns its lifetime and must not log or persist it.
+
 V9's planned TCP transport is plaintext. It does not encrypt ROM, battery, state, input, or
 metadata and cannot authenticate a server against an on-path attacker. It is not safe merely
 because the URI contains a random token. V9 does not provide TLS, matchmaking, NAT traversal,

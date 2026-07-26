@@ -31,9 +31,10 @@ class ProtocolV9InvitationAuthTest {
             else -> row.getValue("input").replace("\\n", "\n")
           }
       if (row.getValue("expected") == "SUCCESS") {
-        val invitation = V9Invitation.parse(input)
-        assertEquals(row.getValue("canonical"), invitation.render(), row.getValue("id"))
-        assertEquals("V9Invitation([redacted])", invitation.toString())
+        V9Invitation.parse(input).use { invitation ->
+          assertEquals(row.getValue("canonical"), invitation.render(), row.getValue("id"))
+          assertEquals("V9Invitation([redacted])", invitation.toString())
+        }
       } else {
         val error = assertFailsWith<V9InvitationParseException>(row.getValue("id")) {
           V9Invitation.parse(input)
@@ -61,7 +62,10 @@ class ProtocolV9InvitationAuthTest {
             "&exp=2000000300&token=oKGio6SlpqeoqaqrrK2urw",
         value.render(),
     )
-    assertEquals(value.render(), V9Invitation.parse(value.render()).render())
+    val rendered = value.render()
+    V9Invitation.parse(rendered).use { parsed ->
+      assertEquals(rendered, parsed.render())
+    }
     assertFalse(value.toString().contains("oKGi"))
     assertFailsWith<V9InvitationParseException> {
       host.createInvitation("play.example", 6688, 1, 59)
@@ -71,9 +75,137 @@ class ProtocolV9InvitationAuthTest {
     }
     host.close()
     assertEquals(0, host.outstandingInvitations())
+    assertFalse(value.isSecretAvailable())
+    assertFailsWith<IllegalStateException> { value.render() }
     assertFailsWith<IllegalStateException> {
       host.createInvitation("play.example", 6688, 1)
     }
+  }
+
+  @Test
+  fun hostInvalidationDestroysEverySharedApplicationView() {
+    val clock = FakeClock()
+    val scheduler = ManualScheduler(clock)
+    val token = ByteArray(16) { it.toByte() }
+    val serverNonce = ByteArray(32) { 1 }
+    val clientNonce = ByteArray(32) { 2 }
+    val host =
+        V9InvitationHost(
+            V9LinkMode.NORMAL,
+            clock,
+            V9UtcSeconds { 1 },
+            fixedRandom(token),
+            scheduler,
+        )
+
+    val replaced = host.createInvitation("play.example", 6688, 1, 60)
+    val replacement = host.createInvitation("play.example", 6688, 1, 60)
+    assertFalse(replaced.isSecretAvailable())
+    assertFailsWith<IllegalStateException> { replaced.render() }
+    replaced.close()
+
+    val client = replacement.forClientAuthentication()
+    assertFalse(replacement.isSecretAvailable())
+    assertTrue(client.isSecretAvailable())
+    val auth = client.createAuth(serverNonce, clientNonce)
+    val accepted =
+        assertIs<V9Authentication.Accepted>(
+            host.authenticate(auth, serverNonce, clientNonce),
+        )
+    assertFalse(client.isSecretAvailable())
+    assertFailsWith<IllegalStateException> {
+      client.createAuth(serverNonce, clientNonce)
+    }
+    client.close()
+    client.close()
+    replacement.close()
+    replacement.close()
+    accepted.reservation.close()
+    host.close()
+    assertEquals(0, host.outstandingInvitations())
+    assertFalse(scheduler.closed.get())
+  }
+
+  @Test
+  fun expiryStopAndExplicitCloseInvalidateRenderingWithoutChangingDisclosedStrings() {
+    val clock = FakeClock()
+    val scheduler = ManualScheduler(clock)
+    val host =
+        V9InvitationHost(
+            V9LinkMode.NORMAL,
+            clock,
+            V9UtcSeconds { 1 },
+            fixedRandom(ByteArray(16) { 7 }),
+            scheduler,
+        )
+
+    val expired = host.createInvitation("play.example", 6688, 1, 60)
+    val alreadyDisclosed = expired.render()
+    clock.now = 60_000
+    scheduler.runDue()
+    assertFalse(expired.isSecretAvailable())
+    assertFailsWith<IllegalStateException> { expired.render() }
+    // The immutable caller-owned String is outside the wipeable secret boundary.
+    assertTrue(alreadyDisclosed.endsWith("token=BwcHBwcHBwcHBwcHBwcHBw"))
+    expired.close()
+
+    val explicitlyClosed = host.createInvitation("play.example", 6688, 1, 60)
+    explicitlyClosed.close()
+    explicitlyClosed.close()
+    assertFalse(explicitlyClosed.isSecretAvailable())
+    assertFailsWith<IllegalStateException> { explicitlyClosed.render() }
+    assertEquals(0, host.outstandingInvitations())
+
+    val stopped = host.createInvitation("play.example", 6688, 1, 60)
+    host.close()
+    host.close()
+    assertFalse(stopped.isSecretAvailable())
+    assertFailsWith<IllegalStateException> { stopped.render() }
+    stopped.close()
+  }
+
+  @Test
+  fun parserTransfersOneSecretLeaseAndParseFailuresRemainRedacted() {
+    val canonical =
+        "coffeegb://play.example:6688/join?v=9&mode=normal&slot=1" +
+            "&exp=2000000000&token=AAECAwQFBgcICQoLDA0ODw"
+    val parsed = V9Invitation.parse(canonical)
+    val client = parsed.forClientAuthentication()
+    assertFalse(parsed.isSecretAvailable())
+    assertFailsWith<IllegalStateException> { parsed.render() }
+    assertTrue(client.isSecretAvailable())
+    client.createAuth(ByteArray(32) { 1 }, ByteArray(32) { 2 })
+    client.close()
+    assertFalse(client.isSecretAvailable())
+    assertFailsWith<IllegalStateException> {
+      client.createAuth(ByteArray(32) { 1 }, ByteArray(32) { 2 })
+    }
+    parsed.close()
+
+    val noncanonicalToken = canonical.dropLast(1) + "x"
+    val failure = assertFailsWith<V9InvitationParseException> {
+      V9Invitation.parse(noncanonicalToken)
+    }
+    assertEquals(V9InvitationError.INV_TOKEN, failure.reason)
+    assertEquals("INV_TOKEN", failure.message)
+    assertTrue(noncanonicalToken.endsWith("token=AAECAwQFBgcICQoLDA0ODx"))
+
+    var failedGenerationBuffer: ByteArray? = null
+    val failedHost =
+        V9InvitationHost(
+            V9LinkMode.NORMAL,
+            random =
+                V9SecureRandom { target ->
+                  failedGenerationBuffer = target
+                  target.fill(0x5a.toByte())
+                  throw IllegalStateException("injected random failure")
+                },
+        )
+    assertFailsWith<IllegalStateException> {
+      failedHost.createInvitation("play.example", 6688, 1)
+    }
+    assertTrue(requireNotNull(failedGenerationBuffer).all { it == 0.toByte() })
+    failedHost.close()
   }
 
   @Test
@@ -189,7 +321,7 @@ class ProtocolV9InvitationAuthTest {
       val actual = if (outcome is V9Authentication.Accepted) "SUCCESS" else "AUTH_FAILED"
       assertEquals(row.getValue("expected"), actual, row.getValue("id"))
       if (outcome is V9Authentication.Accepted) outcome.reservation.close()
-      invitation.forClientAuthentication().close()
+      invitation.close()
       host.close()
     }
   }
@@ -288,6 +420,7 @@ class ProtocolV9InvitationAuthTest {
             ),
         )
     val replacement = host.createInvitation("play.example", 6688, 1)
+    val replacementUri = replacement.render()
     assertEquals(
         V9Authentication.SlotFull,
         host.authenticate(auth(replacement, serverNonce, clientNonce), serverNonce, clientNonce),
@@ -300,7 +433,11 @@ class ProtocolV9InvitationAuthTest {
     assertEquals(setOf(1, 2), host.occupiedSlots())
     first.reservation.close()
     assertIs<V9Authentication.Accepted>(
-        host.authenticate(auth(replacement, serverNonce, clientNonce), serverNonce, clientNonce),
+        host.authenticate(
+            auth(V9Invitation.parse(replacementUri), serverNonce, clientNonce),
+            serverNonce,
+            clientNonce,
+        ),
     )
     second.reservation.close()
     host.close()
@@ -590,6 +727,73 @@ class ProtocolV9InvitationAuthTest {
   ): List<V9LifecycleSnapshot> =
       synchronized(accepted) { accepted.map(V9FoundationConnection::snapshot) }
 
+  @Test(timeout = 25_000)
+  fun realSocketUsesTenSecondPreManifestDeadlineInsteadOfFiveSecondReadTimeout() {
+    val token = ByteArray(16) { (0xa0 + it).toByte() }
+    val host =
+        V9InvitationHost(
+            V9LinkMode.NORMAL,
+            random = fixedRandom(token),
+        )
+    val invitation = host.createInvitation("127.0.0.1", 1, 1)
+    val accepted = LinkedBlockingQueue<V9FoundationConnection>()
+    var client: V9FoundationConnection? = null
+    var serverConnection: V9FoundationConnection? = null
+    try {
+      V9FoundationServer(
+              invitationHost = host,
+              onAwaitingPairing = accepted::offer,
+          )
+          .use { server ->
+          server.start()
+          client =
+              V9FoundationClient.connect(
+                  InetSocketAddress("127.0.0.1", server.localPort),
+                  invitation = invitation.forClientAuthentication(),
+              )
+          serverConnection = accepted.poll(5, TimeUnit.SECONDS)
+          assertNotNull(serverConnection)
+          assertEquals(
+              V9LifecycleState.WAIT_SERVER_MANIFEST,
+              client!!.awaitPostAuthBoundary(5, TimeUnit.SECONDS).state,
+          )
+          awaitState(serverConnection!!, V9LifecycleState.SEND_SERVER_MANIFEST, 5_000)
+          val authenticatedAt = System.nanoTime()
+
+          Thread.sleep(6_000)
+          assertFalse(client!!.isClosed(), client!!.snapshot().toString())
+          assertFalse(serverConnection!!.isClosed(), serverConnection!!.snapshot().toString())
+          assertEquals(setOf(1), host.occupiedSlots())
+
+          val closeDeadline = authenticatedAt + TimeUnit.SECONDS.toNanos(14)
+          while ((!client!!.isClosed() ||
+                  !serverConnection!!.isClosed() ||
+                  host.occupiedSlots().isNotEmpty()) &&
+              System.nanoTime() < closeDeadline) {
+            Thread.sleep(10)
+          }
+          val elapsedMillis =
+              TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - authenticatedAt)
+          assertTrue(elapsedMillis >= 9_000, "closed before frozen deadline: ${elapsedMillis}ms")
+          assertTrue(elapsedMillis < 14_000, "did not close near frozen deadline: ${elapsedMillis}ms")
+          assertTrue(client!!.isClosed())
+          assertTrue(serverConnection!!.isClosed())
+          assertTrue(host.occupiedSlots().isEmpty())
+          assertTrue(
+              listOf(client!!.snapshot(), serverConnection!!.snapshot())
+                  .any { it.failure?.reason == V9ErrorCode.TIMEOUT },
+          )
+          client!!.close()
+          serverConnection!!.close()
+          assertTrue(host.occupiedSlots().isEmpty())
+          }
+    } finally {
+      client?.close()
+      serverConnection?.close()
+      host.close()
+    }
+  }
+
   @Test
   fun authStageDeadlinesExpireAtExactlyFiveSeconds() {
     val cases =
@@ -627,6 +831,39 @@ class ProtocolV9InvitationAuthTest {
     }
   }
 
+  @Test
+  fun preManifestDeadlinesRemainOpenAtNineThousandNineHundredNinetyNine() {
+    val cases =
+        listOf(
+            Triple(V9Role.SERVER, V9LifecycleState.SEND_SERVER_MANIFEST) {
+                value: V9Lifecycle ->
+              value.serverHelloSent()
+              value.clientHelloReceived(requiredCapabilities())
+              value.clientAuthReceived()
+              value.serverAuthResultSent()
+            },
+            Triple(V9Role.CLIENT, V9LifecycleState.WAIT_SERVER_MANIFEST) {
+                value: V9Lifecycle ->
+              value.serverHelloReceived()
+              value.clientHelloSent(requiredCapabilities())
+              value.clientAuthSent()
+              value.serverAuthResultReceived()
+            },
+        )
+    cases.forEach { (role, expectedState, prepare) ->
+      val clock = FakeClock()
+      val lifecycle = V9Lifecycle(role, clock)
+      prepare(lifecycle)
+      assertEquals(expectedState, lifecycle.snapshot().state)
+      clock.now = 9_999
+      assertNull(lifecycle.checkDeadline())
+      assertEquals(expectedState, lifecycle.snapshot().state)
+      clock.now = 10_000
+      assertEquals(V9ErrorCode.TIMEOUT, lifecycle.checkDeadline()?.reason)
+      assertEquals(V9LifecycleState.CLOSED, lifecycle.snapshot().state)
+    }
+  }
+
   private fun requiredCapabilities() =
       V9NegotiatedCapabilities(V9Capability.requiredCapabilities)
 
@@ -637,6 +874,18 @@ class ProtocolV9InvitationAuthTest {
       Thread.yield()
     }
     assertEquals(V9LifecycleState.CLOSED, connection.snapshot().state)
+  }
+
+  private fun awaitState(
+      connection: V9FoundationConnection,
+      state: V9LifecycleState,
+      timeoutMillis: Long,
+  ) {
+    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    while (connection.snapshot().state != state && System.nanoTime() < deadline) {
+      Thread.yield()
+    }
+    assertEquals(state, connection.snapshot().state)
   }
 
   private fun auth(

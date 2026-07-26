@@ -51,6 +51,11 @@ payloads, and atomic slot reservation. When the server owns `V9InvitationHost` a
 `V9ClientInvitation`, successful AUTH publishes an immutable boundary for authenticated slot
 `1` (normal) or `1..3` (four-player). The next legal frozen state is
 `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`, but MANIFEST itself is deliberately unavailable.
+Invitation values, the host ledger, and client proof owners share one wipeable token buffer through
+explicit leases rather than retaining independent token copies. Transfer to client authentication
+invalidates the source value. Use, expiry, replacement, host stop, or explicit invitation close
+invalidates every shared lease and zeroes the buffer; releasing the final client-only lease also
+zeroes it.
 
 Manifest comparison, consent, ROM/battery transfer, checkpoints, playable input, diagnostics,
 discovery, and Mobile Adapter behavior remain unavailable. Their declarations are rejected at the
@@ -63,6 +68,11 @@ The transport owns its channel, reader/writer tasks, deadline task, bounded queu
 frames. Cancellation or timeout closes each resource idempotently and cannot block an emulator
 thread or the Swing EDT. A failed candidate is closed independently; it does not terminate the
 listener or another candidate.
+
+The injected monotonic lifecycle scheduler is authoritative for blocking-read cancellation.
+Production sockets use no independent `SO_TIMEOUT` after connect, so the 5,000 ms HELLO/AUTH
+deadline cannot preempt the frozen 10,000 ms pre-MANIFEST deadline. Closing the socket at the
+current lifecycle deadline unblocks the reader and releases authentication/slot ownership.
 
 A local peer-visible rejection first freezes queue and decoder admission and records its original
 typed failure. The implementation then makes one best-effort terminal ERROR write, half-closes
