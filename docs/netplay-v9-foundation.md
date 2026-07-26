@@ -18,6 +18,9 @@ The platform-neutral controller package `controller.network.v9` owns:
   post-AUTH `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST` boundary;
 - an opt-in Part-2 MANIFEST-v1 codec and semantic exchange that accepts only caller-prepared,
   deeply owned metadata and stops at `SYNCHRONIZING` or `EXCHANGE_CONSENT`;
+- an additional opt-in Part-3 plan with exact item-scoped CONSENT, lazy ROM/battery sources,
+  bounded streaming, atomic verified candidate delivery, and an immutable pre-START preparation
+  boundary;
 - injected monotonic deadlines, bounded reader/writer retention, cancellation, idempotent close,
   socket/task ownership, and an accept loop that isolates malformed or stalled candidates; and
 - an EDT-marshalling Swing adapter whose controller-facing source has no Swing or AWT dependency.
@@ -74,11 +77,35 @@ and authorizes nothing. Both boundary variants contain detached manifests, sanit
 and proposal values, and SHA-256 identities of the exact two manifest payloads. Missing/different
 ROM data without its exact advanced proposal rejects; no mismatch triggers a transfer.
 
-Consent, ROM/battery transfer, checkpoints, playable input, diagnostics, discovery, and Mobile
-Adapter behavior remain unavailable. Their declarations are rejected at the 32-byte header
-decision, before declared payload allocation. Callers that omit a manifest plan retain the Part-1
-post-AUTH boundary without sending MANIFEST. The default `ConnectionController` still has no v9
-reference; shipped netplay remains protocol v8.
+Part 3 is another explicit extension. `V9Part3Plan` contains only caller-owned lazy providers,
+an atomic completed-candidate sink, and bounded policy values. Each proposal remains in
+`EXCHANGE_CONSENT` until its source and target have each sent one exact 116-byte approval bound to
+the two manifest payload hashes, item identity, direction, class, asset, size, and digest. A
+duplicate, replay, mismatch, extra vote, rejection, cancellation, or deadline failure closes only
+that candidate. Zero proposals still complete directly.
+
+Only after all approvals does the source task open a provider away from the emulator thread and
+EDT. ROM and battery use the frozen 52-byte BEGIN, 8-byte-plus-data CHUNK, and 36-byte END schemas.
+The implementation permits one open transaction per session, contiguous offsets, 65,536 decoded
+bytes per chunk, at most four admitted chunk writes, 64 MiB ROMs, 2 MiB batteries, the existing
+33,817,172-byte wire queue and 128 MiB decoded aggregate, a 120,000 ms synchronization deadline,
+and a 15,000 ms progress deadline reset only by a validated complete frame. Raw RFC-1951 chunks
+require capability 10. The source length and streaming SHA-256 must equal the approved proposal.
+The receiver retains at most the approved class limit and gives its caller one detached candidate
+only after exact END length and digest verification; failure or close wipes queued frames, source
+buffers, and partial receiver retention where practicable.
+
+Completion publishes sanitized per-item progress and an immutable `SYNCHRONIZING`
+preparation-complete boundary. It does not send START. `V9SwingPart3Adapter` marshals only that
+sanitized progress and explicit approve/reject/cancel actions across the EDT; private candidates
+never enter Swing. Replacing an observer, cancelling, or closing suppresses queued stale
+callbacks.
+
+Checkpoints, START/READY, playable input, diagnostics, discovery, and Mobile Adapter behavior
+remain unavailable. Their declarations are rejected before proportional payload allocation.
+Callers that omit a Part-3 plan retain the Part-2 boundary; callers that also omit a manifest plan
+retain the Part-1 post-AUTH boundary. The default `ConnectionController` still has no v9 reference;
+shipped netplay remains protocol v8.
 
 ## Ownership, errors, and privacy
 
@@ -101,7 +128,8 @@ candidate at exactly 2,000 ms (it remains open at 1,999 ms) without replacing th
 reason. Received terminal errors may close promptly.
 
 Server ownership includes pending candidates and every handed-off connection, whether it remains
-at `AWAITING_PAIRING`, the Part-1 pre-MANIFEST boundary, or the Part-2 pre-consent boundary.
+at `AWAITING_PAIRING`, the Part-1 pre-MANIFEST boundary, the Part-2 pre-consent boundary, or the
+Part-3 pre-START boundary.
 A close listener removes a handed-off connection from the registry when its later owner closes it.
 Candidate construction, start, and callback failures close/remove the candidate and leave the
 accept loop available. Server shutdown and callback delivery share one gate, so shutdown cannot
@@ -120,10 +148,11 @@ diagnostic text is strictly validated where required by the wire schema but is d
 than surfaced. Exceptions, payload bytes, paths, ROM/save content, invitation material, and remote
 strings are never used as UI diagnostics.
 
-Invitation authentication and bounded manifest metadata are implemented only through the opt-in
-Part-1/Part-2 API; encryption is **not** implemented. The protocol is plaintext TCP and does not
-provide confidentiality or protection against an on-path attacker. This boundary must not be
-presented as a secure or playable Internet netplay flow.
+Invitation authentication, bounded manifest metadata, explicit consent, and bounded ROM/battery
+preparation are implemented only through the opt-in Part-1/Part-2/Part-3 API; encryption is **not**
+implemented. The protocol is plaintext TCP and does not provide confidentiality or protection
+against an on-path attacker. This boundary must not be presented as a secure or playable Internet
+netplay flow.
 
 ## Verification
 
@@ -139,3 +168,8 @@ and the controller/Swing dependency boundary. `ProtocolV9ManifestTest` executes 
 difference, direction, and pre-consent classification rows through the production codec; exercises
 all truncations, fragmented/coalesced frames, class/capability/content bindings, exact manifest
 deadlines, normal/four-player exchanges, listener isolation, and the no-later-payload boundary.
+`ProtocolV9ConsentTransferTest` covers exact consent/bulk schemas, both decision orders and strict
+subsets, multiple ROM/battery proposals, lazy-provider gating, raw/DEFLATE framing, real-socket
+normal/four-player exchanges, guest isolation, source/sink failure atomicity, exact progress
+deadlines, and the pre-START gate. `V9SwingPart3AdapterTest` covers EDT delivery, sanitized
+progress, explicit decisions/cancel, and queued stale-callback suppression.

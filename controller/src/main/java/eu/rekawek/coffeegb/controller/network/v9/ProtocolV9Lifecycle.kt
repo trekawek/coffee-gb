@@ -92,8 +92,8 @@ interface V9LifecycleSource {
  *
  * Phase #347 owns HELLO, Part 1 of #348 owns AUTH, and Part 2 owns the MANIFEST transitions through
  * the immutable pre-consent boundary. Later frozen states remain explicit values rather than being
- * inferred from unrelated emulator events, but their transitions stay unavailable until their
- * owning phases implement them.
+ * inferred from unrelated emulator events. Part 3 owns item-scoped CONSENT and bounded private
+ * preparation through SYNCHRONIZING; START and later transitions remain unavailable.
  */
 class V9Lifecycle(
     private val role: V9Role,
@@ -208,6 +208,14 @@ class V9Lifecycle(
           V9LifecycleState.SYNCHRONIZING
         },
     )
+  }
+
+  @Synchronized
+  fun consentComplete() {
+    check(state == V9LifecycleState.EXCHANGE_CONSENT) {
+      "Illegal v9 lifecycle transition"
+    }
+    transition(V9LifecycleState.SYNCHRONIZING)
   }
 
   @Synchronized

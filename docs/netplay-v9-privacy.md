@@ -3,9 +3,10 @@
 Protocol v9 has an opt-in developer transport foundation that validates CGB9 frames and negotiates
 HELLO capabilities. Part 1 of #348 adds strict invitation parsing, bounded host invitation
 ownership, and AUTH. Part 2 adds the exact bounded MANIFEST metadata exchange, then stops at an
-immutable pre-consent boundary. It is not a playable end-user path: no consent decision, private
-transfer, checkpoint, or input is enabled. Callers that do not opt into an explicit prepared
-manifest retain the Part-1 pre-MANIFEST boundary. Current user netplay remains protocol v8 with
+immutable pre-consent boundary. Part 3 optionally adds explicit two-sided item consent and bounded
+ROM/battery preparation, then stops before START. It is not a playable end-user path: checkpoint,
+input, and gameplay remain disabled. Callers that do not opt into an explicit prepared manifest
+and Part-3 plan retain the earlier boundaries. Current user netplay remains protocol v8 with
 the compatibility restrictions in
 [netplay-protocol-v8.md](netplay-protocol-v8.md). A v8/v9 mismatch is intentional and has no
 downgrade, fallback, or compatibility probe.
@@ -48,6 +49,13 @@ Paths, tokens, credentials, battery/state payloads, and payload fragments are fo
 and diagnostics. State transport is direct bounded StateFile v2 only; local historical snapshot
 import is never reachable from a peer.
 
+For the implemented ROM/battery classes, a mismatch alone opens nothing. The caller's lazy source
+is invoked off the emulator thread and EDT only after both approvals. One approved item permits
+one matching directional transaction. The receiver publishes nothing until length and SHA-256 are
+complete and verified; partial retention and queued private frame copies are wiped on rejection,
+timeout, cancellation, or close where the runtime permits. The presentation adapter sees only
+item IDs, stable classes/assets, direction, bounded byte counts, and sanitized state.
+
 ## Diagnosing a failed pairing
 
 The opt-in foundation exposes only typed, sanitized protocol/timeout/cancellation diagnostics.
@@ -69,15 +77,17 @@ wired into the normal netplay menu.
 The exact grammar, limits, timeouts, errors, and state transitions are normative in
 [netplay-protocol-v9.md](netplay-protocol-v9.md).
 
-## Deliberate Part-2 boundary
+## Deliberate Part-3 boundary
 
-After successful AUTH, explicitly prepared peers exchange exact bounded MANIFEST metadata. An
-exact pair stops at `SYNCHRONIZING`; valid advanced proposals stop at `EXCHANGE_CONSENT`, without
-making a consent decision. Manifest preparation happens outside transport and supplies hashes,
-sizes, sanitized title/type/profile identity, and availability only—never ROM, battery, StateFile,
-or path bytes. Nothing at this boundary authorizes transfer.
+After successful AUTH, explicitly prepared peers exchange bounded MANIFEST metadata. An exact pair
+with no proposals reaches `SYNCHRONIZING` without private traffic. Valid advanced proposals require
+an explicit local source/target decision on each side; only the complete matching decision set may
+open one lazy ROM/battery source. A verified transaction ends at an immutable preparation-complete
+`SYNCHRONIZING` boundary. Manifest preparation itself still supplies hashes, sizes, sanitized
+title/type/profile identity, and availability only—never ROM, battery, StateFile, or path bytes.
 
-CONSENT, transfers, checkpoints, diagnostics, discovery, and playable input remain for later
-phases. The stale nonce-comparison roadmap checkbox is not a tokenless/manual-address bypass: v9
-has no such flow. Discovery or a different invitation mechanism requires a separately reviewed
-capability and threat-model change and is deferred to #350.
+Checkpoints, START/READY, diagnostics, discovery, and playable input remain for later phases.
+Checkpoint and atomic linked-state integration are #349. The stale nonce-comparison roadmap
+checkbox is not a tokenless/manual-address bypass: v9 has no such flow. Discovery or a different
+invitation mechanism requires a separately reviewed capability and threat-model change and is
+deferred to #350.
