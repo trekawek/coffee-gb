@@ -1,0 +1,2 @@
+base_fixture	cut_offsets	expected	state_transition	boundary
+valid_ping	0,1,4,5,6,8,10,12,16,20,24,28,32,63	TRUNCATED	none	before-payload-read-or-state-change

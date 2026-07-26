@@ -46,6 +46,18 @@ also requires SDL2 (`brew install sdl2`); keyboard input works without it.
 For netplay, one player chooses **Link > Start server** and the other chooses
 **Link > Connect to server**.
 
+The next-generation pairing and consent design is frozen as **protocol v9** but is not implemented
+yet. It deliberately does not interoperate or downgrade to current protocol v8. Its short-lived
+invitation proves possession only: planned TCP remains plaintext and is not confidential or secure
+against an on-path attacker. Own-ROM use is the default and ROM, battery, and checkpoint transfer
+classes require compatible manifests plus explicit consent on both sides. See
+[the v9 privacy/troubleshooting guide](docs/netplay-v9-privacy.md) and the
+[normative v9 contract](docs/netplay-protocol-v9.md).
+
+Mobile Adapter GB support is likewise specification-only. The clean-room design treats it as a
+bounded serial peripheral, never a rollback link mode, and neither connects to historical Nintendo
+services nor bundles service data. See [the Mobile Adapter contract](docs/mobile-adapter-contract.md).
+
 ### Hardware profiles and command-line selection
 
 Each emulation session resolves one immutable hardware profile before construction. The permanent

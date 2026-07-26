@@ -1,0 +1,8 @@
+id	current_frames	current_encoded	current_decoded	add_frames	add_encoded	add_decoded	expected	provenance
+exact_all_limits	255	33816575	134217727	1	1	1	SUCCESS	coffee-gb-synthetic-budget
+frame_boundary_plus_one	256	0	0	1	0	0	QUEUE_OVERFLOW	coffee-gb-synthetic-budget
+encoded_boundary_plus_one	0	33816576	0	1	1	0	QUEUE_OVERFLOW	coffee-gb-synthetic-budget
+decoded_boundary_plus_one	0	0	134217728	1	0	1	LIMIT_EXCEEDED	coffee-gb-synthetic-budget
+unsigned_wire_max	0	0	0	1	4294967295	0	QUEUE_OVERFLOW	coffee-gb-synthetic-budget
+checked_add_overflow	0	9223372036854775807	0	1	1	0	LIMIT_EXCEEDED	coffee-gb-synthetic-budget
+negative_signed_confusion	0	-1	0	1	1	0	MALFORMED_HEADER	coffee-gb-synthetic-budget
