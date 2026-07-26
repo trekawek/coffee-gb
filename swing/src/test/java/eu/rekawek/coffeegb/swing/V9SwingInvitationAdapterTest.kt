@@ -2,11 +2,13 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.network.v9.V9Invitation
 import eu.rekawek.coffeegb.controller.network.v9.V9InvitationError
+import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -50,23 +52,29 @@ class V9SwingInvitationAdapterTest {
         },
     )
 
-    val terminal = CountDownLatch(3)
+    val awaiting = CountDownLatch(1)
     adapter.awaitingAuthentication {
       assertTrue(SwingUtilities.isEventDispatchThread())
       assertIs<V9InvitationUiState.AwaitingAuthentication>(it)
-      terminal.countDown()
+      awaiting.countDown()
     }
+    assertTrue(awaiting.await(3, TimeUnit.SECONDS))
+
+    val rejected = CountDownLatch(1)
     adapter.authenticationRejected {
       assertTrue(SwingUtilities.isEventDispatchThread())
       assertIs<V9InvitationUiState.AuthenticationRejected>(it)
-      terminal.countDown()
+      rejected.countDown()
     }
+    assertTrue(rejected.await(3, TimeUnit.SECONDS))
+
+    val cancelled = CountDownLatch(1)
     adapter.cancel {
       assertTrue(SwingUtilities.isEventDispatchThread())
       assertIs<V9InvitationUiState.Cancelled>(it)
-      terminal.countDown()
+      cancelled.countDown()
     }
-    assertTrue(terminal.await(3, TimeUnit.SECONDS))
+    assertTrue(cancelled.await(3, TimeUnit.SECONDS))
     adapter.close()
   }
 
@@ -87,6 +95,101 @@ class V9SwingInvitationAdapterTest {
     adapter.close()
   }
 
+  @Test
+  fun cancelSuppressesEveryQueuedOlderStateAndDestroysDiscardedSecret() {
+    val gate = EdtGate.block()
+    val executor = ImmediateExecutorService()
+    val delivered = mutableListOf<V9InvitationUiState>()
+    val invalidDelivered = mutableListOf<V9InvitationUiState>()
+    lateinit var discardedInvitation: V9Invitation
+    val adapter =
+        V9SwingInvitationAdapter.forTest(
+            V9InvitationClipboard { error("not copied") },
+            executor,
+        ) {
+          V9Invitation.parse(it).also { value -> discardedInvitation = value }
+        }
+    val invalidAdapter = V9SwingInvitationAdapter(executor = executor)
+    try {
+      adapter.parseAsync(canonical) { delivered += it }
+      adapter.awaitingAuthentication { delivered += it }
+      adapter.authenticationRejected { delivered += it }
+      adapter.cancel { delivered += it }
+
+      invalidAdapter.parseAsync("not-an-invitation") { invalidDelivered += it }
+      invalidAdapter.cancel { invalidDelivered += it }
+    } finally {
+      gate.releaseAndDrain()
+    }
+
+    assertEquals(1, delivered.size)
+    assertIs<V9InvitationUiState.Cancelled>(delivered.single())
+    assertEquals(1, invalidDelivered.size)
+    assertIs<V9InvitationUiState.Cancelled>(invalidDelivered.single())
+    assertFailsWith<IllegalStateException> { discardedInvitation.render() }
+    adapter.close()
+    invalidAdapter.close()
+  }
+
+  @Test
+  fun newerParseSuppressesQueuedOlderResultWithoutClosingDeliveredResult() {
+    val gate = EdtGate.block()
+    val executor = ImmediateExecutorService()
+    val oldDelivered = mutableListOf<V9InvitationUiState>()
+    val currentDelivered = mutableListOf<V9InvitationUiState>()
+    val parsed = mutableListOf<V9Invitation>()
+    val adapter =
+        V9SwingInvitationAdapter.forTest(
+            V9InvitationClipboard { error("not copied") },
+            executor,
+        ) {
+          V9Invitation.parse(it).also(parsed::add)
+        }
+    val newer = canonical.replace("play.example", "new.example")
+    try {
+      adapter.parseAsync(canonical) { oldDelivered += it }
+      adapter.parseAsync(newer) { currentDelivered += it }
+    } finally {
+      gate.releaseAndDrain()
+    }
+
+    assertTrue(oldDelivered.isEmpty())
+    assertEquals(2, currentDelivered.size)
+    assertIs<V9InvitationUiState.Parsing>(currentDelivered[0])
+    val delivered = assertIs<V9InvitationUiState.Parsed>(currentDelivered[1])
+    assertEquals(2, parsed.size)
+    assertFailsWith<IllegalStateException> { parsed[0].render() }
+    assertEquals(newer, parsed[1].render())
+    assertEquals(newer, delivered.invitation.render())
+    delivered.close()
+    adapter.close()
+  }
+
+  @Test
+  fun closeSuppressesAlreadyQueuedResultAndDestroysItsSecret() {
+    val gate = EdtGate.block()
+    val executor = ImmediateExecutorService()
+    val delivered = mutableListOf<V9InvitationUiState>()
+    lateinit var discardedInvitation: V9Invitation
+    val adapter =
+        V9SwingInvitationAdapter.forTest(
+            V9InvitationClipboard { error("not copied") },
+            executor,
+        ) {
+          V9Invitation.parse(it).also { value -> discardedInvitation = value }
+        }
+    try {
+      adapter.parseAsync(canonical) { delivered += it }
+      adapter.close()
+    } finally {
+      gate.releaseAndDrain()
+    }
+
+    assertTrue(delivered.isEmpty())
+    assertFailsWith<IllegalStateException> { discardedInvitation.render() }
+    adapter.close()
+  }
+
   private fun assertFailsOffEdt(block: () -> Unit) {
     var failed = false
     val thread =
@@ -100,5 +203,51 @@ class V9SwingInvitationAdapterTest {
     thread.start()
     thread.join()
     assertTrue(failed)
+  }
+
+  private class EdtGate private constructor(
+      private val release: CountDownLatch,
+  ) {
+    fun releaseAndDrain() {
+      release.countDown()
+      SwingUtilities.invokeAndWait {}
+    }
+
+    companion object {
+      fun block(): EdtGate {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        SwingUtilities.invokeLater {
+          entered.countDown()
+          release.await()
+        }
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        return EdtGate(release)
+      }
+    }
+  }
+
+  private class ImmediateExecutorService : AbstractExecutorService() {
+    private val stopped = AtomicBoolean(false)
+
+    override fun execute(command: Runnable) {
+      check(!stopped.get())
+      command.run()
+    }
+
+    override fun shutdown() {
+      stopped.set(true)
+    }
+
+    override fun shutdownNow(): MutableList<Runnable> {
+      stopped.set(true)
+      return mutableListOf()
+    }
+
+    override fun isShutdown(): Boolean = stopped.get()
+
+    override fun isTerminated(): Boolean = stopped.get()
+
+    override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = stopped.get()
   }
 }

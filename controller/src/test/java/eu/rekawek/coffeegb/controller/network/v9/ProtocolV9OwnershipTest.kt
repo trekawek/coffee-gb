@@ -335,6 +335,81 @@ class ProtocolV9OwnershipTest {
   }
 
   @Test
+  fun connectAttemptSchedulingFailureCompletesOnceAndDestroysAcceptedCredential() {
+    val scheduler = ThrowingScheduler()
+    val factoryCalls = AtomicInteger()
+    val callbacks = AtomicInteger()
+    val result = AtomicReference<V9ErrorCode>()
+    val invitation = clientInvitation()
+    val attempt =
+        V9FoundationConnectAttempt(
+            scheduler = scheduler,
+            channelFactory = {
+              factoryCalls.incrementAndGet()
+              ImmediateConnectableChannel()
+            },
+        )
+
+    attempt.start(
+        InetSocketAddress("127.0.0.1", 1),
+        invitation = invitation,
+    ) { connection, error ->
+      assertNull(connection)
+      result.set(error)
+      callbacks.incrementAndGet()
+    }
+
+    assertEquals(V9ErrorCode.INTERNAL_ERROR, result.get())
+    assertEquals(1, callbacks.get())
+    assertEquals(0, factoryCalls.get())
+    assertFalse(invitation.isSecretAvailable())
+    assertEquals(0, scheduler.closeCount.get())
+    attempt.cancel()
+    attempt.close()
+    assertEquals(1, callbacks.get())
+    assertEquals(0, scheduler.closeCount.get())
+  }
+
+  @Test
+  fun synchronousClientAcceptsCredentialOnlyAfterValidationAndClosesItOnSetupFailure() {
+    val address = InetSocketAddress("127.0.0.1", 1)
+    val validationFactoryCalls = AtomicInteger()
+    val callerOwned = clientInvitation()
+    assertFailsWith<IllegalArgumentException> {
+      V9FoundationClient.connect(
+          address,
+          V9LinkMode.FOUR_PLAYER,
+          emptySet(),
+          V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt(),
+          callerOwned,
+      ) {
+        validationFactoryCalls.incrementAndGet()
+        ImmediateConnectableChannel()
+      }
+    }
+    assertEquals(0, validationFactoryCalls.get())
+    assertTrue(callerOwned.isSecretAvailable())
+    callerOwned.close()
+
+    val accepted = clientInvitation()
+    val setupFactoryCalls = AtomicInteger()
+    assertFailsWith<IOException> {
+      V9FoundationClient.connect(
+          address,
+          V9LinkMode.NORMAL,
+          emptySet(),
+          V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt(),
+          accepted,
+      ) {
+        setupFactoryCalls.incrementAndGet()
+        throw IOException("synthetic socket-channel setup failure")
+      }
+    }
+    assertEquals(1, setupFactoryCalls.get())
+    assertFalse(accepted.isSecretAvailable())
+  }
+
+  @Test
   fun serverRemovesClosedCandidatesAndIsolatesConstructionStartAndCallbackFailures() {
     val callbacks = AtomicInteger()
     val accepted = CountDownLatch(3)
@@ -648,6 +723,13 @@ class ProtocolV9OwnershipTest {
     }
   }
 
+  private fun clientInvitation(): V9ClientInvitation =
+      V9Invitation.parse(
+              "coffeegb://play.example:6688/join?v=9&mode=normal&slot=1" +
+                  "&exp=2000000000&token=AAECAwQFBgcICQoLDA0ODw",
+          )
+          .forClientAuthentication()
+
   private enum class V9ConnectHook {
     BEFORE_CONNECT,
     AFTER_CONNECT,
@@ -684,6 +766,18 @@ class ProtocolV9OwnershipTest {
         val action: Runnable,
         val active: AtomicBoolean = AtomicBoolean(true),
     )
+  }
+
+  private class ThrowingScheduler : V9DeadlineScheduler, Closeable {
+    val closeCount = AtomicInteger()
+
+    override fun schedule(deadlineMillis: Long, action: Runnable): Closeable {
+      throw IllegalStateException("synthetic scheduling failure")
+    }
+
+    override fun close() {
+      closeCount.incrementAndGet()
+    }
   }
 
   private class ScriptedChannel(

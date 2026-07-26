@@ -46,6 +46,60 @@ class ProtocolV9InvitationAuthTest {
   }
 
   @Test
+  fun invitationLengthGateUsesExactUtf8BytesBeforeAnyProportionalCopy() {
+    assertEquals(
+        V9InvitationError.INV_SCHEME,
+        assertFailsWith<V9InvitationParseException> {
+              V9Invitation.parse("a".repeat(512))
+            }
+            .reason,
+    )
+    assertEquals(
+        V9InvitationError.INV_TOO_LONG,
+        assertFailsWith<V9InvitationParseException> {
+              V9Invitation.parse("a".repeat(513))
+            }
+            .reason,
+    )
+    assertEquals(
+        V9InvitationError.INV_SCHEME,
+        assertFailsWith<V9InvitationParseException> {
+              V9Invitation.parse("é".repeat(256))
+            }
+            .reason,
+    )
+    assertEquals(
+        V9InvitationError.INV_TOO_LONG,
+        assertFailsWith<V9InvitationParseException> {
+              V9Invitation.parse("é".repeat(257))
+            }
+            .reason,
+    )
+    // The JDK UTF-8 encoder replaces an unpaired surrogate with one byte.
+    assertEquals(
+        V9InvitationError.INV_SCHEME,
+        assertFailsWith<V9InvitationParseException> {
+              V9Invitation.parse("\uD800".repeat(512))
+            }
+            .reason,
+    )
+    assertEquals(
+        V9InvitationError.INV_TOO_LONG,
+        assertFailsWith<V9InvitationParseException> {
+              V9Invitation.parse("\uD800".repeat(513))
+            }
+            .reason,
+    )
+    assertEquals(
+        V9InvitationError.INV_TOO_LONG,
+        assertFailsWith<V9InvitationParseException> {
+              V9Invitation.parse("x".repeat(2_000_000))
+            }
+            .reason,
+    )
+  }
+
+  @Test
   fun generatedInvitationsAreExactRandomBoundedCanonicalAndRedacted() {
     val clock = FakeClock(10_000)
     val token = ByteArray(16) { (0xa0 + it).toByte() }
