@@ -76,6 +76,10 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   `490595c3b8506d3f155aa6be9d7a5cd7d0fa9a5b` (GPL-3.0); libmobile commit
   `0704f56902f23b7ebf05c82c222e0e145e3140b6` (LGPL-3.0) is corroboration only and no code is
   copied. Tests make no network request and normal builds never regenerate these resources.
+- Phase #347 consumes the same checked-in protocol-v9 TSV corpus in production-parity and
+  transport-foundation tests. It adds no binary fixture, invitation secret, remote capture, ROM,
+  save, StateFile, credential, endpoint, or downloaded artifact; all resource bytes and manifest
+  hashes from Phase #346 remain unchanged.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

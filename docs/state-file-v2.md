@@ -99,9 +99,11 @@ SGB header rejects before held-input/ROM/state payload reads; a coarse incoming 
 canonical `dmg`, never MGB. Support requires a separately negotiated profile-aware protocol.
 StateFile v2 is currently for local portable snapshots and the explicit codec/apply seam.
 
-The future protocol-v9 contract in [netplay-protocol-v9.md](netplay-protocol-v9.md) allocates a new
-wire major and requires direct bounded StateFile v2 checkpoints with exact profile identities. That
-Phase #346 contract is not a production transport and changes no v8 byte or behavior.
+The protocol-v9 contract in [netplay-protocol-v9.md](netplay-protocol-v9.md) allocates a new wire
+major and requires direct bounded StateFile v2 checkpoints with exact profile identities. The
+Phase #347 production foundation implements framing and HELLO only and rejects CHECKPOINT before
+payload allocation; Phase #349 owns StateFile-v2 checkpoint admission and atomic application.
+No v8 byte or behavior changes.
 
 There is no #315 replay format yet. Any future replay must carry the exact canonical profile ID
 (including `mgb` or `sgb2`) plus its rational `ClockSpec`; a coarse enum is insufficient.

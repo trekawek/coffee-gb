@@ -1,6 +1,6 @@
 # ADR 0001: allocate the next netplay wire generation as v9
 
-- Status: accepted for the Phase 0 contract gate
+- Status: accepted; Phase #347 foundation implemented
 - Date: 2026-07-26
 - Issues: #346, #318; state boundary #314
 
@@ -24,9 +24,10 @@ uses a fixed 64-byte frame header. The server sends the first v9 frame. Conseque
 - a v9 server never attempts to parse a v8/v7 byte as a v9 field; and
 - there is no downgrade, compatibility probe, dual parser, or fallback on the same connection.
 
-Protocol v8 remains implemented and documented exactly as it was before this ADR. Phase #346 adds
-no production v9 parser or dormant feature flag. Phase #347 must implement the frozen v9 contract
-beside the isolated v8 implementation and choose the protocol before interpreting a frame.
+Protocol v8 remains implemented and documented exactly as it was before this ADR. Phase #346 added
+no production parser. Phase #347 implements the frozen frame/HELLO/lifecycle foundation beside the
+isolated v8 implementation, with an explicit preface decision before interpreting a frame. It is
+opt-in and not connected to the current end-user v8 controller path.
 
 ## Consequences
 

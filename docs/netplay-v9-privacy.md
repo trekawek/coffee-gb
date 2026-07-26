@@ -1,17 +1,19 @@
 # Protocol-v9 pairing, privacy, and troubleshooting
 
-Protocol v9 is a reviewed future contract; it is not available in the current build. Current
-netplay remains protocol v8 with the compatibility restrictions in
+Protocol v9 has an opt-in developer transport foundation that validates CGB9 frames and negotiates
+HELLO capabilities, then stops at `AWAITING_PAIRING`. It is not a playable end-user path: no
+invitation, authentication, manifest, consent, private transfer, or checkpoint is enabled. Current
+user netplay remains protocol v8 with the compatibility restrictions in
 [netplay-protocol-v8.md](netplay-protocol-v8.md). A v8/v9 mismatch is intentional and has no
-downgrade. Use matching Coffee GB builds and do not repeatedly paste an invitation into an older
-client.
+downgrade, fallback, or compatibility probe.
 
 ## What an invitation does—and does not do
 
-A v9 invitation will contain a random, one-use, short-lived 128-bit token. Possession proves only
-that the peer received that invitation. The token stays in memory, is never logged/persisted, and
-wrong, expired, reused, or wrong-slot attempts all receive the same generic failure. Revoke an
-invitation by cancelling the host dialog or stopping the session.
+A later v9 pairing phase will create random, one-use, short-lived 128-bit invitations. Invitation
+creation and validation are not implemented by the #347 foundation. When implemented, possession
+will prove only that the peer received that invitation. The token stays in memory, is never
+logged/persisted, and wrong, expired, reused, or wrong-slot attempts all receive the same generic
+failure.
 
 V9's planned TCP transport is plaintext. It does not encrypt ROM, battery, state, input, or
 metadata and cannot authenticate a server against an on-path attacker. It is not safe merely
@@ -35,6 +37,10 @@ and diagnostics. State transport is direct bounded StateFile v2 only; local hist
 import is never reachable from a peer.
 
 ## Diagnosing a failed pairing
+
+The #347 foundation exposes only typed, sanitized protocol/timeout/cancellation diagnostics for
+developer tests. Pairing diagnostics below describe the frozen later-phase behavior and are not
+yet reachable from the desktop.
 
 - **Unsupported protocol / `Coff` versus `CGB9`:** the builds use v8 and v9. Install matching
   versions; there is no fallback.
