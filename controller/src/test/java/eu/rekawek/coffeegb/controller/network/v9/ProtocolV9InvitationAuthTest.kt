@@ -516,6 +516,12 @@ class ProtocolV9InvitationAuthTest {
 
   @Test
   fun rejectedSocketCandidateDoesNotPoisonListenerAndLaterValidCandidateOwnsThenReleasesSlot() {
+    repeat(32) { round ->
+      rejectedThenValidSocketCandidate(round)
+    }
+  }
+
+  private fun rejectedThenValidSocketCandidate(round: Int) {
     val token = ByteArray(16) { (0xa0 + it).toByte() }
     val host =
         V9InvitationHost(
@@ -543,9 +549,11 @@ class ProtocolV9InvitationAuthTest {
                   .forClientAuthentication()
           val rejected = V9FoundationClient.connect(address, invitation = wrong)
           try {
+            val boundary = rejected.awaitPostAuthBoundary(5, TimeUnit.SECONDS)
             assertEquals(
                 V9ErrorCode.AUTH_FAILED,
-                rejected.awaitPostAuthBoundary(5, TimeUnit.SECONDS).failure?.reason,
+                boundary.failure?.reason,
+                "round=$round client=$boundary servers=${serverSnapshots(accepted)}",
             )
           } finally {
             rejected.close()
@@ -556,9 +564,11 @@ class ProtocolV9InvitationAuthTest {
               invitation = invitation.forClientAuthentication(),
           )
           try {
+            val boundary = valid.awaitPostAuthBoundary(5, TimeUnit.SECONDS)
             assertEquals(
                 V9LifecycleState.WAIT_SERVER_MANIFEST,
-                valid.awaitPostAuthBoundary(5, TimeUnit.SECONDS).state,
+                boundary.state,
+                "round=$round client=$boundary servers=${serverSnapshots(accepted)}",
             )
             assertTrue(callbackCount.await(5, TimeUnit.SECONDS))
             assertEquals(setOf(1), host.occupiedSlots())
@@ -574,6 +584,11 @@ class ProtocolV9InvitationAuthTest {
         }
     assertEquals(0, host.outstandingInvitations())
   }
+
+  private fun serverSnapshots(
+      accepted: MutableList<V9FoundationConnection>,
+  ): List<V9LifecycleSnapshot> =
+      synchronized(accepted) { accepted.map(V9FoundationConnection::snapshot) }
 
   @Test
   fun authStageDeadlinesExpireAtExactlyFiveSeconds() {
