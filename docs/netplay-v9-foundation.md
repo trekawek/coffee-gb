@@ -16,6 +16,8 @@ The platform-neutral controller package `controller.network.v9` owns:
 - immutable lifecycle snapshots from connect/listen through either the post-HELLO
   `AWAITING_PAIRING` boundary or, when the explicit Part-1 invitation owner is supplied, the
   post-AUTH `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST` boundary;
+- an opt-in Part-2 MANIFEST-v1 codec and semantic exchange that accepts only caller-prepared,
+  deeply owned metadata and stops at `SYNCHRONIZING` or `EXCHANGE_CONSENT`;
 - injected monotonic deadlines, bounded reader/writer retention, cancellation, idempotent close,
   socket/task ownership, and an accept loop that isolates malformed or stalled candidates; and
 - an EDT-marshalling Swing adapter whose controller-facing source has no Swing or AWT dependency.
@@ -50,17 +52,33 @@ generation, monotonic expiry/rate limiting, one-use proof ownership, exact AUTH/
 payloads, and atomic slot reservation. When the server owns `V9InvitationHost` and the client owns
 `V9ClientInvitation`, successful AUTH publishes an immutable boundary for authenticated slot
 `1` (normal) or `1..3` (four-player). The next legal frozen state is
-`SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`, but MANIFEST itself is deliberately unavailable.
+`SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`.
 Invitation values, the host ledger, and client proof owners share one wipeable token buffer through
 explicit leases rather than retaining independent token copies. Transfer to client authentication
 invalidates the source value. Use, expiry, replacement, host stop, or explicit invitation close
 invalidates every shared lease and zeroes the buffer; releasing the final client-only lease also
 zeroes it.
 
-Manifest comparison, consent, ROM/battery transfer, checkpoints, playable input, diagnostics,
-discovery, and Mobile Adapter behavior remain unavailable. Their declarations are rejected at the
-32-byte header decision, before declared payload allocation. The default `ConnectionController`
-still has no v9 reference; shipped netplay remains protocol v8.
+Part 2 is an explicit extension: both endpoints must supply immutable, already-prepared
+`V9ManifestPlan` metadata before the connection starts. Transport code never opens a ROM, save,
+StateFile, or path and never hashes content on its reader/writer task. The server sends first; each
+side validates exact mode, authenticated guest, wire sender, full roster, generation, commitment,
+required capabilities, entries, differences, and proposals before comparison. Normal is exactly
+players 0/1. Four-player entries are exactly players 0..3 and every manifest in one prepared host
+plan shares one generation and commitment, while each proposal remains confined to host 0 and
+that authenticated guest.
+
+An exact own-ROM pair with no proposals publishes an immutable `SYNCHRONIZING` boundary. A
+well-formed warning proposal publishes `EXCHANGE_CONSENT`; this is only metadata awaiting consent
+and authorizes nothing. Both boundary variants contain detached manifests, sanitized difference
+and proposal values, and SHA-256 identities of the exact two manifest payloads. Missing/different
+ROM data without its exact advanced proposal rejects; no mismatch triggers a transfer.
+
+Consent, ROM/battery transfer, checkpoints, playable input, diagnostics, discovery, and Mobile
+Adapter behavior remain unavailable. Their declarations are rejected at the 32-byte header
+decision, before declared payload allocation. Callers that omit a manifest plan retain the Part-1
+post-AUTH boundary without sending MANIFEST. The default `ConnectionController` still has no v9
+reference; shipped netplay remains protocol v8.
 
 ## Ownership, errors, and privacy
 
@@ -83,7 +101,7 @@ candidate at exactly 2,000 ms (it remains open at 1,999 ms) without replacing th
 reason. Received terminal errors may close promptly.
 
 Server ownership includes pending candidates and every handed-off connection, whether it remains
-at `AWAITING_PAIRING` or reaches the Part-1 pre-MANIFEST boundary.
+at `AWAITING_PAIRING`, the Part-1 pre-MANIFEST boundary, or the Part-2 pre-consent boundary.
 A close listener removes a handed-off connection from the registry when its later owner closes it.
 Candidate construction, start, and callback failures close/remove the candidate and leave the
 accept loop available. Server shutdown and callback delivery share one gate, so shutdown cannot
@@ -102,10 +120,10 @@ diagnostic text is strictly validated where required by the wire schema but is d
 than surfaced. Exceptions, payload bytes, paths, ROM/save content, invitation material, and remote
 strings are never used as UI diagnostics.
 
-Invitation authentication is implemented only through the bounded Part-1 API; encryption is
-**not** implemented. The protocol is plaintext TCP and does not provide confidentiality or
-protection against an on-path attacker. This boundary must not be presented as a secure or
-playable Internet netplay flow.
+Invitation authentication and bounded manifest metadata are implemented only through the opt-in
+Part-1/Part-2 API; encryption is **not** implemented. The protocol is plaintext TCP and does not
+provide confidentiality or protection against an on-path attacker. This boundary must not be
+presented as a secure or playable Internet netplay flow.
 
 ## Verification
 
@@ -117,4 +135,7 @@ reference model and hostile vectors remain unchanged. `ProtocolV9InvitationAuthT
 every frozen invitation, invitation-lifecycle, and AUTH vector against production, including
 concurrent one-use ownership and real-socket candidate isolation. `V9SwingLifecycleAdapterTest`
 and `V9SwingInvitationAdapterTest` prove EDT delivery, explicit clipboard disclosure, redaction,
-and the controller/Swing dependency boundary.
+and the controller/Swing dependency boundary. `ProtocolV9ManifestTest` executes the frozen mapper,
+difference, direction, and pre-consent classification rows through the production codec; exercises
+all truncations, fragmented/coalesced frames, class/capability/content bindings, exact manifest
+deadlines, normal/four-player exchanges, listener isolation, and the no-later-payload boundary.

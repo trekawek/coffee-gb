@@ -5,8 +5,11 @@ This is the authoritative normative contract for protocol v9. The machine-readab
 document. RFC 2119 words are normative. Phase #347 implements the CGB9 frame, HELLO negotiation,
 bounded transport ownership, and lifecycle representation beside the frozen v8 implementation.
 Without an invitation owner that foundation stops at `AWAITING_PAIRING`. Part 1 of #348 implements
-the already-frozen invitation and AUTH contract and stops at the pre-MANIFEST boundary. Every
-later message remains unavailable until its owning phase implements it.
+the already-frozen invitation and AUTH contract. Part 2 adds the exact MANIFEST-v1 exchange and
+stops at an immutable pre-consent boundary: `SYNCHRONIZING` for an exact pair with no proposals,
+or `EXCHANGE_CONSENT` when validated metadata contains one or more proposals. Every private/large
+class remains unavailable. Callers that do not explicitly provide a prepared immutable manifest
+retain the Part-1 pre-MANIFEST boundary.
 
 Protocol v8 is frozen separately in [netplay-protocol-v8.md](netplay-protocol-v8.md). V9 never
 downgrades to, probes, or parses v8/v7 on the same connection. The version decision and the stale
@@ -481,8 +484,9 @@ does not provide TLS, matchmaking, rendezvous, NAT traversal, relay, or public i
 | Phase | Consumes this frozen artifact | Production behavior still blocked before it |
 |---|---|---|
 | #347 | v9 header/registries/state machines and hostile wire corpus | implemented as an opt-in transport foundation; no invitation, authentication, consent, private transfer, checkpoint, or playable flow |
-| #348 Part 1 | invitation/auth vectors, AUTH ordering, token/slot ownership, privacy limits | implemented through the immutable pre-MANIFEST boundary; MANIFEST and every private/large class remain unavailable |
-| #348 Parts 2–3 | MANIFEST/CONSENT ordering and ROM/battery transactions | no manifest comparison, consent, transfer, checkpoint, or playable UI exists after Part 1 |
+| #348 Part 1 | invitation/auth vectors, AUTH ordering, token/slot ownership, privacy limits | implemented; callers without an explicit manifest plan retain the immutable pre-MANIFEST boundary |
+| #348 Part 2 | MANIFEST ordering, exact roster/identity comparison, and item proposals | implemented through an immutable pre-consent boundary; manifests are caller-prepared metadata and no private content is opened or hashed on transport threads |
+| #348 Part 3 | CONSENT ordering and ROM/battery transactions | no consent decision, transfer, checkpoint, or playable UI exists after Part 2 |
 | #349 | CHECKPOINT schema, StateFile-v2 identity, atomic group/history rules | no v9 checkpoint/rollback integration exists after #347 |
 | #350 | cancellation/cleanup/diagnostic contracts, hostile lifecycle cases, and any separately reviewed discovery mechanism | no hardening rollout or v8 retirement occurs after #347; no nonce/manual-address bypass exists |
 | #351 | Mobile clean-room ADR/source inventory/transcripts | no production Mobile engine exists in #346 |

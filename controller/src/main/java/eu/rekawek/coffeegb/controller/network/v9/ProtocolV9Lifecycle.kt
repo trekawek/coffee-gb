@@ -90,9 +90,10 @@ interface V9LifecycleSource {
 /**
  * Controller-owned immutable lifecycle stream.
  *
- * Phase #347 advances only HELLO states. All later frozen states are explicit values, rather than
- * being inferred from unrelated emulator events, but their transitions remain unavailable until
- * their owning phases implement them.
+ * Phase #347 owns HELLO, Part 1 of #348 owns AUTH, and Part 2 owns the MANIFEST transitions through
+ * the immutable pre-consent boundary. Later frozen states remain explicit values rather than being
+ * inferred from unrelated emulator events, but their transitions stay unavailable until their
+ * owning phases implement them.
  */
 class V9Lifecycle(
     private val role: V9Role,
@@ -171,6 +172,42 @@ class V9Lifecycle(
   fun serverAuthResultReceived() {
     requireRoleState(V9Role.CLIENT, V9LifecycleState.WAIT_AUTH_RESULT)
     transition(V9LifecycleState.WAIT_SERVER_MANIFEST)
+  }
+
+  @Synchronized
+  fun serverManifestSent() {
+    requireRoleState(V9Role.SERVER, V9LifecycleState.SEND_SERVER_MANIFEST)
+    transition(V9LifecycleState.WAIT_CLIENT_MANIFEST)
+  }
+
+  @Synchronized
+  fun serverManifestReceived() {
+    requireRoleState(V9Role.CLIENT, V9LifecycleState.WAIT_SERVER_MANIFEST)
+    transition(V9LifecycleState.SEND_CLIENT_MANIFEST)
+  }
+
+  @Synchronized
+  fun clientManifestSent(proposalsPending: Boolean) {
+    requireRoleState(V9Role.CLIENT, V9LifecycleState.SEND_CLIENT_MANIFEST)
+    transition(
+        if (proposalsPending) {
+          V9LifecycleState.EXCHANGE_CONSENT
+        } else {
+          V9LifecycleState.SYNCHRONIZING
+        },
+    )
+  }
+
+  @Synchronized
+  fun clientManifestReceived(proposalsPending: Boolean) {
+    requireRoleState(V9Role.SERVER, V9LifecycleState.WAIT_CLIENT_MANIFEST)
+    transition(
+        if (proposalsPending) {
+          V9LifecycleState.EXCHANGE_CONSENT
+        } else {
+          V9LifecycleState.SYNCHRONIZING
+        },
+    )
   }
 
   @Synchronized
