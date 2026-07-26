@@ -188,6 +188,7 @@ class V9FoundationConnection(
   private val started = AtomicBoolean(false)
   private val boundary = CountDownLatch(1)
   private val postAuth = CountDownLatch(1)
+  @Volatile private var pairingBoundary: V9LifecycleSnapshot? = null
   private val tasks = mutableListOf<Thread>()
   private val taskLock = Any()
   private val ownershipLock = Any()
@@ -207,8 +208,10 @@ class V9FoundationConnection(
     require(clientInvitation == null || role == V9Role.CLIENT && clientInvitation.mode == mode)
     lifecycle.addListener { state ->
       scheduleDeadline(state)
-      if (state.phase == V9LifecyclePhase.AWAITING_PAIRING ||
-          state.phase == V9LifecyclePhase.CLOSED) {
+      if (state.phase == V9LifecyclePhase.AWAITING_PAIRING) {
+        pairingBoundary = state
+        boundary.countDown()
+      } else if (state.phase == V9LifecyclePhase.CLOSED) {
         boundary.countDown()
       }
     }
@@ -238,7 +241,7 @@ class V9FoundationConnection(
 
   fun awaitPairingBoundary(timeout: Long, unit: TimeUnit): V9LifecycleSnapshot {
     boundary.await(timeout, unit)
-    return snapshot()
+    return pairingBoundary ?: snapshot()
   }
 
   fun awaitPostAuthBoundary(timeout: Long, unit: TimeUnit): V9LifecycleSnapshot {
@@ -600,9 +603,9 @@ class V9FoundationConnection(
 
   private fun reject(reason: V9ErrorCode, diagnostic: V9Diagnostic) {
     if (closed.get() || snapshot().state == V9LifecycleState.TERMINAL_CLEANUP) return
+    lifecycle.beginTerminalCleanup(reason, diagnostic)
     writer.close()
     writerTask?.takeUnless { it === Thread.currentThread() }?.interrupt()
-    lifecycle.beginTerminalCleanup(reason, diagnostic)
     if (reason.peerVisible &&
         reason != V9ErrorCode.UNSUPPORTED_PROTOCOL &&
         !closed.get()) {
@@ -658,9 +661,9 @@ class V9FoundationConnection(
       payload: ByteArray,
   ) {
     if (closed.get()) return
+    lifecycle.beginTerminalCleanup(reason, diagnostic)
     writer.close()
     writerTask?.takeUnless { it === Thread.currentThread() }?.interrupt()
-    lifecycle.beginTerminalCleanup(reason, diagnostic)
     try {
       synchronized(wireStateLock) {
         val sequence = nextSequenceOrFail() ?: return
