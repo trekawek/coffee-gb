@@ -1,0 +1,8 @@
+id	input_hex	eof	expected	decisive_read	diagnostic	provenance
+v9	43474239	false	V9	4	detected-v9-supported-v9	coffee-gb-synthetic-preface
+v8_or_earlier	436f6666	false	UNSUPPORTED_PROTOCOL	4	detected-legacy-CoffeeGB-v8-or-earlier-expected-v9	coffee-gb-synthetic-preface
+stale_cgb8	43474238	false	UNSUPPORTED_PROTOCOL	4	detected-CGB8-expected-CGB9-v9	coffee-gb-synthetic-preface
+unknown	00010203	false	UNSUPPORTED_PROTOCOL	4	detected-unknown-00010203-expected-CGB9-v9	coffee-gb-synthetic-preface
+fragment_1	43	false	NEED_MORE	1	waiting-for-4-byte-v9-preface	coffee-gb-synthetic-preface
+fragment_3	434742	false	NEED_MORE	3	waiting-for-4-byte-v9-preface	coffee-gb-synthetic-preface
+truncated_eof	434742	true	TRUNCATED	3	truncated-v9-preface-expected-4-bytes	coffee-gb-synthetic-preface

@@ -1,0 +1,13 @@
+id	name	version	required	phase_owner	meaning
+0x0001	FRAME_V1	1	true	347	64-byte-CGB9-header-and-SHA256
+0x0002	INVITATION_PROOF_V1	1	true	347	HMAC-SHA256-invitation-possession-proof
+0x0003	MANIFEST_V1	1	true	348	bounded-ROM-slot-profile-manifest
+0x0004	CONSENT_V1	1	true	348	two-sided-payload-class-consent
+0x0005	STATEFILE_V2	1	true	349	exact-profile-portable-checkpoints
+0x0006	PROFILE_ID_ASCII_V1	1	true	349	canonical-lowercase-profile-identities
+0x0007	ATOMIC_GROUP_CHECKPOINT_V1	1	true	349	one-logical-linked-session-transaction
+0x0008	ROM_TRANSFER_V1	1	false	348	consent-gated-ROM-transfer
+0x0009	BATTERY_TRANSFER_V1	1	false	348	consent-gated-battery-transfer
+0x000a	RAW_DEFLATE_V1	1	false	348	bounded-RFC1951-bulk-chunks-only
+0x000b	FOUR_PLAYER_V1	1	false	349	four-player-mode-and-topology
+0x000c	PING_V1	1	false	350	active-idle-liveness-probe

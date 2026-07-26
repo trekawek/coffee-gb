@@ -1,0 +1,12 @@
+id	ttl_seconds	bound_slot	candidate_slot	now_millis	precondition	expected	provenance
+ttl_min_minus_one	59	2	2	0	fresh	INV_EXPIRY	coffee-gb-synthetic-invitation-lifecycle
+ttl_min	60	2	2	0	fresh	SUCCESS	coffee-gb-synthetic-invitation-lifecycle
+ttl_max	600	2	2	0	fresh	SUCCESS	coffee-gb-synthetic-invitation-lifecycle
+ttl_max_plus_one	601	2	2	0	fresh	INV_EXPIRY	coffee-gb-synthetic-invitation-lifecycle
+wrong_slot	300	2	1	1	fresh	AUTH_FAILED	coffee-gb-synthetic-invitation-lifecycle
+expiry_before	300	2	2	299999	fresh	SUCCESS	coffee-gb-synthetic-invitation-lifecycle
+expiry_exact	300	2	2	300000	fresh	AUTH_FAILED	coffee-gb-synthetic-invitation-lifecycle
+one_use	300	2	2	1	used	AUTH_FAILED	coffee-gb-synthetic-invitation-lifecycle
+stopped	300	2	2	1	stopped	AUTH_FAILED	coffee-gb-synthetic-invitation-lifecycle
+rate_limit_exhausted	300	2	2	59999	eight-failures	AUTH_FAILED	coffee-gb-synthetic-invitation-lifecycle
+rate_limit_rollover	300	2	2	60000	eight-failures	SUCCESS	coffee-gb-synthetic-invitation-lifecycle
