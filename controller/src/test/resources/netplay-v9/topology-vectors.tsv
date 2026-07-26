@@ -1,11 +1,13 @@
-id	mode	authenticated_player	roster_mask	occupied_mask	candidate_player	checkpoint_kind	checkpoint_mask	expected	committed_mask	candidate_mutated	provenance
-normal_success	normal	1	0x03	0x01	1	SESSION	0x02	SUCCESS	0x03	true	coffee-gb-synthetic-topology
-normal_host_invitation	normal	0	0x03	0x01	0	SESSION	0x01	AUTH_FAILED	0x01	false	coffee-gb-synthetic-topology
-normal_wrong_guest	normal	2	0x05	0x01	2	SESSION	0x04	AUTH_FAILED	0x01	false	coffee-gb-synthetic-topology
-four_first_guest	four	1	0x03	0x01	1	LINKED_SESSION	0x03	SUCCESS	0x03	true	coffee-gb-synthetic-topology
-four_complete_roster	four	3	0x0f	0x07	3	LINKED_SESSION	0x0f	SUCCESS	0x0f	true	coffee-gb-synthetic-topology
-slot_collision	four	1	0x03	0x03	1	LINKED_SESSION	0x03	SERVER_FULL	0x03	false	coffee-gb-synthetic-topology
-replacement_after_release	four	1	0x0f	0x0d	1	LINKED_SESSION	0x0f	SUCCESS	0x0f	true	coffee-gb-synthetic-topology
-checkpoint_missing_candidate	four	2	0x07	0x03	2	LINKED_SESSION	0x03	TOPOLOGY_MISMATCH	0x03	false	coffee-gb-synthetic-topology
-checkpoint_extra_player	four	2	0x07	0x03	2	LINKED_SESSION	0x0f	TOPOLOGY_MISMATCH	0x03	false	coffee-gb-synthetic-topology
-four_nonatomic_root	four	2	0x07	0x03	2	SESSION	0x04	ROOT_KIND_MISMATCH	0x03	false	coffee-gb-synthetic-topology
+id	mode	live_mask	target_mask	target_generation	commitment_byte	authenticated_player	candidate_player	roster_mask	roster_generation	candidate_commitment_byte	checkpoint_kind	checkpoint_mask	checkpoint_digest_byte	candidate_checkpoint_digest_byte	expected	committed_mask	candidate_mask	barrier_open	provenance
+normal_candidate_ready	normal	0x01	0x03	1	7	1	1	0x03	1	7	SESSION	0x02	8	8	SUCCESS	0x01	0x02	true	coffee-gb-synthetic-topology
+normal_host_invitation	normal	0x01	0x03	1	7	0	0	0x03	1	7	SESSION	0x01	8	8	AUTH_FAILED	0x01	0x00	false	coffee-gb-synthetic-topology
+normal_wrong_guest	normal	0x01	0x03	1	7	2	2	0x03	1	7	SESSION	0x04	8	8	AUTH_FAILED	0x01	0x00	false	coffee-gb-synthetic-topology
+four_first_guest_candidate_only	four	0x01	0x0f	7	7	1	1	0x0f	7	7	LINKED_SESSION	0x0f	8	8	SUCCESS	0x01	0x02	false	coffee-gb-synthetic-topology
+four_third_guest_candidate_only	four	0x01	0x0f	7	7	3	3	0x0f	7	7	LINKED_SESSION	0x0f	8	8	SUCCESS	0x01	0x08	false	coffee-gb-synthetic-topology
+slot_collision	four	0x03	0x0f	7	7	1	1	0x0f	7	7	LINKED_SESSION	0x0f	8	8	SERVER_FULL	0x03	0x00	false	coffee-gb-synthetic-topology
+different_roster	four	0x01	0x0f	7	7	2	2	0x07	7	7	LINKED_SESSION	0x07	8	8	TOPOLOGY_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology
+different_generation	four	0x01	0x0f	7	7	2	2	0x0f	8	7	LINKED_SESSION	0x0f	8	8	TOPOLOGY_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology
+different_commitment	four	0x01	0x0f	7	7	2	2	0x0f	7	9	LINKED_SESSION	0x0f	8	8	TOPOLOGY_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology
+different_checkpoint_digest	four	0x01	0x0f	7	7	2	2	0x0f	7	7	LINKED_SESSION	0x0f	8	9	TOPOLOGY_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology
+checkpoint_missing_player	four	0x01	0x0f	7	7	2	2	0x0f	7	7	LINKED_SESSION	0x07	8	8	TOPOLOGY_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology
+four_nonatomic_root	four	0x01	0x0f	7	7	2	2	0x0f	7	7	SESSION	0x04	8	8	ROOT_KIND_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology

@@ -61,7 +61,7 @@ The Phase #351 minimum supported command set is deliberately conservative:
 | Command | Status | Request/response contract |
 |---:|---|---|
 | `10` | supported minimum | exactly 8 ASCII `NINTENDO`; echo exactly those 8 bytes |
-| `11` | supported minimum | empty end-session request/response |
+| `11` | supported minimum | empty end-session request/response; enter sleep and clear slots/parser |
 | `16` | supported minimum | empty reset request/response; cancels jobs/connections |
 | `19` | supported minimum | 2-byte offset/length, length `0..128`, checked within 256; response offset+bytes |
 | `1a` | specified, later opt-in | offset plus `0..128` bytes, checked within 256; atomic write, response offset |
@@ -108,6 +108,18 @@ Partial magic, header, data, or checksum returns `NEED_MORE` with no acknowledge
 configuration mutation, or slot mutation. Invalid magic/reserved/length clears retention
 immediately. Checksum or command validation occurs only once the complete request is present.
 The transcript runner feeds every timestamped fragment rather than concatenating it first.
+
+Every new non-empty feed starts a new visible operation result: a prior success or error cannot
+leak while the next packet is partial. The engine therefore reports `NEED_MORE` with empty
+response, acknowledgement, and commit count until that new packet completes. Emulated timestamps
+are monotonic. A timestamp below the last observed value reports `TIME_REGRESSION` and changes
+neither parser bytes, session state, slots, configuration, response, nor acknowledgement.
+
+END_SESSION command `11` requires empty data, returns an empty `91` response and acknowledgement
+`88 91`, transitions to sleep, and clears parser retention and both pending slots. Controller
+cancellation, peripheral replacement, and session replacement have the same cleanup ownership:
+they clear partial bytes, slots, response/acknowledgement, and commit markers, invalidate the
+generation, and expose no stale completion to a following packet.
 
 Reset command `16`, peripheral replacement, ROM/session replacement, save/load, rewind, stop, and
 controller cancellation disconnect every live backend operation. Save state owns only the bounded

@@ -23,12 +23,14 @@ StateFile, token generated for real use, path, credential, server response, or t
 - `capability-gate-vectors.tsv` freezes message/mode execution gates after negotiation.
 - `mapper-families.tsv` and `manifest-diffs.tsv` are stable numeric registries for sanitized
   cartridge metadata and Fatal/Warning/Informational comparison outcomes.
-- `manifest-consent-vectors.tsv` executes own-ROM, fatal, warning, directional item approval, and
-  no-implicit-transfer outcomes.
-- `topology-vectors.tsv` freezes host player 0, normal guest 1, four-player guests 1..3, slot
-  collision/replacement, and candidate-isolation/group-checkpoint outcomes.
+- `manifest-consent-vectors.tsv` executes semantic manifest comparison, exact roster/generation
+  commitment, proposal/diff binding, per-guest endpoint isolation, repeated directional item
+  approval, and no-implicit-transfer outcomes.
+- `topology-vectors.tsv` freezes host player 0, normal guest 1, four-player guests 1..3, a
+  candidate-only pre-commit topology, slot collision/replacement, and the single atomic
+  group-checkpoint barrier.
 - `wire-vectors.tsv` commits exact complete or deliberately hostile frame bytes. SHA-256 is over
-  each decoded `input_hex` byte sequence. Each row also records decisive read, bounded payload
+  each decoded `input_hex` byte sequence. Each row also records the exact decisive read, bounded payload
   allocations, prohibited live mutation, generator, expected state, outcome, and provenance.
 - `manifest.tsv` lists every other artifact in this directory and freezes its whole-file SHA-256,
   kind, provenance, and reproduction method. It deliberately does not hash itself.

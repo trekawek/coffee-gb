@@ -1,18 +1,21 @@
-id	scenario	expected	severity	transfer_allowed	provenance
-compatible_own_rom	own-rom-match	SUCCESS	INFORMATIONAL	false	coffee-gb-synthetic-manifest-consent
-fatal_protocol	protocol-context-mismatch	CAPABILITY_MISMATCH	FATAL	false	coffee-gb-synthetic-manifest-consent
-fatal_profile	profile-mismatch	MANIFEST_MISMATCH	FATAL	false	coffee-gb-synthetic-manifest-consent
-missing_rom_no_proposal	missing-rom-no-proposal	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-different_rom_offer_pending	different-rom-offer-pending	CONSENT_REQUIRED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-warning_rejected	warning-rejected	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-one_side_only	one-side-approved	CONSENT_REQUIRED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-two_sided_exact	two-sided-approved	SUCCESS	WARNING_REQUIRES_APPROVAL	true	coffee-gb-synthetic-manifest-consent
-wrong_direction	wrong-direction	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-wrong_player	wrong-player	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-wrong_asset	wrong-asset	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-manifest_changed	manifest-changed	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-approval_replay	approval-replay	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-extra_transaction	extra-transaction	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-battery_not_rom	battery-with-rom-consent	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-checkpoint_not_rom	checkpoint-with-rom-consent	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
-begin_before_approval	begin-before-approval	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+id	guest	server_roster	client_roster	server_generation	client_generation	client_commitment	protocol_compatible	client_profile	client_primary_present	client_primary_size	client_primary_digest	diff_code	diff_severity	diff_player	diff_proposal	proposal_id	proposal_asset	proposal_owner	proposal_source	proposal_target	proposal_size	proposal_digest	server_decision	client_decision	consent_manifest	replay	expected	severity	transfer_allowed	provenance
+compatible_own_rom	1	0x03	0x03	1	1	valid	true	dmg	true	32768	2	10	3	1	-	-	-	-	-	-	-	-	none	none	exact	false	SUCCESS	INFORMATIONAL	false	coffee-gb-synthetic-manifest-consent
+fatal_protocol	1	0x03	0x03	1	1	valid	false	dmg	true	32768	2	10	3	1	-	-	-	-	-	-	-	-	none	none	exact	false	CAPABILITY_MISMATCH	FATAL	false	coffee-gb-synthetic-manifest-consent
+fatal_profile	1	0x03	0x03	1	1	valid	true	cgb	true	32768	2	3	1	1	-	-	-	-	-	-	-	-	none	none	exact	false	MANIFEST_MISMATCH	FATAL	false	coffee-gb-synthetic-manifest-consent
+missing_rom_no_proposal	1	0x03	0x03	1	1	valid	true	dmg	false	0	0	5	2	1	41	-	-	-	-	-	-	-	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+different_rom_offer_pending	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32768	2	none	none	exact	false	CONSENT_REQUIRED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+warning_rejected	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32768	2	approve	reject	exact	false	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+one_side_only	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32768	2	approve	none	exact	false	CONSENT_REQUIRED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+two_sided_exact	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32768	2	approve	approve	exact	false	SUCCESS	WARNING_REQUIRES_APPROVAL	true	coffee-gb-synthetic-manifest-consent
+manifest_changed_after_approval	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32768	2	approve	approve	changed	false	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+approval_transaction_replay	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32768	2	approve	approve	exact	true	CONSENT_REJECTED	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+wrong_proposal_size	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32767	2	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+wrong_proposal_digest	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	1	32768	9	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+wrong_diff_pairing	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	7	2	1	41	41	1	1	0	1	32768	2	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+absent_proposal_owner	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	2	41	41	1	2	0	1	32768	2	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+cross_guest_endpoint	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	0	2	32768	2	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+wrong_offer_direction	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	1	1	1	0	32768	2	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+wrong_asset_pairing	1	0x03	0x03	1	1	valid	true	dmg	true	32768	3	6	2	1	41	41	2	1	0	1	32768	2	none	none	exact	false	MANIFEST_MISMATCH	WARNING_REQUIRES_APPROVAL	false	coffee-gb-synthetic-manifest-consent
+different_roster	1	0x03	0x05	1	1	valid	true	dmg	true	32768	2	10	3	1	-	-	-	-	-	-	-	-	none	none	exact	false	MANIFEST_MISMATCH	FATAL	false	coffee-gb-synthetic-manifest-consent
+different_generation	1	0x03	0x03	1	2	valid	true	dmg	true	32768	2	10	3	1	-	-	-	-	-	-	-	-	none	none	exact	false	MANIFEST_MISMATCH	FATAL	false	coffee-gb-synthetic-manifest-consent
+different_commitment	1	0x03	0x03	1	1	corrupt	true	dmg	true	32768	2	10	3	1	-	-	-	-	-	-	-	-	none	none	exact	false	MANIFEST_MISMATCH	FATAL	false	coffee-gb-synthetic-manifest-consent

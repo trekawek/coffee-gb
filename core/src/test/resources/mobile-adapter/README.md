@@ -11,6 +11,9 @@ kind, provenance, and reproduction method. It deliberately does not hash itself.
 
 Every transcript records the 262-byte parser-buffer and two-pending-packet-slot ceilings. The
 exact 3,000 ms partial-packet boundary remains waiting; the first injected time beyond it resets.
+The reference engine also executes sequential complete-to-partial and error-to-partial feeds,
+rejects regressing emulated timestamps without mutation, and clears parser/slot/response ownership
+on END_SESSION, cancellation, and replacement.
 
 Reproduce a packet by writing `99 66`, command, zero reserved byte, big-endian payload length,
 payload, and the big-endian 16-bit additive sum of command/reserved/length/payload. Responses use
