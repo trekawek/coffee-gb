@@ -28,8 +28,13 @@ only for a registered bulk chunk after capability 10 is negotiated.
 
 Each direction starts at sequence zero, accepts `0xfffffffe` as its last frame, and then closes;
 `0xffffffff` is never emitted. The response ledger tracks exact request type, correlation, and
-one-response ownership. Input fragmentation is arbitrary, coalesced frames are accepted, EOF is
-typed as truncated or unexpected, and bytes after a terminal frame are rejected as trailing data.
+one-response ownership without retaining an ever-growing completed-response history. Every live
+inbound foundation frame passes through that ledger before its payload handler. With no Phase-1
+request outstanding, a response-form ERROR is therefore rejected as `CORRELATION_ERROR`. Before
+the server HELLO, the client accepts only a normal HELLO or a non-response, sequence-zero terminal
+`SERVER_BUSY`/`SERVER_FULL` rejection. Input fragmentation is arbitrary, coalesced frames are
+accepted, EOF is typed as truncated or unexpected, and bytes after a terminal frame are rejected
+as trailing data.
 
 ## HELLO-only lifecycle
 
@@ -48,6 +53,26 @@ The transport owns its channel, reader/writer tasks, deadline task, bounded queu
 frames. Cancellation or timeout closes each resource idempotently and cannot block an emulator
 thread or the Swing EDT. A failed candidate is closed independently; it does not terminate the
 listener or another candidate.
+
+A local peer-visible rejection first freezes queue and decoder admission and records its original
+typed failure. The implementation then makes one best-effort terminal ERROR write, half-closes
+output, and enters `TERMINAL_CLEANUP`. It drains only for peer EOF; it does not parse another
+frame. Peer EOF closes promptly. Otherwise the injected monotonic cleanup deadline closes the
+candidate at exactly 2,000 ms (it remains open at 1,999 ms) without replacing the rejection with
+`TIMEOUT`. A failed error write also closes only that candidate while preserving the original
+reason. Received terminal errors may close promptly.
+
+Server ownership includes pending candidates and every handed-off `AWAITING_PAIRING` connection.
+A close listener removes a handed-off connection from the registry when its later owner closes it.
+Candidate construction, start, and callback failures close/remove the candidate and leave the
+accept loop available. Server shutdown and callback delivery share one gate, so shutdown cannot
+leave a post-close callback or retained candidate.
+
+The cancellable client connector owns a channel/connection only until a successful started
+connection is atomically handed to its callback. Cancellation is exactly once at every earlier
+boundary; the injected monotonic connect deadline is exactly 5,000 ms. After handoff, closing the
+attempt cannot cancel the connection. Schedulers created internally are closed with their owner;
+an injected scheduler, including an injected system scheduler, remains caller-owned and reusable.
 
 Public failures contain a stable error code and a fixed local diagnostic category. Raw peer
 diagnostic text is strictly validated where required by the wire schema but is discarded rather
