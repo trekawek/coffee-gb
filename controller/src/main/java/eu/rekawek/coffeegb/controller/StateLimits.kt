@@ -84,7 +84,7 @@ internal object StateLimits {
   const val LEGACY_MAX_STRING_CHARS = 65_536
   const val LEGACY_MAX_STRING_BYTES = LEGACY_MAX_STRING_CHARS * 3L
 
-  // StateFile v1 limits. These names are deliberately independent from the local-only legacy
+  // StateFile portable-format limits. These names are deliberately independent from the local-only legacy
   // importer: changing a portable format limit is a versioned compatibility decision.
   const val PORTABLE_MAX_DECODED_PAYLOAD_BYTES = 128 * MIB
   const val PORTABLE_MAX_ENCODED_PAYLOAD_BYTES =
@@ -101,5 +101,6 @@ internal object StateLimits {
   const val PORTABLE_MAX_ARRAY_BYTES = 32 * MIB
   const val PORTABLE_MAX_STRING_CHARS = 65_536
   const val PORTABLE_MAX_STRING_BYTES = PORTABLE_MAX_STRING_CHARS * 3
+  const val PORTABLE_MAX_PROFILE_ID_BYTES = 32
   const val PORTABLE_MAX_LINKED_PLAYERS = 4
 }

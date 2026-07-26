@@ -43,12 +43,17 @@ import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStateEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
 import eu.rekawek.coffeegb.controller.network.Connection
+import eu.rekawek.coffeegb.controller.network.ConnectionController.ClientProtocolErrorEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerProtocolErrorEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -111,6 +116,9 @@ class LinkedController(
   private val batteryBuffers = MutableList<ByteArray?>(mode.playerCount) { null }
 
   private var links = StateHistory.createLinks(mode)
+
+  /** Basic-controller state retained when an unsupported local profile is rejected pre-session. */
+  private var rejectedLocalState: Controller.ControllerState? = null
 
   @VisibleForTesting internal val stateHistory: StateHistory = StateHistory(mode)
 
@@ -473,6 +481,24 @@ class LinkedController(
     eventBus.register<LoadRomEvent> {
       val rom = Rom(it.rom)
       val config = createGameboyConfig(properties, rom)
+      if (config.hardwareProfile == HardwareProfileRegistry.SGB2) {
+        // Protocol v8 is permanently StateFile-v1-only. Reject before a linked Gameboy is built
+        // or any live session/config/topology state changes, and retain the incoming Basic state
+        // so the transport shutdown can return to the exact pre-link machine.
+        rejectedLocalState =
+            it.state?.let { state -> Controller.ControllerState(state, rom) }
+        val message =
+            "SGB2 netplay is unavailable: protocol v8 negotiates StateFile v1, which can identify only sgb"
+        if (localPlayer == 0) {
+          eventBus.post(ServerProtocolErrorEvent(localPlayer, message))
+          eventBus.postAsync(StopServerEvent())
+        } else {
+          eventBus.post(ClientProtocolErrorEvent(message))
+          eventBus.postAsync(StopClientEvent())
+        }
+        return@register
+      }
+      rejectedLocalState = null
       eventBus.post(Controller.GameboyTypeEvent(config.gameboyType))
       eventBus.post(Controller.HardwareProfileEvent(config.hardwareProfile))
       eventBus.post(Controller.SessionPauseSupportEvent(false))
@@ -1024,6 +1050,7 @@ class LinkedController(
             bootstrapMode = config.bootstrapMode,
             frame = frame,
             cgb0Revision = config.isCgb0Revision,
+            hardwareProfileId = config.hardwareProfile.id(),
             mealybugDmgBlob = config.isMealybugDmgBlob,
             codeBreakerRumble = config.isCodeBreakerRumble,
             displaySgbBorder = config.isDisplaySgbBorder,
@@ -1050,6 +1077,7 @@ class LinkedController(
               bootstrapMode = config.bootstrapMode,
               frame = frame,
               cgb0Revision = config.isCgb0Revision,
+              hardwareProfileId = config.hardwareProfile.id(),
               mealybugDmgBlob = config.isMealybugDmgBlob,
               codeBreakerRumble = config.isCodeBreakerRumble,
               displaySgbBorder = config.isDisplaySgbBorder,
@@ -1147,7 +1175,9 @@ class LinkedController(
 
     val localSession = sessions[localPlayer]
     val state =
-        localSession?.let { Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom) }
+        localSession?.let {
+          Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
+        } ?: rejectedLocalState
 
     localSession?.eventBus?.post(Controller.EmulationStoppedEvent())
     sessions.forEach { it?.close() }
@@ -1164,6 +1194,13 @@ class LinkedController(
       val bootstrapMode: Gameboy.BootstrapMode,
       val frame: Long,
       val cgb0Revision: Boolean = false,
+      val hardwareProfileId: String =
+          when {
+            gameboyType == GameboyType.CGB && cgb0Revision -> HardwareProfileRegistry.CGB0.id()
+            gameboyType == GameboyType.CGB -> HardwareProfileRegistry.CGB.id()
+            gameboyType == GameboyType.SGB -> HardwareProfileRegistry.SGB.id()
+            else -> HardwareProfileRegistry.DMG.id()
+          },
       val player: Int = 0,
       val heldButtons: Set<Button> = emptySet(),
       val slotRomFile: ByteArray? = null,

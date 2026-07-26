@@ -30,7 +30,10 @@ public final class HardwareProfileRegistry {
             new BootSpec("cgb", 536, 0xb644, 0x1180, 0x0000, 0xff56, 0x000d, 0);
 
     private static final BootSpec SGB_BOOT =
-            new BootSpec("sgb", 4, 0xabcc, 0x01b0, 0x0013, 0x00d8, 0x014d, 0);
+            new BootSpec("sgb", 4, 0xabcc, 0x0100, 0x0014, 0x0000, 0xc060, 0);
+
+    private static final BootSpec SGB2_BOOT =
+            new BootSpec("sgb2", 4, 0xabcc, 0xff00, 0x0014, 0x0000, 0xc060, 0);
 
     public static final HardwareProfile DMG =
             new HardwareProfile("dmg", "Game Boy (DMG)", HardwareProfile.Family.DMG, "dmg",
@@ -47,9 +50,13 @@ public final class HardwareProfileRegistry {
 
     public static final HardwareProfile SGB =
             new HardwareProfile("sgb", "Super Game Boy", HardwareProfile.Family.SGB, "sgb",
-                    SGB_CAPABILITIES, ClockSpec.LEGACY, SGB_BOOT);
+                    SGB_CAPABILITIES, ClockSpec.SGB, SGB_BOOT);
 
-    private static final List<HardwareProfile> SUPPORTED = List.of(DMG, CGB, CGB0, SGB);
+    public static final HardwareProfile SGB2 =
+            new HardwareProfile("sgb2", "Super Game Boy 2", HardwareProfile.Family.SGB, "sgb2",
+                    SGB_CAPABILITIES, ClockSpec.SGB2, SGB2_BOOT);
+
+    private static final List<HardwareProfile> SUPPORTED = List.of(DMG, CGB, CGB0, SGB, SGB2);
 
     private static final Map<String, HardwareProfile> BY_ID;
 

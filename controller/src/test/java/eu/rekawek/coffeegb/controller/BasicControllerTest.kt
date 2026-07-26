@@ -6,11 +6,13 @@ import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingCancelledEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
+import eu.rekawek.coffeegb.controller.Controller.HardwareProfileEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import java.io.File
@@ -29,6 +31,46 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerTest {
+
+  @Test
+  fun persistedSgb2SelectionReloadsTheRunningSessionWithExactProfile() {
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties()
+    val profileEvents = LinkedBlockingQueue<HardwareProfileEvent>()
+    eventBus.register<HardwareProfileEvent> { profileEvents.add(it) }
+    val sgbRom =
+        Files.createTempFile("coffee-gb-sgb2-profile-reload", ".gb").toFile().also { file ->
+          file.writeBytes(
+              ROM.readBytes().also { bytes ->
+                bytes[0x143] = 0
+                bytes[0x146] = 0x03
+              })
+        }
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+        HardwareProfileRegistry.SGB.id()
+    val controller = BasicController(eventBus, properties, null)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(sgbRom))
+      assertEquals(
+          HardwareProfileRegistry.SGB,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+
+      properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+          HardwareProfileRegistry.SGB2.id()
+      eventBus.post(Controller.UpdatedSystemMappingEvent())
+      assertEquals(
+          HardwareProfileRegistry.SGB2,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      sgbRom.delete()
+    }
+  }
 
   @Test
   fun disabledRewindCreatesNoFrameCapturesAndCannotFreezeForwardEmulation() {

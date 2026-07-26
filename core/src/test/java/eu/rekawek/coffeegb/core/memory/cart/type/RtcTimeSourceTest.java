@@ -139,6 +139,27 @@ public class RtcTimeSourceTest {
         assertEquals(1, component(component(mbc3.captureState(), "clockMemento"), "seconds"));
     }
 
+    @Test
+    public void mbc3RationalSgbOscillatorCarriesExactSubsecondRemainder() throws Exception {
+        Mbc3 mbc3 = (Mbc3) cartridge(
+                0x13, 0x03, new MemoryBattery(new byte[0]), new VirtualTimeSource(),
+                ClockSpec.SGB).getMemoryController();
+        enableMbc3(mbc3);
+
+        long ticks = ClockSpec.SGB.ticksForSeconds(1, ClockSpec.Rounding.CEILING);
+        for (long i = 0; i < ticks - 1; i++) {
+            mbc3.tick();
+        }
+        Object before = component(mbc3.captureState(), "clockMemento");
+        assertEquals(0, component(before, "seconds"));
+        assertEquals(47_249_994L, component(before, "subSecondTicks"));
+
+        mbc3.tick();
+        Object after = component(mbc3.captureState(), "clockMemento");
+        assertEquals(1, component(after, "seconds"));
+        assertEquals(5L, component(after, "subSecondTicks"));
+    }
+
     private static Cartridge cartridge(int type, int ramSize, MemoryBattery battery,
                                        VirtualTimeSource time) throws IOException {
         return cartridge(type, ramSize, battery, time, ClockSpec.LEGACY);

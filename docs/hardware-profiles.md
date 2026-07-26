@@ -3,145 +3,159 @@
 ## Permanent identity and ownership
 
 Every `GameboyConfiguration` resolves one registered immutable `HardwareProfile` before a
-`Gameboy` is constructed. `Gameboy` validates that the value is the authoritative registry
-instance and retains it for the session's lifetime; there is no mutable global current profile.
-The permanent lowercase-ASCII IDs, in registry order, are:
+`Gameboy` is constructed or ticks. There is no mutable global current profile. The permanent
+lowercase-ASCII IDs, in registry order, are:
 
-| ID | Display name | Family/revision | Current capabilities |
+| ID | Display name | Family/revision | Game Boy-side capabilities |
 |---|---|---|---|
 | `dmg` | Game Boy (DMG) | DMG / `dmg` | monochrome LCD, serial link |
 | `cgb` | Game Boy Color (CGB) | CGB / `cgb` | color/CGB mode, double speed, infrared, serial link |
-| `cgb0` | Game Boy Color (CGB revision 0) | CGB / `cgb0` | CGB capabilities plus the existing revision-zero boot/OAM policy |
-| `sgb` | Super Game Boy | SGB / `sgb` | SGB command/input/border path and DMG-side serial link |
+| `cgb0` | Game Boy Color (CGB revision 0) | CGB / `cgb0` | CGB capabilities plus existing revision-zero boot/OAM policy |
+| `sgb` | Super Game Boy | SGB / `sgb` | SGB commands, multiplexed input, border, DMG-side serial |
+| `sgb2` | Super Game Boy 2 | SGB / `sgb2` | the same currently evidenced Game Boy-side capabilities as `sgb` |
 
-IDs are non-ordinal and permanent. Registry iteration is deterministic. Canonical lookup accepts
-only these exact strings; persisted settings additionally accept the finite historical aliases
-`DMG`, `CGB`, `CGB0`, and `SGB`. Display names, enum ordinals, mixed case, and arbitrary aliases are
-never identities. Unknown values fail before core construction and include the complete supported
-list in the error.
+IDs are non-ordinal and permanent. Canonical lookup accepts only these exact strings. Persisted
+settings additionally accept the finite historical aliases `DMG`, `CGB`, `CGB0`, and `SGB`;
+notably, `SGB` always canonicalizes to `sgb`, never `sgb2`, and no uppercase `SGB2` alias exists.
+Display names, enum ordinals, mixed case, and arbitrary aliases are never identities. Unknown IDs
+fail before core construction and list every supported ID.
 
-`HardwareCapabilities`, `BootSpec`, and `ClockSpec` are immutable values owned by a profile.
-Mutable arrays, callbacks, clocks as host services, event buses, and UI/device values are absent.
-`HardwareProfileIdentity` is a small service-free `(profileId, ClockSpec)` seam suitable for
-diagnostics and future #315 replay metadata; this phase does not define a replay file.
+`HardwareCapabilities`, `BootSpec`, and `ClockSpec` are immutable profile-owned values. Mutable
+arrays, callbacks, host clocks, event buses, and UI/device values are absent. The deprecated
+three-value `GameboyType` remains a source adapter: both `sgb` and `sgb2` map back to coarse
+`GameboyType.SGB`, while that coarse value maps forward only to `sgb`. Configuration copies for
+restore, rollback, boot templates, linked sessions, and transaction rollback retain the exact
+registered profile instance.
 
-The executable source of truth is
+The executable registry contract is
 [`hardware-profile-matrix.tsv`](../controller/src/test/resources/sgb-baselines/hardware-profile-matrix.tsv).
-It pins identity, every capability, exact clock/cadence, boot image selector, authentic-boot divider
-preset, skip-boot registers, and CGB handoff ticks. `HardwareProfileMatrixTest` compares every cell
-to the registry, while `SgbInventoryGuardTest` scans and fingerprints all production profile,
-model, boot, clock, state, compatibility, and platform decisions.
+Its guard checks identity, capabilities, exact clocks/cadence, boot selectors, skip defaults, and
+registry order. `SgbInventoryGuardTest` separately fingerprints every production profile/clock
+decision site.
 
-## Resolution and compatibility adapters
+## Evidence and exact SGB-family clocks
 
-Automatic selection preserves the established policy:
+Evidence was accessed 2026-07-26. No referenced or generated Nintendo ROM bytes are committed.
 
-- non-CGB cartridges use the configured DMG-games profile (default `sgb`);
-- CGB/universal cartridges and Datel's color-header compatibility case use the configured CGB-games
-  profile (default `cgb`);
-- an SGB selection for a cartridge without the SGB header falls back to CGB as before;
-- the reviewed `CGB0_REVISION` ROM compatibility feature canonicalizes an otherwise selected `cgb`
-  session to `cgb0`;
-- an explicit CLI override is resolved before `Gameboy` construction and its first tick.
+- **Pan Docs commit `37526fad2d47c89fa6485fce0740c594686598b1`**, CC0-1.0:
+  [`SGB_Functions.md`](https://github.com/gbdev/pandocs/blob/37526fad2d47c89fa6485fce0740c594686598b1/src/SGB_Functions.md)
+  says NTSC SGB derives its Game Boy master clock from the approximately 21.477 MHz SNES master,
+  runs approximately 2.41% fast, and SGB2 uses a separate approximately 20.972 MHz crystal at the
+  correct Game Boy speed.
+- The same immutable Pan Docs revision's
+  [`Power_Up_Sequence.md`](https://github.com/gbdev/pandocs/blob/37526fad2d47c89fa6485fce0740c594686598b1/src/Power_Up_Sequence.md)
+  and
+  [`SGB_Unlocking.md`](https://github.com/gbdev/pandocs/blob/37526fad2d47c89fa6485fce0740c594686598b1/src/SGB_Unlocking.md)
+  identify SGB/SGB2 by `C=0x14`, distinguish them with `A=0x01`/`0xff`, state that their boot ROMs
+  differ by that final value, and leave their post-boot DIV value unknown.
+- **Gekkio, _GB: Complete Technical Reference_, revision 188, 2026-07-14**, CC BY-SA 4.0,
+  [`gbctr.pdf`](https://gekkio.fi/files/gb-docs/gbctr.pdf), downloaded SHA-256
+  `b147d6c49fb27ea8e803da9956e91ac1e47fd7bdedd7742ca1ffab63c7daaf07`, corroborates that ICD2
+  divides the SNES source by five and that SGB2 uses a 20.971520 MHz crystal divided by five.
+- **SNESdev Wiki, “Timing”, revision 1467 (2026-05-14)**, CC0-1.0,
+  [permanent revision](https://snes.nesdev.org/w/index.php?title=Timing&oldid=1467), records the
+  NTSC SNES master as `945/44 MHz`. Pan Docs' immutable approximate value independently
+  corroborates it.
 
-`GameboyType` remains a documented deprecated three-value source adapter. DMG/CGB/SGB map to their
-canonical profiles; both `cgb` and `cgb0` map back to coarse CGB. The deprecated
-`setCgb0Revision` API changes the concrete profile between `cgb` and `cgb0` and rejects CGB0 on a
-non-CGB family, so callers cannot create a contradictory revision/type pair. Configuration copies
-for restore, rollback replay, boot templates, linked checkpoints, and transaction rollback retain
-the exact registered profile.
-
-Mealybug DMG-blob timing, CodeBreaker rumble, Datel pass-through identity, bootstrap choice, and
-the SGB-border preference remain explicit configuration/accessory policy. They are not generalized
-into hardware capabilities. State and boot-cache keys retain them separately where they affect
-behavior.
-
-## Exact clock contract
-
-`ClockSpec` contains an integer master-tick rate and an exact rational controller cadence. All four
-Phase-3 profiles deliberately use the legacy Coffee GB values:
+The resulting exact rates are:
 
 ```text
-master ticks/second       = 4,194,304
-controller frames/second = 60 / 1
-ticks/controller frame   = floor(4,194,304 / 60) = 69,905
+NTSC SGB SNES master = 945/44 MHz = 945,000,000/44 Hz
+SGB Game Boy master  = (945,000,000 / 44) / 5
+                      = 47,250,000 / 11 ticks/second
+
+SGB2 crystal         = 20,971,520 Hz
+SGB2 Game Boy master = 20,971,520 / 5
+                      = 4,194,304 ticks/second
+
+Game Boy LCD frame   = 70,224 master ticks
+SGB frames/second    = (47,250,000 / 11) / 70,224 = 140,625 / 2,299
+SGB2 frames/second   = 4,194,304 / 70,224 = 262,144 / 4,389
 ```
 
-The 60-Hz value is Coffee GB's established controller scheduling policy, not a claim that it is the
-physical LCD refresh rate. Real SGB/SGB2 timing is explicitly deferred to #344; MGB identity and
-timing are deferred to #345.
+The technical reference prints “21.447 MHz” for NTSC SNES, which disagrees with Pan Docs' 21.477
+MHz and the published theoretical expression. Coffee GB uses the exact theoretical expression,
+records the disagreement, and never substitutes a rounded integer frequency.
 
-Conversions use checked integer or `BigInteger` multiply/divide with explicit floor, ceiling, or
-nearest rounding. Consumer-owned `RateAccumulator` phases carry the exact remainder. The host
-pacer advances nanoseconds by an exact rational phase, and the Swing audio sink converts tick-domain
-samples to 44.1 kHz with an exact phase rather than cumulative floating-point rounding. This is an
-intentional exactness correction in host sample selection; APU tick output and built-in session
-rates remain unchanged. Size calculations are checked before allocation. Host wall-clock pacing is
-not emulated time and is never captured.
+`ClockSpec` therefore stores both master rate and frame cadence as reduced numerator/denominator
+pairs. Its old integer-rate accessors remain deprecated source adapters and throw for a rational
+rate rather than return a plausible false integer. Conversions use checked integer/`BigInteger`
+arithmetic and explicit rounding. Consumer-owned `RateAccumulator` phases keep exact remainders;
+the per-tick hot path allocates nothing and uses `BigInteger` only when an analytical bulk advance
+would overflow `long`.
 
-Production consumers now receive the owning session clock: BasicController, LinkedController,
-StateHistory, TimingTicker, Agent, Sound/audio output, MBC3/RTC (including Datel slots), serial/GPS,
-four-player adapter timing, and Gameboy frame-derived thresholds. Deprecated
-`Gameboy.TICKS_PER_SEC` and `Gameboy.TICKS_PER_FRAME` remain source adapters only; no migrated
-production path reads them. Linked candidate groups are preflighted before construction/replay or
-live replacement and reject differing master/tick budgets before partial execution.
+DMG/CGB/CGB0 retain Coffee GB's established 4,194,304-Hz, 60-Hz controller policy and floored
+69,905-tick frame. SGB/SGB2 now use the exact 70,224-tick LCD frame. This intentionally changes the
+previous SGB baseline: CPU/timer/PPU/APU/RTC/serial consumers run at the evidenced fast NTSC SGB
+rate, and skip boot now exposes `AF=0x0100`, `BC=0x0014`, `DE=0`, `HL=0xc060`. SGB2 exposes the same
+values except `AF=0xff00`. The synthetic state hashes record those intentional changes; DMG, CGB,
+and CGB0 hashes are unchanged.
 
-State prepare is also clock-owned. Generic detached decoding keeps arrays and graphs bounded without
-assuming a built-in rate; before machine/session, legacy-import, or rewind mutation, semantic
-preflight derives the exact Sound stereo capacity and MBC3 subsecond upper bound from the target
-profile's `ClockSpec`. A custom-clock state valid for that target is therefore accepted, while the
-same shape or phase is rejected for an incompatible target before any component restore begins.
+Production consumers receive the owning session clock: controllers, rollback history, host pacing,
+Agent bounds, Sound and Swing audio conversion, MBC3/Datel-slot RTCs, serial/GPS, four-player
+adapter scaling, and clock-derived state semantics. Linked preflight compares the complete reduced
+master/cadence identity, not a rounded rate or coincidentally equal frame budget. State preflight
+derives Sound capacity and RTC phase bounds from the exact target clock before the first mutation.
 
-## Boot and capability parity
+## Long-run, audio, RTC, and host pacing policy
 
-BIOS resource selection, CGB/SGB construction, CGB0 MMU/OAM behavior, authentic-boot divider
-presets, CGB post-boot peripheral handoff, skip-boot DIV/register values, display capability, RTC,
-and serial/audio clocking derive from the resolved profile or a narrow immutable value derived once
-from it. Hot CPU/GPU/APU/MMU components may retain narrow booleans; they do not branch on display
-names or perform registry lookup per tick.
+Tests advance at least 24 emulated hours algebraically and compare exact 44.1-kHz output totals,
+frame totals, and remainders with independent `BigInteger` equations. No real sleep is used. The
+core Sound buffer holds one profile frame of tick-domain stereo samples. Swing's host sink owns an
+exact sample-rate phase; pause and same-clock restore leave it intact, while an actual profile
+clock change resets host presentation history.
 
-This phase intentionally preserves two evidence-visible baselines:
+MBC3 `subSecondTicks` is an exact numerator-domain phase: one master tick adds the clock
+denominator, and the exclusive phase bound is the clock numerator. That scalar and Sound buffer
+shape are validated against the target profile during prepare, before any live component mutation.
+The injected wall `TimeSource` remains uncaptured.
 
-- current SGB skip boot uses DMG `BC=0x0013`, while the pinned Pan Docs table lists SGB
-  `C=0x14`;
-- all current profiles use Coffee GB's legacy master clock/controller cadence.
+`TimingTicker` owns only wall pacing. Different fake `nanoTime`/park schedules at the same emulated
+tick boundary produce the same complete machine (including tick-domain audio) state. A pause or
+late-host re-anchor advances no emulator tick and captures no host deadline.
 
-The behavioral evidence was accessed 2026-07-25 and is pinned to Pan Docs commit
-[`fe246067`](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/Power_Up_Sequence.md)
-(CC0-1.0), together with Coffee GB's ROM-independent model hashes and compatibility suites. The
-disagreement is recorded rather than guessed. No Nintendo boot ROM or proprietary fixture was
-added.
+## Boot policy and capability limits
 
-## State, rewind, and protocol compatibility
+Skip boot uses the cited SGB-family CPU registers. Pan Docs leaves SGB/SGB2 DIV unknown, so both
+retain Coffee GB's deterministic `0xabcc` skip preset; this is explicitly an emulator policy, not a
+hardware measurement. No further SGB2 register, command, renderer, multiplayer, serial, or
+capability difference is claimed without evidence.
 
-`MachineSnapshot` records the canonical profile ID and rejects a different profile before restore
-mutation. StateFile v1 does not gain bytes: its fixed hardware byte plus existing CGB0 flag derive
-exactly one canonical ID (`dmg`, `cgb`, `cgb0`, or `sgb`). Full compatibility still includes the
-existing bootstrap and accessory flags. Inspection prints the canonical ID. The released v1 golden
-fixture decodes and re-encodes byte-for-byte, and an incompatible derived ID produces typed
-`HARDWARE_PROFILE_MISMATCH` before the first live-mutation callback.
+Coffee GB includes an SGB1 bootstrap resource but does not bundle an SGB2 boot ROM. It must never
+run the SGB1 image under SGB2 identity. Consequently `NORMAL` and `FAST_FORWARD` bootstrap with
+`sgb2` fail before component construction with an actionable “use skip bootstrap” error. `SKIP` is
+fully supported. A future user-supplied SGB2 boot path requires separate legal/provenance and image
+validation work; this phase downloads or embeds nothing.
 
-Protocol v8 is also byte-for-byte unchanged. Its `GameboyType` ordinal and profile flags are pinned
-wire compatibility fields which are canonicalized to a registered profile before candidate session
-construction. A free-form or unknown profile ID is not accepted in v1/v8. Adding a new portable or
-wire identity requires an explicit StateFile extension/version and, when applicable, a new netplay
-capability/version; display-name matching is forbidden.
+## Selection, state, rewind, and netplay
 
-## Desktop and contributor contract
+The CLI accepts `--profile=sgb2`; it conflicts with either legacy force flag. Desktop model menus
+are registry-generated and include `Auto (default)`, SGB, and SGB2. Auto is represented by an
+absent mapping property and preserves existing cartridge/header defaults. Explicit choices persist
+canonical IDs and are resolved before the first tick. Legacy `SGB` settings continue to select
+SGB1.
 
-The command line accepts `--profile=<id>`. It conflicts with `--force-dmg` and `--force-cgb`; the
-two force flags also conflict with one another. Legacy force flags map to `dmg` and `cgb`.
-Malformed/missing/unknown profile values fail before Swing or core session construction. Desktop
-menus are generated from registry order and persist canonical IDs while reading the finite legacy
-aliases.
+`MachineSnapshot` records the exact profile ID and rejects cross-profile restore before mutation.
+StateFile v1 bytes and meanings are frozen: its coarse SGB identity always means `sgb`. StateFile
+v2 adds a bounded explicit canonical ID to identity section v2 and is required for `sgb2`; see
+[state-file-v2.md](state-file-v2.md). The released v1 golden fixture still re-encodes byte-for-byte.
 
-To add or rename a profile in a future phase:
+Protocol v8 negotiates StateFile v1 and remains byte-for-byte frozen. It cannot represent SGB2.
+Coffee GB therefore rejects a local SGB2 linked load before constructing a linked session and also
+rejects any SGB2 state at the transport boundary; it never sends SGB2 as coarse SGB. The reusable
+linked clock policy can compare two exact SGB2 clocks, but enabling network sessions needs a
+separately negotiated protocol version. Future #315 replay metadata must likewise carry the exact
+canonical ID and rational clock identity; no replay format is implemented here.
 
-1. never reuse or change an existing ID;
-2. add the complete immutable registry entry and reviewed finite alias only if migration requires it;
-3. update the checked-in matrix and decision inventory/fingerprints;
-4. prove boot/register/memory/render/timing parity or document an evidence-backed change;
-5. version portable/network metadata if the old fixed identity cannot represent it;
+## Extension contract
+
+To add or rename a profile:
+
+1. never reuse or change an existing canonical ID;
+2. add a complete immutable registry row and a finite alias only when migration requires it;
+3. update the evidence-backed matrix and source inventory/fingerprints;
+4. prove boot/register/memory/render/timing behavior with deterministic baselines;
+5. version portable/network metadata when an existing identity cannot represent it;
 6. add mismatch-before-mutation, settings/CLI, rewind, linked, and compatibility coverage.
 
-SGB2 (`#344`), MGB (`#345`), and replay recording (`#315`) are deliberately outside this phase.
+MGB remains deferred to #345. Replay recording remains deferred to #315.

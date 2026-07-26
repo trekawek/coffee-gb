@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
@@ -109,6 +110,8 @@ class StateCodecTest {
                 .setCodeBreakerRumble(true),
             StateCodecTestSupport.configuration(StateCodecTestSupport.rom(sgb = true), GameboyType.SGB)
                 .setDisplaySgbBorder(false),
+            StateCodecTestSupport.configuration(StateCodecTestSupport.rom(sgb = true), GameboyType.SGB)
+                .setHardwareProfile(HardwareProfileRegistry.SGB2),
             StateCodecTestSupport.configuration(StateCodecTestSupport.datelRom(), GameboyType.CGB)
                 .setSlotRom(Rom(StateCodecTestSupport.rom(seed = 3, cgb = true))),
             StateCodecTestSupport.configuration(StateCodecTestSupport.datelRom(), GameboyType.CGB)

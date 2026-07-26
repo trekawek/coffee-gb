@@ -5,19 +5,27 @@ import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.security.MessageDigest
 import java.util.zip.DataFormatException
 import java.util.zip.Deflater
 import java.util.zip.Inflater
 
 /**
- * Version-1 portable state codec.
+ * Versioned portable state codec. V2 adds an explicit canonical hardware-profile ID while
+ * preserving every v1 envelope/payload byte for the released profiles.
  *
  * Parsing creates detached values only. Live machines are reached exclusively by the explicit
  * decode-and-apply methods after envelope, identity, structure, and target compatibility checks.
  */
 object StateCodec {
-  const val FORMAT_VERSION = 1
+  const val V1_FORMAT_VERSION = 1
+  const val LATEST_FORMAT_VERSION = 2
+  /** Protocol v8 remains frozen to the released v1 format. */
+  const val PROTOCOL_V8_FORMAT_VERSION = V1_FORMAT_VERSION
+  /** @deprecated This historical name meant the only format at the time; use a scoped constant. */
+  @Deprecated("Use V1_FORMAT_VERSION, LATEST_FORMAT_VERSION, or PROTOCOL_V8_FORMAT_VERSION")
+  const val FORMAT_VERSION = V1_FORMAT_VERSION
   const val HEADER_SIZE = 68
   const val SECTION_HEADER_SIZE = 16
 
@@ -30,13 +38,14 @@ object StateCodec {
 
   fun encode(file: StateFile, compression: StateCompression = StateCompression.NONE): ByteArray {
     validateFileForEncoding(file)
+    val formatVersion = file.formatVersion
     val sections = ArrayList<EncodedSection>(3)
     sections +=
         EncodedSection(
             StateIdentitySectionCodec.ID,
-            StateIdentitySectionCodec.VERSION,
+            formatVersion,
             required = true,
-            StateIdentitySectionCodec.encode(file.identities),
+            StateIdentitySectionCodec.encode(file.identities, formatVersion),
         )
     sections +=
         EncodedSection(
@@ -68,7 +77,7 @@ object StateCodec {
     val checksum = sha256(encoded)
     val writer = PortableWriter(StateLimits.PORTABLE_MAX_FILE_BYTES, HEADER_SIZE + encoded.size)
     writer.writeBytes(MAGIC)
-    writer.writeU16(FORMAT_VERSION)
+    writer.writeU16(formatVersion)
     writer.writeU16(HEADER_SIZE)
     writer.writeU32(compression.flag.toLong())
     writer.writeByte(file.root.kind.id)
@@ -98,7 +107,7 @@ object StateCodec {
                 "StateFile has no state section",
             )
     validateDecodedFile(identities, root)
-    return StateFile(identities, root, sections.diagnostics)
+    return StateFile(identities, root, sections.diagnostics, envelope.version)
   }
 
   /** Reads bounded envelope/directory/identity metadata without constructing a live emulator. */
@@ -112,7 +121,7 @@ object StateCodec {
                 "StateFile has no identity section",
             )
     return StateFileInspection(
-        FORMAT_VERSION,
+        envelope.version,
         envelope.kind,
         envelope.compression,
         envelope.encodedLength.toLong(),
@@ -289,7 +298,7 @@ object StateCodec {
       }
     }
     val version = reader.readU16()
-    if (version != FORMAT_VERSION) {
+    if (version !in V1_FORMAT_VERSION..LATEST_FORMAT_VERSION) {
       throw StateDecodeException(
           StateDecodeReason.UNSUPPORTED_FORMAT_VERSION,
           "Unsupported StateFile version $version",
@@ -370,7 +379,7 @@ object StateCodec {
           "Decoded payload size ${decoded.size} differs from declared $decodedLength",
       )
     }
-    return DecodedEnvelope(kind, compression, sectionCount, encodedLength, decoded)
+    return DecodedEnvelope(version, kind, compression, sectionCount, encodedLength, decoded)
   }
 
   private fun parseSections(
@@ -421,8 +430,8 @@ object StateCodec {
       when (id) {
         StateIdentitySectionCodec.ID -> {
           if (!required) malformedRequiredFlag(id, true)
-          if (version != StateIdentitySectionCodec.VERSION) unsupportedSection(id, version)
-          identities = StateIdentitySectionCodec.decode(section)
+          if (version != envelope.version) unsupportedSection(id, version)
+          identities = StateIdentitySectionCodec.decode(section, version)
         }
         StatePayloadSectionCodec.ID -> {
           if (!required) malformedRequiredFlag(id, true)
@@ -468,6 +477,16 @@ object StateCodec {
 
   private fun validateFileForEncoding(file: StateFile) {
     try {
+      if (file.formatVersion == V1_FORMAT_VERSION &&
+          file.identities.any {
+            it.identity?.profile?.canonicalProfileId ==
+                HardwareProfileRegistry.SGB2.id()
+          }) {
+        throw StateDecodeException(
+            StateDecodeReason.HARDWARE_PROFILE_MISMATCH,
+            "StateFile v1 cannot represent the sgb2 profile",
+        )
+      }
       validateFileShape(file.identities, file.root)
     } catch (failure: StateDecodeException) {
       throw StateEncodeException(failure.message ?: "Portable state is invalid", failure)
@@ -721,6 +740,7 @@ object StateCodec {
   )
 
   private data class DecodedEnvelope(
+      val version: Int,
       val kind: StateRootKind,
       val compression: StateCompression,
       val sectionCount: Int,

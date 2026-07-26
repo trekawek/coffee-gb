@@ -2,10 +2,14 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile as CoreHardwareProfile
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import java.nio.charset.StandardCharsets
 
 internal object StateIdentitySectionCodec {
   const val ID = 1
-  const val VERSION = 1
+  const val VERSION_1 = 1
+  const val VERSION_2 = 2
   const val PROFILE_CGB0 = 1
   const val PROFILE_MEALYBUG_DMG_BLOB = 1 shl 1
   const val PROFILE_CODEBREAKER_RUMBLE = 1 shl 2
@@ -16,8 +20,11 @@ internal object StateIdentitySectionCodec {
           PROFILE_CODEBREAKER_RUMBLE or
           PROFILE_SGB_BORDER
 
-  fun encode(entries: List<StateIdentityEntry>): ByteArray {
+  fun encode(entries: List<StateIdentityEntry>, version: Int): ByteArray {
     try {
+      if (version != VERSION_1 && version != VERSION_2) {
+        throw StateEncodeException("Unsupported identity section version $version")
+      }
       val writer = PortableWriter(StateLimits.PORTABLE_MAX_SECTION_BYTES)
       requireEntries(entries)
       writer.writeU32(entries.size.toLong())
@@ -38,6 +45,20 @@ internal object StateIdentitySectionCodec {
           if (identity.profile.codeBreakerRumble) flags = flags or PROFILE_CODEBREAKER_RUMBLE
           if (identity.profile.displaySgbBorder) flags = flags or PROFILE_SGB_BORDER
           writer.writeU32(flags.toLong())
+          if (version == VERSION_1) {
+            if (identity.profile.canonicalProfileId == HardwareProfileRegistry.SGB2.id()) {
+              throw StateEncodeException("StateFile v1 cannot represent the sgb2 profile")
+            }
+          } else {
+            val profileId = identity.profile.canonicalProfileId
+            val encodedId = profileId.toByteArray(StandardCharsets.US_ASCII)
+            if (encodedId.size > StateLimits.PORTABLE_MAX_PROFILE_ID_BYTES ||
+                encodedId.any { (it.toInt() and 0xff) !in 0x21..0x7e }) {
+              throw StateEncodeException("Portable profile ID '$profileId' is not bounded ASCII")
+            }
+            writer.writeU16(encodedId.size)
+            writer.writeBytes(encodedId)
+          }
         }
       }
       return writer.toByteArray()
@@ -46,7 +67,13 @@ internal object StateIdentitySectionCodec {
     }
   }
 
-  fun decode(reader: PortableReader): List<StateIdentityEntry> {
+  fun decode(reader: PortableReader, version: Int): List<StateIdentityEntry> {
+    if (version != VERSION_1 && version != VERSION_2) {
+      throw StateDecodeException(
+          StateDecodeReason.UNSUPPORTED_SECTION_VERSION,
+          "Unsupported identity section version $version",
+      )
+    }
     val count =
         PortableBounds.requireCount(
             reader.readU32(),
@@ -81,11 +108,11 @@ internal object StateIdentitySectionCodec {
                       } else {
                         null
                       }
-                  val version = reader.readU16()
-                  if (version != HardwareProfile.VERSION) {
+                  val profileVersion = reader.readU16()
+                  if (profileVersion != HardwareProfile.VERSION) {
                     throw StateDecodeException(
                         StateDecodeReason.HARDWARE_PROFILE_MISMATCH,
-                        "Unsupported hardware profile version $version",
+                        "Unsupported hardware profile version $profileVersion",
                     )
                   }
                   val hardware = hardware(reader.readByte())
@@ -99,13 +126,14 @@ internal object StateIdentitySectionCodec {
                   }
                   val profile =
                       HardwareProfile(
-                          version,
+                          profileVersion,
                           hardware,
                           bootstrap,
                           flags and PROFILE_CGB0.toLong() != 0L,
                           flags and PROFILE_MEALYBUG_DMG_BLOB.toLong() != 0L,
                           flags and PROFILE_CODEBREAKER_RUMBLE.toLong() != 0L,
                           flags and PROFILE_SGB_BORDER.toLong() != 0L,
+                          if (version == VERSION_2) readProfileId(reader) else null,
                       )
                   validateProfile(profile)
                   MachineIdentity(
@@ -140,6 +168,48 @@ internal object StateIdentitySectionCodec {
     if (profile.displaySgbBorder && profile.hardware != MachineHardwareState.SGB) {
       malformed("SGB-border profile flag is set on ${profile.hardware}")
     }
+    val registered =
+        try {
+          HardwareProfileRegistry.resolve(profile.canonicalProfileId)
+        } catch (failure: IllegalArgumentException) {
+          throw StateDecodeException(
+              StateDecodeReason.HARDWARE_PROFILE_MISMATCH,
+              "Unknown portable hardware profile '${profile.canonicalProfileId}'",
+              failure,
+          )
+        }
+    val expectedHardware =
+        when (registered.family()) {
+          CoreHardwareProfile.Family.DMG -> MachineHardwareState.DMG
+          CoreHardwareProfile.Family.CGB -> MachineHardwareState.CGB
+          CoreHardwareProfile.Family.SGB -> MachineHardwareState.SGB
+        }
+    if (expectedHardware != profile.hardware ||
+        (registered == HardwareProfileRegistry.CGB0) != profile.cgb0Revision) {
+      throw StateDecodeException(
+          StateDecodeReason.HARDWARE_PROFILE_MISMATCH,
+          "Portable profile ${profile.canonicalProfileId} conflicts with ${profile.hardware}",
+      )
+    }
+  }
+
+  private fun readProfileId(reader: PortableReader): String {
+    val length =
+        PortableBounds.requireCount(
+            reader.readU16().toLong(),
+            StateLimits.PORTABLE_MAX_PROFILE_ID_BYTES.toLong(),
+            "Portable profile ID bytes",
+        )
+    if (length == 0) malformed("Portable profile ID is empty")
+    val bytes = reader.readBytes(length, StateLimits.PORTABLE_MAX_PROFILE_ID_BYTES)
+    if (bytes.any { (it.toInt() and 0xff) !in 0x21..0x7e }) {
+      malformed("Portable profile ID is not canonical ASCII")
+    }
+    val id = String(bytes, StandardCharsets.US_ASCII)
+    if (!id.matches(Regex("[a-z][a-z0-9-]*"))) {
+      malformed("Portable profile ID '$id' is not canonical lowercase ASCII")
+    }
+    return id
   }
 
   internal fun hardwareId(hardware: MachineHardwareState): Int =

@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.Opcodes
 import eu.rekawek.coffeegb.core.cpu.Registers
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
+import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
@@ -60,7 +61,11 @@ class Agent(romFile: File) {
         }
     }
 
-    fun runUntilFrame(maxTicks: Int = gameboy.clockSpec.ticksPerSecondInt()) {
+    fun runUntilFrame(
+        maxTicks: Int =
+            Math.toIntExact(
+                gameboy.clockSpec.ticksForSeconds(1, ClockSpec.Rounding.CEILING))
+    ) {
         var ticks = 0
         while (!gameboy.tick() && ticks < maxTicks) {
             ticks++

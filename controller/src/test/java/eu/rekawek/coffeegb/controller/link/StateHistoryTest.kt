@@ -57,6 +57,7 @@ class StateHistoryTest {
             }
     val second =
         Gameboy.GameboyConfiguration(Rom(StateCodecTestSupport.rom()))
+            .setGameboyType(GameboyType.SGB)
             .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
             .setSupportBatterySave(false)
     val links = StateHistory.createLinks(LinkMode.NORMAL)

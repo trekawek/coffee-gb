@@ -1,11 +1,12 @@
 # SGB conformance baselines and practical-command contract
 
 Issue #340 established the observational Phase 0 evidence and deterministic fixtures. Issue #341
-used those artifacts to complete the platform-neutral practical command set, and issue #342 added
-independent local SGB P1-P4 host input. Issue #343 now resolves immutable per-session hardware
-profiles and clocks while preserving every locked DMG/CGB/CGB0/SGB behavior. It does not implement
-real SGB/SGB2 timing or MGB. The existing StateFile-v1 record registry and field schema remain
-unchanged.
+used those artifacts to complete the platform-neutral practical command set, issue #342 added
+independent local SGB P1-P4 host input, and issue #343 established immutable per-session hardware
+profiles and clocks. Issue #344 adds the evidence-backed `sgb2` identity and exact SGB-family clock
+contract. It intentionally changes only the cited SGB clock/skip-boot baseline and adds StateFile
+v2 identity; it does not implement MGB or change the practical SGB command set. The 91 portable
+record IDs and every StateFile-v1 field remain unchanged.
 
 ## Checked-in sources of truth
 
@@ -44,29 +45,29 @@ part of the contract.
 
 | Category | Files | Normalized occurrences |
 | --- | ---: | ---: |
-| `HARDWARE_PROFILE` | 23 | 168 |
-| `GAMEBOY_TYPE` | 9 | 42 |
+| `HARDWARE_PROFILE` | 25 | 194 |
+| `GAMEBOY_TYPE` | 9 | 45 |
 | `CGB_FLAG` | 37 | 412 |
-| `SGB_FLAG` | 10 | 42 |
-| `CGB0` | 9 | 40 |
-| `BOOTSTRAP` | 11 | 79 |
-| `CLOCK` | 21 | 183 |
+| `SGB_FLAG` | 11 | 43 |
+| `CGB0` | 9 | 42 |
+| `BOOTSTRAP` | 11 | 83 |
+| `CLOCK` | 23 | 212 |
 | `SGB_BORDER` | 7 | 43 |
 | `MEALYBUG` | 9 | 45 |
 | `CODEBREAKER` | 8 | 54 |
 | `ROM_MODEL` | 8 | 55 |
-| `PORTABLE_PROFILE` | 4 | 33 |
+| `PORTABLE_PROFILE` | 4 | 43 |
 
 The 79 files comprise 41 hardware-policy, 15 compatibility-adapter, 7 configuration, 7
-portable-state-adapter, 5 platform-adapter, and 4 legacy-importer rows. Seventy-five rows are owned
-by the completed profile/clock migration (#343), two SGB display or palette rows by command
-completion (#341), Joypad multiplayer by #342, and the remaining coarse SerialPort capability branch
-by SGB2 timing (#344). No current decision is owned solely by #345 because MGB is not representable
-yet; #345 extends the registry rather than changing an existing MGB branch.
+portable-state-adapter, 5 platform-adapter, and 4 legacy-importer rows. Fifty-one rows retain the
+completed profile foundation (#343), 25 own exact SGB2 timing/identity work (#344), two SGB display
+or palette rows belong to command completion (#341), and Joypad multiplayer belongs to #342. No
+current decision is owned solely by #345 because MGB is not representable yet; #345 extends the
+registry rather than changing an existing MGB branch.
 
 ## Public technical evidence
 
-All sources below were accessed on 2026-07-25. Links are pinned to immutable commits.
+The command sources below were accessed on 2026-07-25. Links are pinned to immutable commits.
 
 | Evidence key | Version and license | Supports |
 | --- | --- | --- |
@@ -80,6 +81,17 @@ All sources below were accessed on 2026-07-25. Links are pinned to immutable com
 | `PANDOCS_BORDER` | [border commands](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/SGB_Command_Border.md) | Character, picture, attribute, and object transfers. |
 | `PANDOCS_UNDOCUMENTED` | [undocumented commands](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/SGB_Command_Undocumented.md) | SGB1v2 disassembly observations for `0x1a..0x1f`; not generalized to other revisions. |
 | `COFFEEGB_BASELINE` | This PR's real JOYP, renderer, input, model, and StateFile tests | What the current implementation actually consumes, stores, renders, and resumes. |
+
+The profile/timing evidence was accessed on 2026-07-26 and is pinned in
+[hardware-profiles.md](hardware-profiles.md). Pan Docs commit
+[`37526fad2d47c89fa6485fce0740c594686598b1`](https://github.com/gbdev/pandocs/tree/37526fad2d47c89fa6485fce0740c594686598b1),
+CC0-1.0, establishes the SGB/SGB2 clock-source distinction and post-boot A/C values. Gekkio's
+_GB: Complete Technical Reference_ revision 188 (CC BY-SA 4.0; downloaded SHA-256
+`b147d6c49fb27ea8e803da9956e91ac1e47fd7bdedd7742ca1ffab63c7daaf07`) corroborates ICD2's
+divide-by-five path and the exact SGB2 crystal. SNESdev Wiki `Timing` revision 1467
+([permanent revision](https://snes.nesdev.org/w/index.php?title=Timing&oldid=1467), CC0-1.0)
+specifies the exact NTSC SNES source as `945/44 MHz`. GBCTR prints a disagreeing “21.447 MHz”
+approximation; the disagreement is retained rather than hidden by rounding.
 
 The current 105-frame border transition is also traced to
 [SameBoy `213a12c`, `Core/sgb.c`](https://github.com/LIJI32/SameBoy/blob/213a12ce93d66b105a113debd9396306066a7cfc/Core/sgb.c),
@@ -112,15 +124,14 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
   ignored independently even when its untrusted count bits advertise more rows. This keeps the
   CasualPokePlayer extended-protocol result unchanged. Public disassembly evidence is
   SGB1v2-specific and does not justify an effect or a generic multi-packet schema.
-- Skip boot currently gives SGB the DMG `BC=0x0013` value; Pan Docs' pinned
-  [power-up table](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/Power_Up_Sequence.md)
-  documents SGB `C=0x14`. Phase 0 locks the current value without changing it.
-- Deprecated `TICKS_PER_SEC`/`TICKS_PER_FRAME` constants and protocol-v8 coarse fields remain source
-  or wire compatibility adapters. Production controllers, rollback, host pacing, audio conversion,
-  RTC, and serial delays use the resolved session `ClockSpec`. Pan Docs' pinned
-  [timer discussion](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/Timer_and_Divider_Registers.md)
-  is reference evidence; all Phase-3 profiles intentionally retain the legacy 4,194,304-Hz and
-  60-Hz controller policy. Real SGB/SGB2 timing remains #344.
+- Skip boot now follows the pinned SGB-family values: SGB uses `AF=0x0100`, SGB2 uses
+  `AF=0xff00`, and both use `BC=0x0014`, `DE=0`, `HL=0xc060`. Their DIV value remains unknown;
+  Coffee GB's retained `0xabcc` value is explicitly a deterministic policy, not a hardware claim.
+- The exact SGB Game Boy master is `(1,890,000,000 / 88) / 5 = 47,250,000 / 11` ticks/second.
+  SGB2 is `20,971,520 / 5 = 4,194,304` ticks/second. Both use the 70,224-tick LCD frame, yielding
+  exact cadences `140,625 / 2,299` and `262,144 / 4,389` frames/second. Deprecated integer clock
+  adapters throw for a rational rate rather than report a false rounded value. Protocol v8 remains
+  StateFile-v1-only and rejects SGB2 before payload transmission.
 
 ## Phase 1 framing, mutation, and state contract
 
@@ -236,12 +247,13 @@ locale, `hashCode`, clock, or unordered iteration.
 | restored continuation | `c78c334dbeb2a0cc9aab7f087fe0d9cdb46d292417eedb222355108880bd73ae` |
 
 The model fixture builds one valid-checksum, 32 KiB synthetic ROM and runs exactly each profile's
-`ClockSpec.controllerTicksPerFrame()` (currently 69,905) under DMG, CGB, CGB0, and SGB with skip
-boot. The synthetic ROM SHA
+`ClockSpec.controllerTicksPerFrame()`: 69,905 under DMG/CGB/CGB0 and the full 70,224-tick LCD frame
+under SGB/SGB2, all with skip boot. The synthetic ROM SHA
 is `f89f3802d47dd31da0db6b5656ed5098194e85020ba735fb44c1c9d4f9043eee`. The exact register,
-frame-event, frame-hash, and uncompressed StateFile-v1 hashes are reviewable in
-`model-baselines.tsv`; notably SGB currently starts with the same DMG registers and emits both one
-DMG and one SGB event.
+frame-event, frame-hash, and portable StateFile hashes are reviewable in `model-baselines.tsv`.
+DMG/CGB/CGB0 rows are unchanged. The SGB row changes only for the cited clock/skip defaults; the
+new SGB2 row differs by its cited `AF=0xff00` identity and StateFile-v2 metadata. Both emit one DMG
+frame and one SGB output event.
 
 The StateFile harness drives real PAL/ATTR/CHR/PCT/MASK/MLT commands plus `ATTR_LIN`, `ATTR_DIV`, and
 `PAL_PRI`. It performs the production three-frame VRAM transfer and border progress, holds
@@ -251,9 +263,9 @@ the exact portable bytes and continuation:
 
 | State fixture value | SHA-256 |
 | --- | --- |
-| capture StateFile | `bd4c452080e8dcb183460f5dad1f80681b101125075f716bb314d57e12d94b0e` |
+| capture StateFile | `d662b90def20941f92397a7f80fcc0e3a2c7dbb4a5c53c49db8c2238298c9064` |
 | capture frame | `089c22de4291e57ff45098eb3bfbdaa71b81aecc30b5fa6c1d72a58ea7e6d063` |
-| continuation StateFile | `044ffd6c83983693c7bb4c75e180e2b108c02b7ff8e9a52c08484cd3f039e92d` |
+| continuation StateFile | `1dffd3a21e388d65e7b87b76ba06f993395813097b2b448d01c09e763972f1fb` |
 | continuation frame | `51dd2ed6cf24f04a64ea81af4e9768056ea48074445476c96d6dca015fd2e342` |
 
 The Phase 0 fake source has been removed. The reusable production `PlayerInputSource`, immutable
@@ -266,11 +278,11 @@ rollback replay, keyboard mappings, and fake no-SDL devices.
 The exact registry/capability/boot/clock matrix is
 [`hardware-profile-matrix.tsv`](../controller/src/test/resources/sgb-baselines/hardware-profile-matrix.tsv)
 and is enforced against production by `HardwareProfileMatrixTest`. Permanent IDs are `dmg`, `cgb`,
-`cgb0`, and `sgb`; all baseline register, frame, and StateFile hashes above remain unchanged. The
-full ownership, CLI, state-v1, protocol-v8, evidence, and extension contract is documented in
-[hardware-profiles.md](hardware-profiles.md).
+`cgb0`, `sgb`, and `sgb2`. The full ownership, CLI, StateFile-v1/v2, protocol-v8, evidence, and
+extension contract is documented in [hardware-profiles.md](hardware-profiles.md) and
+[state-file-v2.md](state-file-v2.md). The committed synthetic SGB2 SESSION golden is 59,486 bytes
+with SHA-256 `2d2178e6eba26a8debdacf84be144cccd1b42e50bf0dbce5c41612bcb16aa226`.
 
-- #344 adds SGB2 only after model/timing evidence and long-run clock tests.
 - #345 adds MGB and the repeatable profile-extension process.
 - #315 may consume the service-free profile identity seam, but no replay format is implemented here.
 

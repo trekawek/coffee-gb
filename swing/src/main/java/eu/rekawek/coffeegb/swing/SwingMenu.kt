@@ -724,8 +724,20 @@ class SwingMenu(
       val menu = JMenu(title)
       systemMenu.add(menu)
 
+      val auto = JCheckBoxMenuItem("Auto (default)", !properties.hasProperty(gameType))
+      menu.add(auto)
+      auto.addActionListener {
+        properties.clearProperty(gameType)
+        uncheckAllBut(menu, auto)
+        eventBus.post(Controller.UpdatedSystemMappingEvent())
+      }
+
       for (profile in HardwareProfileRegistry.supportedProfiles()) {
-        val item = JCheckBoxMenuItem(profile.displayName(), profile == value)
+        val item =
+            JCheckBoxMenuItem(
+                profile.displayName(),
+                properties.hasProperty(gameType) && profile == value,
+            )
         menu.add(item)
         item.addActionListener {
           properties.setProperty(gameType, profile.id())

@@ -37,6 +37,13 @@ class EmulatorProperties(val profileOverride: HardwareProfile? = null) {
     saveProperties()
   }
 
+  fun hasProperty(key: Key): Boolean = properties.containsKey(key.propertyName)
+
+  fun clearProperty(key: Key) {
+    properties.remove(key.propertyName)
+    saveProperties()
+  }
+
   internal fun saveProperties() {
     try {
       FileWriter(PROPERTIES_FILE).use { writer -> properties.store(writer, "") }

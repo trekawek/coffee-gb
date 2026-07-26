@@ -54,7 +54,7 @@ class MainTest {
         assertFailsWith<IllegalArgumentException> {
           ParsedArgs.parse(arrayOf("--profile=CGB")).hardwareProfileOverride()
         }
-    assertTrue(unknown.message!!.contains("[dmg, cgb, cgb0, sgb]"))
+    assertTrue(unknown.message!!.contains("[dmg, cgb, cgb0, sgb, sgb2]"))
   }
 
   private fun testRom(): ByteArray =

@@ -5,7 +5,9 @@ events. Their contents now have an explicit format boundary.
 
 ## Production format
 
-Every new save is a StateFile v1 `MACHINE` root encoded with deterministic raw DEFLATE. Capture
+Every new save is a portable StateFile `MACHINE` root encoded with deterministic raw DEFLATE.
+Profiles representable by the released coarse identity continue using v1; `sgb2` uses the explicit
+canonical identity in StateFile v2. Capture
 runs when `BasicController` dispatches the save event at its emulation-thread frame boundary.
 `SnapshotManager` owns the exact active `GameboyConfiguration`, so the identity section records the
 normalized primary-ROM SHA-256, optional Datel slot-ROM SHA-256, and complete stable hardware
@@ -16,7 +18,8 @@ The live/runtime state contracts and the exact native-serialization allowlist ar
 
 Rewind states remain in memory as internal, structurally shared `MachineSnapshot` values;
 `ControllerState` and boot/reset handoff use explicit non-serializable component/detached state.
-Netplay protocol v8 independently uses StateFile v1 and cannot invoke this local legacy importer; see
+Netplay protocol v8 independently uses StateFile v1, rejects SGB2, and cannot invoke this local
+legacy importer; see
 [netplay-protocol-v8.md](netplay-protocol-v8.md).
 
 ## Bounded format detection

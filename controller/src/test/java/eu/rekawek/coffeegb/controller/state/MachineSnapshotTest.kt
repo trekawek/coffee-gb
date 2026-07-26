@@ -40,6 +40,34 @@ class MachineSnapshotTest {
   }
 
   @Test
+  fun stableProfileIdentityRejectsSgbAndSgb2CrossRestoreBeforeMutation() {
+    val bytes = StateCodecTestSupport.rom(sgb = true)
+    val sgbConfig =
+        StateCodecTestSupport.configuration(bytes, GameboyType.SGB)
+            .setHardwareProfile(HardwareProfileRegistry.SGB)
+    val sgb2Config =
+        StateCodecTestSupport.configuration(bytes, GameboyType.SGB)
+            .setHardwareProfile(HardwareProfileRegistry.SGB2)
+    StateCodecTestSupport.session(sgb2Config).use { source ->
+      repeat(7_777) { source.gameboy.tick() }
+      val snapshot = MachineSnapshot.capture(source.gameboy)
+      repeat(2_048) { source.gameboy.tick() }
+      val expected = DetachedStateAdapter.capture(source.gameboy)
+      snapshot.restore(source.gameboy)
+      repeat(2_048) { source.gameboy.tick() }
+      assertEquals(expected, DetachedStateAdapter.capture(source.gameboy))
+
+      StateCodecTestSupport.session(sgbConfig).use { target ->
+        val before = DetachedStateAdapter.capture(target.gameboy)
+        val stages = mutableListOf<ApplyStage>()
+        assertFailsWith<StateApplyException> { snapshot.restore(target.gameboy) { stages += it } }
+        assertTrue(stages.isEmpty())
+        assertEquals(before, DetachedStateAdapter.capture(target.gameboy))
+      }
+    }
+  }
+
+  @Test
   fun unchangedPagesReuseIdentityAndOneWramWriteCopiesOnlyItsPage() {
     StateCodecTestSupport.session(cgbMbc5Configuration()).use { session ->
       val gameboy = session.gameboy

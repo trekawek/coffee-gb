@@ -609,7 +609,7 @@ internal object StateSemantics {
                 it.nonNegativeLong("subSecondTicks")
               },
               { fields, clock ->
-                fields.range("subSecondTicks", 0L, clock.ticksPerSecond() - 1L)
+                fields.range("subSecondTicks", 0L, clock.secondPhaseLimit() - 1L)
               },
           ))
       put("eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State",

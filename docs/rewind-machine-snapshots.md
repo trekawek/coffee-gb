@@ -132,8 +132,8 @@ with:
 
 Method: use one synthetic CGB MBC5+32 KiB RAM machine, run 1800 complete forward frames, and retain
 the 300 states selected by `RewindManager`'s first-capture/every-sixth-frame cadence. Each frame
-executes exactly the machine profile's `ClockSpec.controllerTicksPerFrame()` (69,905 for every
-current built-in) before the record point, then
+executes exactly the machine profile's `ClockSpec.controllerTicksPerFrame()` (69,905 for the
+recorded CGB baseline; 70,224 for SGB/SGB2) before the record point, then
 applies the same deterministic scattered WRAM, both-VRAM-bank, OAM and mapper-RAM workload to the
 legacy and MachineSnapshot machines. The harness then restores all 300 entries.
 The legacy baseline counts every distinct reachable primitive array using the measured 64-bit

@@ -133,6 +133,30 @@ class ClockOwnedStateSemanticsTest {
   }
 
   @Test
+  fun rationalSgbRtcPhaseUsesTargetOwnedUnitsAndRejectsItsExactBoundary() {
+    val clock = ClockSpec.SGB
+    val rtc = RealTimeClock(VirtualTimeSource(), clock)
+    val before = record(rtc.captureState())
+    val lastWholeTick = clock.secondPhaseLimit() - clock.secondPhaseUnitsPerTick().toLong()
+    val valid = before.replaceField("subSecondTicks", Int64State(lastWholeTick))
+    val prepared = rtcState(valid)
+
+    StateSemantics.validateForClock(prepared, clock)
+    rtc.restoreState(prepared)
+    rtc.tick()
+    val continued = record(rtc.captureState())
+    assertEquals(1, continued.int("seconds"))
+    assertEquals(0L, continued.long("subSecondTicks"))
+
+    val stable = record(rtc.captureState())
+    val invalid = stable.replaceField("subSecondTicks", Int64State(clock.secondPhaseLimit().toLong()))
+    assertFailsWith<StateApplyException> {
+      StateSemantics.validateForClock(rtcState(invalid), clock)
+    }
+    assertEquals(stable, record(rtc.captureState()))
+  }
+
+  @Test
   fun legacyFullSoundBufferRemainsCompatibleAndWrongTargetShapeIsAtomic() {
     session().use { session ->
       val before = session.captureDetachedState()

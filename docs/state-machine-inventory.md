@@ -3,8 +3,8 @@
 ## Invariant established by Phase 1
 
 `MachineState`, `SessionState`, and `LinkedSessionState` are the service-free capture/apply boundary
-used by the portable StateFile v1 codec. A capture owns every array and collection it exposes. Before
-mutation, apply checks the hardware tag, nested record/mapper tree, invariant array dimensions,
+used by the portable StateFile v1/v2 codec. A capture owns every array and collection it exposes.
+Before mutation, apply checks the hardware tag, nested record/mapper tree, invariant array dimensions,
 serial endpoint and component-state root, cartridge RTC locations, runtime DTO, held input, and linked
 topology against the already-configured target. Null is admitted only for audited owner/field or
 array-element positions, not inferred from the non-null value's type. The adapter then reconstructs
@@ -18,11 +18,14 @@ linked—the other sessions and controller frame from rollback captures.
 The model contains only `Int`, `Long`, `Boolean`, `Double`, `String`, explicit enum/type IDs, and
 deep-owned immutable containers. It cannot represent a thread, callback, event bus, stream, file,
 clock service, AWT/Swing object, or live mutable array. The format that encodes this model is
-specified separately in [state-file-v1.md](state-file-v1.md). Local slot snapshots and netplay
-protocol v8 use that format; local legacy migration remains isolated from network decoding.
+specified separately in [state-file-v1.md](state-file-v1.md) and
+[state-file-v2.md](state-file-v2.md). Local slot snapshots use the minimum identity version able to
+represent the profile; protocol-v8 netplay uses only v1, and local legacy migration remains isolated
+from network decoding.
 The owning immutable hardware profile and exact `ClockSpec` are construction identity rather than
-mutable machine data: MachineSnapshot retains the canonical ID, while StateFile v1 derives that ID
-from its fixed hardware/CGB0 identity fields and verifies the complete profile before apply.
+mutable machine data: MachineSnapshot retains the canonical ID, StateFile v1 derives that ID
+from its frozen hardware/CGB0 identity fields, and StateFile v2 carries an explicit bounded
+canonical ID. Both verify the complete profile before apply.
 The exact remaining compatibility surface and removal policy are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 

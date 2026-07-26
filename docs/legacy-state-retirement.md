@@ -6,14 +6,14 @@ Normal Coffee GB execution has no Java-native state path. Live machine owners im
 internal `StatefulComponent<T>` contract and return immutable, non-serializable
 `ComponentState<T>` records through `captureState`; restore accepts the same typed records. The
 controller converts those records to the deep-owned `MachineState`, `SessionState`, and
-`LinkedSessionState` DTOs used by StateFile v1. Rewind uses the separate paged `MachineSnapshot`
+`LinkedSessionState` DTOs used by StateFile v1/v2. Rewind uses the separate paged `MachineSnapshot`
 contract so unchanged dominant arrays are not cloned.
 
 The ownership split is therefore:
 
 | Operation | State contract |
 |---|---|
-| portable slot save/load and controller handoff | detached `MachineState` / StateFile v1 |
+| portable slot save/load and controller handoff | detached `MachineState` / StateFile v1 or v2 identity |
 | protocol-v8 machine/session/checkpoint exchange | detached StateFile-v1 roots only |
 | boot template and reset reuse | typed deep-owned `ComponentState` inside `BootState` |
 | rewind | immutable structurally shared `MachineSnapshot` |
@@ -84,8 +84,9 @@ validation, and restore. See [snapshot-migration.md](snapshot-migration.md) and
 
 ## Evolution and removal policy
 
-StateFile v1 extension/version rules remain those in [state-file-v1.md](state-file-v1.md); retiring
-native serialization does not alter its bytes, record IDs, limits, checksum, compression, or
+StateFile extension/version rules remain those in [state-file-v1.md](state-file-v1.md) and
+[state-file-v2.md](state-file-v2.md); retiring native serialization does not alter its bytes,
+record IDs, limits, checksum, compression, or
 protocol-v8 framing. The historical importer is a local migration aid, not a portable format and
 not a promise of cross-emulator compatibility. It may be removed only in a future major release
 after a separately announced deprecation window. Coffee GB does not promise indefinite support
