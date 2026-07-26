@@ -613,22 +613,63 @@ class ProtocolV9ProductionTest {
 
   @Test
   fun sequenceAndResponseLedgerNeverUsesOrdinalsOrWraps() {
-    val ledger = V9ResponseLedger(1)
-    ledger.recordPeerRequest(7, V9MessageType.AUTH)
-    assertNull(ledger.accept(1, V9MessageType.AUTH_RESULT, V9Flag.RESPONSE.wireMask, 7))
-    assertEquals(2, ledger.nextIncomingSequence)
-    assertEquals(
-        V9ErrorCode.CORRELATION_ERROR,
-        ledger.accept(2, V9MessageType.AUTH_RESULT, V9Flag.RESPONSE.wireMask, 7),
+    rows("/netplay-v9/response-vectors.tsv").forEach { row ->
+      val exhausted = row.getValue("expected_sequence") == "4294967295"
+      val expected =
+          if (exhausted) ProtocolV9.EXHAUSTED_SEQUENCE
+          else row.long("expected_sequence")
+      val alreadyResponded = row.boolean("already_responded")
+      val ledger =
+          V9ResponseLedger(
+              if (alreadyResponded) Math.subtractExact(expected, 1) else expected,
+          )
+      if (row.getValue("outstanding_sequence") != "-") {
+        val requestSequence = row.long("outstanding_sequence")
+        val requestType =
+            assertNotNull(V9MessageType.fromWireName(row.getValue("outstanding_message")))
+        ledger.recordPeerRequest(requestSequence, requestType)
+        if (alreadyResponded) {
+          assertNull(
+              ledger.accept(
+                  Math.subtractExact(expected, 1),
+                  V9MessageType.AUTH_RESULT,
+                  V9Flag.RESPONSE.wireMask,
+                  requestSequence,
+              ),
+          )
+          assertEquals(0, ledger.outstandingRequests)
+        }
+      }
+      val result =
+          ledger.accept(
+              row.long("incoming_sequence"),
+              assertNotNull(V9MessageType.fromWireName(row.getValue("message"))),
+              row.hexInt("flags"),
+              row.long("correlation"),
+          )
+      assertEquals(
+          row.getValue("expected"),
+          result?.wireName ?: "SUCCESS",
+          row.getValue("id"),
+      )
+      val next = row.getValue("next_sequence")
+      if (next == "EXHAUSTED") assertNull(ledger.nextIncomingSequence, row.getValue("id"))
+      else assertEquals(next.toLong(), ledger.nextIncomingSequence, row.getValue("id"))
+    }
+    val bounded = V9ResponseLedger(1)
+    bounded.recordPeerRequest(7, V9MessageType.AUTH)
+    assertNull(
+        bounded.accept(
+            1,
+            V9MessageType.AUTH_RESULT,
+            V9Flag.RESPONSE.wireMask,
+            7,
+        ),
     )
-
-    val wrong = V9ResponseLedger(1)
-    wrong.recordPeerRequest(9, V9MessageType.START)
-    assertEquals(
-        V9ErrorCode.CORRELATION_ERROR,
-        wrong.accept(1, V9MessageType.PONG, V9Flag.RESPONSE.wireMask, 9),
-    )
-    assertEquals(1, wrong.nextIncomingSequence)
+    assertEquals(0, bounded.outstandingRequests)
+    assertFailsWith<IllegalArgumentException> {
+      bounded.recordPeerRequest(7, V9MessageType.AUTH)
+    }
 
     val exhausted = V9ResponseLedger(ProtocolV9.LAST_SEQUENCE)
     assertNull(exhausted.accept(ProtocolV9.LAST_SEQUENCE, V9MessageType.INPUT, 0, 0))
@@ -686,6 +727,31 @@ class ProtocolV9ProductionTest {
     assertFailsWith<UnsupportedOperationException> {
       mutable.add(V9Capability.PING_V1)
     }
+
+    val terminalClock = FakeClock()
+    val terminal = V9Lifecycle(V9Role.CLIENT, terminalClock)
+    val original =
+        assertNotNull(
+            terminal.beginTerminalCleanup(
+                V9ErrorCode.CAPABILITY_MISMATCH,
+                V9Diagnostic.CAPABILITY_MISMATCH,
+            ),
+        )
+    assertEquals(V9LifecycleState.WAIT_SERVER_HELLO, original.stage)
+    assertEquals(2_000, terminal.snapshot().deadlineMillis)
+    terminalClock.now = 1_999
+    assertEquals(original, terminal.checkDeadline())
+    assertEquals(V9LifecycleState.TERMINAL_CLEANUP, terminal.snapshot().state)
+    terminalClock.now = 2_000
+    assertEquals(original, terminal.checkDeadline())
+    assertEquals(V9LifecycleState.CLOSED, terminal.snapshot().state)
+    assertEquals(V9ErrorCode.CAPABILITY_MISMATCH, terminal.snapshot().failure?.reason)
+    assertEquals(original, terminal.cancel())
+
+    val normal = V9Lifecycle(V9Role.CLIENT)
+    normal.closeNormally()
+    assertNull(normal.cancel())
+    assertEquals(V9LifecycleState.CLOSED, normal.snapshot().state)
   }
 
   @Test

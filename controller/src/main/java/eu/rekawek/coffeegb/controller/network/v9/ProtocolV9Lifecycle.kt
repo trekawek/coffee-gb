@@ -153,23 +153,54 @@ class V9Lifecycle(
   fun checkDeadline(): V9Failure? {
     val currentDeadline = deadline ?: return failure
     if (clock.nowMillis() >= currentDeadline && state != V9LifecycleState.CLOSED) {
-      val error = state.timeout()?.expiryError ?: V9ErrorCode.TIMEOUT
-      fail(error, V9Diagnostic.TIMEOUT)
+      val error = state.timeout()?.expiryError
+      if (error == null) {
+        closeNormally()
+      } else {
+        fail(error, V9Diagnostic.TIMEOUT)
+      }
     }
     return failure
   }
 
   @Synchronized
-  fun cancel(): V9Failure {
+  fun cancel(): V9Failure? {
     if (state != V9LifecycleState.CLOSED) {
       fail(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
     }
-    return requireNotNull(failure)
+    return failure
+  }
+
+  /**
+   * Records the original local rejection and begins the frozen best-effort terminal drain.
+   *
+   * The failure stage is the state that rejected the peer, not `TERMINAL_CLEANUP`. Subsequent
+   * cancellation, delivery failure, peer EOF, or cleanup expiry cannot replace that outcome.
+   */
+  @Synchronized
+  fun beginTerminalCleanup(reason: V9ErrorCode, diagnostic: V9Diagnostic): V9Failure? {
+    if (state == V9LifecycleState.CLOSED || state == V9LifecycleState.TERMINAL_CLEANUP) {
+      return failure
+    }
+    val result = V9Failure(reason, state, diagnostic)
+    failure = result
+    transition(V9LifecycleState.TERMINAL_CLEANUP)
+    return result
+  }
+
+  /** Completes terminal cleanup after peer EOF or a failed best-effort terminal write. */
+  @Synchronized
+  fun completeTerminalCleanup() {
+    if (state == V9LifecycleState.TERMINAL_CLEANUP) closeNormally()
   }
 
   @Synchronized
-  fun fail(reason: V9ErrorCode, diagnostic: V9Diagnostic): V9Failure {
-    if (state == V9LifecycleState.CLOSED && failure != null) return requireNotNull(failure)
+  fun fail(reason: V9ErrorCode, diagnostic: V9Diagnostic): V9Failure? {
+    if (state == V9LifecycleState.CLOSED) return failure
+    if (state == V9LifecycleState.TERMINAL_CLEANUP && failure != null) {
+      closeNormally()
+      return failure
+    }
     val result = V9Failure(reason, state, diagnostic)
     failure = result
     state = V9LifecycleState.CLOSED
@@ -244,17 +275,22 @@ class V9Lifecycle(
 class V9ResponseLedger(initialIncomingSequence: Long = 0) {
   private var expected = validateSequence(initialIncomingSequence, allowExhausted = true)
   private val outstanding = mutableMapOf<Long, V9MessageType>()
-  private val completed = mutableSetOf<Long>()
+  private var lastRecordedRequestSequence = 0L
 
   val nextIncomingSequence: Long?
     @Synchronized get() = expected.takeUnless { it == ProtocolV9.EXHAUSTED_SEQUENCE }
+
+  val outstandingRequests: Int
+    @Synchronized get() = outstanding.size
 
   @Synchronized
   fun recordPeerRequest(sequence: Long, type: V9MessageType) {
     require(sequence in 1..ProtocolV9.LAST_SEQUENCE)
     require(type in setOf(V9MessageType.AUTH, V9MessageType.START, V9MessageType.PING))
-    require(sequence !in outstanding && sequence !in completed)
+    require(sequence > lastRecordedRequestSequence)
+    require(outstanding.size < V9Limit.QUEUED_FRAMES.value)
     outstanding[sequence] = type
+    lastRecordedRequestSequence = sequence
   }
 
   @Synchronized
@@ -271,7 +307,7 @@ class V9ResponseLedger(initialIncomingSequence: Long = 0) {
     if (!response) {
       if (correlation != 0L) return V9ErrorCode.CORRELATION_ERROR
     } else {
-      if (correlation == 0L || correlation in completed) return V9ErrorCode.CORRELATION_ERROR
+      if (correlation == 0L) return V9ErrorCode.CORRELATION_ERROR
       val request = outstanding[correlation] ?: return V9ErrorCode.CORRELATION_ERROR
       val allowed = when (type) {
         V9MessageType.AUTH_RESULT -> request == V9MessageType.AUTH
@@ -282,7 +318,6 @@ class V9ResponseLedger(initialIncomingSequence: Long = 0) {
       }
       if (!allowed) return V9ErrorCode.CORRELATION_ERROR
       outstanding.remove(correlation)
-      completed += correlation
     }
     expected =
         if (expected == ProtocolV9.LAST_SEQUENCE) ProtocolV9.EXHAUSTED_SEQUENCE
