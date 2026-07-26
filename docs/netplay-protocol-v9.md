@@ -164,8 +164,9 @@ MANIFEST is `342..1,396` bytes. Its fixed 52-byte header contains schema `1`, mo
 sixteen differences, zero reserved bytes, protocol major `9`, StateFile version `2`, application
 compatibility level `1`, build/core compatibility level `1`, roster mask, nonzero roster
 generation, and a SHA-256 roster commitment. The roster always contains host player 0 and the
-authenticated guest; normal is exactly mask `03`. A four-player host coordinates three per-guest
-TCP sessions for players 1, 2, and 3. Every per-guest manifest covers the same committed roster,
+authenticated guest. Normal is exactly mask `03` with entries 0 and 1; four-player is exactly
+mask `0f` with entries 0 through 3. A four-player host coordinates three per-guest TCP sessions
+for players 1, 2, and 3. Every per-guest manifest covers the same committed roster,
 and START is withheld until slot occupancy, every required item decision/transfer, and the one
 atomic group checkpoint are ready on all participating sessions.
 
@@ -175,7 +176,9 @@ mask. It commits topology independently of content differences, so all three fou
 connections can compare one target roster while still reporting their own availability. Every
 manifest on a connection MUST equal the coordinator's selected mode, mask, nonzero generation,
 and commitment. A later manifest cannot invent a partial roster, change generation, or replace
-the commitment.
+the commitment. Header `sender_player` is exactly the endpoint that sent those bytes on that
+connection: host-to-guest is sender 0 and guest-to-host is the authenticated guest. The sender
+field cannot be used to claim another endpoint's OFFER or REQUEST authority.
 
 Entries are strictly player-sorted and exactly `144 + profileLength + titleLength` bytes. Each
 contains player, content flags (primary-ROM present, slot-ROM present, battery available),
@@ -211,7 +214,9 @@ Owners, sources, and targets belong to the committed roster. On one guest TCP se
 target are exactly `{host 0, authenticated guest}`; cross-guest proposals are rejected rather
 than routed through another socket. Class and asset kind must agree. One manifest admits at most
 two ROM proposals (primary and slot), one battery proposal, and one checkpoint proposal, within
-the overall eight-proposal structural ceiling.
+the overall eight-proposal structural ceiling. The eight-item ceiling is also the lifecycle
+capacity for abstract approved items, but a semantic MANIFEST can contain no more than those four
+class-limited proposals.
 
 Application/build levels plus protocol/StateFile capability context are compared before content.
 The two stable numeric compatibility levels deliberately replace a free-form build/version string:
@@ -247,10 +252,14 @@ Checkpoint is the one explicit exception to one-use item transfer. A two-sided c
 creates a **directional session-scoped checkpoint grant** for the exact manifest pair, source,
 target, group owner, committed roster mask, generation, and commitment. It admits at most 32
 successfully validated checkpoints in that direction, one in flight at a time, with strictly
-increasing authoritative frames. It is revoked by terminal cleanup, manifest replacement, roster
-or generation change, or exhaustion. Each checkpoint still validates its own length, SHA-256,
-StateFile-v2 identities, root, roster, and frame before consuming one grant use. A duplicate frame,
-replay, wrong direction, wrong group, or use 33 is `CONSENT_REJECTED`. This bounded grant is
+increasing unsigned-u64 authoritative frames. `7fff_ffff_ffff_ffff` followed by
+`8000_0000_0000_0000` is increasing; replay and wrap after `ffff_ffff_ffff_ffff` are forbidden.
+It is revoked by terminal cleanup, manifest replacement, roster or generation change, or
+exhaustion. Authorization preflight is non-consuming and precedes StateFile inspection: an
+unauthorized malformed file is `CONSENT_REJECTED`; an authorized file that fails
+checksum/root/profile/identity validation reports that StateFile error without consuming a use.
+Only a completely validated file commits the grant use and new frame. A duplicate frame, replay,
+wrong direction, wrong group, or use 33 is `CONSENT_REJECTED`. This bounded grant is
 established before ACTIVE; ACTIVE has no proposal/CONSENT transition.
 
 A UI cancel is a denial. START remains illegal until every required actor decision, every approved
@@ -269,8 +278,11 @@ stamp u64; the stamp never drives emulation.
 CHECKPOINT is checkpoint kind u8 (`0` initial MACHINE, `1` normal SESSION, `2` four-player
 LINKED_SESSION), player mask u8, owner player u8, zero u8, frame u64, StateFile byte length u32,
 nonzero approved checkpoint-grant proposal ID u32, then exactly that many direct StateFile bytes.
-Its frame must be strictly greater than the last accepted frame in that directional grant. It is channel
-`ffffffff`, except initial MACHINE may use channel `owner+1`. File length must equal the remaining
+Normal mode accepts only MACHINE or SESSION with one player bit and channel `owner+1`; it rejects
+LINKED_SESSION. Four-player mode accepts only LINKED_SESSION with mask `0f` and group channel
+`ffffffff`; it rejects MACHINE, SESSION, partial masks, and player channels. Its unsigned-u64
+frame must be strictly greater than the last accepted frame in that directional grant. File length
+must equal the remaining
 decoded payload and be at
 least the 68-byte StateFile envelope. The first bytes are `CGBS`, StateFile format is exactly v2,
 and envelope/root/profile/ROM/slot/accessory integrity is validated before graph reconstruction.

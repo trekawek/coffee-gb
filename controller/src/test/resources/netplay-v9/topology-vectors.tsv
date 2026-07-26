@@ -4,6 +4,7 @@ normal_host_invitation	normal	0x01	0x03	1	7	0	0	0x03	1	7	SESSION	0x01	8	8	AUTH_F
 normal_wrong_guest	normal	0x01	0x03	1	7	2	2	0x03	1	7	SESSION	0x04	8	8	AUTH_FAILED	0x01	0x00	false	coffee-gb-synthetic-topology
 four_first_guest_candidate_only	four	0x01	0x0f	7	7	1	1	0x0f	7	7	LINKED_SESSION	0x0f	8	8	SUCCESS	0x01	0x02	false	coffee-gb-synthetic-topology
 four_third_guest_candidate_only	four	0x01	0x0f	7	7	3	3	0x0f	7	7	LINKED_SESSION	0x0f	8	8	SUCCESS	0x01	0x08	false	coffee-gb-synthetic-topology
+four_partial_target_never_opens	four	0x03	0x07	7	7	2	2	0x07	7	7	LINKED_SESSION	0x07	8	8	TOPOLOGY_MISMATCH	0x03	0x00	false	coffee-gb-synthetic-topology
 slot_collision	four	0x03	0x0f	7	7	1	1	0x0f	7	7	LINKED_SESSION	0x0f	8	8	SERVER_FULL	0x03	0x00	false	coffee-gb-synthetic-topology
 different_roster	four	0x01	0x0f	7	7	2	2	0x07	7	7	LINKED_SESSION	0x07	8	8	TOPOLOGY_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology
 different_generation	four	0x01	0x0f	7	7	2	2	0x0f	8	7	LINKED_SESSION	0x0f	8	8	TOPOLOGY_MISMATCH	0x01	0x00	false	coffee-gb-synthetic-topology

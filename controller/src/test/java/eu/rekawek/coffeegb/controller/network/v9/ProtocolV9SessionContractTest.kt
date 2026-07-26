@@ -1,5 +1,18 @@
 package eu.rekawek.coffeegb.controller.network.v9
 
+import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.link.LinkMode
+import eu.rekawek.coffeegb.controller.link.LinkedController
+import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
+import eu.rekawek.coffeegb.controller.state.StateCompression
+import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -137,6 +150,14 @@ class ProtocolV9SessionContractTest {
 
     val manifest = roster.encode()
     assertEquals(null, PayloadSchemas.validate("MANIFEST", 0, 0, manifest, context))
+    val clientManifestPayload = validNormalManifest(sender = 1).encode()
+    assertEquals(null, PayloadSchemas.validate(
+        "MANIFEST", 0, 0, clientManifestPayload,
+        context.copy(wireSource = 1, wireTarget = 0)))
+    val senderSpoof = validNormalManifest(sender = 0, proposals = listOf(romProposal())).encode()
+    assertEquals("MANIFEST_MISMATCH", PayloadSchemas.validate(
+        "MANIFEST", 0, 0, senderSpoof,
+        context.copy(wireSource = 1, wireTarget = 0)))
     assertEquals("MANIFEST_MISMATCH",
         PayloadSchemas.validate(
             "MANIFEST", 0, 0, manifest.copyOf().also { it[20] = (it[20] + 1).toByte() },
@@ -164,6 +185,26 @@ class ProtocolV9SessionContractTest {
         )).encode()
     assertEquals("MANIFEST_MISMATCH",
         PayloadSchemas.validate("MANIFEST", 0, 0, maskedDifference, context))
+    val partialFour = Manifest(
+        mode = 2,
+        sender = 1,
+        rosterMask = 0x07,
+        rosterGeneration = 7,
+        entries = (0..2).map { manifestEntry(it, "PLAYER$it", it + 1) },
+        diffs = (0..2).map { ManifestDiff(MATCH_DIFF, INFORMATIONAL, it) },
+        proposals = emptyList(),
+    )
+    assertEquals("MANIFEST_MISMATCH", PayloadSchemas.validate(
+        "MANIFEST", 0, 0, partialFour.encode(),
+        PayloadContext(
+            mode = "four",
+            authenticatedPlayer = 1,
+            rosterMask = 0x07,
+            rosterGeneration = 7,
+            rosterCommitment = partialFour.rosterDigest(),
+            wireSource = 1,
+            wireTarget = 0,
+        )))
 
     val serverManifest = sha256(manifest)
     val clientManifest = sha256(validNormalManifest(sender = 1).encode())
@@ -230,29 +271,112 @@ class ProtocolV9SessionContractTest {
     val checkpointProposal = Proposal(
         77, OFFER, CHECKPOINT_CLASS, CHECKPOINT_ASSET, GROUP_PLAYER, 0, 1, 0,
         ByteArray(32))
-    val checkpointConsent = ConsentLedger(
-        checkpointProposal, sha256(manifest), sha256(validNormalManifest(sender = 1).encode()))
-    checkpointConsent.decide(consentFor(
-        checkpointProposal, 0, sha256(manifest), sha256(validNormalManifest(sender = 1).encode())))
-    checkpointConsent.decide(consentFor(
-        checkpointProposal, 1, sha256(manifest), sha256(validNormalManifest(sender = 1).encode())))
-    val checkpointGrant = CheckpointGrant(
-        checkpointConsent, 0x03, roster.rosterGeneration, roster.rosterDigest())
+    fun approvedCheckpointGrant(
+        mask: Int = 0x03,
+        generation: Long = roster.rosterGeneration,
+        commitment: ByteArray = roster.rosterDigest(),
+        maximumTransactions: Int = 32,
+    ): CheckpointGrant {
+      val ledger = ConsentLedger(checkpointProposal, serverManifest, clientManifest)
+      ledger.decide(consentFor(checkpointProposal, 0, serverManifest, clientManifest))
+      ledger.decide(consentFor(checkpointProposal, 1, serverManifest, clientManifest))
+      return CheckpointGrant(ledger, mask, generation, commitment, maximumTransactions)
+    }
+    val checkpointGrant = approvedCheckpointGrant()
     val checkpointContext = context.copy(
+        serverManifestHash = serverManifest,
+        clientManifestHash = clientManifest,
         expectedProfiles = mapOf(0 to "sgb2"),
         admissions = StatefulAdmissions(null, checkpointGrant))
     val checkpoint = checkpointPayload(1, 0x01, 0, 9, checkpointProposal.id, stateBytes)
-    assertEquals(null, PayloadSchemas.validate(
-        "CHECKPOINT", 0, playerChannel(0).toLong(), checkpoint, checkpointContext))
+    val malformedState = ByteArray(68) { 0x55 }
+    assertEquals("CONSENT_REJECTED", PayloadSchemas.validate(
+        "CHECKPOINT", 0, playerChannel(0).toLong(),
+        checkpointPayload(1, 0x01, 0, 9, checkpointProposal.id, malformedState),
+        context.copy(expectedProfiles = mapOf(0 to "sgb2"))))
+    val deniedLedger = ConsentLedger(checkpointProposal, serverManifest, clientManifest)
+    val deniedGrant = CheckpointGrant(
+        deniedLedger, 0x03, roster.rosterGeneration, roster.rosterDigest())
+    assertEquals("CONSENT_REJECTED", PayloadSchemas.validate(
+        "CHECKPOINT", 0, playerChannel(0).toLong(),
+        checkpointPayload(1, 0x01, 0, 9, checkpointProposal.id, malformedState),
+        context.copy(
+            serverManifestHash = serverManifest,
+            clientManifestHash = clientManifest,
+            admissions = StatefulAdmissions(null, deniedGrant))))
+    listOf(
+        checkpointContext.copy(wireSource = 1, wireTarget = 0),
+        checkpointContext.copy(serverManifestHash = ByteArray(32) { 9 }),
+        checkpointContext.copy(
+            admissions = StatefulAdmissions(null, approvedCheckpointGrant(mask = 0x0f))),
+        checkpointContext.copy(
+            admissions = StatefulAdmissions(null, approvedCheckpointGrant(generation = 2))),
+        checkpointContext.copy(
+            admissions = StatefulAdmissions(
+                null, approvedCheckpointGrant(maximumTransactions = 0))),
+    ).forEachIndexed { index, rejectedContext ->
+      assertEquals("CONSENT_REJECTED", PayloadSchemas.validate(
+          "CHECKPOINT", 0, playerChannel(0).toLong(),
+          checkpointPayload(1, 0x01, 0, 9, checkpointProposal.id, malformedState),
+          rejectedContext), "checkpoint preflight $index")
+    }
+    assertEquals("STATEFILE_VERSION", PayloadSchemas.validate(
+        "CHECKPOINT", 0, playerChannel(0).toLong(),
+        checkpointPayload(1, 0x01, 0, 9, checkpointProposal.id, malformedState),
+        checkpointContext))
+    assertEquals(0, checkpointGrant.used)
     assertEquals("PROFILE_MISMATCH", PayloadSchemas.validate(
         "CHECKPOINT", 0, playerChannel(0).toLong(),
-        checkpointPayload(1, 0x01, 0, 10, checkpointProposal.id, stateBytes),
+        checkpoint,
         checkpointContext.copy(expectedProfiles = mapOf(0 to "dmg"))))
+    assertEquals(0, checkpointGrant.used)
+    assertEquals(null, PayloadSchemas.validate(
+        "CHECKPOINT", 0, playerChannel(0).toLong(), checkpoint, checkpointContext))
+    assertEquals(1, checkpointGrant.used)
     assertEquals("CONSENT_REJECTED", PayloadSchemas.validate(
         "CHECKPOINT", 0, playerChannel(0).toLong(), checkpoint, checkpointContext))
+    assertEquals("CONSENT_REJECTED", PayloadSchemas.validate(
+        "CHECKPOINT", 0, playerChannel(0).toLong(),
+        checkpointPayload(1, 0x01, 0, 9, checkpointProposal.id, malformedState),
+        checkpointContext))
+    assertEquals(1, checkpointGrant.used)
     assertEquals("MALFORMED_HEADER", PayloadSchemas.validate(
         "CHECKPOINT", 0, playerChannel(0).toLong(),
         checkpoint.copyOf().also { for (i in 16..19) it[i] = 0 }, checkpointContext))
+    assertEquals("TOPOLOGY_MISMATCH", PayloadSchemas.validate(
+        "CHECKPOINT", 0, GROUP_CHANNEL,
+        checkpointPayload(2, 0x03, 0, 10, checkpointProposal.id, stateBytes),
+        checkpointContext))
+
+    val linkedStateBytes = linkedCheckpointState()
+    val fourRoster = validFourRoster()
+    val fourGrant = approvedCheckpointGrant(
+        0x0f, fourRoster.rosterGeneration, fourRoster.rosterDigest())
+    val fourContext = PayloadContext(
+        mode = "four",
+        authenticatedPlayer = 1,
+        rosterMask = 0x0f,
+        rosterGeneration = fourRoster.rosterGeneration,
+        rosterCommitment = fourRoster.rosterDigest(),
+        serverManifestHash = serverManifest,
+        clientManifestHash = clientManifest,
+        expectedProfiles = (0..3).associateWith { "dmg" },
+        admissions = StatefulAdmissions(null, fourGrant),
+    )
+    assertEquals("TOPOLOGY_MISMATCH", PayloadSchemas.validate(
+        "CHECKPOINT", 0, playerChannel(0).toLong(),
+        checkpointPayload(1, 0x01, 0, 10, checkpointProposal.id, stateBytes), fourContext))
+    assertEquals("TOPOLOGY_MISMATCH", PayloadSchemas.validate(
+        "CHECKPOINT", 0, GROUP_CHANNEL,
+        checkpointPayload(2, 0x07, 0, 10, checkpointProposal.id, linkedStateBytes), fourContext))
+    assertEquals("TOPOLOGY_MISMATCH", PayloadSchemas.validate(
+        "CHECKPOINT", 0, playerChannel(0).toLong(),
+        checkpointPayload(2, 0x0f, 0, 10, checkpointProposal.id, linkedStateBytes), fourContext))
+    assertEquals(0, fourGrant.used)
+    assertEquals(null, PayloadSchemas.validate(
+        "CHECKPOINT", 0, GROUP_CHANNEL,
+        checkpointPayload(2, 0x0f, 0, 10, checkpointProposal.id, linkedStateBytes), fourContext))
+    assertEquals(1, fourGrant.used)
 
     val bulkBytes = ByteArray(32) { it.toByte() }
     val bulkProposal = romProposal().copy(
@@ -372,7 +496,9 @@ class ProtocolV9SessionContractTest {
     val checkpointGrant = CheckpointGrant(
         checkpointLedger, 0x03, 7, rosterCommitment, maximumTransactions = 3)
     val checkpointContext = PayloadContext(
-        "normal", 1, 0x03, 7, rosterCommitment)
+        "normal", 1, 0x03, 7, rosterCommitment,
+        serverManifestHash = serverManifest,
+        clientManifestHash = clientManifest)
     val checkpointDeclaration = CheckpointDeclaration(
         43, 1, 0x01, 0, 10, 1024, ByteArray(32) { 4 })
     assertEquals("CONSENT_REJECTED",
@@ -403,6 +529,27 @@ class ProtocolV9SessionContractTest {
     assertEquals("CONSENT_REJECTED", checkpointGrant.admit(
         checkpointDeclaration.copy(frame = 14),
         checkpointContext.copy(rosterGeneration = 8)))
+
+    val unsignedLedger = ConsentLedger(
+        checkpointProposal, serverManifest, clientManifest).also {
+      assertEquals("CONSENT_REQUIRED", it.decide(
+          consentFor(checkpointProposal, 0, serverManifest, clientManifest)))
+      assertEquals("SUCCESS", it.decide(
+          consentFor(checkpointProposal, 1, serverManifest, clientManifest)))
+    }
+    val unsignedGrant = CheckpointGrant(
+        unsignedLedger, 0x03, 7, rosterCommitment, maximumTransactions = 3)
+    assertEquals("SUCCESS", unsignedGrant.admit(
+        checkpointDeclaration.copy(frame = Long.MAX_VALUE), checkpointContext))
+    assertEquals("SUCCESS", unsignedGrant.admit(
+        checkpointDeclaration.copy(frame = Long.MIN_VALUE), checkpointContext))
+    assertEquals("CONSENT_REJECTED", unsignedGrant.preflight(
+        checkpointDeclaration.copy(frame = Long.MAX_VALUE), checkpointContext))
+    assertEquals("SUCCESS", unsignedGrant.admit(
+        checkpointDeclaration.copy(frame = -1L), checkpointContext))
+    assertEquals("CONSENT_REJECTED", unsignedGrant.admit(
+        checkpointDeclaration.copy(frame = -1L), checkpointContext))
+    assertEquals(3, unsignedGrant.used)
   }
 
   @Test
@@ -415,6 +562,7 @@ class ProtocolV9SessionContractTest {
     val serverManifest = ByteArray(32) { 1 }
     val clientManifest = ByteArray(32) { 2 }
     val empty = ConsentBook(emptyList(), serverManifest, clientManifest, 1)
+    assertEquals("ALL_ITEMS_APPROVED", empty.status)
     assertTrue(empty.canStart(candidatesPrepared = true))
 
     val book = ConsentBook(listOf(rom, battery), serverManifest, clientManifest, 1)
@@ -444,6 +592,140 @@ class ProtocolV9SessionContractTest {
     assertEquals("CONSENT_REJECTED", rejected.decide(
         consentFor(rom, 1, serverManifest, clientManifest, REJECT)))
     assertFalse(rejected.canStart(candidatesPrepared = true))
+
+    val maximum = (0 until 8).map { index -> rom.copy(id = 100L + index) }
+    val maximumBook = ConsentBook(maximum, serverManifest, clientManifest, 1)
+    maximum.forEachIndexed { index, item ->
+      val firstActor = if (index % 2 == 0) 0 else 1
+      val secondActor = 1 - firstActor
+      maximumBook.decide(consentFor(
+          item, firstActor, serverManifest, clientManifest))
+      maximumBook.decide(consentFor(
+          item, secondActor, serverManifest, clientManifest))
+    }
+    assertEquals("ALL_ITEMS_APPROVED", maximumBook.status)
+    assertFalse(maximumBook.canStart(candidatesPrepared = true))
+    maximum.reversed().forEach { item ->
+      assertEquals("SUCCESS", maximumBook.markPrepared(item.id))
+    }
+    assertEquals(8, maximumBook.preparedCount)
+    assertTrue(maximumBook.canStart(candidatesPrepared = true))
+    assertEquals("CONSENT_REJECTED",
+        ConsentBook(maximum + rom.copy(id = 108), serverManifest, clientManifest, 1).status)
+
+    val duplicateDecision = ConsentBook(listOf(rom), serverManifest, clientManifest, 1)
+    assertEquals("CONSENT_REQUIRED", duplicateDecision.decide(
+        consentFor(rom, 0, serverManifest, clientManifest)))
+    assertEquals("CONSENT_REJECTED", duplicateDecision.decide(
+        consentFor(rom, 0, serverManifest, clientManifest)))
+    assertEquals(0, duplicateDecision.preparedCount)
+    assertFalse(duplicateDecision.canStart(candidatesPrepared = true))
+  }
+
+  @Test
+  fun manifestSenderIsBoundToTheActualWireDirection() {
+    rows("/netplay-v9/manifest-direction-vectors.tsv").forEach { row ->
+      val proposal = romProposal().copy(
+          action = row.int("action"),
+          source = row.int("proposal_source"),
+          target = row.int("proposal_target"),
+      )
+      val manifest = validNormalManifest(
+          sender = row.int("sender"),
+          proposals = listOf(proposal),
+      )
+      val context = PayloadContext(
+          mode = row.getValue("mode"),
+          authenticatedPlayer = row.int("guest"),
+          rosterMask = 0x03,
+          rosterGeneration = manifest.rosterGeneration,
+          rosterCommitment = manifest.rosterDigest(),
+          wireSource = row.int("wire_source"),
+          wireTarget = row.int("wire_target"),
+      )
+      val outcome = if (Manifest.decode(manifest.encode(), context) == null) {
+        "SUCCESS"
+      } else {
+        "MANIFEST_MISMATCH"
+      }
+      assertEquals(row.getValue("expected"), outcome, row.getValue("id"))
+      assertEquals("coffee-gb-synthetic-manifest-direction", row.getValue("provenance"))
+    }
+  }
+
+  @Test
+  fun manifestProposalClassCeilingsAndContentBindingsAreSemantic() {
+    val entries = listOf(
+        manifestEntry(0, "HOST", 1).copy(
+            slotPresent = true,
+            slotLength = 16_384,
+            slotDigest = ByteArray(32) { 11 }),
+        manifestEntry(1, "GUEST", 2).copy(
+            slotPresent = true,
+            slotLength = 16_384,
+            slotDigest = ByteArray(32) { 12 }),
+    )
+    val context = PayloadContext(
+        mode = "normal",
+        authenticatedPlayer = 1,
+        rosterMask = 0x03,
+        rosterGeneration = 1,
+        wireSource = 0,
+        wireTarget = 1,
+    )
+    val primaryHost = Proposal(
+        51, OFFER, ROM_CLASS, PRIMARY_ROM_ASSET, 0, 0, 1, 32_768,
+        entries[0].primaryDigest)
+    val slotHost = Proposal(
+        52, OFFER, ROM_CLASS, SLOT_ROM_ASSET, 0, 0, 1, 16_384,
+        entries[0].slotDigest)
+    val primaryGuest = Proposal(
+        53, OFFER, ROM_CLASS, PRIMARY_ROM_ASSET, 1, 0, 1, 32_768,
+        entries[1].primaryDigest)
+    val threeRom = Manifest(
+        1, 0, 0x03, 1, entries,
+        listOf(
+            ManifestDiff(PRIMARY_ROM_DIFFERENT_DIFF, WARNING, 0, primaryHost.id),
+            ManifestDiff(SLOT_ROM_DIFFERENT_DIFF, WARNING, 0, slotHost.id),
+            ManifestDiff(PRIMARY_ROM_DIFFERENT_DIFF, WARNING, 1, primaryGuest.id),
+        ),
+        listOf(primaryHost, slotHost, primaryGuest),
+    )
+    assertEquals("proposal-class-limit", Manifest.decode(threeRom.encode(), context))
+
+    val batteryHost = Proposal(
+        61, OFFER, BATTERY_CLASS, BATTERY_ASSET, 0, 0, 1, 8_192,
+        ByteArray(32) { 21 })
+    val batteryGuest = Proposal(
+        62, OFFER, BATTERY_CLASS, BATTERY_ASSET, 1, 0, 1, 8_192,
+        ByteArray(32) { 22 })
+    val twoBattery = Manifest(
+        1, 0, 0x03, 1, entries,
+        listOf(
+            ManifestDiff(BATTERY_TRANSFER_DIFF, WARNING, 0, batteryHost.id),
+            ManifestDiff(BATTERY_TRANSFER_DIFF, WARNING, 1, batteryGuest.id),
+        ),
+        listOf(batteryHost, batteryGuest),
+    )
+    assertEquals("proposal-class-limit", Manifest.decode(twoBattery.encode(), context))
+
+    val checkpointOne = Proposal(
+        71, OFFER, CHECKPOINT_CLASS, CHECKPOINT_ASSET, GROUP_PLAYER, 0, 1, 0,
+        ByteArray(32))
+    val checkpointTwo = checkpointOne.copy(id = 72)
+    val twoCheckpoint = Manifest(
+        1, 0, 0x03, 1, entries,
+        listOf(ManifestDiff(CHECKPOINT_SYNC_DIFF, WARNING, 1, checkpointOne.id)),
+        listOf(checkpointOne, checkpointTwo),
+    )
+    assertEquals("proposal-class-limit", Manifest.decode(twoCheckpoint.encode(), context))
+
+    val wrongBinding = Manifest(
+        1, 0, 0x03, 1, entries,
+        listOf(ManifestDiff(PRIMARY_ROM_DIFFERENT_DIFF, WARNING, 0, primaryHost.id)),
+        listOf(primaryHost.copy(size = primaryHost.size - 1)),
+    )
+    assertEquals("proposal-content", Manifest.decode(wrongBinding.encode(), context))
   }
 
   @Test
@@ -731,6 +1013,8 @@ class ProtocolV9SessionContractTest {
       val rosterMask: Int,
       val rosterGeneration: Long = 1,
       val rosterCommitment: ByteArray? = null,
+      val serverManifestHash: ByteArray? = null,
+      val clientManifestHash: ByteArray? = null,
       val expectedProfiles: Map<Int, String> = emptyMap(),
       val sessionId: Long? = null,
       val outstandingPingNonce: Long? = null,
@@ -794,10 +1078,12 @@ class ProtocolV9SessionContractTest {
       val owner = payload[2].toInt() and 0xff
       if (kind !in 0..2 || payload[3].toInt() != 0 || mask !in 1..15 ||
           owner !in 0..3 || mask and (1 shl owner) == 0 ||
-          context.rosterMask and mask != mask ||
-          kind in 0..1 && Integer.bitCount(mask) != 1 ||
-          kind == 2 && (mask != context.rosterMask || channel != GROUP_CHANNEL) ||
-          kind in 0..1 && channel != playerChannel(owner).toLong()) {
+          context.mode == "normal" && (context.rosterMask != 0x03 || kind !in 0..1 ||
+              Integer.bitCount(mask) != 1 || context.rosterMask and mask != mask ||
+              channel != playerChannel(owner).toLong()) ||
+          context.mode == "four" && (context.rosterMask != 0x0f || kind != 2 ||
+              mask != 0x0f || channel != GROUP_CHANNEL) ||
+          context.mode !in setOf("normal", "four")) {
         return "TOPOLOGY_MISMATCH"
       }
       val frame = u64(payload, 4)
@@ -806,6 +1092,13 @@ class ProtocolV9SessionContractTest {
       if (proposalId == 0L || stateLength != payload.size.toLong() - 20L) {
         return "MALFORMED_HEADER"
       }
+      val declaration = CheckpointDeclaration(
+          proposalId, kind, mask, owner, frame, stateLength,
+          sha256(payload, 20, payload.size - 20))
+      val grant = context.admissions?.checkpoint ?: return "CONSENT_REJECTED"
+      val preflight = grant.preflight(declaration, context)
+      if (preflight != "SUCCESS") return preflight
+
       val state = payload.copyOfRange(20, payload.size)
       if (!state.copyOfRange(0, minOf(4, state.size))
               .contentEquals("CGBS".toByteArray(StandardCharsets.US_ASCII)) ||
@@ -838,10 +1131,7 @@ class ProtocolV9SessionContractTest {
             context.expectedProfiles[inspected.player] !=
                 inspected.identity!!.profile.canonicalProfileId
           }) return "PROFILE_MISMATCH"
-      val declaration = CheckpointDeclaration(
-          proposalId, kind, mask, owner, frame, state.size.toLong(), sha256(state))
-      return (context.admissions?.checkpoint?.admit(declaration, context)
-          ?: "CONSENT_REJECTED").takeUnless { it == "SUCCESS" }
+      return grant.commit(declaration, context).takeUnless { it == "SUCCESS" }
     }
 
     private fun validateBulkBegin(
@@ -1088,8 +1378,8 @@ class ProtocolV9SessionContractTest {
             rosterMask and 1 == 0 || Integer.bitCount(rosterMask) != entryCount ||
             rosterMask and (1 shl sender) == 0) return "header"
         if (context.mode == "normal" && (mode != 1 || rosterMask != 0x03) ||
-            context.mode == "four" && mode != 2 ||
-            sender != 0 && sender != context.authenticatedPlayer ||
+            context.mode == "four" && (mode != 2 || rosterMask != 0x0f) ||
+            sender != context.wireSource ||
             rosterMask != context.rosterMask ||
             u32(payload, 16) != context.rosterGeneration ||
             context.rosterCommitment?.let {
@@ -1202,13 +1492,13 @@ class ProtocolV9SessionContractTest {
                   size == 0L || digest.all { byte -> byte.toInt() == 0 })) return "proposal"
           val proposal = Proposal(
               id, action, assetClass, assetKind, owner, source, target, size, digest)
-          if (!proposalKeys.add(Triple(assetClass, assetKind, owner))) return "proposal-duplicate"
           val classCount = Math.addExact(classCounts.getOrDefault(assetClass, 0), 1)
           classCounts[assetClass] = classCount
           if (assetClass == ROM_CLASS && classCount > 2 ||
               assetClass in setOf(BATTERY_CLASS, CHECKPOINT_CLASS) && classCount > 1) {
             return "proposal-class-limit"
           }
+          if (!proposalKeys.add(Triple(assetClass, assetKind, owner))) return "proposal-duplicate"
           if (assetKind in setOf(PRIMARY_ROM_ASSET, SLOT_ROM_ASSET)) {
             val entry = entryBindings[owner] ?: return "proposal-owner"
             val present = if (assetKind == PRIMARY_ROM_ASSET) entry.primaryPresent else entry.slotPresent
@@ -1371,6 +1661,11 @@ class ProtocolV9SessionContractTest {
     fun approved(): Boolean =
         !rejected && approvals == setOf(proposal.source, proposal.target)
 
+    fun matchesManifestPair(server: ByteArray?, client: ByteArray?): Boolean =
+        server != null && client != null &&
+            MessageDigest.isEqual(server, serverManifest) &&
+            MessageDigest.isEqual(client, clientManifest)
+
     private fun matches(consent: Consent): Boolean =
         consent.decisionId == proposal.id && consent.proposalId == proposal.id &&
             consent.assetClass == proposal.assetClass && consent.assetKind == proposal.assetKind &&
@@ -1391,9 +1686,12 @@ class ProtocolV9SessionContractTest {
       proposal.id to ConsentLedger(proposal, serverManifest, clientManifest)
     }
     private val prepared = mutableSetOf<Long>()
-    var status = if (proposals.all {
-          setOf(it.source, it.target) == setOf(0, authenticatedGuest)
-        }) "CONSENT_REQUIRED" else "CONSENT_REJECTED"
+    var status = when {
+      proposals.isEmpty() -> "ALL_ITEMS_APPROVED"
+      proposals.all { setOf(it.source, it.target) == setOf(0, authenticatedGuest) } ->
+        "CONSENT_REQUIRED"
+      else -> "CONSENT_REJECTED"
+    }
       private set
 
     init {
@@ -1429,6 +1727,8 @@ class ProtocolV9SessionContractTest {
         status != "CONSENT_REJECTED" && candidatesPrepared &&
             ledgers.values.all(ConsentLedger::approved) &&
             prepared == ledgers.keys
+
+    val preparedCount: Int get() = prepared.size
   }
 
   private data class BulkDeclaration(
@@ -1535,9 +1835,12 @@ class ProtocolV9SessionContractTest {
 
     val used: Int get() = admitted
 
-    fun admit(value: CheckpointDeclaration, context: PayloadContext): String {
+    fun preflight(value: CheckpointDeclaration, context: PayloadContext): String {
       val proposal = consent.proposal
-      if (!consent.approved() || proposal.assetClass != CHECKPOINT_CLASS ||
+      if (!consent.approved() ||
+          !consent.matchesManifestPair(
+              context.serverManifestHash, context.clientManifestHash) ||
+          proposal.assetClass != CHECKPOINT_CLASS ||
           proposal.assetKind != CHECKPOINT_ASSET ||
           proposal.owner != GROUP_PLAYER || proposal.size != 0L ||
           proposal.digest.any { it.toInt() != 0 } ||
@@ -1547,18 +1850,32 @@ class ProtocolV9SessionContractTest {
           context.rosterGeneration != rosterGeneration ||
           context.rosterCommitment == null ||
           !MessageDigest.isEqual(context.rosterCommitment, rosterCommitment) ||
-          value.rosterMask and rosterMask != value.rosterMask ||
-          value.kind == 2 && value.rosterMask != rosterMask ||
-          value.kind in 0..1 && Integer.bitCount(value.rosterMask) != 1 ||
+          context.mode == "normal" && (rosterMask != 0x03 || value.kind !in 0..1 ||
+              Integer.bitCount(value.rosterMask) != 1 ||
+              value.rosterMask and rosterMask != value.rosterMask) ||
+          context.mode == "four" && (rosterMask != 0x0f || value.kind != 2 ||
+              value.rosterMask != 0x0f) ||
+          context.mode !in setOf("normal", "four") ||
           value.owner !in 0..3 || value.rosterMask and (1 shl value.owner) == 0 ||
           value.stateLength <= 0 || value.stateDigest.size != 32 ||
           value.stateDigest.all { it.toInt() == 0 } ||
           admitted >= maximumTransactions ||
-          lastFrame?.let { value.frame <= it } == true) return "CONSENT_REJECTED"
+          lastFrame?.let { java.lang.Long.compareUnsigned(value.frame, it) <= 0 } == true) {
+        return "CONSENT_REJECTED"
+      }
+      return "SUCCESS"
+    }
+
+    fun commit(value: CheckpointDeclaration, context: PayloadContext): String {
+      val result = preflight(value, context)
+      if (result != "SUCCESS") return result
       admitted++
       lastFrame = value.frame
       return "SUCCESS"
     }
+
+    fun admit(value: CheckpointDeclaration, context: PayloadContext): String =
+        commit(value, context)
   }
 
   private class TopologyCoordinator(
@@ -1575,6 +1892,7 @@ class ProtocolV9SessionContractTest {
       private set
     val barrierOpen: Boolean
       get() {
+        if (targetMask != exactRosterMask(mode)) return false
         val requiredCandidates = targetMask and initialLiveMask.inv() and 0x0f
         return liveMask == targetMask || candidateMask == requiredCandidates
       }
@@ -1593,7 +1911,8 @@ class ProtocolV9SessionContractTest {
       if (!legalPlayer || authenticatedPlayer != candidatePlayer) return "AUTH_FAILED"
       val bit = 1 shl candidatePlayer
       if (liveMask and bit != 0 || candidateMask and bit != 0) return "SERVER_FULL"
-      if (rosterMask != targetMask || rosterGeneration != targetGeneration ||
+      if (targetMask != exactRosterMask(mode) || rosterMask != targetMask ||
+          rosterGeneration != targetGeneration ||
           rosterMask and 1 == 0 || rosterMask and bit == 0 ||
           !MessageDigest.isEqual(rosterCommitment, targetCommitment) ||
           !MessageDigest.isEqual(checkpointDigest, targetCheckpointDigest)) {
@@ -1637,6 +1956,12 @@ class ProtocolV9SessionContractTest {
         return "TOPOLOGY_MISMATCH"
       }
       return "SUCCESS"
+    }
+
+    private fun exactRosterMask(value: String): Int = when (value) {
+      "normal" -> 0x03
+      "four" -> 0x0f
+      else -> -1
     }
   }
 
@@ -1702,8 +2027,10 @@ class ProtocolV9SessionContractTest {
       if (!row.getValue("protocol_compatible").toBoolean()) {
         return ScenarioResult("CAPABILITY_MISMATCH", "FATAL", false)
       }
-      if (Manifest.decode(serverBytes, context) != null ||
-          Manifest.decode(clientBytes, context) != null) {
+      if (Manifest.decode(
+              serverBytes, context.copy(wireSource = 0, wireTarget = guest)) != null ||
+          Manifest.decode(
+              clientBytes, context.copy(wireSource = guest, wireTarget = 0)) != null) {
         return ScenarioResult("MANIFEST_MISMATCH", row.getValue("severity"), false)
       }
 
@@ -1925,6 +2252,50 @@ class ProtocolV9SessionContractTest {
       .put(kind.toByte()).put(rosterMask.toByte()).put(owner.toByte()).put(0)
       .putLong(frame).putInt(state.size).putInt(proposalId.toInt()).put(state).array()
 
+  private fun linkedCheckpointState(): ByteArray {
+    val romBytes = StateCodecTestSupport.rom()
+    val file = Files.createTempFile("coffee-gb-v9-linked-contract-", ".gb").toFile()
+    file.writeBytes(romBytes)
+    val properties = EmulatorProperties(HardwareProfileRegistry.DMG)
+    val configuration = Controller.createGameboyConfig(properties, Rom(romBytes))
+    val bus = EventBusImpl()
+    val controller = LinkedController(
+        bus, properties, null, LinkMode.FOUR_PLAYER_ADAPTER, localPlayer = 0).also {
+      it.timingTicker.disabled = true
+    }
+    try {
+      bus.post(LoadRomEvent(file))
+      controller.runFrame()
+      for (player in 1..3) {
+        bus.post(PeerLoadedGameEvent(
+            romBytes,
+            null,
+            null,
+            configuration.gameboyType,
+            configuration.bootstrapMode,
+            controller.currentFrame(),
+            player = player,
+        ))
+        controller.runFrame()
+      }
+      assertEquals(4, controller.activeSessionCount())
+      val captured = StateCodec.capture(controller)
+      return StateCodec.encode(
+          StateFile(
+              captured.identities,
+              captured.root,
+              captured.diagnostics,
+              formatVersion = 2,
+          ),
+          StateCompression.DEFLATE,
+      )
+    } finally {
+      controller.close()
+      bus.close()
+      file.delete()
+    }
+  }
+
   private fun bulkBeginPayload(
       transactionId: Long,
       proposal: Proposal,
@@ -2098,6 +2469,11 @@ class ProtocolV9SessionContractTest {
 
     fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)
+
+    fun sha256(bytes: ByteArray, offset: Int, length: Int): ByteArray =
+        MessageDigest.getInstance("SHA-256").apply {
+          update(bytes, offset, length)
+        }.digest()
 
     fun u16(bytes: ByteArray, offset: Int) =
         ((bytes[offset].toInt() and 0xff) shl 8) or
