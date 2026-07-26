@@ -201,7 +201,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         gameGenie = new Genie(mmu, gbc);
 
         sgbBus = new EventBusImpl(null, null, false);
-        sgbDisplay = new SgbDisplay(configuration.rom, sgbBus, sgb, configuration.displaySgbBorder);
+        sgbDisplay = new SgbDisplay(
+                configuration.rom, sgbBus, sgb, configuration.isDisplaySgbBorder());
         vRamTransfer = new VRamTransfer(sgbBus);
         superGameboy = new SuperGameboy(sgbBus);
         background = new Background(sgbBus);
@@ -1247,7 +1248,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
 
         public boolean isDisplaySgbBorder() {
-            return displaySgbBorder;
+            return hardwareProfile.capabilities().superGameboyBorder() && displaySgbBorder;
         }
 
         public GameboyConfiguration setBootstrapMode(BootstrapMode bootstrapMode) {

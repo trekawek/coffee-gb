@@ -14,6 +14,7 @@ import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import java.io.File
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
@@ -162,6 +163,11 @@ class BasicController private constructor(
       // Disabled rewind is a real no-work mode: the key cannot freeze forward emulation and
       // runFrame never reaches a machine capture.
       isRewinding = rewindManager.enabled && it.active
+    }
+    eventQueue.register<SgbDisplay.SetSgbBorder> {
+      // The display consumes the same event on its session bus. Keep the configuration identity
+      // synchronized at this frame boundary so later portable captures describe the live option.
+      session?.config?.setDisplaySgbBorder(it.borderEnabled)
     }
     eventQueue.register<Controller.ResetEmulationEvent> {
       session?.config?.rom?.file?.let {

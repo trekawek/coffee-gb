@@ -1,7 +1,7 @@
 path	sha256
 controller/src/main/java/eu/rekawek/coffeegb/controller/Agent.kt	7c798d5cf62fb781c9f83b61c9618e970db7c06bffba9c0d14108b57b1c98ab8
 controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt	285cf54b80e86ef171158933a05e7c65b335121df0c312b1f7579cca285a9c04
-controller/src/main/java/eu/rekawek/coffeegb/controller/Controller.kt	581fb4a9cdb9290d6dd2353532f6ceb0dd34819b8fa00aed7f22f2fe9499fdbc
+controller/src/main/java/eu/rekawek/coffeegb/controller/Controller.kt	9ae1bf92c443de6c641579f5eadb34c822961ca5cb1cc2b1b01c5a1e42f6747a
 controller/src/main/java/eu/rekawek/coffeegb/controller/LegacySnapshotImporter.kt	b4a5567280e0392435d48f136d203e11b56d8d25e620a97ae71002c02a0326fe
 controller/src/main/java/eu/rekawek/coffeegb/controller/RomSessionPreparer.kt	b5f9acd8cfe12cb8a1b6a6653d71d7510895e364e706aa8b3b883fe8a18a30c5
 controller/src/main/java/eu/rekawek/coffeegb/controller/StateTypeRegistry.kt	d1bbcea3556d7406fcecb64282cab5ae73a8be0c5b8e7623e7d2bbd8e660d791
@@ -19,7 +19,7 @@ controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateFile.kt	36226
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSectionCodecs.kt	f22438ad0cc47a2ffb8384762aa896f8f832a7cfd5050c7dcf3ebc87200d7cf6
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSemantics.kt	8a19c681c3c031c889a2f17cd9c9fb4daf10cba63f4ce27af1cff2a97fa731fb
 core/src/main/java/eu/rekawek/coffeegb/core/CartridgeOptions.java	0b02e1356777223d6504598b01970bbc1b9212e5c506336092d13641489dd527
-core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	ee99a30605795e12bf73d62a54ee40c7dcaae120efa8e8049620e0668a4d6120
+core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	36495d3e744fa8bdcf2bfb8ea2ac6d265ce88d597b4b747ec5e90e5c147bae19
 core/src/main/java/eu/rekawek/coffeegb/core/GameboyType.java	9e28a6c29287477e503b6c6867fe1e5c352c44eae720aeb508ff5a0fe930bd2b
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/Cpu.java	1674586181415f65aaf57ff6ce3a4d36478a27bcfb25966403a4341303378fc8
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/InterruptManager.java	b717f6185cb210c09f05860061dec3686a527ee0de4b5faccef1d835f8fcc057
