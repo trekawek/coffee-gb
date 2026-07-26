@@ -49,12 +49,15 @@ For netplay, one player chooses **Link > Start server** and the other chooses
 The next-generation pairing and consent design is frozen as **protocol v9**. An opt-in developer
 foundation now validates CGB9 framing and HELLO capabilities. Its Part-1 API strictly parses
 one-use invitations and authenticates a reserved guest slot. Its explicit Part-2 API exchanges
-caller-prepared, bounded MANIFEST metadata and stops before consent or any private payload; callers
-without a manifest plan retain the Part-1 boundary. Own-ROM exact match is the default, and a ROM
-mismatch never starts a transfer. Consent, transfers, checkpoints, and gameplay remain unavailable.
-V9 is not wired into the normal menu and is not a playable user flow. Current user netplay remains
-v8. V9 deliberately does not interoperate or downgrade to v8. Its planned TCP transport remains
-plaintext—not confidential or secure against an on-path attacker. See
+caller-prepared, bounded MANIFEST metadata. An additional explicit Part-3 plan enables two-sided,
+item-scoped consent and one bounded ROM or battery transaction per approved proposal, then stops at
+an immutable pre-START boundary. Content providers are opened only after both exact approvals;
+verified receivers deliver only complete detached candidates. Callers without these opt-ins retain
+their earlier boundary. Own-ROM exact match remains the default and performs no transfer.
+Checkpoints, START/gameplay, discovery, and the default UI remain unavailable, so v9 is not yet a
+playable user flow. Current user netplay remains v8. V9 deliberately does not interoperate or
+downgrade to v8. Its TCP transport is plaintext—not confidential or secure against an on-path
+attacker. See
 [the v9 privacy/troubleshooting guide](docs/netplay-v9-privacy.md) and the
 [normative v9 contract](docs/netplay-protocol-v9.md). The implemented foundation boundary is
 documented in [netplay-v9-foundation.md](docs/netplay-v9-foundation.md).

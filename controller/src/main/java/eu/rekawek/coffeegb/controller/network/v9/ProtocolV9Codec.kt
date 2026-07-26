@@ -160,6 +160,7 @@ class V9Frame internal constructor(
   internal fun payloadView(): ByteArray = ownedPayload
 
   override fun close() {
+    ownedPayload.fill(0)
     reservation?.close()
   }
 }
@@ -181,11 +182,26 @@ class V9DecoderPolicy(
     negotiatedCapabilities: Set<V9Capability> = V9Capability.entries.toSet(),
     val linkMode: V9LinkMode = V9LinkMode.NORMAL,
     val allowUnknownOptional: Boolean = false,
+    val headerAdmission: V9HeaderAdmission? = null,
 ) {
   val allowedMessages: Set<V9MessageType> =
       Collections.unmodifiableSet(allowedMessages.toSet())
   val negotiatedCapabilities: Set<V9Capability> =
       Collections.unmodifiableSet(negotiatedCapabilities.toSet())
+}
+
+fun interface V9HeaderAdmission {
+  /**
+   * Runs after fixed-header, capability, and static message validation, but before queue
+   * reservation or payload allocation.
+   */
+  fun validate(
+      type: V9MessageType,
+      flags: Int,
+      channel: Long,
+      encodedLength: Long,
+      decodedLength: Long,
+  ): V9ErrorCode?
 }
 
 /**
@@ -216,6 +232,22 @@ class V9IncrementalDecoder(
   fun feed(bytes: ByteArray): V9DecodeBatch = feed(bytes, 0, bytes.size)
 
   fun feed(bytes: ByteArray, offset: Int, length: Int): V9DecodeBatch {
+    return feedInternal(bytes, offset, length, false)
+  }
+
+  /**
+   * Consumes at most one complete frame. Stateful callers use this to apply the first frame's
+   * lifecycle transition before admitting a coalesced successor header.
+   */
+  fun feedOne(bytes: ByteArray, offset: Int, length: Int): V9DecodeBatch =
+      feedInternal(bytes, offset, length, true)
+
+  private fun feedInternal(
+      bytes: ByteArray,
+      offset: Int,
+      length: Int,
+      stopAfterFrame: Boolean,
+  ): V9DecodeBatch {
     require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
     val completed = mutableListOf<V9Frame>()
     var input = offset
@@ -248,6 +280,7 @@ class V9IncrementalDecoder(
           payloadCount = 0
           if (parsed.encodedLength == 0L) {
             completeFrame(completed)
+            if (stopAfterFrame && completed.isNotEmpty()) break
           }
         }
         continue
@@ -261,6 +294,7 @@ class V9IncrementalDecoder(
       consumed = Math.addExact(consumed, copy.toLong())
       if (payloadCount == payload.size) {
         completeFrame(completed)
+        if (stopAfterFrame && completed.isNotEmpty()) break
       }
     }
     return snapshot(completed)
@@ -290,12 +324,15 @@ class V9IncrementalDecoder(
     } else {
       encoded
     }
+    if (decoded !== encoded) encoded.fill(0)
     if (!MessageDigest.isEqual(currentHeader.digest(), sha256(decoded))) {
+      decoded.fill(0)
       return fail(V9ErrorCode.CHECKSUM_MISMATCH, consumed.toIntBounded())
     }
 
     val payloadFailure = validateFoundationPayload(currentHeader, decoded)
     if (payloadFailure != null) {
+      decoded.fill(0)
       return fail(payloadFailure, consumed.toIntBounded())
     }
     if (currentHeader.type == null) {
@@ -393,14 +430,17 @@ class V9IncrementalDecoder(
     if (encodedLength > Int.MAX_VALUE || decodedLength > Int.MAX_VALUE) {
       return V9ErrorCode.LIMIT_EXCEEDED
     }
-    val wireBytes = checkedWireBytes(encodedLength) ?: return V9ErrorCode.LIMIT_EXCEEDED
-    budget.admissionError(wireBytes, decodedLength)?.let { return it }
     if (type != null) {
       capabilityFailure(type, flags, policy)?.let { return it }
       if (type !in policy.allowedMessages) return V9ErrorCode.UNEXPECTED_MESSAGE
+      policy.headerAdmission
+          ?.validate(type, flags, channel, encodedLength, decodedLength)
+          ?.let { return it }
     } else if (!policy.allowUnknownOptional) {
       return V9ErrorCode.UNEXPECTED_MESSAGE
     }
+    val wireBytes = checkedWireBytes(encodedLength) ?: return V9ErrorCode.LIMIT_EXCEEDED
+    budget.admissionError(wireBytes, decodedLength)?.let { return it }
     return null
   }
 
@@ -416,6 +456,7 @@ class V9IncrementalDecoder(
   private fun fail(reason: V9ErrorCode, decisiveBytes: Int) {
     currentReservation?.close()
     currentReservation = null
+    encodedPayload?.fill(0)
     failure = V9ProtocolException(reason, decisiveBytes)
     terminal = true
     resetFrame()
@@ -484,31 +525,37 @@ object V9FrameEncoder {
       throw V9ProtocolException(V9ErrorCode.LIMIT_EXCEEDED, 32)
     }
     val decoded = frame.payload.copyOf()
-    val encoded =
-        if (frame.flags has V9Flag.DEFLATE) deflateRaw(decoded) else decoded
-    if (encoded.size.toLong() > frame.type.spec.maximumEncodedBytes) {
-      throw V9ProtocolException(V9ErrorCode.LIMIT_EXCEEDED, 32)
+    var encoded: ByteArray? = null
+    try {
+      encoded =
+          if (frame.flags has V9Flag.DEFLATE) deflateRaw(decoded) else decoded
+      if (encoded.size.toLong() > frame.type.spec.maximumEncodedBytes) {
+        throw V9ProtocolException(V9ErrorCode.LIMIT_EXCEEDED, 32)
+      }
+      val size = try {
+        Math.addExact(ProtocolV9.HEADER_BYTES, encoded.size)
+      } catch (_: ArithmeticException) {
+        throw V9ProtocolException(V9ErrorCode.LIMIT_EXCEEDED, 32)
+      }
+      val result = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN)
+      result.put(ProtocolV9.MAGIC)
+      result.put(ProtocolV9.MAJOR.toByte())
+      result.put(ProtocolV9.MINOR.toByte())
+      result.putShort(ProtocolV9.HEADER_BYTES.toShort())
+      result.putShort(frame.type.wireId.toShort())
+      result.putShort(frame.flags.toShort())
+      result.putInt(frame.sequence.toInt())
+      result.putInt(frame.correlation.toInt())
+      result.putInt(encoded.size)
+      result.putInt(decoded.size)
+      result.putInt(frame.channel.toInt())
+      result.put(sha256(decoded))
+      result.put(encoded)
+      return result.array()
+    } finally {
+      if (encoded !== decoded) encoded?.fill(0)
+      decoded.fill(0)
     }
-    val size = try {
-      Math.addExact(ProtocolV9.HEADER_BYTES, encoded.size)
-    } catch (_: ArithmeticException) {
-      throw V9ProtocolException(V9ErrorCode.LIMIT_EXCEEDED, 32)
-    }
-    val result = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN)
-    result.put(ProtocolV9.MAGIC)
-    result.put(ProtocolV9.MAJOR.toByte())
-    result.put(ProtocolV9.MINOR.toByte())
-    result.putShort(ProtocolV9.HEADER_BYTES.toShort())
-    result.putShort(frame.type.wireId.toShort())
-    result.putShort(frame.flags.toShort())
-    result.putInt(frame.sequence.toInt())
-    result.putInt(frame.correlation.toInt())
-    result.putInt(encoded.size)
-    result.putInt(decoded.size)
-    result.putInt(frame.channel.toInt())
-    result.put(sha256(decoded))
-    result.put(encoded)
-    return result.array()
   }
 }
 

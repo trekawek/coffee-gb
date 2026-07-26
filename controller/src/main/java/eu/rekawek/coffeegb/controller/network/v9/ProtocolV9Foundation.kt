@@ -136,7 +136,10 @@ internal class V9WriterQueue {
     }
     if (next > V9Limit.QUEUED_WIRE_BYTES.value) return false
     val owned = value.copyOf()
-    if (!queue.offer(QueuedWrite(owned, onWritten))) return false
+    if (!queue.offer(QueuedWrite(owned, onWritten))) {
+      owned.fill(0)
+      return false
+    }
     wireBytes = next
     return true
   }
@@ -146,13 +149,16 @@ internal class V9WriterQueue {
 
   @Synchronized
   fun completed(value: QueuedWrite) {
-    if (closed) return
-    wireBytes = Math.subtractExact(wireBytes, value.bytes.size.toLong())
+    if (!closed) {
+      wireBytes = Math.subtractExact(wireBytes, value.bytes.size.toLong())
+    }
+    value.bytes.fill(0)
   }
 
   @Synchronized
   fun close() {
     closed = true
+    queue.forEach { it.bytes.fill(0) }
     queue.clear()
     wireBytes = 0
   }
@@ -177,8 +183,10 @@ data class V9PostAuthBoundary(
  * Without invitation ownership this performs only the server-first HELLO exchange and stops at
  * `WAIT_AUTH`/`SEND_AUTH`. With explicit Part-1 invitation owners it performs AUTH and stops at
  * `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`. With an explicit caller-prepared [manifestPlan],
- * it exchanges and validates MANIFEST and stops at the immutable pre-consent boundary. Consent,
- * private payload, checkpoint, diagnostics, discovery, and gameplay messages remain unavailable.
+ * it exchanges and validates MANIFEST and stops at the immutable pre-consent boundary. With an
+ * explicit [part3Plan], item-scoped CONSENT and bounded ROM/battery preparation are enabled and
+ * stop at an immutable pre-START boundary. Checkpoint, START, diagnostics, discovery, and gameplay
+ * remain unavailable.
  */
 class V9FoundationConnection(
     private val channel: V9TransportChannel,
@@ -191,29 +199,32 @@ class V9FoundationConnection(
     private val invitationHost: V9InvitationHost? = null,
     private val clientInvitation: V9ClientInvitation? = null,
     private val manifestPlan: V9ManifestPlan? = null,
+    private val part3Plan: V9Part3Plan? = null,
 ) : Closeable, V9LifecycleSource {
   private val scheduler = scheduler ?: V9SystemDeadlineScheduler(clock)
   private val ownedScheduler = if (scheduler == null) this.scheduler as Closeable else null
   private val lifecycle = V9Lifecycle(role, clock)
   private val localHello = V9HelloCodec.create(role, nonce, optionalCapabilities)
-  private val decoder =
-      V9IncrementalDecoder(
-          policy =
-              V9DecoderPolicy(
-                  allowedMessages =
-                      buildSet {
-                        add(V9MessageType.HELLO)
-                        add(V9MessageType.AUTH)
-                        add(V9MessageType.AUTH_RESULT)
-                        add(V9MessageType.CANCEL)
-                        add(V9MessageType.GOODBYE)
-                        add(V9MessageType.ERROR)
-                        if (manifestPlan != null) add(V9MessageType.MANIFEST)
-                      },
-                  negotiatedCapabilities = V9Capability.entries.toSet(),
-                  linkMode = mode,
-              ),
+  private val decoderPolicy =
+      V9DecoderPolicy(
+          allowedMessages =
+              buildSet {
+                add(V9MessageType.HELLO)
+                add(V9MessageType.AUTH)
+                add(V9MessageType.AUTH_RESULT)
+                add(V9MessageType.CANCEL)
+                add(V9MessageType.GOODBYE)
+                add(V9MessageType.ERROR)
+                if (manifestPlan != null) add(V9MessageType.MANIFEST)
+                if (part3Plan != null) addAll(PART3_MESSAGES)
+              },
+          negotiatedCapabilities = V9Capability.entries.toSet(),
+          linkMode = mode,
+          headerAdmission =
+              if (part3Plan == null) null
+              else V9HeaderAdmission(::admitPart3Header),
       )
+  private val decoder = V9IncrementalDecoder(policy = decoderPolicy)
   private val writer = V9WriterQueue()
   private val responseLedger = V9ResponseLedger()
   private val closed = AtomicBoolean(false)
@@ -221,13 +232,18 @@ class V9FoundationConnection(
   private val boundary = CountDownLatch(1)
   private val postAuth = CountDownLatch(1)
   private val manifestComplete = CountDownLatch(1)
+  private val preparationComplete = CountDownLatch(1)
   @Volatile private var pairingBoundary: V9LifecycleSnapshot? = null
   @Volatile private var completedManifestBoundary: V9ManifestPairingBoundary? = null
+  @Volatile private var completedPreparationBoundary: V9PreparationBoundary? = null
   private val tasks = mutableListOf<Thread>()
   private val taskLock = Any()
   private val ownershipLock = Any()
   private val closeListenerLock = Any()
   private val closeListeners = mutableListOf<() -> Unit>()
+  private val part3ListenerLock = Any()
+  private val pendingPart3Listeners = mutableListOf<V9Part3ProgressListener>()
+  private val part3Subscriptions = mutableListOf<Closeable>()
   private val wireStateLock = Any()
   private var timeoutTask: Closeable? = null
   private var writerTask: Thread? = null
@@ -237,6 +253,7 @@ class V9FoundationConnection(
   private var authenticatedBoundary: V9PostAuthBoundary? = null
   private var localManifestPayload: ByteArray? = null
   private var localManifest: V9Manifest? = null
+  @Volatile private var part3Session: V9Part3Session? = null
   private var nextOutgoingSequence = 0L
 
   init {
@@ -246,6 +263,10 @@ class V9FoundationConnection(
     require(manifestPlan == null || invitationHost != null || clientInvitation != null) {
       "v9 manifest exchange requires invitation authentication"
     }
+    require(part3Plan == null || manifestPlan != null) {
+      "v9 Part-3 requires an explicit manifest plan"
+    }
+    require(part3Plan == null || part3Plan.role == role && part3Plan.mode == mode)
     lifecycle.addListener { state ->
       scheduleDeadline(state)
       if (state.phase == V9LifecyclePhase.AWAITING_PAIRING) {
@@ -254,6 +275,7 @@ class V9FoundationConnection(
       } else if (state.phase == V9LifecyclePhase.CLOSED) {
         boundary.countDown()
         manifestComplete.countDown()
+        preparationComplete.countDown()
       }
     }
   }
@@ -297,6 +319,39 @@ class V9FoundationConnection(
 
   fun manifestBoundary(): V9ManifestPairingBoundary? = completedManifestBoundary
 
+  fun awaitPreparationBoundary(
+      timeout: Long,
+      unit: TimeUnit,
+  ): V9PreparationBoundary? {
+    preparationComplete.await(timeout, unit)
+    return completedPreparationBoundary
+  }
+
+  fun preparationBoundary(): V9PreparationBoundary? = completedPreparationBoundary
+
+  fun consentItems(): List<V9ConsentItem> = part3Session?.items().orEmpty()
+
+  fun submitConsent(proposalId: Long, decision: V9ConsentDecision) {
+    val session =
+        part3Session ?: throw IllegalStateException("v9 Part-3 boundary is not ready")
+    session.submitConsent(proposalId, decision)
+  }
+
+  fun part3Progress(): V9Part3Progress? = part3Session?.progress()
+
+  fun addPart3ProgressListener(listener: V9Part3ProgressListener): Closeable {
+    val session = part3Session
+    if (session != null) return session.addProgressListener(listener)
+    synchronized(part3ListenerLock) {
+      val current = part3Session
+      if (current != null) return current.addProgressListener(listener)
+      pendingPart3Listeners += listener
+    }
+    return Closeable {
+      synchronized(part3ListenerLock) { pendingPart3Listeners.remove(listener) }
+    }
+  }
+
   fun negotiatedCapabilities(): Set<V9Capability> =
       negotiated?.capabilities?.toSet() ?: emptySet()
 
@@ -311,6 +366,20 @@ class V9FoundationConnection(
   internal fun isClosed(): Boolean = closed.get()
 
   internal fun activeTaskCount(): Int = synchronized(taskLock) { tasks.count(Thread::isAlive) }
+
+  internal fun part3HeaderAdmissionForTest(
+      type: V9MessageType,
+      flags: Int,
+      channel: Long,
+      encodedLength: Long,
+      decodedLength: Long,
+  ): V9ErrorCode? {
+    val session = part3Session ?: return V9ErrorCode.UNEXPECTED_MESSAGE
+    return session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
+  }
+
+  internal fun configuredDecoderMessagesForTest(): Set<V9MessageType> =
+      decoderPolicy.allowedMessages
 
   internal fun addCloseListener(listener: () -> Unit): Closeable {
     var invokeNow = false
@@ -378,7 +447,7 @@ class V9FoundationConnection(
   private fun readLoop() {
     val bytes = ByteArray(8_192)
     try {
-      while (!closed.get()) {
+      readLoop@ while (!closed.get()) {
         val count = channel.read(bytes, 0, bytes.size)
         if (count < 0) {
           if (snapshot().state == V9LifecycleState.TERMINAL_CLEANUP) {
@@ -396,17 +465,29 @@ class V9FoundationConnection(
           // Output is half-closed. Peer bytes are drained only to observe EOF; no frame is admitted.
           continue
         }
-        val result = decoder.feed(bytes, 0, count)
-        result.frames.forEach { frame ->
-          frame.use {
-            if (!closed.get() &&
-                snapshot().state != V9LifecycleState.TERMINAL_CLEANUP) {
-              handleFrame(frame)
+        var offset = 0
+        while (offset < count && !closed.get()) {
+          val before = decoder.snapshot().consumedBytes
+          val result = decoder.feedOne(bytes, offset, count - offset)
+          val consumed = Math.subtractExact(result.consumedBytes, before)
+          if (consumed <= 0 || consumed > count - offset) {
+            reject(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.IO_FAILURE)
+            continue@readLoop
+          }
+          offset = Math.addExact(offset, consumed.toInt())
+          result.frames.forEach { frame ->
+            frame.use {
+              if (!closed.get() &&
+                  snapshot().state != V9LifecycleState.TERMINAL_CLEANUP) {
+                handleFrame(frame)
+              }
             }
           }
-        }
-        result.failure?.let {
-          reject(it.reason, diagnosticFor(it.reason))
+          val failure = result.failure
+          if (failure != null) {
+            reject(failure.reason, diagnosticFor(failure.reason))
+            continue@readLoop
+          }
         }
       }
     } catch (e: V9ProtocolException) {
@@ -468,6 +549,21 @@ class V9FoundationConnection(
         V9MessageType.AUTH -> handleAuth(frame)
         V9MessageType.AUTH_RESULT -> handleAuthResult(frame)
         V9MessageType.MANIFEST -> handleManifest(frame)
+        V9MessageType.CONSENT ->
+          part3Session?.handleConsent(frame.payloadView())
+              ?: reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.CONSENT_REJECTED)
+        V9MessageType.ROM_BEGIN,
+        V9MessageType.ROM_CHUNK,
+        V9MessageType.ROM_END,
+        V9MessageType.BATTERY_BEGIN,
+        V9MessageType.BATTERY_CHUNK,
+        V9MessageType.BATTERY_END ->
+          part3Session?.handleBulk(
+              type,
+              frame.header.flags,
+              frame.header.channel,
+              frame.payloadView(),
+          ) ?: reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.TRANSFER_REJECTED)
         V9MessageType.CANCEL -> fail(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
         V9MessageType.GOODBYE -> {
           lifecycle.closeNormally()
@@ -801,6 +897,37 @@ class V9FoundationConnection(
   }
 
   private fun publishManifestBoundary(value: V9ManifestPairingBoundary) {
+    if (part3Plan != null) {
+      val guestPlan =
+          part3Plan.forGuest(role, value.authenticatedGuest)
+              ?: return reject(
+                  V9ErrorCode.CONSENT_REJECTED,
+                  V9Diagnostic.CONSENT_REJECTED,
+              )
+      val session =
+          V9Part3Session(
+              role,
+              mode,
+              value.authenticatedGuest,
+              guestPlan,
+              clock,
+              scheduler::schedule,
+              ::startTask,
+              ::enqueuePart3,
+              lifecycle::consentComplete,
+              ::reject,
+          ) { prepared ->
+            completedPreparationBoundary = prepared
+            preparationComplete.countDown()
+          }
+      part3Session = session
+      val listeners =
+          synchronized(part3ListenerLock) {
+            pendingPart3Listeners.toList().also { pendingPart3Listeners.clear() }
+          }
+      listeners.forEach { part3Subscriptions += session.addProgressListener(it) }
+      session.start(value)
+    }
     completedManifestBoundary = value
     manifestComplete.countDown()
   }
@@ -848,10 +975,54 @@ class V9FoundationConnection(
     }
   }
 
+  private fun enqueuePart3(
+      type: V9MessageType,
+      flags: Int,
+      channel: Long,
+      payload: ByteArray,
+      onWritten: () -> Unit,
+  ): Boolean =
+      synchronized(wireStateLock) {
+        if (closed.get() || snapshot().state == V9LifecycleState.TERMINAL_CLEANUP) {
+          return@synchronized false
+        }
+        val sequence = nextSequenceOrFail() ?: return@synchronized false
+        val encoded =
+            try {
+              V9FrameEncoder.encode(
+                  V9OutboundFrame(type, flags, sequence, 0, channel, payload),
+                  part3Policy(),
+              )
+            } catch (e: V9ProtocolException) {
+              reject(e.reason, diagnosticFor(e.reason))
+              return@synchronized false
+            }
+        advanceOutgoingSequence()
+        try {
+          writer.offer(encoded, onWritten)
+        } finally {
+          encoded.fill(0)
+        }
+      }
+
+  private fun admitPart3Header(
+      type: V9MessageType,
+      flags: Int,
+      channel: Long,
+      encodedLength: Long,
+      decodedLength: Long,
+  ): V9ErrorCode? {
+    if (type !in PART3_MESSAGES) return null
+    val session = part3Session ?: return V9ErrorCode.UNEXPECTED_MESSAGE
+    val result = session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
+    return result
+  }
+
   private fun reject(reason: V9ErrorCode, diagnostic: V9Diagnostic) {
     if (closed.get() || snapshot().state == V9LifecycleState.TERMINAL_CLEANUP) return
     lifecycle.beginTerminalCleanup(reason, diagnostic)
     writer.close()
+    part3Session?.close()
     localManifestPayload?.fill(0)
     localManifestPayload = null
     localManifest = null
@@ -1011,6 +1182,13 @@ class V9FoundationConnection(
           linkMode = mode,
       )
 
+  private fun part3Policy(): V9DecoderPolicy =
+      V9DecoderPolicy(
+          allowedMessages = PART3_MESSAGES + V9MessageType.ERROR,
+          negotiatedCapabilities = negotiated?.capabilities ?: emptySet(),
+          linkMode = mode,
+      )
+
   private fun startTask(name: String, block: () -> Unit): Thread {
     check(!closed.get()) { "v9 foundation is closed" }
     val task = thread(start = false, isDaemon = true, name = name, block = block)
@@ -1059,6 +1237,13 @@ class V9FoundationConnection(
     localManifestPayload?.fill(0)
     localManifestPayload = null
     localManifest = null
+    part3Session?.close()
+    part3Session = null
+    synchronized(part3ListenerLock) {
+      part3Subscriptions.forEach(Closeable::close)
+      part3Subscriptions.clear()
+      pendingPart3Listeners.clear()
+    }
     clientInvitation?.close()
     try {
       channel.close()
@@ -1072,6 +1257,7 @@ class V9FoundationConnection(
     boundary.countDown()
     postAuth.countDown()
     manifestComplete.countDown()
+    preparationComplete.countDown()
     val listeners =
         synchronized(closeListenerLock) {
           closeListeners.toList().also { closeListeners.clear() }
@@ -1095,10 +1281,23 @@ class V9FoundationConnection(
     V9ErrorCode.AUTH_FAILED,
     V9ErrorCode.SERVER_FULL -> V9Diagnostic.AUTH_REJECTED
     V9ErrorCode.MANIFEST_MISMATCH -> V9Diagnostic.MANIFEST_REJECTED
+    V9ErrorCode.CONSENT_REJECTED -> V9Diagnostic.CONSENT_REJECTED
+    V9ErrorCode.ROM_MISMATCH -> V9Diagnostic.TRANSFER_REJECTED
     else -> V9Diagnostic.HELLO_REJECTED
   }
 
   companion object {
+    private val PART3_MESSAGES =
+        setOf(
+            V9MessageType.CONSENT,
+            V9MessageType.ROM_BEGIN,
+            V9MessageType.ROM_CHUNK,
+            V9MessageType.ROM_END,
+            V9MessageType.BATTERY_BEGIN,
+            V9MessageType.BATTERY_CHUNK,
+            V9MessageType.BATTERY_END,
+        )
+
     private fun randomNonce(): ByteArray = ByteArray(32).also(SecureRandom()::nextBytes)
   }
 }
@@ -1114,6 +1313,7 @@ class V9FoundationServer(
     private val optionalCapabilities: Set<V9Capability> = emptySet(),
     private val invitationHost: V9InvitationHost? = null,
     private val manifestPlan: V9ManifestPlan? = null,
+    private val part3Plan: V9Part3Plan? = null,
     private val onAwaitingPairing: (V9FoundationConnection) -> Unit,
 ) : Closeable {
   init {
@@ -1121,6 +1321,12 @@ class V9FoundationServer(
         manifestPlan.role == V9Role.SERVER && manifestPlan.mode == mode)
     require(manifestPlan == null || invitationHost != null) {
       "v9 manifest exchange requires invitation authentication"
+    }
+    require(part3Plan == null ||
+        manifestPlan != null &&
+            part3Plan.role == V9Role.SERVER &&
+            part3Plan.mode == mode) {
+      "v9 Part-3 requires matching server manifest ownership"
     }
   }
 
@@ -1153,6 +1359,7 @@ class V9FoundationServer(
             optionalCapabilities = capabilities,
             invitationHost = invitationHost,
             manifestPlan = manifestPlan,
+            part3Plan = part3Plan,
         )
       }
 
@@ -1350,9 +1557,14 @@ object V9FoundationClient {
       connectTimeoutMillis: Int = V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt(),
       invitation: V9ClientInvitation? = null,
       manifestPlan: V9ManifestPlan? = null,
+      part3Plan: V9Part3Plan? = null,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
     require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
+    require(part3Plan == null ||
+        manifestPlan != null &&
+            part3Plan.role == V9Role.CLIENT &&
+            part3Plan.mode == mode)
     return connectAccepted(
         address,
         mode,
@@ -1360,6 +1572,7 @@ object V9FoundationClient {
         connectTimeoutMillis,
         invitation,
         manifestPlan,
+        part3Plan,
         ::newV9SocketChannel,
     )
   }
@@ -1371,10 +1584,15 @@ object V9FoundationClient {
       connectTimeoutMillis: Int,
       invitation: V9ClientInvitation?,
       manifestPlan: V9ManifestPlan? = null,
+      part3Plan: V9Part3Plan? = null,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
     require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
+    require(part3Plan == null ||
+        manifestPlan != null &&
+            part3Plan.role == V9Role.CLIENT &&
+            part3Plan.mode == mode)
     return connectAccepted(
         address,
         mode,
@@ -1382,6 +1600,7 @@ object V9FoundationClient {
         connectTimeoutMillis,
         invitation,
         manifestPlan,
+        part3Plan,
         channelFactory,
     )
   }
@@ -1393,6 +1612,7 @@ object V9FoundationClient {
       connectTimeoutMillis: Int,
       invitation: V9ClientInvitation?,
       manifestPlan: V9ManifestPlan?,
+      part3Plan: V9Part3Plan?,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     var channel: V9ConnectableChannel? = null
@@ -1408,6 +1628,7 @@ object V9FoundationClient {
           optionalCapabilities = optionalCapabilities,
           clientInvitation = invitation,
           manifestPlan = manifestPlan,
+          part3Plan = part3Plan,
       )
       connection = acceptedConnection
       acceptedConnection.start()
@@ -1463,10 +1684,15 @@ class V9FoundationConnectAttempt(
       optionalCapabilities: Set<V9Capability> = emptySet(),
       invitation: V9ClientInvitation? = null,
       manifestPlan: V9ManifestPlan? = null,
+      part3Plan: V9Part3Plan? = null,
       onComplete: (V9FoundationConnection?, V9ErrorCode?) -> Unit,
   ) {
     require(invitation == null || invitation.mode == mode)
     require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
+    require(part3Plan == null ||
+        manifestPlan != null &&
+            part3Plan.role == V9Role.CLIENT &&
+            part3Plan.mode == mode)
     var cancelledBeforeStart = false
     synchronized(lock) {
       check(callback == null) { "v9 connect attempt already started" }
@@ -1508,7 +1734,7 @@ class V9FoundationConnectAttempt(
 
     val worker =
         thread(start = false, isDaemon = true, name = "netplay-v9-connect") {
-          runAttempt(address, mode, optionalCapabilities, invitation, manifestPlan)
+          runAttempt(address, mode, optionalCapabilities, invitation, manifestPlan, part3Plan)
         }
     val startWorker =
         synchronized(lock) {
@@ -1547,6 +1773,7 @@ class V9FoundationConnectAttempt(
       optionalCapabilities: Set<V9Capability>,
       invitation: V9ClientInvitation?,
       manifestPlan: V9ManifestPlan?,
+      part3Plan: V9Part3Plan? = null,
   ) {
     var createdChannel: V9ConnectableChannel? = null
     try {
@@ -1573,6 +1800,7 @@ class V9FoundationConnectAttempt(
               optionalCapabilities = optionalCapabilities,
               clientInvitation = invitation,
               manifestPlan = manifestPlan,
+              part3Plan = part3Plan,
           )
       if (!adoptConnection(value)) {
         value.close()
