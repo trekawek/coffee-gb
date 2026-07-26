@@ -26,6 +26,9 @@ The owning immutable hardware profile and exact `ClockSpec` are construction ide
 mutable machine data: MachineSnapshot retains the canonical ID, StateFile v1 derives that ID
 from its frozen hardware/CGB0 identity fields, and StateFile v2 carries an explicit bounded
 canonical ID. Both verify the complete profile before apply.
+StateFile v1 coarse DMG is permanently canonical `dmg`; MGB is represented only by StateFile v2's
+explicit `mgb` ID. `MachineSnapshot` likewise rejects DMG/MGB cross-restore before materialization.
+Protocol v8 remains StateFile-v1-only and rejects MGB before linked construction or state writes.
 The exact remaining compatibility surface and removal policy are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 

@@ -1,8 +1,9 @@
 # Portable StateFile format, version 2
 
-StateFile v2 is the smallest versioned extension needed to represent an exact SGB-family hardware
-profile and make the existing RTC phase scalar unambiguous. StateFile v1's coarse SGB tag cannot
-distinguish SGB2, and its canonical SGB phase has a frozen historical denominator. V2 preserves
+StateFile v2 is the smallest versioned extension needed to represent a profile beyond StateFile
+v1's coarse hardware identities and make the SGB RTC phase scalar unambiguous. V1 cannot
+distinguish MGB from DMG or SGB2 from SGB, and its canonical SGB phase has a frozen historical
+denominator. V2 preserves
 the v1 envelope, payload bytes, compression, limits, checksum, type registry, and atomic apply
 contract. Identity section 1 is versioned from schema 1 to schema 2; that explicit profile ID also
 selects the RTC scalar's exact numerator domain.
@@ -55,10 +56,12 @@ Current mapping:
 | `cgb0` | CGB, CGB0 set | 1 |
 | `sgb` | SGB | 2 |
 | `sgb2` | SGB | 2 |
+| `mgb` | DMG | 2 |
 
 StateFile v1 SGB always means canonical `sgb`; a reader must never infer `sgb2` from a boot value,
-clock, display name, or an unused v1 bit. New exact-clock SGB and SGB2 machine, session, and linked
-roots use v2. Every active member of a linked root carries its own explicit ID.
+clock, display name, or an unused v1 bit. Likewise, StateFile v1 DMG always means canonical `dmg`,
+never `mgb`. New SGB, SGB2, and MGB machine, session, and linked roots use v2. Every active member
+of a linked root carries its own explicit ID.
 
 ## Payload and compatibility
 
@@ -69,6 +72,7 @@ MBC3 `subSecondTicks` scalar is the explicit profile's numerator-domain phase:
 |---|---:|---:|
 | `sgb` | `0..47,249,999` | 11 |
 | `sgb2` | `0..4,194,303` | 1 |
+| `mgb` | `0..4,194,303` | 1 |
 
 StateFile v1 canonical SGB instead freezes that scalar as a fraction with denominator `4,194,304`.
 On v1 SGB apply, after bounded detached decode but before target graph reconstruction or any live
@@ -83,21 +87,20 @@ target profile before mutation. A cross-profile file fails with typed
 
 Readers continue accepting v1. A decoded v1 file retains format version 1 and re-encodes to its
 exact original bytes. DMG, CGB, and CGB0 continue writing v1, so their portable and protocol-v8
-bytes are stable. Exact-clock SGB/SGB2 cannot be forced into v1: encoding is rejected rather than
-silently assigning the historical scalar meaning.
+bytes are stable. SGB/SGB2/MGB cannot be forced into v1: encoding is rejected rather than silently
+assigning a historical phase or coarse model identity.
 
 ## Netplay and replay boundary
 
 Protocol v8 explicitly negotiates StateFile v1. It neither sends nor accepts StateFile v2, and its
-wire bytes are unchanged. Because current exact-clock SGB and SGB2 captures require v2, either SGB
-family local linked load is rejected before linked-session construction. An outgoing SGB-family
-state is rejected before a payload is written; the coarse incoming SGB header is rejected before
-held-input/ROM/state payload reads or event delivery. Support requires a separately negotiated
-protocol version. StateFile v2 is currently for local portable snapshots and the explicit
-codec/apply seam.
+wire bytes are unchanged. SGB, SGB2, and MGB local linked loads therefore reject before linked
+session construction, and outgoing state rejects before a payload is written. A coarse incoming
+SGB header rejects before held-input/ROM/state payload reads; a coarse incoming DMG header remains
+canonical `dmg`, never MGB. Support requires a separately negotiated profile-aware protocol.
+StateFile v2 is currently for local portable snapshots and the explicit codec/apply seam.
 
-There is no #315 replay format yet. Any future replay must carry canonical `sgb2` plus its exact
-rational `ClockSpec`; a coarse SGB enum is insufficient.
+There is no #315 replay format yet. Any future replay must carry the exact canonical profile ID
+(including `mgb` or `sgb2`) plus its rational `ClockSpec`; a coarse enum is insufficient.
 
 ## Golden fixture and update procedure
 

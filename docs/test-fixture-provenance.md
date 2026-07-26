@@ -60,6 +60,12 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   New exact-clock SGB captures also select StateFile v2 to distinguish their RTC phase from the
   frozen v1 denominator. This changes only the reviewable synthetic SGB StateFile text hashes;
   frame hashes and all committed binary fixtures remain unchanged.
+- Phase #345 adds the reviewable MGB matrix and synthetic model-baseline rows from the same pinned
+  Pan Docs commit and GBCTR revision. It adds no binary fixture, firmware, capture, image, or ROM.
+  The in-memory synthetic ROM is unchanged. Its MGB StateFile-v2 state hash is
+  `7c93ea0f6f4912084e978e5f467226dbb1a7a4fd4111b8e32f253793ea55a48e`; its frame hash is the
+  existing DMG value `9a7c6c11a4190432f0ba3ddd817318ea63582040b8e56f30d80bfab968645b70`.
+  No existing fixture or expected profile hash changes.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

@@ -3,10 +3,10 @@
 Issue #340 established the observational Phase 0 evidence and deterministic fixtures. Issue #341
 used those artifacts to complete the platform-neutral practical command set, issue #342 added
 independent local SGB P1-P4 host input, and issue #343 established immutable per-session hardware
-profiles and clocks. Issue #344 adds the evidence-backed `sgb2` identity and exact SGB-family clock
-contract. It intentionally changes only the cited SGB clock/skip-boot baseline and adds StateFile
-v2 identity; it does not implement MGB or change the practical SGB command set. The 91 portable
-record IDs and every StateFile-v1 field remain unchanged.
+profiles and clocks. Issue #344 added the evidence-backed `sgb2` identity and exact SGB-family
+clock contract. Issue #345 adds the evidence-backed `mgb` identity and an enforceable contributor
+extension process. Neither phase changes the practical SGB command set. The 91 portable record IDs
+and every StateFile-v1 field remain unchanged.
 
 ## Checked-in sources of truth
 
@@ -45,25 +45,24 @@ part of the contract.
 
 | Category | Files | Normalized occurrences |
 | --- | ---: | ---: |
-| `HARDWARE_PROFILE` | 25 | 194 |
-| `GAMEBOY_TYPE` | 9 | 45 |
+| `HARDWARE_PROFILE` | 25 | 202 |
+| `GAMEBOY_TYPE` | 9 | 46 |
 | `CGB_FLAG` | 37 | 412 |
-| `SGB_FLAG` | 11 | 43 |
+| `SGB_FLAG` | 10 | 42 |
 | `CGB0` | 9 | 42 |
 | `BOOTSTRAP` | 11 | 83 |
-| `CLOCK` | 23 | 212 |
+| `CLOCK` | 24 | 214 |
 | `SGB_BORDER` | 7 | 43 |
 | `MEALYBUG` | 9 | 45 |
 | `CODEBREAKER` | 8 | 54 |
 | `ROM_MODEL` | 8 | 55 |
-| `PORTABLE_PROFILE` | 4 | 43 |
+| `PORTABLE_PROFILE` | 4 | 42 |
 
 The 79 files comprise 41 hardware-policy, 15 compatibility-adapter, 7 configuration, 7
 portable-state-adapter, 5 platform-adapter, and 4 legacy-importer rows. Fifty-one rows retain the
-completed profile foundation (#343), 25 own exact SGB2 timing/identity work (#344), two SGB display
-or palette rows belong to command completion (#341), and Joypad multiplayer belongs to #342. No
-current decision is owned solely by #345 because MGB is not representable yet; #345 extends the
-registry rather than changing an existing MGB branch.
+completed profile foundation (#343), 21 own exact SGB2 timing/identity work (#344), four own MGB
+registry/portable/network identity decisions (#345), two SGB display or palette rows belong to
+command completion (#341), and Joypad multiplayer belongs to #342.
 
 ## Public technical evidence
 
@@ -247,11 +246,15 @@ locale, `hashCode`, clock, or unordered iteration.
 | restored continuation | `c78c334dbeb2a0cc9aab7f087fe0d9cdb46d292417eedb222355108880bd73ae` |
 
 The model fixture builds one valid-checksum, 32 KiB synthetic ROM and runs exactly each profile's
-`ClockSpec.controllerTicksPerFrame()`: 69,905 under DMG/CGB/CGB0 and the full 70,224-tick LCD frame
-under SGB/SGB2, all with skip boot. The synthetic ROM SHA
+`ClockSpec.controllerTicksPerFrame()`: 69,905 under DMG/MGB/CGB/CGB0 and the full 70,224-tick LCD
+frame under SGB/SGB2, all with skip boot. The synthetic ROM SHA
 is `f89f3802d47dd31da0db6b5656ed5098194e85020ba735fb44c1c9d4f9043eee`. The exact register,
 frame-event, frame-hash, and portable StateFile hashes are reviewable in `model-baselines.tsv`.
-DMG/CGB/CGB0 rows are unchanged. The SGB row uses StateFile v2 so its exact-clock RTC scalar cannot
+DMG/CGB/CGB0 rows are unchanged. MGB's new state hash is
+`7c93ea0f6f4912084e978e5f467226dbb1a7a4fd4111b8e32f253793ea55a48e`; its frame hash is the
+unchanged DMG value `9a7c6c11a4190432f0ba3ddd817318ea63582040b8e56f30d80bfab968645b70`.
+Only the cited `AF=0xffb0` skip default and explicit StateFile-v2 `mgb` identity distinguish this
+synthetic baseline from DMG. The SGB row uses StateFile v2 so its exact-clock RTC scalar cannot
 be confused with the frozen v1 denominator; this revision changes only that portable metadata hash,
 not registers or frame output. The SGB2 row differs by its cited `AF=0xff00` identity and
 StateFile-v2 metadata. Both emit one DMG frame and one SGB output event.
@@ -279,12 +282,13 @@ rollback replay, keyboard mappings, and fake no-SDL devices.
 The exact registry/capability/boot/clock matrix is
 [`hardware-profile-matrix.tsv`](../controller/src/test/resources/sgb-baselines/hardware-profile-matrix.tsv)
 and is enforced against production by `HardwareProfileMatrixTest`. Permanent IDs are `dmg`, `cgb`,
-`cgb0`, `sgb`, and `sgb2`. The full ownership, CLI, StateFile-v1/v2, protocol-v8, evidence, and
+`cgb0`, `sgb`, `sgb2`, and `mgb`. The full ownership, CLI, StateFile-v1/v2, protocol-v8, evidence, and
 extension contract is documented in [hardware-profiles.md](hardware-profiles.md) and
 [state-file-v2.md](state-file-v2.md). The committed synthetic SGB2 SESSION golden is 59,486 bytes
 with SHA-256 `2d2178e6eba26a8debdacf84be144cccd1b42e50bf0dbce5c41612bcb16aa226`.
 
-- #345 adds MGB and the repeatable profile-extension process.
+- #345 adds MGB and the repeatable profile-extension process. The separate AGB-in-GB-mode evidence
+  audit [#391](https://github.com/trekawek/coffee-gb/issues/391) remains open; it adds no production profile.
 - #315 may consume the service-free profile identity seam, but no replay format is implemented here.
 
 No Phase-0 artifact is real-hardware proof by itself. Synthetic hashes are implementation behavior

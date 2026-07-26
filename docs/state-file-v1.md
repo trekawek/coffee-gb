@@ -88,12 +88,12 @@ not participate in compatibility. Every active linked player has its own identit
 slots have no identity. Inapplicable configuration bits are canonical zero: CGB0 exists only on
 CGB, Mealybug DMG-blob timing only on non-CGB hardware, and the border flag only on SGB.
 
-Permanent canonical profile IDs do not change this v1 layout: hardware DMG is
-`dmg`, hardware CGB with CGB0 clear is `cgb`, hardware CGB with CGB0 set is `cgb0`, and hardware SGB
+Permanent canonical profile IDs do not change this v1 layout: hardware DMG is always `dmg`—never
+`mgb`, hardware CGB with CGB0 clear is `cgb`, hardware CGB with CGB0 set is `cgb0`, and hardware SGB
 is always `sgb`—never `sgb2`. The mapping is total and unambiguous. Bootstrap and the remaining behavior flags stay
 separate compatibility identity. `StateFileInspector` reports the canonical ID plus the fixed v1
 details. An ID not representable by this table cannot be smuggled through a display name or enum
-ordinal. Exact-clock SGB and SGB2 captures use the explicit identity in
+ordinal. SGB, SGB2, and MGB captures use the explicit identity in
 [StateFile v2](state-file-v2.md); no undefined v1 flag or field was repurposed.
 
 ### Section 2: root payload

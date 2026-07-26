@@ -16,6 +16,7 @@ import eu.rekawek.coffeegb.controller.state.StateDecodeException
 import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateIdentityEntry
+import eu.rekawek.coffeegb.controller.state.StateProfilePolicy
 import eu.rekawek.coffeegb.controller.state.StateRootKind
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
@@ -214,11 +215,16 @@ class Connection(
       event: LinkedController.LocalRomLoadedEvent,
       expectedRoot: StateRootKind,
   ) {
-    if (event.hardwareProfileId == HardwareProfileRegistry.SGB.id() ||
-        event.hardwareProfileId == HardwareProfileRegistry.SGB2.id()) {
+    val hardwareProfile =
+        try {
+          HardwareProfileRegistry.resolve(event.hardwareProfileId)
+        } catch (failure: IllegalArgumentException) {
+          throw IOException("Unknown hardware profile ${event.hardwareProfileId}", failure)
+        }
+    if (!StateProfilePolicy.protocolV8Representable(hardwareProfile)) {
       throw IOException(
-          "SGB-family netplay is unavailable: protocol v8 negotiates StateFile v1 with " +
-              "the historical 4,194,304-unit SGB RTC phase; exact-clock sgb/sgb2 state requires v2")
+          "Profile ${hardwareProfile.id()} netplay is unavailable: protocol v8 negotiates " +
+              "StateFile v1, while this profile requires explicit StateFile v2 identity")
     }
     if (expectedRoot == StateRootKind.SESSION && event.portableState == null) {
       throw IOException("A running-session checkpoint requires a SESSION StateFile")

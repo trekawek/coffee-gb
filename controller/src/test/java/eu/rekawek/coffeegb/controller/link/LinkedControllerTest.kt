@@ -64,8 +64,13 @@ import kotlin.test.assertTrue
 class LinkedControllerTest {
 
   @Test
-  fun exactSgbFamilyLocalLoadRejectsBeforeLinkedSessionConstructionAndRetainsBasicState() {
-    for (profile in listOf(HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2)) {
+  fun v2OnlyProfileLocalLoadRejectsBeforeLinkedSessionConstructionAndRetainsBasicState() {
+    for (profile in
+        listOf(
+            HardwareProfileRegistry.SGB,
+            HardwareProfileRegistry.SGB2,
+            HardwareProfileRegistry.MGB,
+        )) {
       val seedBus = EventBusImpl()
       val seedConfig =
           Gameboy.GameboyConfiguration(Rom(ROM))

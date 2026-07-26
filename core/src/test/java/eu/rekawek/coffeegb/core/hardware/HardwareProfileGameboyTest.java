@@ -68,6 +68,13 @@ public class HardwareProfileGameboyTest {
                 sgb2.forStateHistoryReplay().getHardwareProfile());
         assertSame(HardwareProfileRegistry.SGB2,
                 sgb2.forBootTemplate().getHardwareProfile());
+
+        GameboyConfiguration mgb = configuration(HardwareProfileRegistry.MGB);
+        assertSame(HardwareProfileRegistry.MGB, mgb.forRestore().getHardwareProfile());
+        assertSame(HardwareProfileRegistry.MGB,
+                mgb.forStateHistoryReplay().getHardwareProfile());
+        assertSame(HardwareProfileRegistry.MGB,
+                mgb.forBootTemplate().getHardwareProfile());
     }
 
     @Test
@@ -84,6 +91,27 @@ public class HardwareProfileGameboyTest {
             IllegalArgumentException failure = assertThrows(
                     IllegalArgumentException.class, configuration::build);
             assertTrue(failure.getMessage().contains("sgb2"));
+            assertTrue(failure.getMessage().contains("skip bootstrap"));
+        }
+    }
+
+    @Test
+    public void mgbSkipBootUsesPocketDefaultsButNeverRunsTheBundledDmgBoot() throws Exception {
+        try (Gameboy gameboy = configuration(HardwareProfileRegistry.MGB).build()) {
+            assertSame(HardwareProfileRegistry.MGB, gameboy.getHardwareProfile());
+            assertEquals(0xffb0, gameboy.getCpu().getRegisters().getAF());
+            assertEquals(0x0013, gameboy.getCpu().getRegisters().getBC());
+            assertEquals(0x00d8, gameboy.getCpu().getRegisters().getDE());
+            assertEquals(0x014d, gameboy.getCpu().getRegisters().getHL());
+            assertEquals(0xab, gameboy.getAddressSpace().getByte(0xff04));
+        }
+
+        for (BootstrapMode mode : new BootstrapMode[]{BootstrapMode.NORMAL, BootstrapMode.FAST_FORWARD}) {
+            GameboyConfiguration configuration = configuration(HardwareProfileRegistry.MGB)
+                    .setBootstrapMode(mode);
+            IllegalArgumentException failure = assertThrows(
+                    IllegalArgumentException.class, configuration::build);
+            assertTrue(failure.getMessage().contains("mgb"));
             assertTrue(failure.getMessage().contains("skip bootstrap"));
         }
     }

@@ -100,8 +100,8 @@ MBC3 subsecond phase must be below that clock's tick rate. This target-dependent
 before the rewind apply callback, not inside a partially mutating component restore.
 
 Each snapshot also retains the immutable canonical hardware-profile ID. Capture chains reuse pages
-only within the same ID, and restore rejects `dmg`/`cgb`/`cgb0`/`sgb` mismatches before materializing
-or mutating live arrays. The profile scalar adds no shared mutable state and does not change the
+only within the same ID, and restore rejects `dmg`/`mgb`/`cgb`/`cgb0`/`sgb`/`sgb2` mismatches before
+materializing or mutating live arrays. The profile scalar adds no shared mutable state and does not change the
 page-generation or retained-byte accounting. Deprecated coarse `GameboyType` is not rewind
 identity.
 
@@ -134,7 +134,7 @@ with:
 Method: use one synthetic CGB MBC5+32 KiB RAM machine, run 1800 complete forward frames, and retain
 the 300 states selected by `RewindManager`'s first-capture/every-sixth-frame cadence. Each frame
 executes exactly the machine profile's `ClockSpec.controllerTicksPerFrame()` (69,905 for the
-recorded CGB baseline; 70,224 for SGB/SGB2) before the record point, then
+recorded CGB baseline; MGB shares 69,905 and SGB/SGB2 use 70,224) before the record point, then
 applies the same deterministic scattered WRAM, both-VRAM-bank, OAM and mapper-RAM workload to the
 legacy and MachineSnapshot machines. The harness then restores all 300 entries.
 The legacy baseline counts every distinct reachable primitive array using the measured 64-bit

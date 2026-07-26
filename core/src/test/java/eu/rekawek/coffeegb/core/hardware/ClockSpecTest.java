@@ -5,6 +5,7 @@ import org.junit.Test;
 import java.math.BigInteger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -118,5 +119,19 @@ public class ClockSpecTest {
             assertEquals(expectedNanos[0].longValueExact(), actualNanos);
             assertEquals(expectedNanos[1].longValueExact(), nanos.remainder());
         }
+    }
+
+    @Test
+    public void mgbSharesTheExactDmgClockAndLongRunConversionIdentity() {
+        ClockSpec dmg = HardwareProfileRegistry.DMG.clockSpec();
+        ClockSpec mgb = HardwareProfileRegistry.MGB.clockSpec();
+        assertSame(dmg, mgb);
+
+        long ticks = Math.multiplyExact(24L * 60 * 60, 4_194_304L);
+        ClockSpec.RateAccumulator dmgAudio = dmg.newTickRateAccumulator(44_100);
+        ClockSpec.RateAccumulator mgbAudio = mgb.newTickRateAccumulator(44_100);
+        assertEquals(dmgAudio.advance(ticks), mgbAudio.advance(ticks));
+        assertEquals(dmgAudio.remainder(), mgbAudio.remainder());
+        assertEquals(dmg.controllerTicksPerFrame(), mgb.controllerTicksPerFrame());
     }
 }

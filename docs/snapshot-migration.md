@@ -6,8 +6,8 @@ events. Their contents now have an explicit format boundary.
 ## Production format
 
 Every new save is a portable StateFile `MACHINE` root encoded with deterministic raw DEFLATE.
-DMG/CGB/CGB0 use the released v1 identity. Exact-clock `sgb` and `sgb2` use the explicit canonical
-identity in StateFile v2 so their RTC phase cannot be confused with the frozen v1 SGB denominator.
+DMG/CGB/CGB0 use the released v1 identity. `sgb`, `sgb2`, and `mgb` use the explicit canonical
+identity in StateFile v2 so SGB RTC phase and DMG-family model identity cannot be confused with v1.
 Historical v1 SGB files remain byte-exact on decode/re-encode and convert their phase, while fully
 detached, before target validation and mutation. Capture
 runs when `BasicController` dispatches the save event at its emulation-thread frame boundary.
@@ -20,7 +20,7 @@ The live/runtime state contracts and the exact native-serialization allowlist ar
 
 Rewind states remain in memory as internal, structurally shared `MachineSnapshot` values;
 `ControllerState` and boot/reset handoff use explicit non-serializable component/detached state.
-Netplay protocol v8 independently uses StateFile v1, rejects exact-clock SGB and SGB2, and cannot
+Netplay protocol v8 independently uses StateFile v1, rejects SGB, SGB2, and MGB, and cannot
 invoke this local legacy importer; see
 [netplay-protocol-v8.md](netplay-protocol-v8.md).
 

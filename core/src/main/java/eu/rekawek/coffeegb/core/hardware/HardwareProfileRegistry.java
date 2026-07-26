@@ -20,8 +20,9 @@ public final class HardwareProfileRegistry {
     private static final HardwareCapabilities SGB_CAPABILITIES =
             new HardwareCapabilities(false, false, false, false, true, true, true);
 
-    private static final BootSpec DMG_BOOT =
-            new BootSpec("dmg", 4, 0xabcc, 0x01b0, 0x0013, 0x00d8, 0x014d, 0);
+    private static final BootSpec DMG_BOOT = monochromeBoot("dmg", 0x01b0);
+
+    private static final BootSpec MGB_BOOT = monochromeBoot("mgb", 0xffb0);
 
     private static final BootSpec CGB_BOOT =
             new BootSpec("cgb", 10, 0xb644, 0x1180, 0x0000, 0xff56, 0x000d, 12);
@@ -56,7 +57,11 @@ public final class HardwareProfileRegistry {
             new HardwareProfile("sgb2", "Super Game Boy 2", HardwareProfile.Family.SGB, "sgb2",
                     SGB_CAPABILITIES, ClockSpec.SGB2, SGB2_BOOT);
 
-    private static final List<HardwareProfile> SUPPORTED = List.of(DMG, CGB, CGB0, SGB, SGB2);
+    public static final HardwareProfile MGB =
+            new HardwareProfile("mgb", "Game Boy Pocket (MGB)", HardwareProfile.Family.DMG, "mgb",
+                    DMG_CAPABILITIES, ClockSpec.LEGACY, MGB_BOOT);
+
+    private static final List<HardwareProfile> SUPPORTED = List.of(DMG, CGB, CGB0, SGB, SGB2, MGB);
 
     private static final Map<String, HardwareProfile> BY_ID;
 
@@ -140,6 +145,11 @@ public final class HardwareProfileRegistry {
 
     public static List<String> supportedIds() {
         return SUPPORTED.stream().map(HardwareProfile::id).collect(Collectors.toUnmodifiableList());
+    }
+
+    /** Shared evidenced monochrome policy; MGB differs only in boot-ROM identity and A. */
+    private static BootSpec monochromeBoot(String bootRomId, int postBootAf) {
+        return new BootSpec(bootRomId, 4, 0xabcc, postBootAf, 0x0013, 0x00d8, 0x014d, 0);
     }
 
     private static IllegalArgumentException unknown(String id) {
