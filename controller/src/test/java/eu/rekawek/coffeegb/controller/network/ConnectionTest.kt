@@ -1030,6 +1030,21 @@ class ConnectionTest {
               .run()
         }
     assertEquals(Connection.ProtocolErrorReason.INVALID_PORTABLE_STATE, wrongProfileError.reason)
+
+    val cgbMachine = portableStates(gameboyType = GameboyType.CGB).first
+    val wrongHardwareFamilyError =
+        assertFailsWith<Connection.ProtocolException> {
+          clientConnection(
+                  networkRomMessage(
+                      cgbMachine,
+                      gameboyType = GameboyType.DMG,
+                  ))
+              .run()
+        }
+    assertEquals(
+        Connection.ProtocolErrorReason.INVALID_PORTABLE_STATE,
+        wrongHardwareFamilyError.reason,
+    )
     assertEquals(null, received.poll())
   }
 

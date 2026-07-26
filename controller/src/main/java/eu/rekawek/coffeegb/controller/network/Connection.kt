@@ -632,6 +632,7 @@ class Connection(
             gameboyType,
             bootstrapMode,
             profileFlags,
+            decodedState != null,
         )
     decodedState?.let {
       validatePeerState(configuration, it.file, expectedStateRoot, eventPlayer)
@@ -811,6 +812,7 @@ class Connection(
       gameboyType: GameboyType,
       bootstrapMode: BootstrapMode,
       profileFlags: Int,
+      portableStatePresent: Boolean,
   ): Gameboy.GameboyConfiguration =
       try {
         peerConfiguration(
@@ -823,6 +825,7 @@ class Connection(
             profileFlags and PROFILE_MEALYBUG_DMG_BLOB != 0,
             profileFlags and PROFILE_CODEBREAKER_RUMBLE != 0,
             profileFlags and PROFILE_SGB_BORDER != 0,
+            portableStatePresent,
         )
       } catch (e: Exception) {
         failProtocol(
@@ -1535,13 +1538,15 @@ class Connection(
         mealybugDmgBlob: Boolean,
         codeBreakerRumble: Boolean,
         displaySgbBorder: Boolean,
+        portableStatePresent: Boolean = false,
     ): Gameboy.GameboyConfiguration {
       val primary = Rom(rom)
       if (slotRom != null &&
           primary.cartridgeProperties.mapper != CartridgeProperties.Mapper.DATEL) {
         throw IOException("A slot ROM is valid only for a Datel pass-through cartridge")
       }
-      return Gameboy.GameboyConfiguration(primary)
+      val configuration =
+          Gameboy.GameboyConfiguration(primary)
           .setGameboyType(gameboyType)
           .setBootstrapMode(bootstrapMode)
           .setCgb0Revision(cgb0Revision)
@@ -1549,8 +1554,16 @@ class Connection(
           .setCodeBreakerRumble(codeBreakerRumble)
           .setDisplaySgbBorder(displaySgbBorder)
           .setSlotRom(slotRom?.let(::Rom))
-          .setBatteryData(battery?.clone())
           .setSupportBatterySave(false)
+      // A portable checkpoint already owns the mapper RAM and RTC data, but its detached graph
+      // also retains the sender's file-backed battery bookkeeping. Give a battery cartridge a
+      // service-free in-memory target even when no save file was transferred so the audited
+      // FileBattery -> MemoryBattery adapter can preflight that graph. A state-less ROM load keeps
+      // the old absent-save behavior (default cartridge RAM, no synthetic save contents).
+      if (battery != null || portableStatePresent && primary.type.isBattery) {
+        configuration.setBatteryData(battery?.clone() ?: byteArrayOf())
+      }
+      return configuration
     }
 
     internal fun validateStateFileDeclaration(size: Int): StateFileDeclaration? {

@@ -20,6 +20,7 @@ import eu.rekawek.coffeegb.core.sgb.Background
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy
 import eu.rekawek.coffeegb.core.state.ComponentState
+import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
@@ -30,6 +31,58 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class DetachedStateTest {
+
+  @Test
+  fun fileBatteryCheckpointTargetsMemoryBatteryAndRejectsOverflowBeforeMutation() {
+    val romBytes = slotRom(0x1b, 0x03)
+    val path = Files.createTempFile("coffee-gb-file-memory-battery-", ".gbc")
+    Files.write(path, romBytes)
+    try {
+      val sourceConfig =
+          Gameboy.GameboyConfiguration(Rom(path.toFile()))
+              .setBootstrapMode(BootstrapMode.SKIP)
+      val targetConfig =
+          Gameboy.GameboyConfiguration(Rom(romBytes))
+              .setBootstrapMode(BootstrapMode.SKIP)
+              .setBatteryData(byteArrayOf())
+              .setSupportBatterySave(false)
+      session(sourceConfig).use { source ->
+        session(targetConfig).use { target ->
+          val state = source.captureDetachedState().machine
+          assertEquals(2, state.recordCount(FILE_BATTERY_STATE))
+          assertEquals(
+              2,
+              target.captureDetachedState().machine.recordCount(MEMORY_BATTERY_STATE),
+          )
+          DetachedStateAdapter.validateTarget(target.gameboy, state)
+
+          val malformed =
+              MachineState(
+                  state.root.replaceRecordField(
+                      FILE_BATTERY_STATE,
+                      "ramBuffer",
+                      BytesState(ByteArray(0x8001)),
+                  ),
+                  state.rtcRuntime,
+                  state.hardware,
+                  state.dmgFifoRuntime,
+              )
+          val before = target.captureDetachedState().machine
+          val stages = mutableListOf<ApplyStage>()
+          val failure =
+              assertFailsWith<StateApplyException> {
+                DetachedStateAdapter.apply(target.gameboy, malformed, stages::add)
+              }
+          assertTrue(failure.message.orEmpty().contains("target capacity"))
+          assertTrue(stages.isEmpty())
+          assertEquals(before, target.captureDetachedState().machine)
+        }
+      }
+    } finally {
+      Files.deleteIfExists(path)
+      Files.deleteIfExists(path.resolveSibling(path.fileName.toString().substringBeforeLast('.') + ".sav"))
+    }
+  }
 
   @Test
   fun nontrivialPpuAndDisplayStateRoundTripsAndContinuesDeterministically() {
@@ -1589,6 +1642,10 @@ class DetachedStateTest {
     const val DATEL_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Datel\$DatelState"
     const val BASIC_ROM_MEMENTO =
         "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomState"
+    const val FILE_BATTERY_STATE =
+        "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
+    const val MEMORY_BATTERY_STATE =
+        "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"
     const val GENIE_MEMENTO = "eu.rekawek.coffeegb.core.genie.Genie\$GenieState"
     const val RTC_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState"
     const val HUC3_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Huc3\$Huc3State"

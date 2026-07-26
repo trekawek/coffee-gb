@@ -11,9 +11,12 @@ import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.MachineState
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.controller.state.StateCompression
+import eu.rekawek.coffeegb.controller.state.StateIdentity
+import eu.rekawek.coffeegb.controller.state.StateIdentityEntry
 import eu.rekawek.coffeegb.controller.state.StateRootKind
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
@@ -810,6 +813,56 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun linkedControllersExchangeTransferred512KiBCgbRomAndMachineCheckpoint() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val serverReady = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
+    val clientReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    serverBus.register<ConnectionController.ServerGotConnectionEvent> { serverReady.add(it) }
+    clientBus.register<ConnectionController.ClientConnectedToServerEvent> { clientReady.add(it) }
+    val rom = synthetic512KiBCgbRom(47)
+    val properties = borderEnabledProperties(HardwareProfileRegistry.CGB)
+    assertMachineCheckpointMatchesTransferredRom(rom, properties)
+    val hostController = linkedController(serverBus, LinkMode.NORMAL, 0, properties)
+    val clientController =
+        linkedController(
+            clientBus,
+            LinkMode.NORMAL,
+            1,
+            borderEnabledProperties(HardwareProfileRegistry.CGB),
+        )
+
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+    val client = TcpClient("localhost:$port", clientBus)
+    this.client = client
+    threads += Thread(client).also { it.start() }
+    assertNotNull(serverReady.poll(5, TimeUnit.SECONDS))
+    assertNotNull(clientReady.poll(5, TimeUnit.SECONDS))
+
+    serverBus.post(LoadRomEvent(rom, runningMemento(1_000, properties, rom)))
+    clientBus.post(
+        LoadRomEvent(
+            rom,
+            runningMemento(
+                2_000,
+                borderEnabledProperties(HardwareProfileRegistry.CGB),
+                rom,
+            ),
+        ))
+    driveControllers(hostController, clientController) {
+      hostController.activeSessionCount() == 2 && clientController.activeSessionCount() == 2
+    }
+
+    assertEquals(2, hostController.activeSessionCount())
+    assertEquals(2, clientController.activeSessionCount())
+    assertTrue(synchronizationFailures.isEmpty(), synchronizationFailures.peek())
+  }
+
+  @Test
   fun linkedFourPlayerClientStartsFromPortableCheckpointOverTcp() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
@@ -1067,6 +1120,78 @@ class TcpConnectionTest {
     }
   }
 
+  private fun assertMachineCheckpointMatchesTransferredRom(
+      romFile: java.io.File,
+      properties: EmulatorProperties,
+  ) {
+    val wireRom = romFile.readBytes()
+    assertEquals(512 * 1024, wireRom.size)
+    assertContentEquals(
+        wireRom,
+        Rom(wireRom).rom.map(Int::toByte).toByteArray(),
+        "the valid synthetic header must not require loader correction",
+    )
+    val sourceBus = EventBusImpl()
+    val sourceConfig = Controller.createGameboyConfig(properties, Rom(romFile))
+    val source = sourceConfig.build()
+    source.init(sourceBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    val file =
+        try {
+          repeat(1_000) { source.tick() }
+          StateCodec.capture(sourceConfig, source)
+        } finally {
+          source.stop()
+          source.close()
+          sourceBus.close()
+        }
+    val sourceIdentity = StateIdentity.from(sourceConfig)
+    assertEquals(sourceIdentity, file.identities.single().identity)
+    assertEquals(SYNTHETIC_CGB_SHA256, sourceIdentity.primaryRom.hex())
+    assertEquals("cgb", sourceIdentity.profile.canonicalProfileId)
+    assertFalse(sourceIdentity.profile.displaySgbBorder)
+    assertEquals(
+        2,
+        (file.root as MachineStateRoot)
+            .machine
+            .recordCount(FILE_BATTERY_STATE),
+        "the local checkpoint captures both file-backed battery ownership records",
+    )
+    val target =
+        Connection.peerConfiguration(
+            wireRom,
+            null,
+            null,
+            GameboyType.CGB,
+            Gameboy.BootstrapMode.SKIP,
+            false,
+            false,
+            false,
+            false,
+            true,
+        )
+    assertEquals(sourceIdentity, StateIdentity.from(target))
+    StateCodec.validateForTarget(
+        file,
+        StateRootKind.MACHINE,
+        listOf(StateIdentityEntry(0, StateIdentity.from(target))),
+    )
+    val targetBus = EventBusImpl()
+    val probe = target.forRestore().build()
+    probe.init(targetBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    try {
+      assertEquals(
+          2,
+          DetachedStateAdapter.capture(probe).recordCount(MEMORY_BATTERY_STATE),
+          "the peer checkpoint target must be service-free and memory-backed",
+      )
+      DetachedStateAdapter.validateTarget(probe, (file.root as MachineStateRoot).machine)
+    } finally {
+      probe.stop()
+      probe.close()
+      targetBus.close()
+    }
+  }
+
   private fun borderEnabledProperties(profile: HardwareProfile): EmulatorProperties =
       EmulatorProperties(profile).also {
         it.properties[EmulatorProperties.Key.ShowSgbBorder.propertyName] = "true"
@@ -1077,6 +1202,43 @@ class TcpConnectionTest {
           .also {
             it.writeBytes(StateCodecTestSupport.rom(seed = seed, cgb = true))
             temporaryRoms += it
+          }
+
+  private fun synthetic512KiBCgbRom(seed: Int): java.io.File =
+      java.io.File.createTempFile("coffee-gb-netplay-cgb-512k-$seed-", ".gbc")
+          .also { file ->
+            val bytes = ByteArray(512 * 1024) { index -> ((index * 17 + seed) and 0xff).toByte() }
+            bytes[0x100] = 0x18
+            bytes[0x101] = 0xfe.toByte()
+            ByteArray(16).copyInto(bytes, 0x134)
+            "CGBSYNTH512".forEachIndexed { index, character ->
+              bytes[0x134 + index] = character.code.toByte()
+            }
+            bytes[0x143] = 0x80.toByte()
+            bytes[0x144] = 0
+            bytes[0x145] = 0
+            bytes[0x146] = 0
+            bytes[0x147] = 0x1b
+            bytes[0x148] = 0x04
+            bytes[0x149] = 0x03
+            bytes[0x14a] = 0
+            bytes[0x14b] = 0
+            bytes[0x14c] = 0
+            var headerChecksum = 0
+            for (index in 0x134..0x14c) {
+              headerChecksum = (headerChecksum - (bytes[index].toInt() and 0xff) - 1) and 0xff
+            }
+            bytes[0x14d] = headerChecksum.toByte()
+            bytes[0x14e] = 0
+            bytes[0x14f] = 0
+            val globalChecksum =
+                bytes.indices
+                    .filter { it != 0x14e && it != 0x14f }
+                    .fold(0) { sum, index -> (sum + (bytes[index].toInt() and 0xff)) and 0xffff }
+            bytes[0x14e] = (globalChecksum ushr 8).toByte()
+            bytes[0x14f] = globalChecksum.toByte()
+            file.writeBytes(bytes)
+            temporaryRoms += file
           }
 
   private fun portableSession(rom: ByteArray, player: Int): ByteArray {
@@ -1096,5 +1258,11 @@ class TcpConnectionTest {
 
   private companion object {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
+    const val FILE_BATTERY_STATE =
+        "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
+    const val MEMORY_BATTERY_STATE =
+        "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"
+    const val SYNTHETIC_CGB_SHA256 =
+        "4eebdc6a6e2d47d711054a73419b06f4c8675ef1838a9cc364d32f27552e1b5c"
   }
 }

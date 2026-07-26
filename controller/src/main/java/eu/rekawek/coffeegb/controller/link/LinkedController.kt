@@ -863,6 +863,7 @@ class LinkedController(
               event.mealybugDmgBlob,
               event.codeBreakerRumble,
               event.displaySgbBorder,
+              event.portableState != null,
           )
           .setPlayerInputSource(PlayerInputSource.RELEASED)
 

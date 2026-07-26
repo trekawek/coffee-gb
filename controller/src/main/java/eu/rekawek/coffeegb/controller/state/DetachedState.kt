@@ -1039,6 +1039,10 @@ internal object StateGraph {
       }
       when {
         candidate is RecordState && target is RecordState -> {
+          if (isFileToMemoryBattery(candidate, target, owner, field)) {
+            validateFileToMemoryBattery(candidate, target, path)
+            return
+          }
           if (candidate.typeId != target.typeId) {
             throw StateApplyException(
                 "$path has ${recordClass(candidate).name}, expected ${recordClass(target).name}")
@@ -1071,6 +1075,48 @@ internal object StateGraph {
             value(candidate.values[index], target.values[index], "$path[$index]", owner, field, true)
           }
         }
+      }
+    }
+
+    /**
+     * File-backed local sessions and service-free transferred sessions deliberately use different
+     * battery owners. MemoryBattery.restoreState explicitly accepts FileBatteryState; mirror that
+     * production contract here so target preflight remains complete before mutation.
+     */
+    private fun isFileToMemoryBattery(
+        candidate: RecordState,
+        target: RecordState,
+        owner: String?,
+        field: String?,
+    ): Boolean =
+        owner != null &&
+            field == "batteryMemento" &&
+            recordClass(candidate).name == FILE_BATTERY_STATE &&
+            recordClass(target).name == MEMORY_BATTERY_STATE
+
+    private fun validateFileToMemoryBattery(
+        candidate: RecordState,
+        target: RecordState,
+        path: String,
+    ) {
+      fun RecordState.field(name: String): StateValue =
+          fields.singleOrNull { it.name == name }?.value
+              ?: throw StateApplyException("$path is missing $name")
+
+      val clock = candidate.field("clockBuffer") as? BytesState
+          ?: throw StateApplyException("$path.clockBuffer is not a byte array")
+      val ram = candidate.field("ramBuffer") as? BytesState
+          ?: throw StateApplyException("$path.ramBuffer is not a byte array")
+      val clockPresent = (candidate.field("isClockPresent") as? BooleanState)?.value
+          ?: throw StateApplyException("$path.isClockPresent is not boolean")
+      candidate.field("isDirty") as? BooleanState
+          ?: throw StateApplyException("$path.isDirty is not boolean")
+      val buffer = target.field("buffer") as? BytesState
+          ?: throw StateApplyException("$path target buffer is not a byte array")
+      val required = ram.size.toLong() + if (clockPresent) clock.size.toLong() else 0L
+      if (required > buffer.size.toLong()) {
+        throw StateApplyException(
+            "$path requires $required battery bytes, target capacity is ${buffer.size}")
       }
     }
   }
@@ -1144,6 +1190,12 @@ internal object StateGraph {
           "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState" to
               "dataTransfer",
       )
+
+  private const val MEMORY_BATTERY_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"
+
+  private const val FILE_BATTERY_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
 
   /**
    * Exact nullable locations in the pinned legacy graph. Nullability is a field contract, not a
