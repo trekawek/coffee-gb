@@ -11,7 +11,7 @@ import javax.swing.SwingUtilities
  * EDT boundary for the opt-in v9 lifecycle.
  *
  * The controller publishes platform-neutral immutable values. This adapter is deliberately not
- * wired into the user-visible netplay flow until pairing and consent arrive in #348.
+ * wired into the user-visible netplay flow until the remaining manifest/consent work lands.
  */
 class V9SwingLifecycleAdapter(
     source: V9LifecycleSource,

@@ -47,9 +47,10 @@ For netplay, one player chooses **Link > Start server** and the other chooses
 **Link > Connect to server**.
 
 The next-generation pairing and consent design is frozen as **protocol v9**. An opt-in developer
-foundation now validates CGB9 framing and HELLO capabilities, but it stops before pairing and is
-not a playable user flow; current user netplay remains v8. V9 deliberately does not interoperate
-or downgrade to v8. Invitation authentication is not implemented yet, and planned TCP remains
+foundation now validates CGB9 framing and HELLO capabilities. Its Part-1 API strictly parses
+one-use invitations and authenticates a reserved guest slot, then stops before MANIFEST; it is not
+wired into the normal menu and is not a playable user flow. Current user netplay remains v8. V9
+deliberately does not interoperate or downgrade to v8. Its planned TCP transport remains
 plaintext—not confidential or secure against an on-path attacker. Own-ROM use is the default and
 ROM, battery, and checkpoint transfer classes will require compatible manifests plus explicit
 consent on both sides. See

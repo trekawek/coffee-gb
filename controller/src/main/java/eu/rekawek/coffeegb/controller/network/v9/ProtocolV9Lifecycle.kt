@@ -150,6 +150,30 @@ class V9Lifecycle(
   }
 
   @Synchronized
+  fun clientAuthSent() {
+    requireRoleState(V9Role.CLIENT, V9LifecycleState.SEND_AUTH)
+    transition(V9LifecycleState.WAIT_AUTH_RESULT)
+  }
+
+  @Synchronized
+  fun clientAuthReceived() {
+    requireRoleState(V9Role.SERVER, V9LifecycleState.WAIT_AUTH)
+    transition(V9LifecycleState.SEND_AUTH_RESULT)
+  }
+
+  @Synchronized
+  fun serverAuthResultSent() {
+    requireRoleState(V9Role.SERVER, V9LifecycleState.SEND_AUTH_RESULT)
+    transition(V9LifecycleState.SEND_SERVER_MANIFEST)
+  }
+
+  @Synchronized
+  fun serverAuthResultReceived() {
+    requireRoleState(V9Role.CLIENT, V9LifecycleState.WAIT_AUTH_RESULT)
+    transition(V9LifecycleState.WAIT_SERVER_MANIFEST)
+  }
+
+  @Synchronized
   fun checkDeadline(): V9Failure? {
     val currentDeadline = deadline ?: return failure
     if (clock.nowMillis() >= currentDeadline && state != V9LifecycleState.CLOSED) {
