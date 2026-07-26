@@ -57,6 +57,9 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   Nintendo ROM/BIOS/image/audio bytes, is distributed under the repository license, is 59,486
   bytes, and has SHA-256
   `2d2178e6eba26a8debdacf84be144cccd1b42e50bf0dbce5c41612bcb16aa226`.
+  New exact-clock SGB captures also select StateFile v2 to distinguish their RTC phase from the
+  frozen v1 denominator. This changes only the reviewable synthetic SGB StateFile text hashes;
+  frame hashes and all committed binary fixtures remain unchanged.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

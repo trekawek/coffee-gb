@@ -131,7 +131,7 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
   SGB2 is `20,971,520 / 5 = 4,194,304` ticks/second. Both use the 70,224-tick LCD frame, yielding
   exact cadences `140,625 / 2,299` and `262,144 / 4,389` frames/second. Deprecated integer clock
   adapters throw for a rational rate rather than report a false rounded value. Protocol v8 remains
-  StateFile-v1-only and rejects SGB2 before payload transmission.
+  StateFile-v1-only and rejects current exact-clock SGB/SGB2 before payload transmission.
 
 ## Phase 1 framing, mutation, and state contract
 
@@ -251,9 +251,10 @@ The model fixture builds one valid-checksum, 32 KiB synthetic ROM and runs exact
 under SGB/SGB2, all with skip boot. The synthetic ROM SHA
 is `f89f3802d47dd31da0db6b5656ed5098194e85020ba735fb44c1c9d4f9043eee`. The exact register,
 frame-event, frame-hash, and portable StateFile hashes are reviewable in `model-baselines.tsv`.
-DMG/CGB/CGB0 rows are unchanged. The SGB row changes only for the cited clock/skip defaults; the
-new SGB2 row differs by its cited `AF=0xff00` identity and StateFile-v2 metadata. Both emit one DMG
-frame and one SGB output event.
+DMG/CGB/CGB0 rows are unchanged. The SGB row uses StateFile v2 so its exact-clock RTC scalar cannot
+be confused with the frozen v1 denominator; this revision changes only that portable metadata hash,
+not registers or frame output. The SGB2 row differs by its cited `AF=0xff00` identity and
+StateFile-v2 metadata. Both emit one DMG frame and one SGB output event.
 
 The StateFile harness drives real PAL/ATTR/CHR/PCT/MASK/MLT commands plus `ATTR_LIN`, `ATTR_DIV`, and
 `PAL_PRI`. It performs the production three-frame VRAM transfer and border progress, holds
@@ -263,9 +264,9 @@ the exact portable bytes and continuation:
 
 | State fixture value | SHA-256 |
 | --- | --- |
-| capture StateFile | `d662b90def20941f92397a7f80fcc0e3a2c7dbb4a5c53c49db8c2238298c9064` |
+| capture StateFile v2 | `76bb387ea0ae6f61fee473101c1855ea801e460cfd205682548626f43f8575d3` |
 | capture frame | `089c22de4291e57ff45098eb3bfbdaa71b81aecc30b5fa6c1d72a58ea7e6d063` |
-| continuation StateFile | `1dffd3a21e388d65e7b87b76ba06f993395813097b2b448d01c09e763972f1fb` |
+| continuation StateFile v2 | `bb170bafca8e074e59dfc18d41229e3331c802710c9aef1778d50b3197434f51` |
 | continuation frame | `51dd2ed6cf24f04a64ea81af4e9768056ea48074445476c96d6dca015fd2e342` |
 
 The Phase 0 fake source has been removed. The reusable production `PlayerInputSource`, immutable

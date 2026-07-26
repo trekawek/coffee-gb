@@ -4,7 +4,8 @@
 
 `MachineSnapshot` is Coffee GB's internal rewind representation. It is immutable, service-free, and
 owned by the emulator thread. It is not a StateFile root, has no byte codec, is not serializable,
-and must never cross a disk or network boundary. Disk snapshots and netplay use StateFile v1;
+and must never cross a disk or network boundary. Disk snapshots use StateFile v1/v2 as required by
+profile identity; protocol-v8 netplay uses StateFile v1;
 `ControllerState` and boot/reset use explicit detached/component state. The local-only historical
 importer is a separate migration boundary and is never reachable from rewind.
 

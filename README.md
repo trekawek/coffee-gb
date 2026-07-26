@@ -66,9 +66,10 @@ as finite compatibility aliases; new settings use canonical lowercase IDs. See
 and extension rules.
 
 The System menu exposes `Auto (default)`, SGB, and SGB2 separately. SGB2 currently requires
-skip-bootstrap mode because Coffee GB does not bundle Nintendo's SGB2 boot ROM. Protocol v8
-negotiates StateFile v1 and cannot identify SGB2, so SGB2 netplay is rejected instead of being sent
-as SGB1. Local StateFile v2 snapshots preserve exact SGB2 identity.
+skip-bootstrap mode because Coffee GB does not bundle Nintendo's SGB2 boot ROM. New SGB/SGB2 local
+snapshots use StateFile v2 so the exact profile clock and RTC phase meaning are unambiguous; old v1
+SGB snapshots remain importable. Protocol v8 is frozen to StateFile v1, so both current SGB-family
+profiles are rejected for netplay rather than transmitting ambiguous or aliased state.
 
 ### Default controls
 

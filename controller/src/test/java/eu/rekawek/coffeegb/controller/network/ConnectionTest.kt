@@ -942,39 +942,63 @@ class ConnectionTest {
   }
 
   @Test
-  fun protocolV8RejectsSgb2BeforeWritingAnyStateBearingMessage() {
-    val handshake =
-        "CoffeeGB NETPLAY".toByteArray() +
-            byteArrayOf(0x08, LinkMode.NORMAL.ordinal.toByte(), 0x01) +
-            capabilities()
-    val output = ByteArrayOutputStream()
-    val connection =
-        Connection(ByteArrayInputStream(handshake), output, senderBus, false).also {
-          receiver = it
+  fun protocolV8RejectsExactSgbFamilyBeforeWritingAnyStateBearingMessage() {
+    for (profile in listOf(HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2)) {
+      val localBus = EventBusImpl()
+      val handshake =
+          "CoffeeGB NETPLAY".toByteArray() +
+              byteArrayOf(0x08, LinkMode.NORMAL.ordinal.toByte(), 0x01) +
+              capabilities()
+      val output = ByteArrayOutputStream()
+      val connection =
+          Connection(ByteArrayInputStream(handshake), output, localBus, false)
+      val before = output.toByteArray()
+      val configuration =
+          Gameboy.GameboyConfiguration(Rom(ROM))
+              .setHardwareProfile(profile)
+              .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+              .setSupportBatterySave(false)
+      val state = portableMachine(configuration)
+      assertEquals(2, StateCodec.inspect(state).formatVersion)
+
+      localBus.post(
+          LinkedController.LocalRomLoadedEvent(
+              ROM.readBytes(),
+              null,
+              state,
+              GameboyType.SGB,
+              Gameboy.BootstrapMode.SKIP,
+              0,
+              hardwareProfileId = profile.id(),
+              player = 1,
+          ))
+
+      assertContentEquals(before, output.toByteArray(), profile.id())
+      connection.stop()
+      localBus.close()
+    }
+  }
+
+  @Test
+  fun protocolV8RejectsCoarseSgbHeaderBeforeReadingAnyPayload() {
+    val received = LinkedBlockingQueue<Connection.PeerLoadedGameEvent>()
+    receiverBus.register<Connection.PeerLoadedGameEvent> { received.add(it) }
+    val header =
+        romHeader(
+            gameboyType = GameboyType.SGB.ordinal,
+            romDecoded = 1,
+            romEncoded = 1,
+            stateBytes = 1,
+        )
+
+    val error =
+        assertFailsWith<Connection.ProtocolException> {
+          tripwireClient(byteArrayOf(0x01) + header).run()
         }
-    val before = output.toByteArray()
-    val configuration =
-        Gameboy.GameboyConfiguration(Rom(ROM))
-            .setHardwareProfile(HardwareProfileRegistry.SGB2)
-            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-            .setSupportBatterySave(false)
-    val state = portableMachine(configuration)
-    assertEquals(2, StateCodec.inspect(state).formatVersion)
 
-    senderBus.post(
-        LinkedController.LocalRomLoadedEvent(
-            ROM.readBytes(),
-            null,
-            state,
-            GameboyType.SGB,
-            Gameboy.BootstrapMode.SKIP,
-            0,
-            hardwareProfileId = HardwareProfileRegistry.SGB2.id(),
-            player = 1,
-        ))
-
-    assertContentEquals(before, output.toByteArray())
-    connection.stop()
+    assertEquals(Connection.ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT, error.reason)
+    assertTrue(error.message!!.contains("StateFile v2"))
+    assertEquals(null, received.poll())
   }
 
   @Test

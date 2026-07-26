@@ -214,9 +214,11 @@ class Connection(
       event: LinkedController.LocalRomLoadedEvent,
       expectedRoot: StateRootKind,
   ) {
-    if (event.hardwareProfileId == HardwareProfileRegistry.SGB2.id()) {
+    if (event.hardwareProfileId == HardwareProfileRegistry.SGB.id() ||
+        event.hardwareProfileId == HardwareProfileRegistry.SGB2.id()) {
       throw IOException(
-          "SGB2 netplay is unavailable: protocol v8 negotiates StateFile v1, which can identify only sgb")
+          "SGB-family netplay is unavailable: protocol v8 negotiates StateFile v1 with " +
+              "the historical 4,194,304-unit SGB RTC phase; exact-clock sgb/sgb2 state requires v2")
     }
     if (expectedRoot == StateRootKind.SESSION && event.portableState == null) {
       throw IOException("A running-session checkpoint requires a SESSION StateFile")
@@ -496,6 +498,14 @@ class Connection(
     val gameboyType = enumValue<GameboyType>(buf.get(), "Game Boy type")
     val bootstrapMode = enumValue<BootstrapMode>(buf.get(), "bootstrap mode")
     val profileFlags = validateProfileFlags(buf.getInt(), gameboyType)
+    if (gameboyType == GameboyType.SGB) {
+      failProtocol(
+          ProtocolErrorReason.UNSUPPORTED_STATE_FORMAT,
+          IOException(
+              "Protocol v8 StateFile v1 cannot carry exact-clock SGB-family RTC phase state; " +
+                  "a versioned protocol with StateFile v2 is required"),
+      )
+    }
     val heldCount = buf.get().toInt() and 0xff
     if (heldCount > Button.entries.size) throw IOException("Invalid held button count $heldCount")
     val romSize = buf.getInt()

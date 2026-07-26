@@ -93,8 +93,8 @@ Permanent canonical profile IDs do not change this v1 layout: hardware DMG is
 is always `sgb`—never `sgb2`. The mapping is total and unambiguous. Bootstrap and the remaining behavior flags stay
 separate compatibility identity. `StateFileInspector` reports the canonical ID plus the fixed v1
 details. An ID not representable by this table cannot be smuggled through a display name or enum
-ordinal. SGB2 uses the explicit identity in [StateFile v2](state-file-v2.md); no undefined v1 flag
-or field was repurposed.
+ordinal. Exact-clock SGB and SGB2 captures use the explicit identity in
+[StateFile v2](state-file-v2.md); no undefined v1 flag or field was repurposed.
 
 ### Section 2: root payload
 
@@ -107,6 +107,13 @@ A machine payload contains:
 - when present, timing and output FIFO records, each six signed 32-bit values:
   `linePixels`, `outCount`, `firstEntry`, `firstBgp`, `firstObp0`, `firstObp1`;
 - one StateValue whose registered record type is the Gameboy root.
+
+For canonical SGB files written before exact rational profile clocks were introduced,
+`RealTimeClockState.subSecondTicks` is frozen as a fraction whose denominator is `4,194,304`.
+That historical v1 meaning is part of the payload contract; it is not the newer SGB clock's
+numerator-domain phase. Decode and inspection retain the scalar unchanged so a decoded v1 file
+re-encodes byte-for-byte. Target-aware apply converts it, while still detached, to the exact `sgb`
+phase described in [StateFile v2](state-file-v2.md). New exact-clock SGB captures cannot write v1.
 
 A session payload adds:
 
@@ -238,9 +245,22 @@ Session, or LinkedController. It performs, in order:
 1. bounded envelope/checksum/decompression/section parsing;
 2. detached structural and runtime validation;
 3. primary/slot ROM and canonical profile plus full behavior-flag comparison for every active machine;
-4. Phase-1 target-aware graph, nullability, mapper, endpoint, hardware, and semantic validation,
+4. for a v1 canonical SGB target, checked detached conversion of every primary/slot MBC3 phase
+   from the frozen `4,194,304` denominator to the exact registered `sgb` phase domain;
+5. Phase-1 target-aware graph, nullability, mapper, endpoint, hardware, and semantic validation,
    including Sound capacity and MBC3 subsecond phase derived from the exact target `ClockSpec`;
-5. the Phase-1 safe-point prepare-and-commit transaction.
+6. the Phase-1 safe-point prepare-and-commit transaction.
+
+The conversion is exact rational nearest rounding with ties upward:
+
+```text
+new = floor((old * 47,250,000 + 2,097,152) / 4,194,304)
+```
+
+It uses checked `BigInteger` arithmetic and has absolute error at most one half of a new phase
+unit. `old` must be in `0..4,194,303`; rejection and conversion both occur before the first apply
+callback or live component mutation. The boundary value `4,194,303` maps to `47,249,989`, so the
+next exact SGB machine tick (`+11`) advances the RTC second exactly as the next legacy tick did.
 
 An incompatible canonical ID is reported as typed `HARDWARE_PROFILE_MISMATCH` before any target
 capture/apply callback. No live-mutation callback occurs before all deterministic validation succeeds. Unexpected restore
@@ -306,9 +326,11 @@ The committed fixture
 It is generated from a repository-owned synthetic ROM and contains no ROM bytes. Its local README
 documents the opt-in update command; normal tests only decode and re-encode it.
 
-Version 1 is frozen. [StateFile v2](state-file-v2.md) changes only the envelope and identity
-section version to append a bounded canonical profile ID. Released v1 files remain accepted and
-exact-reencodable; a v1 SGB identity always remains SGB1.
+Version 1 is frozen. [StateFile v2](state-file-v2.md) changes the envelope and identity section
+version to append a bounded canonical profile ID; its unchanged RTC scalar is interpreted in the
+explicit profile's exact phase domain. Released v1 files remain accepted and exact-reencodable; a
+v1 SGB identity always remains SGB1 and keeps the historical `4,194,304`-denominator meaning until
+the pre-apply conversion above.
 
 New optional sections receive new numeric IDs and canonical positions. A new required concept,
 changed field meaning/width, changed type/value registry, raised compatibility limit, or changed
