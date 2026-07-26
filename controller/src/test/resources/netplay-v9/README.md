@@ -26,9 +26,11 @@ StateFile, token generated for real use, path, credential, server response, or t
 - `manifest-consent-vectors.tsv` executes semantic manifest comparison, exact roster/generation
   commitment, proposal/diff binding, per-guest endpoint isolation, repeated directional item
   approval, and no-implicit-transfer outcomes.
+- `manifest-direction-vectors.tsv` binds every MANIFEST sender field to the actual TCP direction
+  and proves a guest cannot spoof host OFFER authority.
 - `topology-vectors.tsv` freezes host player 0, normal guest 1, four-player guests 1..3, a
-  candidate-only pre-commit topology, slot collision/replacement, and the single atomic
-  group-checkpoint barrier.
+  candidate-only pre-commit topology, exact `03`/`0f` mode rosters, slot
+  collision/replacement, and the single atomic group-checkpoint barrier.
 - `wire-vectors.tsv` commits exact complete or deliberately hostile frame bytes. SHA-256 is over
   each decoded `input_hex` byte sequence. Each row also records the exact decisive read, bounded payload
   allocations, prohibited live mutation, generator, expected state, outcome, and provenance.

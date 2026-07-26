@@ -1,0 +1,4 @@
+id	mode	guest	wire_source	wire_target	sender	action	proposal_source	proposal_target	expected	provenance
+server_offer	normal	1	0	1	0	1	0	1	SUCCESS	coffee-gb-synthetic-manifest-direction
+client_request	normal	1	1	0	1	2	0	1	SUCCESS	coffee-gb-synthetic-manifest-direction
+guest_spoofs_host_offer	normal	1	1	0	0	1	0	1	MANIFEST_MISMATCH	coffee-gb-synthetic-manifest-direction

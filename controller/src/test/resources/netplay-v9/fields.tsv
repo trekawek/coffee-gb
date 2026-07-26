@@ -28,8 +28,8 @@ auth-result-v1	0	2	status	u16-zero-accepted-or-one-rejected
 auth-result-v1	2	2	reserved	u16-zero
 manifest-v1	0	2	schema	u16-exactly-1
 manifest-v1	2	1	mode	u8-1-normal-or-2-four-player
-manifest-v1	3	1	sender_player	u8-host-zero-or-authenticated-guest-one-through-three
-manifest-v1	4	1	entry_count	u8-two-through-four-exact-roster-popcount
+manifest-v1	3	1	sender_player	u8-exact-wire-source-host-zero-or-authenticated-guest
+manifest-v1	4	1	entry_count	u8-exactly-2-normal-or-4-four-player
 manifest-v1	5	1	proposal_count	u8-zero-through-eight
 manifest-v1	6	1	diff_count	u8-zero-through-sixteen
 manifest-v1	7	1	reserved0	u8-zero
@@ -37,7 +37,7 @@ manifest-v1	8	1	protocol_major	u8-exactly-9
 manifest-v1	9	1	statefile_version	u8-exactly-2
 manifest-v1	10	2	app_compatibility	u16-exactly-1
 manifest-v1	12	2	build_compatibility	u16-exactly-1
-manifest-v1	14	1	roster_mask	u8-host-bit0-plus-mode-coherent-guests
+manifest-v1	14	1	roster_mask	u8-exactly-0x03-normal-or-0x0f-four-player
 manifest-v1	15	1	reserved1	u8-zero
 manifest-v1	16	4	roster_generation	u32-nonzero
 manifest-v1	20	32	roster_sha256	SHA-256-CoffeeGB-v9-roster-v2-mode-mask-generation-ascending-player-IDs
@@ -108,11 +108,11 @@ input-v1	8	1	player	u8-zero-through-three-and-channel-equals-player-plus-one
 input-v1	9	1	button_mask	u8-stable-button-bits
 input-v1	10	2	intra_frame_order	u16-strict-order-within-frame-slot
 input-v1	12	4	reserved	u32-zero
-statefile-v2-group-v1	0	1	checkpoint_kind	u8-0-MACHINE-1-SESSION-2-LINKED_SESSION
-statefile-v2-group-v1	1	1	slot_mask	u8-bits0-through-three-nonzero
+statefile-v2-group-v1	0	1	checkpoint_kind	u8-normal-0-MACHINE-or-1-SESSION-four-player-exactly-2-LINKED_SESSION
+statefile-v2-group-v1	1	1	slot_mask	u8-normal-one-roster-bit-four-player-exactly-0x0f
 statefile-v2-group-v1	2	1	owner_player	u8-zero-through-three-present-in-mask
 statefile-v2-group-v1	3	1	reserved0	u8-zero
-statefile-v2-group-v1	4	8	frame	u64-authoritative-frame
+statefile-v2-group-v1	4	8	frame	u64-unsigned-strictly-increasing-per-directional-grant-no-wrap
 statefile-v2-group-v1	12	4	statefile_length	u32-exact-remaining-68-through-33554432
 statefile-v2-group-v1	16	4	proposal_id	u32-nonzero-matching-bounded-directional-checkpoint-grant
 statefile-v2-group-v1	20	remaining	statefile	direct-CGBS-StateFile-v2-exact-root-and-identities
