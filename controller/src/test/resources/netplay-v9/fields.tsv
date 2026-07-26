@@ -40,7 +40,7 @@ manifest-v1	12	2	build_compatibility	u16-exactly-1
 manifest-v1	14	1	roster_mask	u8-host-bit0-plus-mode-coherent-guests
 manifest-v1	15	1	reserved1	u8-zero
 manifest-v1	16	4	roster_generation	u32-nonzero
-manifest-v1	20	32	roster_sha256	SHA-256-CoffeeGB-v9-roster-v1-mode-mask-canonical-entries
+manifest-v1	20	32	roster_sha256	SHA-256-CoffeeGB-v9-roster-v2-mode-mask-generation-ascending-player-IDs
 manifest-v1	52	remaining	entries_diffs_proposals	sorted-entries-then-fixed-diffs-then-fixed-proposals-no-trailing
 manifest-entry-v1	0	1	player	u8-zero-through-three
 manifest-entry-v1	1	1	content_flags	u8-bits0-primary-ROM-present-1-slot-ROM-present-2-battery-present
@@ -68,8 +68,8 @@ transfer-proposal-v1	4	1	action	u8-1-offer-by-source-2-request-by-target
 transfer-proposal-v1	5	1	class	u8-1-ROM-2-battery-3-checkpoint
 transfer-proposal-v1	6	1	asset_kind	u8-1-primary-ROM-2-slot-ROM-3-battery-4-checkpoint
 transfer-proposal-v1	7	1	owner_player	u8-zero-through-three-or-ff-group-checkpoint
-transfer-proposal-v1	8	1	source_player	u8-zero-through-three
-transfer-proposal-v1	9	1	target_player	u8-zero-through-three-distinct-from-source
+transfer-proposal-v1	8	1	source_player	u8-host-zero-or-authenticated-guest-and-roster-member
+transfer-proposal-v1	9	1	target_player	u8-other-endpoint-in-host-authenticated-guest-pair
 transfer-proposal-v1	10	1	disposition	u8-exactly-2-warning-requires-approval
 transfer-proposal-v1	11	1	reserved	u8-zero
 transfer-proposal-v1	12	4	expected_size	u32-nonzero-private-asset-or-zero-checkpoint
@@ -86,7 +86,7 @@ game-shark-patch-v1	1	4	mode	signed-big-endian-i32
 game-shark-patch-v1	5	4	bank	signed-big-endian-i32
 game-shark-patch-v1	9	4	address	signed-big-endian-i32
 game-shark-patch-v1	13	4	data	signed-big-endian-i32
-consent-v1	0	4	decision_id	u32-nonzero
+consent-v1	0	4	decision_id	u32-nonzero-exact-proposal-ID-shared-by-source-and-target-votes
 consent-v1	4	1	actor_player	u8-exact-source-or-target
 consent-v1	5	1	decision	u8-1-approve-or-2-reject
 consent-v1	6	1	class	u8-1-ROM-2-battery-3-checkpoint
@@ -114,7 +114,7 @@ statefile-v2-group-v1	2	1	owner_player	u8-zero-through-three-present-in-mask
 statefile-v2-group-v1	3	1	reserved0	u8-zero
 statefile-v2-group-v1	4	8	frame	u64-authoritative-frame
 statefile-v2-group-v1	12	4	statefile_length	u32-exact-remaining-68-through-33554432
-statefile-v2-group-v1	16	4	proposal_id	u32-nonzero-matching-two-sided-checkpoint-consent
+statefile-v2-group-v1	16	4	proposal_id	u32-nonzero-matching-bounded-directional-checkpoint-grant
 statefile-v2-group-v1	20	remaining	statefile	direct-CGBS-StateFile-v2-exact-root-and-identities
 bulk-begin-v1	0	4	transaction_id	u32-nonzero-no-open-transaction
 bulk-begin-v1	4	4	proposal_id	u32-nonzero-matching-two-sided-consent

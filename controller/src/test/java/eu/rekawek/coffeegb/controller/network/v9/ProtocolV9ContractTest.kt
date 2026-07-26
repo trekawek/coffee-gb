@@ -49,9 +49,9 @@ class ProtocolV9ContractTest {
     assertEquals(7, capabilities.count { it.getValue("required") == "true" })
     assertEquals((1..0x1f).toList(), errors.map { it.hexInt("code") })
     assertEquals((1..0x10).toList(), mapperFamilies.map { it.hexInt("id") })
-    assertEquals((1..0x0a).toList(), manifestDiffs.map { it.hexInt("id") })
+    assertEquals((1..0x0c).toList(), manifestDiffs.map { it.hexInt("id") })
     assertTrue(limits.size >= 20)
-    assertEquals(22, timeouts.size)
+    assertEquals(19, timeouts.size)
     assertTrue(transitions.any { it.getValue("state") == "ACTIVE" })
 
     val timeoutStates = timeouts.map { it.getValue("state") }.toSet()
@@ -95,7 +95,7 @@ class ProtocolV9ContractTest {
   }
 
   @Test
-  fun transitionRegistryExecutesTheCompleteConsentBeforeSynchronizationHandshake() {
+  fun transitionRegistryExecutesZeroOneAndRepeatedConsentBeforeSynchronization() {
     val transitions = rows("/netplay-v9/transitions.tsv")
     assertEquals(transitions.size, transitions.map {
       listOf(it.getValue("role"), it.getValue("state"), it.getValue("direction"),
@@ -104,20 +104,33 @@ class ProtocolV9ContractTest {
     val messageNames = rows("/netplay-v9/messages.tsv").map { it.getValue("name") }.toSet()
     assertTrue(transitions.all { it.getValue("message") in messageNames })
 
-    val server = ContractStateMachine("server", transitions, "SEND_SERVER_HELLO")
+    val zeroProposalServer = ContractStateMachine("server", transitions, "SEND_SERVER_HELLO")
     listOf(
         Step("out", "HELLO", "always"),
         Step("in", "HELLO", "valid-required-capabilities"),
         Step("in", "AUTH", "complete-proof"),
         Step("out", "AUTH_RESULT", "accepted"),
         Step("out", "MANIFEST", "authenticated"),
-        Step("in", "MANIFEST", "compatible"),
-        Step("out", "CONSENT", "local-decision"),
-        Step("in", "CONSENT", "exact-item-decisions-complete"),
+        Step("in", "MANIFEST", "compatible-no-proposals"),
         Step("out", "START", "all-item-consented-transfers-complete-and-candidates-prepared"),
         Step("in", "READY", "matching-session-id-and-correlation"),
-    ).forEach(server::advance)
-    assertEquals("ACTIVE", server.state)
+    ).forEach(zeroProposalServer::advance)
+    assertEquals("ACTIVE", zeroProposalServer.state)
+
+    val repeatedConsentServer = ContractStateMachine("server", transitions, "SEND_SERVER_HELLO")
+    listOf(
+        Step("out", "HELLO", "always"),
+        Step("in", "HELLO", "valid-required-capabilities"),
+        Step("in", "AUTH", "complete-proof"),
+        Step("out", "AUTH_RESULT", "accepted"),
+        Step("out", "MANIFEST", "authenticated"),
+        Step("in", "MANIFEST", "compatible-with-proposals"),
+        Step("out", "CONSENT", "valid-item-decision-more-required"),
+        Step("in", "CONSENT", "valid-item-decision-more-required"),
+        Step("out", "CONSENT", "valid-item-decision-more-required"),
+        Step("in", "CONSENT", "all-item-decisions-complete"),
+    ).forEach(repeatedConsentServer::advance)
+    assertEquals("SYNCHRONIZING", repeatedConsentServer.state)
 
     val client = ContractStateMachine("client", transitions, "WAIT_SERVER_HELLO")
     listOf(
@@ -126,9 +139,11 @@ class ProtocolV9ContractTest {
         Step("out", "AUTH", "complete-proof"),
         Step("in", "AUTH_RESULT", "accepted"),
         Step("in", "MANIFEST", "authenticated"),
-        Step("out", "MANIFEST", "locally-compatible"),
-        Step("in", "CONSENT", "local-decision-available"),
-        Step("out", "CONSENT", "exact-item-decision"),
+        Step("out", "MANIFEST", "locally-compatible-with-proposals"),
+        Step("in", "CONSENT", "valid-item-decision-more-required"),
+        Step("out", "CONSENT", "valid-item-decision-more-required"),
+        Step("in", "CONSENT", "valid-item-decision-more-required"),
+        Step("out", "CONSENT", "all-item-decisions-complete"),
         Step("in", "START", "all-item-consented-transfers-complete-and-candidates-prepared"),
         Step("out", "READY", "prepared-session"),
     ).forEach(client::advance)
@@ -146,7 +161,8 @@ class ProtocolV9ContractTest {
     }
     val beforeConsent = ContractStateMachine("server", transitions, "WAIT_AUTH")
     assertFalse(beforeConsent.tryAdvance(
-        Step("in", "CHECKPOINT", "exact-item-consented-StateFile-v2-atomic")))
+        Step("in", "CHECKPOINT",
+            "session-checkpoint-grant-valid-within-budget-StateFile-v2-atomic")))
     assertEquals("WAIT_AUTH", beforeConsent.state)
 
     val busyServer = ContractStateMachine("server", transitions, "SEND_SERVER_HELLO")
@@ -187,18 +203,41 @@ class ProtocolV9ContractTest {
         val context = "${row.getValue("id")}/${if (feedIndex == 0) "whole" else "byte"}"
         assertEquals(row.getValue("expected"), result.outcome, context)
         assertEquals(row.getValue("expected_state"), result.state, context)
-        assertTrue(result.consumed <= row.int("decisive_read"), context)
+        assertEquals(row.int("decisive_read"), result.consumed, "$context decisive read")
         assertEquals(row.int("payload_allocations"), result.payloadAllocations, context)
         assertEquals("false", row.getValue("mutation_allowed"))
         assertFalse(result.mutated, "Contract parser must never mutate an emulator: $context")
       }
       assertEquals("ProtocolV9ContractTest.frame-v1", row.getValue("generator"))
     }
-
     val coalesced = vectors.single { it.getValue("id") == "coalesced_input_ping" }
     val coalescedResult = ReferenceDecoder(specs).decode(
         listOf(hex(coalesced.getValue("input_hex"))), "both", "ACTIVE", 1, true)
     assertEquals(2, coalescedResult.frames)
+  }
+
+  @Test
+  fun acceptingTheLastUsableSequenceExhaustsTheDirectionWithoutWrapping() {
+    val row = rows("/netplay-v9/wire-vectors.tsv")
+        .single { it.getValue("id") == "valid_input" }
+    val original = hex(row.getValue("input_hex"))
+    val lastUsable = original.copyOf().also {
+      ByteBuffer.wrap(it, 12, 4).putInt(0xffff_fffe.toInt())
+    }
+    val decoder = ReferenceDecoder(messageSpecs()).incremental(
+        "both", "ACTIVE", 0xffff_fffe.toInt())
+    val accepted = decoder.feed(lastUsable)
+    assertEquals("SUCCESS", accepted.outcome)
+    assertTrue(accepted.directionExhausted)
+
+    val forbidden = original.copyOf().also {
+      ByteBuffer.wrap(it, 12, 4).putInt(0xffff_ffff.toInt())
+    }
+    val closed = decoder.feed(forbidden)
+    assertEquals("SEQUENCE_ERROR", closed.outcome)
+    assertEquals(32 + lastUsable.size, closed.consumed)
+    assertEquals("CLOSED", closed.state)
+    assertTrue(closed.directionExhausted)
   }
 
   @Test
@@ -691,6 +730,7 @@ class ProtocolV9ContractTest {
       val mutated: Boolean = false,
       val retainedBytes: Int = 0,
       val payloadReservations: Int = 0,
+      val directionExhausted: Boolean = false,
   )
 
   private enum class HeaderDecision { ACCEPT_DECLARATION, LIMIT_EXCEEDED, MALFORMED }
@@ -738,7 +778,8 @@ class ProtocolV9ContractTest {
         role: String,
         initialState: String,
         initialSequence: Int,
-    ) = IncrementalReferenceDecoder(role, initialState, initialSequence.toLong())
+    ) = IncrementalReferenceDecoder(
+        role, initialState, initialSequence.toLong() and 0xffff_ffffL)
 
     fun decode(
         chunks: List<ByteArray>,
@@ -846,6 +887,7 @@ class ProtocolV9ContractTest {
             allocations,
             retainedBytes = headerCount + payloadCount,
             payloadReservations = reservations,
+            directionExhausted = expectedSequence == 0xffff_ffffL,
         )
       }
 

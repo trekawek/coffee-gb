@@ -17,10 +17,11 @@ addition, and multiplication. It MUST validate the fixed header, type-specific e
 limits, session aggregate, and queue admission before allocating or reading payload bytes.
 
 Header error precedence is fixed and is evaluated as soon as the decisive byte is retained:
-magic/major/minor at byte 6, header length at byte 8, type plus known/reserved flags at byte 12,
-then channel, sequence/correlation, raw-length equality, per-message lengths, and aggregate/queue
-reservation together at byte 32. Only then may a payload reservation be made or payload bytes be
-read. Payload precedence is exact read,
+magic at byte 4, major/minor at byte 6, header length at byte 8, type plus known/reserved flags at
+byte 12, then channel, sequence/correlation, raw-length equality, per-message lengths, and
+aggregate/queue reservation together at byte 32. A valid declaration is admitted only after the
+complete 64-byte header (including its digest) is retained. Only then may a payload reservation be
+made or payload bytes be read. Payload precedence is exact read,
 bounded decompression, checksum, message schema, state transition, then queue/event admission.
 The first failing check supplies the stable error. No later check may allocate or mutate.
 
@@ -168,6 +169,14 @@ TCP sessions for players 1, 2, and 3. Every per-guest manifest covers the same c
 and START is withheld until slot occupancy, every required item decision/transfer, and the one
 atomic group checkpoint are ready on all participating sessions.
 
+The roster commitment is exactly SHA-256 over ASCII `CoffeeGB-v9-roster-v2`, followed by mode u8,
+roster mask u8, roster generation u32 big-endian, and the ascending u8 player IDs named by the
+mask. It commits topology independently of content differences, so all three four-player
+connections can compare one target roster while still reporting their own availability. Every
+manifest on a connection MUST equal the coordinator's selected mode, mask, nonzero generation,
+and commitment. A later manifest cannot invent a partial roster, change generation, or replace
+the commitment.
+
 Entries are strictly player-sorted and exactly `144 + profileLength + titleLength` bytes. Each
 contains player, content flags (primary-ROM present, slot-ROM present, battery available),
 bootstrap and accessory flags, profile/title lengths, raw cartridge-header type, stable mapper
@@ -184,12 +193,25 @@ Stable mapper family IDs are: `ROM_ONLY`, `MBC1`, `MBC2`, `MBC3`, `MBC5`, `MBC6`
 After the entries come fixed 12-byte difference records and fixed 48-byte transfer proposals.
 Stable difference IDs are `PROTOCOL_CONTEXT`, `STATE_CONTEXT`, `PROFILE_IDENTITY`,
 `ROSTER_IDENTITY`, `PRIMARY_ROM_MISSING`, `PRIMARY_ROM_DIFFERENT`, `SLOT_ROM_MISSING`,
-`SLOT_ROM_DIFFERENT`, `BATTERY_OPTIONAL`, and `MATCH`. Severity is exactly Fatal,
-Warning-requiring-approval, or Informational. Fatal differences cannot be approved. A warning
-names one nonzero proposal ID. A proposal binds action (offer by source or request by target),
-class, asset kind, owner player, source player, distinct target player, exact expected size and
-SHA-256 (or the explicitly zero checkpoint sentinel), and the warning disposition. Proposals are
-unique and directionally authored; class and asset kind must agree.
+`SLOT_ROM_DIFFERENT`, `BATTERY_OPTIONAL`, `MATCH`, `BATTERY_TRANSFER`, and `CHECKPOINT_SYNC`.
+The first four are Fatal, ROM missing/different plus explicit battery/checkpoint transfer are
+Warning-requiring-approval, and battery-optional/match are Informational. Fatal and informational
+records have proposal ID zero; every warning names one unique nonzero proposal ID and every
+proposal is named by exactly one warning. Difference `(code, player)` and proposal IDs are unique.
+`MATCH` is the sole difference for its player and cannot hide another result.
+
+A primary-ROM warning pairs only with a primary-ROM proposal for that player; a slot-ROM warning
+pairs only with a slot-ROM proposal for that player; a battery warning pairs only with a battery
+proposal for that player; and a checkpoint warning pairs only with a group-owner checkpoint
+proposal for the authenticated guest. A proposal binds action (offer by source or request by
+target), class, asset kind, owner player, source player, distinct target player, exact expected
+size and SHA-256 (or the explicitly zero checkpoint sentinel), and the warning disposition.
+Primary/slot proposal size and digest MUST equal the named owner's present manifest entry.
+Owners, sources, and targets belong to the committed roster. On one guest TCP session, source and
+target are exactly `{host 0, authenticated guest}`; cross-guest proposals are rejected rather
+than routed through another socket. Class and asset kind must agree. One manifest admits at most
+two ROM proposals (primary and slot), one battery proposal, and one checkpoint proposal, within
+the overall eight-proposal structural ceiling.
 
 Application/build levels plus protocol/StateFile capability context are compared before content.
 The two stable numeric compatibility levels deliberately replace a free-form build/version string:
@@ -203,19 +225,37 @@ registry and executable outcomes are in `manifest-diffs.tsv` and
 
 ### CONSENT and payload classes
 
-CONSENT is an exact 116-byte item decision. It binds a nonzero decision ID, actor, approve/reject,
+CONSENT is an exact 116-byte item decision. It binds a nonzero decision-set ID equal to the
+proposal ID (shared by that proposal's source and target votes), actor, approve/reject,
 class (ROM, battery, or checkpoint), asset kind, source, target, owner, proposal ID, expected size
 and SHA-256, plus the SHA-256 of the exact server and client MANIFEST payloads. Both the proposal
 source and target must submit one matching approval; offer/availability and permission to receive
-are separate facts. Rejection is final. A manifest change, replayed decision, duplicate actor,
+are separate facts. Decisions may arrive in either actor order. For zero proposals both peers move
+directly to `SYNCHRONIZING`; otherwise `EXCHANGE_CONSENT` repeats for exactly the outstanding
+source/target decisions across all proposals. It moves to `SYNCHRONIZING` only after every
+proposal has both approvals. Rejection or cancellation is terminal. A manifest change, replayed
+decision, duplicate actor,
 wrong direction/player/asset/class, extra transaction, or mismatched identity rejects.
 
 No ROM, battery/save, StateFile, path, or other private/large content may be read for transfer,
 compressed, queued, announced in content form, or sent before AUTH, both exact manifests, and both
 item approvals have succeeded. Every BEGIN or CHECKPOINT names the approved proposal. Consent for
-ROM never authorizes battery or checkpoint, and one proposal authorizes at most one transaction.
-A UI cancel is a denial. START remains illegal until every approved transfer has completed and all
-candidate sessions are prepared without live mutation.
+ROM never authorizes battery or checkpoint. ROM and battery proposals are one-use and authorize
+exactly one matching transaction.
+
+Checkpoint is the one explicit exception to one-use item transfer. A two-sided checkpoint proposal
+creates a **directional session-scoped checkpoint grant** for the exact manifest pair, source,
+target, group owner, committed roster mask, generation, and commitment. It admits at most 32
+successfully validated checkpoints in that direction, one in flight at a time, with strictly
+increasing authoritative frames. It is revoked by terminal cleanup, manifest replacement, roster
+or generation change, or exhaustion. Each checkpoint still validates its own length, SHA-256,
+StateFile-v2 identities, root, roster, and frame before consuming one grant use. A duplicate frame,
+replay, wrong direction, wrong group, or use 33 is `CONSENT_REJECTED`. This bounded grant is
+established before ACTIVE; ACTIVE has no proposal/CONSENT transition.
+
+A UI cancel is a denial. START remains illegal until every required actor decision, every approved
+ROM/battery transfer, initial checkpoint preparation, and every candidate prepare step has
+completed without live mutation.
 
 ### Runtime payloads
 
@@ -228,7 +268,8 @@ stamp u64; the stamp never drives emulation.
 
 CHECKPOINT is checkpoint kind u8 (`0` initial MACHINE, `1` normal SESSION, `2` four-player
 LINKED_SESSION), player mask u8, owner player u8, zero u8, frame u64, StateFile byte length u32,
-nonzero approved proposal ID u32, then exactly that many direct StateFile bytes. It is channel
+nonzero approved checkpoint-grant proposal ID u32, then exactly that many direct StateFile bytes.
+Its frame must be strictly greater than the last accepted frame in that directional grant. It is channel
 `ffffffff`, except initial MACHINE may use channel `owner+1`. File length must equal the remaining
 decoded payload and be at
 least the 68-byte StateFile envelope. The first bytes are `CGBS`, StateFile format is exactly v2,
@@ -260,14 +301,18 @@ order is:
 
 ```text
 server HELLO -> client HELLO -> client AUTH -> server AUTH_RESULT
--> server MANIFEST -> client MANIFEST -> server CONSENT -> client CONSENT
+-> server MANIFEST -> client MANIFEST
+-> zero proposals OR repeated item CONSENT decisions by both actors
 -> SYNCHRONIZING (consented transfer/checkpoint preparation)
 -> server START -> client READY -> ACTIVE
 ```
 
-Any other message is `UNEXPECTED_MESSAGE` and terminates. In `SYNCHRONIZING`, only consented
+For multiple proposals, CONSENT frames remain in `EXCHANGE_CONSENT` until the last outstanding
+actor decision succeeds; there is no fixed server/client count or ordering. START is illegal after
+any strict subset. Any other message is `UNEXPECTED_MESSAGE` and terminates. In
+`SYNCHRONIZING`, only consented
 checkpoint and bulk transactions plus terminal frames are legal. In ACTIVE, input/reset/stop,
-checkpoint, ping/pong, and terminal frames are legal. A terminal frame transitions
+checkpoint under the bounded session grant, ping/pong, and terminal frames are legal. A terminal frame transitions
 to CLOSED after cleanup. State transitions occur only after the complete frame, checksum,
 decompression, payload schema, current-state legality, limits, and queue reservation have passed.
 A rejected frame produces **no state transition, allocation based on its declaration, payload
@@ -285,7 +330,8 @@ the emulator thread, EDT, accept loop, or another session.
 
 Listener limits are 8 pending handshakes and 4 handshake workers. One session retains at most 256
 queued frames, 33,817,172 queued **wire bytes**, 128 MiB decoded aggregate, four 65,536-byte bulk
-chunks, and one checkpoint transaction. Wire bytes count every retained frame's 64-byte header
+chunks, one checkpoint transaction in flight, and 32 accepted checkpoints per directional
+session grant. Wire bytes count every retained frame's 64-byte header
 plus its encoded payload, including checkpoint/bulk metadata and compression overhead. The bound
 is intentionally the exact simultaneous admission of one maximum checkpoint frame
 (`64 + 33,554,452 = 33,554,516`) and four maximum encoded chunk frames
@@ -346,6 +392,19 @@ flags, root kind, slots, local owner, endpoint/topology, and integrity must agre
 Any member failure rejects only the source and leaves live sessions, history, inputs, frame,
 configuration, and topology unchanged. Rollback generation/rebase details are implemented in #349
 but may not weaken this grouping or atomicity contract.
+
+The host is the four-player coordinator across three independently authenticated guest TCP
+sessions. It selects one nonzero target generation, roster mask `0f`, roster commitment, and
+LINKED_SESSION checkpoint digest before candidate admission. Candidate occupancy is separate from
+the committed/live emulator topology. Guest 1 and guest 2 preparation therefore leave the live
+mask unchanged and cannot authorize START. The barrier opens only after all required guests have
+presented the same roster tuple, validated the same checkpoint identity/digest, completed their
+per-connection directional consents/transfers, and prepared without mutation. The coordinator
+then commits the entire target roster once and allows START/READY on all sessions. Collision or
+candidate failure removes only that candidate; it cannot partially grow or alter the committed
+topology. After commitment, a replacement must authenticate the vacated slot and use the same
+committed slot, generation, commitment, and checkpoint identity; changing topology requires a new
+session generation.
 
 ## Invitation URI and threat model
 

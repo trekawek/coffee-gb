@@ -26,3 +26,4 @@ QUEUED_WIRE_BYTES	33817172	bytes	checked-before-copy	one-complete-checkpoint-fra
 PENDING_HANDSHAKES	8	sessions	before-accept-admission	listener-isolation
 HANDSHAKE_WORKERS	4	workers	before-task-start	listener-isolation
 OPEN_BULK_TRANSACTIONS	1	transaction	before-BEGIN	bounded-ownership
+CHECKPOINTS_PER_DIRECTIONAL_GRANT	32	transactions	before-checkpoint-admission	bounded-session-scoped-checkpoint-resynchronization

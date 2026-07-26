@@ -9,3 +9,5 @@ id	name	severity	approval_allowed	meaning
 0x0008	SLOT_ROM_DIFFERENT	WARNING_REQUIRES_APPROVAL	true	target-slot-ROM-digest-differs
 0x0009	BATTERY_OPTIONAL	INFORMATIONAL	true	battery-is-available-but-not-required-for-own-ROM-start
 0x000a	MATCH	INFORMATIONAL	false	identity-or-content-item-matches
+0x000b	BATTERY_TRANSFER	WARNING_REQUIRES_APPROVAL	true	explicit-battery-transfer-proposal-for-named-owner
+0x000c	CHECKPOINT_SYNC	WARNING_REQUIRES_APPROVAL	true	directional-session-checkpoint-grant-for-authenticated-guest

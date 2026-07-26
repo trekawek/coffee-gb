@@ -81,7 +81,7 @@ public class MobileAdapterContractTest {
     @Test
     public void deterministicTranscriptsHaveExactFramingChecksumsTimingAndHashes() throws Exception {
         List<Map<String, String>> transcripts = rows("/mobile-adapter/transcripts.tsv");
-        assertEquals(Set.of("begin_session", "reset", "invalid_checksum", "timeout",
+        assertEquals(Set.of("begin_session", "end_session", "reset", "invalid_checksum", "timeout",
                 "timeout_exact_boundary", "config_read", "max_payload_unsupported", "config_read_boundary",
                 "payload_boundary_plus_one"),
                 transcripts.stream().map(r -> r.get("id")).collect(Collectors.toSet()));
@@ -226,6 +226,77 @@ public class MobileAdapterContractTest {
         assertArrayEquals(hex(transcripts.get("begin_session").get("response_hex")),
                 started.response);
 
+        ReferenceMobileEngine sequential = new ReferenceMobileEngine("SLEEP");
+        assertEquals("SESSION_STARTED", sequential.feed(begin, 0).outcome);
+        EngineResult afterSuccessPartial = sequential.feed(Arrays.copyOf(begin, 3), 1);
+        assertEquals("NEED_MORE", afterSuccessPartial.outcome);
+        assertEquals(3, afterSuccessPartial.retainedBytes);
+        assertEquals(0, afterSuccessPartial.response.length);
+        assertEquals(0, afterSuccessPartial.ack.length);
+        assertEquals(0, afterSuccessPartial.commits);
+
+        ReferenceMobileEngine bytewise = new ReferenceMobileEngine("SLEEP");
+        for (int i = 0; i < begin.length; i++) {
+            EngineResult part = bytewise.feed(new byte[]{begin[i]}, i);
+            assertEquals("byte=" + i, i == begin.length - 1 ? "SESSION_STARTED" : "NEED_MORE",
+                    part.outcome);
+        }
+        ReferenceMobileEngine irregular = new ReferenceMobileEngine("SLEEP");
+        int irregularOffset = 0;
+        for (int size : List.of(1, 3, 2, 5, begin.length - 11)) {
+            int endOffset = Math.addExact(irregularOffset, size);
+            EngineResult part = irregular.feed(
+                    Arrays.copyOfRange(begin, irregularOffset, endOffset), endOffset);
+            irregularOffset = endOffset;
+            assertEquals(irregularOffset == begin.length ? "SESSION_STARTED" : "NEED_MORE",
+                    part.outcome);
+        }
+        assertEquals(begin.length, irregularOffset);
+
+        byte[] badChecksum = hex(transcripts.get("invalid_checksum").get("request_hex"));
+        ReferenceMobileEngine afterError = new ReferenceMobileEngine("SESSION");
+        assertEquals("CHECKSUM_ERROR", afterError.feed(badChecksum, 0).outcome);
+        EngineResult afterErrorPartial = afterError.feed(Arrays.copyOf(begin, 5), 1);
+        assertEquals("NEED_MORE", afterErrorPartial.outcome);
+        assertEquals(5, afterErrorPartial.retainedBytes);
+        assertEquals(0, afterErrorPartial.response.length);
+        assertEquals(0, afterErrorPartial.ack.length);
+        assertEquals(0, afterErrorPartial.commits);
+
+        ReferenceMobileEngine monotonic = new ReferenceMobileEngine("SESSION");
+        assertEquals("NEED_MORE", monotonic.feed(Arrays.copyOf(begin, 4), 100).outcome);
+        EngineResult beforeRegression = monotonic.snapshot();
+        EngineResult regression = monotonic.feed(new byte[]{begin[4]}, 99);
+        assertEquals("TIME_REGRESSION", regression.outcome);
+        assertEquals(beforeRegression.state, regression.state);
+        assertEquals(beforeRegression.retainedBytes, regression.retainedBytes);
+        assertEquals(beforeRegression.pendingSlots, regression.pendingSlots);
+        assertArrayEquals(beforeRegression.response, regression.response);
+        assertArrayEquals(beforeRegression.ack, regression.ack);
+
+        byte[] end = hex(transcripts.get("end_session").get("request_hex"));
+        ReferenceMobileEngine ending = new ReferenceMobileEngine("SESSION");
+        assertTrue(ending.reservePendingSlot());
+        EngineResult ended = ending.feed(end, 0);
+        assertEquals("SESSION_ENDED", ended.outcome);
+        assertEquals("SLEEP", ended.state);
+        assertEquals(0, ended.pendingSlots);
+        assertEquals(0, ended.retainedBytes);
+        assertArrayEquals(hex(transcripts.get("end_session").get("response_hex")),
+                ended.response);
+        assertArrayEquals(hex(transcripts.get("end_session").get("ack_hex")), ended.ack);
+
+        ReferenceMobileEngine cancelled = new ReferenceMobileEngine("SESSION");
+        assertTrue(cancelled.reservePendingSlot());
+        assertEquals("NEED_MORE", cancelled.feed(Arrays.copyOf(begin, 6), 0).outcome);
+        EngineResult cancellation = cancelled.cancelOrReplace();
+        assertEquals("CANCELLED", cancellation.outcome);
+        assertEquals("SLEEP", cancellation.state);
+        assertEquals(0, cancellation.pendingSlots);
+        assertEquals(0, cancellation.retainedBytes);
+        assertEquals(0, cancellation.response.length);
+        assertEquals(0, cancellation.ack.length);
+
         assertTrue(engine.reservePendingSlot());
         byte[] reset = hex(transcripts.get("reset").get("request_hex"));
         EngineResult resetResult = engine.feed(reset, 3_003);
@@ -277,6 +348,10 @@ public class MobileAdapterContractTest {
         Packet reset = parsePacket(hex(rows.get("reset").get("request_hex")));
         assertEquals(0x16, reset.command);
         assertEquals(0, reset.data.length);
+
+        Packet end = parsePacket(hex(rows.get("end_session").get("request_hex")));
+        assertEquals(0x11, end.command);
+        assertEquals(0, end.data.length);
 
         Packet config = parsePacket(hex(rows.get("config_read").get("request_hex")));
         assertArrayEquals(new byte[]{0, 4}, config.data);
@@ -489,6 +564,7 @@ public class MobileAdapterContractTest {
         private int count;
         private int expectedPacketBytes = -1;
         private long lastByteMillis = -1;
+        private long lastObservedMillis = -1;
         private String state;
         private String outcome = "NEED_MORE";
         private byte[] response = new byte[0];
@@ -507,10 +583,9 @@ public class MobileAdapterContractTest {
         }
 
         private EngineResult feed(byte[] bytes, long emulatedMillis) {
-            advanceTo(emulatedMillis);
-            if (outcome.equals("IDLE_TIMEOUT_RESET") || outcome.equals("IDLE_BOUNDARY_WAIT")) {
-                outcome = "NEED_MORE";
-            }
+            EngineResult time = advanceTo(emulatedMillis);
+            if (time.outcome.equals("TIME_REGRESSION")) return time;
+            outcome = "NEED_MORE";
             response = new byte[0];
             ack = new byte[0];
             commits = 0;
@@ -548,6 +623,10 @@ public class MobileAdapterContractTest {
 
         private EngineResult advanceTo(long emulatedMillis) {
             if (emulatedMillis < 0) throw new IllegalArgumentException("Negative emulated time");
+            if (lastObservedMillis >= 0 && emulatedMillis < lastObservedMillis) {
+                return snapshot("TIME_REGRESSION");
+            }
+            lastObservedMillis = emulatedMillis;
             if (lastByteMillis >= 0 &&
                     Math.subtractExact(emulatedMillis, lastByteMillis) > 3_000) {
                 state = "SLEEP";
@@ -569,8 +648,23 @@ public class MobileAdapterContractTest {
         }
 
         private EngineResult snapshot() {
-            return new EngineResult(state, outcome, response.clone(), ack.clone(), count,
+            return snapshot(outcome);
+        }
+
+        private EngineResult snapshot(String visibleOutcome) {
+            return new EngineResult(state, visibleOutcome, response.clone(), ack.clone(), count,
                     pendingSlots.used(), commits);
+        }
+
+        private EngineResult cancelOrReplace() {
+            state = "SLEEP";
+            outcome = "CANCELLED";
+            response = new byte[0];
+            ack = new byte[0];
+            commits = 0;
+            clearParser();
+            pendingSlots.clear();
+            return snapshot();
         }
 
         private void commitPacket() {
@@ -598,6 +692,18 @@ public class MobileAdapterContractTest {
                     outcome = "SESSION_STARTED";
                     response = packet(0x90, data);
                     ack = new byte[]{(byte) 0x88, (byte) 0x90};
+                    commits++;
+                    return;
+                case 0x11:
+                    if (data.length != 0) {
+                        unsupported();
+                        return;
+                    }
+                    state = "SLEEP";
+                    pendingSlots.clear();
+                    outcome = "SESSION_ENDED";
+                    response = packet(0x91, new byte[0]);
+                    ack = new byte[]{(byte) 0x88, (byte) 0x91};
                     commits++;
                     return;
                 case 0x16:
