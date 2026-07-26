@@ -688,17 +688,8 @@ class ProtocolV9ContractTest {
   }
 
   @Test
-  fun productionRemainsV8OnlyAndTheContractCannotReachLegacyOrNativeState() {
+  fun productionV9FoundationMirrorsTheContractWithoutReachingLegacyOrReplacingV8() {
     val root = repositoryRoot()
-    val productionRoots = listOf(root.resolve("core/src/main"), root.resolve("controller/src/main"), root.resolve("swing/src/main"))
-    val production = productionRoots.flatMap { sourceRoot ->
-      Files.walk(sourceRoot).use { paths ->
-        paths.filter { Files.isRegularFile(it) && (it.toString().endsWith(".kt") || it.toString().endsWith(".java")) }
-            .toList()
-      }
-    }.associateWith { it.readUtf8() }
-    assertFalse(production.values.any { "CGB9" in it || "PROTOCOL_VERSION: Byte = 0x09" in it })
-
     val v8 = root.resolve("controller/src/main/java/eu/rekawek/coffeegb/controller/network/Connection.kt").readUtf8()
     listOf(
         "private const val PROTOCOL_NAME = \"CoffeeGB NETPLAY\"",
@@ -708,6 +699,33 @@ class ProtocolV9ContractTest {
         "private const val PROTOCOL_ERROR: Byte = 0x0a",
         "internal const val ROM_HEADER_SIZE = 44",
     ).forEach { assertTrue(v8.contains(it), "v8 production contract drift: $it") }
+    val defaultController =
+        root.resolve(
+            "controller/src/main/java/eu/rekawek/coffeegb/controller/network/ConnectionController.kt")
+            .readUtf8()
+    assertFalse(defaultController.contains(".network.v9"))
+    assertFalse(defaultController.contains("V9Foundation"))
+
+    val v9Root =
+        root.resolve("controller/src/main/java/eu/rekawek/coffeegb/controller/network/v9")
+    val v9Production =
+        Files.walk(v9Root).use { paths ->
+          paths.filter {
+            Files.isRegularFile(it) &&
+                (it.toString().endsWith(".kt") || it.toString().endsWith(".java"))
+          }.sorted().map { it.readUtf8() }.toList().joinToString("\n")
+        }
+    assertTrue(v9Production.contains("CGB9"))
+    listOf(
+        "ObjectInputStream",
+        "ObjectOutputStream",
+        "LegacySnapshotImporter",
+        "NetplayMementoCodec",
+        "CGBN",
+        "Memento<",
+    ).forEach { assertFalse(v9Production.contains(it)) }
+    assertFalse(v9Production.contains("java.util." + "Hex" + "Format"))
+    assertFalse(Regex("(?:Enum\\.)?ordinal(?:\\(\\))?|\\.ordinal").containsMatchIn(v9Production))
 
     val contractRoot = root.resolve("controller/src/test/resources/netplay-v9")
     val contractResources = Files.list(contractRoot).use { paths ->
