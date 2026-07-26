@@ -394,13 +394,21 @@ data class V9BulkBegin(
     val chunkSize: Long,
 )
 
-class V9BulkChunk(
+class V9BulkChunk private constructor(
     val transactionId: Long,
     val absoluteOffset: Long,
     data: ByteArray,
+    takeOwnership: Boolean,
 ) : Closeable {
+  private val ownedData = if (takeOwnership) data else data.copyOf()
+
+  constructor(
+      transactionId: Long,
+      absoluteOffset: Long,
+      data: ByteArray,
+  ) : this(transactionId, absoluteOffset, data, false)
+
   private val closed = AtomicBoolean(false)
-  private val ownedData = data.copyOf()
 
   fun data(): ByteArray {
     check(!closed.get()) { "v9 bulk chunk is closed" }
@@ -419,6 +427,14 @@ class V9BulkChunk(
   override fun toString(): String =
       "V9BulkChunk(transaction=$transactionId, offset=$absoluteOffset, " +
           "bytes=${ownedData.size}, content=[redacted])"
+
+  companion object {
+    internal fun takeOwnership(
+        transactionId: Long,
+        absoluteOffset: Long,
+        data: ByteArray,
+    ): V9BulkChunk = V9BulkChunk(transactionId, absoluteOffset, data, true)
+  }
 }
 
 data class V9BulkEnd(
@@ -489,7 +505,7 @@ object V9BulkCodec {
     }
     val transaction = u32(payload, 0)
     if (transaction == 0L) malformed(payload.size)
-    return V9BulkChunk(
+    return V9BulkChunk.takeOwnership(
         transaction,
         u32(payload, 4),
         payload.copyOfRange(CHUNK_HEADER_BYTES, payload.size),
@@ -588,6 +604,7 @@ internal class V9Part3Session(
   private val usedTransactionIds = mutableSetOf<Long>()
   private val writeWaiters = mutableSetOf<CountDownLatch>()
   private var inbound: InboundTransaction? = null
+  private var pendingDelivery: PendingDelivery? = null
   private var activeSource: V9BulkSource? = null
   private var bulkDeadline: Closeable? = null
   private var closed = false
@@ -597,6 +614,7 @@ internal class V9Part3Session(
   fun start(value: V9ManifestPairingBoundary) {
     var complete: V9PreparationBoundary? = null
     synchronized(lock) {
+      if (closed) return
       check(boundary == null) { "v9 Part-3 session already started" }
       check(value.role == role && value.mode == mode &&
           value.authenticatedGuest == authenticatedGuest)
@@ -730,6 +748,7 @@ internal class V9Part3Session(
             val transferClass = requireNotNull(V9BulkCodec.messageClass(type))
             if (!allApprovedLocked() ||
                 inbound != null ||
+                pendingDelivery != null ||
                 flags != 0 ||
                 channel !in 1L..4L ||
                 encodedLength != V9BulkCodec.BEGIN_BYTES.toLong() ||
@@ -799,14 +818,33 @@ internal class V9Part3Session(
       synchronized(lock) { boundary?.let { progressLocked() } }
 
   override fun addProgressListener(listener: V9Part3ProgressListener): Closeable {
-    listeners += listener
-    progress()?.let(listener::onProgress)
-    return Closeable { listeners.remove(listener) }
+    val active = AtomicBoolean(true)
+    val initial =
+        synchronized(lock) {
+          if (closed) {
+            active.set(false)
+            null
+          } else {
+            listeners += listener
+            boundary?.let { progressLocked() }
+          }
+        }
+    if (initial != null) {
+      try {
+        listener.onProgress(initial)
+      } catch (_: RuntimeException) {
+        // An initial observer failure cannot affect protocol or transfer ownership.
+      }
+    }
+    return Closeable {
+      if (active.compareAndSet(true, false)) listeners.remove(listener)
+    }
   }
 
   override fun close() {
     val source: V9BulkSource?
     val retained: ByteArray?
+    val delivery: PendingDelivery?
     synchronized(lock) {
       if (closed) return
       closed = true
@@ -816,10 +854,14 @@ internal class V9Part3Session(
       activeSource = null
       retained = inbound?.bytes
       inbound = null
+      delivery = pendingDelivery
+      pendingDelivery = null
       writeWaiters.forEach(CountDownLatch::countDown)
       writeWaiters.clear()
     }
     retained?.fill(0)
+    delivery?.candidate?.close()
+    delivery?.completed?.countDown()
     try {
       source?.close()
     } catch (_: IOException) {
@@ -828,6 +870,15 @@ internal class V9Part3Session(
       // The connection is already closing; caller source details remain private.
     }
     publish()
+    listeners.clear()
+  }
+
+  @Throws(InterruptedException::class)
+  fun awaitPendingDelivery() {
+    while (true) {
+      val current = synchronized(lock) { if (closed) null else pendingDelivery } ?: return
+      if (current.completed.await(100, TimeUnit.MILLISECONDS)) return
+    }
   }
 
   private fun onLocalVoteWritten(proposalId: Long, decision: V9ConsentDecision) {
@@ -1008,8 +1059,8 @@ internal class V9Part3Session(
     } catch (e: V9ProtocolException) {
       failSession(e.reason, V9Diagnostic.TRANSFER_REJECTED)
     } catch (_: InterruptedException) {
-      Thread.currentThread().interrupt()
       if (!isClosed()) failSession(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
+      Thread.currentThread().interrupt()
     } catch (_: IOException) {
       failSession(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.TRANSFER_REJECTED)
     } catch (_: RuntimeException) {
@@ -1038,6 +1089,9 @@ internal class V9Part3Session(
           }
         }
       }
+      val continueWithNext =
+          synchronized(lock) { !closed && proposal.proposalId in prepared }
+      if (continueWithNext) advanceTransfer()
     }
   }
 
@@ -1051,6 +1105,7 @@ internal class V9Part3Session(
       if (!allApprovedLocked() ||
           proposal.proposalId in claimed ||
           proposal.proposalId in prepared ||
+          pendingDelivery != null ||
           value.transactionId in usedTransactionIds ||
           proposal.transferClass != transferClass ||
           value.sourcePlayer != peerActor() ||
@@ -1124,6 +1179,7 @@ internal class V9Part3Session(
 
   private fun acceptEnd(type: V9MessageType, channel: Long, value: V9BulkEnd) {
     val transaction: InboundTransaction
+    val delivery: PendingDelivery
     synchronized(lock) {
       ensureOpen()
       transaction =
@@ -1131,36 +1187,66 @@ internal class V9Part3Session(
       if (transaction.transferClass != V9BulkCodec.messageClass(type) ||
           transaction.channel != channel ||
           transaction.transactionId != value.transactionId ||
+          pendingDelivery != null ||
           transaction.offset != transaction.bytes.size.toLong() ||
           !MessageDigest.isEqual(value.completeSha256.view(), transaction.proposal.expectedDigestView()) ||
           !MessageDigest.isEqual(transaction.digest.digest(), transaction.proposal.expectedDigestView())) {
         throw V9ProtocolException(V9ErrorCode.CHECKSUM_MISMATCH, 0)
       }
       inbound = null
+      delivery =
+          PendingDelivery(
+              transaction.proposal,
+              V9CompletedBulkCandidate(
+                  V9ConsentItem.from(transaction.proposal),
+                  transaction.bytes,
+              ),
+          )
+      pendingDelivery = delivery
     }
     validProgress(transaction.proposal.proposalId, transaction.offset)
     try {
-      startTask("netplay-v9-private-sink") { deliver(transaction) }
+      startTask("netplay-v9-private-sink") { deliver(delivery) }
     } catch (_: RuntimeException) {
-      transaction.bytes.fill(0)
+      discardDelivery(delivery)
       failSession(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.TRANSFER_REJECTED)
     }
   }
 
-  private fun deliver(transaction: InboundTransaction) {
-    val candidate =
-        V9CompletedBulkCandidate(V9ConsentItem.from(transaction.proposal), transaction.bytes)
-    if (isClosed()) {
-      candidate.close()
-      return
-    }
+  private fun deliver(delivery: PendingDelivery) {
+    var handedOff = false
     try {
-      plan.sink.accept(candidate)
-      markPrepared(transaction.proposal.proposalId)
-    } catch (_: RuntimeException) {
-      candidate.close()
-      failSession(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.TRANSFER_REJECTED)
+      if (isClosed()) return
+      plan.sink.accept(delivery.candidate)
+      handedOff =
+          synchronized(lock) {
+            if (!closed && pendingDelivery === delivery) {
+              pendingDelivery = null
+              true
+            } else {
+              false
+            }
+          }
+      if (handedOff) markPrepared(delivery.proposal.proposalId)
+    } catch (_: InterruptedException) {
+      if (!isClosed()) failSession(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
+      Thread.currentThread().interrupt()
+    } catch (_: Exception) {
+      if (!isClosed()) {
+        failSession(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.TRANSFER_REJECTED)
+      }
+    } finally {
+      if (!handedOff) discardDelivery(delivery)
+      delivery.completed.countDown()
     }
+  }
+
+  private fun discardDelivery(delivery: PendingDelivery) {
+    synchronized(lock) {
+      if (pendingDelivery === delivery) pendingDelivery = null
+    }
+    delivery.candidate.close()
+    delivery.completed.countDown()
   }
 
   private fun markPrepared(proposalId: Long) {
@@ -1369,5 +1455,11 @@ internal class V9Part3Session(
       val bytes: ByteArray,
       val digest: MessageDigest,
       var offset: Long = 0,
+  )
+
+  private data class PendingDelivery(
+      val proposal: V9TransferProposal,
+      val candidate: V9CompletedBulkCandidate,
+      val completed: CountDownLatch = CountDownLatch(1),
   )
 }

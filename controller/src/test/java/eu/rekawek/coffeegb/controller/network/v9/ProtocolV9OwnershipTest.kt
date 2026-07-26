@@ -26,6 +26,22 @@ import org.junit.Test
 class ProtocolV9OwnershipTest {
 
   @Test
+  fun failedInFlightWriteWipesTheExactOwnedBufferAndDoesNotRunCompletion() {
+    val channel = ScriptedChannel(failWrites = true)
+    val connection = V9FoundationConnection(channel, V9Role.SERVER)
+
+    connection.start()
+    awaitCondition { connection.isClosed() }
+    awaitCondition { connection.activeTaskCount() == 0 }
+
+    val inFlight = assertNotNull(channel.lastWriteBuffer.get())
+    assertTrue(inFlight.all { it == 0.toByte() }, "polled writer bytes must be wiped")
+    assertEquals(0, channel.readCalls.get(), "HELLO completion must not start the reader")
+    assertEquals(V9LifecycleState.CLOSED, connection.snapshot().state)
+    assertEquals(V9ErrorCode.INTERNAL_ERROR, connection.snapshot().failure?.reason)
+  }
+
+  @Test
   fun localTerminalErrorDrainsUntilPeerEofOrExactCleanupDeadline() {
     val clock = FakeClock()
     val scheduler = ManualScheduler(clock)
@@ -112,6 +128,7 @@ class ProtocolV9OwnershipTest {
     failedWrite.enqueue(malformedServerHello())
     awaitCondition { isolated.isClosed() }
     assertEquals(V9ErrorCode.CAPABILITY_MISMATCH, isolated.snapshot().failure?.reason)
+    awaitCondition { failedWrite.closeCount.get() == 1 }
     assertEquals(1, failedWrite.closeCount.get())
   }
 
@@ -791,6 +808,8 @@ class ProtocolV9OwnershipTest {
     val outputShutdown = CountDownLatch(1)
     val closed = AtomicBoolean()
     val closeCount = AtomicInteger()
+    val readCalls = AtomicInteger()
+    val lastWriteBuffer = AtomicReference<ByteArray?>()
 
     fun enqueue(bytes: ByteArray) {
       bytes.forEach { incoming.put(it.toInt() and 0xff) }
@@ -804,6 +823,7 @@ class ProtocolV9OwnershipTest {
     fun outputBytes(): ByteArray = output.toByteArray()
 
     override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+      readCalls.incrementAndGet()
       val first = incoming.take()
       if (first < 0) return -1
       bytes[offset] = first.toByte()
@@ -820,6 +840,7 @@ class ProtocolV9OwnershipTest {
     }
 
     override fun write(bytes: ByteArray, offset: Int, length: Int): Int {
+      lastWriteBuffer.set(bytes)
       writeEntered.countDown()
       writeRelease.await()
       if (closed.get()) throw IOException("closed")

@@ -242,8 +242,7 @@ class V9FoundationConnection(
   private val closeListenerLock = Any()
   private val closeListeners = mutableListOf<() -> Unit>()
   private val part3ListenerLock = Any()
-  private val pendingPart3Listeners = mutableListOf<V9Part3ProgressListener>()
-  private val part3Subscriptions = mutableListOf<Closeable>()
+  private val part3Registrations = mutableSetOf<Part3ListenerRegistration>()
   private val wireStateLock = Any()
   private var timeoutTask: Closeable? = null
   private var writerTask: Thread? = null
@@ -340,16 +339,22 @@ class V9FoundationConnection(
   fun part3Progress(): V9Part3Progress? = part3Session?.progress()
 
   fun addPart3ProgressListener(listener: V9Part3ProgressListener): Closeable {
-    val session = part3Session
-    if (session != null) return session.addProgressListener(listener)
-    synchronized(part3ListenerLock) {
-      val current = part3Session
-      if (current != null) return current.addProgressListener(listener)
-      pendingPart3Listeners += listener
+    val registration = Part3ListenerRegistration(listener)
+    val session =
+        synchronized(part3ListenerLock) {
+          if (closed.get()) {
+            null
+          } else {
+            part3Registrations += registration
+            part3Session
+          }
+        }
+    if (closed.get()) {
+      registration.close()
+    } else if (session != null) {
+      registration.promote(session)
     }
-    return Closeable {
-      synchronized(part3ListenerLock) { pendingPart3Listeners.remove(listener) }
-    }
+    return registration
   }
 
   fun negotiatedCapabilities(): Set<V9Capability> =
@@ -374,8 +379,7 @@ class V9FoundationConnection(
       encodedLength: Long,
       decodedLength: Long,
   ): V9ErrorCode? {
-    val session = part3Session ?: return V9ErrorCode.UNEXPECTED_MESSAGE
-    return session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
+    return admitPart3Header(type, flags, channel, encodedLength, decodedLength)
   }
 
   internal fun configuredDecoderMessagesForTest(): Set<V9MessageType> =
@@ -476,12 +480,16 @@ class V9FoundationConnection(
           }
           offset = Math.addExact(offset, consumed.toInt())
           result.frames.forEach { frame ->
+            val waitForDelivery =
+                frame.header.type == V9MessageType.ROM_END ||
+                    frame.header.type == V9MessageType.BATTERY_END
             frame.use {
               if (!closed.get() &&
                   snapshot().state != V9LifecycleState.TERMINAL_CLEANUP) {
                 handleFrame(frame)
               }
             }
+            if (waitForDelivery) part3Session?.awaitPendingDelivery()
           }
           val failure = result.failure
           if (failure != null) {
@@ -512,8 +520,11 @@ class V9FoundationConnection(
       while (!closed.get()) {
         val value = writer.poll(50) ?: continue
         synchronized(wireStateLock) {
-          writeFully(value.bytes)
-          writer.completed(value)
+          try {
+            writeFully(value.bytes)
+          } finally {
+            writer.completed(value)
+          }
           if (!closed.get()) value.onWritten()
         }
       }
@@ -920,13 +931,21 @@ class V9FoundationConnection(
             completedPreparationBoundary = prepared
             preparationComplete.countDown()
           }
-      part3Session = session
-      val listeners =
+      val registrations =
           synchronized(part3ListenerLock) {
-            pendingPart3Listeners.toList().also { pendingPart3Listeners.clear() }
+            if (closed.get()) {
+              null
+            } else {
+              part3Session = session
+              part3Registrations.toList()
+            }
           }
-      listeners.forEach { part3Subscriptions += session.addProgressListener(it) }
+      if (registrations == null) {
+        session.close()
+        return
+      }
       session.start(value)
+      registrations.forEach { it.promote(session) }
     }
     completedManifestBoundary = value
     manifestComplete.countDown()
@@ -1013,9 +1032,10 @@ class V9FoundationConnection(
       decodedLength: Long,
   ): V9ErrorCode? {
     if (type !in PART3_MESSAGES) return null
-    val session = part3Session ?: return V9ErrorCode.UNEXPECTED_MESSAGE
-    val result = session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
-    return result
+    return synchronized(wireStateLock) {
+      val session = part3Session ?: return@synchronized V9ErrorCode.UNEXPECTED_MESSAGE
+      session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
+    }
   }
 
   private fun reject(reason: V9ErrorCode, diagnostic: V9Diagnostic) {
@@ -1237,13 +1257,16 @@ class V9FoundationConnection(
     localManifestPayload?.fill(0)
     localManifestPayload = null
     localManifest = null
-    part3Session?.close()
-    part3Session = null
-    synchronized(part3ListenerLock) {
-      part3Subscriptions.forEach(Closeable::close)
-      part3Subscriptions.clear()
-      pendingPart3Listeners.clear()
-    }
+    val (session, registrations) =
+        synchronized(part3ListenerLock) {
+          val currentSession = part3Session
+          part3Session = null
+          val currentRegistrations = part3Registrations.toList()
+          part3Registrations.clear()
+          currentSession to currentRegistrations
+        }
+    registrations.forEach(Closeable::close)
+    session?.close()
     clientInvitation?.close()
     try {
       channel.close()
@@ -1284,6 +1307,48 @@ class V9FoundationConnection(
     V9ErrorCode.CONSENT_REJECTED -> V9Diagnostic.CONSENT_REJECTED
     V9ErrorCode.ROM_MISMATCH -> V9Diagnostic.TRANSFER_REJECTED
     else -> V9Diagnostic.HELLO_REJECTED
+  }
+
+  private inner class Part3ListenerRegistration(
+      listener: V9Part3ProgressListener,
+  ) : Closeable {
+    private val active = AtomicBoolean(true)
+    private val safeListener =
+        V9Part3ProgressListener { progress ->
+          if (active.get()) {
+            try {
+              listener.onProgress(progress)
+            } catch (_: RuntimeException) {
+              // Presentation observers never affect protocol or private-content ownership.
+            }
+          }
+        }
+    private var subscription: Closeable? = null
+
+    fun promote(session: V9Part3Session) {
+      if (!active.get()) return
+      val installed = session.addProgressListener(safeListener)
+      val discard =
+          synchronized(part3ListenerLock) {
+            if (!active.get() || closed.get() || part3Session !== session || subscription != null) {
+              true
+            } else {
+              subscription = installed
+              false
+            }
+          }
+      if (discard) installed.close()
+    }
+
+    override fun close() {
+      if (!active.compareAndSet(true, false)) return
+      val installed =
+          synchronized(part3ListenerLock) {
+            part3Registrations.remove(this)
+            subscription.also { subscription = null }
+          }
+      installed?.close()
+    }
   }
 
   companion object {
