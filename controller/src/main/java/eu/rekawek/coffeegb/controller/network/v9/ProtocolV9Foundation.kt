@@ -136,12 +136,21 @@ internal class V9WriterQueue {
   data class QueuedWrite(val bytes: ByteArray, val onWritten: () -> Unit)
 }
 
+/** Immutable Part-1 boundary. MANIFEST and all private traffic remain unavailable here. */
+data class V9PostAuthBoundary(
+    val role: V9Role,
+    val mode: V9LinkMode,
+    val slot: Int,
+    val state: V9LifecycleState,
+)
+
 /**
  * Opt-in protocol-v9 transport foundation.
  *
- * This owner performs only the server-first HELLO exchange. It stops at the role-specific
- * `WAIT_AUTH`/`SEND_AUTH` state (public phase `AWAITING_PAIRING`); no invitation, manifest,
- * consent, private payload, checkpoint, or gameplay message can be queued or delivered.
+ * Without invitation ownership this performs only the server-first HELLO exchange and stops at
+ * `WAIT_AUTH`/`SEND_AUTH`. With explicit Part-1 invitation owners it performs AUTH and stops at
+ * `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`. Manifest, consent, private payload, checkpoint,
+ * diagnostics, discovery, and gameplay messages remain unavailable.
  */
 class V9FoundationConnection(
     private val channel: V9TransportChannel,
@@ -151,6 +160,8 @@ class V9FoundationConnection(
     optionalCapabilities: Set<V9Capability> = emptySet(),
     private val clock: V9MonotonicClock = V9MonotonicClock.SYSTEM,
     scheduler: V9DeadlineScheduler? = null,
+    private val invitationHost: V9InvitationHost? = null,
+    private val clientInvitation: V9ClientInvitation? = null,
 ) : Closeable, V9LifecycleSource {
   private val scheduler = scheduler ?: V9SystemDeadlineScheduler(clock)
   private val ownedScheduler = if (scheduler == null) this.scheduler as Closeable else null
@@ -160,7 +171,13 @@ class V9FoundationConnection(
       V9IncrementalDecoder(
           policy =
               V9DecoderPolicy(
-                  allowedMessages = setOf(V9MessageType.HELLO, V9MessageType.ERROR),
+                  allowedMessages =
+                      setOf(
+                          V9MessageType.HELLO,
+                          V9MessageType.AUTH,
+                          V9MessageType.AUTH_RESULT,
+                          V9MessageType.ERROR,
+                      ),
                   negotiatedCapabilities = V9Capability.entries.toSet(),
                   linkMode = mode,
               ),
@@ -170,6 +187,7 @@ class V9FoundationConnection(
   private val closed = AtomicBoolean(false)
   private val started = AtomicBoolean(false)
   private val boundary = CountDownLatch(1)
+  private val postAuth = CountDownLatch(1)
   private val tasks = mutableListOf<Thread>()
   private val taskLock = Any()
   private val ownershipLock = Any()
@@ -179,9 +197,14 @@ class V9FoundationConnection(
   private var timeoutTask: Closeable? = null
   private var writerTask: Thread? = null
   private var negotiated: V9NegotiatedCapabilities? = null
+  private var remoteHello: V9Hello? = null
+  private var slotReservation: V9InvitationHost.Reservation? = null
+  private var authenticatedBoundary: V9PostAuthBoundary? = null
   private var nextOutgoingSequence = 0L
 
   init {
+    require(invitationHost == null || role == V9Role.SERVER && invitationHost.mode == mode)
+    require(clientInvitation == null || role == V9Role.CLIENT && clientInvitation.mode == mode)
     lifecycle.addListener { state ->
       scheduleDeadline(state)
       if (state.phase == V9LifecyclePhase.AWAITING_PAIRING ||
@@ -218,10 +241,21 @@ class V9FoundationConnection(
     return snapshot()
   }
 
+  fun awaitPostAuthBoundary(timeout: Long, unit: TimeUnit): V9LifecycleSnapshot {
+    postAuth.await(timeout, unit)
+    return snapshot()
+  }
+
   fun negotiatedCapabilities(): Set<V9Capability> =
       negotiated?.capabilities?.toSet() ?: emptySet()
 
   fun writerQueueSnapshot(): V9QueueSnapshot = writer.snapshot()
+
+  @Synchronized
+  fun postAuthBoundary(): V9PostAuthBoundary? = authenticatedBoundary
+
+  @Synchronized
+  fun authenticatedSlot(): Int? = authenticatedBoundary?.slot
 
   internal fun isClosed(): Boolean = closed.get()
 
@@ -238,7 +272,7 @@ class V9FoundationConnection(
     }
   }
 
-  /** Phase #347 deliberately refuses all post-HELLO traffic. */
+  /** Part 1 deliberately refuses all caller-originated traffic beyond its AUTH boundary. */
   fun sendUnavailable(type: V9MessageType): Nothing {
     require(type != V9MessageType.HELLO && type != V9MessageType.ERROR)
     throw V9ProtocolException(V9ErrorCode.UNEXPECTED_MESSAGE, 0)
@@ -380,6 +414,8 @@ class V9FoundationConnection(
           }
       when (type) {
         V9MessageType.HELLO -> handleHello(V9HelloCodec.decode(frame.payloadView()))
+        V9MessageType.AUTH -> handleAuth(frame)
+        V9MessageType.AUTH_RESULT -> handleAuthResult(frame)
         V9MessageType.ERROR -> {
           val remote = V9ErrorPayloadCodec.decode(frame.payloadView())
           if (role == V9Role.CLIENT &&
@@ -406,8 +442,12 @@ class V9FoundationConnection(
           }
           val result = V9HelloCodec.negotiate(localHello, remote, V9Role.SERVER, mode)
           negotiated = result
+          remoteHello = remote
           lifecycle.serverHelloReceived()
-          enqueueHello { lifecycle.clientHelloSent(result) }
+          enqueueHello {
+            lifecycle.clientHelloSent(result)
+            if (clientInvitation != null) enqueueClientAuth()
+          }
         }
         V9Role.SERVER -> {
           if (snapshot().state != V9LifecycleState.WAIT_CLIENT_HELLO) {
@@ -415,12 +455,147 @@ class V9FoundationConnection(
           }
           val result = V9HelloCodec.negotiate(localHello, remote, V9Role.CLIENT, mode)
           negotiated = result
+          remoteHello = remote
           lifecycle.clientHelloReceived(result)
         }
       }
     } catch (e: V9ProtocolException) {
       reject(e.reason, V9Diagnostic.CAPABILITY_MISMATCH)
     }
+  }
+
+  private fun enqueueClientAuth() {
+    val invitation = clientInvitation ?: return
+    val server = remoteHello?.nonce()
+        ?: return fail(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.IO_FAILURE)
+    val client = localHello.nonce()
+    val auth =
+        try {
+          invitation.createAuth(server, client)
+        } catch (_: RuntimeException) {
+          fail(V9ErrorCode.AUTH_FAILED, V9Diagnostic.AUTH_REJECTED)
+          return
+        }
+    val sequence = nextSequenceOrFail() ?: return
+    val encoded =
+        try {
+          V9FrameEncoder.encode(
+              V9OutboundFrame(
+                  V9MessageType.AUTH,
+                  0,
+                  sequence,
+                  0,
+                  ProtocolV9.CONTROL_CHANNEL,
+                  V9AuthCodec.encode(auth),
+              ),
+              authPolicy(),
+          )
+        } catch (e: V9ProtocolException) {
+          fail(e.reason, V9Diagnostic.AUTH_REJECTED)
+          return
+        }
+    responseLedger.recordPeerRequest(sequence, V9MessageType.AUTH)
+    if (!writer.offer(encoded) {
+          advanceOutgoingSequence()
+          invitation.close()
+          lifecycle.clientAuthSent()
+        }) {
+      invitation.close()
+      fail(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
+    }
+  }
+
+  private fun handleAuth(frame: V9Frame) {
+    if (role != V9Role.SERVER ||
+        snapshot().state != V9LifecycleState.WAIT_AUTH ||
+        invitationHost == null) {
+      reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.AUTH_REJECTED)
+      return
+    }
+    lifecycle.clientAuthReceived()
+    val remote = remoteHello?.nonce()
+    val local = localHello.nonce()
+    val auth =
+        try {
+          V9AuthCodec.decode(frame.payloadView(), mode)
+        } catch (_: V9ProtocolException) {
+          null
+        }
+    val outcome =
+        if (auth == null || remote == null) {
+          invitationHost.rejectMalformedAdmission()
+        } else {
+          invitationHost.authenticate(auth, local, remote)
+        }
+    when (outcome) {
+      is V9Authentication.Accepted -> {
+        slotReservation = outcome.reservation
+        enqueueAcceptedAuthResult(frame.header.sequence, outcome.reservation.slot)
+      }
+      V9Authentication.Failed ->
+        sendRejectedAuthResult(frame.header.sequence)
+      V9Authentication.SlotFull ->
+        sendCorrelatedSlotFull(frame.header.sequence)
+    }
+  }
+
+  private fun enqueueAcceptedAuthResult(correlation: Long, slot: Int) {
+    val sequence = nextSequenceOrFail() ?: return
+    val encoded =
+        try {
+          V9FrameEncoder.encode(
+              V9OutboundFrame(
+                  V9MessageType.AUTH_RESULT,
+                  V9Flag.RESPONSE.wireMask,
+                  sequence,
+                  correlation,
+                  ProtocolV9.CONTROL_CHANNEL,
+                  V9AuthCodec.encode(V9AuthResult(V9AuthStatus.ACCEPTED)),
+              ),
+              authPolicy(),
+          )
+        } catch (e: V9ProtocolException) {
+          fail(e.reason, V9Diagnostic.AUTH_REJECTED)
+          return
+        }
+    if (!writer.offer(encoded) {
+          advanceOutgoingSequence()
+          lifecycle.serverAuthResultSent()
+          authenticatedBoundary =
+              V9PostAuthBoundary(role, mode, slot, V9LifecycleState.SEND_SERVER_MANIFEST)
+          postAuth.countDown()
+        }) {
+      fail(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
+    }
+  }
+
+  private fun handleAuthResult(frame: V9Frame) {
+    if (role != V9Role.CLIENT ||
+        snapshot().state != V9LifecycleState.WAIT_AUTH_RESULT ||
+        clientInvitation == null) {
+      reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.AUTH_REJECTED)
+      return
+    }
+    val result =
+        try {
+          V9AuthCodec.decodeResult(frame.payloadView(), frame.header.flags)
+        } catch (_: V9ProtocolException) {
+          reject(V9ErrorCode.AUTH_FAILED, V9Diagnostic.AUTH_REJECTED)
+          return
+        }
+    if (result.status == V9AuthStatus.REJECTED) {
+      fail(V9ErrorCode.AUTH_FAILED, V9Diagnostic.AUTH_REJECTED)
+      return
+    }
+    lifecycle.serverAuthResultReceived()
+    authenticatedBoundary =
+        V9PostAuthBoundary(
+            role,
+            mode,
+            clientInvitation.slot,
+            V9LifecycleState.WAIT_SERVER_MANIFEST,
+        )
+    postAuth.countDown()
   }
 
   private fun reject(reason: V9ErrorCode, diagnostic: V9Diagnostic) {
@@ -443,6 +618,72 @@ class V9FoundationConnection(
         closeResources()
       }
     } else {
+      lifecycle.completeTerminalCleanup()
+      closeResources()
+    }
+  }
+
+  private fun sendRejectedAuthResult(correlation: Long) {
+    sendTerminalResponse(
+        V9ErrorCode.AUTH_FAILED,
+        V9Diagnostic.AUTH_REJECTED,
+        V9MessageType.AUTH_RESULT,
+        V9Flag.RESPONSE.wireMask or V9Flag.TERMINAL.wireMask,
+        correlation,
+        V9AuthCodec.encode(V9AuthResult(V9AuthStatus.REJECTED)),
+    )
+  }
+
+  private fun sendCorrelatedSlotFull(correlation: Long) {
+    sendTerminalResponse(
+        V9ErrorCode.SERVER_FULL,
+        V9Diagnostic.AUTH_REJECTED,
+        V9MessageType.ERROR,
+        V9Flag.RESPONSE.wireMask or V9Flag.TERMINAL.wireMask,
+        correlation,
+        V9ErrorPayloadCodec.encode(
+            V9ErrorCode.SERVER_FULL,
+            V9MessageType.AUTH.wireId,
+            correlation,
+        ),
+    )
+  }
+
+  private fun sendTerminalResponse(
+      reason: V9ErrorCode,
+      diagnostic: V9Diagnostic,
+      type: V9MessageType,
+      flags: Int,
+      correlation: Long,
+      payload: ByteArray,
+  ) {
+    if (closed.get()) return
+    writer.close()
+    writerTask?.takeUnless { it === Thread.currentThread() }?.interrupt()
+    lifecycle.beginTerminalCleanup(reason, diagnostic)
+    try {
+      synchronized(wireStateLock) {
+        val sequence = nextSequenceOrFail() ?: return
+        val bytes =
+            V9FrameEncoder.encode(
+                V9OutboundFrame(
+                    type,
+                    flags,
+                    sequence,
+                    correlation,
+                    ProtocolV9.CONTROL_CHANNEL,
+                    payload,
+                ),
+                authPolicy(),
+            )
+        writeFully(bytes)
+        advanceOutgoingSequence()
+        channel.shutdownOutput()
+      }
+    } catch (_: IOException) {
+      lifecycle.completeTerminalCleanup()
+      closeResources()
+    } catch (_: V9ProtocolException) {
       lifecycle.completeTerminalCleanup()
       closeResources()
     }
@@ -489,6 +730,27 @@ class V9FoundationConnection(
         }
   }
 
+  private fun nextSequenceOrFail(): Long? {
+    if (nextOutgoingSequence > ProtocolV9.LAST_SEQUENCE) {
+      fail(V9ErrorCode.SEQUENCE_ERROR, V9Diagnostic.AUTH_REJECTED)
+      return null
+    }
+    return nextOutgoingSequence
+  }
+
+  private fun authPolicy(): V9DecoderPolicy =
+      V9DecoderPolicy(
+          allowedMessages =
+              setOf(
+                  V9MessageType.HELLO,
+                  V9MessageType.AUTH,
+                  V9MessageType.AUTH_RESULT,
+                  V9MessageType.ERROR,
+              ),
+          negotiatedCapabilities = negotiated?.capabilities ?: V9Capability.entries.toSet(),
+          linkMode = mode,
+      )
+
   private fun startTask(name: String, block: () -> Unit): Thread {
     check(!closed.get()) { "v9 foundation is closed" }
     val task = thread(start = false, isDaemon = true, name = name, block = block)
@@ -532,6 +794,9 @@ class V9FoundationConnection(
       timeoutTask = null
     }
     writer.close()
+    slotReservation?.close()
+    slotReservation = null
+    clientInvitation?.close()
     try {
       channel.close()
     } catch (_: IOException) {
@@ -542,6 +807,7 @@ class V9FoundationConnection(
     }
     ownedScheduler?.close()
     boundary.countDown()
+    postAuth.countDown()
     val listeners =
         synchronized(closeListenerLock) {
           closeListeners.toList().also { closeListeners.clear() }
@@ -562,6 +828,8 @@ class V9FoundationConnection(
     V9ErrorCode.TIMEOUT -> V9Diagnostic.TIMEOUT
     V9ErrorCode.CANCELLED -> V9Diagnostic.CANCELLED
     V9ErrorCode.QUEUE_OVERFLOW -> V9Diagnostic.QUEUE_FULL
+    V9ErrorCode.AUTH_FAILED,
+    V9ErrorCode.SERVER_FULL -> V9Diagnostic.AUTH_REJECTED
     else -> V9Diagnostic.HELLO_REJECTED
   }
 
@@ -571,13 +839,14 @@ class V9FoundationConnection(
 }
 
 /**
- * Opt-in listener used only by foundation diagnostics/tests until #348 supplies pairing.
+ * Opt-in listener used only by foundation/Part-1 diagnostics and tests until later pairing phases.
  * It is intentionally not reachable from [eu.rekawek.coffeegb.controller.network.ConnectionController].
  */
 class V9FoundationServer(
     private val port: Int = 0,
     private val mode: V9LinkMode = V9LinkMode.NORMAL,
     private val optionalCapabilities: Set<V9Capability> = emptySet(),
+    private val invitationHost: V9InvitationHost? = null,
     private val onAwaitingPairing: (V9FoundationConnection) -> Unit,
 ) : Closeable {
   private val stopped = AtomicBoolean(false)
@@ -607,6 +876,7 @@ class V9FoundationServer(
             role,
             linkMode,
             optionalCapabilities = capabilities,
+            invitationHost = invitationHost,
         )
       }
 
@@ -649,8 +919,9 @@ class V9FoundationServer(
     }
     val neverStarted = workers.shutdownNow()
     neverStarted.filterIsInstance<V9PendingCandidate>().forEach(V9PendingCandidate::close)
-    pending.toList().forEach(V9PendingCandidate::close)
-    connections.toList().forEach(V9FoundationConnection::close)
+    pending.toTypedArray().forEach(V9PendingCandidate::close)
+    connections.toTypedArray().forEach(V9FoundationConnection::close)
+    invitationHost?.close()
     acceptThread?.interrupt()
   }
 
@@ -801,7 +1072,9 @@ object V9FoundationClient {
       mode: V9LinkMode = V9LinkMode.NORMAL,
       optionalCapabilities: Set<V9Capability> = emptySet(),
       connectTimeoutMillis: Int = V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt(),
+      invitation: V9ClientInvitation? = null,
   ): V9FoundationConnection {
+    require(invitation == null || invitation.mode == mode)
     val channel = V9SocketChannel(Socket())
     try {
       channel.connect(address, connectTimeoutMillis)
@@ -810,12 +1083,22 @@ object V9FoundationClient {
           V9Role.CLIENT,
           mode,
           optionalCapabilities = optionalCapabilities,
+          clientInvitation = invitation,
       ).also(V9FoundationConnection::start)
     } catch (e: IOException) {
+      invitation?.close()
       try {
         channel.close()
       } catch (_: IOException) {
         // Keep the original connect failure.
+      }
+      throw e
+    } catch (e: RuntimeException) {
+      invitation?.close()
+      try {
+        channel.close()
+      } catch (_: IOException) {
+        // Keep the original construction/start failure.
       }
       throw e
     }
@@ -838,6 +1121,7 @@ class V9FoundationConnectAttempt(
   private var state = V9ConnectAttemptState.NEW
   private var pendingChannel: V9ConnectableChannel? = null
   private var pendingConnection: V9FoundationConnection? = null
+  private var pendingInvitation: V9ClientInvitation? = null
   private var task: Thread? = null
   private var timeoutTask: Closeable? = null
   private var callback:
@@ -850,8 +1134,10 @@ class V9FoundationConnectAttempt(
       address: InetSocketAddress,
       mode: V9LinkMode = V9LinkMode.NORMAL,
       optionalCapabilities: Set<V9Capability> = emptySet(),
+      invitation: V9ClientInvitation? = null,
       onComplete: (V9FoundationConnection?, V9ErrorCode?) -> Unit,
   ) {
+    require(invitation == null || invitation.mode == mode)
     var cancelledBeforeStart = false
     synchronized(lock) {
       check(callback == null) { "v9 connect attempt already started" }
@@ -862,9 +1148,11 @@ class V9FoundationConnectAttempt(
       } else {
         check(state == V9ConnectAttemptState.NEW) { "v9 connect attempt is closed" }
         state = V9ConnectAttemptState.CONNECTING
+        pendingInvitation = invitation
       }
     }
     if (cancelledBeforeStart) {
+      invitation?.close()
       onComplete(null, V9ErrorCode.CANCELLED)
       return
     }
@@ -886,7 +1174,7 @@ class V9FoundationConnectAttempt(
 
     val worker =
         thread(start = false, isDaemon = true, name = "netplay-v9-connect") {
-          runAttempt(address, mode, optionalCapabilities)
+          runAttempt(address, mode, optionalCapabilities, invitation)
         }
     val startWorker =
         synchronized(lock) {
@@ -923,6 +1211,7 @@ class V9FoundationConnectAttempt(
       address: InetSocketAddress,
       mode: V9LinkMode,
       optionalCapabilities: Set<V9Capability>,
+      invitation: V9ClientInvitation?,
   ) {
     var createdChannel: V9ConnectableChannel? = null
     try {
@@ -947,6 +1236,7 @@ class V9FoundationConnectAttempt(
               V9Role.CLIENT,
               mode,
               optionalCapabilities = optionalCapabilities,
+              clientInvitation = invitation,
           )
       if (!adoptConnection(value)) {
         value.close()
@@ -988,6 +1278,7 @@ class V9FoundationConnectAttempt(
         } else {
           pendingConnection = connection
           pendingChannel = null
+          pendingInvitation = null
           state = V9ConnectAttemptState.CONSTRUCTED
           true
         }
@@ -1034,6 +1325,7 @@ class V9FoundationConnectAttempt(
   private fun completeFailure(error: V9ErrorCode) {
     val channel: V9ConnectableChannel?
     val connection: V9FoundationConnection?
+    val invitation: V9ClientInvitation?
     val worker: Thread?
     val deadline: Closeable?
     val completion: ((V9FoundationConnection?, V9ErrorCode?) -> Unit)?
@@ -1054,6 +1346,8 @@ class V9FoundationConnectAttempt(
       connection = pendingConnection
       pendingChannel = null
       pendingConnection = null
+      invitation = pendingInvitation
+      pendingInvitation = null
       worker = task
       deadline = timeoutTask
       timeoutTask = null
@@ -1062,6 +1356,7 @@ class V9FoundationConnectAttempt(
     }
     deadline?.close()
     closeQuietly(channel)
+    invitation?.close()
     connection?.cancel()
     if (worker !== Thread.currentThread()) worker?.interrupt()
     ownedScheduler?.close()

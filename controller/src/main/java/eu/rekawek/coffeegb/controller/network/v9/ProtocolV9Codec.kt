@@ -319,6 +319,10 @@ class V9IncrementalDecoder(
       payload: ByteArray,
   ): V9ErrorCode? = when (header.type) {
     V9MessageType.HELLO -> V9HelloCodec.validate(payload)
+    // AUTH has an exact header length. Slot/reserved/proof validation deliberately runs in the
+    // authenticated lifecycle handler so every malformed proof receives the same AUTH_RESULT.
+    V9MessageType.AUTH -> null
+    V9MessageType.AUTH_RESULT -> V9AuthCodec.validateAuthResult(payload, header.flags)
     V9MessageType.ERROR -> V9ErrorPayloadCodec.validate(header.flags, payload)
     else -> null
   }

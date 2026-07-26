@@ -13,8 +13,9 @@ The platform-neutral controller package `controller.network.v9` owns:
   values whose wire identities never use enum ordinals;
 - the fixed 64-byte big-endian `CGB9`/9.0 frame encoder and incremental decoder;
 - exact HELLO payload validation and bidirectional required-capability negotiation;
-- immutable lifecycle snapshots from connect/listen through the post-HELLO
-  `AWAITING_PAIRING` boundary;
+- immutable lifecycle snapshots from connect/listen through either the post-HELLO
+  `AWAITING_PAIRING` boundary or, when the explicit Part-1 invitation owner is supplied, the
+  post-AUTH `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST` boundary;
 - injected monotonic deadlines, bounded reader/writer retention, cancellation, idempotent close,
   socket/task ownership, and an accept loop that isolates malformed or stalled candidates; and
 - an EDT-marshalling Swing adapter whose controller-facing source has no Swing or AWT dependency.
@@ -36,16 +37,25 @@ the server HELLO, the client accepts only a normal HELLO or a non-response, sequ
 accepted, EOF is typed as truncated or unexpected, and bytes after a terminal frame are rejected
 as trailing data.
 
-## HELLO-only lifecycle
+## HELLO and invitation-auth lifecycle
 
 The server sends HELLO first. Both roles validate protocol 9.0, sorted unique capability records,
 all seven required version-1 capabilities, unknown-required rejection, and the optional
-four-player gate. The connection then publishes `WAIT_AUTH` (server) or `SEND_AUTH` (client), both
-classified as `AWAITING_PAIRING`, and does not continue.
+four-player gate. A foundation connection with no invitation owner still publishes `WAIT_AUTH`
+(server) or `SEND_AUTH` (client), both classified as `AWAITING_PAIRING`, and does not continue.
+This preserves the opt-in #347 foundation API.
 
-AUTH, invitation proof, manifest, consent, ROM/battery transfer, checkpoints, playing messages,
-diagnostics, discovery, and Mobile Adapter behavior are unavailable. Later message declarations
-are rejected before payload allocation by the lifecycle policy. Phase #348 is the next gate.
+Part 1 of #348 adds the exact canonical invitation parser/renderer, 16-byte `SecureRandom`
+generation, monotonic expiry/rate limiting, one-use proof ownership, exact AUTH/AUTH_RESULT
+payloads, and atomic slot reservation. When the server owns `V9InvitationHost` and the client owns
+`V9ClientInvitation`, successful AUTH publishes an immutable boundary for authenticated slot
+`1` (normal) or `1..3` (four-player). The next legal frozen state is
+`SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`, but MANIFEST itself is deliberately unavailable.
+
+Manifest comparison, consent, ROM/battery transfer, checkpoints, playable input, diagnostics,
+discovery, and Mobile Adapter behavior remain unavailable. Their declarations are rejected at the
+32-byte header decision, before declared payload allocation. The default `ConnectionController`
+still has no v9 reference; shipped netplay remains protocol v8.
 
 ## Ownership, errors, and privacy
 
@@ -62,7 +72,8 @@ candidate at exactly 2,000 ms (it remains open at 1,999 ms) without replacing th
 `TIMEOUT`. A failed error write also closes only that candidate while preserving the original
 reason. Received terminal errors may close promptly.
 
-Server ownership includes pending candidates and every handed-off `AWAITING_PAIRING` connection.
+Server ownership includes pending candidates and every handed-off connection, whether it remains
+at `AWAITING_PAIRING` or reaches the Part-1 pre-MANIFEST boundary.
 A close listener removes a handed-off connection from the registry when its later owner closes it.
 Candidate construction, start, and callback failures close/remove the candidate and leave the
 accept loop available. Server shutdown and callback delivery share one gate, so shutdown cannot
@@ -81,9 +92,10 @@ diagnostic text is strictly validated where required by the wire schema but is d
 than surfaced. Exceptions, payload bytes, paths, ROM/save content, invitation material, and remote
 strings are never used as UI diagnostics.
 
-Invitation authentication and encryption are **not implemented**. The eventual protocol is
-plaintext TCP and does not provide confidentiality or protection against an on-path attacker.
-The foundation must not be presented as a secure or playable Internet netplay flow.
+Invitation authentication is implemented only through the bounded Part-1 API; encryption is
+**not** implemented. The protocol is plaintext TCP and does not provide confidentiality or
+protection against an on-path attacker. This boundary must not be presented as a secure or
+playable Internet netplay flow.
 
 ## Verification
 
@@ -91,5 +103,8 @@ The foundation must not be presented as a secure or playable Internet netplay fl
 row and exercises fragmentation, coalescing, truncation, header precedence, exact/+1 limits,
 checked aggregate admission, compressed corruption/bombs, sequence exhaustion, HELLO negotiation,
 deadline/cancellation cleanup, partial writes, and accept-loop survival. The independent Phase-0
-reference model and hostile vectors remain unchanged. `V9SwingLifecycleAdapterTest` proves EDT
-delivery and the controller/Swing dependency boundary.
+reference model and hostile vectors remain unchanged. `ProtocolV9InvitationAuthTest` executes
+every frozen invitation, invitation-lifecycle, and AUTH vector against production, including
+concurrent one-use ownership and real-socket candidate isolation. `V9SwingLifecycleAdapterTest`
+and `V9SwingInvitationAdapterTest` prove EDT delivery, explicit clipboard disclosure, redaction,
+and the controller/Swing dependency boundary.

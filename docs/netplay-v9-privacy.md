@@ -1,19 +1,21 @@
 # Protocol-v9 pairing, privacy, and troubleshooting
 
 Protocol v9 has an opt-in developer transport foundation that validates CGB9 frames and negotiates
-HELLO capabilities, then stops at `AWAITING_PAIRING`. It is not a playable end-user path: no
-invitation, authentication, manifest, consent, private transfer, or checkpoint is enabled. Current
+HELLO capabilities. Part 1 of #348 adds strict invitation parsing, bounded host invitation
+ownership, and AUTH, then stops at the immutable pre-MANIFEST boundary. It is not a playable
+end-user path: no manifest, consent, private transfer, checkpoint, or input is enabled. Current
 user netplay remains protocol v8 with the compatibility restrictions in
 [netplay-protocol-v8.md](netplay-protocol-v8.md). A v8/v9 mismatch is intentional and has no
 downgrade, fallback, or compatibility probe.
 
 ## What an invitation does—and does not do
 
-A later v9 pairing phase will create random, one-use, short-lived 128-bit invitations. Invitation
-creation and validation are not implemented by the #347 foundation. When implemented, possession
-will prove only that the peer received that invitation. The token stays in memory, is never
-logged/persisted, and wrong, expired, reused, or wrong-slot attempts all receive the same generic
-failure.
+The Part-1 host creates random, one-use, short-lived 128-bit invitations. Possession proves only
+that the peer received that invitation. Token material stays in bounded session memory, is never
+logged or persisted, and wrong, expired, reused, stopped-host, wrong-slot, and rate-limited
+attempts all receive the same generic failure. Host expiry uses an injected monotonic deadline;
+the URI's UTC `exp` value is display-only. Successful proof consumption and slot reservation are
+one atomic decision.
 
 V9's planned TCP transport is plaintext. It does not encrypt ROM, battery, state, input, or
 metadata and cannot authenticate a server against an on-path attacker. It is not safe merely
@@ -38,9 +40,10 @@ import is never reachable from a peer.
 
 ## Diagnosing a failed pairing
 
-The #347 foundation exposes only typed, sanitized protocol/timeout/cancellation diagnostics for
-developer tests. Pairing diagnostics below describe the frozen later-phase behavior and are not
-yet reachable from the desktop.
+The opt-in foundation exposes only typed, sanitized protocol/timeout/cancellation diagnostics.
+The minimal Part-1 Swing adapter parses pasted invitations away from the EDT, returns presentation
+events on the EDT, and accesses the clipboard only through an explicit copy action. It is not
+wired into the normal netplay menu.
 
 - **Unsupported protocol / `Coff` versus `CGB9`:** the builds use v8 and v9. Install matching
   versions; there is no fallback.
@@ -55,3 +58,12 @@ yet reachable from the desktop.
 
 The exact grammar, limits, timeouts, errors, and state transitions are normative in
 [netplay-protocol-v9.md](netplay-protocol-v9.md).
+
+## Deliberate Part-1 boundary
+
+After successful AUTH, server and client stop at `SEND_SERVER_MANIFEST` and
+`WAIT_SERVER_MANIFEST`. MANIFEST, CONSENT, transfers, checkpoints, diagnostics, discovery, and
+playable input remain for later #348 parts. The stale nonce-comparison roadmap checkbox is not a
+tokenless/manual-address bypass: v9 has no such flow. Discovery or a different invitation
+mechanism requires a separately reviewed capability and threat-model change and is deferred to
+#350.
