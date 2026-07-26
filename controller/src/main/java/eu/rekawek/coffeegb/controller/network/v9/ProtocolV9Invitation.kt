@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.controller.network.v9
 
 import java.io.Closeable
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -205,13 +204,12 @@ class V9Invitation private constructor(
 
     @JvmStatic
     fun parse(value: String): V9Invitation {
-      val utf8 = value.toByteArray(StandardCharsets.UTF_8)
+      if (exceedsUtf8Limit(value, V9Limit.INVITATION_URI_BYTES.value.toInt())) {
+        fail(V9InvitationError.INV_TOO_LONG)
+      }
       var decodedToken: ByteArray? = null
       var ownedSecret: V9InvitationSecret? = null
       try {
-        if (utf8.size > V9Limit.INVITATION_URI_BYTES.value) {
-          fail(V9InvitationError.INV_TOO_LONG)
-        }
         if (value.any { it.code < 0x20 || it.code == 0x7f || it.isWhitespace() }) {
           fail(V9InvitationError.INV_CONTROL)
         }
@@ -280,7 +278,6 @@ class V9Invitation private constructor(
         throw e
       } finally {
         decodedToken?.fill(0)
-        utf8.fill(0)
       }
     }
 
@@ -377,6 +374,35 @@ class V9Invitation private constructor(
       if (!DECIMAL.matches(value) || value.length > 1 && value.startsWith('0')) return null
       val parsed = value.toLongOrNull() ?: return null
       return parsed.takeIf { it in 0..maximum }
+    }
+
+    /**
+     * Computes the JDK UTF-8 encoded length without first copying attacker-controlled input.
+     * Unpaired UTF-16 surrogates use the encoder's one-byte replacement representation.
+     */
+    private fun exceedsUtf8Limit(value: String, maximum: Int): Boolean {
+      var bytes = 0
+      var index = 0
+      while (index < value.length) {
+        val current = value[index]
+        val width =
+            when {
+              current.code <= 0x7f -> 1
+              current.code <= 0x7ff -> 2
+              Character.isHighSurrogate(current) &&
+                  index + 1 < value.length &&
+                  Character.isLowSurrogate(value[index + 1]) -> {
+                index++
+                4
+              }
+              Character.isSurrogate(current) -> 1
+              else -> 3
+            }
+        if (bytes > maximum - width) return true
+        bytes += width
+        index++
+      }
+      return false
     }
 
     private fun decodeToken(value: String): ByteArray? {

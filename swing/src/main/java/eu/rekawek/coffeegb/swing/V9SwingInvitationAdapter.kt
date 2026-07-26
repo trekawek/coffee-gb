@@ -15,8 +15,10 @@ import javax.swing.SwingUtilities
 sealed class V9InvitationUiState {
   object Parsing : V9InvitationUiState()
   class Parsed(val invitation: V9Invitation) : V9InvitationUiState(), Closeable {
+    private val closed = AtomicBoolean(false)
+
     override fun close() {
-      invitation.close()
+      if (closed.compareAndSet(false, true)) invitation.close()
     }
 
     override fun toString(): String = "Parsed([redacted])"
@@ -45,10 +47,16 @@ fun interface V9InvitationClipboard {
  * is passed only to the explicit clipboard operation. This adapter has no title/log/diagnostic
  * storage and does not make protocol v9 reachable from the normal netplay menu.
  */
-class V9SwingInvitationAdapter(
+class V9SwingInvitationAdapter private constructor(
     private val clipboard: V9InvitationClipboard = V9InvitationClipboard.SYSTEM,
     executor: ExecutorService? = null,
+    private val parser: (String) -> V9Invitation,
 ) : Closeable {
+  constructor(
+      clipboard: V9InvitationClipboard = V9InvitationClipboard.SYSTEM,
+      executor: ExecutorService? = null,
+  ) : this(clipboard, executor, V9Invitation::parse)
+
   private val executor =
       executor
           ?: Executors.newSingleThreadExecutor { task ->
@@ -57,6 +65,7 @@ class V9SwingInvitationAdapter(
   private val ownedExecutor = if (executor == null) this.executor else null
   private val closed = AtomicBoolean(false)
   private var pending: Future<*>? = null
+  private var operation = Any()
 
   @Synchronized
   fun parseAsync(
@@ -65,21 +74,22 @@ class V9SwingInvitationAdapter(
   ) {
     check(!closed.get()) { "v9 invitation adapter is closed" }
     pending?.cancel(true)
-    publish(consumer, V9InvitationUiState.Parsing)
+    val current = nextOperation()
+    publish(current, consumer, V9InvitationUiState.Parsing)
     pending =
         executor.submit {
           val result =
               try {
-                V9InvitationUiState.Parsed(V9Invitation.parse(input))
+                V9InvitationUiState.Parsed(parser(input))
               } catch (e: V9InvitationParseException) {
                 V9InvitationUiState.InvalidInvitation(e.reason)
               } catch (_: RuntimeException) {
                 V9InvitationUiState.InvalidInvitation(V9InvitationError.INV_AUTHORITY)
               }
-          if (!Thread.currentThread().isInterrupted && !closed.get()) {
-            publish(consumer, result)
-          } else {
+          if (Thread.currentThread().isInterrupted || !isCurrent(current)) {
             discard(result)
+          } else {
+            publish(current, consumer, result)
           }
         }
   }
@@ -92,43 +102,64 @@ class V9SwingInvitationAdapter(
     clipboard.copy(invitation.render())
   }
 
+  @Synchronized
   fun authenticationRejected(consumer: (V9InvitationUiState) -> Unit) {
-    publish(consumer, V9InvitationUiState.AuthenticationRejected)
+    publish(operation, consumer, V9InvitationUiState.AuthenticationRejected)
   }
 
+  @Synchronized
   fun awaitingAuthentication(consumer: (V9InvitationUiState) -> Unit) {
-    publish(consumer, V9InvitationUiState.AwaitingAuthentication)
+    publish(operation, consumer, V9InvitationUiState.AwaitingAuthentication)
   }
 
   @Synchronized
   fun cancel(consumer: (V9InvitationUiState) -> Unit) {
     pending?.cancel(true)
     pending = null
-    publish(consumer, V9InvitationUiState.Cancelled)
+    val current = nextOperation()
+    publish(current, consumer, V9InvitationUiState.Cancelled)
   }
 
   @Synchronized
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
+    nextOperation()
     pending?.cancel(true)
     pending = null
     ownedExecutor?.shutdownNow()
   }
 
   private fun publish(
+      publishedOperation: Any,
       consumer: (V9InvitationUiState) -> Unit,
       state: V9InvitationUiState,
   ) {
     SwingUtilities.invokeLater {
-      if (!closed.get()) consumer(state) else discard(state)
+      if (isCurrent(publishedOperation)) consumer(state) else discard(state)
     }
   }
+
+  @Synchronized
+  private fun nextOperation(): Any {
+    operation = Any()
+    return operation
+  }
+
+  @Synchronized
+  private fun isCurrent(expected: Any): Boolean = !closed.get() && operation === expected
 
   private fun discard(state: V9InvitationUiState) {
     if (state is V9InvitationUiState.Parsed) state.close()
   }
 
   companion object {
+    internal fun forTest(
+        clipboard: V9InvitationClipboard,
+        executor: ExecutorService,
+        parser: (String) -> V9Invitation,
+    ): V9SwingInvitationAdapter =
+        V9SwingInvitationAdapter(clipboard, executor, parser)
+
     const val PLAINTEXT_WARNING =
         "Invitation possession does not encrypt plaintext TCP and provides no protection " +
             "against an on-path attacker."

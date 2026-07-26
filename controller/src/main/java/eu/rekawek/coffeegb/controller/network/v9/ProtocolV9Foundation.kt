@@ -65,6 +65,27 @@ class V9SocketChannel(private val socket: Socket) : V9ConnectableChannel {
   }
 }
 
+private fun newV9SocketChannel(): V9SocketChannel {
+  val socket = Socket()
+  return try {
+    V9SocketChannel(socket)
+  } catch (e: IOException) {
+    try {
+      socket.close()
+    } catch (_: IOException) {
+      // Preserve the setup failure while closing the not-yet-owned socket best effort.
+    }
+    throw e
+  } catch (e: RuntimeException) {
+    try {
+      socket.close()
+    } catch (_: IOException) {
+      // Preserve the setup failure while closing the not-yet-owned socket best effort.
+    }
+    throw e
+  }
+}
+
 fun interface V9DeadlineScheduler {
   fun schedule(deadlineMillis: Long, action: Runnable): Closeable
 }
@@ -1084,32 +1105,75 @@ object V9FoundationClient {
       invitation: V9ClientInvitation? = null,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
-    val channel = V9SocketChannel(Socket())
+    return connectAccepted(
+        address,
+        mode,
+        optionalCapabilities,
+        connectTimeoutMillis,
+        invitation,
+        ::newV9SocketChannel,
+    )
+  }
+
+  internal fun connect(
+      address: InetSocketAddress,
+      mode: V9LinkMode,
+      optionalCapabilities: Set<V9Capability>,
+      connectTimeoutMillis: Int,
+      invitation: V9ClientInvitation?,
+      channelFactory: () -> V9ConnectableChannel,
+  ): V9FoundationConnection {
+    require(invitation == null || invitation.mode == mode)
+    return connectAccepted(
+        address,
+        mode,
+        optionalCapabilities,
+        connectTimeoutMillis,
+        invitation,
+        channelFactory,
+    )
+  }
+
+  private fun connectAccepted(
+      address: InetSocketAddress,
+      mode: V9LinkMode,
+      optionalCapabilities: Set<V9Capability>,
+      connectTimeoutMillis: Int,
+      invitation: V9ClientInvitation?,
+      channelFactory: () -> V9ConnectableChannel,
+  ): V9FoundationConnection {
+    var channel: V9ConnectableChannel? = null
+    var connection: V9FoundationConnection? = null
     try {
-      channel.connect(address, connectTimeoutMillis)
-      return V9FoundationConnection(
-          channel,
+      val acceptedChannel = channelFactory()
+      channel = acceptedChannel
+      acceptedChannel.connect(address, connectTimeoutMillis)
+      val acceptedConnection = V9FoundationConnection(
+          acceptedChannel,
           V9Role.CLIENT,
           mode,
           optionalCapabilities = optionalCapabilities,
           clientInvitation = invitation,
-      ).also(V9FoundationConnection::start)
+      )
+      connection = acceptedConnection
+      acceptedConnection.start()
+      return acceptedConnection
     } catch (e: IOException) {
       invitation?.close()
-      try {
-        channel.close()
-      } catch (_: IOException) {
-        // Keep the original connect failure.
-      }
+      if (connection != null) connection.close() else closeChannel(channel)
       throw e
     } catch (e: RuntimeException) {
       invitation?.close()
-      try {
-        channel.close()
-      } catch (_: IOException) {
-        // Keep the original construction/start failure.
-      }
+      if (connection != null) connection.close() else closeChannel(channel)
       throw e
+    }
+  }
+
+  private fun closeChannel(channel: V9TransportChannel?) {
+    try {
+      channel?.close()
+    } catch (_: IOException) {
+      // Keep the original setup/connect/construction failure.
     }
   }
 }
@@ -1122,7 +1186,7 @@ class V9FoundationConnectAttempt(
     private val clock: V9MonotonicClock = V9MonotonicClock.SYSTEM,
     scheduler: V9DeadlineScheduler? = null,
     private val channelFactory: () -> V9ConnectableChannel =
-        { V9SocketChannel(Socket()) },
+        { newV9SocketChannel() },
 ) : Closeable {
   private val lock = Any()
   private val scheduler = scheduler ?: V9SystemDeadlineScheduler(clock)
@@ -1173,8 +1237,13 @@ class V9FoundationConnectAttempt(
           Long.MAX_VALUE
         }
     val scheduled =
-        scheduler.schedule(deadline) {
-          if (clock.nowMillis() >= deadline) completeFailure(V9ErrorCode.TIMEOUT)
+        try {
+          scheduler.schedule(deadline) {
+            if (clock.nowMillis() >= deadline) completeFailure(V9ErrorCode.TIMEOUT)
+          }
+        } catch (_: RuntimeException) {
+          completeFailure(V9ErrorCode.INTERNAL_ERROR)
+          return
         }
     synchronized(lock) {
       if (state == V9ConnectAttemptState.CONNECTING) timeoutTask = scheduled
