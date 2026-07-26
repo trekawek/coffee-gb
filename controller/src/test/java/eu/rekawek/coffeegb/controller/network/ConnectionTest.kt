@@ -942,8 +942,13 @@ class ConnectionTest {
   }
 
   @Test
-  fun protocolV8RejectsExactSgbFamilyBeforeWritingAnyStateBearingMessage() {
-    for (profile in listOf(HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2)) {
+  fun protocolV8RejectsProfilesThatRequireV2BeforeWritingAnyStateBearingMessage() {
+    for ((profile, coarseType) in
+        listOf(
+            HardwareProfileRegistry.SGB to GameboyType.SGB,
+            HardwareProfileRegistry.SGB2 to GameboyType.SGB,
+            HardwareProfileRegistry.MGB to GameboyType.DMG,
+        )) {
       val localBus = EventBusImpl()
       val handshake =
           "CoffeeGB NETPLAY".toByteArray() +
@@ -966,7 +971,7 @@ class ConnectionTest {
               ROM.readBytes(),
               null,
               state,
-              GameboyType.SGB,
+              coarseType,
               Gameboy.BootstrapMode.SKIP,
               0,
               hardwareProfileId = profile.id(),

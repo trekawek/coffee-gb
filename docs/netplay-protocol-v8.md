@@ -71,12 +71,12 @@ StateFile identity section must agree with the received primary ROM, optional Da
 hardware, bootstrap mode, and every profile bit.
 
 The pinned `GameboyType` plus CGB0 flag canonicalizes to permanent profile ID `dmg`, `cgb`,
-`cgb0`, or historical-v1 `sgb` before candidate construction;
+`cgb0`, or historical-v1 `sgb` before candidate construction; coarse DMG never means MGB;
 the remaining flags stay accessory/boot compatibility policy. Protocol v8 has no free-form profile
-string and negotiates StateFile v1 only. It therefore cannot represent `sgb2` or StateFile v2.
+string and negotiates StateFile v1 only. It therefore cannot represent `sgb2`, `mgb`, or StateFile v2.
 StateFile v1 also freezes the SGB MBC3 phase in the historical 4,194,304-denominator domain, while
 current exact-clock SGB state requires v2 to distinguish that meaning. Coffee GB therefore rejects
-both SGB-family local records before writing state bytes. A received coarse SGB header is rejected
+SGB, SGB2, and MGB local records before writing state bytes. A received coarse SGB header is rejected
 after the bounded fixed header and before held-input/ROM/state payload reads or delivery. SGB2 is
 never aliased to the coarse SGB ordinal, and an exact SGB phase is never sent under the legacy v1
 meaning. Network support requires a new explicit negotiation/protocol version rather than
@@ -122,7 +122,7 @@ checkpoints use one fresh shared adapter and commit as a group. Any decode, iden
 preparation, or commit failure rejects only the source and leaves the live group unchanged;
 unexpected commit failures restore the captured controller/history transaction.
 
-An explicitly selected local `sgb` or `sgb2` profile is rejected even earlier, at
+An explicitly selected local `sgb`, `sgb2`, or `mgb` profile is rejected even earlier, at
 LinkedController's ROM load boundary and before any linked Game Boy, configuration, topology, or
 history mutation. The transport is stopped with an actionable protocol-v8/StateFile-v1 diagnostic,
 while any incoming Basic-controller machine state is retained for the exact return to local play.
@@ -130,7 +130,7 @@ while any incoming Basic-controller machine state is retained for the exact retu
 Each candidate retains its registered profile and immutable `ClockSpec`. The complete linked group
 is preflighted before construction/replay or replacement; its full reduced master-rate and cadence
 identity must match, even if two profiles happen to have the same integer tick budget. DMG/CGB/CGB0
-remain on the legacy budget. SGB and SGB2 are not v8-representable under the explicit policy above,
+remain on the legacy budget. SGB, SGB2, and MGB are not v8-representable under the explicit policy above,
 so exact linked-clock comparison remains reusable policy but adds no wire-field meaning.
 
 Network `AC ED 00 05`, retired `CGBN`, unknown magic, corrupt/truncated/future StateFile data,

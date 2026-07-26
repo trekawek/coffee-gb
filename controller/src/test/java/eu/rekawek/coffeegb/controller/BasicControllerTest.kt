@@ -33,7 +33,7 @@ import org.junit.Test
 class BasicControllerTest {
 
   @Test
-  fun persistedSgb2SelectionReloadsTheRunningSessionWithExactProfile() {
+  fun persistedSgb2AndMgbSelectionsReloadTheRunningSessionWithExactProfile() {
     val eventBus = EventBusImpl()
     val properties = EmulatorProperties()
     val profileEvents = LinkedBlockingQueue<HardwareProfileEvent>()
@@ -63,6 +63,14 @@ class BasicControllerTest {
       eventBus.post(Controller.UpdatedSystemMappingEvent())
       assertEquals(
           HardwareProfileRegistry.SGB2,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+
+      properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+          HardwareProfileRegistry.MGB.id()
+      eventBus.post(Controller.UpdatedSystemMappingEvent())
+      assertEquals(
+          HardwareProfileRegistry.MGB,
           assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
       )
     } finally {

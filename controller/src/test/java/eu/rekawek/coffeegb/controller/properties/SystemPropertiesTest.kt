@@ -60,6 +60,10 @@ class SystemPropertiesTest {
     assertEquals(HardwareProfileRegistry.SGB2, properties.system.dmgGamesProfile)
     properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "SGB"
     assertEquals(HardwareProfileRegistry.SGB, properties.system.dmgGamesProfile)
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "mgb"
+    assertEquals(HardwareProfileRegistry.MGB, properties.system.dmgGamesProfile)
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "MGB"
+    assertFailsWith<IllegalArgumentException> { properties.system.dmgGamesProfile }
   }
 
   @Test
@@ -73,7 +77,7 @@ class SystemPropertiesTest {
         assertFailsWith<IllegalArgumentException> {
           Controller.createGameboyConfig(properties, rom)
         }
-    assertTrue(failure.message!!.contains("[dmg, cgb, cgb0, sgb, sgb2]"))
+    assertTrue(failure.message!!.contains("[dmg, cgb, cgb0, sgb, sgb2, mgb]"))
   }
 
   @Test
@@ -101,5 +105,8 @@ class SystemPropertiesTest {
     properties.clearProperty(key)
     assertTrue(!properties.hasProperty(key))
     assertEquals(HardwareProfileRegistry.SGB, properties.system.dmgGamesProfile)
+
+    properties.setProperty(key, HardwareProfileRegistry.MGB.id())
+    assertEquals(HardwareProfileRegistry.MGB, properties.system.dmgGamesProfile)
   }
 }

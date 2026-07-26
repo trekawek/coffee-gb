@@ -14,12 +14,13 @@ public class HardwareProfileRegistryTest {
 
     @Test
     public void registryHasPermanentCanonicalIdsInDeterministicOrder() {
-        assertEquals(List.of("dmg", "cgb", "cgb0", "sgb", "sgb2"), HardwareProfileRegistry.supportedIds());
+        assertEquals(List.of("dmg", "cgb", "cgb0", "sgb", "sgb2", "mgb"), HardwareProfileRegistry.supportedIds());
         assertSame(HardwareProfileRegistry.DMG, HardwareProfileRegistry.resolve("dmg"));
         assertSame(HardwareProfileRegistry.CGB, HardwareProfileRegistry.resolve("cgb"));
         assertSame(HardwareProfileRegistry.CGB0, HardwareProfileRegistry.resolve("cgb0"));
         assertSame(HardwareProfileRegistry.SGB, HardwareProfileRegistry.resolve("sgb"));
         assertSame(HardwareProfileRegistry.SGB2, HardwareProfileRegistry.resolve("sgb2"));
+        assertSame(HardwareProfileRegistry.MGB, HardwareProfileRegistry.resolve("mgb"));
         assertThrows(UnsupportedOperationException.class,
                 () -> HardwareProfileRegistry.supportedProfiles().add(HardwareProfileRegistry.DMG));
     }
@@ -33,12 +34,13 @@ public class HardwareProfileRegistryTest {
 
         IllegalArgumentException unknown = assertThrows(IllegalArgumentException.class,
                 () -> HardwareProfileRegistry.resolveSetting("Game Boy Color (CGB)"));
-        assertTrue(unknown.getMessage().contains("[dmg, cgb, cgb0, sgb, sgb2]"));
+        assertTrue(unknown.getMessage().contains("[dmg, cgb, cgb0, sgb, sgb2, mgb]"));
         assertThrows(IllegalArgumentException.class, () -> HardwareProfileRegistry.resolve("CGB"));
         assertThrows(IllegalArgumentException.class, () -> HardwareProfileRegistry.resolve("SGB2"));
+        assertThrows(IllegalArgumentException.class, () -> HardwareProfileRegistry.resolveSetting("MGB"));
         assertTrue(assertThrows(IllegalArgumentException.class,
                 () -> HardwareProfileRegistry.resolve(null)).getMessage()
-                .contains("[dmg, cgb, cgb0, sgb, sgb2]"));
+                .contains("[dmg, cgb, cgb0, sgb, sgb2, mgb]"));
     }
 
     @Test
@@ -48,21 +50,26 @@ public class HardwareProfileRegistryTest {
         assertSame(HardwareProfileRegistry.SGB, GameboyType.SGB.toHardwareProfile());
         assertEquals(GameboyType.CGB, GameboyType.fromHardwareProfile(HardwareProfileRegistry.CGB0));
         assertEquals(GameboyType.SGB, GameboyType.fromHardwareProfile(HardwareProfileRegistry.SGB2));
+        assertEquals(GameboyType.DMG, GameboyType.fromHardwareProfile(HardwareProfileRegistry.MGB));
+        assertSame(HardwareProfileRegistry.DMG, GameboyType.DMG.toHardwareProfile());
     }
 
     @Test
-    public void capabilitiesAndBootPolicyLockCurrentFiveProfileBehavior() {
+    public void capabilitiesAndBootPolicyLockCurrentSixProfileBehavior() {
         assertEquals(HardwareProfile.Family.DMG, HardwareProfileRegistry.DMG.family());
         assertEquals(HardwareProfile.Family.CGB, HardwareProfileRegistry.CGB.family());
         assertEquals(HardwareProfile.Family.CGB, HardwareProfileRegistry.CGB0.family());
         assertEquals(HardwareProfile.Family.SGB, HardwareProfileRegistry.SGB.family());
         assertEquals(HardwareProfile.Family.SGB, HardwareProfileRegistry.SGB2.family());
+        assertEquals(HardwareProfile.Family.DMG, HardwareProfileRegistry.MGB.family());
         assertTrue(HardwareProfileRegistry.CGB.capabilities().doubleSpeed());
         assertTrue(HardwareProfileRegistry.CGB.capabilities().infrared());
         assertTrue(HardwareProfileRegistry.SGB.capabilities().superGameboyCommands());
         assertTrue(HardwareProfileRegistry.SGB.capabilities().superGameboyBorder());
         assertEquals(HardwareProfileRegistry.SGB.capabilities(),
                 HardwareProfileRegistry.SGB2.capabilities());
+        assertSame(HardwareProfileRegistry.DMG.capabilities(),
+                HardwareProfileRegistry.MGB.capabilities());
         assertEquals(10, HardwareProfileRegistry.CGB.bootSpec().authenticDivPreset());
         assertEquals(536, HardwareProfileRegistry.CGB0.bootSpec().authenticDivPreset());
         assertEquals(12, HardwareProfileRegistry.CGB.bootSpec().cgbBootHandoffTicks());
@@ -72,6 +79,11 @@ public class HardwareProfileRegistryTest {
         assertEquals(0x0100, HardwareProfileRegistry.SGB.bootSpec().postBootAf());
         assertEquals(0xff00, HardwareProfileRegistry.SGB2.bootSpec().postBootAf());
         assertEquals(0x0014, HardwareProfileRegistry.SGB2.bootSpec().postBootBc());
+        assertSame(ClockSpec.LEGACY, HardwareProfileRegistry.MGB.clockSpec());
+        assertEquals(0xffb0, HardwareProfileRegistry.MGB.bootSpec().postBootAf());
+        assertEquals(0x0013, HardwareProfileRegistry.MGB.bootSpec().postBootBc());
+        assertEquals(0x00d8, HardwareProfileRegistry.MGB.bootSpec().postBootDe());
+        assertEquals(0x014d, HardwareProfileRegistry.MGB.bootSpec().postBootHl());
     }
 
     @Test

@@ -17,6 +17,7 @@ import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateIdentityEntry
+import eu.rekawek.coffeegb.controller.state.StateProfilePolicy
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
@@ -481,17 +482,16 @@ class LinkedController(
     eventBus.register<LoadRomEvent> {
       val rom = Rom(it.rom)
       val config = createGameboyConfig(properties, rom)
-      if (config.hardwareProfile == HardwareProfileRegistry.SGB ||
-          config.hardwareProfile == HardwareProfileRegistry.SGB2) {
+      if (!StateProfilePolicy.protocolV8Representable(config.hardwareProfile)) {
         // Protocol v8 is permanently StateFile-v1-only. Its SGB RTC phase has the released legacy
-        // meaning, while exact-clock SGB/SGB2 captures require v2. Reject before a linked Gameboy
-        // is built or any live session/config/topology state changes, and retain the incoming Basic
-        // state so transport shutdown can return to the exact pre-link machine.
+        // meaning, and its coarse DMG identity can never mean MGB. Reject profiles that require v2
+        // before a linked Gameboy is built or any live session/config/topology state changes, and
+        // retain the incoming Basic state so transport shutdown can return to the pre-link machine.
         rejectedLocalState =
             it.state?.let { state -> Controller.ControllerState(state, rom) }
         val message =
-            "SGB-family netplay is unavailable: protocol v8 negotiates StateFile v1 with " +
-                "legacy SGB RTC phase semantics; exact-clock ${config.hardwareProfile.id()} requires v2"
+            "Profile ${config.hardwareProfile.id()} netplay is unavailable: protocol v8 " +
+                "negotiates StateFile v1, while this profile requires explicit StateFile v2 identity"
         if (localPlayer == 0) {
           eventBus.post(ServerProtocolErrorEvent(localPlayer, message))
           eventBus.postAsync(StopServerEvent())

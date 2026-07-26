@@ -168,6 +168,18 @@ data class MachineIdentity(
 
 data class StateIdentityEntry(val player: Int, val identity: MachineIdentity?)
 
+/** Version selection shared by local state capture and the frozen protocol-v8 boundary. */
+object StateProfilePolicy {
+  fun requiresExplicitIdentity(profile: CoreHardwareProfile): Boolean {
+    val registered = HardwareProfileRegistry.requireRegistered(profile)
+    return registered.family() == CoreHardwareProfile.Family.SGB ||
+        registered == HardwareProfileRegistry.MGB
+  }
+
+  fun protocolV8Representable(profile: CoreHardwareProfile): Boolean =
+      !requiresExplicitIdentity(profile)
+}
+
 sealed interface StateFileRoot {
   val kind: StateRootKind
 }
@@ -282,10 +294,12 @@ object StateIdentity {
                 hardware != MachineHardwareState.CGB && configuration.isMealybugDmgBlob,
                 configuration.isCodeBreakerRumble,
                 hardware == MachineHardwareState.SGB && configuration.isDisplaySgbBorder,
-                // The released v1 SGB payload used the legacy 4,194,304-unit RTC phase domain.
-                // Exact-clock SGB and SGB2 captures therefore require v2's explicit identity so
-                // their numerator-domain phase can never be confused with historical v1 bytes.
-                resolvedProfile.id().takeIf { hardware == MachineHardwareState.SGB },
+                // The released v1 SGB payload used the legacy 4,194,304-unit RTC phase domain,
+                // while coarse v1 DMG always means canonical dmg. Exact SGB/SGB2 and MGB captures
+                // therefore require v2's explicit identity.
+                resolvedProfile.id().takeIf {
+                  StateProfilePolicy.requiresExplicitIdentity(resolvedProfile)
+                },
             ),
         )
       }

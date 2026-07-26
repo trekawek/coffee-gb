@@ -49,12 +49,13 @@ For netplay, one player chooses **Link > Start server** and the other chooses
 ### Hardware profiles and command-line selection
 
 Each emulation session resolves one immutable hardware profile before construction. The permanent
-profile IDs are `dmg`, `cgb`, `cgb0`, `sgb`, and `sgb2`. Automatic selection preserves the desktop defaults;
+profile IDs are `dmg`, `cgb`, `cgb0`, `sgb`, `sgb2`, and `mgb`. Automatic selection preserves the desktop defaults;
 an exact profile can be selected with:
 
 ```bash
 java -jar coffee-gb-VERSION.jar --profile=cgb0 path/to/game.gbc
 java -jar coffee-gb-VERSION.jar --profile=sgb2 path/to/sgb-game.gb
+java -jar coffee-gb-VERSION.jar --profile=mgb path/to/game.gb
 ```
 
 The legacy `--force-dmg`/`-d` and `--force-cgb`/`-c` flags remain available and map to `dmg` and
@@ -65,11 +66,12 @@ as finite compatibility aliases; new settings use canonical lowercase IDs. See
 [`docs/hardware-profiles.md`](docs/hardware-profiles.md) for clocks, boot policy, state identity,
 and extension rules.
 
-The System menu exposes `Auto (default)`, SGB, and SGB2 separately. SGB2 currently requires
-skip-bootstrap mode because Coffee GB does not bundle Nintendo's SGB2 boot ROM. New SGB/SGB2 local
-snapshots use StateFile v2 so the exact profile clock and RTC phase meaning are unambiguous; old v1
-SGB snapshots remain importable. Protocol v8 is frozen to StateFile v1, so both current SGB-family
-profiles are rejected for netplay rather than transmitting ambiguous or aliased state.
+The registry-generated System menu exposes `Auto (default)` plus every profile, including distinct
+SGB, SGB2, and MGB choices. SGB2 and MGB require skip-bootstrap mode because Coffee GB does not
+bundle their Nintendo boot ROMs. New SGB/SGB2/MGB local snapshots use StateFile v2 so exact model
+identity and RTC phase meaning are unambiguous; old v1 snapshots remain importable. Protocol v8 is
+frozen to StateFile v1, so SGB, SGB2, and MGB are rejected for netplay rather than transmitting an
+ambiguous or aliased identity.
 
 ### Default controls
 
