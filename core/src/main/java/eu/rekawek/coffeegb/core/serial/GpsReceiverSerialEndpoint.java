@@ -40,7 +40,7 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
 
     private final int uartBitTicks;
 
-    private final int startupBeaconIntervalTicks;
+    private final long secondStartupBeaconTick;
 
     private final int responseTurnaroundTicks;
 
@@ -99,7 +99,8 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
             throw new IllegalArgumentException("GPS UART timing requires at least one tick per bit");
         }
         nextStartupBeacon = clockSpec.ticksForRateUnits(1, 4, ClockSpec.Rounding.FLOOR);
-        startupBeaconIntervalTicks = clockSpec.ticksPerSecondInt();
+        // Absolute rational deadlines avoid accumulating a rounded one-second interval.
+        secondStartupBeaconTick = clockSpec.ticksForRateUnits(5, 4, ClockSpec.Rounding.FLOOR);
         responseTurnaroundTicks = Math.multiplyExact(uartBitTicks, 4);
     }
 
@@ -111,7 +112,9 @@ public class GpsReceiverSerialEndpoint implements SerialEndpoint {
             // that two non-empty bursts arrive before it configures TAIP.
             queueAscii("GPS\r");
             startupBeacons++;
-            nextStartupBeacon += startupBeaconIntervalTicks;
+            if (startupBeacons == 1) {
+                nextStartupBeacon = secondStartupBeaconTick;
+            }
         }
 
         if (outputDelayTicks > 0) {

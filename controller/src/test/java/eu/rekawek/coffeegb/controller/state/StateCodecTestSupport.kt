@@ -57,6 +57,7 @@ internal object StateCodecTestSupport {
       decodedOverride: Long? = null,
       encodedOverride: Long? = null,
       encodedPayloadOverride: ByteArray? = null,
+      formatVersion: Int = StateCodec.V1_FORMAT_VERSION,
   ): ByteArray {
     val payloadWriter = PortableWriter(8 * 1024 * 1024)
     sections.forEach { section ->
@@ -71,7 +72,7 @@ internal object StateCodecTestSupport {
     val encoded = encodedPayloadOverride ?: decoded
     val writer = PortableWriter(8 * 1024 * 1024)
     writer.writeBytes(byteArrayOf('C'.code.toByte(), 'G'.code.toByte(), 'B'.code.toByte(), 'S'.code.toByte()))
-    writer.writeU16(StateCodec.FORMAT_VERSION)
+    writer.writeU16(formatVersion)
     writer.writeU16(StateCodec.HEADER_SIZE)
     writer.writeU32(envelopeFlags.toLong())
     writer.writeByte(kind.id)

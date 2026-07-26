@@ -88,13 +88,13 @@ not participate in compatibility. Every active linked player has its own identit
 slots have no identity. Inapplicable configuration bits are canonical zero: CGB0 exists only on
 CGB, Mealybug DMG-blob timing only on non-CGB hardware, and the border flag only on SGB.
 
-Phase 3 assigns permanent canonical profile IDs without changing this v1 layout: hardware DMG is
+Permanent canonical profile IDs do not change this v1 layout: hardware DMG is
 `dmg`, hardware CGB with CGB0 clear is `cgb`, hardware CGB with CGB0 set is `cgb0`, and hardware SGB
-is `sgb`. The mapping is total and unambiguous. Bootstrap and the remaining behavior flags stay
+is always `sgb`—never `sgb2`. The mapping is total and unambiguous. Bootstrap and the remaining behavior flags stay
 separate compatibility identity. `StateFileInspector` reports the canonical ID plus the fixed v1
 details. An ID not representable by this table cannot be smuggled through a display name or enum
-ordinal; a future profile requires an explicitly versioned optional section or a new format
-version under the extension rules below.
+ordinal. SGB2 uses the explicit identity in [StateFile v2](state-file-v2.md); no undefined v1 flag
+or field was repurposed.
 
 ### Section 2: root payload
 
@@ -305,6 +305,10 @@ The committed fixture
 `e5ae258c3f1a9405ca87518dbb13526def9fd3e44a4486d7a495c111958cf091`.
 It is generated from a repository-owned synthetic ROM and contains no ROM bytes. Its local README
 documents the opt-in update command; normal tests only decode and re-encode it.
+
+Version 1 is frozen. [StateFile v2](state-file-v2.md) changes only the envelope and identity
+section version to append a bounded canonical profile ID. Released v1 files remain accepted and
+exact-reencodable; a v1 SGB identity always remains SGB1.
 
 New optional sections receive new numeric IDs and canonical positions. A new required concept,
 changed field meaning/width, changed type/value registry, raised compatibility limit, or changed

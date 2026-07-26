@@ -56,6 +56,10 @@ class SystemPropertiesTest {
 
     properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "dmg"
     assertEquals(HardwareProfileRegistry.DMG, properties.system.dmgGamesProfile)
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "sgb2"
+    assertEquals(HardwareProfileRegistry.SGB2, properties.system.dmgGamesProfile)
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "SGB"
+    assertEquals(HardwareProfileRegistry.SGB, properties.system.dmgGamesProfile)
   }
 
   @Test
@@ -69,7 +73,7 @@ class SystemPropertiesTest {
         assertFailsWith<IllegalArgumentException> {
           Controller.createGameboyConfig(properties, rom)
         }
-    assertTrue(failure.message!!.contains("[dmg, cgb, cgb0, sgb]"))
+    assertTrue(failure.message!!.contains("[dmg, cgb, cgb0, sgb, sgb2]"))
   }
 
   @Test
@@ -81,5 +85,21 @@ class SystemPropertiesTest {
         HardwareProfileRegistry.DMG,
         Controller.createGameboyConfig(properties, rom).hardwareProfile,
     )
+  }
+
+  @Test
+  fun `desktop auto selection is represented by an absent mapping property`() {
+    val properties = EmulatorProperties()
+    val key = EmulatorProperties.Key.DmgGamesType
+    properties.properties.remove(key.propertyName)
+    assertTrue(!properties.hasProperty(key))
+    assertEquals(HardwareProfileRegistry.SGB, properties.system.dmgGamesProfile)
+
+    properties.setProperty(key, HardwareProfileRegistry.SGB2.id())
+    assertTrue(properties.hasProperty(key))
+    assertEquals(HardwareProfileRegistry.SGB2, properties.system.dmgGamesProfile)
+    properties.clearProperty(key)
+    assertTrue(!properties.hasProperty(key))
+    assertEquals(HardwareProfileRegistry.SGB, properties.system.dmgGamesProfile)
   }
 }

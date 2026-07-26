@@ -137,8 +137,9 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         if (halt || emulationPaused) {
             return;
         }
-        if (++subSecondTicks == clockSpec.ticksPerSecond()) {
-            subSecondTicks = 0;
+        subSecondTicks = Math.addExact(subSecondTicks, clockSpec.secondPhaseUnitsPerTick());
+        if (subSecondTicks >= clockSpec.secondPhaseLimit()) {
+            subSecondTicks -= clockSpec.secondPhaseLimit();
             advanceSeconds(1);
         }
     }
@@ -173,11 +174,11 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         }
 
         advanceSeconds(elapsedMillis / 1000);
-        long elapsedTicks = clockSpec.ticksForMilliseconds(
+        long elapsedPhase = clockSpec.secondPhaseUnitsForMilliseconds(
                 elapsedMillis % 1000, ClockSpec.Rounding.FLOOR);
-        long ticks = subSecondTicks + elapsedTicks;
-        advanceSeconds(ticks / clockSpec.ticksPerSecond());
-        subSecondTicks = ticks % clockSpec.ticksPerSecond();
+        long phase = subSecondTicks + elapsedPhase;
+        advanceSeconds(phase / clockSpec.secondPhaseLimit());
+        subSecondTicks = Math.toIntExact(phase % clockSpec.secondPhaseLimit());
     }
 
     private void advanceSeconds(long count) {

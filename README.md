@@ -49,11 +49,12 @@ For netplay, one player chooses **Link > Start server** and the other chooses
 ### Hardware profiles and command-line selection
 
 Each emulation session resolves one immutable hardware profile before construction. The permanent
-profile IDs are `dmg`, `cgb`, `cgb0`, and `sgb`. Automatic selection preserves the desktop defaults;
+profile IDs are `dmg`, `cgb`, `cgb0`, `sgb`, and `sgb2`. Automatic selection preserves the desktop defaults;
 an exact profile can be selected with:
 
 ```bash
 java -jar coffee-gb-VERSION.jar --profile=cgb0 path/to/game.gbc
+java -jar coffee-gb-VERSION.jar --profile=sgb2 path/to/sgb-game.gb
 ```
 
 The legacy `--force-dmg`/`-d` and `--force-cgb`/`-c` flags remain available and map to `dmg` and
@@ -63,6 +64,11 @@ and report all supported IDs. Persisted uppercase `DMG`, `CGB`, `CGB0`, and `SGB
 as finite compatibility aliases; new settings use canonical lowercase IDs. See
 [`docs/hardware-profiles.md`](docs/hardware-profiles.md) for clocks, boot policy, state identity,
 and extension rules.
+
+The System menu exposes `Auto (default)`, SGB, and SGB2 separately. SGB2 currently requires
+skip-bootstrap mode because Coffee GB does not bundle Nintendo's SGB2 boot ROM. Protocol v8
+negotiates StateFile v1 and cannot identify SGB2, so SGB2 netplay is rejected instead of being sent
+as SGB1. Local StateFile v2 snapshots preserve exact SGB2 identity.
 
 ### Default controls
 

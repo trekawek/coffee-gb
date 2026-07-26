@@ -172,6 +172,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public Gameboy(GameboyConfiguration configuration) {
         this.hardwareProfile = HardwareProfileRegistry.requireRegistered(configuration.hardwareProfile);
+        if (configuration.bootstrapMode != BootstrapMode.SKIP
+                && !Bios.hasBundledBootRom(hardwareProfile)) {
+            throw new IllegalArgumentException(
+                    "Profile " + hardwareProfile.id()
+                            + " has no bundled boot ROM; select skip bootstrap before starting the session");
+        }
         this.clockSpec = hardwareProfile.clockSpec();
         this.gbc = hardwareProfile.capabilities().cgbMode();
         boolean gbc = this.gbc;
@@ -235,7 +241,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             slotCartridge = null;
         }
-        Bios bios = new Bios(hardwareProfile);
+        Bios bios = new Bios(hardwareProfile, configuration.bootstrapMode != BootstrapMode.SKIP);
         biosShadow = new BiosShadow(bios, cartridge);
         speedMode.setBiosShadow(biosShadow);
         mmu.setSpeedMode(speedMode);

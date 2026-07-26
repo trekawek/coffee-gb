@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.link
 
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.register
@@ -19,9 +20,12 @@ import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerResetEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStateEvent
 import eu.rekawek.coffeegb.controller.network.Connection.ValidatedPeerStopEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerDisconnectedEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerProtocolErrorEvent
+import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.ApplyStage
+import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.Int32State
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
@@ -36,11 +40,13 @@ import eu.rekawek.coffeegb.controller.state.StateValue
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
+import eu.rekawek.coffeegb.core.memory.cart.Rom
 import org.junit.Test
 import java.io.IOException
 import java.nio.file.Files
@@ -56,6 +62,50 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class LinkedControllerTest {
+
+  @Test
+  fun sgb2LocalLoadRejectsBeforeLinkedSessionConstructionAndRetainsBasicState() {
+    val seedBus = EventBusImpl()
+    val seedConfig =
+        Gameboy.GameboyConfiguration(Rom(ROM))
+            .setHardwareProfile(HardwareProfileRegistry.SGB2)
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setSupportBatterySave(false)
+    val seedSession = Session(seedConfig, seedBus, null)
+    val seedState = DetachedStateAdapter.capture(seedSession.gameboy)
+    seedSession.close()
+
+    val eventBus = EventBusImpl()
+    val errors = mutableListOf<ServerProtocolErrorEvent>()
+    var stopRequests = 0
+    eventBus.register<ServerProtocolErrorEvent> { errors += it }
+    eventBus.register<StopServerEvent> { stopRequests++ }
+    val sut =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(HardwareProfileRegistry.SGB2),
+            null,
+            LinkMode.NORMAL,
+            localPlayer = 0,
+        )
+    sut.timingTicker.disabled = true
+    val before = sut.captureDetachedState()
+
+    eventBus.post(LoadRomEvent(ROM, seedState))
+    eventBus.drainAsyncEvents()
+
+    assertEquals(0, sut.activeSessionCount())
+    assertEquals(before, sut.captureDetachedState())
+    assertEquals(1, errors.size)
+    assertEquals(0, errors.single().player)
+    assertTrue(errors.single().message.contains("protocol v8"))
+    assertTrue(errors.single().message.contains("StateFile v1"))
+    assertEquals(1, stopRequests)
+
+    val returned = assertNotNull(sut.closeWithState())
+    assertEquals(seedState, returned.state)
+    assertContentEquals(ROM.readBytes(), returned.rom.file.readBytes())
+  }
 
   @Test
   fun fourPlayerHostRunsImmediatelyWithEmptyAdapterPorts() {

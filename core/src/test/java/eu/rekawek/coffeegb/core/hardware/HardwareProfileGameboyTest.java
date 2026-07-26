@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class HardwareProfileGameboyTest {
 
@@ -60,6 +61,31 @@ public class HardwareProfileGameboyTest {
                 configuration.forStateHistoryReplay().getHardwareProfile());
         assertSame(HardwareProfileRegistry.CGB0,
                 configuration.forBootTemplate().getHardwareProfile());
+
+        GameboyConfiguration sgb2 = configuration(HardwareProfileRegistry.SGB2);
+        assertSame(HardwareProfileRegistry.SGB2, sgb2.forRestore().getHardwareProfile());
+        assertSame(HardwareProfileRegistry.SGB2,
+                sgb2.forStateHistoryReplay().getHardwareProfile());
+        assertSame(HardwareProfileRegistry.SGB2,
+                sgb2.forBootTemplate().getHardwareProfile());
+    }
+
+    @Test
+    public void sgb2SkipBootIsSupportedButBundledSgb1BootIsNeverUsed() throws Exception {
+        try (Gameboy gameboy = configuration(HardwareProfileRegistry.SGB2).build()) {
+            assertSame(HardwareProfileRegistry.SGB2, gameboy.getHardwareProfile());
+            assertEquals(0xff00, gameboy.getCpu().getRegisters().getAF());
+            assertEquals(0x0014, gameboy.getCpu().getRegisters().getBC());
+        }
+
+        for (BootstrapMode mode : new BootstrapMode[]{BootstrapMode.NORMAL, BootstrapMode.FAST_FORWARD}) {
+            GameboyConfiguration configuration = configuration(HardwareProfileRegistry.SGB2)
+                    .setBootstrapMode(mode);
+            IllegalArgumentException failure = assertThrows(
+                    IllegalArgumentException.class, configuration::build);
+            assertTrue(failure.getMessage().contains("sgb2"));
+            assertTrue(failure.getMessage().contains("skip bootstrap"));
+        }
     }
 
     private static GameboyConfiguration configuration(HardwareProfile profile) throws Exception {

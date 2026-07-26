@@ -44,7 +44,7 @@ public final class HardwareProfile {
         if ((family == Family.SGB) != capabilities.superGameboyCommands()) {
             throw new IllegalArgumentException("SGB family and SGB capability disagree");
         }
-        String expectedBootRom = family.name().toLowerCase();
+        String expectedBootRom = family == Family.CGB ? "cgb" : id;
         if (!expectedBootRom.equals(bootSpec.bootRomId())) {
             throw new IllegalArgumentException(
                     family + " family requires the " + expectedBootRom + " boot ROM, not "

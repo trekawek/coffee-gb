@@ -49,6 +49,14 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   Coffee GB constants/baselines and pinned public Pan Docs power-up evidence. It is not a ROM,
   firmware dump, trace, screenshot, or hardware capture. No binary fixture is added or regenerated;
   model, legacy-migration, StateFile-v1, and protocol-v8 bytes remain unchanged.
+- Phase #344 updates that matrix from pinned Pan Docs commit `37526fad`, Gekkio GBCTR revision 188
+  (download SHA-256 `b147d6c49fb27ea8e803da9956e91ac1e47fd7bdedd7742ca1ffab63c7daaf07`),
+  and the cited theoretical SNES timing equation. The only new binary is
+  `state-file-v2/sgb2-session-deflate.cgbstate`, generated from
+  `StateCodecTestSupport.rom(seed = 2, sgb = true)` and normal Coffee GB code. It contains no
+  Nintendo ROM/BIOS/image/audio bytes, is distributed under the repository license, is 59,486
+  bytes, and has SHA-256
+  `2d2178e6eba26a8debdacf84be144cccd1b42e50bf0dbce5c41612bcb16aa226`.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

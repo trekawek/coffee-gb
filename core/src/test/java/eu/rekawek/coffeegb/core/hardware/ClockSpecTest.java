@@ -66,6 +66,57 @@ public class ClockSpecTest {
                 () -> clock.newTickRateAccumulator(Long.MAX_VALUE).advance(Long.MAX_VALUE));
         assertThrows(IllegalArgumentException.class, () -> new ClockSpec(0, 60, 1));
         assertThrows(IllegalArgumentException.class, () -> new ClockSpec(1, 2, 1));
-        assertTrue(clock.hasCompatibleControllerBudget(new ClockSpec(10, 6, 2)));
+        assertTrue(clock.hasCompatibleClockIdentity(new ClockSpec(10, 6, 2)));
+    }
+
+    @Test
+    public void sgbAndSgb2ExposeExactEvidenceBackedRatesAndFrameBudgets() {
+        ClockSpec sgb = ClockSpec.SGB;
+        assertEquals(47_250_000L, sgb.ticksPerSecondNumerator());
+        assertEquals(11L, sgb.ticksPerSecondDenominator());
+        assertEquals(70_224, sgb.controllerTicksPerFrame());
+        assertTrue(sgb.hasExactControllerTickBudget());
+        assertThrows(IllegalStateException.class, sgb::ticksPerSecond);
+
+        ClockSpec sgb2 = ClockSpec.SGB2;
+        assertEquals(4_194_304L, sgb2.ticksPerSecond());
+        assertEquals(70_224, sgb2.controllerTicksPerFrame());
+        assertTrue(sgb2.hasExactControllerTickBudget());
+        assertTrue(!sgb.hasCompatibleClockIdentity(sgb2));
+    }
+
+    @Test
+    public void sgbFamilyLongRunAudioAndFrameConversionsHaveExactRemainders() {
+        for (ClockSpec clock : new ClockSpec[]{ClockSpec.SGB, ClockSpec.SGB2}) {
+            BigInteger seconds = BigInteger.valueOf(24L * 60 * 60);
+            BigInteger tickNumerator = seconds.multiply(
+                    BigInteger.valueOf(clock.ticksPerSecondNumerator()));
+            BigInteger tickDenominator = BigInteger.valueOf(clock.ticksPerSecondDenominator());
+            // Ceiling is deliberate: the exercised span is at least 24 physical hours even when
+            // a rational clock has no integer tick exactly at that wall-time boundary.
+            long inputTicks = tickNumerator.add(tickDenominator.subtract(BigInteger.ONE))
+                    .divide(tickDenominator).longValueExact();
+
+            ClockSpec.RateAccumulator audio = clock.newTickRateAccumulator(44_100);
+            long samples = audio.advance(inputTicks);
+            BigInteger exactAudioNumerator = BigInteger.valueOf(inputTicks)
+                    .multiply(BigInteger.valueOf(44_100))
+                    .multiply(BigInteger.valueOf(clock.ticksPerSecondDenominator()));
+            BigInteger[] expectedAudio = exactAudioNumerator.divideAndRemainder(
+                    BigInteger.valueOf(clock.ticksPerSecondNumerator()));
+            assertEquals(expectedAudio[0].longValueExact(), samples);
+            assertEquals(expectedAudio[1].longValueExact(), audio.remainder());
+
+            long frames = inputTicks / clock.controllerTicksPerFrame();
+            ClockSpec.RateAccumulator nanos = clock.newFrameNanosecondAccumulator();
+            long actualNanos = nanos.advance(frames);
+            BigInteger exactNanos = BigInteger.valueOf(frames)
+                    .multiply(BigInteger.valueOf(1_000_000_000L))
+                    .multiply(BigInteger.valueOf(clock.controllerFramesPerSecondDenominator()));
+            BigInteger[] expectedNanos = exactNanos.divideAndRemainder(
+                    BigInteger.valueOf(clock.controllerFramesPerSecondNumerator()));
+            assertEquals(expectedNanos[0].longValueExact(), actualNanos);
+            assertEquals(expectedNanos[1].longValueExact(), nanos.remainder());
+        }
     }
 }

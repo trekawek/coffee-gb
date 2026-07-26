@@ -1,7 +1,12 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
+import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import org.junit.Test
 
@@ -34,5 +39,36 @@ class TimingTickerTest {
     assertEquals(0, ticker.completedFrames)
     ticker.run(second)
     assertEquals(1, ticker.completedFrames)
+  }
+
+  @Test
+  fun `host pacing and pause reanchoring never advance emulated sgb2 state`() {
+    fun runWithHostStep(hostStep: Long): ByteArray {
+      val configuration =
+          StateCodecTestSupport.configuration(
+                  StateCodecTestSupport.rom(sgb = true),
+                  GameboyType.SGB,
+              )
+              .setHardwareProfile(HardwareProfileRegistry.SGB2)
+      return StateCodecTestSupport.session(configuration).use { session ->
+        val now = AtomicLong(0)
+        val ticker = TimingTicker({ now.addAndGet(hostStep) }, {})
+        val clock = session.gameboy.clockSpec
+        repeat(clock.controllerTicksPerFrame()) {
+          session.gameboy.tick()
+          ticker.run(clock)
+        }
+        val atFrame = StateCodec.encode(StateCodec.capture(session))
+
+        // A long fake host pause invokes pacing/re-anchor logic only. No emulator tick is hidden
+        // inside TimingTicker, so the complete detached machine remains byte-identical.
+        now.addAndGet(60_000_000_000L)
+        repeat(clock.controllerTicksPerFrame()) { ticker.run(clock) }
+        assertContentEquals(atFrame, StateCodec.encode(StateCodec.capture(session)))
+        atFrame
+      }
+    }
+
+    assertContentEquals(runWithHostStep(17_000_000L), runWithHostStep(91_000_000L))
   }
 }

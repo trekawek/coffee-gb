@@ -16,6 +16,7 @@ import eu.rekawek.coffeegb.controller.state.StateGraph
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.state.ComponentState
@@ -571,7 +572,7 @@ class ConnectionTest {
   }
 
   @Test
-  fun handshakeRequiresStateFileV1CapabilityInBothDirections() {
+  fun handshakeRequiresProtocolV8StateFileV1CapabilityInBothDirections() {
     val serverHandshake =
         "CoffeeGB NETPLAY".toByteArray() +
             byteArrayOf(0x08, LinkMode.NORMAL.ordinal.toByte(), 0x01) +
@@ -938,6 +939,42 @@ class ConnectionTest {
       }
       assertEquals(null, received.poll(), description)
     }
+  }
+
+  @Test
+  fun protocolV8RejectsSgb2BeforeWritingAnyStateBearingMessage() {
+    val handshake =
+        "CoffeeGB NETPLAY".toByteArray() +
+            byteArrayOf(0x08, LinkMode.NORMAL.ordinal.toByte(), 0x01) +
+            capabilities()
+    val output = ByteArrayOutputStream()
+    val connection =
+        Connection(ByteArrayInputStream(handshake), output, senderBus, false).also {
+          receiver = it
+        }
+    val before = output.toByteArray()
+    val configuration =
+        Gameboy.GameboyConfiguration(Rom(ROM))
+            .setHardwareProfile(HardwareProfileRegistry.SGB2)
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setSupportBatterySave(false)
+    val state = portableMachine(configuration)
+    assertEquals(2, StateCodec.inspect(state).formatVersion)
+
+    senderBus.post(
+        LinkedController.LocalRomLoadedEvent(
+            ROM.readBytes(),
+            null,
+            state,
+            GameboyType.SGB,
+            Gameboy.BootstrapMode.SKIP,
+            0,
+            hardwareProfileId = HardwareProfileRegistry.SGB2.id(),
+            player = 1,
+        ))
+
+    assertContentEquals(before, output.toByteArray())
+    connection.stop()
   }
 
   @Test

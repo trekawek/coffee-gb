@@ -121,7 +121,7 @@ class RomIdentity(bytes: ByteArray) {
   }
 }
 
-/** Stable v1 behavior profile. Diagnostic build versions are intentionally not part of it. */
+/** Stable portable behavior profile. Diagnostic build versions are intentionally not part of it. */
 data class HardwareProfile(
     val version: Int,
     val hardware: MachineHardwareState,
@@ -130,6 +130,8 @@ data class HardwareProfile(
     val mealybugDmgBlob: Boolean,
     val codeBreakerRumble: Boolean,
     val displaySgbBorder: Boolean,
+    /** Null only for the released v1 identity schema, whose coarse tag derives the canonical ID. */
+    val explicitProfileId: String? = null,
 ) {
   init {
     require(version == VERSION) { "Unsupported hardware profile version $version" }
@@ -138,12 +140,13 @@ data class HardwareProfile(
   /** Stable Phase-3 identity derived without changing the StateFile-v1 byte layout. */
   val canonicalProfileId: String
     get() =
-        when (hardware) {
-          MachineHardwareState.DMG -> HardwareProfileRegistry.DMG.id()
-          MachineHardwareState.CGB ->
-              HardwareProfileRegistry.cgbRevision(cgb0Revision).id()
-          MachineHardwareState.SGB -> HardwareProfileRegistry.SGB.id()
-        }
+        explicitProfileId
+            ?: when (hardware) {
+              MachineHardwareState.DMG -> HardwareProfileRegistry.DMG.id()
+              MachineHardwareState.CGB ->
+                  HardwareProfileRegistry.cgbRevision(cgb0Revision).id()
+              MachineHardwareState.SGB -> HardwareProfileRegistry.SGB.id()
+            }
 
   fun isCompatibleWith(other: HardwareProfile): Boolean =
       canonicalProfileId == other.canonicalProfileId &&
@@ -191,10 +194,17 @@ class StateFile(
     identities: Collection<StateIdentityEntry>,
     val root: StateFileRoot,
     val diagnostics: StateDiagnosticMetadata? = null,
+    val formatVersion: Int =
+        if (identities.any {
+          it.identity?.profile?.canonicalProfileId == HardwareProfileRegistry.SGB2.id()
+        }) 2 else 1,
 ) {
   init {
     require(identities.size <= StateLimits.PORTABLE_MAX_LINKED_PLAYERS) {
       "Portable state identity count exceeds ${StateLimits.PORTABLE_MAX_LINKED_PLAYERS}"
+    }
+    require(formatVersion == 1 || formatVersion == 2) {
+      "Unsupported portable format version $formatVersion"
     }
   }
 
@@ -203,11 +213,12 @@ class StateFile(
 
   override fun equals(other: Any?): Boolean =
       other is StateFile &&
+          formatVersion == other.formatVersion &&
           identities == other.identities &&
           root == other.root &&
           diagnostics == other.diagnostics
 
-  override fun hashCode(): Int = arrayOf(identities, root, diagnostics).contentHashCode()
+  override fun hashCode(): Int = arrayOf(formatVersion, identities, root, diagnostics).contentHashCode()
 }
 
 data class StateSectionInspection(
@@ -271,6 +282,7 @@ object StateIdentity {
                 hardware != MachineHardwareState.CGB && configuration.isMealybugDmgBlob,
                 configuration.isCodeBreakerRumble,
                 hardware == MachineHardwareState.SGB && configuration.isDisplaySgbBorder,
+                resolvedProfile.id().takeIf { it == HardwareProfileRegistry.SGB2.id() },
             ),
         )
       }

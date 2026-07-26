@@ -25,6 +25,7 @@ class HardwareModelBaselineTest {
                 ModelCase("CGB", HardwareProfileRegistry.CGB),
                 ModelCase("CGB0", HardwareProfileRegistry.CGB0),
                 ModelCase("SGB", HardwareProfileRegistry.SGB),
+                ModelCase("SGB2", HardwareProfileRegistry.SGB2),
             )
             .map(::measure)
 

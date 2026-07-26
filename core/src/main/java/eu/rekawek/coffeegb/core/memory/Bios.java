@@ -38,13 +38,29 @@ public class Bios implements AddressSpace {
     private final int[] rom;
 
     public Bios(HardwareProfile profile) {
+        this(profile, true);
+    }
+
+    /**
+     * Constructs the mapped boot address space. A profile without a bundled boot ROM may use a
+     * disabled placeholder only when the owning Gameboy is configured to skip bootstrap.
+     */
+    public Bios(HardwareProfile profile, boolean bootRomRequired) {
         HardwareProfile registered = HardwareProfileRegistry.requireRegistered(profile);
         String bootRomId = registered.bootSpec().bootRomId();
         this.cgbBootRom = "cgb".equals(bootRomId);
-        this.rom = BOOT_ROMS.get(bootRomId);
-        if (rom == null) {
-            throw new IllegalArgumentException("No boot ROM registered for profile " + profile.id());
+        int[] bundled = BOOT_ROMS.get(bootRomId);
+        if (bundled == null && bootRomRequired) {
+            throw new IllegalArgumentException(
+                    "Coffee GB does not bundle or configure an authentic " + bootRomId
+                            + " boot ROM for profile " + profile.id() + "; use skip bootstrap.");
         }
+        this.rom = bundled == null ? new int[0x100] : bundled;
+    }
+
+    public static boolean hasBundledBootRom(HardwareProfile profile) {
+        HardwareProfile registered = HardwareProfileRegistry.requireRegistered(profile);
+        return BOOT_ROMS.containsKey(registered.bootSpec().bootRomId());
     }
 
     /** @deprecated Construct from a resolved HardwareProfile. */

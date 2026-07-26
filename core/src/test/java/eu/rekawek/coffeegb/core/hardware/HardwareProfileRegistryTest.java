@@ -14,11 +14,12 @@ public class HardwareProfileRegistryTest {
 
     @Test
     public void registryHasPermanentCanonicalIdsInDeterministicOrder() {
-        assertEquals(List.of("dmg", "cgb", "cgb0", "sgb"), HardwareProfileRegistry.supportedIds());
+        assertEquals(List.of("dmg", "cgb", "cgb0", "sgb", "sgb2"), HardwareProfileRegistry.supportedIds());
         assertSame(HardwareProfileRegistry.DMG, HardwareProfileRegistry.resolve("dmg"));
         assertSame(HardwareProfileRegistry.CGB, HardwareProfileRegistry.resolve("cgb"));
         assertSame(HardwareProfileRegistry.CGB0, HardwareProfileRegistry.resolve("cgb0"));
         assertSame(HardwareProfileRegistry.SGB, HardwareProfileRegistry.resolve("sgb"));
+        assertSame(HardwareProfileRegistry.SGB2, HardwareProfileRegistry.resolve("sgb2"));
         assertThrows(UnsupportedOperationException.class,
                 () -> HardwareProfileRegistry.supportedProfiles().add(HardwareProfileRegistry.DMG));
     }
@@ -32,11 +33,12 @@ public class HardwareProfileRegistryTest {
 
         IllegalArgumentException unknown = assertThrows(IllegalArgumentException.class,
                 () -> HardwareProfileRegistry.resolveSetting("Game Boy Color (CGB)"));
-        assertTrue(unknown.getMessage().contains("[dmg, cgb, cgb0, sgb]"));
+        assertTrue(unknown.getMessage().contains("[dmg, cgb, cgb0, sgb, sgb2]"));
         assertThrows(IllegalArgumentException.class, () -> HardwareProfileRegistry.resolve("CGB"));
+        assertThrows(IllegalArgumentException.class, () -> HardwareProfileRegistry.resolve("SGB2"));
         assertTrue(assertThrows(IllegalArgumentException.class,
                 () -> HardwareProfileRegistry.resolve(null)).getMessage()
-                .contains("[dmg, cgb, cgb0, sgb]"));
+                .contains("[dmg, cgb, cgb0, sgb, sgb2]"));
     }
 
     @Test
@@ -45,23 +47,31 @@ public class HardwareProfileRegistryTest {
         assertSame(HardwareProfileRegistry.CGB, GameboyType.CGB.toHardwareProfile());
         assertSame(HardwareProfileRegistry.SGB, GameboyType.SGB.toHardwareProfile());
         assertEquals(GameboyType.CGB, GameboyType.fromHardwareProfile(HardwareProfileRegistry.CGB0));
+        assertEquals(GameboyType.SGB, GameboyType.fromHardwareProfile(HardwareProfileRegistry.SGB2));
     }
 
     @Test
-    public void capabilitiesAndBootPolicyLockCurrentFourProfileBehavior() {
+    public void capabilitiesAndBootPolicyLockCurrentFiveProfileBehavior() {
         assertEquals(HardwareProfile.Family.DMG, HardwareProfileRegistry.DMG.family());
         assertEquals(HardwareProfile.Family.CGB, HardwareProfileRegistry.CGB.family());
         assertEquals(HardwareProfile.Family.CGB, HardwareProfileRegistry.CGB0.family());
         assertEquals(HardwareProfile.Family.SGB, HardwareProfileRegistry.SGB.family());
+        assertEquals(HardwareProfile.Family.SGB, HardwareProfileRegistry.SGB2.family());
         assertTrue(HardwareProfileRegistry.CGB.capabilities().doubleSpeed());
         assertTrue(HardwareProfileRegistry.CGB.capabilities().infrared());
         assertTrue(HardwareProfileRegistry.SGB.capabilities().superGameboyCommands());
         assertTrue(HardwareProfileRegistry.SGB.capabilities().superGameboyBorder());
+        assertEquals(HardwareProfileRegistry.SGB.capabilities(),
+                HardwareProfileRegistry.SGB2.capabilities());
         assertEquals(10, HardwareProfileRegistry.CGB.bootSpec().authenticDivPreset());
         assertEquals(536, HardwareProfileRegistry.CGB0.bootSpec().authenticDivPreset());
         assertEquals(12, HardwareProfileRegistry.CGB.bootSpec().cgbBootHandoffTicks());
         assertEquals(0, HardwareProfileRegistry.CGB0.bootSpec().cgbBootHandoffTicks());
-        assertSame(ClockSpec.LEGACY, HardwareProfileRegistry.SGB.clockSpec());
+        assertSame(ClockSpec.SGB, HardwareProfileRegistry.SGB.clockSpec());
+        assertSame(ClockSpec.SGB2, HardwareProfileRegistry.SGB2.clockSpec());
+        assertEquals(0x0100, HardwareProfileRegistry.SGB.bootSpec().postBootAf());
+        assertEquals(0xff00, HardwareProfileRegistry.SGB2.bootSpec().postBootAf());
+        assertEquals(0x0014, HardwareProfileRegistry.SGB2.bootSpec().postBootBc());
     }
 
     @Test

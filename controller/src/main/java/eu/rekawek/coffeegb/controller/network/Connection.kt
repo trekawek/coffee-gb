@@ -20,6 +20,7 @@ import eu.rekawek.coffeegb.controller.state.StateRootKind
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
@@ -213,6 +214,10 @@ class Connection(
       event: LinkedController.LocalRomLoadedEvent,
       expectedRoot: StateRootKind,
   ) {
+    if (event.hardwareProfileId == HardwareProfileRegistry.SGB2.id()) {
+      throw IOException(
+          "SGB2 netplay is unavailable: protocol v8 negotiates StateFile v1, which can identify only sgb")
+    }
     if (expectedRoot == StateRootKind.SESSION && event.portableState == null) {
       throw IOException("A running-session checkpoint requires a SESSION StateFile")
     }
@@ -957,6 +962,10 @@ class Connection(
           "Local StateFile root ${file.root.kind} does not match expected $expectedRoot")
     }
     val inspection = StateCodec.inspect(bytes)
+    if (inspection.formatVersion != StateCodec.PROTOCOL_V8_FORMAT_VERSION) {
+      throw IOException(
+          "Protocol v8 supports StateFile v${StateCodec.PROTOCOL_V8_FORMAT_VERSION}, not v${inspection.formatVersion}")
+    }
     if (inspection.decodedPayloadLength > StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES) {
       throw IOException(
           "Local StateFile decoded payload ${inspection.decodedPayloadLength} exceeds " +
@@ -973,12 +982,12 @@ class Connection(
     val magic = ByteArray(STATE_MAGIC.size).also(buffer::get)
     check(magic.contentEquals(STATE_MAGIC))
     val version = buffer.short.toInt() and 0xffff
-    if (version != StateCodec.FORMAT_VERSION) {
+    if (version != StateCodec.PROTOCOL_V8_FORMAT_VERSION) {
       failProtocol(
           ProtocolErrorReason.INVALID_PORTABLE_STATE,
           IOException(
               "Unsupported network StateFile version $version; supported " +
-                  "${StateCodec.FORMAT_VERSION}",
+                  "${StateCodec.PROTOCOL_V8_FORMAT_VERSION}",
               StateDecodeException(
                   eu.rekawek.coffeegb.controller.state.StateDecodeReason
                       .UNSUPPORTED_FORMAT_VERSION,
@@ -1179,7 +1188,7 @@ class Connection(
         byteArrayOf(
             PROTOCOL_VERSION,
             STATE_NEGOTIATION_VERSION,
-            StateCodec.FORMAT_VERSION.toByte(),
+            StateCodec.PROTOCOL_V8_FORMAT_VERSION.toByte(),
             STATE_ROOT_CAPABILITIES,
         ))
   }
@@ -1193,7 +1202,7 @@ class Connection(
     if (peerProtocol == -1) {
       throw CompatibilityException(
           "Truncated $peer netplay negotiation: expected protocol v${PROTOCOL_VERSION.toInt()} " +
-              "and StateFile v${StateCodec.FORMAT_VERSION}.")
+              "and StateFile v${StateCodec.PROTOCOL_V8_FORMAT_VERSION}.")
     }
     if (peerProtocol != PROTOCOL_VERSION.toInt()) {
       val detected =
@@ -1204,7 +1213,7 @@ class Connection(
           }
       throw CompatibilityException(
           "Incompatible $peer netplay negotiation: detected $detected; expected protocol " +
-              "v${PROTOCOL_VERSION.toInt()} with StateFile v${StateCodec.FORMAT_VERSION}.")
+              "v${PROTOCOL_VERSION.toInt()} with StateFile v${StateCodec.PROTOCOL_V8_FORMAT_VERSION}.")
     }
     val rest = ByteArray(STATE_CAPABILITY_BYTES - 1)
     try {
@@ -1212,7 +1221,7 @@ class Connection(
     } catch (failure: IOException) {
       throw CompatibilityException(
           "Truncated $peer StateFile negotiation: expected negotiation v" +
-              "$STATE_NEGOTIATION_VERSION, StateFile v${StateCodec.FORMAT_VERSION}, " +
+              "$STATE_NEGOTIATION_VERSION, StateFile v${StateCodec.PROTOCOL_V8_FORMAT_VERSION}, " +
               "and root capabilities 0x${STATE_ROOT_CAPABILITIES.toString(16)}.",
       )
     }
@@ -1223,10 +1232,10 @@ class Connection(
               "${STATE_NEGOTIATION_VERSION.toInt()}.")
     }
     val stateVersion = rest[1].toInt() and 0xff
-    if (stateVersion != StateCodec.FORMAT_VERSION) {
+    if (stateVersion != StateCodec.PROTOCOL_V8_FORMAT_VERSION) {
       throw CompatibilityException(
           "Unsupported $peer StateFile format version $stateVersion; supported " +
-              "${StateCodec.FORMAT_VERSION}.")
+              "${StateCodec.PROTOCOL_V8_FORMAT_VERSION}.")
     }
     val roots = rest[2].toInt() and 0xff
     if (roots != STATE_ROOT_CAPABILITIES.toInt()) {

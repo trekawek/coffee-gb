@@ -21,7 +21,7 @@ internal fun requireCompatibleLinkedClockIdentities(
   val first = identities.firstOrNull() ?: return ClockSpec.LEGACY
   val clock = first.clockSpec
   identities.drop(1).forEach { identity ->
-    if (!clock.hasCompatibleControllerBudget(identity.clockSpec)) {
+    if (!clock.hasCompatibleClockIdentity(identity.clockSpec)) {
       throw StateApplyException(
           "Linked profile ${identity.profileId} clock ${identity.clockSpec} " +
               "is incompatible with ${first.profileId} clock $clock",

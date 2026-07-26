@@ -200,4 +200,9 @@ public class AudioSystemSound implements Runnable {
         long samples = clockSpec.maximumOutputUnits(clockSpec.controllerTicksPerFrame(), SAMPLE_RATE);
         return Math.toIntExact(Math.multiplyExact(samples, 4));
     }
+
+    /** Package-private deterministic probe; exposes only the scalar conversion phase. */
+    long samplePhaseForTesting() {
+        return sampleAccumulator.remainder();
+    }
 }

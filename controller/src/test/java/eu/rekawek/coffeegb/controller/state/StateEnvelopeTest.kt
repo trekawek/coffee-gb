@@ -15,7 +15,7 @@ class StateEnvelopeTest {
     val baseline = baseline()
     assertMutation(baseline, StateDecodeReason.INVALID_MAGIC) { it[0] = 'X'.code.toByte() }
     assertMutation(baseline, StateDecodeReason.UNSUPPORTED_FORMAT_VERSION) {
-      StateCodecTestSupport.writeU16(it, 4, 2)
+      StateCodecTestSupport.writeU16(it, 4, StateCodec.LATEST_FORMAT_VERSION + 1)
     }
     assertMutation(baseline, StateDecodeReason.UNSUPPORTED_FORMAT_VERSION) {
       StateCodecTestSupport.writeU16(it, 6, StateCodec.HEADER_SIZE + 1)
