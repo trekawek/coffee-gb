@@ -434,6 +434,12 @@ canonical UTC-seconds display value and is never trusted instead of the host dea
 eight failed AUTH attempts are admitted per listening session in one 60-second monotonic window;
 later attempts are the same generic failure until the window rolls. A successful use invalidates
 the invitation immediately. Stopping the host invalidates all outstanding invitations.
+Application objects use explicit transferable ownership of one mutable token buffer: client-auth
+transfer invalidates the source invitation without copying, and use, expiry, replacement, host
+stop, or explicit close zeroes the shared buffer. Rendering is the sole explicit disclosure and
+fails after invalidation. An immutable URI string already returned to a caller is outside the
+zeroizable buffer boundary and remains the caller's secret to discard without logging or
+persistence.
 
 Canonical URI grammar is:
 

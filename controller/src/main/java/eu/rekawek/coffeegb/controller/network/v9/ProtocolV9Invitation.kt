@@ -34,10 +34,121 @@ class V9InvitationParseException(
 ) : IllegalArgumentException(reason.name)
 
 /**
+ * One mutable token buffer shared by bounded leases.
+ *
+ * A host lease may invalidate every application view at expiry/use/replacement/stop. Transferring
+ * a lease changes which object may use it without copying the bytes. Releasing the final lease or
+ * invalidating the material wipes the buffer exactly once.
+ */
+internal class V9InvitationSecret private constructor(
+    private val bytes: ByteArray,
+) {
+  private var leases = 0
+  private var destroyed = false
+
+  @Synchronized
+  fun acquire(): V9InvitationSecretLease {
+    check(!destroyed) { "v9 invitation secret is unavailable" }
+    leases = Math.addExact(leases, 1)
+    return V9InvitationSecretLease(this)
+  }
+
+  @Synchronized
+  fun <T> useIfAvailable(block: (ByteArray) -> T): T? =
+      if (destroyed) null else block(bytes)
+
+  @Synchronized
+  fun isAvailable(): Boolean = !destroyed
+
+  @Synchronized
+  fun destroy() {
+    if (!destroyed) {
+      destroyed = true
+      bytes.fill(0)
+    }
+  }
+
+  @Synchronized
+  fun release() {
+    check(leases > 0)
+    leases--
+    if (leases == 0) destroy()
+  }
+
+  companion object {
+    fun generated(random: V9SecureRandom): V9InvitationSecret {
+      val bytes = ByteArray(V9Limit.INVITATION_TOKEN_BYTES.value.toInt())
+      return try {
+        random.nextBytes(bytes)
+        V9InvitationSecret(bytes)
+      } catch (e: RuntimeException) {
+        bytes.fill(0)
+        throw e
+      }
+    }
+
+    fun takingOwnership(bytes: ByteArray): V9InvitationSecret =
+        V9InvitationSecret(bytes)
+  }
+}
+
+internal class V9InvitationSecretLease(
+    private val secret: V9InvitationSecret,
+) : AutoCloseable {
+  private var open = true
+
+  fun <T> use(block: (ByteArray) -> T): T =
+      synchronized(this) {
+        check(open) { "v9 invitation secret is unavailable" }
+        secret.useIfAvailable(block)
+            ?: throw IllegalStateException("v9 invitation secret is unavailable")
+      }
+
+  fun transfer(): V9InvitationSecretLease =
+      synchronized(this) {
+        check(open && secret.isAvailable()) { "v9 invitation secret is unavailable" }
+        open = false
+        V9InvitationSecretLease(secret)
+      }
+
+  fun destroy() {
+    val invalidate =
+        synchronized(this) {
+          if (!open) false
+          else {
+            open = false
+            true
+          }
+        }
+    if (invalidate) {
+      secret.destroy()
+      secret.release()
+    }
+  }
+
+  fun isAvailable(): Boolean =
+      synchronized(this) { open && secret.isAvailable() }
+
+  override fun close() {
+    val release =
+        synchronized(this) {
+          if (!open) false
+          else {
+            open = false
+            true
+          }
+        }
+    if (release) secret.release()
+  }
+}
+
+/**
  * Pure, canonical protocol-v9 invitation value.
  *
- * Token bytes are deep-owned and intentionally absent from [toString], equality, diagnostics, and
- * ordinary accessors. [render] is the one explicit disclosure used by copy/paste UI.
+ * The token lease is intentionally absent from [toString], equality, diagnostics, and ordinary
+ * accessors. [render] is the one explicit disclosure used by copy/paste UI. [close] invalidates
+ * this invitation and every lease sharing its token; [forClientAuthentication] transfers this
+ * value's lease without copying it.
  */
 class V9Invitation private constructor(
     val host: String,
@@ -45,29 +156,43 @@ class V9Invitation private constructor(
     val mode: V9LinkMode,
     val slot: Int,
     val displayExpiryUtcSeconds: Long,
-    token: ByteArray,
-) {
-  private val token = token.copyOf()
+    private val secret: V9InvitationSecretLease,
+) : AutoCloseable {
 
   init {
     require(canonicalHost(host))
     require(port in 1..65_535)
     require(validSlot(mode, slot))
     require(displayExpiryUtcSeconds in 1L..MAX_EXPIRY_UTC_SECONDS)
-    require(this.token.size == V9Limit.INVITATION_TOKEN_BYTES.value.toInt())
   }
 
   /** Explicitly renders the transferable secret; callers must not log or persist this value. */
-  fun render(): String {
-    val authority = if (':' in host) "[$host]" else host
-    val modeName = if (mode == V9LinkMode.NORMAL) "normal" else "four"
-    return "coffeegb://$authority:$port/join?v=9&mode=$modeName&slot=$slot" +
-        "&exp=$displayExpiryUtcSeconds&token=${encodeToken(token)}"
-  }
+  fun render(): String =
+      secret.use { token ->
+        val authority = if (':' in host) "[$host]" else host
+        val modeName = if (mode == V9LinkMode.NORMAL) "normal" else "four"
+        val prefix =
+            "coffeegb://$authority:$port/join?v=9&mode=$modeName&slot=$slot" +
+                "&exp=$displayExpiryUtcSeconds&token="
+        val rendered = CharArray(Math.addExact(prefix.length, 22))
+        prefix.toCharArray(rendered, 0, 0, prefix.length)
+        encodeToken(token, rendered, prefix.length)
+        try {
+          String(rendered)
+        } finally {
+          rendered.fill('\u0000')
+        }
+      }
 
   override fun toString(): String = "V9Invitation([redacted])"
 
-  internal fun copyToken(): ByteArray = token.copyOf()
+  internal fun transferSecret(): V9InvitationSecretLease = secret.transfer()
+
+  internal fun isSecretAvailable(): Boolean = secret.isAvailable()
+
+  override fun close() {
+    secret.destroy()
+  }
 
   companion object {
     private const val MAX_EXPIRY_UTC_SECONDS = 253_402_300_799L
@@ -75,70 +200,87 @@ class V9Invitation private constructor(
     private val DNS_LABEL = Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
     private val DECIMAL = Regex("0|[1-9][0-9]*")
     private val QUERY_NAMES = listOf("v", "mode", "slot", "exp", "token")
+    private const val BASE64URL_ALPHABET =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
     @JvmStatic
     fun parse(value: String): V9Invitation {
       val utf8 = value.toByteArray(StandardCharsets.UTF_8)
-      if (utf8.size > V9Limit.INVITATION_URI_BYTES.value) {
-        fail(V9InvitationError.INV_TOO_LONG)
-      }
-      if (value.any { it.code < 0x20 || it.code == 0x7f || it.isWhitespace() }) {
-        fail(V9InvitationError.INV_CONTROL)
-      }
-      if ('%' in value) fail(V9InvitationError.INV_ENCODING)
-      if ('#' in value) fail(V9InvitationError.INV_FRAGMENT)
-      if (!value.startsWith("coffeegb://")) fail(V9InvitationError.INV_SCHEME)
+      var decodedToken: ByteArray? = null
+      var ownedSecret: V9InvitationSecret? = null
+      try {
+        if (utf8.size > V9Limit.INVITATION_URI_BYTES.value) {
+          fail(V9InvitationError.INV_TOO_LONG)
+        }
+        if (value.any { it.code < 0x20 || it.code == 0x7f || it.isWhitespace() }) {
+          fail(V9InvitationError.INV_CONTROL)
+        }
+        if ('%' in value) fail(V9InvitationError.INV_ENCODING)
+        if ('#' in value) fail(V9InvitationError.INV_FRAGMENT)
+        if (!value.startsWith("coffeegb://")) fail(V9InvitationError.INV_SCHEME)
 
-      val remainder = value.substring("coffeegb://".length)
-      val pathIndex = remainder.indexOf("/join?")
-      if (pathIndex < 0) {
-        fail(if ('/' in remainder) V9InvitationError.INV_PATH else V9InvitationError.INV_AUTHORITY)
-      }
-      val authority = remainder.substring(0, pathIndex)
-      val query = remainder.substring(pathIndex + "/join?".length)
-      if ('@' in authority) fail(V9InvitationError.INV_AUTHORITY)
-      val parsedAuthority = parseAuthority(authority)
-      if (parsedAuthority == null) {
-        fail(
-            if (!authority.contains(':') || authority.substringAfterLast(':').isEmpty()) {
-              V9InvitationError.INV_PORT
-            } else {
-              V9InvitationError.INV_AUTHORITY
-            },
-        )
-      }
-      val (host, portText) = parsedAuthority
-      if (!canonicalHost(host)) fail(V9InvitationError.INV_HOST)
-      val port = canonicalUnsigned(portText, 65_535L)?.toInt()
-          ?: fail(V9InvitationError.INV_PORT)
-      if (port == 0) fail(V9InvitationError.INV_PORT)
+        val remainder = value.substring("coffeegb://".length)
+        val pathIndex = remainder.indexOf("/join?")
+        if (pathIndex < 0) {
+          fail(
+              if ('/' in remainder) V9InvitationError.INV_PATH
+              else V9InvitationError.INV_AUTHORITY,
+          )
+        }
+        val authority = remainder.substring(0, pathIndex)
+        val query = remainder.substring(pathIndex + "/join?".length)
+        if ('@' in authority) fail(V9InvitationError.INV_AUTHORITY)
+        val parsedAuthority = parseAuthority(authority)
+        if (parsedAuthority == null) {
+          fail(
+              if (!authority.contains(':') || authority.substringAfterLast(':').isEmpty()) {
+                V9InvitationError.INV_PORT
+              } else {
+                V9InvitationError.INV_AUTHORITY
+              },
+          )
+        }
+        val (host, portText) = parsedAuthority
+        if (!canonicalHost(host)) fail(V9InvitationError.INV_HOST)
+        val port = canonicalUnsigned(portText, 65_535L)?.toInt()
+            ?: fail(V9InvitationError.INV_PORT)
+        if (port == 0) fail(V9InvitationError.INV_PORT)
 
-      val pieces = query.split('&')
-      val pairs = pieces.map { it.substringBefore('=') to it.substringAfter('=', "") }
-      val counts = pairs.map { it.first }.groupingBy { it }.eachCount()
-      if (counts.values.any { it > 1 }) fail(V9InvitationError.INV_DUPLICATE)
-      if (pairs.any { it.first !in QUERY_NAMES }) fail(V9InvitationError.INV_UNKNOWN)
-      if (!pairs.map { it.first }.containsAll(QUERY_NAMES)) fail(V9InvitationError.INV_MISSING)
-      if (pairs.map { it.first } != QUERY_NAMES) fail(V9InvitationError.INV_QUERY_ORDER)
-      val values = pairs.toMap()
-      if (values.getValue("v") != "9") fail(V9InvitationError.INV_VERSION)
-      val mode =
-          when (values.getValue("mode")) {
-            "normal" -> V9LinkMode.NORMAL
-            "four" -> V9LinkMode.FOUR_PLAYER
-            else -> fail(V9InvitationError.INV_MODE)
-          }
-      val slot = canonicalUnsigned(values.getValue("slot"), 3)?.toInt()
-          ?: fail(V9InvitationError.INV_SLOT)
-      if (!validSlot(mode, slot)) fail(V9InvitationError.INV_SLOT)
-      val expiry = canonicalUnsigned(values.getValue("exp"), MAX_EXPIRY_UTC_SECONDS)
-          ?: fail(V9InvitationError.INV_EXPIRY)
-      if (expiry == 0L) fail(V9InvitationError.INV_EXPIRY)
-      val token = decodeToken(values.getValue("token"))
-          ?: fail(V9InvitationError.INV_TOKEN)
-
-      return V9Invitation(host, port, mode, slot, expiry, token).also {
-        if (it.render() != value) fail(V9InvitationError.INV_HOST)
+        val pieces = query.split('&')
+        val pairs = pieces.map { it.substringBefore('=') to it.substringAfter('=', "") }
+        val counts = pairs.map { it.first }.groupingBy { it }.eachCount()
+        if (counts.values.any { it > 1 }) fail(V9InvitationError.INV_DUPLICATE)
+        if (pairs.any { it.first !in QUERY_NAMES }) fail(V9InvitationError.INV_UNKNOWN)
+        if (!pairs.map { it.first }.containsAll(QUERY_NAMES)) {
+          fail(V9InvitationError.INV_MISSING)
+        }
+        if (pairs.map { it.first } != QUERY_NAMES) fail(V9InvitationError.INV_QUERY_ORDER)
+        val values = pairs.toMap()
+        if (values.getValue("v") != "9") fail(V9InvitationError.INV_VERSION)
+        val mode =
+            when (values.getValue("mode")) {
+              "normal" -> V9LinkMode.NORMAL
+              "four" -> V9LinkMode.FOUR_PLAYER
+              else -> fail(V9InvitationError.INV_MODE)
+            }
+        val slot = canonicalUnsigned(values.getValue("slot"), 3)?.toInt()
+            ?: fail(V9InvitationError.INV_SLOT)
+        if (!validSlot(mode, slot)) fail(V9InvitationError.INV_SLOT)
+        val expiry = canonicalUnsigned(values.getValue("exp"), MAX_EXPIRY_UTC_SECONDS)
+            ?: fail(V9InvitationError.INV_EXPIRY)
+        if (expiry == 0L) fail(V9InvitationError.INV_EXPIRY)
+        decodedToken =
+            decodeToken(values.getValue("token"))
+                ?: fail(V9InvitationError.INV_TOKEN)
+        ownedSecret = V9InvitationSecret.takingOwnership(decodedToken)
+        decodedToken = null
+        return V9Invitation(host, port, mode, slot, expiry, ownedSecret.acquire())
+      } catch (e: RuntimeException) {
+        ownedSecret?.destroy()
+        throw e
+      } finally {
+        decodedToken?.fill(0)
+        utf8.fill(0)
       }
     }
 
@@ -148,9 +290,9 @@ class V9Invitation private constructor(
         mode: V9LinkMode,
         slot: Int,
         displayExpiryUtcSeconds: Long,
-        token: ByteArray,
+        secret: V9InvitationSecret,
     ): V9Invitation =
-        V9Invitation(host, port, mode, slot, displayExpiryUtcSeconds, token)
+        V9Invitation(host, port, mode, slot, displayExpiryUtcSeconds, secret.acquire())
 
     private fun parseAuthority(authority: String): Pair<String, String>? {
       if (authority.startsWith('[')) {
@@ -246,14 +388,36 @@ class V9Invitation private constructor(
             return null
           }
       if (decoded.size != V9Limit.INVITATION_TOKEN_BYTES.value.toInt() ||
-          encodeToken(decoded) != value) {
+          value.last() !in setOf('A', 'Q', 'g', 'w')) {
+        decoded.fill(0)
         return null
       }
       return decoded
     }
 
-    private fun encodeToken(value: ByteArray): String =
-        Base64.getUrlEncoder().withoutPadding().encodeToString(value)
+    private fun encodeToken(
+        value: ByteArray,
+        encoded: CharArray,
+        offset: Int,
+    ) {
+      require(value.size == V9Limit.INVITATION_TOKEN_BYTES.value.toInt())
+      var input = 0
+      var output = offset
+      while (input + 2 < value.size) {
+        val bits =
+            ((value[input].toInt() and 0xff) shl 16) or
+                ((value[input + 1].toInt() and 0xff) shl 8) or
+                (value[input + 2].toInt() and 0xff)
+        encoded[output++] = BASE64URL_ALPHABET[bits ushr 18 and 0x3f]
+        encoded[output++] = BASE64URL_ALPHABET[bits ushr 12 and 0x3f]
+        encoded[output++] = BASE64URL_ALPHABET[bits ushr 6 and 0x3f]
+        encoded[output++] = BASE64URL_ALPHABET[bits and 0x3f]
+        input += 3
+      }
+      val tail = (value[input].toInt() and 0xff) shl 16
+      encoded[output++] = BASE64URL_ALPHABET[tail ushr 18 and 0x3f]
+      encoded[output] = BASE64URL_ALPHABET[tail ushr 12 and 0x3f]
+    }
 
     private fun validSlot(mode: V9LinkMode, slot: Int): Boolean =
         mode == V9LinkMode.NORMAL && slot == 1 ||
@@ -319,27 +483,34 @@ class V9InvitationHost(
     val lifetimeMillis = Math.multiplyExact(ttlSeconds, 1_000L)
     val monotonicExpiry = Math.addExact(clock.nowMillis(), lifetimeMillis)
     val displayExpiry = Math.addExact(utcSeconds.nowSeconds(), ttlSeconds)
-    val token = ByteArray(V9Limit.INVITATION_TOKEN_BYTES.value.toInt())
+    val secret = V9InvitationSecret.generated(random)
     val generated =
-        try {
-          random.nextBytes(token)
-          V9Invitation.create(host, port, mode, slot, displayExpiry, token) to
-              HostedInvitation(token, monotonicExpiry)
-        } finally {
-          token.fill(0)
-        }
+      try {
+        V9Invitation.create(host, port, mode, slot, displayExpiry, secret) to
+            HostedInvitation(secret.acquire(), monotonicExpiry)
+      } catch (e: RuntimeException) {
+        secret.destroy()
+        throw e
+      }
     val (value, hosted) = generated
     invitations.remove(slot)?.destroy()
     invitations[slot] = hosted
-    hosted.expiryTask =
-        scheduler.schedule(monotonicExpiry) {
-          synchronized(this) {
-            if (invitations[slot] === hosted && clock.nowMillis() >= monotonicExpiry) {
-              invitations.remove(slot)
-              hosted.destroy()
+    try {
+      hosted.expiryTask =
+          scheduler.schedule(monotonicExpiry) {
+            synchronized(this) {
+              if (invitations[slot] === hosted && clock.nowMillis() >= monotonicExpiry) {
+                invitations.remove(slot)
+                hosted.destroy()
+              }
             }
           }
-        }
+    } catch (e: RuntimeException) {
+      invitations.remove(slot, hosted)
+      hosted.destroy()
+      value.close()
+      throw e
+    }
     return value
   }
 
@@ -363,42 +534,41 @@ class V9InvitationHost(
       return V9Authentication.Failed
     }
     val invitation = invitations[auth.slot]
-    val proofMatches =
-        if (invitation == null) {
-          false
-        } else {
-          val key = invitation.copyToken()
-          try {
-            MessageDigest.isEqual(
-                V9AuthCodec.proof(key, serverNonce, clientNonce, auth.slot),
-                auth.proof(),
-            )
-          } finally {
-            key.fill(0)
-          }
-        }
     if (invitation == null ||
         invitation.used ||
         now >= invitation.expiresAtMillis ||
-        !validSlot(auth.slot) ||
-        !proofMatches) {
+        !invitation.isAvailable() ||
+        !validSlot(auth.slot)) {
       failures++
-      if (invitation != null && now >= invitation.expiresAtMillis) {
+      if (invitation != null &&
+          (now >= invitation.expiresAtMillis || !invitation.isAvailable())) {
         invitations.remove(auth.slot)?.destroy()
       }
       return V9Authentication.Failed
     }
-    if (occupied.containsKey(auth.slot)) return V9Authentication.SlotFull
 
-    invitation.used = true
-    invitation.destroy()
-    val reservation = Reservation(this, auth.slot)
-    occupied[auth.slot] = reservation
-    return V9Authentication.Accepted(reservation)
+    val outcome =
+        invitation.withMatchingProof(auth, serverNonce, clientNonce) {
+          if (occupied.containsKey(auth.slot)) {
+            V9Authentication.SlotFull
+          } else {
+            invitation.used = true
+            invitation.destroy()
+            val reservation = Reservation(this, auth.slot)
+            occupied[auth.slot] = reservation
+            V9Authentication.Accepted(reservation)
+          }
+        }
+    if (outcome != null) return outcome
+
+    failures++
+    if (!invitation.isAvailable()) invitations.remove(auth.slot)?.destroy()
+    return V9Authentication.Failed
   }
 
   @Synchronized
-  fun outstandingInvitations(): Int = invitations.values.count { !it.used }
+  fun outstandingInvitations(): Int =
+      invitations.values.count { !it.used && it.isAvailable() }
 
   @Synchronized
   fun occupiedSlots(): Set<Int> =
@@ -466,19 +636,44 @@ class V9InvitationHost(
   }
 
   private class HostedInvitation(
-      token: ByteArray,
+      private val secret: V9InvitationSecretLease,
       val expiresAtMillis: Long,
   ) {
-    private val token = token.copyOf()
     var used = false
     var expiryTask: Closeable? = null
 
-    fun copyToken(): ByteArray = token.copyOf()
+    fun <T> withMatchingProof(
+        auth: V9Auth,
+        serverNonce: ByteArray,
+        clientNonce: ByteArray,
+        onMatch: () -> T,
+    ): T? {
+      val actual = auth.proof()
+      return try {
+        secret.use { token ->
+          val expected = V9AuthCodec.proof(token, serverNonce, clientNonce, auth.slot)
+          try {
+            if (MessageDigest.isEqual(expected, actual)) onMatch() else null
+          } finally {
+            expected.fill(0)
+            actual.fill(0)
+          }
+        }
+      } catch (_: IllegalStateException) {
+        actual.fill(0)
+        null
+      } catch (e: RuntimeException) {
+        actual.fill(0)
+        throw e
+      }
+    }
+
+    fun isAvailable(): Boolean = secret.isAvailable()
 
     fun destroy() {
       expiryTask?.close()
       expiryTask = null
-      token.fill(0)
+      secret.destroy()
     }
   }
 }

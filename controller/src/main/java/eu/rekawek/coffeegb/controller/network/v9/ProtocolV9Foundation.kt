@@ -35,11 +35,17 @@ interface V9ConnectableChannel : V9TransportChannel {
 }
 
 class V9SocketChannel(private val socket: Socket) : V9ConnectableChannel {
+  init {
+    // Lifecycle deadlines own blocking-read cancellation. A fixed SO_TIMEOUT would preempt later
+    // states whose frozen deadline is longer than the HELLO/AUTH deadline.
+    socket.soTimeout = 0
+  }
+
   override fun connect(address: InetSocketAddress, timeoutMillis: Int) {
     socket.connect(address, timeoutMillis)
     socket.tcpNoDelay = true
     socket.keepAlive = true
-    socket.soTimeout = V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt()
+    socket.soTimeout = 0
   }
 
   override fun read(bytes: ByteArray, offset: Int, length: Int): Int =
@@ -973,7 +979,7 @@ class V9FoundationServer(
     try {
       socket.tcpNoDelay = true
       socket.keepAlive = true
-      socket.soTimeout = V9Timeout.WAIT_CLIENT_HELLO.milliseconds.toInt()
+      socket.soTimeout = 0
       connection =
           connectionFactory(
               V9SocketChannel(socket),

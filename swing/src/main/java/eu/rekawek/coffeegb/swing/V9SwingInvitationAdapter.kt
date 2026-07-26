@@ -14,7 +14,11 @@ import javax.swing.SwingUtilities
 
 sealed class V9InvitationUiState {
   object Parsing : V9InvitationUiState()
-  class Parsed(val invitation: V9Invitation) : V9InvitationUiState() {
+  class Parsed(val invitation: V9Invitation) : V9InvitationUiState(), Closeable {
+    override fun close() {
+      invitation.close()
+    }
+
     override fun toString(): String = "Parsed([redacted])"
   }
   class InvalidInvitation(val reason: V9InvitationError) : V9InvitationUiState()
@@ -72,7 +76,11 @@ class V9SwingInvitationAdapter(
               } catch (_: RuntimeException) {
                 V9InvitationUiState.InvalidInvitation(V9InvitationError.INV_AUTHORITY)
               }
-          if (!Thread.currentThread().isInterrupted && !closed.get()) publish(consumer, result)
+          if (!Thread.currentThread().isInterrupted && !closed.get()) {
+            publish(consumer, result)
+          } else {
+            discard(result)
+          }
         }
   }
 
@@ -112,8 +120,12 @@ class V9SwingInvitationAdapter(
       state: V9InvitationUiState,
   ) {
     SwingUtilities.invokeLater {
-      if (!closed.get()) consumer(state)
+      if (!closed.get()) consumer(state) else discard(state)
     }
+  }
+
+  private fun discard(state: V9InvitationUiState) {
+    if (state is V9InvitationUiState.Parsed) state.close()
   }
 
   companion object {

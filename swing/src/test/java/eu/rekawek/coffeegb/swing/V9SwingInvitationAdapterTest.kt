@@ -34,6 +34,8 @@ class V9SwingInvitationAdapterTest {
     assertEquals(canonical, success.invitation.render())
     assertEquals("Parsed([redacted])", success.toString())
     assertFalse(states.toString().contains("AAECAw"))
+    success.close()
+    assertFailsOffEdt { success.invitation.render() }
 
     val invalid = CountDownLatch(2)
     adapter.parseAsync("not-an-invitation") {
@@ -81,6 +83,7 @@ class V9SwingInvitationAdapterTest {
     assertTrue(warning.contains("does not encrypt plaintext TCP"))
     assertTrue(warning.contains("no protection"))
     assertFalse(warning.contains("secure", ignoreCase = true))
+    invitation.close()
     adapter.close()
   }
 
