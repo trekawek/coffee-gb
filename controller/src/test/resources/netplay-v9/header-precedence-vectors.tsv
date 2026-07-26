@@ -1,0 +1,13 @@
+id	magic	major	minor	header_length	type	flags	sequence	correlation	encoded	decoded	channel	current_frames	current_wire	current_decoded	expected	decisive_read	payload_reservations	provenance
+magic_precedes_all	BAD9	8	1	63	0x7777	0x8000	5	9	17	18	9	256	33817172	134217728	UNSUPPORTED_PROTOCOL	4	0	coffee-gb-synthetic-header-precedence
+version_precedes_length	CGB9	8	0	63	0x7777	0x8000	5	9	17	18	9	256	33817172	134217728	UNSUPPORTED_PROTOCOL	6	0	coffee-gb-synthetic-header-precedence
+header_length_precedes_type	CGB9	9	0	63	0x7777	0x8000	5	9	17	18	9	256	33817172	134217728	MALFORMED_HEADER	8	0	coffee-gb-synthetic-header-precedence
+unknown_type_precedes_sequence	CGB9	9	0	64	0x7777	0x0000	5	9	17	18	9	256	33817172	134217728	UNKNOWN_REQUIRED_TYPE	12	0	coffee-gb-synthetic-header-precedence
+reserved_flag_precedes_channel	CGB9	9	0	64	0x0012	0x8000	5	9	17	18	9	256	33817172	134217728	UNKNOWN_REQUIRED_FLAG	12	0	coffee-gb-synthetic-header-precedence
+channel_precedes_sequence	CGB9	9	0	64	0x0012	0x0000	5	9	16	17	9	256	33817172	134217728	MALFORMED_HEADER	32	0	coffee-gb-synthetic-header-precedence
+sequence_precedes_correlation	CGB9	9	0	64	0x0012	0x0000	5	9	16	17	0	256	33817172	134217728	SEQUENCE_ERROR	32	0	coffee-gb-synthetic-header-precedence
+correlation_precedes_raw_length	CGB9	9	0	64	0x0012	0x0000	1	9	16	17	0	256	33817172	134217728	CORRELATION_ERROR	32	0	coffee-gb-synthetic-header-precedence
+raw_length_precedes_message_limit	CGB9	9	0	64	0x0012	0x0000	1	0	17	16	0	256	33817172	134217728	MALFORMED_HEADER	32	0	coffee-gb-synthetic-header-precedence
+message_limit_precedes_queue	CGB9	9	0	64	0x0012	0x0000	1	0	17	17	0	256	33817172	134217728	LIMIT_EXCEEDED	32	0	coffee-gb-synthetic-header-precedence
+queue_last	CGB9	9	0	64	0x0012	0x0000	1	0	16	16	0	256	33817172	134217728	QUEUE_OVERFLOW	32	0	coffee-gb-synthetic-header-precedence
+valid_declaration	CGB9	9	0	64	0x0012	0x0000	1	0	16	16	0	0	0	0	ACCEPT	64	1	coffee-gb-synthetic-header-precedence

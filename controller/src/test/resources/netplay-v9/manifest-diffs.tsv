@@ -1,0 +1,11 @@
+id	name	severity	approval_allowed	meaning
+0x0001	PROTOCOL_CONTEXT	FATAL	false	protocol-major-or-required-capability-context-differs
+0x0002	STATE_CONTEXT	FATAL	false	StateFile-version-or-state-compatibility-context-differs
+0x0003	PROFILE_IDENTITY	FATAL	false	profile-bootstrap-accessory-or-boot-identity-differs
+0x0004	ROSTER_IDENTITY	FATAL	false	mode-player-roster-or-endpoint-identity-differs
+0x0005	PRIMARY_ROM_MISSING	WARNING_REQUIRES_APPROVAL	true	target-does-not-have-primary-ROM
+0x0006	PRIMARY_ROM_DIFFERENT	WARNING_REQUIRES_APPROVAL	true	target-primary-ROM-digest-differs
+0x0007	SLOT_ROM_MISSING	WARNING_REQUIRES_APPROVAL	true	target-does-not-have-required-slot-ROM
+0x0008	SLOT_ROM_DIFFERENT	WARNING_REQUIRES_APPROVAL	true	target-slot-ROM-digest-differs
+0x0009	BATTERY_OPTIONAL	INFORMATIONAL	true	battery-is-available-but-not-required-for-own-ROM-start
+0x000a	MATCH	INFORMATIONAL	false	identity-or-content-item-matches

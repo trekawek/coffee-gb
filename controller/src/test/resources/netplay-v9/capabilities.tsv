@@ -2,7 +2,7 @@ id	name	version	required	phase_owner	meaning
 0x0001	FRAME_V1	1	true	347	64-byte-CGB9-header-and-SHA256
 0x0002	INVITATION_PROOF_V1	1	true	347	HMAC-SHA256-invitation-possession-proof
 0x0003	MANIFEST_V1	1	true	348	bounded-ROM-slot-profile-manifest
-0x0004	CONSENT_V1	1	true	348	two-sided-payload-class-consent
+0x0004	CONSENT_V1	1	true	348	two-sided-item-scoped-directional-consent
 0x0005	STATEFILE_V2	1	true	349	exact-profile-portable-checkpoints
 0x0006	PROFILE_ID_ASCII_V1	1	true	349	canonical-lowercase-profile-identities
 0x0007	ATOMIC_GROUP_CHECKPOINT_V1	1	true	349	one-logical-linked-session-transaction

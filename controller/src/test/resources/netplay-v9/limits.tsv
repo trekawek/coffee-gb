@@ -4,6 +4,8 @@ UNKNOWN_OPTIONAL_BYTES	4096	bytes	before-payload-read	bounded-forward-skip
 CAPABILITY_COUNT	32	entries	before-capability-loop	finite-negotiation
 PROFILE_ID_BYTES	32	bytes	before-string-decode	StateFile-v2-compatible
 MANIFEST_ENTRIES	4	entries	before-entry-allocation	one-per-logical-slot
+MANIFEST_PROPOSALS	8	entries	before-proposal-allocation	item-scoped-private-transfer-proposals
+MANIFEST_DIFFS	16	entries	before-diff-allocation	bounded-compatibility-report
 INVITATION_URI_BYTES	512	bytes	before-URI-parse	clipboard-and-log-bound
 INVITATION_TOKEN_BYTES	16	bytes	before-auth	128-bit-minimum
 INVITATION_EXPIRY_MIN_SECONDS	60	seconds	before-invitation-create	bounded-lifetime-lower-bound
@@ -20,7 +22,7 @@ BULK_CHUNK_ENCODED_BYTES	65600	bytes	before-chunk-read	bounded-deflate-overhead
 BULK_WINDOW_CHUNKS	4	chunks	before-queue-admission	bounded-backpressure
 SESSION_DECODED_AGGREGATE_BYTES	134217728	bytes	checked-before-admission	portable-aggregate-ceiling
 QUEUED_FRAMES	256	frames	before-queue-admission	bounded-session-work
-QUEUED_ENCODED_BYTES	33816576	bytes	checked-before-copy	one-StateFile-plus-window
+QUEUED_WIRE_BYTES	33817172	bytes	checked-before-copy	one-complete-checkpoint-frame-plus-four-complete-maximum-chunk-frames
 PENDING_HANDSHAKES	8	sessions	before-accept-admission	listener-isolation
 HANDSHAKE_WORKERS	4	workers	before-task-start	listener-isolation
 OPEN_BULK_TRANSACTIONS	1	transaction	before-BEGIN	bounded-ownership

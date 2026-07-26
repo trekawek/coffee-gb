@@ -14,15 +14,29 @@ StateFile, token generated for real use, path, credential, server response, or t
 - `preface-vectors.tsv` freezes the four-byte v9 versus legacy/unknown decision before any
   incompatible header byte is parsed or any response is emitted.
 - `aggregate-vectors.tsv` freezes checked queue/session reservation exact and boundary+1 outcomes
-  without allocating any declared wire payload.
+  using complete wire-frame bytes (64-byte header plus encoded payload) without allocating any
+  declared wire payload.
+- `header-precedence-vectors.tsv` freezes the exact first-error and decisive-read boundary for
+  multi-invalid headers, including aggregate admission without payload retention.
+- `response-vectors.tsv` freezes outstanding-request correlation, response type, one-response
+  ownership, and the non-wrapping unsigned sequence boundary.
+- `capability-gate-vectors.tsv` freezes message/mode execution gates after negotiation.
+- `mapper-families.tsv` and `manifest-diffs.tsv` are stable numeric registries for sanitized
+  cartridge metadata and Fatal/Warning/Informational comparison outcomes.
+- `manifest-consent-vectors.tsv` executes own-ROM, fatal, warning, directional item approval, and
+  no-implicit-transfer outcomes.
+- `topology-vectors.tsv` freezes host player 0, normal guest 1, four-player guests 1..3, slot
+  collision/replacement, and candidate-isolation/group-checkpoint outcomes.
 - `wire-vectors.tsv` commits exact complete or deliberately hostile frame bytes. SHA-256 is over
   each decoded `input_hex` byte sequence. Each row also records decisive read, bounded payload
   allocations, prohibited live mutation, generator, expected state, outcome, and provenance.
 - `manifest.tsv` lists every other artifact in this directory and freezes its whole-file SHA-256,
   kind, provenance, and reproduction method. It deliberately does not hash itself.
 
-The Kotlin contract tests are the reference generator/reproduction method and execute every wire
-row both whole and one byte at a time. To update deliberately, edit the normative document and
+The Kotlin contract tests are the reference generator/reproduction method. Their bounded
+feed/finish decoder retains header and payload state across calls, asserts NEED_MORE without
+mutation, and executes every wire row whole and one byte at a time; separate tests cover irregular
+fragmentation and coalesced frames. To update deliberately, edit the normative document and
 registry in one review, derive the bytes with the helper's canonical frame builder, record the
 candidate bytes/hash, and run:
 
