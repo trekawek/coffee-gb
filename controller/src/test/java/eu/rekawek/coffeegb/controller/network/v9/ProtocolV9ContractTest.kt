@@ -38,6 +38,8 @@ class ProtocolV9ContractTest {
     val limits = rows("/netplay-v9/limits.tsv")
     val timeouts = rows("/netplay-v9/timeouts.tsv")
     val errors = rows("/netplay-v9/errors.tsv")
+    val mapperFamilies = rows("/netplay-v9/mapper-families.tsv")
+    val manifestDiffs = rows("/netplay-v9/manifest-diffs.tsv")
     val transitions = rows("/netplay-v9/transitions.tsv")
     val spec = repositoryRoot().resolve("docs/netplay-protocol-v9.md").readUtf8()
 
@@ -46,6 +48,8 @@ class ProtocolV9ContractTest {
     assertEquals((1..12).toList(), capabilities.map { it.hexInt("id") })
     assertEquals(7, capabilities.count { it.getValue("required") == "true" })
     assertEquals((1..0x1f).toList(), errors.map { it.hexInt("code") })
+    assertEquals((1..0x10).toList(), mapperFamilies.map { it.hexInt("id") })
+    assertEquals((1..0x0a).toList(), manifestDiffs.map { it.hexInt("id") })
     assertTrue(limits.size >= 20)
     assertEquals(22, timeouts.size)
     assertTrue(transitions.any { it.getValue("state") == "ACTIVE" })
@@ -83,6 +87,8 @@ class ProtocolV9ContractTest {
     }
     capabilities.forEach { assertTrue(spec.contains(it.getValue("name"))) }
     errors.forEach { assertTrue(spec.contains(it.getValue("name"))) }
+    mapperFamilies.forEach { assertTrue(spec.contains(it.getValue("name"))) }
+    manifestDiffs.forEach { assertTrue(spec.contains(it.getValue("name"))) }
     assertFalse(Regex("\\b(?:TBD|implementation-defined)\\b", RegexOption.IGNORE_CASE).containsMatchIn(spec))
     assertTrue(spec.contains("StateFile v2"))
     assertTrue(spec.contains("no downgrade", ignoreCase = true))
@@ -107,8 +113,8 @@ class ProtocolV9ContractTest {
         Step("out", "MANIFEST", "authenticated"),
         Step("in", "MANIFEST", "compatible"),
         Step("out", "CONSENT", "local-decision"),
-        Step("in", "CONSENT", "matching-decision-and-required-classes"),
-        Step("out", "START", "all-consented-transfers-complete-and-candidates-prepared"),
+        Step("in", "CONSENT", "exact-item-decisions-complete"),
+        Step("out", "START", "all-item-consented-transfers-complete-and-candidates-prepared"),
         Step("in", "READY", "matching-session-id-and-correlation"),
     ).forEach(server::advance)
     assertEquals("ACTIVE", server.state)
@@ -122,8 +128,8 @@ class ProtocolV9ContractTest {
         Step("in", "MANIFEST", "authenticated"),
         Step("out", "MANIFEST", "locally-compatible"),
         Step("in", "CONSENT", "local-decision-available"),
-        Step("out", "CONSENT", "matching-decision"),
-        Step("in", "START", "all-consented-transfers-complete-and-candidates-prepared"),
+        Step("out", "CONSENT", "exact-item-decision"),
+        Step("in", "START", "all-item-consented-transfers-complete-and-candidates-prepared"),
         Step("out", "READY", "prepared-session"),
     ).forEach(client::advance)
     assertEquals("ACTIVE", client.state)
@@ -139,15 +145,25 @@ class ProtocolV9ContractTest {
       }
     }
     val beforeConsent = ContractStateMachine("server", transitions, "WAIT_AUTH")
-    assertFalse(beforeConsent.tryAdvance(Step("in", "CHECKPOINT", "consented-StateFile-v2-atomic")))
+    assertFalse(beforeConsent.tryAdvance(
+        Step("in", "CHECKPOINT", "exact-item-consented-StateFile-v2-atomic")))
     assertEquals("WAIT_AUTH", beforeConsent.state)
 
     val busyServer = ContractStateMachine("server", transitions, "SEND_SERVER_HELLO")
-    busyServer.advance(Step("out", "ERROR", "SERVER_BUSY-or-all-slots-full-terminal"))
+    busyServer.advance(Step("out", "ERROR", "SERVER_BUSY-pre-HELLO-terminal"))
     assertEquals("CLOSED", busyServer.state)
     val busyClient = ContractStateMachine("client", transitions, "WAIT_SERVER_HELLO")
-    busyClient.advance(Step("in", "ERROR", "SERVER_BUSY-or-all-slots-full-terminal"))
+    busyClient.advance(Step("in", "ERROR", "SERVER_BUSY-pre-HELLO-terminal"))
     assertEquals("CLOSED", busyClient.state)
+    assertTrue(transitions.any {
+      it.getValue("state") in setOf("SEND_AUTH_RESULT", "WAIT_AUTH_RESULT") &&
+          it.getValue("message") == "ERROR" &&
+          it.getValue("condition") == "correlated-SERVER_FULL-slot-race"
+    })
+    assertFalse(transitions.any {
+      it.getValue("state") !in setOf("SEND_SERVER_HELLO", "WAIT_SERVER_HELLO") &&
+          it.getValue("condition").contains("SERVER_BUSY")
+    })
   }
 
   @Test
@@ -183,6 +199,60 @@ class ProtocolV9ContractTest {
     val coalescedResult = ReferenceDecoder(specs).decode(
         listOf(hex(coalesced.getValue("input_hex"))), "both", "ACTIVE", 1, true)
     assertEquals(2, coalescedResult.frames)
+  }
+
+  @Test
+  fun incrementalDecoderKeepsBoundedStateAcrossRealReadBoundaries() {
+    val vectors = rows("/netplay-v9/wire-vectors.tsv").associateBy { it.getValue("id") }
+    val bytes = hex(vectors.getValue("valid_input").getValue("input_hex"))
+    val byteDecoder = ReferenceDecoder(messageSpecs()).incremental("both", "ACTIVE", 1)
+    bytes.forEachIndexed { index, value ->
+      val result = byteDecoder.feed(byteArrayOf(value))
+      if (index < bytes.lastIndex) {
+        assertEquals("NEED_MORE", result.outcome, "byte=$index")
+        assertEquals(0, result.frames, "byte=$index")
+        assertEquals("ACTIVE", result.state, "byte=$index")
+        assertTrue(result.retainedBytes in 1..79, "byte=$index retained=${result.retainedBytes}")
+        assertFalse(result.mutated)
+      } else {
+        assertEquals("SUCCESS", result.outcome)
+        assertEquals(1, result.frames)
+        assertEquals(0, result.retainedBytes)
+        assertEquals(1, result.payloadReservations)
+        assertEquals(1, result.payloadAllocations)
+      }
+    }
+    assertEquals("SUCCESS", byteDecoder.finish().outcome)
+
+    val irregular = ReferenceDecoder(messageSpecs()).incremental("both", "ACTIVE", 1)
+    val sizes = listOf(3, 1, 17, 2, 31, 5, 7, 14)
+    var offset = 0
+    sizes.forEachIndexed { index, size ->
+      val end = Math.addExact(offset, size)
+      val result = irregular.feed(bytes.copyOfRange(offset, end))
+      offset = end
+      if (index < sizes.lastIndex) assertEquals("NEED_MORE", result.outcome, "fragment=$index")
+    }
+    assertEquals(bytes.size, offset)
+    assertEquals("SUCCESS", irregular.finish().outcome)
+
+    val coalesced = hex(vectors.getValue("coalesced_input_ping").getValue("input_hex"))
+    val coalescedDecoder = ReferenceDecoder(messageSpecs()).incremental("both", "ACTIVE", 1)
+    val coalescedResult = coalescedDecoder.feed(coalesced)
+    assertEquals("SUCCESS", coalescedResult.outcome)
+    assertEquals(2, coalescedResult.frames)
+    assertEquals(0, coalescedResult.retainedBytes)
+    assertEquals(2, coalescedResult.payloadReservations)
+
+    listOf(0, 1, 3, 4, 5, 7, 8, 11, 12, 31, 32, 63, 64, 65, 79).forEach { cut ->
+      val partial = ReferenceDecoder(messageSpecs()).incremental("both", "ACTIVE", 1)
+      val beforeEof = partial.feed(bytes.copyOf(cut))
+      assertEquals("NEED_MORE", beforeEof.outcome, "cut=$cut")
+      assertEquals("TRUNCATED", partial.finish().outcome, "cut=$cut")
+      assertEquals(0, partial.snapshot().frames, "cut=$cut")
+      assertFalse(partial.snapshot().mutated)
+      assertTrue(partial.snapshot().retainedBytes <= 79, "cut=$cut")
+    }
   }
 
   @Test
@@ -275,8 +345,8 @@ class ProtocolV9ContractTest {
       return decoder.inspectHeader(frame(
           type, flags, 1, 0, 0, payload, payload.size, sha256Bytes(payload)))
     }
-    assertEquals(HeaderDecision.ACCEPT_DECLARATION, declaration(0x0004, 0, 712))
-    assertEquals(HeaderDecision.LIMIT_EXCEEDED, declaration(0x0004, 0, 713))
+    assertEquals(HeaderDecision.ACCEPT_DECLARATION, declaration(0x0004, 0, 1_396))
+    assertEquals(HeaderDecision.LIMIT_EXCEEDED, declaration(0x0004, 0, 1_397))
     assertEquals(HeaderDecision.ACCEPT_DECLARATION, declaration(0x7777, OPTIONAL, 4_096))
     assertEquals(HeaderDecision.LIMIT_EXCEEDED, declaration(0x7777, OPTIONAL, 4_097))
   }
@@ -285,18 +355,20 @@ class ProtocolV9ContractTest {
   fun aggregateAndBulkDeclarationsUseCheckedExactBoundariesBeforeLargeRetention() {
     rows("/netplay-v9/aggregate-vectors.tsv").forEach { row ->
       val result = ReferenceBudget.reserve(
-          row.long("current_frames"), row.long("current_encoded"), row.long("current_decoded"),
-          row.long("add_frames"), row.long("add_encoded"), row.long("add_decoded"))
+          row.long("current_frames"), row.long("current_wire"), row.long("current_decoded"),
+          row.long("add_frames"), row.long("add_wire"), row.long("add_decoded"))
       assertEquals(row.getValue("expected"), result, row.getValue("id"))
       assertEquals("coffee-gb-synthetic-budget", row.getValue("provenance"))
     }
 
     val decoder = ReferenceDecoder(messageSpecs())
     fun begin(type: Int, total: Long, chunk: Long): DecodeResult {
-      val payload = ByteBuffer.allocate(48).putInt(1).put(0.toByte()).put(ByteArray(3))
-          .putInt(total.toInt()).put(ByteArray(32)).putInt(chunk.toInt()).array()
+      val assetKind = if (type == 0x000a) 1 else 3
+      val payload = ByteBuffer.allocate(52).putInt(1).putInt(41)
+          .put(0.toByte()).put(1.toByte()).put(1.toByte()).put(assetKind.toByte())
+          .putInt(total.toInt()).put(ByteArray(32) { 1 }).putInt(chunk.toInt()).array()
       return decoder.decode(
-          listOf(frame(type, 0, 1, 0, 1, payload, payload.size, sha256Bytes(payload))),
+          listOf(frame(type, 0, 1, 0, 2, payload, payload.size, sha256Bytes(payload))),
           "both", "SYNCHRONIZING", 1, true)
     }
     assertEquals("SUCCESS", begin(0x000a, 67_108_864, 65_536).outcome)
@@ -336,7 +408,7 @@ class ProtocolV9ContractTest {
     fun checkpointFrame(state: ByteArray, kind: Int = 1, mask: Int = 1): ByteArray {
       val payload = ByteBuffer.allocate(20 + state.size)
           .put(kind.toByte()).put(mask.toByte()).put(0.toByte()).put(0.toByte())
-          .putLong(123).putInt(state.size).putInt(0).put(state).array()
+          .putLong(123).putInt(state.size).putInt(41).put(state).array()
       return frame(0x0009, 0, 1, 0, -1, payload, payload.size, sha256Bytes(payload))
     }
     val decoder = ReferenceDecoder(messageSpecs())
@@ -486,14 +558,26 @@ class ProtocolV9ContractTest {
 
   @Test
   fun invitationProofExpiryOneUseSlotBindingAndRateLimitAreExactAndGeneric() {
-    val row = rows("/netplay-v9/auth-vectors.tsv").single()
+    val authRows = rows("/netplay-v9/auth-vectors.tsv")
+    authRows.forEach { vector ->
+      val vectorProof = authProof(
+          hex(vector.getValue("token_hex")),
+          hex(vector.getValue("server_nonce_hex")),
+          hex(vector.getValue("client_nonce_hex")),
+          vector.int("slot"))
+      assertContentEquals(hex(vector.getValue("proof_hex")), vectorProof, vector.getValue("id"))
+      assertTrue(
+          vector.getValue("mode") == "normal" && vector.int("slot") == 1 ||
+              vector.getValue("mode") == "four" && vector.int("slot") in 1..3)
+      assertEquals("SUCCESS", vector.getValue("expected"))
+      assertEquals("coffee-gb-synthetic-auth", vector.getValue("provenance"))
+    }
+    val row = authRows.single { it.getValue("id") == "four_guest_2" }
     val token = hex(row.getValue("token_hex"))
     val serverNonce = hex(row.getValue("server_nonce_hex"))
     val clientNonce = hex(row.getValue("client_nonce_hex"))
     val proof = authProof(token, serverNonce, clientNonce, row.int("slot"))
     assertContentEquals(hex(row.getValue("proof_hex")), proof)
-    assertEquals("SUCCESS", row.getValue("expected"))
-    assertEquals("coffee-gb-synthetic-auth", row.getValue("provenance"))
 
     val slotBound = InvitationLedger(token, 2, expiresAtMillis = 300_000)
     assertEquals("AUTH_FAILED", slotBound.authenticate(proof, 1, 1, serverNonce, clientNonce))
@@ -605,6 +689,8 @@ class ProtocolV9ContractTest {
       val frames: Int,
       val payloadAllocations: Int,
       val mutated: Boolean = false,
+      val retainedBytes: Int = 0,
+      val payloadReservations: Int = 0,
   )
 
   private enum class HeaderDecision { ACCEPT_DECLARATION, LIMIT_EXCEEDED, MALFORMED }
@@ -648,78 +734,207 @@ class ProtocolV9ContractTest {
       return HeaderDecision.ACCEPT_DECLARATION
     }
 
-    fun decode(chunks: List<ByteArray>, role: String, initialState: String, initialSequence: Int, eof: Boolean): DecodeResult {
-      val input = chunks.fold(ByteArrayOutputStream()) { output, chunk -> output.apply { write(chunk) } }.toByteArray()
-      var offset = 0
-      var state = initialState
-      var expectedSequence = initialSequence.toLong()
-      var frames = 0
-      var allocations = 0
-      while (offset < input.size || (input.isEmpty() && offset == 0)) {
-        if (input.size - offset < 64) {
-          return DecodeResult(if (eof) "TRUNCATED" else "NEED_MORE", "CLOSED", input.size, frames, allocations)
-        }
-        val h = header(input, offset)
-            ?: return DecodeResult(headerError(input, offset), "CLOSED", minOf(input.size, offset + 64), frames, allocations)
-        if (h.sequence != expectedSequence) return DecodeResult("SEQUENCE_ERROR", "CLOSED", offset + 64, frames, allocations)
-        if (h.flags and RESPONSE != 0 && h.correlation == 0L) {
-          return DecodeResult("CORRELATION_ERROR", "CLOSED", offset + 64, frames, allocations)
-        }
-        if (h.flags and RESPONSE == 0 && h.correlation != 0L) {
-          return DecodeResult("CORRELATION_ERROR", "CLOSED", offset + 64, frames, allocations)
-        }
-        val spec = specs[h.type]
-        if (spec == null) {
-          if (h.flags != OPTIONAL || h.encoded != h.decoded || h.encoded > 4096 || h.channel != 0L || h.correlation != 0L) {
-            return DecodeResult("UNKNOWN_REQUIRED_TYPE", "CLOSED", offset + 64, frames, allocations)
-          }
-        } else {
-          if (h.flags and KNOWN_FLAGS.inv() != 0 || h.flags and spec.allowedFlags.inv() != 0 ||
-              h.flags and spec.requiredFlags != spec.requiredFlags) {
-            return DecodeResult("UNKNOWN_REQUIRED_FLAG", "CLOSED", offset + 64, frames, allocations)
-          }
-          if (!validChannel(spec, h.channel)) {
-            return DecodeResult("MALFORMED_HEADER", "CLOSED", offset + 64, frames, allocations)
-          }
-          if (h.flags and DEFLATE == 0 && h.encoded != h.decoded) {
-            return DecodeResult("MALFORMED_HEADER", "CLOSED", offset + 64, frames, allocations)
-          }
-          if (h.encoded > spec.maxEncoded || h.decoded > spec.maxDecoded || h.decoded < spec.minDecoded) {
-            return DecodeResult("LIMIT_EXCEEDED", "CLOSED", offset + 64, frames, allocations)
-          }
-          if (h.flags and DEFLATE != 0 && spec.compression != "raw-deflate") {
-            return DecodeResult("UNKNOWN_REQUIRED_FLAG", "CLOSED", offset + 64, frames, allocations)
-          }
-        }
-        if (h.encoded > Int.MAX_VALUE || h.encoded > input.size.toLong() - offset - 64) {
-          return DecodeResult(if (eof) "TRUNCATED" else "NEED_MORE", "CLOSED", input.size, frames, allocations)
-        }
-        val payload = input.copyOfRange(offset + 64, offset + 64 + h.encoded.toInt())
-        allocations++
-        val decoded = if (h.flags and DEFLATE != 0) {
-          inflateExact(payload, h.decoded.toInt())
-              ?: return DecodeResult("DECOMPRESSION_FAILED", "CLOSED", offset + 64 + payload.size, frames, allocations)
-        } else payload
-        if (!MessageDigest.isEqual(h.digest, sha256Bytes(decoded))) {
-          return DecodeResult("CHECKSUM_MISMATCH", "CLOSED", offset + 64 + payload.size, frames, allocations)
-        }
-        val semantic = validatePayload(h.type, decoded)
-        if (semantic != null) return DecodeResult(semantic, "CLOSED", offset + 64 + payload.size, frames, allocations)
-        val next = transition(role, state, spec?.name, h.flags)
-            ?: return DecodeResult("UNEXPECTED_MESSAGE", "CLOSED", offset + 64 + payload.size, frames, allocations)
-        state = next
-        offset += 64 + payload.size
-        expectedSequence++
-        if (spec != null) frames++
-        if (h.flags and TERMINAL != 0 && offset != input.size) {
-          return DecodeResult("TRAILING_DATA", "CLOSED", offset + 1, frames, allocations)
-        }
-        if (input.isEmpty()) break
+    fun incremental(
+        role: String,
+        initialState: String,
+        initialSequence: Int,
+    ) = IncrementalReferenceDecoder(role, initialState, initialSequence.toLong())
+
+    fun decode(
+        chunks: List<ByteArray>,
+        role: String,
+        initialState: String,
+        initialSequence: Int,
+        eof: Boolean,
+    ): DecodeResult {
+      val decoder = incremental(role, initialState, initialSequence)
+      chunks.forEach { chunk ->
+        if (!decoder.isTerminal) decoder.feed(chunk)
       }
-      return DecodeResult(if (frames == 0) "SKIPPED_OPTIONAL" else "SUCCESS", state, offset, frames, allocations)
+      return if (eof) decoder.finish() else decoder.snapshot()
     }
 
-    private fun validatePayload(type: Int, payload: ByteArray): String? {
+    /**
+     * Test-only stream decoder. Header bytes are retained in one fixed 64-byte array. A payload
+     * reservation is made only after all declaration checks pass, and only bytes actually received
+     * count as retained. No feed call depends on a socket read matching a frame boundary.
+     */
+    inner class IncrementalReferenceDecoder(
+        private val role: String,
+        initialState: String,
+        private var expectedSequence: Long,
+    ) {
+      private val headerBytes = ByteArray(64)
+      private var headerCount = 0
+      private var currentHeader: Header? = null
+      private var payloadBytes: ByteArray? = null
+      private var payloadCount = 0
+      private var outcome: String? = null
+      private var state = initialState
+      private var consumed = 0
+      private var frames = 0
+      private var allocations = 0
+      private var reservations = 0
+      private var skippedOptional = false
+      private var terminalFrameSeen = false
+
+      val isTerminal: Boolean get() = outcome != null
+
+      fun feed(bytes: ByteArray): DecodeResult {
+        var inputOffset = 0
+        while (inputOffset < bytes.size && outcome == null) {
+          if (terminalFrameSeen) {
+            consumed++
+            outcome = "TRAILING_DATA"
+            state = "CLOSED"
+            break
+          }
+          if (headerCount < 64) {
+            headerBytes[headerCount++] = bytes[inputOffset++]
+            consumed++
+            val earlyError = declarationError(headerBytes, headerCount, expectedSequence)
+            if (earlyError != null) {
+              outcome = earlyError
+              state = "CLOSED"
+              break
+            }
+            if (headerCount == 64) {
+              val parsed = header(headerBytes, 0)
+                  ?: error("A complete header passed declaration validation but did not parse")
+              currentHeader = parsed
+              payloadBytes = ByteArray(parsed.encoded.toInt())
+              allocations++
+              payloadCount = 0
+              reservations++
+              if (parsed.encoded == 0L) completeFrame()
+            }
+            continue
+          }
+          val payload = checkNotNull(payloadBytes)
+          val count = minOf(bytes.size - inputOffset, payload.size - payloadCount)
+          System.arraycopy(bytes, inputOffset, payload, payloadCount, count)
+          payloadCount += count
+          inputOffset += count
+          consumed += count
+          if (payloadCount == payload.size) completeFrame()
+        }
+        return snapshot()
+      }
+
+      fun finish(): DecodeResult {
+        if (outcome == null &&
+            (headerCount != 0 || currentHeader != null ||
+                consumed == 0 && frames == 0 && !skippedOptional)) {
+          outcome = "TRUNCATED"
+          state = "CLOSED"
+        }
+        return snapshot()
+      }
+
+      fun snapshot(): DecodeResult {
+        val currentOutcome = outcome ?: when {
+          headerCount != 0 || currentHeader != null ||
+              consumed == 0 && frames == 0 && !skippedOptional -> "NEED_MORE"
+          skippedOptional && frames == 0 -> "SKIPPED_OPTIONAL"
+          else -> "SUCCESS"
+        }
+        return DecodeResult(
+            currentOutcome,
+            state,
+            consumed,
+            frames,
+            allocations,
+            retainedBytes = headerCount + payloadCount,
+            payloadReservations = reservations,
+        )
+      }
+
+      private fun completeFrame() {
+        val h = checkNotNull(currentHeader)
+        val encoded = checkNotNull(payloadBytes)
+        val decoded = if (h.flags and DEFLATE != 0) {
+          inflateExact(encoded, h.decoded.toInt()) ?: return fail("DECOMPRESSION_FAILED")
+        } else {
+          encoded
+        }
+        if (!MessageDigest.isEqual(h.digest, sha256Bytes(decoded))) {
+          return fail("CHECKSUM_MISMATCH")
+        }
+        val semantic = validatePayload(h.type, h.flags, h.channel, decoded)
+        if (semantic != null) return fail(semantic)
+        val spec = specs[h.type]
+        val next = transition(role, state, spec?.name, h.flags)
+            ?: return fail("UNEXPECTED_MESSAGE")
+        state = next
+        if (spec == null) skippedOptional = true else frames++
+        if (expectedSequence == 0xffff_fffeL) {
+          expectedSequence = 0xffff_ffffL
+        } else {
+          expectedSequence++
+        }
+        terminalFrameSeen = h.flags and TERMINAL != 0
+        headerCount = 0
+        currentHeader = null
+        payloadBytes = null
+        payloadCount = 0
+      }
+
+      private fun fail(error: String) {
+        outcome = error
+        state = "CLOSED"
+      }
+    }
+
+    private fun declarationError(bytes: ByteArray, count: Int, expectedSequence: Long): String? {
+      if (count >= 4 && !bytes.copyOfRange(0, 4).contentEquals(MAGIC)) {
+        return "UNSUPPORTED_PROTOCOL"
+      }
+      if (count >= 6 &&
+          ((bytes[4].toInt() and 0xff) != 9 || (bytes[5].toInt() and 0xff) != 0)) {
+        return "UNSUPPORTED_PROTOCOL"
+      }
+      if (count >= 8 && u16(bytes, 6) != 64) return "MALFORMED_HEADER"
+      if (count < 12) return null
+      val type = u16(bytes, 8)
+      val flags = u16(bytes, 10)
+      val spec = specs[type]
+      if (spec == null && flags != OPTIONAL) return "UNKNOWN_REQUIRED_TYPE"
+      if (spec != null &&
+          (flags and KNOWN_FLAGS.inv() != 0 || flags and spec.allowedFlags.inv() != 0 ||
+              flags and spec.requiredFlags != spec.requiredFlags ||
+              flags and DEFLATE != 0 && spec.compression != "raw-deflate")) {
+        return "UNKNOWN_REQUIRED_FLAG"
+      }
+      if (count < 32) return null
+      val sequence = u32(bytes, 12)
+      val correlation = u32(bytes, 16)
+      val encoded = u32(bytes, 20)
+      val decoded = u32(bytes, 24)
+      val channel = u32(bytes, 28)
+      if (spec == null) {
+        if (encoded != decoded || encoded > 4_096 || channel != 0L || correlation != 0L) {
+          return "UNKNOWN_REQUIRED_TYPE"
+        }
+      } else if (!validChannel(spec, channel)) {
+        return "MALFORMED_HEADER"
+      }
+      if (expectedSequence == 0xffff_ffffL || sequence != expectedSequence) {
+        return "SEQUENCE_ERROR"
+      }
+      if (flags and RESPONSE != 0 && correlation == 0L ||
+          flags and RESPONSE == 0 && correlation != 0L) {
+        return "CORRELATION_ERROR"
+      }
+      if (flags and DEFLATE == 0 && encoded != decoded) return "MALFORMED_HEADER"
+      if (spec != null &&
+          (encoded > spec.maxEncoded || decoded > spec.maxDecoded || decoded < spec.minDecoded)) {
+        return "LIMIT_EXCEEDED"
+      }
+      if (encoded > Int.MAX_VALUE || decoded > Int.MAX_VALUE) return "LIMIT_EXCEEDED"
+      return null
+    }
+
+    private fun validatePayload(type: Int, flags: Int, channel: Long, payload: ByteArray): String? {
       if (type == 0x0001) {
         if (payload.size < 38 || payload[1].toInt() != 9 || payload[2].toInt() != 9 || payload[3].toInt() != 0) return "CAPABILITY_MISMATCH"
         val count = u16(payload, 36)
@@ -746,7 +961,7 @@ class ProtocolV9ContractTest {
         val mask = payload[1].toInt() and 0xff
         val owner = payload[2].toInt() and 0xff
         if (kind !in 0..2 || mask !in 1..15 || owner !in 0..3 || mask and (1 shl owner) == 0 ||
-            payload[3].toInt() != 0 || u32(payload, 16) != 0L) return "STATEFILE_MALFORMED"
+            payload[3].toInt() != 0 || u32(payload, 16) == 0L) return "STATEFILE_MALFORMED"
         if (kind in 0..1 && Integer.bitCount(mask) != 1 ||
             kind == 2 && Integer.bitCount(mask) !in 2..4) return "TOPOLOGY_MISMATCH"
         val declared = u32(payload, 12)
@@ -776,10 +991,17 @@ class ProtocolV9ContractTest {
         if (identityMask != mask) return "TOPOLOGY_MISMATCH"
       }
       if (type == 0x000a || type == 0x000d) {
-        val total = u32(payload, 8)
+        val total = u32(payload, 12)
         val max = if (type == 0x000a) 67_108_864L else 2_097_152L
-        val chunk = u32(payload, 44)
-        if (total == 0L || total > max || chunk !in 1..65_536) return "LIMIT_EXCEEDED"
+        val chunk = u32(payload, 48)
+        val asset = payload[11].toInt() and 0xff
+        val source = payload[8].toInt() and 0xff
+        val target = payload[9].toInt() and 0xff
+        val owner = payload[10].toInt() and 0xff
+        if (u32(payload, 0) == 0L || u32(payload, 4) == 0L ||
+            source !in 0..3 || target !in 0..3 || source == target || owner !in 0..3 ||
+            type == 0x000a && asset !in 1..2 || type == 0x000d && asset != 3 ||
+            total == 0L || total > max || chunk !in 1..65_536) return "LIMIT_EXCEEDED"
       }
       if (type == 0x0014 || type == 0x0015) {
         val reason = u16(payload, 0)
@@ -938,7 +1160,7 @@ class ProtocolV9ContractTest {
       } catch (_: ArithmeticException) {
         return "LIMIT_EXCEEDED"
       }
-      if (totals[0] > 256 || totals[1] > 33_816_576) return "QUEUE_OVERFLOW"
+      if (totals[0] > 256 || totals[1] > 33_817_172) return "QUEUE_OVERFLOW"
       if (totals[2] > 134_217_728) return "LIMIT_EXCEEDED"
       return "SUCCESS"
     }
@@ -1022,7 +1244,7 @@ class ProtocolV9ContractTest {
       val slotText = values.getValue("slot")
       if (!decimal.matches(slotText) || slotText.startsWith('0') && slotText != "0") return fail("INV_SLOT")
       val slot = slotText.toIntOrNull() ?: return fail("INV_SLOT")
-      if ((mode == "normal" && slot != 0) || (mode == "four" && slot !in 0..3)) return fail("INV_SLOT")
+      if ((mode == "normal" && slot != 1) || (mode == "four" && slot !in 1..3)) return fail("INV_SLOT")
       val expiry = values.getValue("exp")
       if (!decimal.matches(expiry) || expiry.startsWith('0') || expiry.toLongOrNull() !in 1L..253_402_300_799L) return fail("INV_EXPIRY")
       val token = values.getValue("token")

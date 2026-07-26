@@ -95,17 +95,58 @@ public class MobileAdapterContractTest {
             assertTrue(Integer.parseInt(row.get("buffer_limit")) <= 262);
             assertEquals(2, Integer.parseInt(row.get("pending_slot_limit")));
 
-            FragmentResult fragments = fragments(row.get("fragments"));
-            assertEquals(request.length, fragments.bytes);
-            assertTrue(fragments.monotonic);
+            List<FragmentStep> fragments = fragmentSteps(row.get("fragments"));
+            assertEquals(request.length,
+                    fragments.stream().mapToInt(FragmentStep::count).sum());
+            long previous = -1;
+            int requestOffset = 0;
+            ReferenceMobileEngine engine = new ReferenceMobileEngine(row.get("initial_state"));
+            for (int i = 0; i < fragments.size(); i++) {
+                FragmentStep fragment = fragments.get(i);
+                assertTrue(row.get("id"), fragment.millis >= previous);
+                previous = fragment.millis;
+                int next = Math.addExact(requestOffset, fragment.count);
+                assertTrue(row.get("id"), next <= request.length);
+                EngineResult current;
+                if (fragment.count == 0) {
+                    current = engine.advanceTo(fragment.millis);
+                } else {
+                    current = engine.feed(Arrays.copyOfRange(request, requestOffset, next),
+                            fragment.millis);
+                    requestOffset = next;
+                }
+                if (requestOffset < request.length &&
+                        !row.get("expected_result").equals("LENGTH_LIMIT")) {
+                    assertEquals(row.get("id") + ":fragment=" + i,
+                            "NEED_MORE", current.outcome);
+                    assertEquals(0, current.response.length);
+                    assertEquals(0, current.ack.length);
+                    assertEquals(0, current.commits);
+                }
+                assertTrue(current.retainedBytes <= 262);
+                assertTrue(current.pendingSlots <= 2);
+            }
+            assertEquals(request.length, requestOffset);
+            EngineResult engineResult = engine.snapshot();
+            assertEquals(row.get("id"), row.get("expected_state"), engineResult.state);
+            assertEquals(row.get("id"), row.get("expected_result"), engineResult.outcome);
+            assertArrayEquals(row.get("id"), response, engineResult.response);
+            assertArrayEquals(row.get("id"), ack, engineResult.ack);
+
+            FragmentResult fragmentSummary = fragments(row.get("fragments"));
             if (row.get("expected_result").equals("IDLE_TIMEOUT_RESET")) {
-                assertTrue(Math.subtractExact(fragments.lastMillis, fragments.lastDataMillis) > 3_000);
-                assertEquals(0, fragments.lastCount);
+                assertTrue(Math.subtractExact(fragmentSummary.lastMillis,
+                        fragmentSummary.lastDataMillis) > 3_000);
+                assertEquals(0, fragmentSummary.lastCount);
+                assertEquals(0, engineResult.retainedBytes);
+                assertEquals(0, engineResult.pendingSlots);
             }
             if (row.get("expected_result").equals("IDLE_BOUNDARY_WAIT")) {
                 assertEquals(3_000,
-                        Math.subtractExact(fragments.lastMillis, fragments.lastDataMillis));
-                assertEquals(0, fragments.lastCount);
+                        Math.subtractExact(fragmentSummary.lastMillis,
+                                fragmentSummary.lastDataMillis));
+                assertEquals(0, fragmentSummary.lastCount);
+                assertTrue(engineResult.retainedBytes > 0);
             }
 
             Packet requestPacket = parsePacket(request);
@@ -135,6 +176,69 @@ public class MobileAdapterContractTest {
                 assertEquals(requestPacket.command | 0x80, responsePacket.command);
             }
         }
+    }
+
+    @Test
+    public void incrementalEngineCleansPartialBuffersSlotsAndResponsesAtExactLifecycleBoundaries()
+            throws Exception {
+        Map<String, Map<String, String>> transcripts = rows("/mobile-adapter/transcripts.tsv")
+                .stream().collect(Collectors.toMap(r -> r.get("id"), r -> r));
+        byte[] begin = hex(transcripts.get("begin_session").get("request_hex"));
+        ReferenceMobileEngine engine = new ReferenceMobileEngine("SLEEP");
+        EngineResult badMagic = new ReferenceMobileEngine("SLEEP")
+                .feed(new byte[]{(byte) 0x99, 0x65}, 0);
+        assertEquals("MAGIC_ERROR", badMagic.outcome);
+        assertEquals(0, badMagic.retainedBytes);
+        assertEquals(0, badMagic.commits);
+        EngineResult reserved = new ReferenceMobileEngine("SLEEP")
+                .feed(new byte[]{(byte) 0x99, 0x66, 0x10, 0x01}, 0);
+        assertEquals("RESERVED_ERROR", reserved.outcome);
+        assertEquals(0, reserved.retainedBytes);
+        assertEquals(0, reserved.commits);
+        for (int cut : List.of(1, 2, 3, 4, 5, 6, begin.length - 2, begin.length - 1)) {
+            ReferenceMobileEngine partial = new ReferenceMobileEngine("SLEEP");
+            EngineResult pending = partial.feed(Arrays.copyOf(begin, cut), 0);
+            assertEquals("cut=" + cut, "NEED_MORE", pending.outcome);
+            assertEquals(0, pending.response.length);
+            assertEquals(0, pending.ack.length);
+            assertEquals(0, pending.commits);
+            assertEquals(cut, pending.retainedBytes);
+        }
+
+        assertTrue(engine.reservePendingSlot());
+        assertTrue(engine.reservePendingSlot());
+        assertFalse(engine.reservePendingSlot());
+        assertEquals("NEED_MORE", engine.feed(Arrays.copyOf(begin, 6), 0).outcome);
+        EngineResult exact = engine.advanceTo(3_000);
+        assertEquals("IDLE_BOUNDARY_WAIT", exact.outcome);
+        assertEquals(2, exact.pendingSlots);
+        assertEquals(6, exact.retainedBytes);
+        EngineResult expired = engine.advanceTo(3_001);
+        assertEquals("IDLE_TIMEOUT_RESET", expired.outcome);
+        assertEquals("SLEEP", expired.state);
+        assertEquals(0, expired.pendingSlots);
+        assertEquals(0, expired.retainedBytes);
+        assertEquals(0, expired.response.length);
+
+        EngineResult started = engine.feed(begin, 3_002);
+        assertEquals("SESSION_STARTED", started.outcome);
+        assertEquals("SESSION", started.state);
+        assertArrayEquals(hex(transcripts.get("begin_session").get("response_hex")),
+                started.response);
+
+        assertTrue(engine.reservePendingSlot());
+        byte[] reset = hex(transcripts.get("reset").get("request_hex"));
+        EngineResult resetResult = engine.feed(reset, 3_003);
+        assertEquals("SESSION_RESET", resetResult.outcome);
+        assertEquals(0, resetResult.pendingSlots);
+        assertEquals(0, resetResult.retainedBytes);
+
+        byte[] plusOne = hex(transcripts.get("payload_boundary_plus_one").get("request_hex"));
+        EngineResult limited = engine.feed(plusOne, 3_004);
+        assertEquals("LENGTH_LIMIT", limited.outcome);
+        assertEquals(0, limited.retainedBytes);
+        assertEquals(0, limited.response.length);
+        assertEquals(0, limited.commits);
     }
 
     @Test
@@ -270,6 +374,16 @@ public class MobileAdapterContractTest {
         return new FragmentResult(bytes, monotonic, lastMillis, lastDataMillis, lastCount);
     }
 
+    private static List<FragmentStep> fragmentSteps(String value) {
+        List<FragmentStep> result = new ArrayList<>();
+        for (String entry : value.split(";")) {
+            String[] parts = entry.split(":", -1);
+            assertEquals(2, parts.length);
+            result.add(new FragmentStep(Long.parseLong(parts[0]), Integer.parseInt(parts[1])));
+        }
+        return result;
+    }
+
     private static List<Map<String, String>> rows(String resource) throws IOException {
         InputStream stream = MobileAdapterContractTest.class.getResourceAsStream(resource);
         assertNotNull("Missing " + resource, stream);
@@ -358,6 +472,215 @@ public class MobileAdapterContractTest {
     private record FragmentResult(int bytes, boolean monotonic, long lastMillis,
                                   long lastDataMillis, int lastCount) {}
 
+    private record FragmentStep(long millis, int count) {}
+
+    private record EngineResult(String state, String outcome, byte[] response, byte[] ack,
+                                int retainedBytes, int pendingSlots, int commits) {}
+
+    /**
+     * Test-only incremental serial receiver. It owns one fixed maximum packet buffer and changes
+     * session/configuration state only after a complete checksum-valid request has passed its
+     * command-specific checks.
+     */
+    private static final class ReferenceMobileEngine {
+        private final byte[] packet = new byte[262];
+        private final byte[] configuration = new byte[256];
+        private final ReferenceSlots pendingSlots = new ReferenceSlots(2);
+        private int count;
+        private int expectedPacketBytes = -1;
+        private long lastByteMillis = -1;
+        private String state;
+        private String outcome = "NEED_MORE";
+        private byte[] response = new byte[0];
+        private byte[] ack = new byte[0];
+        private int commits;
+
+        private ReferenceMobileEngine(String initialState) {
+            if (!Set.of("SLEEP", "SESSION").contains(initialState)) {
+                throw new IllegalArgumentException("Unknown Mobile state " + initialState);
+            }
+            state = initialState;
+            configuration[0] = 0x4d;
+            configuration[1] = 0x41;
+            configuration[2] = (byte) 0x81;
+            for (int i = 0; i < 128; i++) configuration[128 + i] = (byte) i;
+        }
+
+        private EngineResult feed(byte[] bytes, long emulatedMillis) {
+            advanceTo(emulatedMillis);
+            if (outcome.equals("IDLE_TIMEOUT_RESET") || outcome.equals("IDLE_BOUNDARY_WAIT")) {
+                outcome = "NEED_MORE";
+            }
+            response = new byte[0];
+            ack = new byte[0];
+            commits = 0;
+            for (byte value : bytes) {
+                lastByteMillis = emulatedMillis;
+                if (count >= packet.length) {
+                    reject("BUFFER_LIMIT");
+                    break;
+                }
+                packet[count++] = value;
+                if (count == 2 &&
+                        ((packet[0] & 0xff) != 0x99 || (packet[1] & 0xff) != 0x66)) {
+                    reject("MAGIC_ERROR");
+                    break;
+                }
+                if (count == 4 && packet[3] != 0) {
+                    reject("RESERVED_ERROR");
+                    break;
+                }
+                if (count == 6) {
+                    int declared = unsigned16(packet, 4);
+                    if (declared > 254) {
+                        reject("LENGTH_LIMIT");
+                        break;
+                    }
+                    expectedPacketBytes = Math.addExact(8, declared);
+                }
+                if (expectedPacketBytes > 0 && count == expectedPacketBytes) {
+                    commitPacket();
+                }
+            }
+            if (count > 0 && outcome.equals("SUCCESS")) outcome = "NEED_MORE";
+            return snapshot();
+        }
+
+        private EngineResult advanceTo(long emulatedMillis) {
+            if (emulatedMillis < 0) throw new IllegalArgumentException("Negative emulated time");
+            if (lastByteMillis >= 0 &&
+                    Math.subtractExact(emulatedMillis, lastByteMillis) > 3_000) {
+                state = "SLEEP";
+                outcome = "IDLE_TIMEOUT_RESET";
+                response = new byte[0];
+                ack = new byte[0];
+                commits = 0;
+                clearParser();
+                pendingSlots.clear();
+            } else if (lastByteMillis >= 0 && count > 0 &&
+                    Math.subtractExact(emulatedMillis, lastByteMillis) == 3_000) {
+                outcome = "IDLE_BOUNDARY_WAIT";
+            }
+            return snapshot();
+        }
+
+        private boolean reservePendingSlot() {
+            return pendingSlots.reserve();
+        }
+
+        private EngineResult snapshot() {
+            return new EngineResult(state, outcome, response.clone(), ack.clone(), count,
+                    pendingSlots.used(), commits);
+        }
+
+        private void commitPacket() {
+            int command = packet[2] & 0xff;
+            int length = unsigned16(packet, 4);
+            int expectedChecksum = 0;
+            for (int i = 2; i < 6 + length; i++) {
+                expectedChecksum = (expectedChecksum + (packet[i] & 0xff)) & 0xffff;
+            }
+            int actualChecksum = unsigned16(packet, 6 + length);
+            byte[] data = Arrays.copyOfRange(packet, 6, 6 + length);
+            clearParser();
+            if (actualChecksum != expectedChecksum) {
+                outcome = "CHECKSUM_ERROR";
+                ack = new byte[]{(byte) 0x88, (byte) 0xf1};
+                return;
+            }
+            switch (command) {
+                case 0x10:
+                    if (!Arrays.equals(data, "NINTENDO".getBytes(StandardCharsets.US_ASCII))) {
+                        unsupported();
+                        return;
+                    }
+                    state = "SESSION";
+                    outcome = "SESSION_STARTED";
+                    response = packet(0x90, data);
+                    ack = new byte[]{(byte) 0x88, (byte) 0x90};
+                    commits++;
+                    return;
+                case 0x16:
+                    if (data.length != 0) {
+                        unsupported();
+                        return;
+                    }
+                    state = "SESSION";
+                    pendingSlots.clear();
+                    outcome = "SESSION_RESET";
+                    response = packet(0x96, new byte[0]);
+                    ack = new byte[]{(byte) 0x88, (byte) 0x96};
+                    commits++;
+                    return;
+                case 0x19:
+                    if (data.length != 2) {
+                        unsupported();
+                        return;
+                    }
+                    int offset = data[0] & 0xff;
+                    int requested = data[1] & 0xff;
+                    int end;
+                    try {
+                        end = Math.addExact(offset, requested);
+                    } catch (ArithmeticException e) {
+                        unsupported();
+                        return;
+                    }
+                    if (requested > 128 || end > configuration.length) {
+                        unsupported();
+                        return;
+                    }
+                    byte[] result = new byte[requested + 1];
+                    result[0] = (byte) offset;
+                    System.arraycopy(configuration, offset, result, 1, requested);
+                    outcome = requested == 128 ? "CONFIG_READ_BOUNDARY" : "CONFIG_READ";
+                    response = packet(0x99, result);
+                    ack = new byte[]{(byte) 0x88, (byte) 0x99};
+                    commits++;
+                    return;
+                default:
+                    unsupported();
+            }
+        }
+
+        private void unsupported() {
+            outcome = "UNSUPPORTED_COMMAND";
+            ack = new byte[]{(byte) 0x88, (byte) 0xf0};
+        }
+
+        private void reject(String reason) {
+            outcome = reason;
+            response = new byte[0];
+            ack = new byte[0];
+            commits = 0;
+            clearParser();
+        }
+
+        private void clearParser() {
+            Arrays.fill(packet, 0, count, (byte) 0);
+            count = 0;
+            expectedPacketBytes = -1;
+        }
+
+        private static byte[] packet(int command, byte[] data) {
+            byte[] bytes = new byte[8 + data.length];
+            bytes[0] = (byte) 0x99;
+            bytes[1] = 0x66;
+            bytes[2] = (byte) command;
+            bytes[3] = 0;
+            bytes[4] = (byte) (data.length >>> 8);
+            bytes[5] = (byte) data.length;
+            System.arraycopy(data, 0, bytes, 6, data.length);
+            int checksum = 0;
+            for (int i = 2; i < 6 + data.length; i++) {
+                checksum = (checksum + (bytes[i] & 0xff)) & 0xffff;
+            }
+            bytes[6 + data.length] = (byte) (checksum >>> 8);
+            bytes[7 + data.length] = (byte) checksum;
+            return bytes;
+        }
+    }
+
     private static final class ReferenceSlots {
         private final int capacity;
         private int used;
@@ -375,6 +698,14 @@ public class MobileAdapterContractTest {
         private void complete() {
             if (used <= 0) throw new IllegalStateException("No pending slot");
             used--;
+        }
+
+        private void clear() {
+            used = 0;
+        }
+
+        private int used() {
+            return used;
         }
     }
 }

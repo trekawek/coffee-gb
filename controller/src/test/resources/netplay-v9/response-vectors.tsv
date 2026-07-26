@@ -1,0 +1,14 @@
+id	expected_sequence	incoming_sequence	message	flags	correlation	outstanding_sequence	outstanding_message	already_responded	expected	next_sequence	provenance
+auth_result_matches	1	1	AUTH_RESULT	0x0004	7	7	AUTH	false	SUCCESS	2	coffee-gb-synthetic-response
+ready_matches_start	2	2	READY	0x0004	9	9	START	false	SUCCESS	3	coffee-gb-synthetic-response
+pong_matches_ping	3	3	PONG	0x0004	11	11	PING	false	SUCCESS	4	coffee-gb-synthetic-response
+error_matches_request	4	4	ERROR	0x000c	13	13	AUTH	false	SUCCESS	5	coffee-gb-synthetic-response
+wrong_nonzero_correlation	1	1	AUTH_RESULT	0x0004	8	7	AUTH	false	CORRELATION_ERROR	1	coffee-gb-synthetic-response
+wrong_response_type	1	1	PONG	0x0004	7	7	AUTH	false	CORRELATION_ERROR	1	coffee-gb-synthetic-response
+unsolicited_response	1	1	READY	0x0004	9	-	-	false	CORRELATION_ERROR	1	coffee-gb-synthetic-response
+duplicate_response	1	1	AUTH_RESULT	0x0004	7	7	AUTH	true	CORRELATION_ERROR	1	coffee-gb-synthetic-response
+response_zero_correlation	1	1	PONG	0x0004	0	11	PING	false	CORRELATION_ERROR	1	coffee-gb-synthetic-response
+request_nonzero_correlation	1	1	INPUT	0x0000	1	-	-	false	CORRELATION_ERROR	1	coffee-gb-synthetic-response
+near_u32_last_usable	4294967294	4294967294	INPUT	0x0000	0	-	-	false	SUCCESS	EXHAUSTED	coffee-gb-synthetic-response
+u32_reserved_exhausted	4294967295	4294967295	INPUT	0x0000	0	-	-	false	SEQUENCE_ERROR	EXHAUSTED	coffee-gb-synthetic-response
+u32_wrap_forbidden	4294967295	0	INPUT	0x0000	0	-	-	false	SEQUENCE_ERROR	EXHAUSTED	coffee-gb-synthetic-response

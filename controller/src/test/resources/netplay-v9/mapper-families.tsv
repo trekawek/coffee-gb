@@ -1,0 +1,17 @@
+id	name	meaning
+0x01	ROM_ONLY	no-bank-controller
+0x02	MBC1	Nintendo-MBC1-family
+0x03	MBC2	Nintendo-MBC2-family
+0x04	MBC3	Nintendo-MBC3-and-RTC-family
+0x05	MBC5	Nintendo-MBC5-and-rumble-family
+0x06	MBC6	Nintendo-MBC6-flash-family
+0x07	MBC7	Nintendo-MBC7-EEPROM-sensor-family
+0x08	MMM01	Nintendo-MMM01-family
+0x09	CAMERA	Game-Boy-Camera-family
+0x0a	HUC1	Hudson-HuC1-family
+0x0b	HUC3	Hudson-HuC3-RTC-family
+0x0c	TAMA5	Bandai-TAMA5-RTC-family
+0x0d	M161	Mani-M161-family
+0x0e	DATEL	Datel-pass-through-family
+0x0f	UNLICENSED	other-explicitly-supported-unlicensed-controller
+0x10	UNKNOWN_KNOWN_HEADER	recognized-cartridge-type-without-more-specific-family

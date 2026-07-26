@@ -1,0 +1,12 @@
+id	negotiated	mode	message	flags	expected	provenance
+normal_required_only	1,2,3,4,5,6,7	normal	INPUT	0x0000	SUCCESS	coffee-gb-synthetic-capability-gate
+four_missing_capability	1,2,3,4,5,6,7	four	START	0x0000	CAPABILITY_MISMATCH	coffee-gb-synthetic-capability-gate
+four_negotiated	1,2,3,4,5,6,7,11	four	START	0x0000	SUCCESS	coffee-gb-synthetic-capability-gate
+rom_missing_class	1,2,3,4,5,6,7	normal	ROM_BEGIN	0x0000	CAPABILITY_MISMATCH	coffee-gb-synthetic-capability-gate
+rom_negotiated	1,2,3,4,5,6,7,8	normal	ROM_BEGIN	0x0000	SUCCESS	coffee-gb-synthetic-capability-gate
+battery_missing_class	1,2,3,4,5,6,7	normal	BATTERY_BEGIN	0x0000	CAPABILITY_MISMATCH	coffee-gb-synthetic-capability-gate
+battery_negotiated	1,2,3,4,5,6,7,9	normal	BATTERY_BEGIN	0x0000	SUCCESS	coffee-gb-synthetic-capability-gate
+rom_deflate_missing_codec	1,2,3,4,5,6,7,8	normal	ROM_CHUNK	0x0002	CAPABILITY_MISMATCH	coffee-gb-synthetic-capability-gate
+rom_deflate_negotiated	1,2,3,4,5,6,7,8,10	normal	ROM_CHUNK	0x0002	SUCCESS	coffee-gb-synthetic-capability-gate
+ping_missing_capability	1,2,3,4,5,6,7	normal	PING	0x0000	CAPABILITY_MISMATCH	coffee-gb-synthetic-capability-gate
+ping_negotiated	1,2,3,4,5,6,7,12	normal	PING	0x0000	SUCCESS	coffee-gb-synthetic-capability-gate

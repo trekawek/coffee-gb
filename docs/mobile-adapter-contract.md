@@ -101,6 +101,14 @@ idle no reset has occurred; the first tick beyond 3,000 ms cancels the partial p
 logical connections, ends the session, clears bounded response state, and returns to sleep. A
 following valid begin-session packet starts cleanly.
 
+The Phase #346 executable reference receiver is genuinely incremental: it retains at most the
+fixed 262-byte packet buffer across feed calls, decides magic after byte 2, reserved status after
+byte 4, and length after byte 6, then waits for exactly the declared data and two checksum bytes.
+Partial magic, header, data, or checksum returns `NEED_MORE` with no acknowledgement, response,
+configuration mutation, or slot mutation. Invalid magic/reserved/length clears retention
+immediately. Checksum or command validation occurs only once the complete request is present.
+The transcript runner feeds every timestamped fragment rather than concatenating it first.
+
 Reset command `16`, peripheral replacement, ROM/session replacement, save/load, rewind, stop, and
 controller cancellation disconnect every live backend operation. Save state owns only the bounded
 deterministic fields listed in ADR 0002. Loading deterministic state never reconnects host

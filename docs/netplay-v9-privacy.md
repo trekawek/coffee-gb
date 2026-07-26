@@ -21,12 +21,18 @@ whose operator you trust.
 
 ## Consent and data minimization
 
-Own-ROM use is the default. Authentication and a compatible metadata-only manifest happen before
-the UI can consent to ROM, battery, or checkpoint classes. A ROM mismatch never starts an
-automatic transfer. Both sides must explicitly consent to each class, and cancellation denies it.
-Paths, tokens, credentials, battery/state hashes, and payload fragments are forbidden in logs and
-diagnostics. State transport is direct bounded StateFile v2 only; local historical snapshot import
-is never reachable from a peer.
+Own-ROM use is the default. Authentication and a compatible bounded manifest happen first. The
+manifest exposes only the frozen compatibility context, roster, sanitized cartridge title/type,
+stable mapper family, content sizes/digests, and explicit advanced offer/request proposals; it
+never contains a path or payload. A missing or different ROM is a warning requiring approval, not
+an automatic transfer.
+
+Consent is not a global class switch. Source and target each approve one proposal bound to both
+exact manifests, class, direction, players, asset kind, size, and digest. ROM, battery, and
+checkpoint approvals are distinct; a changed manifest or replayed/extra transaction rejects.
+Paths, tokens, credentials, battery/state payloads, and payload fragments are forbidden in logs
+and diagnostics. State transport is direct bounded StateFile v2 only; local historical snapshot
+import is never reachable from a peer.
 
 ## Diagnosing a failed pairing
 
