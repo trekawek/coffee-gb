@@ -2,9 +2,11 @@
 
 Protocol v9 has an opt-in developer transport foundation that validates CGB9 frames and negotiates
 HELLO capabilities. Part 1 of #348 adds strict invitation parsing, bounded host invitation
-ownership, and AUTH, then stops at the immutable pre-MANIFEST boundary. It is not a playable
-end-user path: no manifest, consent, private transfer, checkpoint, or input is enabled. Current
-user netplay remains protocol v8 with the compatibility restrictions in
+ownership, and AUTH. Part 2 adds the exact bounded MANIFEST metadata exchange, then stops at an
+immutable pre-consent boundary. It is not a playable end-user path: no consent decision, private
+transfer, checkpoint, or input is enabled. Callers that do not opt into an explicit prepared
+manifest retain the Part-1 pre-MANIFEST boundary. Current user netplay remains protocol v8 with
+the compatibility restrictions in
 [netplay-protocol-v8.md](netplay-protocol-v8.md). A v8/v9 mismatch is intentional and has no
 downgrade, fallback, or compatibility probe.
 
@@ -67,11 +69,15 @@ wired into the normal netplay menu.
 The exact grammar, limits, timeouts, errors, and state transitions are normative in
 [netplay-protocol-v9.md](netplay-protocol-v9.md).
 
-## Deliberate Part-1 boundary
+## Deliberate Part-2 boundary
 
-After successful AUTH, server and client stop at `SEND_SERVER_MANIFEST` and
-`WAIT_SERVER_MANIFEST`. MANIFEST, CONSENT, transfers, checkpoints, diagnostics, discovery, and
-playable input remain for later #348 parts. The stale nonce-comparison roadmap checkbox is not a
-tokenless/manual-address bypass: v9 has no such flow. Discovery or a different invitation
-mechanism requires a separately reviewed capability and threat-model change and is deferred to
-#350.
+After successful AUTH, explicitly prepared peers exchange exact bounded MANIFEST metadata. An
+exact pair stops at `SYNCHRONIZING`; valid advanced proposals stop at `EXCHANGE_CONSENT`, without
+making a consent decision. Manifest preparation happens outside transport and supplies hashes,
+sizes, sanitized title/type/profile identity, and availability only—never ROM, battery, StateFile,
+or path bytes. Nothing at this boundary authorizes transfer.
+
+CONSENT, transfers, checkpoints, diagnostics, discovery, and playable input remain for later
+phases. The stale nonce-comparison roadmap checkbox is not a tokenless/manual-address bypass: v9
+has no such flow. Discovery or a different invitation mechanism requires a separately reviewed
+capability and threat-model change and is deferred to #350.

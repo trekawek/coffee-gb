@@ -199,6 +199,7 @@ enum class V9Diagnostic {
   CAPABILITY_MISMATCH,
   INVALID_INVITATION,
   AUTH_REJECTED,
+  MANIFEST_REJECTED,
   TIMEOUT,
   CANCELLED,
   IO_FAILURE,
@@ -267,7 +268,22 @@ object V9ErrorPayloadCodec {
   }
 }
 
-private fun isSafeDiagnostic(bytes: ByteArray, maximum: Int): Boolean {
+internal object V9TerminalPayloadCodec {
+  fun validate(payload: ByteArray): V9ErrorCode? {
+    if (payload.size < 4) return V9ErrorCode.MALFORMED_HEADER
+    val reason = u16(payload, 0)
+    val length = u16(payload, 2)
+    if ((reason != 0 && V9ErrorCode.fromWireId(reason) == null) ||
+        length > 256 ||
+        payload.size != 4 + length) {
+      return V9ErrorCode.MALFORMED_HEADER
+    }
+    return if (isSafeDiagnostic(payload.copyOfRange(4, payload.size), 256)) null
+    else V9ErrorCode.STRICT_UTF8
+  }
+}
+
+internal fun isSafeDiagnostic(bytes: ByteArray, maximum: Int): Boolean {
   if (bytes.size > maximum) return false
   val text = try {
     StandardCharsets.UTF_8.newDecoder()

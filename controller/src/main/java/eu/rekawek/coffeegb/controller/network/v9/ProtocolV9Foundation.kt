@@ -163,7 +163,7 @@ internal class V9WriterQueue {
   data class QueuedWrite(val bytes: ByteArray, val onWritten: () -> Unit)
 }
 
-/** Immutable Part-1 boundary. MANIFEST and all private traffic remain unavailable here. */
+/** Immutable Part-1 boundary. MANIFEST remains opt-in and all private traffic is unavailable. */
 data class V9PostAuthBoundary(
     val role: V9Role,
     val mode: V9LinkMode,
@@ -176,8 +176,9 @@ data class V9PostAuthBoundary(
  *
  * Without invitation ownership this performs only the server-first HELLO exchange and stops at
  * `WAIT_AUTH`/`SEND_AUTH`. With explicit Part-1 invitation owners it performs AUTH and stops at
- * `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`. Manifest, consent, private payload, checkpoint,
- * diagnostics, discovery, and gameplay messages remain unavailable.
+ * `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`. With an explicit caller-prepared [manifestPlan],
+ * it exchanges and validates MANIFEST and stops at the immutable pre-consent boundary. Consent,
+ * private payload, checkpoint, diagnostics, discovery, and gameplay messages remain unavailable.
  */
 class V9FoundationConnection(
     private val channel: V9TransportChannel,
@@ -189,6 +190,7 @@ class V9FoundationConnection(
     scheduler: V9DeadlineScheduler? = null,
     private val invitationHost: V9InvitationHost? = null,
     private val clientInvitation: V9ClientInvitation? = null,
+    private val manifestPlan: V9ManifestPlan? = null,
 ) : Closeable, V9LifecycleSource {
   private val scheduler = scheduler ?: V9SystemDeadlineScheduler(clock)
   private val ownedScheduler = if (scheduler == null) this.scheduler as Closeable else null
@@ -199,12 +201,15 @@ class V9FoundationConnection(
           policy =
               V9DecoderPolicy(
                   allowedMessages =
-                      setOf(
-                          V9MessageType.HELLO,
-                          V9MessageType.AUTH,
-                          V9MessageType.AUTH_RESULT,
-                          V9MessageType.ERROR,
-                      ),
+                      buildSet {
+                        add(V9MessageType.HELLO)
+                        add(V9MessageType.AUTH)
+                        add(V9MessageType.AUTH_RESULT)
+                        add(V9MessageType.CANCEL)
+                        add(V9MessageType.GOODBYE)
+                        add(V9MessageType.ERROR)
+                        if (manifestPlan != null) add(V9MessageType.MANIFEST)
+                      },
                   negotiatedCapabilities = V9Capability.entries.toSet(),
                   linkMode = mode,
               ),
@@ -215,7 +220,9 @@ class V9FoundationConnection(
   private val started = AtomicBoolean(false)
   private val boundary = CountDownLatch(1)
   private val postAuth = CountDownLatch(1)
+  private val manifestComplete = CountDownLatch(1)
   @Volatile private var pairingBoundary: V9LifecycleSnapshot? = null
+  @Volatile private var completedManifestBoundary: V9ManifestPairingBoundary? = null
   private val tasks = mutableListOf<Thread>()
   private val taskLock = Any()
   private val ownershipLock = Any()
@@ -228,11 +235,17 @@ class V9FoundationConnection(
   private var remoteHello: V9Hello? = null
   private var slotReservation: V9InvitationHost.Reservation? = null
   private var authenticatedBoundary: V9PostAuthBoundary? = null
+  private var localManifestPayload: ByteArray? = null
+  private var localManifest: V9Manifest? = null
   private var nextOutgoingSequence = 0L
 
   init {
     require(invitationHost == null || role == V9Role.SERVER && invitationHost.mode == mode)
     require(clientInvitation == null || role == V9Role.CLIENT && clientInvitation.mode == mode)
+    require(manifestPlan == null || manifestPlan.role == role && manifestPlan.mode == mode)
+    require(manifestPlan == null || invitationHost != null || clientInvitation != null) {
+      "v9 manifest exchange requires invitation authentication"
+    }
     lifecycle.addListener { state ->
       scheduleDeadline(state)
       if (state.phase == V9LifecyclePhase.AWAITING_PAIRING) {
@@ -240,6 +253,7 @@ class V9FoundationConnection(
         boundary.countDown()
       } else if (state.phase == V9LifecyclePhase.CLOSED) {
         boundary.countDown()
+        manifestComplete.countDown()
       }
     }
   }
@@ -276,6 +290,13 @@ class V9FoundationConnection(
     return snapshot()
   }
 
+  fun awaitManifestBoundary(timeout: Long, unit: TimeUnit): V9ManifestPairingBoundary? {
+    manifestComplete.await(timeout, unit)
+    return completedManifestBoundary
+  }
+
+  fun manifestBoundary(): V9ManifestPairingBoundary? = completedManifestBoundary
+
   fun negotiatedCapabilities(): Set<V9Capability> =
       negotiated?.capabilities?.toSet() ?: emptySet()
 
@@ -302,7 +323,7 @@ class V9FoundationConnection(
     }
   }
 
-  /** Part 1 deliberately refuses all caller-originated traffic beyond its AUTH boundary. */
+  /** The foundation deliberately refuses all caller-originated state-bearing traffic. */
   fun sendUnavailable(type: V9MessageType): Nothing {
     require(type != V9MessageType.HELLO && type != V9MessageType.ERROR)
     throw V9ProtocolException(V9ErrorCode.UNEXPECTED_MESSAGE, 0)
@@ -446,6 +467,12 @@ class V9FoundationConnection(
         V9MessageType.HELLO -> handleHello(V9HelloCodec.decode(frame.payloadView()))
         V9MessageType.AUTH -> handleAuth(frame)
         V9MessageType.AUTH_RESULT -> handleAuthResult(frame)
+        V9MessageType.MANIFEST -> handleManifest(frame)
+        V9MessageType.CANCEL -> fail(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
+        V9MessageType.GOODBYE -> {
+          lifecycle.closeNormally()
+          closeResources()
+        }
         V9MessageType.ERROR -> {
           val remote = V9ErrorPayloadCodec.decode(frame.payloadView())
           if (role == V9Role.CLIENT &&
@@ -594,6 +621,7 @@ class V9FoundationConnection(
           authenticatedBoundary =
               V9PostAuthBoundary(role, mode, slot, V9LifecycleState.SEND_SERVER_MANIFEST)
           postAuth.countDown()
+          if (manifestPlan != null) enqueueServerManifest(slot)
         }) {
       fail(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
     }
@@ -628,10 +656,205 @@ class V9FoundationConnection(
     postAuth.countDown()
   }
 
+  private fun enqueueServerManifest(slot: Int) {
+    if (role != V9Role.SERVER ||
+        snapshot().state != V9LifecycleState.SEND_SERVER_MANIFEST) {
+      reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.MANIFEST_REJECTED)
+      return
+    }
+    val manifest = manifestPlan?.manifestFor(role, slot)
+        ?: return reject(V9ErrorCode.MANIFEST_MISMATCH, V9Diagnostic.MANIFEST_REJECTED)
+    val context = manifestContext(slot, 0, slot, manifest)
+    val payload =
+        try {
+          V9ManifestCodec.encode(manifest, context)
+        } catch (e: V9ProtocolException) {
+          reject(e.reason, V9Diagnostic.MANIFEST_REJECTED)
+          return
+        }
+    localManifest = manifest
+    localManifestPayload = payload.copyOf()
+    enqueueManifest(payload) {
+      lifecycle.serverManifestSent()
+    }
+  }
+
+  private fun handleManifest(frame: V9Frame) {
+    val boundary = authenticatedBoundary
+    if (manifestPlan == null || boundary == null) {
+      reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.MANIFEST_REJECTED)
+      return
+    }
+    val state = snapshot().state
+    val expected =
+        role == V9Role.CLIENT && state == V9LifecycleState.WAIT_SERVER_MANIFEST ||
+            role == V9Role.SERVER && state == V9LifecycleState.WAIT_CLIENT_MANIFEST
+    if (!expected) {
+      reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.MANIFEST_REJECTED)
+      return
+    }
+    val wireSource = if (role == V9Role.CLIENT) 0 else boundary.slot
+    val wireTarget = if (role == V9Role.CLIENT) boundary.slot else 0
+    val prepared =
+        manifestPlan.manifestFor(role, boundary.slot)
+            ?: return reject(
+                V9ErrorCode.MANIFEST_MISMATCH,
+                V9Diagnostic.MANIFEST_REJECTED,
+            )
+    val context = manifestContext(boundary.slot, wireSource, wireTarget, prepared)
+    val decoded =
+        try {
+          V9ManifestCodec.decode(frame.payloadView(), context)
+        } catch (e: V9ProtocolException) {
+          reject(e.reason, V9Diagnostic.MANIFEST_REJECTED)
+          return
+        }
+    if (role == V9Role.CLIENT) {
+      enqueueClientManifest(boundary.slot, decoded, frame.payloadView())
+    } else {
+      completeServerManifestPair(boundary.slot, decoded, frame.payloadView())
+    }
+  }
+
+  private fun enqueueClientManifest(
+      slot: Int,
+      serverManifest: V9Manifest,
+      serverPayload: ByteArray,
+  ) {
+    val manifest = manifestPlan?.manifestFor(role, slot)
+        ?: return reject(V9ErrorCode.MANIFEST_MISMATCH, V9Diagnostic.MANIFEST_REJECTED)
+    val context = manifestContext(slot, slot, 0, manifest)
+    val payload =
+        try {
+          V9ManifestCodec.encode(manifest, context)
+        } catch (e: V9ProtocolException) {
+          reject(e.reason, V9Diagnostic.MANIFEST_REJECTED)
+          return
+        }
+    val compatible =
+        compatibleBoundary(slot, serverManifest, serverPayload, manifest, payload)
+            ?: return
+    lifecycle.serverManifestReceived()
+    enqueueManifest(payload) {
+      lifecycle.clientManifestSent(compatible.proposals.isNotEmpty())
+      publishManifestBoundary(compatible)
+    }
+  }
+
+  private fun completeServerManifestPair(
+      slot: Int,
+      clientManifest: V9Manifest,
+      clientPayload: ByteArray,
+  ) {
+    val serverManifest = localManifest
+        ?: return reject(V9ErrorCode.MANIFEST_MISMATCH, V9Diagnostic.MANIFEST_REJECTED)
+    val serverPayload = localManifestPayload
+        ?: return reject(V9ErrorCode.MANIFEST_MISMATCH, V9Diagnostic.MANIFEST_REJECTED)
+    val compatible =
+        compatibleBoundary(slot, serverManifest, serverPayload, clientManifest, clientPayload)
+            ?: return
+    lifecycle.clientManifestReceived(compatible.proposals.isNotEmpty())
+    publishManifestBoundary(compatible)
+    localManifestPayload?.fill(0)
+    localManifestPayload = null
+    localManifest = null
+  }
+
+  private fun compatibleBoundary(
+      slot: Int,
+      serverManifest: V9Manifest,
+      serverPayload: ByteArray,
+      clientManifest: V9Manifest,
+      clientPayload: ByteArray,
+  ): V9ManifestPairingBoundary? {
+    val comparison =
+        V9ManifestCompatibility.compare(
+            serverManifest,
+            clientManifest,
+            slot,
+            protocolCapabilityCompatible =
+                negotiated?.capabilities?.containsAll(V9Capability.requiredCapabilities) == true,
+        )
+    if (comparison is V9ManifestComparisonResult.Rejected) {
+      reject(comparison.reason, V9Diagnostic.MANIFEST_REJECTED)
+      return null
+    }
+    comparison as V9ManifestComparisonResult.Compatible
+    val nextState =
+        if (comparison.proposals.isEmpty()) {
+          V9LifecycleState.SYNCHRONIZING
+        } else {
+          V9LifecycleState.EXCHANGE_CONSENT
+        }
+    return V9ManifestPairingBoundary(
+        role,
+        mode,
+        slot,
+        nextState,
+        serverManifest,
+        clientManifest,
+        V9ManifestDigest.sha256(serverPayload),
+        V9ManifestDigest.sha256(clientPayload),
+        comparison.differences,
+        comparison.proposals,
+    )
+  }
+
+  private fun publishManifestBoundary(value: V9ManifestPairingBoundary) {
+    completedManifestBoundary = value
+    manifestComplete.countDown()
+  }
+
+  private fun manifestContext(
+      slot: Int,
+      source: Int,
+      target: Int,
+      prepared: V9Manifest,
+  ): V9ManifestValidationContext =
+      V9ManifestValidationContext(
+          mode,
+          slot,
+          source,
+          target,
+          prepared.rosterGeneration,
+          prepared.rosterCommitment(),
+          negotiated?.capabilities ?: emptySet(),
+      )
+
+  private fun enqueueManifest(payload: ByteArray, onWritten: () -> Unit) {
+    val sequence = nextSequenceOrFail() ?: return
+    val encoded =
+        try {
+          V9FrameEncoder.encode(
+              V9OutboundFrame(
+                  V9MessageType.MANIFEST,
+                  0,
+                  sequence,
+                  0,
+                  ProtocolV9.CONTROL_CHANNEL,
+                  payload,
+              ),
+              manifestPolicy(),
+          )
+        } catch (e: V9ProtocolException) {
+          reject(e.reason, V9Diagnostic.MANIFEST_REJECTED)
+          return
+        }
+    if (!writer.offer(encoded) {
+          advanceOutgoingSequence()
+          onWritten()
+        }) {
+      reject(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
+    }
+  }
+
   private fun reject(reason: V9ErrorCode, diagnostic: V9Diagnostic) {
     if (closed.get() || snapshot().state == V9LifecycleState.TERMINAL_CLEANUP) return
     lifecycle.beginTerminalCleanup(reason, diagnostic)
     writer.close()
+    localManifestPayload?.fill(0)
+    localManifestPayload = null
+    localManifest = null
     writerTask?.takeUnless { it === Thread.currentThread() }?.interrupt()
     if (reason.peerVisible &&
         reason != V9ErrorCode.UNSUPPORTED_PROTOCOL &&
@@ -781,6 +1004,13 @@ class V9FoundationConnection(
           linkMode = mode,
       )
 
+  private fun manifestPolicy(): V9DecoderPolicy =
+      V9DecoderPolicy(
+          allowedMessages = setOf(V9MessageType.MANIFEST, V9MessageType.ERROR),
+          negotiatedCapabilities = negotiated?.capabilities ?: emptySet(),
+          linkMode = mode,
+      )
+
   private fun startTask(name: String, block: () -> Unit): Thread {
     check(!closed.get()) { "v9 foundation is closed" }
     val task = thread(start = false, isDaemon = true, name = name, block = block)
@@ -826,6 +1056,9 @@ class V9FoundationConnection(
     writer.close()
     slotReservation?.close()
     slotReservation = null
+    localManifestPayload?.fill(0)
+    localManifestPayload = null
+    localManifest = null
     clientInvitation?.close()
     try {
       channel.close()
@@ -838,6 +1071,7 @@ class V9FoundationConnection(
     ownedScheduler?.close()
     boundary.countDown()
     postAuth.countDown()
+    manifestComplete.countDown()
     val listeners =
         synchronized(closeListenerLock) {
           closeListeners.toList().also { closeListeners.clear() }
@@ -860,6 +1094,7 @@ class V9FoundationConnection(
     V9ErrorCode.QUEUE_OVERFLOW -> V9Diagnostic.QUEUE_FULL
     V9ErrorCode.AUTH_FAILED,
     V9ErrorCode.SERVER_FULL -> V9Diagnostic.AUTH_REJECTED
+    V9ErrorCode.MANIFEST_MISMATCH -> V9Diagnostic.MANIFEST_REJECTED
     else -> V9Diagnostic.HELLO_REJECTED
   }
 
@@ -869,7 +1104,8 @@ class V9FoundationConnection(
 }
 
 /**
- * Opt-in listener used only by foundation/Part-1 diagnostics and tests until later pairing phases.
+ * Opt-in listener used only by foundation/Part-1/Part-2 diagnostics and tests until later pairing
+ * phases.
  * It is intentionally not reachable from [eu.rekawek.coffeegb.controller.network.ConnectionController].
  */
 class V9FoundationServer(
@@ -877,8 +1113,17 @@ class V9FoundationServer(
     private val mode: V9LinkMode = V9LinkMode.NORMAL,
     private val optionalCapabilities: Set<V9Capability> = emptySet(),
     private val invitationHost: V9InvitationHost? = null,
+    private val manifestPlan: V9ManifestPlan? = null,
     private val onAwaitingPairing: (V9FoundationConnection) -> Unit,
 ) : Closeable {
+  init {
+    require(manifestPlan == null ||
+        manifestPlan.role == V9Role.SERVER && manifestPlan.mode == mode)
+    require(manifestPlan == null || invitationHost != null) {
+      "v9 manifest exchange requires invitation authentication"
+    }
+  }
+
   private val stopped = AtomicBoolean(false)
   private val startStopLock = Any()
   private val callbackLock = Any()
@@ -907,6 +1152,7 @@ class V9FoundationServer(
             linkMode,
             optionalCapabilities = capabilities,
             invitationHost = invitationHost,
+            manifestPlan = manifestPlan,
         )
       }
 
@@ -1103,14 +1349,17 @@ object V9FoundationClient {
       optionalCapabilities: Set<V9Capability> = emptySet(),
       connectTimeoutMillis: Int = V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt(),
       invitation: V9ClientInvitation? = null,
+      manifestPlan: V9ManifestPlan? = null,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
+    require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
     return connectAccepted(
         address,
         mode,
         optionalCapabilities,
         connectTimeoutMillis,
         invitation,
+        manifestPlan,
         ::newV9SocketChannel,
     )
   }
@@ -1121,15 +1370,18 @@ object V9FoundationClient {
       optionalCapabilities: Set<V9Capability>,
       connectTimeoutMillis: Int,
       invitation: V9ClientInvitation?,
+      manifestPlan: V9ManifestPlan? = null,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
+    require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
     return connectAccepted(
         address,
         mode,
         optionalCapabilities,
         connectTimeoutMillis,
         invitation,
+        manifestPlan,
         channelFactory,
     )
   }
@@ -1140,6 +1392,7 @@ object V9FoundationClient {
       optionalCapabilities: Set<V9Capability>,
       connectTimeoutMillis: Int,
       invitation: V9ClientInvitation?,
+      manifestPlan: V9ManifestPlan?,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     var channel: V9ConnectableChannel? = null
@@ -1154,6 +1407,7 @@ object V9FoundationClient {
           mode,
           optionalCapabilities = optionalCapabilities,
           clientInvitation = invitation,
+          manifestPlan = manifestPlan,
       )
       connection = acceptedConnection
       acceptedConnection.start()
@@ -1208,9 +1462,11 @@ class V9FoundationConnectAttempt(
       mode: V9LinkMode = V9LinkMode.NORMAL,
       optionalCapabilities: Set<V9Capability> = emptySet(),
       invitation: V9ClientInvitation? = null,
+      manifestPlan: V9ManifestPlan? = null,
       onComplete: (V9FoundationConnection?, V9ErrorCode?) -> Unit,
   ) {
     require(invitation == null || invitation.mode == mode)
+    require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
     var cancelledBeforeStart = false
     synchronized(lock) {
       check(callback == null) { "v9 connect attempt already started" }
@@ -1252,7 +1508,7 @@ class V9FoundationConnectAttempt(
 
     val worker =
         thread(start = false, isDaemon = true, name = "netplay-v9-connect") {
-          runAttempt(address, mode, optionalCapabilities, invitation)
+          runAttempt(address, mode, optionalCapabilities, invitation, manifestPlan)
         }
     val startWorker =
         synchronized(lock) {
@@ -1290,6 +1546,7 @@ class V9FoundationConnectAttempt(
       mode: V9LinkMode,
       optionalCapabilities: Set<V9Capability>,
       invitation: V9ClientInvitation?,
+      manifestPlan: V9ManifestPlan?,
   ) {
     var createdChannel: V9ConnectableChannel? = null
     try {
@@ -1315,6 +1572,7 @@ class V9FoundationConnectAttempt(
               mode,
               optionalCapabilities = optionalCapabilities,
               clientInvitation = invitation,
+              manifestPlan = manifestPlan,
           )
       if (!adoptConnection(value)) {
         value.close()

@@ -323,6 +323,8 @@ class V9IncrementalDecoder(
     // authenticated lifecycle handler so every malformed proof receives the same AUTH_RESULT.
     V9MessageType.AUTH -> null
     V9MessageType.AUTH_RESULT -> V9AuthCodec.validateAuthResult(payload, header.flags)
+    V9MessageType.CANCEL,
+    V9MessageType.GOODBYE -> V9TerminalPayloadCodec.validate(payload)
     V9MessageType.ERROR -> V9ErrorPayloadCodec.validate(header.flags, payload)
     else -> null
   }
