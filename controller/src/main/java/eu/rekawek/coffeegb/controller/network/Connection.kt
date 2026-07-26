@@ -204,10 +204,29 @@ class Connection(
     try {
       block()
     } catch (e: IOException) {
-      LOG.info("Closing player {} connection after destination write failure: {}", player + 1,
-          e.message)
-      doStop = true
-      abortWriter(e)
+      val diagnostic =
+          if (e is OutboundCheckpointException) {
+            e.message ?: "Outgoing portable checkpoint was rejected."
+          } else {
+            "The netplay destination write failed. The connection was closed safely."
+          }
+      LOG.info(
+          "Closing player {} connection after destination write failure: {}",
+          player + 1,
+          diagnostic,
+      )
+      try {
+        if (server) {
+          eventBus.post(ConnectionController.ServerProtocolErrorEvent(player, diagnostic))
+        } else {
+          eventBus.post(ConnectionController.ClientProtocolErrorEvent(diagnostic))
+        }
+      } catch (callbackFailure: RuntimeException) {
+        e.addSuppressed(callbackFailure)
+      } finally {
+        doStop = true
+        abortWriter(e)
+      }
     }
   }
 
@@ -215,6 +234,26 @@ class Connection(
       event: LinkedController.LocalRomLoadedEvent,
       expectedRoot: StateRootKind,
   ) {
+    val message =
+        try {
+          prepareRomMessage(event, expectedRoot)
+        } catch (e: IOException) {
+          throw OutboundCheckpointException(sanitizeOutgoingStateFailure(e), e)
+        }
+    sendMessage(message.buffer, OutboundMessage.BOOTSTRAP)
+    LOG.atInfo().log(
+        "Sent player {} ROM ({} -> {} bytes compressed, state root {})",
+        event.player + 1,
+        event.romFile.size,
+        message.encodedRomBytes,
+        expectedRoot,
+    )
+  }
+
+  private fun prepareRomMessage(
+      event: LinkedController.LocalRomLoadedEvent,
+      expectedRoot: StateRootKind,
+  ): PreparedRomMessage {
     val hardwareProfile =
         try {
           HardwareProfileRegistry.resolve(event.hardwareProfileId)
@@ -229,6 +268,9 @@ class Connection(
     if (expectedRoot == StateRootKind.SESSION && event.portableState == null) {
       throw IOException("A running-session checkpoint requires a SESSION StateFile")
     }
+    // Validate the small, profile-derived declaration before any StateFile inspection,
+    // compression, or message allocation. The peer will repeat the same fail-closed check.
+    val outgoingProfileFlags = profileFlags(event)
     val stateDeclaration =
         event.portableState?.let { validateOutgoingState(it, expectedRoot) }
     checkedDecodedMessageSize(
@@ -255,7 +297,7 @@ class Connection(
     buf.putLong(event.frame)
     buf.put(event.gameboyType.ordinal.toByte())
     buf.put(event.bootstrapMode.ordinal.toByte())
-    buf.putInt(profileFlags(event))
+    buf.putInt(outgoingProfileFlags)
     buf.put(heldButtons.size.toByte())
     buf.putInt(event.romFile.size)
     buf.putInt(rom.size)
@@ -269,14 +311,19 @@ class Connection(
     buf.put(rom)
     slotRom?.let(buf::put)
     battery?.let(buf::put)
-    sendMessage(buf, OutboundMessage.BOOTSTRAP)
-    LOG.atInfo().log(
-        "Sent player {} ROM ({} -> {} bytes compressed, state root {})",
-        event.player + 1,
-        event.romFile.size,
-        rom.size,
-        expectedRoot,
-    )
+    return PreparedRomMessage(buf, rom.size)
+  }
+
+  private fun sanitizeOutgoingStateFailure(failure: IOException): String {
+    val message = failure.message.orEmpty()
+    val detail =
+        message.takeIf {
+          it.matches(
+              Regex(
+                  "^(?:SGB-border|CGB0|Mealybug DMG-blob) profile flag is invalid for " +
+                      "(?:DMG|CGB|SGB)$"))
+        } ?: "Local portable-state metadata failed validation"
+    return "Outgoing portable checkpoint was rejected: $detail"
   }
 
   private fun sendButtons(event: LinkedController.LocalButtonStateEvent) {
@@ -1284,6 +1331,11 @@ class Connection(
     RUNTIME,
   }
 
+  private data class PreparedRomMessage(
+      val buffer: ByteBuffer,
+      val encodedRomBytes: Int,
+  )
+
   private data class Handshake(val mode: LinkMode, val player: Int)
 
   internal enum class RejectionReason(
@@ -1298,6 +1350,9 @@ class Connection(
       IOException(reason.userMessage)
 
   internal class CompatibilityException(message: String) : IOException(message)
+
+  internal class OutboundCheckpointException(message: String, cause: IOException) :
+      IOException(message, cause)
 
   internal enum class ProtocolErrorReason(
       val wireCode: Int,

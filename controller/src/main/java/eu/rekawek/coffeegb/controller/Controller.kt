@@ -121,7 +121,8 @@ interface Controller : AutoCloseable {
       config.setHardwareProfile(hardwareProfile)
       config.setBootstrapMode(properties.system.bootstrapMode)
       config.setPlayerInputSource(properties.playerInputSource)
-      if (config.hardwareProfile.capabilities().superGameboyCommands() && !rom.isSuperGameboyFlag) {
+      if (!config.hardwareProfile.capabilities().superGameboyBorder() ||
+          !rom.isSuperGameboyFlag) {
         config.setDisplaySgbBorder(false)
       } else {
         config.setDisplaySgbBorder(properties.display.showSgbBorder)

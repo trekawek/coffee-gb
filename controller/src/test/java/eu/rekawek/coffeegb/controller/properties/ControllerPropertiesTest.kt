@@ -1,12 +1,19 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
+import eu.rekawek.coffeegb.controller.state.StateIdentity
+import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.awt.event.KeyEvent
 import java.util.Properties
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class ControllerPropertiesTest {
@@ -93,10 +100,51 @@ class ControllerPropertiesTest {
   @Test
   fun controllerConfigurationsShareTheExactLiveInputService() {
     val properties = EmulatorProperties()
-    val rom = eu.rekawek.coffeegb.core.memory.cart.Rom(ByteArray(0x8000))
+    val rom = Rom(ByteArray(0x8000))
     val config = Controller.createGameboyConfig(properties, rom)
 
     assertSame(properties.playerInputSource, config.playerInputSource)
     assertSame(config.playerInputSource, config.forRestore().playerInputSource)
+  }
+
+  @Test
+  fun sgbBorderPreferenceCannotEnterIncompatibleProfileMetadata() {
+    val cgbRom = Rom(StateCodecTestSupport.rom(cgb = true))
+    val sgbRom = Rom(StateCodecTestSupport.rom(sgb = true))
+
+    listOf(HardwareProfileRegistry.CGB, HardwareProfileRegistry.CGB0).forEach { profile ->
+      val properties = EmulatorProperties(profile)
+      properties.properties[EmulatorProperties.Key.ShowSgbBorder.propertyName] = "true"
+      val config = Controller.createGameboyConfig(properties, cgbRom)
+
+      assertFalse(config.isDisplaySgbBorder, profile.id())
+      assertFalse(StateIdentity.from(config).profile.displaySgbBorder, profile.id())
+    }
+
+    listOf(
+            HardwareProfileRegistry.DMG,
+            HardwareProfileRegistry.MGB,
+        )
+        .forEach { profile ->
+          val config =
+              Gameboy.GameboyConfiguration(Rom(StateCodecTestSupport.rom()))
+                  .setHardwareProfile(profile)
+                  .setDisplaySgbBorder(true)
+          assertFalse(config.isDisplaySgbBorder, profile.id())
+          assertFalse(StateIdentity.from(config).profile.displaySgbBorder, profile.id())
+        }
+
+    listOf(HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2).forEach { profile ->
+      val config =
+          Gameboy.GameboyConfiguration(sgbRom)
+              .setHardwareProfile(profile)
+              .setDisplaySgbBorder(true)
+      assertTrue(config.isDisplaySgbBorder, profile.id())
+      assertTrue(StateIdentity.from(config).profile.displaySgbBorder, profile.id())
+
+      config.setHardwareProfile(HardwareProfileRegistry.CGB)
+      assertFalse(config.isDisplaySgbBorder, "transition from ${profile.id()} to cgb")
+      assertFalse(StateIdentity.from(config).profile.displaySgbBorder)
+    }
   }
 }

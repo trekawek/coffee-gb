@@ -70,6 +70,16 @@ and bit 3 SGB-border behavior. Other bits and hardware-inapplicable combinations
 StateFile identity section must agree with the received primary ROM, optional Datel slot ROM,
 hardware, bootstrap mode, and every profile bit.
 
+The desktop SGB-border preference is converted to an effective configuration value before capture:
+it is always false for DMG, MGB, CGB, and CGB0, and can be true only for an SGB-family profile with
+an SGB-capable cartridge. A live SGB-border option event updates that configuration at the
+controller frame boundary before snapshot capture. `LinkedController` therefore exports the same
+capability-gated value used by `Gameboy` and StateFile identity construction; it never copies the
+raw desktop preference into a CGB/CGB0 header. Local outgoing-record validation remains strict. A
+rejection is delivered immediately as a sanitized connection error before transport shutdown,
+rather than being observable only as a later synchronization timeout. Receiver validation is
+unchanged and continues to reject every impossible hardware/profile combination before mutation.
+
 The pinned `GameboyType` plus CGB0 flag canonicalizes to permanent profile ID `dmg`, `cgb`,
 `cgb0`, or historical-v1 `sgb` before candidate construction; coarse DMG never means MGB;
 the remaining flags stay accessory/boot compatibility policy. Protocol v8 has no free-form profile

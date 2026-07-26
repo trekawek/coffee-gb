@@ -1,21 +1,25 @@
 package eu.rekawek.coffeegb.controller.network
 
+import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
-import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.link.LinkMode
+import eu.rekawek.coffeegb.controller.link.LinkedController
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateRootKind
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -57,6 +61,19 @@ class TcpConnectionTest {
 
   private val controllers = mutableListOf<LinkedController>()
 
+  private val temporaryRoms = mutableListOf<java.io.File>()
+
+  private val synchronizationFailures = LinkedBlockingQueue<String>()
+
+  init {
+    serverBus.register<ConnectionController.ServerProtocolErrorEvent> {
+      synchronizationFailures.add("host player ${it.player + 1}: ${it.message}")
+    }
+    clientBus.register<ConnectionController.ClientProtocolErrorEvent> {
+      synchronizationFailures.add("client: ${it.message}")
+    }
+  }
+
   @After
   fun tearDown() {
     client?.stop()
@@ -67,6 +84,7 @@ class TcpConnectionTest {
     serverBus.close()
     clientBus.close()
     extraBuses.forEach { it.close() }
+    temporaryRoms.forEach(java.io.File::delete)
   }
 
   @Test
@@ -763,8 +781,11 @@ class TcpConnectionTest {
     serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
     serverBus.register<ConnectionController.ServerGotConnectionEvent> { serverReady.add(it) }
     clientBus.register<ConnectionController.ClientConnectedToServerEvent> { clientReady.add(it) }
-    val hostController = linkedController(serverBus, LinkMode.NORMAL, 0)
-    val clientController = linkedController(clientBus, LinkMode.NORMAL, 1)
+    val rom = syntheticCgbRom(41)
+    val hostProperties = borderEnabledProperties(HardwareProfileRegistry.CGB)
+    val clientProperties = borderEnabledProperties(HardwareProfileRegistry.CGB)
+    val hostController = linkedController(serverBus, LinkMode.NORMAL, 0, hostProperties)
+    val clientController = linkedController(clientBus, LinkMode.NORMAL, 1, clientProperties)
 
     val server = TcpServer(serverBus, port)
     this.server = server
@@ -778,8 +799,8 @@ class TcpConnectionTest {
 
     // Both sides are already running when the controller transition supplies their detached
     // mementos. LinkedController must encode those states portably before Connection sees them.
-    serverBus.post(LoadRomEvent(ROM, runningMemento(1_000)))
-    clientBus.post(LoadRomEvent(ROM, runningMemento(2_000)))
+    serverBus.post(LoadRomEvent(rom, runningMemento(1_000, hostProperties, rom)))
+    clientBus.post(LoadRomEvent(rom, runningMemento(2_000, clientProperties, rom)))
     driveControllers(hostController, clientController) {
       hostController.activeSessionCount() == 2 && clientController.activeSessionCount() == 2
     }
@@ -797,14 +818,19 @@ class TcpConnectionTest {
     serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
     clientBus.register<ConnectionController.ClientConnectedToServerEvent> { clientReady.add(it) }
     clientBus.register<Connection.SessionCheckpointEvent> { checkpoints.add(it) }
-    val hostController = linkedController(serverBus, LinkMode.FOUR_PLAYER_ADAPTER, 0)
-    val clientController = linkedController(clientBus, LinkMode.FOUR_PLAYER_ADAPTER, 1)
+    val rom = syntheticCgbRom(53)
+    val hostProperties = borderEnabledProperties(HardwareProfileRegistry.CGB0)
+    val clientProperties = borderEnabledProperties(HardwareProfileRegistry.CGB0)
+    val hostController =
+        linkedController(serverBus, LinkMode.FOUR_PLAYER_ADAPTER, 0, hostProperties)
+    val clientController =
+        linkedController(clientBus, LinkMode.FOUR_PLAYER_ADAPTER, 1, clientProperties)
 
     val server = TcpServer(serverBus, port, LinkMode.FOUR_PLAYER_ADAPTER)
     this.server = server
     threads += Thread(server).also { it.start() }
     assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
-    serverBus.post(LoadRomEvent(ROM))
+    serverBus.post(LoadRomEvent(rom))
     repeat(3) { hostController.runFrame() }
     assertEquals(1, hostController.activeSessionCount())
 
@@ -812,7 +838,7 @@ class TcpConnectionTest {
     this.client = client
     threads += Thread(client).also { it.start() }
     assertNotNull(clientReady.poll(5, TimeUnit.SECONDS))
-    clientBus.post(LoadRomEvent(ROM))
+    clientBus.post(LoadRomEvent(rom))
     driveControllers(hostController, clientController) {
       hostController.activeSessionCount() == 2 && clientController.activeSessionCount() == 2
     }
@@ -825,6 +851,53 @@ class TcpConnectionTest {
         })
     assertEquals(2, hostController.activeSessionCount())
     assertEquals(2, clientController.activeSessionCount())
+  }
+
+  @Test
+  fun invalidOutgoingProfileIsReportedBeforeSynchronizationTimeout() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val serverReady = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
+    val failures = LinkedBlockingQueue<ConnectionController.ServerProtocolErrorEvent>()
+    val disconnected =
+        LinkedBlockingQueue<ConnectionController.ClientDisconnectedFromServerEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent> { serverStarted.add(it) }
+    serverBus.register<ConnectionController.ServerGotConnectionEvent> { serverReady.add(it) }
+    serverBus.register<ConnectionController.ServerProtocolErrorEvent> { failures.add(it) }
+    clientBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
+      disconnected.add(it)
+    }
+
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS))
+    val client = TcpClient("localhost:$port", clientBus)
+    this.client = client
+    threads += Thread(client).also { it.start() }
+    assertNotNull(serverReady.poll(5, TimeUnit.SECONDS))
+
+    val rom = StateCodecTestSupport.rom(seed = 67, cgb = true)
+    serverBus.post(
+        LinkedController.LocalRomLoadedEvent(
+            romFile = rom,
+            batteryFile = null,
+            portableState = null,
+            gameboyType = GameboyType.CGB,
+            bootstrapMode = Gameboy.BootstrapMode.SKIP,
+            frame = 0,
+            hardwareProfileId = HardwareProfileRegistry.CGB.id(),
+            displaySgbBorder = true,
+        ))
+
+    val failure = assertNotNull(failures.poll(2, TimeUnit.SECONDS))
+    assertEquals(1, failure.player)
+    assertEquals(
+        "Outgoing portable checkpoint was rejected: " +
+            "SGB-border profile flag is invalid for CGB",
+        failure.message,
+    )
+    assertNotNull(disconnected.poll(2, TimeUnit.SECONDS))
   }
 
   @Test
@@ -886,8 +959,9 @@ class TcpConnectionTest {
       bus: EventBusImpl,
       mode: LinkMode,
       player: Int,
+      properties: EmulatorProperties = EmulatorProperties(),
   ): LinkedController =
-      LinkedController(bus, EmulatorProperties(), null, mode, player).also {
+      LinkedController(bus, properties, null, mode, player).also {
         it.timingTicker.disabled = true
         controllers += it
       }
@@ -904,6 +978,9 @@ class TcpConnectionTest {
       host.runFrame()
       client.runFrame()
       pumps++
+      synchronizationFailures.poll()?.let { failure ->
+        throw AssertionError("linked synchronization rejected immediately: $failure")
+      }
       if (complete()) return
       Thread.sleep(10)
     }
@@ -972,12 +1049,13 @@ class TcpConnectionTest {
     return command
   }
 
-  private fun runningMemento(ticks: Int): MachineState {
+  private fun runningMemento(
+      ticks: Int,
+      properties: EmulatorProperties = EmulatorProperties(),
+      romFile: java.io.File = ROM,
+  ): MachineState {
     val bus = EventBusImpl()
-    val gameboy =
-        Gameboy.GameboyConfiguration(Rom(ROM))
-            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-            .build()
+    val gameboy = Controller.createGameboyConfig(properties, Rom(romFile)).build()
     gameboy.init(bus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
     return try {
       repeat(ticks) { gameboy.tick() }
@@ -988,6 +1066,18 @@ class TcpConnectionTest {
       bus.close()
     }
   }
+
+  private fun borderEnabledProperties(profile: HardwareProfile): EmulatorProperties =
+      EmulatorProperties(profile).also {
+        it.properties[EmulatorProperties.Key.ShowSgbBorder.propertyName] = "true"
+      }
+
+  private fun syntheticCgbRom(seed: Int): java.io.File =
+      java.io.File.createTempFile("coffee-gb-netplay-cgb-$seed-", ".gbc")
+          .also {
+            it.writeBytes(StateCodecTestSupport.rom(seed = seed, cgb = true))
+            temporaryRoms += it
+          }
 
   private fun portableSession(rom: ByteArray, player: Int): ByteArray {
     val bus = EventBusImpl()

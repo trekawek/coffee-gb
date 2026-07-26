@@ -9,12 +9,14 @@ import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
 import eu.rekawek.coffeegb.controller.Controller.HardwareProfileEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -25,6 +27,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -77,6 +80,98 @@ class BasicControllerTest {
       controller.close()
       eventBus.close()
       sgbRom.delete()
+    }
+  }
+
+  @Test
+  fun sgbBorderOptionUpdatesPortableCaptureIdentityAtFrameBoundary() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val saved = LinkedBlockingQueue<Controller.SnapshotSavedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<Controller.SnapshotSavedEvent> { saved.add(it) }
+    val directory = Files.createTempDirectory("coffee-gb-sgb-border-option")
+    val rom =
+        directory.resolve("border.gb").toFile().also { file ->
+          file.writeBytes(
+              ROM.readBytes().also { bytes ->
+                bytes[0x143] = 0
+                bytes[0x146] = 0x03
+              })
+        }
+    val properties = EmulatorProperties(HardwareProfileRegistry.SGB)
+    properties.properties[EmulatorProperties.Key.BootstrapMode.propertyName] = "SKIP"
+    properties.properties[EmulatorProperties.Key.ShowSgbBorder.propertyName] = "false"
+    val controller = BasicController(eventBus, properties, null)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      eventBus.post(SgbDisplay.SetSgbBorder(true))
+      eventBus.post(Controller.SaveSnapshotEvent(0))
+      assertNotNull(saved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      val identity =
+          StateCodec.inspect(Files.readAllBytes(directory.resolve("border.sn0")))
+              .identities
+              .single()
+              .identity
+      assertNotNull(identity)
+      assertEquals(HardwareProfileRegistry.SGB.id(), identity.profile.canonicalProfileId)
+      assertTrue(identity.profile.displaySgbBorder)
+    } finally {
+      controller.close()
+      eventBus.close()
+      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun sgbBorderOptionCannotEnterCgbPortableCaptureIdentityAtFrameBoundary() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val saved = LinkedBlockingQueue<Controller.SnapshotSavedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<Controller.SnapshotSavedEvent> { saved.add(it) }
+    val directory = Files.createTempDirectory("coffee-gb-cgb-border-option")
+    val rom =
+        directory.resolve("color.gbc").toFile().also { file ->
+          file.writeBytes(
+              ROM.readBytes().also { bytes ->
+                bytes[0x143] = 0x80.toByte()
+                bytes[0x146] = 0
+              })
+        }
+    val properties = EmulatorProperties(HardwareProfileRegistry.CGB)
+    properties.properties[EmulatorProperties.Key.BootstrapMode.propertyName] = "SKIP"
+    properties.properties[EmulatorProperties.Key.ShowSgbBorder.propertyName] = "true"
+    val controller = BasicController(eventBus, properties, null)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      eventBus.post(SgbDisplay.SetSgbBorder(true))
+      eventBus.post(Controller.SaveSnapshotEvent(0))
+      assertNotNull(saved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      val identity =
+          StateCodec.inspect(Files.readAllBytes(directory.resolve("color.sn0")))
+              .identities
+              .single()
+              .identity
+      assertNotNull(identity)
+      assertEquals(HardwareProfileRegistry.CGB.id(), identity.profile.canonicalProfileId)
+      assertFalse(identity.profile.displaySgbBorder)
+    } finally {
+      controller.close()
+      eventBus.close()
+      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
+      Files.deleteIfExists(directory)
     }
   }
 
