@@ -23,6 +23,177 @@ import org.junit.Test
 class ProtocolV9ConsentTransferTest {
 
   @Test
+  fun immediateConsentWaitsForTheFinalManifestWriteTransition() {
+    val bytes = privateBytes(2_113)
+    val manifestGate = FrameWriteGate(V9MessageType.MANIFEST)
+    val fixture =
+        connections(
+            proposalPair(bytes),
+            sourcePlan(bytes),
+            targetPlan(),
+            maximumWrite = Int.MAX_VALUE,
+            capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+            clientWriteGate = manifestGate,
+        )
+    try {
+      fixture.start()
+      assertTrue(manifestGate.entered.await(5, TimeUnit.SECONDS))
+      assertNull(fixture.client.manifestBoundary())
+      assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+
+      fixture.server.submitConsent(41, V9ConsentDecision.APPROVE)
+      waitUntil { fixture.clientChannel.hasReadType(V9MessageType.CONSENT) }
+      assertFalse(fixture.client.isClosed(), fixture.client.snapshot().toString())
+      assertNull(fixture.client.part3Progress(), "CONSENT must wait behind MANIFEST completion")
+
+      manifestGate.release.countDown()
+      assertNotNull(fixture.client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      waitUntil {
+        fixture.client.part3Progress()?.items?.single()?.state ==
+            V9ConsentItemState.WAITING_FOR_LOCAL_DECISION
+      }
+      fixture.client.submitConsent(41, V9ConsentDecision.APPROVE)
+      assertNotNull(fixture.server.awaitPreparationBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(fixture.client.awaitPreparationBoundary(5, TimeUnit.SECONDS))
+    } finally {
+      manifestGate.release.countDown()
+      fixture.close()
+      bytes.fill(0)
+    }
+  }
+
+  @Test
+  fun immediateBeginWaitsForTheFinalConsentWriteTransition() {
+    val bytes = privateBytes(2_117)
+    val consentGate = FrameWriteGate(V9MessageType.CONSENT)
+    val fixture =
+        connections(
+            proposalPair(bytes),
+            sourcePlan(bytes),
+            targetPlan(),
+            maximumWrite = Int.MAX_VALUE,
+            capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+            clientWriteGate = consentGate,
+        )
+    try {
+      fixture.start()
+      assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(fixture.client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      fixture.server.submitConsent(41, V9ConsentDecision.APPROVE)
+      waitUntil {
+        fixture.client.part3Progress()?.items?.single()?.state ==
+            V9ConsentItemState.WAITING_FOR_LOCAL_DECISION
+      }
+
+      fixture.client.submitConsent(41, V9ConsentDecision.APPROVE)
+      assertTrue(consentGate.entered.await(5, TimeUnit.SECONDS))
+      waitUntil { fixture.clientChannel.hasReadType(V9MessageType.ROM_BEGIN) }
+      assertFalse(fixture.client.isClosed(), fixture.client.snapshot().toString())
+      assertEquals(V9LifecycleState.EXCHANGE_CONSENT, fixture.client.snapshot().state)
+      assertNull(fixture.client.preparationBoundary())
+
+      consentGate.release.countDown()
+      assertNotNull(fixture.server.awaitPreparationBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(fixture.client.awaitPreparationBoundary(5, TimeUnit.SECONDS))
+    } finally {
+      consentGate.release.countDown()
+      fixture.close()
+      bytes.fill(0)
+    }
+  }
+
+  @Test
+  fun preSessionProgressHandleRemainsAuthoritativeAfterPromotion() {
+    val bytes = privateBytes(2_123)
+    val fixture =
+        connections(
+            proposalPair(bytes),
+            sourcePlan(bytes),
+            targetPlan(),
+            maximumWrite = 17,
+            capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+        )
+    val delivered = AtomicInteger()
+    val observerFailures = AtomicInteger()
+    val handle =
+        fixture.client.addPart3ProgressListener {
+          delivered.incrementAndGet()
+        }
+    val faulty =
+        fixture.client.addPart3ProgressListener {
+          observerFailures.incrementAndGet()
+          throw IllegalStateException("synthetic observer failure")
+        }
+    try {
+      fixture.start()
+      assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(fixture.client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      waitUntil { delivered.get() > 0 && observerFailures.get() > 0 }
+      handle.close()
+      val afterUnsubscribe = delivered.get()
+
+      fixture.server.submitConsent(41, V9ConsentDecision.APPROVE)
+      fixture.client.submitConsent(41, V9ConsentDecision.APPROVE)
+      assertNotNull(fixture.server.awaitPreparationBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(fixture.client.awaitPreparationBoundary(5, TimeUnit.SECONDS))
+      assertEquals(afterUnsubscribe, delivered.get())
+      assertTrue(observerFailures.get() > 1)
+      assertFalse(fixture.client.isClosed(), fixture.client.snapshot().toString())
+    } finally {
+      handle.close()
+      faulty.close()
+      fixture.close()
+      bytes.fill(0)
+    }
+  }
+
+  @Test
+  fun closeRacingListenerPromotionInstallsNoPostCloseSubscription() {
+    val bytes = privateBytes(2_129)
+    val fixture =
+        connections(
+            proposalPair(bytes),
+            sourcePlan(bytes),
+            targetPlan(),
+            maximumWrite = 19,
+            capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+        )
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val callbacks = AtomicInteger()
+    val handle =
+        fixture.client.addPart3ProgressListener {
+          callbacks.incrementAndGet()
+          entered.countDown()
+          var waiting = true
+          while (waiting) {
+            try {
+              release.await()
+              waiting = false
+            } catch (_: InterruptedException) {
+              // Keep the promotion suspended until the test releases the exact boundary.
+            }
+          }
+        }
+    try {
+      fixture.start()
+      assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertTrue(entered.await(5, TimeUnit.SECONDS))
+      fixture.client.close()
+      assertTrue(fixture.client.isClosed())
+      release.countDown()
+      waitUntil { fixture.client.activeTaskCount() == 0 }
+      handle.close()
+      assertEquals(1, callbacks.get())
+    } finally {
+      release.countDown()
+      handle.close()
+      fixture.close()
+      bytes.fill(0)
+    }
+  }
+
+  @Test
   fun consentCodecIsExactDetachedAndRejectsEveryTruncationAndFieldMismatch() {
     val data = privateBytes(257)
     val pair = proposalPair(data)
@@ -777,7 +948,145 @@ class ProtocolV9ConsentTransferTest {
       assertEquals(V9Diagnostic.TRANSFER_REJECTED, sinkFailure.client.snapshot().failure?.diagnostic)
     } finally {
       sinkFailure.close()
+    }
+
+    var interruptedCandidate: V9CompletedBulkCandidate? = null
+    val checkedFailure =
+        connections(
+            proposalPair(bytes),
+            sourcePlan(bytes),
+            V9GuestPart3Plan(
+                emptyMap(),
+                V9BulkCandidateSink {
+                  interruptedCandidate = it
+                  throw InterruptedException("synthetic checked sink failure")
+                },
+            ),
+            maximumWrite = 29,
+            capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+        )
+    try {
+      checkedFailure.start()
+      assertNotNull(checkedFailure.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(checkedFailure.client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      checkedFailure.server.submitConsent(41, V9ConsentDecision.APPROVE)
+      checkedFailure.client.submitConsent(41, V9ConsentDecision.APPROVE)
+      waitUntil { checkedFailure.client.snapshot().state == V9LifecycleState.CLOSED }
+      assertEquals(V9ErrorCode.CANCELLED, checkedFailure.client.snapshot().failure?.reason)
+      assertNull(checkedFailure.client.preparationBoundary())
+      assertFailsWith<IllegalStateException> { assertNotNull(interruptedCandidate).bytes() }
+    } finally {
+      checkedFailure.close()
       bytes.fill(0)
+    }
+  }
+
+  @Test
+  fun cancellingWhileCandidateSinkIsBlockedRevokesFoundationOwnership() {
+    val bytes = privateBytes(4_111)
+    val sinkEntered = CountDownLatch(1)
+    val sinkRelease = CountDownLatch(1)
+    val candidate = AtomicReference<V9CompletedBulkCandidate?>()
+    val fixture =
+        connections(
+            proposalPair(bytes),
+            sourcePlan(bytes),
+            V9GuestPart3Plan(
+                emptyMap(),
+                V9BulkCandidateSink {
+                  candidate.set(it)
+                  sinkEntered.countDown()
+                  sinkRelease.await()
+                },
+            ),
+            maximumWrite = 31,
+            capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+        )
+    try {
+      fixture.start()
+      assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(fixture.client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      fixture.server.submitConsent(41, V9ConsentDecision.APPROVE)
+      fixture.client.submitConsent(41, V9ConsentDecision.APPROVE)
+      assertTrue(sinkEntered.await(5, TimeUnit.SECONDS))
+      fixture.client.cancel()
+      waitUntil { fixture.client.activeTaskCount() == 0 }
+      assertNull(fixture.client.preparationBoundary())
+      assertEquals(V9ErrorCode.CANCELLED, fixture.client.snapshot().failure?.reason)
+      assertFailsWith<IllegalStateException> { assertNotNull(candidate.get()).bytes() }
+    } finally {
+      sinkRelease.countDown()
+      fixture.close()
+      bytes.fill(0)
+    }
+  }
+
+  @Test
+  fun aBlockedCandidateDeliveryBackpressuresTheNextApprovedProposal() {
+    val primary = privateBytes(3_071)
+    val slot = privateBytes(3_073)
+    val pair = twoRomProposalPair(primary, slot)
+    val sinkCalls = AtomicInteger()
+    val firstEntered = CountDownLatch(1)
+    val firstRelease = CountDownLatch(1)
+    val candidates = LinkedBlockingQueue<V9CompletedBulkCandidate>()
+    val transaction = AtomicInteger(70)
+    val fixture =
+        connections(
+            pair,
+            V9GuestPart3Plan(
+                mapOf(
+                    41L to V9BulkSourceProvider { ByteArrayBulkSource(primary) },
+                    42L to V9BulkSourceProvider { ByteArrayBulkSource(slot) },
+                ),
+                V9BulkCandidateSink { it.close() },
+                transactionIds = V9TransactionIdSource { transaction.incrementAndGet().toLong() },
+            ),
+            V9GuestPart3Plan(
+                emptyMap(),
+                V9BulkCandidateSink {
+                  if (sinkCalls.incrementAndGet() == 1) {
+                    firstEntered.countDown()
+                    firstRelease.await()
+                  }
+                  candidates.put(it)
+                },
+            ),
+            maximumWrite = 37,
+            capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+        )
+    try {
+      fixture.start()
+      assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(fixture.client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      listOf(41L, 42L).forEach { proposalId ->
+        fixture.server.submitConsent(proposalId, V9ConsentDecision.APPROVE)
+        fixture.client.submitConsent(proposalId, V9ConsentDecision.APPROVE)
+      }
+      assertTrue(firstEntered.await(5, TimeUnit.SECONDS))
+      assertNotNull(
+          fixture.server.awaitPreparationBoundary(5, TimeUnit.SECONDS),
+          "server=${fixture.server.snapshot()} progress=${fixture.server.part3Progress()} " +
+              "wire=${wireTypes(fixture.serverChannel.recordedBytes())}",
+      )
+      assertEquals(1, sinkCalls.get(), "a second candidate must not be retained concurrently")
+      assertNull(fixture.client.preparationBoundary())
+
+      firstRelease.countDown()
+      assertNotNull(fixture.client.awaitPreparationBoundary(5, TimeUnit.SECONDS))
+      assertEquals(2, sinkCalls.get())
+      val delivered = listOf(
+          assertNotNull(candidates.poll(2, TimeUnit.SECONDS)),
+          assertNotNull(candidates.poll(2, TimeUnit.SECONDS)),
+      )
+      assertContentEquals(primary, delivered[0].bytes())
+      assertContentEquals(slot, delivered[1].bytes())
+      delivered.forEach(V9CompletedBulkCandidate::close)
+    } finally {
+      firstRelease.countDown()
+      fixture.close()
+      primary.fill(0)
+      slot.fill(0)
     }
   }
 
@@ -975,11 +1284,14 @@ class ProtocolV9ConsentTransferTest {
       clientPart3: V9GuestPart3Plan,
       maximumWrite: Int,
       capabilities: Set<V9Capability>,
+      serverWriteGate: FrameWriteGate? = null,
+      clientWriteGate: FrameWriteGate? = null,
   ): ConnectionFixture {
     val host = V9InvitationHost(V9LinkMode.NORMAL)
     val invitation = host.createInvitation("example.com", 6688, 1)
     val clientInvitation = invitation.forClientAuthentication()
-    val (serverChannel, clientChannel) = RecordingMemoryChannel.pair(maximumWrite)
+    val (serverChannel, clientChannel) =
+        RecordingMemoryChannel.pair(maximumWrite, serverWriteGate, clientWriteGate)
     val server =
         V9FoundationConnection(
             serverChannel,
@@ -1017,6 +1329,63 @@ class ProtocolV9ConsentTransferTest {
 
   private fun proposalPair(bytes: ByteArray): ManifestPair =
       proposalPair(V9LinkMode.NORMAL, 1, bytes)
+
+  private fun twoRomProposalPair(primary: ByteArray, slot: ByteArray): ManifestPair {
+    val primaryProposal = proposal(41, V9TransferAsset.PRIMARY_ROM, 1, 0, 1, primary)
+    val slotProposal = proposal(42, V9TransferAsset.SLOT_ROM, 1, 0, 1, slot)
+    val host = entry(0, digest(privateBytes(9)))
+    val serverGuest =
+        V9ManifestEntry(
+            1,
+            true,
+            true,
+            false,
+            V9ManifestBootstrap.SKIP,
+            0,
+            "dmg",
+            "PLAYER1",
+            0,
+            V9MapperFamily.ROM_ONLY,
+            primary.size.toLong(),
+            slot.size.toLong(),
+            digest(primary),
+            digest(slot),
+            V9ManifestDigest.zero(),
+            V9ManifestDigest.zero(),
+        )
+    val clientGuest =
+        V9ManifestEntry(
+            1,
+            true,
+            true,
+            false,
+            V9ManifestBootstrap.SKIP,
+            0,
+            "dmg",
+            "PLAYER1",
+            0,
+            V9MapperFamily.ROM_ONLY,
+            primary.size.toLong(),
+            slot.size.toLong(),
+            digest(privateBytes(17)),
+            digest(privateBytes(19)),
+            V9ManifestDigest.zero(),
+            V9ManifestDigest.zero(),
+        )
+    return ManifestPair(
+        manifest(
+            0,
+            listOf(
+                V9ManifestDifference(V9ManifestDifferenceCode.PRIMARY_ROM_DIFFERENT, 1, 41),
+                V9ManifestDifference(V9ManifestDifferenceCode.SLOT_ROM_DIFFERENT, 1, 42),
+            ),
+            listOf(primaryProposal, slotProposal),
+            listOf(host, serverGuest),
+        ),
+        manifest(1, emptyList(), emptyList(), listOf(host, clientGuest)),
+        primaryProposal,
+    )
+  }
 
   private fun proposalPair(
       mode: V9LinkMode,
@@ -1357,9 +1726,28 @@ class ProtocolV9ConsentTransferTest {
     }
   }
 
-  private class RecordingMemoryChannel(private val maximumWrite: Int) : V9TransportChannel {
+  private class FrameWriteGate(private val target: V9MessageType) {
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    private val fired = AtomicBoolean()
+
+    fun afterPeerReceived(bytes: ByteArray, offset: Int, count: Int) {
+      if (offset != 0 || count != bytes.size || bytes.size < ProtocolV9.HEADER_BYTES) return
+      val typeId = ByteBuffer.wrap(bytes, 8, 2).order(ByteOrder.BIG_ENDIAN).short.toInt() and 0xffff
+      if (V9MessageType.fromWireId(typeId) != target || !fired.compareAndSet(false, true)) return
+      entered.countDown()
+      release.await()
+    }
+  }
+
+  private class RecordingMemoryChannel(
+      private val maximumWrite: Int,
+      private val writeGate: FrameWriteGate? = null,
+  ) : V9TransportChannel {
     private val incoming = LinkedBlockingQueue<Int>()
     private val recorded = mutableListOf<Byte>()
+    private val observed = mutableListOf<Byte>()
+    private val observedTypes = mutableSetOf<V9MessageType>()
     private val closed = AtomicBoolean(false)
     private lateinit var peer: RecordingMemoryChannel
 
@@ -1376,6 +1764,7 @@ class ProtocolV9ConsentTransferTest {
         }
         bytes[offset + count++] = next.toByte()
       }
+      observeRead(bytes, offset, count)
       return count
     }
 
@@ -1388,6 +1777,7 @@ class ProtocolV9ConsentTransferTest {
           peer.incoming.put(bytes[offset + it].toInt() and 0xff)
         }
       }
+      writeGate?.afterPeerReceived(bytes, offset, count)
       return count
     }
 
@@ -1405,10 +1795,36 @@ class ProtocolV9ConsentTransferTest {
     fun recordedBytes(): ByteArray =
         synchronized(recorded) { recorded.toByteArray() }
 
+    fun hasReadType(type: V9MessageType): Boolean =
+        synchronized(observed) { type in observedTypes }
+
+    private fun observeRead(bytes: ByteArray, offset: Int, count: Int) {
+      synchronized(observed) {
+        repeat(count) { observed += bytes[offset + it] }
+        while (observed.size >= 32) {
+          val decisive = observed.take(32).toByteArray()
+          val typeId = ByteBuffer.wrap(decisive).order(ByteOrder.BIG_ENDIAN)
+              .getShort(8).toInt() and 0xffff
+          V9MessageType.fromWireId(typeId)?.let(observedTypes::add)
+          if (observed.size < ProtocolV9.HEADER_BYTES) return
+          val header = observed.take(ProtocolV9.HEADER_BYTES).toByteArray()
+          val buffer = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN)
+          val payloadLength = buffer.getInt(20)
+          val total = Math.addExact(ProtocolV9.HEADER_BYTES, payloadLength)
+          if (payloadLength < 0 || observed.size < total) return
+          observed.subList(0, total).clear()
+        }
+      }
+    }
+
     companion object {
-      fun pair(maximumWrite: Int): Pair<RecordingMemoryChannel, RecordingMemoryChannel> {
-        val first = RecordingMemoryChannel(maximumWrite)
-        val second = RecordingMemoryChannel(maximumWrite)
+      fun pair(
+          maximumWrite: Int,
+          firstWriteGate: FrameWriteGate? = null,
+          secondWriteGate: FrameWriteGate? = null,
+      ): Pair<RecordingMemoryChannel, RecordingMemoryChannel> {
+        val first = RecordingMemoryChannel(maximumWrite, firstWriteGate)
+        val second = RecordingMemoryChannel(maximumWrite, secondWriteGate)
         first.peer = second
         second.peer = first
         return first to second
