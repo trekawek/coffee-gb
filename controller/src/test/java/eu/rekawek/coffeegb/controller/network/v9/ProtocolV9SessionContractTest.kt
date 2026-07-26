@@ -538,7 +538,7 @@ class ProtocolV9SessionContractTest {
           consentFor(checkpointProposal, 1, serverManifest, clientManifest)))
     }
     val unsignedGrant = CheckpointGrant(
-        unsignedLedger, 0x03, 7, rosterCommitment, maximumTransactions = 3)
+        unsignedLedger, 0x03, 7, rosterCommitment, maximumTransactions = 4)
     assertEquals("SUCCESS", unsignedGrant.admit(
         checkpointDeclaration.copy(frame = Long.MAX_VALUE), checkpointContext))
     assertEquals("SUCCESS", unsignedGrant.admit(
@@ -549,6 +549,8 @@ class ProtocolV9SessionContractTest {
         checkpointDeclaration.copy(frame = -1L), checkpointContext))
     assertEquals("CONSENT_REJECTED", unsignedGrant.admit(
         checkpointDeclaration.copy(frame = -1L), checkpointContext))
+    assertEquals("CONSENT_REJECTED", unsignedGrant.admit(
+        checkpointDeclaration.copy(frame = 0L), checkpointContext))
     assertEquals(3, unsignedGrant.used)
   }
 
@@ -776,6 +778,8 @@ class ProtocolV9SessionContractTest {
     assertEquals(0x01, normal.liveMask)
     assertEquals("SUCCESS", normal.commitBarrier())
     assertEquals(0x03, normal.liveMask)
+    assertEquals("SUCCESS", normal.prepareReplacement(
+        1, 1, normalCommitment, normalCheckpoint))
 
     val roster = validFourRoster()
     val commitment = roster.rosterDigest()
@@ -815,6 +819,14 @@ class ProtocolV9SessionContractTest {
     assertEquals("TOPOLOGY_MISMATCH", coordinator.prepareReplacement(
         1, roster.rosterGeneration + 1, commitment, checkpointDigest))
     assertEquals(0x0f, coordinator.liveMask)
+
+    val partialReplacement = TopologyCoordinator(
+        "four", 0x07, 0x07, roster.rosterGeneration, commitment, checkpointDigest)
+    assertEquals("TOPOLOGY_MISMATCH", partialReplacement.prepareReplacement(
+        1, roster.rosterGeneration, commitment, checkpointDigest))
+    assertEquals(0x07, partialReplacement.liveMask)
+    assertEquals(0x00, partialReplacement.candidateMask)
+    assertFalse(partialReplacement.barrierOpen)
 
     val isolated = TopologyCoordinator(
         "four", 0x01, 0x0f, roster.rosterGeneration, commitment, checkpointDigest)
@@ -1948,7 +1960,8 @@ class ProtocolV9SessionContractTest {
         commitment: ByteArray,
         checkpointDigest: ByteArray,
     ): String {
-      if (liveMask != targetMask || player !in 1..3 ||
+      if (targetMask != exactRosterMask(mode) ||
+          liveMask != targetMask || player !in 1..3 ||
           liveMask and (1 shl player) == 0 ||
           generation != targetGeneration ||
           !MessageDigest.isEqual(commitment, targetCommitment) ||
