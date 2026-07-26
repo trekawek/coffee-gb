@@ -8,11 +8,13 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -443,6 +445,104 @@ class ProtocolV9OwnershipTest {
     assertFailsWith<IllegalStateException> { neverStarted.start() }
     assertEquals(0, neverStarted.activeConnectionCount())
     assertEquals(0, neverStarted.pendingCandidateCount())
+  }
+
+  @Test
+  fun serverShutdownClosesSocketAcceptedBeforeCandidateAdmission() {
+    val accepted = CountDownLatch(1)
+    val releaseAdmission = CountDownLatch(1)
+    val serverSocket = AtomicReference<Socket>()
+    val callbacks = AtomicInteger()
+    val server =
+        V9FoundationServer(onAwaitingPairing = {
+          callbacks.incrementAndGet()
+          it.close()
+        })
+    server.candidateHooks =
+        V9ServerCandidateHooks(
+            afterAcceptBeforeAdmission = {
+              serverSocket.set(it)
+              accepted.countDown()
+              releaseAdmission.await()
+            },
+        )
+    server.start()
+    val client = Socket("127.0.0.1", server.localPort)
+    try {
+      assertTrue(accepted.await(2, TimeUnit.SECONDS))
+      assertEquals(0, server.pendingCandidateCount())
+
+      server.close()
+      releaseAdmission.countDown()
+
+      awaitCondition { assertNotNull(serverSocket.get()).isClosed }
+      awaitServerShutdown(server)
+      assertEquals(0, callbacks.get())
+    } finally {
+      releaseAdmission.countDown()
+      client.close()
+      server.close()
+    }
+  }
+
+  @Test
+  fun serverShutdownClosesCandidateQueuedBeforeAnyWorkerCanRunIt() {
+    val workerCount = V9Limit.HANDSHAKE_WORKERS.value.toInt()
+    val candidateCount = workerCount + 1
+    val accepted = CountDownLatch(candidateCount)
+    val workersEntered = CountDownLatch(workerCount)
+    val workerStarts = AtomicInteger()
+    val releaseWorkers = CountDownLatch(1)
+    val serverSockets = ConcurrentLinkedQueue<Socket>()
+    val callbacks = AtomicInteger()
+    val server =
+        V9FoundationServer(onAwaitingPairing = {
+          callbacks.incrementAndGet()
+          it.close()
+        })
+    server.candidateHooks =
+        V9ServerCandidateHooks(
+            afterAcceptBeforeAdmission = {
+              serverSockets += it
+              accepted.countDown()
+            },
+            beforeWorkerNegotiation = {
+              workerStarts.incrementAndGet()
+              workersEntered.countDown()
+              releaseWorkers.await()
+            },
+        )
+    server.start()
+    val clients = List(candidateCount) { Socket("127.0.0.1", server.localPort) }
+    try {
+      assertTrue(accepted.await(2, TimeUnit.SECONDS))
+      assertTrue(workersEntered.await(2, TimeUnit.SECONDS))
+      awaitCondition { server.pendingCandidateCount() == candidateCount }
+      // All workers are held above; the extra accepted candidate is still queued.
+      assertEquals(workerCount, workerStarts.get())
+
+      server.close()
+      releaseWorkers.countDown()
+
+      awaitCondition {
+        serverSockets.size == candidateCount && serverSockets.all(Socket::isClosed)
+      }
+      awaitServerShutdown(server)
+      assertEquals(0, callbacks.get())
+    } finally {
+      releaseWorkers.countDown()
+      clients.forEach(Socket::close)
+      server.close()
+    }
+  }
+
+  private fun awaitServerShutdown(server: V9FoundationServer) {
+    awaitCondition {
+      server.pendingCandidateCount() == 0 &&
+          server.activeConnectionCount() == 0 &&
+          !server.acceptThreadAlive() &&
+          server.workerPoolTerminated()
+    }
   }
 
   private fun assertStageTimeout(
