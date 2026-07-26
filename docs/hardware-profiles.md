@@ -136,16 +136,21 @@ canonical IDs and are resolved before the first tick. Legacy `SGB` settings cont
 SGB1.
 
 `MachineSnapshot` records the exact profile ID and rejects cross-profile restore before mutation.
-StateFile v1 bytes and meanings are frozen: its coarse SGB identity always means `sgb`. StateFile
-v2 adds a bounded explicit canonical ID to identity section v2 and is required for `sgb2`; see
+StateFile v1 bytes and meanings are frozen: its coarse SGB identity always means `sgb`, and its
+MBC3 phase remains a fraction of the historical 4,194,304-unit second. StateFile v2 adds a bounded
+explicit canonical ID to identity section v2 and is required for new exact-clock `sgb` and `sgb2`
+captures. Applying old v1 SGB state performs a checked detached rational conversion before the
+first mutation; decoding and re-encoding preserves the exact old bytes. See
 [state-file-v2.md](state-file-v2.md). The released v1 golden fixture still re-encodes byte-for-byte.
 
-Protocol v8 negotiates StateFile v1 and remains byte-for-byte frozen. It cannot represent SGB2.
-Coffee GB therefore rejects a local SGB2 linked load before constructing a linked session and also
-rejects any SGB2 state at the transport boundary; it never sends SGB2 as coarse SGB. The reusable
-linked clock policy can compare two exact SGB2 clocks, but enabling network sessions needs a
-separately negotiated protocol version. Future #315 replay metadata must likewise carry the exact
-canonical ID and rational clock identity; no replay format is implemented here.
+Protocol v8 negotiates StateFile v1 and remains byte-for-byte frozen. It cannot distinguish the
+historical v1 SGB RTC scalar from current exact-clock state and cannot represent SGB2. Coffee GB
+therefore rejects either SGB-family linked load before constructing a linked session and rejects
+the coarse SGB transport header before payload read; it never sends an ambiguous exact SGB phase
+or SGB2 as coarse SGB. The reusable linked clock policy can compare exact clocks, but enabling SGB
+network sessions needs a separately negotiated protocol version. Future #315 replay metadata must
+likewise carry the exact canonical ID and rational clock identity; no replay format is implemented
+here.
 
 ## Extension contract
 

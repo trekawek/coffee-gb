@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.nio.file.Files
@@ -123,7 +124,9 @@ class StateCodecLinkedTest {
   ): Fixture {
     val file = Files.createTempFile("coffee-gb-state-codec-", ".gb").toFile()
     file.writeBytes(romBytes)
-    val properties = EmulatorProperties()
+    // Protocol v8 supports only the v1 DMG/CGB/CGB0 identity set. Keep this codec fixture
+    // independent of a developer's persisted desktop SGB/SGB2 selection.
+    val properties = EmulatorProperties(HardwareProfileRegistry.DMG)
     val configuration = Controller.createGameboyConfig(properties, Rom(romBytes))
     val bus = EventBusImpl()
     val controller =

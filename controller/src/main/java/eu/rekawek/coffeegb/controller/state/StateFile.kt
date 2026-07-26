@@ -196,7 +196,7 @@ class StateFile(
     val diagnostics: StateDiagnosticMetadata? = null,
     val formatVersion: Int =
         if (identities.any {
-          it.identity?.profile?.canonicalProfileId == HardwareProfileRegistry.SGB2.id()
+          it.identity?.profile?.explicitProfileId != null
         }) 2 else 1,
 ) {
   init {
@@ -282,7 +282,10 @@ object StateIdentity {
                 hardware != MachineHardwareState.CGB && configuration.isMealybugDmgBlob,
                 configuration.isCodeBreakerRumble,
                 hardware == MachineHardwareState.SGB && configuration.isDisplaySgbBorder,
-                resolvedProfile.id().takeIf { it == HardwareProfileRegistry.SGB2.id() },
+                // The released v1 SGB payload used the legacy 4,194,304-unit RTC phase domain.
+                // Exact-clock SGB and SGB2 captures therefore require v2's explicit identity so
+                // their numerator-domain phase can never be confused with historical v1 bytes.
+                resolvedProfile.id().takeIf { hardware == MachineHardwareState.SGB },
             ),
         )
       }

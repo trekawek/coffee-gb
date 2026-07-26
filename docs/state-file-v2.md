@@ -1,9 +1,11 @@
 # Portable StateFile format, version 2
 
-StateFile v2 is the smallest versioned extension needed to represent a canonical hardware profile
-that StateFile v1's coarse hardware tag cannot distinguish. It preserves the v1 envelope, payload,
-compression, limits, checksum, type registry, and atomic apply contract. Only identity section 1 is
-versioned from schema 1 to schema 2.
+StateFile v2 is the smallest versioned extension needed to represent an exact SGB-family hardware
+profile and make the existing RTC phase scalar unambiguous. StateFile v1's coarse SGB tag cannot
+distinguish SGB2, and its canonical SGB phase has a frozen historical denominator. V2 preserves
+the v1 envelope, payload bytes, compression, limits, checksum, type registry, and atomic apply
+contract. Identity section 1 is versioned from schema 1 to schema 2; that explicit profile ID also
+selects the RTC scalar's exact numerator domain.
 
 This document is normative together with [state-file-v1.md](state-file-v1.md). Fields not changed
 below have exactly the v1 layout and meaning.
@@ -51,32 +53,48 @@ Current mapping:
 | `dmg` | DMG | 1 |
 | `cgb` | CGB, CGB0 clear | 1 |
 | `cgb0` | CGB, CGB0 set | 1 |
-| `sgb` | SGB | 1 |
+| `sgb` | SGB | 2 |
 | `sgb2` | SGB | 2 |
 
 StateFile v1 SGB always means canonical `sgb`; a reader must never infer `sgb2` from a boot value,
-clock, display name, or an unused v1 bit. New SGB2 machine, session, and linked roots use v2. Every
-active member of a linked root carries its own explicit ID.
+clock, display name, or an unused v1 bit. New exact-clock SGB and SGB2 machine, session, and linked
+roots use v2. Every active member of a linked root carries its own explicit ID.
 
 ## Payload and compatibility
 
-Payload section schema 1 and all 91 numeric record IDs are byte-for-byte unchanged. The rational
-clock remainder fits the existing MBC3 `subSecondTicks` scalar: it is interpreted against the exact
-target profile during prepare. Sound buffer dimensions are likewise checked against that target
-before mutation. A cross-profile file fails with typed `HARDWARE_PROFILE_MISMATCH` before the first
-apply callback.
+Payload section schema 1 and all 91 numeric record IDs are byte-for-byte unchanged. In v2, the
+MBC3 `subSecondTicks` scalar is the explicit profile's numerator-domain phase:
+
+| Identity | Valid phase | Live increment per machine tick |
+|---|---:|---:|
+| `sgb` | `0..47,249,999` | 11 |
+| `sgb2` | `0..4,194,303` | 1 |
+
+StateFile v1 canonical SGB instead freezes that scalar as a fraction with denominator `4,194,304`.
+On v1 SGB apply, after bounded detached decode but before target graph reconstruction or any live
+mutation, Coffee GB converts it to v2 SGB units with
+`floor((old * 47,250,000 + 2,097,152) / 4,194,304)`: nearest exact rational rounding, ties upward,
+with at most half a destination-unit error. Decode, inspection, and decode-to-encode retain the
+original scalar and exact v1 bytes. Values outside the old domain reject as malformed.
+
+Sound buffer dimensions and the converted/unconverted RTC phase are checked against the exact
+target profile before mutation. A cross-profile file fails with typed
+`HARDWARE_PROFILE_MISMATCH` before the first apply callback.
 
 Readers continue accepting v1. A decoded v1 file retains format version 1 and re-encodes to its
-exact original bytes. Existing v1 profiles continue writing v1, so their portable and protocol-v8
-bytes are stable. SGB2 cannot be forced into v1: encoding is rejected rather than aliased to SGB.
+exact original bytes. DMG, CGB, and CGB0 continue writing v1, so their portable and protocol-v8
+bytes are stable. Exact-clock SGB/SGB2 cannot be forced into v1: encoding is rejected rather than
+silently assigning the historical scalar meaning.
 
 ## Netplay and replay boundary
 
 Protocol v8 explicitly negotiates StateFile v1. It neither sends nor accepts StateFile v2, and its
-wire bytes are unchanged. An SGB2 local linked load is rejected before linked-session construction,
-and an SGB2 state is rejected before a payload is written or delivered; support requires a
-separately negotiated protocol version. StateFile v2 is currently for local portable snapshots and
-the explicit codec/apply seam.
+wire bytes are unchanged. Because current exact-clock SGB and SGB2 captures require v2, either SGB
+family local linked load is rejected before linked-session construction. An outgoing SGB-family
+state is rejected before a payload is written; the coarse incoming SGB header is rejected before
+held-input/ROM/state payload reads or event delivery. Support requires a separately negotiated
+protocol version. StateFile v2 is currently for local portable snapshots and the explicit
+codec/apply seam.
 
 There is no #315 replay format yet. Any future replay must carry canonical `sgb2` plus its exact
 rational `ClockSpec`; a coarse SGB enum is insufficient.

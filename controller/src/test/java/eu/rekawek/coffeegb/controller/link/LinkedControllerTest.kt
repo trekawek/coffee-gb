@@ -64,47 +64,50 @@ import kotlin.test.assertTrue
 class LinkedControllerTest {
 
   @Test
-  fun sgb2LocalLoadRejectsBeforeLinkedSessionConstructionAndRetainsBasicState() {
-    val seedBus = EventBusImpl()
-    val seedConfig =
-        Gameboy.GameboyConfiguration(Rom(ROM))
-            .setHardwareProfile(HardwareProfileRegistry.SGB2)
-            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-            .setSupportBatterySave(false)
-    val seedSession = Session(seedConfig, seedBus, null)
-    val seedState = DetachedStateAdapter.capture(seedSession.gameboy)
-    seedSession.close()
+  fun exactSgbFamilyLocalLoadRejectsBeforeLinkedSessionConstructionAndRetainsBasicState() {
+    for (profile in listOf(HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2)) {
+      val seedBus = EventBusImpl()
+      val seedConfig =
+          Gameboy.GameboyConfiguration(Rom(ROM))
+              .setHardwareProfile(profile)
+              .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+              .setSupportBatterySave(false)
+      val seedSession = Session(seedConfig, seedBus, null)
+      val seedState = DetachedStateAdapter.capture(seedSession.gameboy)
+      seedSession.close()
+      seedBus.close()
 
-    val eventBus = EventBusImpl()
-    val errors = mutableListOf<ServerProtocolErrorEvent>()
-    var stopRequests = 0
-    eventBus.register<ServerProtocolErrorEvent> { errors += it }
-    eventBus.register<StopServerEvent> { stopRequests++ }
-    val sut =
-        LinkedController(
-            eventBus,
-            EmulatorProperties(HardwareProfileRegistry.SGB2),
-            null,
-            LinkMode.NORMAL,
-            localPlayer = 0,
-        )
-    sut.timingTicker.disabled = true
-    val before = sut.captureDetachedState()
+      val eventBus = EventBusImpl()
+      val errors = mutableListOf<ServerProtocolErrorEvent>()
+      var stopRequests = 0
+      eventBus.register<ServerProtocolErrorEvent> { errors += it }
+      eventBus.register<StopServerEvent> { stopRequests++ }
+      val sut =
+          LinkedController(
+              eventBus,
+              EmulatorProperties(profile),
+              null,
+              LinkMode.NORMAL,
+              localPlayer = 0,
+          )
+      sut.timingTicker.disabled = true
+      val before = sut.captureDetachedState()
 
-    eventBus.post(LoadRomEvent(ROM, seedState))
-    eventBus.drainAsyncEvents()
+      eventBus.post(LoadRomEvent(ROM, seedState))
+      eventBus.drainAsyncEvents()
 
-    assertEquals(0, sut.activeSessionCount())
-    assertEquals(before, sut.captureDetachedState())
-    assertEquals(1, errors.size)
-    assertEquals(0, errors.single().player)
-    assertTrue(errors.single().message.contains("protocol v8"))
-    assertTrue(errors.single().message.contains("StateFile v1"))
-    assertEquals(1, stopRequests)
+      assertEquals(0, sut.activeSessionCount())
+      assertEquals(before, sut.captureDetachedState())
+      assertEquals(1, errors.size)
+      assertEquals(0, errors.single().player)
+      assertTrue(errors.single().message.contains("protocol v8"))
+      assertTrue(errors.single().message.contains("StateFile v1"))
+      assertEquals(1, stopRequests)
 
-    val returned = assertNotNull(sut.closeWithState())
-    assertEquals(seedState, returned.state)
-    assertContentEquals(ROM.readBytes(), returned.rom.file.readBytes())
+      val returned = assertNotNull(sut.closeWithState())
+      assertEquals(seedState, returned.state)
+      assertContentEquals(ROM.readBytes(), returned.rom.file.readBytes())
+    }
   }
 
   @Test

@@ -20,8 +20,8 @@ deep-owned immutable containers. It cannot represent a thread, callback, event b
 clock service, AWT/Swing object, or live mutable array. The format that encodes this model is
 specified separately in [state-file-v1.md](state-file-v1.md) and
 [state-file-v2.md](state-file-v2.md). Local slot snapshots use the minimum identity version able to
-represent the profile; protocol-v8 netplay uses only v1, and local legacy migration remains isolated
-from network decoding.
+represent both profile and RTC phase semantics; protocol-v8 netplay uses only v1, and local legacy
+migration remains isolated from network decoding.
 The owning immutable hardware profile and exact `ClockSpec` are construction identity rather than
 mutable machine data: MachineSnapshot retains the canonical ID, StateFile v1 derives that ID
 from its frozen hardware/CGB0 identity fields, and StateFile v2 carries an explicit bounded
@@ -120,14 +120,16 @@ allowlist. Its constrained policies cover every scalar that is later used as an 
 queue size/offset, copy length, parser bit/count, GPU/PPU/DMA phase, audio buffer/channel counter,
 IR/SGB packet/schedule index, RTC field, or mapper EEPROM/flash command phase.
 
-Clock-derived values use a two-stage contract. Profile-independent reconstruction admits only a
-bounded, stereo-aligned Sound prefix/full-buffer shape and a nonnegative RTC subsecond phase. The
+Clock-derived values use a staged contract. Profile-independent reconstruction admits only a
+bounded, stereo-aligned Sound prefix/full-buffer shape and a nonnegative RTC subsecond phase. A v1
+canonical SGB portable root first converts every MBC3 phase from its frozen 4,194,304 denominator
+to the registered exact SGB numerator domain using checked rational nearest rounding. The
 machine/session prepare step then checks the Sound write index and either prefix or historical full
 buffer against `2 * targetClock.controllerTicksPerFrame()`, and checks every primary or Datel-slot
-MBC3 phase against `targetClock.ticksPerSecond()`. The local legacy importer and internal rewind
+MBC3 phase against `targetClock.secondPhaseLimit()`. The local legacy importer and internal rewind
 restore use the same target-clock stage. These checks finish before the first apply callback or live
-component mutation, so a later registered profile may diverge without loosening state admission or
-changing StateFile v1 bytes.
+component mutation, so a registered profile may diverge without loosening state admission or
+silently changing StateFile v1 bytes.
 
 Reachable boundary regressions exercise CH3 after a physical wave-RAM read, MBC3's 63/63/31
 live-and-latched register values, Full Changer armed/running/completed phases, HDMA in its second

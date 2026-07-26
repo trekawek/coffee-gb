@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import java.math.BigInteger
 import java.security.MessageDigest
 import java.util.zip.DataFormatException
 import java.util.zip.Deflater
@@ -200,8 +201,9 @@ object StateCodec {
         file.identities,
         listOf(StateIdentityEntry(0, StateIdentity.from(configuration))),
     )
+    val compatibleRoot = preparePortableRootForApply(file) as MachineStateRoot
     try {
-      DetachedStateAdapter.apply(gameboy, root.machine, probe)
+      DetachedStateAdapter.apply(gameboy, compatibleRoot.machine, probe)
     } catch (failure: StateApplyException) {
       throw StateDecodeException(
           StateDecodeReason.TARGET_STATE_MISMATCH,
@@ -228,8 +230,9 @@ object StateCodec {
         file.identities,
         listOf(StateIdentityEntry(0, StateIdentity.from(session.config))),
     )
+    val compatibleRoot = preparePortableRootForApply(file) as SessionStateRoot
     try {
-      DetachedStateAdapter.apply(session, root.session, probe)
+      DetachedStateAdapter.apply(session, compatibleRoot.session, probe)
     } catch (failure: StateApplyException) {
       throw StateDecodeException(
           StateDecodeReason.TARGET_STATE_MISMATCH,
@@ -253,8 +256,9 @@ object StateCodec {
         file.root as? LinkedSessionStateRoot
             ?: targetMismatch("StateFile root ${file.root.kind} is not a linked session")
     validateTargetIdentities(file.identities, controller.capturePortableIdentities())
+    val compatibleRoot = preparePortableRootForApply(file) as LinkedSessionStateRoot
     try {
-      controller.restoreDetachedState(root.linked, probe)
+      controller.restoreDetachedState(compatibleRoot.linked, probe)
     } catch (failure: StateApplyException) {
       throw StateDecodeException(
           StateDecodeReason.TARGET_STATE_MISMATCH,
@@ -479,12 +483,11 @@ object StateCodec {
     try {
       if (file.formatVersion == V1_FORMAT_VERSION &&
           file.identities.any {
-            it.identity?.profile?.canonicalProfileId ==
-                HardwareProfileRegistry.SGB2.id()
+            it.identity?.profile?.explicitProfileId != null
           }) {
         throw StateDecodeException(
             StateDecodeReason.HARDWARE_PROFILE_MISMATCH,
-            "StateFile v1 cannot represent the sgb2 profile",
+            "StateFile v1 cannot encode an explicit hardware profile",
         )
       }
       validateFileShape(file.identities, file.root)
@@ -588,6 +591,135 @@ object StateCodec {
       StateTypeRegistry.recordClassNames.indexOf(className).plus(1).also {
         if (it == 0) error("Portable record registry has no $className")
       }
+
+  /**
+   * Converts the one historical format/profile combination whose payload scalar changed domain.
+   *
+   * StateFile v1 canonical SGB files predate exact rational clocks. Their MBC3 phase is a fraction
+   * with denominator 4,194,304. V2 SGB/SGB2 phases are numerator-domain values for the explicit
+   * profile. Decode and inspect retain the historical v1 tree byte-for-byte; only this detached,
+   * target-aware preparation creates a converted tree before the first live mutation.
+   */
+  private fun preparePortableRootForApply(file: StateFile): StateFileRoot {
+    if (file.formatVersion != V1_FORMAT_VERSION) return file.root
+    val legacySgbPlayers =
+        file.identities
+            .filter {
+              it.identity?.profile?.canonicalProfileId == HardwareProfileRegistry.SGB.id()
+            }
+            .mapTo(mutableSetOf()) { it.player }
+    if (legacySgbPlayers.isEmpty()) return file.root
+
+    return when (val root = file.root) {
+      is MachineStateRoot ->
+          MachineStateRoot(
+              if (0 in legacySgbPlayers) convertLegacyV1SgbRtcPhase(root.machine)
+              else root.machine)
+      is SessionStateRoot ->
+          SessionStateRoot(
+              if (0 in legacySgbPlayers) convertLegacyV1SgbRtcPhase(root.session)
+              else root.session)
+      is LinkedSessionStateRoot ->
+          LinkedSessionStateRoot(
+              LinkedSessionState(
+                  root.linked.frame,
+                  root.linked.localPlayer,
+                  root.linked.topology,
+                  root.linked.players.map { player ->
+                    LinkedPlayerState(
+                        player.player,
+                        player.session?.let { session ->
+                          if (player.player in legacySgbPlayers) {
+                            convertLegacyV1SgbRtcPhase(session)
+                          } else {
+                            session
+                          }
+                        },
+                    )
+                  },
+              ))
+    }
+  }
+
+  private fun convertLegacyV1SgbRtcPhase(session: SessionState): SessionState =
+      SessionState(
+          convertLegacyV1SgbRtcPhase(session.machine),
+          session.serialPeripheral,
+          session.serialState,
+          session.serialRuntime,
+          session.heldButtons,
+      )
+
+  private fun convertLegacyV1SgbRtcPhase(machine: MachineState): MachineState =
+      MachineState(
+          convertLegacyV1SgbRtcPhase(machine.root) as RecordState,
+          machine.rtcRuntime,
+          machine.hardware,
+          machine.dmgFifoRuntime,
+      )
+
+  private fun convertLegacyV1SgbRtcPhase(value: StateValue): StateValue =
+      when (value) {
+        is RecordState -> {
+          if (value.typeId == rtcStateTypeId) {
+            var foundPhase = false
+            val fields =
+                value.fields.map { field ->
+                  if (field.name == RTC_PHASE_FIELD) {
+                    if (foundPhase) malformedLegacyRtc("contains duplicate RTC phase fields")
+                    foundPhase = true
+                    val phase =
+                        (field.value as? Int64State)?.value
+                            ?: malformedLegacyRtc("has a non-integer RTC phase")
+                    StateField(field.name, Int64State(convertLegacyV1SgbRtcPhase(phase)))
+                  } else {
+                    StateField(field.name, convertLegacyV1SgbRtcPhase(field.value))
+                  }
+                }
+            if (!foundPhase) malformedLegacyRtc("has no RTC phase field")
+            RecordState(value.typeId, fields)
+          } else {
+            RecordState(
+                value.typeId,
+                value.fields.map { field ->
+                  StateField(field.name, convertLegacyV1SgbRtcPhase(field.value))
+                },
+            )
+          }
+        }
+        is ObjectArrayState -> ObjectArrayState(value.values.map(::convertLegacyV1SgbRtcPhase))
+        is ListState -> ListState(value.values.map(::convertLegacyV1SgbRtcPhase))
+        is Int32MapState ->
+            Int32MapState(
+                value.entries.map {
+                  Int32MapEntry(it.key, convertLegacyV1SgbRtcPhase(it.value))
+                })
+        else -> value
+      }
+
+  /** Nearest, with exact half values rounded upward; absolute error is at most half a v2 unit. */
+  private fun convertLegacyV1SgbRtcPhase(phase: Long): Long {
+    if (phase !in 0 until LEGACY_V1_SGB_RTC_PHASE_LIMIT) {
+      malformedLegacyRtc(
+          "phase $phase is outside 0..${LEGACY_V1_SGB_RTC_PHASE_LIMIT - 1}")
+    }
+    val destinationLimit = HardwareProfileRegistry.SGB.clockSpec().secondPhaseLimit().toLong()
+    return BigInteger.valueOf(phase)
+        .multiply(BigInteger.valueOf(destinationLimit))
+        .add(BigInteger.valueOf(LEGACY_V1_SGB_RTC_PHASE_LIMIT / 2))
+        .divide(BigInteger.valueOf(LEGACY_V1_SGB_RTC_PHASE_LIMIT))
+        .longValueExact()
+  }
+
+  private fun malformedLegacyRtc(message: String): Nothing =
+      throw StateDecodeException(
+          StateDecodeReason.MALFORMED_STRUCTURE,
+          "StateFile v1 SGB $message",
+      )
+
+  private val rtcStateTypeId by lazy {
+    registeredRecordId(RTC_STATE_CLASS)
+  }
 
   private fun validateTargetIdentities(
       file: List<StateIdentityEntry>,
@@ -754,4 +886,9 @@ object StateCodec {
       val diagnostics: StateDiagnosticMetadata?,
       val inspections: List<StateSectionInspection>,
   )
+
+  private const val LEGACY_V1_SGB_RTC_PHASE_LIMIT = 4_194_304L
+  private const val RTC_PHASE_FIELD = "subSecondTicks"
+  private const val RTC_STATE_CLASS =
+      "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState"
 }

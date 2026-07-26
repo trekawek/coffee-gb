@@ -46,8 +46,10 @@ internal object StateIdentitySectionCodec {
           if (identity.profile.displaySgbBorder) flags = flags or PROFILE_SGB_BORDER
           writer.writeU32(flags.toLong())
           if (version == VERSION_1) {
-            if (identity.profile.canonicalProfileId == HardwareProfileRegistry.SGB2.id()) {
-              throw StateEncodeException("StateFile v1 cannot represent the sgb2 profile")
+            if (identity.profile.explicitProfileId != null) {
+              throw StateEncodeException(
+                  "StateFile v1 cannot encode explicit profile " +
+                      identity.profile.canonicalProfileId)
             }
           } else {
             val profileId = identity.profile.canonicalProfileId

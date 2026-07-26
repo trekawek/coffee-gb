@@ -481,14 +481,17 @@ class LinkedController(
     eventBus.register<LoadRomEvent> {
       val rom = Rom(it.rom)
       val config = createGameboyConfig(properties, rom)
-      if (config.hardwareProfile == HardwareProfileRegistry.SGB2) {
-        // Protocol v8 is permanently StateFile-v1-only. Reject before a linked Gameboy is built
-        // or any live session/config/topology state changes, and retain the incoming Basic state
-        // so the transport shutdown can return to the exact pre-link machine.
+      if (config.hardwareProfile == HardwareProfileRegistry.SGB ||
+          config.hardwareProfile == HardwareProfileRegistry.SGB2) {
+        // Protocol v8 is permanently StateFile-v1-only. Its SGB RTC phase has the released legacy
+        // meaning, while exact-clock SGB/SGB2 captures require v2. Reject before a linked Gameboy
+        // is built or any live session/config/topology state changes, and retain the incoming Basic
+        // state so transport shutdown can return to the exact pre-link machine.
         rejectedLocalState =
             it.state?.let { state -> Controller.ControllerState(state, rom) }
         val message =
-            "SGB2 netplay is unavailable: protocol v8 negotiates StateFile v1, which can identify only sgb"
+            "SGB-family netplay is unavailable: protocol v8 negotiates StateFile v1 with " +
+                "legacy SGB RTC phase semantics; exact-clock ${config.hardwareProfile.id()} requires v2"
         if (localPlayer == 0) {
           eventBus.post(ServerProtocolErrorEvent(localPlayer, message))
           eventBus.postAsync(StopServerEvent())
