@@ -30,15 +30,18 @@ import eu.rekawek.coffeegb.controller.state.Int32State
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.RecordState
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.SessionState
+import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.state.StateApplyException
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateField
 import eu.rekawek.coffeegb.controller.state.StateValue
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointKind
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointMetadata
+import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointRequest
 import eu.rekawek.coffeegb.controller.network.v9.V9ErrorCode
 import eu.rekawek.coffeegb.controller.network.v9.V9ValidatedCheckpoint
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
@@ -59,6 +62,7 @@ import java.nio.file.Paths
 import java.security.MessageDigest
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertContentEquals
@@ -70,6 +74,205 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LinkedControllerTest {
+
+  @Test
+  fun v9ProviderCapturesAtFrameSafePointAndCancellationReleasesWaiter() {
+    val (eventBus, controller) = configuredController(LinkMode.NORMAL, 2)
+    val executor = Executors.newSingleThreadExecutor()
+    try {
+      val target = controller.createV9Target()
+      val frame = controller.currentFrame()
+      val machine =
+          executor.submit<ByteArray> {
+            target.capture(V9CheckpointRequest(V9CheckpointKind.MACHINE, 0x02, 1, frame))
+          }
+      awaitPendingCapture(target)
+      assertFalse(machine.isDone)
+      dispatchOnly(controller)
+      val machineBytes = machine.get(5, TimeUnit.SECONDS)
+      assertEquals(frame, controller.currentFrame())
+      assertTrue(StateCodec.decode(machineBytes).root is MachineStateRoot)
+      machineBytes.fill(0)
+
+      val session =
+          executor.submit<ByteArray> {
+            target.capture(V9CheckpointRequest(V9CheckpointKind.SESSION, 0x02, 1, frame))
+          }
+      awaitPendingCapture(target)
+      assertFalse(session.isDone)
+      dispatchOnly(controller)
+      val sessionBytes = session.get(5, TimeUnit.SECONDS)
+      assertTrue(StateCodec.decode(sessionBytes).root is SessionStateRoot)
+      sessionBytes.fill(0)
+
+      val cancelledTarget = controller.createV9Target()
+      val cancelled =
+          executor.submit<ByteArray> {
+            cancelledTarget.capture(
+                V9CheckpointRequest(V9CheckpointKind.MACHINE, 0x02, 1, frame))
+          }
+      awaitPendingCapture(cancelledTarget)
+      assertFalse(cancelled.isDone)
+      cancelledTarget.close()
+      val failure = assertFailsWith<java.util.concurrent.ExecutionException> {
+        cancelled.get(5, TimeUnit.SECONDS)
+      }
+      assertEquals(
+          V9ErrorCode.CANCELLED,
+          (failure.cause as eu.rekawek.coffeegb.controller.network.v9.V9ProtocolException).reason,
+      )
+    } finally {
+      executor.shutdownNow()
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun v9LinkedProviderPreservesEmptySlotsAcrossStopResetAndRejectsPreparedTargetChange() {
+    val (eventBus, controller) = configuredController(LinkMode.FOUR_PLAYER_ADAPTER, 2)
+    val executor = Executors.newSingleThreadExecutor()
+    val target = controller.createV9Target()
+    try {
+      fun capture(): eu.rekawek.coffeegb.controller.state.StateFile {
+        val future =
+            executor.submit<ByteArray> {
+              target.capture(
+                  V9CheckpointRequest(
+                      V9CheckpointKind.LINKED_SESSION,
+                      0x0f,
+                      0,
+                      controller.currentFrame(),
+                  ),
+              )
+            }
+        awaitPendingCapture(target)
+        dispatchOnly(controller)
+        val bytes = future.get(5, TimeUnit.SECONDS)
+        return StateCodec.decode(bytes).also { bytes.fill(0) }
+      }
+
+      val initial = capture()
+      assertEquals(listOf(false, false, true, true), initial.identities.map { it.identity == null })
+      assertEquals(
+          listOf(false, false, true, true),
+          (initial.root as eu.rekawek.coffeegb.controller.state.LinkedSessionStateRoot)
+              .linked.players.map { it.session == null },
+      )
+
+      val preparedRef = AtomicReference<eu.rekawek.coffeegb.controller.network.v9.V9PreparedCheckpoint?>()
+      target.prepare(
+          V9ValidatedCheckpoint(
+              V9CheckpointMetadata(
+                  V9CheckpointKind.LINKED_SESSION,
+                  0x0f,
+                  0,
+                  controller.currentFrame(),
+                  41,
+              ),
+              initial,
+              MessageDigest.getInstance("SHA-256").digest(StateCodec.encode(initial)),
+          ),
+      ) { prepared, failure ->
+        assertNull(failure)
+        preparedRef.set(prepared)
+      }
+      dispatchOnly(controller)
+
+      val stop = AtomicReference<V9ErrorCode?>()
+      target.control(
+          eu.rekawek.coffeegb.controller.network.v9.V9RuntimeControl(
+              eu.rekawek.coffeegb.controller.network.v9.V9RuntimeMessageKind.STOP,
+              controller.currentFrame(),
+              1,
+          ),
+          stop::set,
+      )
+      dispatchOnly(controller)
+      assertNull(stop.get())
+      val stopped = controller.captureDetachedState()
+      assertNull(stopped.players[1].session)
+
+      val commitFailure = AtomicReference<V9ErrorCode?>()
+      assertNotNull(preparedRef.get()).commit(commitFailure::set)
+      dispatchOnly(controller)
+      assertEquals(V9ErrorCode.TOPOLOGY_MISMATCH, commitFailure.get())
+      assertEquals(stopped, controller.captureDetachedState())
+
+      val reset = AtomicReference<V9ErrorCode?>()
+      target.control(
+          eu.rekawek.coffeegb.controller.network.v9.V9RuntimeControl(
+              eu.rekawek.coffeegb.controller.network.v9.V9RuntimeMessageKind.RESET,
+              controller.currentFrame(),
+              1,
+          ),
+          reset::set,
+      )
+      dispatchOnly(controller)
+      assertNull(reset.get())
+      assertNotNull(controller.captureDetachedState().players[1].session)
+      assertEquals(listOf(false, false, true, true), capture().identities.map { it.identity == null })
+    } finally {
+      target.disconnected(1)
+      executor.shutdownNow()
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun v9TargetUsesPostTransferRomAndProfileIdentityForCheckpointCapture() {
+    val (eventBus, controller) = configuredController(LinkMode.NORMAL, 1)
+    val target = controller.createV9Target()
+    val executor = Executors.newSingleThreadExecutor()
+    try {
+      assertNull(target.expectedIdentities()[1].identity)
+      val transferredRom = mbc2Rom()
+      eventBus.post(
+          PeerLoadedGameEvent(
+              transferredRom,
+              null,
+              null,
+              GameboyType.DMG,
+              Gameboy.BootstrapMode.SKIP,
+              controller.currentFrame(),
+              player = 1,
+          ),
+      )
+      controller.runFrame()
+      val postTransferIdentity = assertNotNull(target.expectedIdentities()[1].identity)
+      val future =
+          executor.submit<ByteArray> {
+            target.capture(
+                V9CheckpointRequest(
+                    V9CheckpointKind.MACHINE,
+                    0x02,
+                    1,
+                    controller.currentFrame(),
+                ),
+            )
+          }
+      awaitPendingCapture(target)
+      dispatchOnly(controller)
+      val bytes = future.get(5, TimeUnit.SECONDS)
+      val file = StateCodec.decode(bytes)
+      bytes.fill(0)
+      val capturedIdentity = assertNotNull(file.identities.single().identity)
+      assertEquals(postTransferIdentity.primaryRom, capturedIdentity.primaryRom)
+      assertEquals(postTransferIdentity.slotRom, capturedIdentity.slotRom)
+      assertEquals(postTransferIdentity.profile.hardware, capturedIdentity.profile.hardware)
+      assertEquals(
+          postTransferIdentity.profile.canonicalProfileId,
+          capturedIdentity.profile.canonicalProfileId,
+      )
+      assertEquals(HardwareProfileRegistry.DMG.id(), postTransferIdentity.profile.canonicalProfileId)
+    } finally {
+      target.disconnected(1)
+      executor.shutdownNow()
+      controller.close()
+      eventBus.close()
+    }
+  }
 
   @Test
   fun v9MachineCheckpointAppliesOnlyAtFrameSafePointAndMismatchIsAtomic() {
@@ -177,6 +380,11 @@ class LinkedControllerTest {
       assertEquals(expectedSession, restoredSession.captureDetachedState())
 
       val stable = controller.captureDetachedState()
+      val stableHistory = controller.stateHistory.captureSnapshot()
+      val stableConfigs = privateList(controller, "configs")
+      val stableRoms = privateByteArrays(controller, "romBuffers")
+      val stableSlots = privateByteArrays(controller, "slotRomBuffers")
+      val stableBatteries = privateByteArrays(controller, "batteryBuffers")
       val rollbackPrepared =
           AtomicReference<eu.rekawek.coffeegb.controller.network.v9.V9PreparedCheckpoint?>()
       target.prepare(
@@ -207,6 +415,13 @@ class LinkedControllerTest {
       controller.v9ApplyProbe = null
       assertEquals(V9ErrorCode.TOPOLOGY_MISMATCH, rollbackFailure.get())
       assertEquals(stable, controller.captureDetachedState())
+      assertEquals(stableHistory, controller.stateHistory.captureSnapshot())
+      stableConfigs.zip(privateList(controller, "configs")).forEach { (expected, actual) ->
+        assertTrue(expected === actual)
+      }
+      assertByteArraysEqual(stableRoms, privateByteArrays(controller, "romBuffers"))
+      assertByteArraysEqual(stableSlots, privateByteArrays(controller, "slotRomBuffers"))
+      assertByteArraysEqual(stableBatteries, privateByteArrays(controller, "batteryBuffers"))
 
       val wrongConfig =
           StateCodecTestSupport.configuration(ROM_BYTES, GameboyType.SGB)
@@ -1908,6 +2123,14 @@ class LinkedControllerTest {
       LinkedController::class.java.getDeclaredField("eventQueue").also { field ->
         field.isAccessible = true
         (field.get(controller) as EventQueue).dispatch()
+      }
+    }
+
+    fun awaitPendingCapture(target: V9LinkedControllerTarget) {
+      val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+      while (target.pendingCaptureCount() == 0) {
+        if (System.nanoTime() >= deadline) throw AssertionError("capture was not enqueued")
+        Thread.yield()
       }
     }
 

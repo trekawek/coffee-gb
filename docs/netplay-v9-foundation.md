@@ -104,14 +104,22 @@ never enter Swing. Replacing an observer, cancelling, or closing suppresses queu
 callbacks.
 
 Issue #349 is a fourth, explicit extension. `V9PlayPlan` binds one checkpoint provider and one
-frame-safe target to the authenticated manifest/consent tuple. The host sends an initial MACHINE
-root in normal mode or one full-roster LINKED_SESSION in four-player mode. The peer validates the
-direct CGBS StateFile v2 off the emulator thread, prepares target-owned reconstruction without live
-mutation, and commits only after START at the controller's frame safe point. READY is sent only
-after that atomic commit. In ACTIVE, normal resynchronization is SESSION and four-player
-resynchronization remains LINKED_SESSION. INPUT, RESET, and STOP carry stable masks/IDs and are
-accepted only at the same bounded frame-safe event boundary. History exhaustion and invalid frame
-windows reject the connection before input mutation.
+frame-safe target to the authenticated manifest/consent tuple. The production `LinkedController`
+adapter captures the detached root and its current post-transfer ROM/profile identities on the
+controller event safe point, then performs StateFile-v2 encoding off the emulation owner. The host
+sends an initial MACHINE root in normal mode or one logical-full-roster LINKED_SESSION in
+four-player mode. A four-player generation captures that LINKED_SESSION once and gives all three
+guest connections owned copies; advancing emulation cannot produce three different activation
+roots. Empty physical ports remain null in the root while the logical player mask remains `0f`.
+The peer validates the direct CGBS StateFile v2 off the emulator thread, prepares and retains exact
+target-owned reconstruction without live mutation, and commits only after START at the
+controller's frame safe point. READY is admitted only after that guest's atomic commit. A received
+READY acknowledges that guest commit; the host publishes its four-player ACTIVE boundary only
+after all three READY responses, while a client publishes only after its READY bytes are written.
+In ACTIVE, normal resynchronization is SESSION and four-player resynchronization remains
+LINKED_SESSION. INPUT, RESET, and STOP carry stable masks/IDs and are accepted only at the same
+bounded frame-safe event boundary. History exhaustion and invalid frame windows reject the
+connection before input mutation.
 
 The checkpoint declaration, directional consent grant, manifest pair, root, owner/mask/channel,
 unsigned increasing frame, SHA-256, exact ROM/slot identities, canonical profile/bootstrap/
@@ -120,8 +128,12 @@ mutation. One direct StateFile is limited to 32 MiB encoded and decoded; aggrega
 retention remains 128 MiB; one directional grant admits at most 32 successfully committed
 checkpoints and one in flight. StateFile v1, native serialization, the local legacy importer,
 CGBN/Memento, outer checkpoint compression, and fallback are unreachable from peer bytes. A
-failed prepare or commit does not consume the grant. `LinkedController` captures rollback
-state/history and restores it if any member of the frame-safe transaction fails.
+failed prepare or commit does not consume the grant. Commit verifies that sessions, link history,
+and identities are still the exact generation used by prepare; it never reconstructs against a
+changed target. `LinkedController` captures rollback state, configuration/buffer ownership,
+history, frame floor, and inputs and restores them if any member of the frame-safe transaction
+fails. Closing its caller-owned provider cancels a pending safe-point capture and wipes encoded
+bytes if cancellation races encoding.
 
 Callers that omit a play plan retain the Part-3 pre-START boundary; callers that omit Part 3 retain
 the Part-2 boundary; callers that also omit a manifest plan retain the Part-1 post-AUTH boundary.

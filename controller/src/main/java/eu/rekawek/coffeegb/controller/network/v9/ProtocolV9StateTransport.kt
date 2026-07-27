@@ -15,6 +15,7 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Stable CHECKPOINT-v1 kind tags. Declaration order is never a wire identity. */
@@ -388,6 +389,10 @@ class V9PlayPlan private constructor(
       require(plans.keys == setOf(1, 2, 3))
       val coordinator = plans.values.first().fourPlayerCoordinator
       require(coordinator != null && plans.values.all { it.fourPlayerCoordinator === coordinator })
+      val provider = plans.values.first().checkpointProvider
+      require(provider != null && plans.values.all { it.checkpointProvider === provider }) {
+        "four-player activation requires one shared frame-safe checkpoint provider"
+      }
     }
     val requiredInitialKind =
         if (mode == V9LinkMode.NORMAL) V9CheckpointKind.MACHINE
@@ -437,6 +442,58 @@ class V9FourPlayerCoordinator {
   private val activated = mutableSetOf<Int>()
   private var committedDigest: ByteArray? = null
   private var committedFrame: Long? = null
+  private var capture: InitialCapture? = null
+  private val captureClaimants = mutableSetOf<Int>()
+
+  /**
+   * Captures one exact LINKED_SESSION file for the whole activation generation. Concurrent guest
+   * sessions wait for and receive copies of that same file; only the elected leader touches the
+   * emulation-owner provider.
+   */
+  internal fun captureInitial(
+      guest: Int,
+      request: V9CheckpointRequest,
+      provider: V9CheckpointProvider,
+  ): ByteArray {
+    require(guest in 1..3 && request.kind == V9CheckpointKind.LINKED_SESSION)
+    val selected: InitialCapture
+    val leader: Boolean
+    synchronized(lock) {
+      captureClaimants.add(guest)
+      val existing = capture
+      if (existing == null) {
+        selected = InitialCapture(request)
+        capture = selected
+        leader = true
+      } else {
+        if (existing.request != request) {
+          captureClaimants.remove(guest)
+          throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+        }
+        selected = existing
+        leader = false
+      }
+    }
+    if (leader) {
+      try {
+        selected.complete(provider.capture(request), null)
+      } catch (failure: Throwable) {
+        selected.complete(null, failure)
+      }
+    }
+    try {
+      return selected.awaitCopy()
+    } catch (failure: Throwable) {
+      synchronized(lock) {
+        captureClaimants.remove(guest)
+        if (capture === selected) {
+          capture = null
+          selected.close()
+        }
+      }
+      throw failure
+    }
+  }
 
   fun prepared(guest: Int, frame: Long, digest: ByteArray, start: () -> Unit): Closeable {
     require(guest in 1..3 && digest.size == 32)
@@ -470,10 +527,24 @@ class V9FourPlayerCoordinator {
     return Closeable {
       if (active.compareAndSet(true, false)) synchronized(lock) {
         prepared.remove(guest)?.digest?.fill(0)
+        captureClaimants.remove(guest)
+        ready.remove(guest)
+        started.remove(guest)
+        activated.remove(guest)
+        releaseGenerationIfUnused()
+      }
+    }
+  }
+
+  internal fun abandon(guest: Int) {
+    synchronized(lock) {
+      captureClaimants.remove(guest)
+      if (guest !in prepared) {
         ready.remove(guest)
         started.remove(guest)
         activated.remove(guest)
       }
+      releaseGenerationIfUnused()
     }
   }
 
@@ -496,7 +567,65 @@ class V9FourPlayerCoordinator {
 
   internal fun candidateCount(): Int = synchronized(lock) { prepared.size }
 
+  internal fun captureCount(): Int = synchronized(lock) { capture?.providerCaptures ?: 0 }
+
+  private fun releaseGenerationIfUnused() {
+    if (prepared.isEmpty() && captureClaimants.isEmpty()) {
+      capture?.close()
+      capture = null
+      committedDigest?.fill(0)
+      committedDigest = null
+      committedFrame = null
+      ready.clear()
+      started.clear()
+      activated.clear()
+    }
+  }
+
   private class Prepared(val frame: Long, val digest: ByteArray, val start: () -> Unit)
+
+  private class InitialCapture(val request: V9CheckpointRequest) : Closeable {
+    private val done = CountDownLatch(1)
+    private val lock = Any()
+    private var bytes: ByteArray? = null
+    private var failure: Throwable? = null
+    var providerCaptures: Int = 0
+      private set
+
+    fun complete(value: ByteArray?, problem: Throwable?) {
+      synchronized(lock) {
+        if (done.count == 0L) {
+          value?.fill(0)
+          return
+        }
+        providerCaptures = 1
+        bytes = value?.copyOf()
+        value?.fill(0)
+        failure = problem
+        done.countDown()
+      }
+    }
+
+    fun awaitCopy(): ByteArray {
+      try {
+        done.await()
+      } catch (interrupted: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw V9ProtocolException(V9ErrorCode.CANCELLED, 0)
+      }
+      synchronized(lock) {
+        failure?.let { throw it }
+        return checkNotNull(bytes).copyOf()
+      }
+    }
+
+    override fun close() {
+      synchronized(lock) {
+        bytes?.fill(0)
+        bytes = null
+      }
+    }
+  }
 }
 
 internal object V9CheckpointStateValidation {
@@ -508,7 +637,7 @@ internal object V9CheckpointStateValidation {
     val expectedPlayers =
         if (boundary.mode == V9LinkMode.NORMAL) setOf(0, 1) else setOf(0, 1, 2, 3)
     if (expectedRosterIdentities.map { it.player }.toSet() != expectedPlayers ||
-        expectedRosterIdentities.any { it.identity == null }) {
+        boundary.mode == V9LinkMode.NORMAL && expectedRosterIdentities.any { it.identity == null }) {
       throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
     }
     val server = boundary.serverManifest.entries.associateBy { it.player }
@@ -516,7 +645,7 @@ internal object V9CheckpointStateValidation {
     val authoritative =
         if (authorization.proposal.sourcePlayer == 0) server else client
     for (entry in expectedRosterIdentities) {
-      val identity = checkNotNull(entry.identity)
+      val identity = entry.identity ?: continue
       val left = server[entry.player]
           ?: throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
       val right = client[entry.player]
@@ -571,9 +700,7 @@ internal object V9CheckpointStateValidation {
         }
     val expectedMask =
         if (declaration.metadata.kind == V9CheckpointKind.LINKED_SESSION) {
-          expectedIdentities.fold(0) { mask, entry ->
-            if (entry.identity == null) mask else mask or (1 shl entry.player)
-          }
+          0x0f
         } else {
           1 shl declaration.metadata.ownerPlayer
         }

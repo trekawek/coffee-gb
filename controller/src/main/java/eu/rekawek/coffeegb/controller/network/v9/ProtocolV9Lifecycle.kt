@@ -224,6 +224,15 @@ class V9Lifecycle(
     transition(V9LifecycleState.WAIT_READY)
   }
 
+  /** Publishes WAIT_READY before START can leave the writer queue, with exact enqueue rollback. */
+  @Synchronized
+  internal fun admitServerStart(): Closeable =
+      admitReversible(
+          V9Role.SERVER,
+          V9LifecycleState.SYNCHRONIZING,
+          V9LifecycleState.WAIT_READY,
+      )
+
   @Synchronized
   fun clientStartReceived() {
     requireRoleState(V9Role.CLIENT, V9LifecycleState.SYNCHRONIZING)
@@ -235,6 +244,15 @@ class V9Lifecycle(
     requireRoleState(V9Role.CLIENT, V9LifecycleState.SEND_READY)
     transition(V9LifecycleState.ACTIVE)
   }
+
+  /** Publishes ACTIVE before READY can be observed, while caller publication still waits for write. */
+  @Synchronized
+  internal fun admitClientReady(): Closeable =
+      admitReversible(
+          V9Role.CLIENT,
+          V9LifecycleState.SEND_READY,
+          V9LifecycleState.ACTIVE,
+      )
 
   @Synchronized
   fun serverReadyReceived() {
@@ -325,6 +343,26 @@ class V9Lifecycle(
     publish()
   }
 
+  private fun admitReversible(
+      expectedRole: V9Role,
+      expectedState: V9LifecycleState,
+      next: V9LifecycleState,
+  ): Closeable {
+    requireRoleState(expectedRole, expectedState)
+    val previousDeadline = deadline
+    transition(next)
+    val active = java.util.concurrent.atomic.AtomicBoolean(true)
+    return Closeable {
+      synchronized(this) {
+        if (active.compareAndSet(true, false) && state == next && failure == null) {
+          state = expectedState
+          deadline = previousDeadline
+          publish()
+        }
+      }
+    }
+  }
+
   private fun publish() {
     val value = snapshot()
     listeners.forEach { it.onStateChanged(value) }
@@ -392,6 +430,12 @@ class V9ResponseLedger(initialIncomingSequence: Long = 0) {
     require(outstanding.size < V9Limit.QUEUED_FRAMES.value)
     outstanding[sequence] = type
     lastRecordedRequestSequence = sequence
+  }
+
+  /** Rolls back only an unpublished/unenqueued request; sequence allocation remains monotonic. */
+  @Synchronized
+  internal fun cancelPeerRequest(sequence: Long, type: V9MessageType) {
+    if (outstanding[sequence] == type) outstanding.remove(sequence)
   }
 
   @Synchronized
