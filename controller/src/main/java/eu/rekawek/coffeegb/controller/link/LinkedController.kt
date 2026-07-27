@@ -21,6 +21,8 @@ import eu.rekawek.coffeegb.controller.state.StateProfilePolicy
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.PreparedMachineState
+import eu.rekawek.coffeegb.controller.state.PreparedSessionState
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.StateApplyException
 import eu.rekawek.coffeegb.controller.state.StateCodec
@@ -52,6 +54,8 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEve
 import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointCommitCompletion
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointKind
+import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointProvider
+import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointRequest
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointPrepareCompletion
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointTarget
 import eu.rekawek.coffeegb.controller.network.v9.V9ErrorCode
@@ -84,9 +88,11 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
+import java.io.Closeable
 import java.io.IOException
 import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
@@ -185,9 +191,13 @@ class LinkedController(
         StateIdentityEntry(player, session?.let { StateIdentity.from(it.config) })
       }
 
+  /** Exact v9 logical roster: normal is 0/1, four-player is always logical 0..3. */
+  internal fun captureV9PortableIdentities(): List<StateIdentityEntry> =
+      capturePortableIdentities().take(if (mode == LinkMode.NORMAL) 2 else CANONICAL_PLAYER_SLOTS)
+
   /** Explicit opt-in protocol-v9 target. The default v8 controller wiring never constructs it. */
   internal fun createV9Target(): V9LinkedControllerTarget =
-      V9LinkedControllerTarget(this, capturePortableIdentities())
+      V9LinkedControllerTarget(this)
 
   @VisibleForTesting
   internal var v9ApplyProbe: ((Int, ApplyStage) -> Unit)? = null
@@ -204,6 +214,14 @@ class LinkedController(
       completion: V9CheckpointCommitCompletion,
   ) {
     eventBus.post(V9CheckpointCommitEvent(transaction, completion))
+  }
+
+  internal fun enqueueV9CheckpointCapture(
+      request: V9CheckpointRequest,
+      capture: V9PendingCheckpointCapture,
+      lease: V9TargetLease,
+  ) {
+    eventBus.post(V9CheckpointCaptureEvent(request, capture, lease))
   }
 
   internal fun enqueueV9Input(value: V9InputState) {
@@ -282,90 +300,79 @@ class LinkedController(
     }
   }
 
-  /** Complete target-dependent v9 prepare/apply transaction at [runFrame]'s event safe point. */
-  private fun applyV9Checkpoint(checkpoint: V9ValidatedCheckpoint) {
-    val metadata = checkpoint.metadata
-    if (metadata.frame < 0 || metadata.frame > StateLimits.NETPLAY_MAX_FRAME) {
-      throw StateApplyException("V9 checkpoint frame is outside the controller range")
+  /** Applies only the reconstruction retained by prepare; candidate state is never rebuilt here. */
+  private fun applyV9Checkpoint(transaction: V9LinkedPreparedCheckpoint) {
+    val prepared = transaction.prepared
+    if (sessions.indices.any { sessions[it] !== prepared.targetSessions[it] } ||
+        links !== prepared.targetLinks || capturePortableIdentities() != prepared.targetIdentities) {
+      throw StateApplyException("V9 checkpoint target changed after preparation")
     }
-    val expectedIdentities =
-        if (metadata.kind == V9CheckpointKind.LINKED_SESSION) {
-          capturePortableIdentities()
-        } else {
-          val identity =
-              capturePortableIdentities().singleOrNull {
-                it.player == metadata.ownerPlayer && it.identity != null
-              }?.identity ?: throw StateApplyException("V9 checkpoint owner is not active")
-          listOf(StateIdentityEntry(0, identity))
+
+    // Prepare a complete rollback against the current live generation before the first mutation.
+    val rollbackSessions =
+        sessions.map { session ->
+          session?.let { DetachedStateAdapter.prepare(it, it.captureDetachedState()) }
         }
-    StateCodec.validateForTarget(checkpoint.stateFile, metadata.kind.rootKind, expectedIdentities)
-
-    if (metadata.kind == V9CheckpointKind.LINKED_SESSION) {
-      val root = checkpoint.stateFile.root as eu.rekawek.coffeegb.controller.state.LinkedSessionStateRoot
-      if (mode != LinkMode.FOUR_PLAYER_ADAPTER || metadata.slotMask != 0x0f ||
-          root.linked.localPlayer != 0) {
-        throw StateApplyException("V9 linked checkpoint is not the canonical host-owned group")
-      }
-      restoreDetachedState(
-          LinkedSessionState(
-              root.linked.frame,
-              localPlayer,
-              root.linked.topology,
-              root.linked.players,
-          ),
-          v9ApplyProbe,
-      )
-      syncV9RemoteButtons()
-      return
-    }
-
-    if (mode != LinkMode.NORMAL || metadata.slotMask != 1 shl metadata.ownerPlayer) {
-      throw StateApplyException("V9 individual checkpoint does not match normal topology")
-    }
-    val session = sessions.getOrNull(metadata.ownerPlayer)
-        ?: throw StateApplyException("V9 checkpoint owner is not active")
+    val oldSessions = sessions.toList()
+    val oldConfigs = configs.toList()
+    val oldRoms = romBuffers.toList()
+    val oldSlotRoms = slotRomBuffers.toList()
+    val oldBatteries = batteryBuffers.toList()
+    val oldLinks = links
     val oldFrame = frame
     val oldFloor = runtimeFrameFloor
     val oldCurrentInput = currentInput
     val oldLastInput = lastInput
     val oldHistory = stateHistory.captureSnapshot()
-    val rollbackSession = session.captureDetachedState()
-    val rollbackMachine = DetachedStateAdapter.capture(session.gameboy)
+    val oldV9Buttons = v9RemoteButtons.map { it?.toSet() }
+    val oldInitialSynchronized = initialStateSynchronized
+    val oldHostCheckpointPending = hostCheckpointPending
+    val oldLocalCheckpointCreditPending = localCheckpointCreditPending
     try {
-      when (val root = checkpoint.stateFile.root) {
-        is MachineStateRoot -> {
-          val prepared = DetachedStateAdapter.prepare(session.gameboy, root.machine)
-          DetachedStateAdapter.commit(session.gameboy, prepared) { stage ->
-            v9ApplyProbe?.invoke(metadata.ownerPlayer, stage)
+      prepared.players.forEach { player ->
+        val session = player.session
+        player.machine?.let {
+          DetachedStateAdapter.commit(session.gameboy, it) { stage ->
+            v9ApplyProbe?.invoke(player.player, stage)
           }
         }
-        is SessionStateRoot -> {
-          val prepared = DetachedStateAdapter.prepare(session, root.session)
-          DetachedStateAdapter.commit(session, prepared) { stage ->
-            v9ApplyProbe?.invoke(metadata.ownerPlayer, stage)
+        player.sessionState?.let {
+          DetachedStateAdapter.commit(session, it) { stage ->
+            v9ApplyProbe?.invoke(player.player, stage)
           }
         }
-        else -> throw StateApplyException("V9 individual checkpoint has a group root")
       }
-      frame = metadata.frame
-      runtimeFrameFloor = metadata.frame
+      frame = prepared.frame
+      runtimeFrameFloor = prepared.frame
       currentInput = null
       lastInput = null
+      initialStateSynchronized = true
       rebaseHistoryToLiveState()
       syncV9RemoteButtons()
     } catch (failure: Throwable) {
       try {
-        when (checkpoint.stateFile.root) {
-          is MachineStateRoot -> DetachedStateAdapter.apply(session.gameboy, rollbackMachine)
-          is SessionStateRoot -> DetachedStateAdapter.apply(session, rollbackSession)
-          else -> Unit
+        links = oldLinks
+        sessions.indices.forEach { player ->
+          sessions[player] = oldSessions[player]
+          configs[player] = oldConfigs[player]
+          romBuffers[player] = oldRoms[player]
+          slotRomBuffers[player] = oldSlotRoms[player]
+          batteryBuffers[player] = oldBatteries[player]
+        }
+        sessions.indices.forEach { player ->
+          val session = sessions[player]
+          val rollback = rollbackSessions[player]
+          if (session != null && rollback != null) DetachedStateAdapter.commit(session, rollback)
+          v9RemoteButtons[player] = oldV9Buttons[player]
         }
         frame = oldFrame
         runtimeFrameFloor = oldFloor
         currentInput = oldCurrentInput
         lastInput = oldLastInput
+        initialStateSynchronized = oldInitialSynchronized
+        hostCheckpointPending = oldHostCheckpointPending
+        localCheckpointCreditPending = oldLocalCheckpointCreditPending
         stateHistory.restoreSnapshot(oldHistory)
-        syncV9RemoteButtons()
       } catch (rollbackFailure: Throwable) {
         failure.addSuppressed(rollbackFailure)
       }
@@ -374,7 +381,7 @@ class LinkedController(
   }
 
   /** Target-dependent reconstruction at the event safe point without any live mutation. */
-  private fun prepareV9Checkpoint(checkpoint: V9ValidatedCheckpoint) {
+  private fun prepareV9Checkpoint(checkpoint: V9ValidatedCheckpoint): V9PreparedControllerState {
     val metadata = checkpoint.metadata
     if (metadata.frame < 0 || metadata.frame > StateLimits.NETPLAY_MAX_FRAME) {
       throw StateApplyException("V9 checkpoint frame is outside the controller range")
@@ -389,6 +396,8 @@ class LinkedController(
           listOf(StateIdentityEntry(0, identity))
         }
     StateCodec.validateForTarget(checkpoint.stateFile, metadata.kind.rootKind, expected)
+    val preparedPlayers = mutableListOf<V9PreparedPlayerState>()
+    var preparedFrame = metadata.frame
     when (val root = checkpoint.stateFile.root) {
       is eu.rekawek.coffeegb.controller.state.LinkedSessionStateRoot -> {
         if (mode != LinkMode.FOUR_PLAYER_ADAPTER || metadata.slotMask != 0x0f ||
@@ -403,10 +412,16 @@ class LinkedController(
                 root.linked.players,
             )
         validateLinkedState(normalized)
+        preparedFrame = normalized.frame
         sessions.indices.forEach { player ->
           val session = sessions[player] ?: return@forEach
           val state = normalized.players[player].session ?: return@forEach
-          DetachedStateAdapter.prepare(session, state)
+          preparedPlayers +=
+              V9PreparedPlayerState(
+                  player,
+                  session,
+                  sessionState = DetachedStateAdapter.prepare(session, state),
+              )
         }
       }
       is MachineStateRoot -> {
@@ -415,7 +430,12 @@ class LinkedController(
         }
         val session = sessions.getOrNull(metadata.ownerPlayer)
             ?: throw StateApplyException("V9 checkpoint owner is not active")
-        DetachedStateAdapter.prepare(session.gameboy, root.machine)
+        preparedPlayers +=
+            V9PreparedPlayerState(
+                metadata.ownerPlayer,
+                session,
+                machine = DetachedStateAdapter.prepare(session.gameboy, root.machine),
+            )
       }
       is SessionStateRoot -> {
         if (mode != LinkMode.NORMAL || metadata.slotMask != 1 shl metadata.ownerPlayer) {
@@ -423,7 +443,51 @@ class LinkedController(
         }
         val session = sessions.getOrNull(metadata.ownerPlayer)
             ?: throw StateApplyException("V9 checkpoint owner is not active")
-        DetachedStateAdapter.prepare(session, root.session)
+        preparedPlayers +=
+            V9PreparedPlayerState(
+                metadata.ownerPlayer,
+                session,
+                sessionState = DetachedStateAdapter.prepare(session, root.session),
+            )
+      }
+    }
+    return V9PreparedControllerState(
+        preparedFrame,
+        sessions.toList(),
+        identities,
+        links,
+        preparedPlayers.toList(),
+    )
+  }
+
+  /** Captures the requested direct v2 root and identity tuple at the controller event safe point. */
+  private fun captureV9Checkpoint(request: V9CheckpointRequest): eu.rekawek.coffeegb.controller.state.StateFile {
+    if (request.frame != frame || request.frame < 0 || request.frame > StateLimits.NETPLAY_MAX_FRAME) {
+      throw StateApplyException("V9 checkpoint capture frame is no longer current")
+    }
+    return when (request.kind) {
+      V9CheckpointKind.MACHINE -> {
+        if (mode != LinkMode.NORMAL || request.slotMask != 1 shl request.ownerPlayer) {
+          throw StateApplyException("V9 MACHINE capture does not match normal topology")
+        }
+        val session = sessions.getOrNull(request.ownerPlayer)
+            ?: throw StateApplyException("V9 checkpoint owner is not active")
+        StateCodec.captureVersion2(session.config, session.gameboy)
+      }
+      V9CheckpointKind.SESSION -> {
+        if (mode != LinkMode.NORMAL || request.slotMask != 1 shl request.ownerPlayer) {
+          throw StateApplyException("V9 SESSION capture does not match normal topology")
+        }
+        StateCodec.captureVersion2(
+            sessions.getOrNull(request.ownerPlayer)
+                ?: throw StateApplyException("V9 checkpoint owner is not active"))
+      }
+      V9CheckpointKind.LINKED_SESSION -> {
+        if (mode != LinkMode.FOUR_PLAYER_ADAPTER || request.slotMask != 0x0f ||
+            request.ownerPlayer != 0) {
+          throw StateApplyException("V9 LINKED_SESSION capture is not the canonical group")
+        }
+        StateCodec.captureVersion2(this)
       }
     }
   }
@@ -588,9 +652,9 @@ class LinkedController(
 
     eventQueue.register<V9CheckpointPrepareEvent> { event ->
       try {
-        prepareV9Checkpoint(event.checkpoint)
+        val prepared = prepareV9Checkpoint(event.checkpoint)
         event.completion.complete(
-            V9LinkedPreparedCheckpoint(this, event.checkpoint),
+            V9LinkedPreparedCheckpoint(this, event.checkpoint, prepared),
             null,
         )
       } catch (_: Throwable) {
@@ -604,12 +668,24 @@ class LinkedController(
         return@register
       }
       try {
-        applyV9Checkpoint(event.transaction.checkpoint)
+        applyV9Checkpoint(event.transaction)
         event.completion.complete(null)
       } catch (_: Throwable) {
         event.completion.complete(V9ErrorCode.TOPOLOGY_MISMATCH)
       } finally {
         event.transaction.finishSafePointCommit()
+      }
+    }
+
+    eventQueue.register<V9CheckpointCaptureEvent> { event ->
+      if (!event.lease.runIfActive {
+            try {
+              event.capture.complete(captureV9Checkpoint(event.request), null)
+            } catch (_: Throwable) {
+              event.capture.complete(null, V9ErrorCode.TOPOLOGY_MISMATCH)
+            }
+          }) {
+        event.capture.complete(null, V9ErrorCode.CANCELLED)
       }
     }
 
@@ -1187,8 +1263,14 @@ class LinkedController(
     return validatePeer(source) { PeerFrameWindow.validateRuntimeFrame(peerFrame, frame) }
   }
 
-  private fun validateV9Runtime(peerFrame: Long, player: Int): V9ErrorCode? {
-    if (player == localPlayer || player !in sessions.indices || sessions[player] == null ||
+  private fun validateV9Runtime(
+      peerFrame: Long,
+      player: Int,
+      requireActiveSession: Boolean = true,
+  ): V9ErrorCode? {
+    if (player == localPlayer || player !in sessions.indices ||
+        requireActiveSession && sessions[player] == null ||
+        !requireActiveSession && configs[player] == null ||
         peerFrame < runtimeFrameFloor || stateHistory.oldestFrame()?.let { peerFrame < it } == true) {
       return V9ErrorCode.SEQUENCE_ERROR
     }
@@ -1228,7 +1310,12 @@ class LinkedController(
 
   private fun applyV9ControlEvent(event: V9RemoteControlEvent) {
     val value = event.value
-    val failure = validateV9Runtime(value.frame, value.player)
+    val failure =
+        validateV9Runtime(
+            value.frame,
+            value.player,
+            requireActiveSession = value.kind != V9RuntimeMessageKind.RESET,
+        )
     if (failure != null) {
       event.completion.complete(failure)
       return
@@ -1500,6 +1587,7 @@ class LinkedController(
           StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES.toLong()
         }
         is V9CheckpointCommitEvent -> 64L
+        is V9CheckpointCaptureEvent -> 64L
         else -> 64L
       }
 
@@ -1591,6 +1679,12 @@ class LinkedController(
       val completion: V9CheckpointCommitCompletion,
   ) : Event
 
+  private data class V9CheckpointCaptureEvent(
+      val request: V9CheckpointRequest,
+      val capture: V9PendingCheckpointCapture,
+      val lease: V9TargetLease,
+  ) : Event
+
   private data class V9RemoteInputEvent(
       val value: V9InputState,
       val completion: V9GameplayCompletion,
@@ -1640,12 +1734,33 @@ class LinkedController(
 /** Caller-owned adapter; it only posts bounded values to the controller's existing safe point. */
 internal class V9LinkedControllerTarget(
     private val controller: LinkedController,
-    identities: List<StateIdentityEntry>,
-) : V9CheckpointTarget, V9GameplayTarget {
-  private val expected = identities.toList()
+) : V9CheckpointTarget, V9CheckpointProvider, V9GameplayTarget, Closeable {
   private val lease = V9TargetLease()
+  private val captureLock = Any()
+  private val pendingCaptures = mutableSetOf<V9PendingCheckpointCapture>()
 
-  override fun expectedIdentities(): List<StateIdentityEntry> = expected.toList()
+  override fun expectedIdentities(): List<StateIdentityEntry> =
+      controller.captureV9PortableIdentities()
+
+  override fun capture(request: V9CheckpointRequest): ByteArray {
+    val pending = V9PendingCheckpointCapture()
+    synchronized(captureLock) {
+      if (!lease.runIfActive {
+            pendingCaptures.add(pending)
+            controller.enqueueV9CheckpointCapture(request, pending, lease)
+          }) {
+        throw eu.rekawek.coffeegb.controller.network.v9.V9ProtocolException(
+            V9ErrorCode.CANCELLED,
+            0,
+        )
+      }
+    }
+    return try {
+      pending.awaitEncoded()
+    } finally {
+      synchronized(captureLock) { pendingCaptures.remove(pending) }
+    }
+  }
 
   override fun prepare(
       checkpoint: V9ValidatedCheckpoint,
@@ -1667,10 +1782,21 @@ internal class V9LinkedControllerTarget(
   }
 
   override fun disconnected(player: Int) {
-    lease.close()
+    close()
     // Release only this peer's held state; session/topology ownership remains with the controller.
     controller.enqueueV9Input(V9InputState(controller.currentFrame(), player, 0, 0xffff))
   }
+
+  override fun close() {
+    lease.close()
+    synchronized(captureLock) {
+      pendingCaptures.forEach(V9PendingCheckpointCapture::cancel)
+      pendingCaptures.clear()
+    }
+  }
+
+  internal fun pendingCaptureCount(): Int =
+      synchronized(captureLock) { pendingCaptures.size }
 }
 
 internal class V9TargetLease {
@@ -1687,9 +1813,85 @@ internal class V9TargetLease {
   fun close() = synchronized(lock) { active = false }
 }
 
+internal class V9PendingCheckpointCapture {
+  private val lock = Any()
+  private val latch = CountDownLatch(1)
+  private var completed = false
+  @Volatile private var cancelled = false
+  private var stateFile: eu.rekawek.coffeegb.controller.state.StateFile? = null
+  private var failure: V9ErrorCode? = null
+
+  fun complete(
+      value: eu.rekawek.coffeegb.controller.state.StateFile?,
+      problem: V9ErrorCode?,
+  ) {
+    synchronized(lock) {
+      if (completed || cancelled) return
+      completed = true
+      stateFile = value
+      failure = problem
+      latch.countDown()
+    }
+  }
+
+  fun cancel() {
+    synchronized(lock) {
+      if (cancelled) return
+      cancelled = true
+      stateFile = null
+      failure = V9ErrorCode.CANCELLED
+      latch.countDown()
+    }
+  }
+
+  fun awaitEncoded(): ByteArray {
+    try {
+      latch.await()
+    } catch (interrupted: InterruptedException) {
+      Thread.currentThread().interrupt()
+      cancel()
+    }
+    val file = synchronized(lock) {
+      failure?.let {
+        throw eu.rekawek.coffeegb.controller.network.v9.V9ProtocolException(it, 0)
+      }
+      stateFile.also { stateFile = null }
+          ?: throw eu.rekawek.coffeegb.controller.network.v9.V9ProtocolException(
+              V9ErrorCode.CANCELLED,
+              0,
+          )
+    }
+    val encoded = StateCodec.encode(file, StateCompression.DEFLATE)
+    if (cancelled) {
+      encoded.fill(0)
+      throw eu.rekawek.coffeegb.controller.network.v9.V9ProtocolException(
+          V9ErrorCode.CANCELLED,
+          0,
+      )
+    }
+    return encoded
+  }
+}
+
+internal data class V9PreparedPlayerState(
+    val player: Int,
+    val session: Session,
+    val machine: PreparedMachineState? = null,
+    val sessionState: PreparedSessionState? = null,
+)
+
+internal data class V9PreparedControllerState(
+    val frame: Long,
+    val targetSessions: List<Session?>,
+    val targetIdentities: List<StateIdentityEntry>,
+    val targetLinks: StateHistory.Links,
+    val players: List<V9PreparedPlayerState>,
+)
+
 internal class V9LinkedPreparedCheckpoint(
     private val controller: LinkedController,
     internal val checkpoint: V9ValidatedCheckpoint,
+    internal val prepared: V9PreparedControllerState,
 ) : V9PreparedCheckpoint {
   private val committed = AtomicBoolean()
   private val closed = AtomicBoolean()

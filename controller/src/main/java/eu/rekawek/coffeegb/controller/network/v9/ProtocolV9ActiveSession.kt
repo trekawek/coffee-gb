@@ -14,6 +14,7 @@ internal fun interface V9PlaySend {
       correlation: Long,
       channel: Long,
       payload: ByteArray,
+      onAdmitted: (Long) -> Closeable,
       onWritten: () -> Unit,
   ): Long?
 }
@@ -34,7 +35,6 @@ internal class V9PlaySession(
   private val lock = Any()
   private val grant = V9CheckpointGrant(authorization)
   private val authorization = authorization
-  private val expectedIdentities = plan.checkpointTarget.expectedIdentities().toList()
   private var closed = false
   private var initialCheckpointReady = false
   private var checkpointFrame: Long? = null
@@ -56,7 +56,10 @@ internal class V9PlaySession(
     require(proposal.sourcePlayer == 0) {
       "v9 initial checkpoint is host-coordinated"
     }
-    V9CheckpointStateValidation.validateManifestIdentities(authorization, expectedIdentities)
+    V9CheckpointStateValidation.validateManifestIdentities(
+        authorization,
+        plan.checkpointTarget.expectedIdentities(),
+    )
   }
 
   fun start() {
@@ -188,7 +191,7 @@ internal class V9PlaySession(
       check(lifecycle.snapshot().state == V9LifecycleState.ACTIVE)
     }
     val sequence =
-        send.send(type, 0, 0, player.toLong() + 1, payload) {
+        send.send(type, 0, 0, player.toLong() + 1, payload, { Closeable {} }) {
           if (!isClosed()) lifecycle.activeProgress()
         }
     payload.fill(0)
@@ -209,7 +212,14 @@ internal class V9PlaySession(
     var state: ByteArray? = null
     var ticket: V9CheckpointGrant.Ticket? = null
     try {
-      state = provider.capture(V9CheckpointRequest(kind, mask, owner, frame))
+      val request = V9CheckpointRequest(kind, mask, owner, frame)
+      state =
+          if (initial && mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+            requireNotNull(plan.fourPlayerCoordinator)
+                .captureInitial(authenticatedGuest, request, provider)
+          } else {
+            provider.capture(request)
+          }
       val declaration =
           V9CheckpointDeclaration(
               metadata,
@@ -223,7 +233,11 @@ internal class V9PlaySession(
               peerActor(),
               checkpointChannel(metadata),
           )
-      V9CheckpointStateValidation.decodeAndValidate(state, declaration, expectedIdentities)
+      V9CheckpointStateValidation.decodeAndValidate(
+          state,
+          declaration,
+          plan.checkpointTarget.expectedIdentities(),
+      )
       val payload = V9CheckpointCodec.encode(metadata, state)
       val queuedTicket = checkNotNull(ticket)
       val admitted =
@@ -233,6 +247,7 @@ internal class V9PlaySession(
               0,
               checkpointChannel(metadata),
               payload,
+              { Closeable {} },
           ) {
             queuedTicket.commit()
             markCheckpointReady(frame, declaration.stateDigest(), initial)
@@ -296,7 +311,12 @@ internal class V9PlaySession(
       state: ByteArray,
   ) {
     try {
-      val file = V9CheckpointStateValidation.decodeAndValidate(state, declaration, expectedIdentities)
+      val file =
+          V9CheckpointStateValidation.decodeAndValidate(
+              state,
+              declaration,
+              plan.checkpointTarget.expectedIdentities(),
+          )
       val completed = AtomicBoolean(false)
       plan.checkpointTarget.prepare(
           V9ValidatedCheckpoint(declaration.metadata, file, declaration.digestView()),
@@ -448,15 +468,32 @@ internal class V9PlaySession(
             0,
             ProtocolV9.CONTROL_CHANNEL,
             payload,
-        ) {
-          lifecycle.serverStartSent()
-        }
+            { admittedSequence ->
+              val lifecycleRollback = lifecycle.admitServerStart()
+              synchronized(lock) {
+                try {
+                  ensureOpen()
+                  check(startSessionId == null && startSequence == null)
+                  startSessionId = sessionId
+                  startSequence = admittedSequence
+                } catch (failure: RuntimeException) {
+                  lifecycleRollback.close()
+                  throw failure
+                }
+              }
+              Closeable {
+                synchronized(lock) {
+                  if (startSessionId == sessionId && startSequence == admittedSequence) {
+                    startSessionId = null
+                    startSequence = null
+                  }
+                }
+                lifecycleRollback.close()
+              }
+            },
+        ) {}
     payload.fill(0)
     if (sequence == null) return protocolFailure(V9ErrorCode.QUEUE_OVERFLOW)
-    synchronized(lock) {
-      startSessionId = sessionId
-      startSequence = sequence
-    }
   }
 
   private fun handleStart(sequence: Long, payload: ByteArray) {
@@ -498,8 +535,8 @@ internal class V9PlaySession(
             value.sequence,
             ProtocolV9.CONTROL_CHANNEL,
             payload,
+            { lifecycle.admitClientReady() },
         ) {
-          lifecycle.clientReadySent()
           publishActive(value.sessionId, value.frame)
         }
     payload.fill(0)
@@ -612,6 +649,9 @@ internal class V9PlaySession(
       lastInputOrder.clear()
     }
     registration?.close()
+    if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+      plan.fourPlayerCoordinator?.abandon(authenticatedGuest)
+    }
     grant.close()
     try {
       plan.gameplayTarget.disconnected(peerActor())

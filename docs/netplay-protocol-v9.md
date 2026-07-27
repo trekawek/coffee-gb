@@ -417,26 +417,34 @@ without mutation; (6) one frame-safe atomic commit consumes the grant. Failure a
 closes the ticket without advancing its frame/use counters.
 
 An initial state is MACHINE. A normal running checkpoint is SESSION. A four-player checkpoint is
-one LINKED_SESSION root containing exactly the active slot mask, endpoint identities, one coherent
-shared FourPlayerAdapter topology, held inputs, frame/runtime floor, and canonical profile IDs for
-all members. It is decoded and target-validated off the emulator thread, then prepared and applied
-at the existing frame safe point as one transaction. ROM/slot hashes, profiles, bootstrap/accessory
+one LINKED_SESSION root with logical mask `0f`, endpoint identities, one coherent shared
+FourPlayerAdapter topology, held inputs, frame/runtime floor, and canonical profile IDs for every
+physically present member. A physically empty port has a null identity and null session but does
+not remove its logical slot; STOP followed by RESET or a later resynchronization may repopulate it.
+It is decoded and target-validated off the emulator thread, then prepared and applied at the
+existing frame safe point as one transaction. ROM/slot hashes, profiles, bootstrap/accessory
 flags, root kind, slots, local owner, endpoint/topology, and integrity must agree before mutation.
 Any member failure rejects only the source and leaves live sessions, history, inputs, frame,
 configuration, and topology unchanged. The #349 implementation captures the controller's current
 machine/session/history/input/frame floor before its first commit callback and restores all of it
 on failure. Target-dependent construction is a separate no-mutation prepare phase; the
-directional grant is consumed only after the frame-safe commit reports success.
+directional grant is consumed only after the frame-safe commit reports success. Production capture
+uses the same controller event boundary and resolves identities from the post-consent/post-transfer
+target generation; StateFile encoding occurs after the detached capture leaves that owner.
 
 The host is the four-player coordinator across three independently authenticated guest TCP
-sessions. It selects one nonzero target generation, roster mask `0f`, roster commitment, and
-LINKED_SESSION checkpoint digest before candidate admission. Candidate occupancy is separate from
-the committed/live emulator topology. Guest 1 and guest 2 preparation therefore leave the live
+sessions. It selects one nonzero target generation, roster mask `0f`, roster commitment, and one
+frame-safe LINKED_SESSION capture before candidate admission. The same immutable bytes and digest
+are reused for all three guests even if emulation advances between their transports. Candidate
+occupancy is separate from the committed/live emulator topology. Guest 1 and guest 2 preparation
+therefore leave the live
 mask unchanged and cannot authorize START. The barrier opens only after all required guests have
 presented the same roster tuple, validated the same checkpoint identity/digest, completed their
 per-connection directional consents/transfers, and prepared without mutation. The coordinator
-then commits the entire target roster once and allows START/READY on all sessions. Collision or
-candidate failure removes only that candidate; it cannot partially grow or alter the committed
+then releases START on all sessions. Each guest commits its already-prepared target atomically
+before admitting its correlated READY. A READY acknowledges only that guest commit; the host opens
+ACTIVE after all three READY responses. Collision or candidate failure removes only that
+candidate; it cannot partially grow or alter the committed
 topology. After commitment, a replacement must authenticate the vacated slot and use the same
 committed slot, generation, commitment, and checkpoint identity; changing topology requires a new
 session generation.

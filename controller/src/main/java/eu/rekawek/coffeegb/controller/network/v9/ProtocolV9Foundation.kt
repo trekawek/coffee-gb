@@ -1108,6 +1108,7 @@ class V9FoundationConnection(
       correlation: Long,
       channel: Long,
       payload: ByteArray,
+      onAdmitted: (Long) -> Closeable,
       onWritten: () -> Unit,
   ): Long? =
       synchronized(wireStateLock) {
@@ -1125,23 +1126,32 @@ class V9FoundationConnection(
               reject(e.reason, diagnosticFor(e.reason))
               return@synchronized null
             }
+        var requestRecorded = false
+        var admissionRollback: Closeable? = null
         if (type == V9MessageType.START) {
           try {
             responseLedger.recordPeerRequest(sequence, V9MessageType.START)
+            requestRecorded = true
           } catch (_: RuntimeException) {
             encoded.fill(0)
             reject(V9ErrorCode.CORRELATION_ERROR, V9Diagnostic.TRANSFER_REJECTED)
             return@synchronized null
           }
         }
-        advanceOutgoingSequence()
-        val offered =
-            try {
-              writer.offer(encoded, onWritten)
-            } finally {
-              encoded.fill(0)
-            }
+        val offered = try {
+          admissionRollback = onAdmitted(sequence)
+          advanceOutgoingSequence()
+          writer.offer(encoded, onWritten)
+        } catch (_: RuntimeException) {
+          false
+        } finally {
+          encoded.fill(0)
+        }
         if (offered) sequence else {
+          admissionRollback?.close()
+          if (requestRecorded) {
+            responseLedger.cancelPeerRequest(sequence, V9MessageType.START)
+          }
           reject(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
           null
         }

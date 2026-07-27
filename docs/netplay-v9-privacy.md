@@ -91,11 +91,14 @@ open one lazy ROM/battery source. A verified transaction ends at an immutable pr
 `SYNCHRONIZING` boundary. Manifest preparation itself still supplies hashes, sizes, sanitized
 title/type/profile identity, and availability only—never ROM, battery, StateFile, or path bytes.
 
-Only an additional `V9PlayPlan` can cross that boundary. It supplies an off-EDT checkpoint provider
-and a controller-owned two-stage target; the transport never consults the local legacy importer.
-The initial direct StateFile-v2 checkpoint is prepared without mutation, committed at the frame
-safe point, and acknowledged by READY only after commit. Normal ACTIVE resynchronization uses a
-SESSION root; four-player always uses one complete LINKED_SESSION. Rejection wipes retained state
+Only an additional `V9PlayPlan` can cross that boundary. Its production LinkedController provider
+captures one detached root plus current post-transfer identities at the frame safe point and
+encodes off-owner; the transport never consults the local legacy importer. The initial direct
+StateFile-v2 checkpoint is prepared without mutation and committed at the frame safe point. READY
+is admitted only after that guest commit; the host treats it as a per-guest acknowledgement and
+opens four-player ACTIVE only after all three acknowledgements. Normal ACTIVE resynchronization
+uses a SESSION root; four-player uses one generation-frozen LINKED_SESSION with logical mask `0f`
+and may preserve null physical ports. Rejection wipes retained state
 bytes where practicable, releases the candidate, and preserves the live sessions/history/input/
 topology transactionally. No path, token, ROM, battery, StateFile bytes, digest, remote title, or
 input value is emitted in INFO diagnostics.
