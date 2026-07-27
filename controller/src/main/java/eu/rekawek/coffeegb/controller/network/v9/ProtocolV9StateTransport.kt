@@ -238,6 +238,15 @@ fun interface V9CheckpointPrepareCompletion {
 interface V9PreparedCheckpoint : Closeable {
   /** Schedules the already-prepared transaction's one atomic live commit at the frame safe point. */
   fun commit(completion: V9CheckpointCommitCompletion)
+
+  /**
+   * Returns true only when cancellation is linearized before the first safe-point mutation. A
+   * false result means the safe-point commit already won and its one completion remains decisive.
+   */
+  fun cancelBeforeCommit(): Boolean {
+    close()
+    return true
+  }
 }
 
 fun interface V9CheckpointCommitCompletion {
@@ -250,7 +259,7 @@ fun interface V9GameplayCompletion {
   fun complete(failure: V9ErrorCode?)
 }
 
-interface V9CheckpointTarget {
+interface V9CheckpointTarget : Closeable {
   /**
    * Captures one coherent target identity/topology generation at the emulation-owner safe point.
    * Implementations may block the calling foundation worker, never the network reader or owner.
@@ -262,7 +271,9 @@ interface V9CheckpointTarget {
       checkpoint: V9ValidatedCheckpoint,
       generation: V9TargetGeneration,
       completion: V9CheckpointPrepareCompletion,
-  )
+  ): Closeable
+
+  override fun close() {}
 }
 
 interface V9CheckpointProvider : Closeable {
@@ -514,6 +525,8 @@ class V9FourPlayerCoordinator(
   private var committedFrame: Long? = null
   private var capture: InitialCapture? = null
   private val captureClaimants = mutableSetOf<Int>()
+  private val runtimePeers = mutableMapOf<Int, RuntimePeer>()
+  private val activeRuntimePeers = mutableSetOf<Int>()
   private val closed = AtomicBoolean()
   private val ownedExecutor = executor == null
   private val captureExecutor =
@@ -630,6 +643,7 @@ class V9FourPlayerCoordinator(
         ready.remove(guest)
         started.remove(guest)
         activated.remove(guest)
+        activeRuntimePeers.remove(guest)
         releaseGenerationIfUnused()
       }
     }
@@ -642,10 +656,101 @@ class V9FourPlayerCoordinator(
         ready.remove(guest)
         started.remove(guest)
         activated.remove(guest)
+        activeRuntimePeers.remove(guest)
       }
       releaseGenerationIfUnused()
     }
   }
+
+  /** Registers one isolated server-side guest connection as a bounded relay destination. */
+  internal fun registerRuntime(
+      guest: Int,
+      relay: V9FourPlayerRuntimeRelay,
+  ): Closeable {
+    require(guest in 1..3)
+    val registration = RuntimePeer(relay)
+    synchronized(lock) {
+      if (closed.get() || runtimePeers.putIfAbsent(guest, registration) != null) {
+        throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+      }
+    }
+    return Closeable {
+      synchronized(lock) {
+        if (runtimePeers[guest] === registration) {
+          runtimePeers.remove(guest)
+          activeRuntimePeers.remove(guest)
+        }
+      }
+    }
+  }
+
+  internal fun activateRuntime(guest: Int) {
+    synchronized(lock) {
+      if (guest !in activated || guest !in runtimePeers) {
+        throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+      }
+      activeRuntimePeers.add(guest)
+    }
+  }
+
+  /** Host player zero is already authoritative locally; this only fans out the accepted value. */
+  internal fun broadcastHostInput(value: V9InputState) {
+    require(value.player == 0)
+    runtimeSnapshot().forEach { relay ->
+      try {
+        relay.sendInput(value)
+      } catch (_: RuntimeException) {
+        // A failed downstream connection owns its own typed close; healthy peers still receive.
+      }
+    }
+  }
+
+  internal fun broadcastHostControl(value: V9RuntimeControl) {
+    require(value.player == 0)
+    runtimeSnapshot().forEach { relay ->
+      try {
+        relay.sendControl(value)
+      } catch (_: RuntimeException) {
+        // A failed downstream connection cannot revoke the remaining runtime peers.
+      }
+    }
+  }
+
+  /** Called only after the host controller accepted the authenticated guest's event. */
+  internal fun relayGuestInput(guest: Int, value: V9InputState) {
+    if (guest !in 1..3 || value.player != guest) {
+      throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+    }
+    runtimeSnapshot(excluding = guest).forEach { relay ->
+      try {
+        relay.sendInput(value)
+      } catch (_: RuntimeException) {
+        // Keep fan-out isolated per guest connection.
+      }
+    }
+  }
+
+  internal fun relayGuestControl(guest: Int, value: V9RuntimeControl) {
+    if (guest !in 1..3 || value.player != guest) {
+      throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+    }
+    runtimeSnapshot(excluding = guest).forEach { relay ->
+      try {
+        relay.sendControl(value)
+      } catch (_: RuntimeException) {
+        // Keep fan-out isolated per guest connection.
+      }
+    }
+  }
+
+  private fun runtimeSnapshot(excluding: Int? = null): List<V9FourPlayerRuntimeRelay> =
+      synchronized(lock) {
+        activeRuntimePeers.asSequence()
+            .filter { it != excluding }
+            .sorted()
+            .mapNotNull { runtimePeers[it]?.relay }
+            .toList()
+      }
 
   fun ready(guest: Int, activate: () -> Unit) {
     val callbacks: List<() -> Unit>
@@ -684,6 +789,7 @@ class V9FourPlayerCoordinator(
       ready.clear()
       started.clear()
       activated.clear()
+      activeRuntimePeers.clear()
     }
   }
 
@@ -698,6 +804,8 @@ class V9FourPlayerCoordinator(
       ready.clear()
       started.clear()
       activated.clear()
+      runtimePeers.clear()
+      activeRuntimePeers.clear()
       committedDigest?.fill(0)
       committedDigest = null
       committedFrame = null
@@ -710,6 +818,10 @@ class V9FourPlayerCoordinator(
 
   internal fun workerTerminated(): Boolean =
       !ownedExecutor || captureExecutor.isTerminated
+
+  internal fun activeRuntimeCount(): Int = synchronized(lock) { activeRuntimePeers.size }
+
+  private class RuntimePeer(val relay: V9FourPlayerRuntimeRelay)
 
   private class InitialCapture(val request: V9CheckpointRequest) : Closeable {
     private val done = CountDownLatch(1)
@@ -771,6 +883,11 @@ class V9FourPlayerCoordinator(
       }
     }
   }
+}
+
+internal interface V9FourPlayerRuntimeRelay {
+  fun sendInput(value: V9InputState)
+  fun sendControl(value: V9RuntimeControl)
 }
 
 internal object V9CheckpointStateValidation {

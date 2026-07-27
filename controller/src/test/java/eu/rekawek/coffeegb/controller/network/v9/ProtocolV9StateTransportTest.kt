@@ -39,6 +39,7 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.Semaphore
@@ -205,6 +206,186 @@ class ProtocolV9StateTransportTest {
       corrupt.fill(0)
       oversizedDecoded.fill(0)
     } finally {
+      fixture.close()
+    }
+  }
+
+  @Test
+  fun closingPlayableSessionCancelsQueuedCommitAndLeavesGrantUnconsumed() {
+    val fixture = stateFixture()
+    val generation = targetGeneration(fixture.identities, frame = 9)
+    val queuedCompletion = AtomicReference<V9CheckpointCommitCompletion?>()
+    val prepared =
+        object : V9PreparedCheckpoint {
+          private val cancelled = AtomicBoolean()
+
+          override fun commit(completion: V9CheckpointCommitCompletion) {
+            assertTrue(queuedCompletion.compareAndSet(null, completion))
+          }
+
+          override fun cancelBeforeCommit(): Boolean {
+            if (cancelled.compareAndSet(false, true)) {
+              queuedCompletion.getAndSet(null)?.complete(V9ErrorCode.CANCELLED)
+            }
+            return true
+          }
+
+          override fun close() {
+            cancelBeforeCommit()
+          }
+        }
+    val target =
+        object : V9CheckpointTarget, V9GameplayTarget {
+          override fun captureGeneration(): V9TargetGeneration = generation
+
+          override fun prepare(
+              checkpoint: V9ValidatedCheckpoint,
+              expected: V9TargetGeneration,
+              completion: V9CheckpointPrepareCompletion,
+          ): java.io.Closeable {
+            assertTrue(generation.sameIdentityGeneration(expected))
+            completion.complete(prepared, null)
+            return java.io.Closeable {}
+          }
+
+          override fun input(value: V9InputState, completion: V9GameplayCompletion) =
+              completion.complete(null)
+
+          override fun control(value: V9RuntimeControl, completion: V9GameplayCompletion) =
+              completion.complete(null)
+        }
+    val lifecycle = clientLifecycleAtActive()
+    val plan =
+        V9GuestPlayPlan(
+            target,
+            target,
+            initialKind = V9CheckpointKind.MACHINE,
+            initialOwnerPlayer = 0,
+        )
+    val session =
+        V9PlaySession(
+            V9Role.CLIENT,
+            V9LinkMode.NORMAL,
+            1,
+            authorization(fixture.identity),
+            plan,
+            generation,
+            { _, task -> Thread().also { task() } },
+            V9PlaySend { _, _, _, _, _, _, _ -> 1 },
+            lifecycle,
+            { reason, _ -> throw AssertionError("unexpected failure $reason") },
+            {},
+        )
+    try {
+      val metadata = V9CheckpointMetadata(V9CheckpointKind.SESSION, 0x01, 0, 10, 41)
+      val payload = V9CheckpointCodec.encode(metadata, fixture.v2Session)
+      V9Frame(
+              V9FrameHeader(
+                  V9MessageType.CHECKPOINT.wireId,
+                  V9MessageType.CHECKPOINT,
+                  0,
+                  0,
+                  1,
+                  payload.size.toLong(),
+                  payload.size.toLong(),
+                  1,
+                  ByteArray(32),
+              ),
+              payload,
+          )
+          .use(session::handle)
+      assertNotNull(queuedCompletion.get())
+      session.close()
+      assertEquals(V9ErrorCode.CANCELLED, session.checkpointOutcome())
+      assertEquals(1, session.checkpointCompletions())
+      assertEquals(0, session.grantUses())
+      assertNull(queuedCompletion.get())
+    } finally {
+      session.close()
+      fixture.close()
+    }
+  }
+
+  @Test
+  fun safePointCommitWinnerCompletesOnceAndConsumesGrantWhenCloseRacesAfterSelection() {
+    val fixture = stateFixture()
+    val generation = targetGeneration(fixture.identities, frame = 9)
+    val selected = AtomicBoolean()
+    val commitCompletion = AtomicReference<V9CheckpointCommitCompletion?>()
+    val prepared =
+        object : V9PreparedCheckpoint {
+          override fun commit(completion: V9CheckpointCommitCompletion) {
+            assertTrue(commitCompletion.compareAndSet(null, completion))
+          }
+
+          override fun cancelBeforeCommit(): Boolean = !selected.get()
+
+          override fun close() {}
+        }
+    val target =
+        object : V9CheckpointTarget, V9GameplayTarget {
+          override fun captureGeneration(): V9TargetGeneration = generation
+
+          override fun prepare(
+              checkpoint: V9ValidatedCheckpoint,
+              generation: V9TargetGeneration,
+              completion: V9CheckpointPrepareCompletion,
+          ): java.io.Closeable {
+            completion.complete(prepared, null)
+            return java.io.Closeable {}
+          }
+
+          override fun input(value: V9InputState, completion: V9GameplayCompletion) =
+              completion.complete(null)
+
+          override fun control(value: V9RuntimeControl, completion: V9GameplayCompletion) =
+              completion.complete(null)
+        }
+    val session =
+        V9PlaySession(
+            V9Role.CLIENT,
+            V9LinkMode.NORMAL,
+            1,
+            authorization(fixture.identity),
+            V9GuestPlayPlan(target, target, initialKind = V9CheckpointKind.MACHINE,
+                initialOwnerPlayer = 0),
+            generation,
+            { _, task -> Thread().also { task() } },
+            V9PlaySend { _, _, _, _, _, _, _ -> 1 },
+            clientLifecycleAtActive(),
+            { reason, _ -> throw AssertionError("unexpected failure $reason") },
+            {},
+        )
+    try {
+      val metadata = V9CheckpointMetadata(V9CheckpointKind.SESSION, 0x01, 0, 10, 41)
+      val payload = V9CheckpointCodec.encode(metadata, fixture.v2Session)
+      V9Frame(
+              V9FrameHeader(
+                  V9MessageType.CHECKPOINT.wireId,
+                  V9MessageType.CHECKPOINT,
+                  0,
+                  0,
+                  1,
+                  payload.size.toLong(),
+                  payload.size.toLong(),
+                  1,
+                  ByteArray(32),
+              ),
+              payload,
+          )
+          .use(session::handle)
+      assertNotNull(commitCompletion.get())
+      selected.set(true)
+      session.close()
+      assertEquals(0, session.checkpointCompletions())
+      commitCompletion.getAndSet(null)?.complete(null)
+      assertEquals(1, session.checkpointCompletions())
+      assertNull(session.checkpointOutcome())
+      assertEquals(1, session.grantUses())
+      prepared.close()
+      assertEquals(1, session.checkpointCompletions())
+    } finally {
+      session.close()
       fixture.close()
     }
   }
@@ -788,6 +969,148 @@ class ProtocolV9StateTransportTest {
   }
 
   @Test
+  fun cancellingConnectionOwnsPendingTargetGenerationTaskAndLeavesControllerUnchanged() {
+    val source = linkedControllerFixture(LinkMode.NORMAL, 0, 2)
+    val delegate = source.controller.createV9Target()
+    val sourceGeneration = captureGeneration(delegate, source.controller)
+    val identity = assertNotNull(sourceGeneration.identities[0].identity)
+    val pair = manifestPair(identity)
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val targetClosed = AtomicBoolean()
+    val target =
+        object : V9CheckpointTarget, V9CheckpointProvider, V9GameplayTarget {
+          override fun captureGeneration(): V9TargetGeneration {
+            entered.countDown()
+            try {
+              release.await()
+            } catch (interrupted: InterruptedException) {
+              Thread.currentThread().interrupt()
+              throw V9ProtocolException(V9ErrorCode.CANCELLED, 0)
+            }
+            if (targetClosed.get()) throw V9ProtocolException(V9ErrorCode.CANCELLED, 0)
+            return delegate.captureGeneration()
+          }
+
+          override fun capture(request: V9CheckpointRequest): V9CapturedCheckpoint =
+              delegate.capture(request)
+
+          override fun prepare(
+              checkpoint: V9ValidatedCheckpoint,
+              generation: V9TargetGeneration,
+              completion: V9CheckpointPrepareCompletion,
+          ): java.io.Closeable = delegate.prepare(checkpoint, generation, completion)
+
+          override fun input(value: V9InputState, completion: V9GameplayCompletion) =
+              delegate.input(value, completion)
+
+          override fun control(value: V9RuntimeControl, completion: V9GameplayCompletion) =
+              delegate.control(value, completion)
+
+          override fun close() {
+            if (targetClosed.compareAndSet(false, true)) {
+              delegate.close()
+              release.countDown()
+            }
+          }
+        }
+    val before = source.controller.captureDetachedState()
+    val beforeHistory = source.controller.stateHistory.captureSnapshot()
+    val host = V9InvitationHost(V9LinkMode.NORMAL)
+    val accepted = LinkedBlockingQueue<V9FoundationConnection>()
+    val server =
+        V9FoundationServer(
+            mode = V9LinkMode.NORMAL,
+            invitationHost = host,
+            manifestPlan = V9ManifestPlan.server(V9LinkMode.NORMAL, mapOf(1 to pair.server)),
+            part3Plan = V9Part3Plan.server(V9LinkMode.NORMAL, mapOf(1 to part3Guest())),
+            playPlan =
+                V9PlayPlan.server(
+                    V9LinkMode.NORMAL,
+                    mapOf(
+                        1 to V9GuestPlayPlan(
+                            target,
+                            target,
+                            target,
+                            V9CheckpointKind.MACHINE,
+                            0,
+                        ),
+                    ),
+                ),
+        ) { accepted.put(it) }
+    var client: V9FoundationConnection? = null
+    try {
+      server.start()
+      val invitation =
+          host.createInvitation("127.0.0.1", server.localPort, 1).forClientAuthentication()
+      client =
+          V9FoundationClient.connect(
+              InetSocketAddress("127.0.0.1", server.localPort),
+              V9LinkMode.NORMAL,
+              emptySet(),
+              V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt(),
+              invitation,
+              V9ManifestPlan.client(V9LinkMode.NORMAL, 1, pair.client),
+              V9Part3Plan.client(V9LinkMode.NORMAL, 1, part3Guest()),
+              V9PlayPlan.client(
+                  V9LinkMode.NORMAL,
+                  1,
+                  target(
+                      sourceGeneration.identities,
+                      AtomicReference(),
+                      LinkedBlockingQueue(),
+                  ).let { clientTarget ->
+                    V9GuestPlayPlan(
+                        clientTarget,
+                        clientTarget,
+                        initialKind = V9CheckpointKind.MACHINE,
+                        initialOwnerPlayer = 0,
+                    )
+                  },
+              ),
+          )
+      val serverConnection = assertNotNull(accepted.poll(5, TimeUnit.SECONDS))
+      assertNotNull(serverConnection.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      waitUntil {
+        try {
+          serverConnection.submitConsent(41, V9ConsentDecision.APPROVE)
+          true
+        } catch (_: IllegalStateException) {
+          false
+        }
+      }
+      waitUntil {
+        try {
+          client.submitConsent(41, V9ConsentDecision.APPROVE)
+          true
+        } catch (_: IllegalStateException) {
+          false
+        }
+      }
+      assertTrue(entered.await(5, TimeUnit.SECONDS))
+      assertTrue(serverConnection.activeTaskCount() > 0)
+      serverConnection.cancel()
+      waitUntil {
+        serverConnection.activeTaskCount() == 0 && delegate.pendingCaptureCount() == 0
+      }
+      assertTrue(targetClosed.get())
+      assertEquals(V9ErrorCode.CANCELLED, serverConnection.snapshot().failure?.reason)
+      assertNull(serverConnection.activeBoundary())
+      assertEquals(before, source.controller.captureDetachedState())
+      assertEquals(beforeHistory, source.controller.stateHistory.captureSnapshot())
+    } finally {
+      release.countDown()
+      client?.close()
+      server.close()
+      target.close()
+      host.close()
+      source.close()
+    }
+    waitUntil { server.pendingCandidateCount() == 0 && server.activeConnectionCount() == 0 }
+  }
+
+  @Test
   fun readyAndActiveDeadlinesAreExactAndOnlyValidatedProgressReanchorsActive() {
     val clock = MutableClock()
     fun clientAtSynchronizing(): V9Lifecycle {
@@ -1085,6 +1408,58 @@ class ProtocolV9StateTransportTest {
   }
 
   @Test
+  fun fourPlayerServerRejectsGuestSpoofBeforeTargetAndAcceptsAuthenticatedPlayer() {
+    val fixture = linkedStateFixture()
+    val pair = fourManifestPair(1, fixture.identities)
+    val authorization = fourAuthorization(pair, 1)
+    val inputs = LinkedBlockingQueue<V9InputState>()
+    val target =
+        target(
+            fixture.identities,
+            AtomicReference(),
+            inputs,
+            V9LinkMode.FOUR_PLAYER,
+            frame = 11,
+        )
+    val coordinator = V9FourPlayerCoordinator(provider(target.captureGeneration()) { fixture.bytes })
+    val failure = AtomicReference<V9ErrorCode?>()
+    val session =
+        V9PlaySession(
+            V9Role.SERVER,
+            V9LinkMode.FOUR_PLAYER,
+            1,
+            authorization,
+            V9GuestPlayPlan(
+                target,
+                target,
+                initialKind = V9CheckpointKind.LINKED_SESSION,
+                initialOwnerPlayer = 0,
+                fourPlayerCoordinator = coordinator,
+            ),
+            target.captureGeneration(),
+            { _, task -> Thread().also { task() } },
+            V9PlaySend { _, _, _, _, _, _, _ -> 1 },
+            serverLifecycleAtActive(),
+            { reason, _ -> failure.compareAndSet(null, reason) },
+            {},
+        )
+    try {
+      runtimeFrame(V9InputState(11, 2, 0x10, 1)).use(session::handle)
+      assertEquals(V9ErrorCode.TOPOLOGY_MISMATCH, failure.get())
+      assertNull(inputs.poll())
+
+      failure.set(null)
+      runtimeFrame(V9InputState(11, 1, 0x10, 1)).use(session::handle)
+      assertEquals(V9InputState(11, 1, 0x10, 1), inputs.poll(5, TimeUnit.SECONDS))
+      assertNull(failure.get())
+    } finally {
+      session.close()
+      coordinator.close()
+      fixture.close()
+    }
+  }
+
+  @Test
   fun realSocketFourPlayerBarrierRequiresOneCoherentLinkedCheckpointBeforeAllGuestsBecomeActive() {
     val fixture = linkedStateFixture()
     val sharedGeneration =
@@ -1235,6 +1610,7 @@ class ProtocolV9StateTransportTest {
     val coordinator = V9FourPlayerCoordinator(captureTarget)
     val host = V9InvitationHost(V9LinkMode.FOUR_PLAYER)
     val accepted = LinkedBlockingQueue<V9FoundationConnection>()
+    val transports = (1..3).associateWith { FragmentingSocketChannel() }
     val server =
         V9FoundationServer(
             mode = V9LinkMode.FOUR_PLAYER,
@@ -1344,7 +1720,7 @@ class ProtocolV9StateTransportTest {
                         initialOwnerPlayer = 0,
                     ),
                 ),
-            ) { FragmentingSocketChannel() }
+            ) { transports.getValue(guest) }
       }
       val acceptedConnections =
           List(3) { assertNotNull(accepted.poll(5, TimeUnit.SECONDS)) }
@@ -1377,18 +1753,115 @@ class ProtocolV9StateTransportTest {
       assertTrue((serverConnections.values + clients).all {
         it.snapshot().state == V9LifecycleState.ACTIVE && it.snapshot().failure == null
       })
-      val hotPlugTarget = recipients.first().controller
-      val controlFrame = hotPlugTarget.currentFrame()
-      serverConnections.getValue(1).sendControl(
-          V9RuntimeControl(V9RuntimeMessageKind.STOP, controlFrame, 0),
+      assertEquals(3, coordinator.activeRuntimeCount())
+
+      // Guest 1 owns the local input first. Its network frame is then held at deterministic
+      // transport-fragment gates while the host and the two other replicas advance. The host must
+      // validate/apply it before fan-out, and both non-origin guests must replay the late input.
+      val replayControllers =
+          listOf(source.controller, recipients[1].controller, recipients[2].controller)
+      val replayBuses = replayControllers.map { controller ->
+        val replayed = AtomicInteger()
+        val bus = EventBusImpl().also { debug ->
+          debug.register<StateHistory.GameboyJoypadPressEvent> { event ->
+            if (event.gameboy == 1 && event.button == Button.A) replayed.incrementAndGet()
+          }
+        }
+        controller.stateHistory.debugEventBus = bus
+        replayed to bus
+      }
+      val delayedFrame = recipients[0].controller.currentFrame()
+      recipients[0].eventBus.post(ButtonPressEvent(Button.A))
+      recipients[0].controller.runFrame()
+      transports.getValue(1).scheduleWrites()
+      clients[0].sendInput(V9InputState(delayedFrame, 1, 0x10, 1))
+      waitUntil { transports.getValue(1).blockedWriteCount() >= 1 }
+      transports.getValue(1).allowWriteFragments(1)
+      waitUntil { transports.getValue(1).blockedWriteCount() >= 2 }
+      replayControllers.forEach(LinkedController::runFrame)
+      transports.getValue(1).allowWriteFragments(2)
+      waitUntil { transports.getValue(1).blockedWriteCount() >= 4 }
+      replayControllers.forEach(LinkedController::runFrame)
+      transports.getValue(1).releaseScheduledWrites()
+      pumpSafePoints(replayControllers) {
+        replayControllers.all { it.stateHistory.captureSnapshot().patches.isNotEmpty() }
+      }
+      replayControllers.forEach(LinkedController::runFrame)
+      assertTrue(
+          replayBuses.all { it.first.get() > 0 },
+          "late guest input must replay on host and every non-origin replica",
       )
-      pumpSafePoints(listOf(hotPlugTarget)) { hotPlugTarget.activeSessionCount() == 3 }
-      assertNull(hotPlugTarget.captureDetachedState().players[0].session)
-      serverConnections.getValue(1).sendControl(
-          V9RuntimeControl(V9RuntimeMessageKind.RESET, controlFrame, 0),
-      )
-      pumpSafePoints(listOf(hotPlugTarget)) { hotPlugTarget.activeSessionCount() == 4 }
-      assertNotNull(hotPlugTarget.captureDetachedState().players[0].session)
+      val allControllers = listOf(source.controller) + recipients.map { it.controller }
+      val continuationFrame = allControllers.maxOf { it.currentFrame() }
+      allControllers.forEach { controller ->
+        while (controller.currentFrame() < continuationFrame) controller.runFrame()
+      }
+      assertEquals(1, allControllers.map { it.currentFrame() }.toSet().size)
+      val continuationHash = linkedHash(source.controller)
+      recipients.forEach { assertContentEquals(continuationHash, linkedHash(it.controller)) }
+      replayControllers.forEach { it.stateHistory.debugEventBus = null }
+      replayBuses.forEach { it.second.close() }
+
+      assertFailsWith<IllegalArgumentException> {
+        clients[0].sendInput(V9InputState(continuationFrame, 2, 0x10, 2))
+      }
+
+      // A guest-originated STOP/RESET is performed locally first, then accepted by the host and
+      // relayed to the remaining guests. The logical 0x0f topology survives the null physical
+      // slot and every replica converges after the hot-plug reset.
+      val hotPlugOrigin = recipients[0]
+      val stopFrame = hotPlugOrigin.controller.currentFrame()
+      hotPlugOrigin.eventBus.post(Controller.StopEmulationEvent())
+      hotPlugOrigin.controller.runFrame()
+      clients[0].sendControl(V9RuntimeControl(V9RuntimeMessageKind.STOP, stopFrame, 1))
+      pumpSafePoints(replayControllers) {
+        replayControllers.all { it.activeSessionCount() == 3 }
+      }
+      allControllers.forEach { controller ->
+        assertNull(controller.captureDetachedState().players[1].session)
+        assertEquals(
+            LinkedTopologyState.FOUR_PLAYER_ADAPTER,
+            controller.captureDetachedState().topology,
+        )
+        assertEquals(4, controller.captureDetachedState().players.size)
+      }
+      val stoppedFrame = allControllers.maxOf { it.currentFrame() }
+      allControllers.forEach { controller ->
+        while (controller.currentFrame() < stoppedFrame) controller.runFrame()
+      }
+      val resetFrame = hotPlugOrigin.controller.currentFrame()
+      hotPlugOrigin.eventBus.post(Controller.ResetEmulationEvent())
+      hotPlugOrigin.controller.runFrame()
+      clients[0].sendControl(V9RuntimeControl(V9RuntimeMessageKind.RESET, resetFrame, 1))
+      pumpSafePoints(replayControllers) {
+        replayControllers.all { it.activeSessionCount() == 4 }
+      }
+      val resetContinuation = allControllers.maxOf { it.currentFrame() }
+      allControllers.forEach { controller ->
+        while (controller.currentFrame() < resetContinuation) controller.runFrame()
+        assertNotNull(controller.captureDetachedState().players[1].session)
+      }
+      val resetHash = linkedHash(source.controller)
+      recipients.forEach { assertContentEquals(resetHash, linkedHash(it.controller)) }
+
+      // Closing guest 3 removes only that relay destination. Guest 1 can still reach the host and
+      // guest 2; no coordinator lock is held across the downstream send.
+      clients[2].close()
+      waitUntil { coordinator.activeRuntimeCount() == 2 }
+      val isolatedFrame = hotPlugOrigin.controller.currentFrame()
+      hotPlugOrigin.eventBus.post(ButtonPressEvent(Button.B))
+      hotPlugOrigin.controller.runFrame()
+      clients[0].sendInput(V9InputState(isolatedFrame, 1, 0x20, 2))
+      pumpSafePoints(listOf(source.controller, recipients[1].controller)) {
+        source.controller.stateHistory.captureSnapshot().patches.isNotEmpty() &&
+            recipients[1].controller.stateHistory.captureSnapshot().patches.isNotEmpty()
+      }
+      source.controller.runFrame()
+      recipients[1].controller.runFrame()
+      assertEquals(V9LifecycleState.ACTIVE, serverConnections.getValue(1).snapshot().state)
+      assertEquals(V9LifecycleState.ACTIVE, serverConnections.getValue(2).snapshot().state)
+      assertNull(serverConnections.getValue(1).snapshot().failure)
+      assertNull(serverConnections.getValue(2).snapshot().failure)
       assertEquals(0, captureTarget.pendingCaptureCount())
       clientTargets.forEach { assertEquals(0, it.pendingCaptureCount()) }
     } finally {
@@ -1417,10 +1890,10 @@ class ProtocolV9StateTransportTest {
         value: V9ValidatedCheckpoint,
         expectedGeneration: V9TargetGeneration,
         completion: V9CheckpointPrepareCompletion,
-    ) {
+    ): java.io.Closeable {
       if (!generation.sameIdentityGeneration(expectedGeneration)) {
         completion.complete(null, V9ErrorCode.TOPOLOGY_MISMATCH)
-        return
+        return java.io.Closeable {}
       }
       completion.complete(
           object : V9PreparedCheckpoint {
@@ -1439,6 +1912,7 @@ class ProtocolV9StateTransportTest {
           },
           null,
       )
+      return java.io.Closeable {}
     }
     override fun input(value: V9InputState, completion: V9GameplayCompletion) {
       inputs.put(value)
@@ -1485,6 +1959,43 @@ class ProtocolV9StateTransportTest {
         it.consentComplete()
       }
 
+  private fun clientLifecycleAtActive(): V9Lifecycle =
+      V9Lifecycle(V9Role.CLIENT).also {
+        it.serverHelloReceived()
+        it.clientHelloSent(V9NegotiatedCapabilities(V9Capability.requiredCapabilities))
+        it.clientAuthSent()
+        it.serverAuthResultReceived()
+        it.serverManifestReceived()
+        it.clientManifestSent(true)
+        it.consentComplete()
+        it.clientStartReceived()
+        it.clientReadySent()
+      }
+
+  private fun serverLifecycleAtActive(): V9Lifecycle =
+      serverLifecycleAtSynchronizing().also {
+        it.serverStartSent()
+        it.serverReadyReceived()
+      }
+
+  private fun runtimeFrame(value: V9InputState): V9Frame {
+    val payload = V9GameplayCodec.encodeInput(value)
+    return V9Frame(
+        V9FrameHeader(
+            V9MessageType.INPUT.wireId,
+            V9MessageType.INPUT,
+            0,
+            0,
+            1,
+            payload.size.toLong(),
+            payload.size.toLong(),
+            value.player.toLong() + 1,
+            ByteArray(32),
+        ),
+        payload,
+    )
+  }
+
   private fun checkpointDeclaration(
       metadata: V9CheckpointMetadata,
       bytes: ByteArray,
@@ -1516,6 +2027,36 @@ class ProtocolV9StateTransportTest {
             V9Role.SERVER,
             V9LinkMode.NORMAL,
             1,
+            V9LifecycleState.EXCHANGE_CONSENT,
+            pair.server,
+            pair.client,
+            V9ManifestDigest.sha256(serverPayload),
+            V9ManifestDigest.sha256(clientPayload),
+            pair.server.differences,
+            pair.server.proposals,
+        ),
+        pair.proposal,
+    )
+  }
+
+  private fun fourAuthorization(pair: ManifestPair, guest: Int): V9CheckpointAuthorization {
+    fun fourContext(manifest: V9Manifest, source: Int) =
+        V9ManifestValidationContext(
+            V9LinkMode.FOUR_PLAYER,
+            guest,
+            source,
+            if (source == 0) guest else 0,
+            9,
+            manifest.rosterCommitment(),
+            V9Capability.requiredCapabilities + V9Capability.FOUR_PLAYER_V1,
+        )
+    val serverPayload = V9ManifestCodec.encode(pair.server, fourContext(pair.server, 0))
+    val clientPayload = V9ManifestCodec.encode(pair.client, fourContext(pair.client, guest))
+    return V9CheckpointAuthorization(
+        V9ManifestPairingBoundary(
+            V9Role.SERVER,
+            V9LinkMode.FOUR_PLAYER,
+            guest,
             V9LifecycleState.EXCHANGE_CONSENT,
             pair.server,
             pair.client,
