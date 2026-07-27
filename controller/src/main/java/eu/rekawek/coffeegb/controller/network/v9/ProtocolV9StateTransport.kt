@@ -517,6 +517,7 @@ class V9FourPlayerCoordinator(
     executor: ThreadPoolExecutor? = null,
 ) : Closeable {
   private val lock = Any()
+  private val runtimeDispatchLock = Any()
   private val prepared = mutableMapOf<Int, Prepared>()
   private val ready = mutableMapOf<Int, () -> Unit>()
   private val started = mutableSetOf<Int>()
@@ -696,7 +697,7 @@ class V9FourPlayerCoordinator(
   /** Host player zero is already authoritative locally; this only fans out the accepted value. */
   internal fun broadcastHostInput(value: V9InputState) {
     require(value.player == 0)
-    runtimeSnapshot().forEach { relay ->
+    dispatchRuntime { relay ->
       try {
         relay.sendInput(value)
       } catch (_: RuntimeException) {
@@ -707,7 +708,7 @@ class V9FourPlayerCoordinator(
 
   internal fun broadcastHostControl(value: V9RuntimeControl) {
     require(value.player == 0)
-    runtimeSnapshot().forEach { relay ->
+    dispatchRuntime { relay ->
       try {
         relay.sendControl(value)
       } catch (_: RuntimeException) {
@@ -721,7 +722,7 @@ class V9FourPlayerCoordinator(
     if (guest !in 1..3 || value.player != guest) {
       throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
     }
-    runtimeSnapshot(excluding = guest).forEach { relay ->
+    dispatchRuntime(excluding = guest) { relay ->
       try {
         relay.sendInput(value)
       } catch (_: RuntimeException) {
@@ -734,7 +735,7 @@ class V9FourPlayerCoordinator(
     if (guest !in 1..3 || value.player != guest) {
       throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
     }
-    runtimeSnapshot(excluding = guest).forEach { relay ->
+    dispatchRuntime(excluding = guest) { relay ->
       try {
         relay.sendControl(value)
       } catch (_: RuntimeException) {
@@ -751,6 +752,19 @@ class V9FourPlayerCoordinator(
             .mapNotNull { runtimePeers[it]?.relay }
             .toList()
       }
+
+  /**
+   * Establishes one total fan-out order without holding [lock]. Relay calls are bounded queue
+   * offers only; socket I/O and writer-state admission happen later on connection-owned workers.
+   */
+  private fun dispatchRuntime(
+      excluding: Int? = null,
+      action: (V9FourPlayerRuntimeRelay) -> Unit,
+  ) {
+    synchronized(runtimeDispatchLock) {
+      runtimeSnapshot(excluding).forEach(action)
+    }
+  }
 
   fun ready(guest: Int, activate: () -> Unit) {
     val callbacks: List<() -> Unit>

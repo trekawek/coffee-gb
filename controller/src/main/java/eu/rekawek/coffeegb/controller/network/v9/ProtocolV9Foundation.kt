@@ -392,6 +392,10 @@ class V9FoundationConnection(
 
   internal fun activeTaskCount(): Int = synchronized(taskLock) { tasks.count(Thread::isAlive) }
 
+  internal fun runtimeRelayQueueSizeForTest(): Int = synchronized(playOwnershipLock) {
+    playSession?.runtimeRelayQueueSize() ?: 0
+  }
+
   internal fun part3HeaderAdmissionForTest(
       type: V9MessageType,
       flags: Int,

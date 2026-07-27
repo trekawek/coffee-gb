@@ -136,7 +136,11 @@ authenticated player. The host applies that value first and then fans the accept
 player/frame payload out to the other ACTIVE guest connections; those clients accept roster
 relays only from their host connection and reject direct/spoofed player claims. Host player zero
 is fanned out to every ACTIVE guest. Relay destinations are snapshotted under the coordinator lock
-and queued outside it, so a failed or slow downstream guest cannot revoke or block healthy peers.
+and offered in one total order to per-destination 256-value FIFO handoffs outside it. The
+emulation/safe-point callback never enters writer-state admission or socket I/O; one
+connection-owned worker performs those operations later. A blocked writer therefore cannot stall
+the controller or healthy peers, while a full handoff closes only that destination with the typed
+queue-overflow path. Close clears the handoff and interrupts the worker.
 History exhaustion and invalid frame windows reject the connection before input mutation.
 
 The checkpoint declaration, directional consent grant, manifest pair, root, owner/mask/channel,
