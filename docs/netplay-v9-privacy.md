@@ -4,9 +4,11 @@ Protocol v9 has an opt-in developer transport foundation that validates CGB9 fra
 HELLO capabilities. Part 1 of #348 adds strict invitation parsing, bounded host invitation
 ownership, and AUTH. Part 2 adds the exact bounded MANIFEST metadata exchange, then stops at an
 immutable pre-consent boundary. Part 3 optionally adds explicit two-sided item consent and bounded
-ROM/battery preparation, then stops before START. It is not a playable end-user path: checkpoint,
-input, and gameplay remain disabled. Callers that do not opt into an explicit prepared manifest
-and Part-3 plan retain the earlier boundaries. Current user netplay remains protocol v8 with
+ROM/battery preparation, then stops before START. Issue #349 optionally adds direct StateFile-v2
+checkpoints, START/READY, and bounded ACTIVE traffic behind another caller-owned plan. This is a
+playable developer foundation, not an end-user path: callers that do not opt into an explicit
+prepared manifest, Part-3 plan, and play plan retain the earlier boundaries. Current user netplay
+remains protocol v8 with
 the compatibility restrictions in
 [netplay-protocol-v8.md](netplay-protocol-v8.md). A v8/v9 mismatch is intentional and has no
 downgrade, fallback, or compatibility probe.
@@ -71,13 +73,16 @@ wired into the normal netplay menu.
   bootstrap/accessory settings, and link mode. A mismatch is not consent to send a ROM.
 - **Consent rejected:** one side cancelled, timed out, or declined a required class. Nothing large
   is transferred before this point.
+- **State/profile/root/topology mismatch:** the direct StateFile-v2 checkpoint did not match the
+  approved ROM/slot identities, canonical hardware settings, endpoint, roster, or required root.
+  The directional grant is not consumed and the live controller is unchanged.
 - **Malformed/limit/checksum error:** the offending session is closed and its slot released; the
   listener and other sessions continue. Do not post payload bytes or an invitation in a bug report.
 
 The exact grammar, limits, timeouts, errors, and state transitions are normative in
 [netplay-protocol-v9.md](netplay-protocol-v9.md).
 
-## Deliberate Part-3 boundary
+## Explicit #349 play boundary
 
 After successful AUTH, explicitly prepared peers exchange bounded MANIFEST metadata. An exact pair
 with no proposals reaches `SYNCHRONIZING` without private traffic. Valid advanced proposals require
@@ -86,8 +91,15 @@ open one lazy ROM/battery source. A verified transaction ends at an immutable pr
 `SYNCHRONIZING` boundary. Manifest preparation itself still supplies hashes, sizes, sanitized
 title/type/profile identity, and availability only—never ROM, battery, StateFile, or path bytes.
 
-Checkpoints, START/READY, diagnostics, discovery, and playable input remain for later phases.
-Checkpoint and atomic linked-state integration are #349. The stale nonce-comparison roadmap
-checkbox is not a tokenless/manual-address bypass: v9 has no such flow. Discovery or a different
-invitation mechanism requires a separately reviewed capability and threat-model change and is
-deferred to #350.
+Only an additional `V9PlayPlan` can cross that boundary. It supplies an off-EDT checkpoint provider
+and a controller-owned two-stage target; the transport never consults the local legacy importer.
+The initial direct StateFile-v2 checkpoint is prepared without mutation, committed at the frame
+safe point, and acknowledged by READY only after commit. Normal ACTIVE resynchronization uses a
+SESSION root; four-player always uses one complete LINKED_SESSION. Rejection wipes retained state
+bytes where practicable, releases the candidate, and preserves the live sessions/history/input/
+topology transactionally. No path, token, ROM, battery, StateFile bytes, digest, remote title, or
+input value is emitted in INFO diagnostics.
+
+Diagnostics and discovery remain for #350. The stale nonce-comparison roadmap checkbox is not a
+tokenless/manual-address bypass: v9 has no such flow. Discovery or a different invitation
+mechanism requires a separately reviewed capability and threat-model change.

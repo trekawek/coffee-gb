@@ -93,7 +93,7 @@ interface V9LifecycleSource {
  * Phase #347 owns HELLO, Part 1 of #348 owns AUTH, and Part 2 owns the MANIFEST transitions through
  * the immutable pre-consent boundary. Later frozen states remain explicit values rather than being
  * inferred from unrelated emulator events. Part 3 owns item-scoped CONSENT and bounded private
- * preparation through SYNCHRONIZING; START and later transitions remain unavailable.
+ * preparation through SYNCHRONIZING; Phase #349 owns CHECKPOINT, START/READY, and ACTIVE.
  */
 class V9Lifecycle(
     private val role: V9Role,
@@ -216,6 +216,38 @@ class V9Lifecycle(
       "Illegal v9 lifecycle transition"
     }
     transition(V9LifecycleState.SYNCHRONIZING)
+  }
+
+  @Synchronized
+  fun serverStartSent() {
+    requireRoleState(V9Role.SERVER, V9LifecycleState.SYNCHRONIZING)
+    transition(V9LifecycleState.WAIT_READY)
+  }
+
+  @Synchronized
+  fun clientStartReceived() {
+    requireRoleState(V9Role.CLIENT, V9LifecycleState.SYNCHRONIZING)
+    transition(V9LifecycleState.SEND_READY)
+  }
+
+  @Synchronized
+  fun clientReadySent() {
+    requireRoleState(V9Role.CLIENT, V9LifecycleState.SEND_READY)
+    transition(V9LifecycleState.ACTIVE)
+  }
+
+  @Synchronized
+  fun serverReadyReceived() {
+    requireRoleState(V9Role.SERVER, V9LifecycleState.WAIT_READY)
+    transition(V9LifecycleState.ACTIVE)
+  }
+
+  /** Re-anchors only the ACTIVE idle deadline after a fully validated frame. */
+  @Synchronized
+  fun activeProgress() {
+    check(state == V9LifecycleState.ACTIVE) { "Illegal v9 lifecycle transition" }
+    deadline = deadlineFor(V9LifecycleState.ACTIVE)
+    publish()
   }
 
   @Synchronized

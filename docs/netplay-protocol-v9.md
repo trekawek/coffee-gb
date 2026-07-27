@@ -11,7 +11,9 @@ or `EXCHANGE_CONSENT` when validated metadata contains one or more proposals. Pa
 the exact item-scoped CONSENT exchange plus bounded one-use ROM and battery transactions, then
 stops at an immutable preparation-complete `SYNCHRONIZING` boundary before START. Callers must
 explicitly supply both prepared manifest metadata and a Part-3 plan; omitting either retains the
-corresponding Part-1 or Part-2 boundary.
+corresponding Part-1 or Part-2 boundary. Issue #349 implements the already-frozen direct-v2
+checkpoint, START/READY, ACTIVE traffic, and frame-safe atomic target contracts only when an
+additional play plan is supplied; omitting it preserves the Part-3 pre-START boundary.
 
 Protocol v8 is frozen separately in [netplay-protocol-v8.md](netplay-protocol-v8.md). V9 never
 downgrades to, probes, or parses v8/v7 on the same connection. The version decision and the stale
@@ -403,6 +405,17 @@ forbidden. Network limits are tighter than portable-file limits: one direct Stat
 32 MiB encoded and 32 MiB decoded; the whole decoded session aggregate is 128 MiB. Both layers'
 graph/value/depth/section/string/array limits still apply.
 
+Production admission order is fixed: (1) the 64-byte frame header validates type, flags, channel,
+sequence/correlation, signed-to-bounded length conversion, checked frame/queue arithmetic, and
+per-message/aggregate budgets before payload allocation; (2) the 20-byte CHECKPOINT prefix
+validates kind/mask/owner/reserved/frame/length/proposal and performs a non-consuming directional
+grant preflight; (3) the direct bytes must be CGBS StateFile v2 and pass envelope lengths,
+checksum, 32 MiB encoded/decoded bounds, and root inspection; (4) bounded graph decode validates
+ROM/optional-slot SHA-256, canonical profile/bootstrap/accessory identity, player mask, endpoint,
+topology, generation/roster commitment, and frame; (5) the target reconstructs every candidate
+without mutation; (6) one frame-safe atomic commit consumes the grant. Failure at any earlier step
+closes the ticket without advancing its frame/use counters.
+
 An initial state is MACHINE. A normal running checkpoint is SESSION. A four-player checkpoint is
 one LINKED_SESSION root containing exactly the active slot mask, endpoint identities, one coherent
 shared FourPlayerAdapter topology, held inputs, frame/runtime floor, and canonical profile IDs for
@@ -410,8 +423,10 @@ all members. It is decoded and target-validated off the emulator thread, then pr
 at the existing frame safe point as one transaction. ROM/slot hashes, profiles, bootstrap/accessory
 flags, root kind, slots, local owner, endpoint/topology, and integrity must agree before mutation.
 Any member failure rejects only the source and leaves live sessions, history, inputs, frame,
-configuration, and topology unchanged. Rollback generation/rebase details are implemented in #349
-but may not weaken this grouping or atomicity contract.
+configuration, and topology unchanged. The #349 implementation captures the controller's current
+machine/session/history/input/frame floor before its first commit callback and restores all of it
+on failure. Target-dependent construction is a separate no-mutation prepare phase; the
+directional grant is consumed only after the frame-safe commit reports success.
 
 The host is the four-player coordinator across three independently authenticated guest TCP
 sessions. It selects one nonzero target generation, roster mask `0f`, roster commitment, and
@@ -488,8 +503,8 @@ does not provide TLS, matchmaking, rendezvous, NAT traversal, relay, or public i
 | #347 | v9 header/registries/state machines and hostile wire corpus | implemented as an opt-in transport foundation; no invitation, authentication, consent, private transfer, checkpoint, or playable flow |
 | #348 Part 1 | invitation/auth vectors, AUTH ordering, token/slot ownership, privacy limits | implemented; callers without an explicit manifest plan retain the immutable pre-MANIFEST boundary |
 | #348 Part 2 | MANIFEST ordering, exact roster/identity comparison, and item proposals | implemented through an immutable pre-consent boundary; manifests are caller-prepared metadata and no private content is opened or hashed on transport threads |
-| #348 Part 3 | CONSENT ordering and ROM/battery transactions | implemented through immutable preparation completion; lazy sources open only after two exact approvals and verified receivers deliver only whole detached candidates; START and gameplay remain blocked |
-| #349 | CHECKPOINT schema, StateFile-v2 identity, atomic group/history rules | no v9 checkpoint/rollback integration exists after #348 |
+| #348 Part 3 | CONSENT ordering and ROM/battery transactions | implemented through immutable preparation completion; lazy sources open only after two exact approvals and verified receivers deliver only whole detached candidates; callers without a play plan remain blocked before START |
+| #349 | CHECKPOINT schema, StateFile-v2 identity, atomic group/history rules | implemented behind an explicit play plan: initial MACHINE or full-roster LINKED_SESSION, normal ACTIVE SESSION resync, START/READY, bounded INPUT/RESET/STOP, and two-stage frame-safe atomic commit; default v8/UI remain isolated |
 | #350 | cancellation/cleanup/diagnostic contracts, hostile lifecycle cases, and any separately reviewed discovery mechanism | no hardening rollout or v8 retirement occurs after #347; no nonce/manual-address bypass exists |
 | #351 | Mobile clean-room ADR/source inventory/transcripts | no production Mobile engine exists in #346 |
 | #352 | bounded async backend/status/cancellation contract | no DNS/socket/backend work exists in #346 |

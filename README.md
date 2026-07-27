@@ -54,8 +54,10 @@ item-scoped consent and one bounded ROM or battery transaction per approved prop
 an immutable pre-START boundary. Content providers are opened only after both exact approvals;
 verified receivers deliver only complete detached candidates. Callers without these opt-ins retain
 their earlier boundary. Own-ROM exact match remains the default and performs no transfer.
-Checkpoints, START/gameplay, discovery, and the default UI remain unavailable, so v9 is not yet a
-playable user flow. Current user netplay remains v8. V9 deliberately does not interoperate or
+An additional #349 developer plan enables direct StateFile-v2 checkpoints, atomic frame-safe
+restore, START/READY, and bounded ACTIVE input/reset/stop. It remains opt-in and is not wired to the
+default UI; discovery also remains unavailable. Current user netplay remains v8. V9 deliberately
+does not interoperate or
 downgrade to v8. Its TCP transport is plaintext—not confidential or secure against an on-path
 attacker. See
 [the v9 privacy/troubleshooting guide](docs/netplay-v9-privacy.md) and the

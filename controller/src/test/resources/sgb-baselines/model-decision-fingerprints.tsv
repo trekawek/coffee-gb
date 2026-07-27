@@ -11,6 +11,7 @@ controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt
 controller/src/main/java/eu/rekawek/coffeegb/controller/link/StateHistory.kt	c849427da71f8a59766caf2099d84c595e0e2b382cde0dfa9ca3f3165daec77e
 controller/src/main/java/eu/rekawek/coffeegb/controller/network/Connection.kt	0c47d1ca52d492155c4e114103630e61a91078208efbeb12a883734067ffeead
 controller/src/main/java/eu/rekawek/coffeegb/controller/network/v9/ProtocolV9Manifest.kt	28f0d2e973caa33fb70a3e8d3c2e1f4d099d6b305297441aa7fc2f9b25d49034
+controller/src/main/java/eu/rekawek/coffeegb/controller/network/v9/ProtocolV9StateTransport.kt	482a4f4b76dc1bf5d8d234fab8a3588073042b9923570da9cf5f927e2f005d37
 controller/src/main/java/eu/rekawek/coffeegb/controller/properties/EmulatorProperties.kt	f5cbc3b03295c94c1727ea2b810328d518b3df9893eb525a20c7ff298151a1df
 controller/src/main/java/eu/rekawek/coffeegb/controller/properties/SystemProperties.kt	b9716d9b0d66a73b84d2c091b03da1a5edd4580254d95e2b09be9e93f3d3d6df
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/DetachedState.kt	0e0f1973f3f1a44607bb2b87c2a47169d832340750a41193e716233ebff91b97

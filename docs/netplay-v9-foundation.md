@@ -21,6 +21,8 @@ The platform-neutral controller package `controller.network.v9` owns:
 - an additional opt-in Part-3 plan with exact item-scoped CONSENT, lazy ROM/battery sources,
   bounded streaming, atomic verified candidate delivery, and an immutable pre-START preparation
   boundary;
+- an additional opt-in #349 play plan with direct StateFile-v2 checkpoints, two-stage target
+  prepare/commit, START/READY, bounded ACTIVE input/control, and normal/four-player barriers;
 - injected monotonic deadlines, bounded reader/writer retention, cancellation, idempotent close,
   socket/task ownership, and an accept loop that isolates malformed or stalled candidates; and
 - an EDT-marshalling Swing adapter whose controller-facing source has no Swing or AWT dependency.
@@ -101,11 +103,30 @@ sanitized progress and explicit approve/reject/cancel actions across the EDT; pr
 never enter Swing. Replacing an observer, cancelling, or closing suppresses queued stale
 callbacks.
 
-Checkpoints, START/READY, playable input, diagnostics, discovery, and Mobile Adapter behavior
-remain unavailable. Their declarations are rejected before proportional payload allocation.
-Callers that omit a Part-3 plan retain the Part-2 boundary; callers that also omit a manifest plan
-retain the Part-1 post-AUTH boundary. The default `ConnectionController` still has no v9 reference;
-shipped netplay remains protocol v8.
+Issue #349 is a fourth, explicit extension. `V9PlayPlan` binds one checkpoint provider and one
+frame-safe target to the authenticated manifest/consent tuple. The host sends an initial MACHINE
+root in normal mode or one full-roster LINKED_SESSION in four-player mode. The peer validates the
+direct CGBS StateFile v2 off the emulator thread, prepares target-owned reconstruction without live
+mutation, and commits only after START at the controller's frame safe point. READY is sent only
+after that atomic commit. In ACTIVE, normal resynchronization is SESSION and four-player
+resynchronization remains LINKED_SESSION. INPUT, RESET, and STOP carry stable masks/IDs and are
+accepted only at the same bounded frame-safe event boundary. History exhaustion and invalid frame
+windows reject the connection before input mutation.
+
+The checkpoint declaration, directional consent grant, manifest pair, root, owner/mask/channel,
+unsigned increasing frame, SHA-256, exact ROM/slot identities, canonical profile/bootstrap/
+accessory identity, StateFile checksum/schema, endpoint, and topology are validated before live
+mutation. One direct StateFile is limited to 32 MiB encoded and decoded; aggregate decoded
+retention remains 128 MiB; one directional grant admits at most 32 successfully committed
+checkpoints and one in flight. StateFile v1, native serialization, the local legacy importer,
+CGBN/Memento, outer checkpoint compression, and fallback are unreachable from peer bytes. A
+failed prepare or commit does not consume the grant. `LinkedController` captures rollback
+state/history and restores it if any member of the frame-safe transaction fails.
+
+Callers that omit a play plan retain the Part-3 pre-START boundary; callers that omit Part 3 retain
+the Part-2 boundary; callers that also omit a manifest plan retain the Part-1 post-AUTH boundary.
+Diagnostics/discovery and Mobile Adapter behavior remain unavailable. The default
+`ConnectionController` still has no v9 reference; shipped netplay remains protocol v8.
 
 ## Ownership, errors, and privacy
 
@@ -129,7 +150,7 @@ reason. Received terminal errors may close promptly.
 
 Server ownership includes pending candidates and every handed-off connection, whether it remains
 at `AWAITING_PAIRING`, the Part-1 pre-MANIFEST boundary, the Part-2 pre-consent boundary, or the
-Part-3 pre-START boundary.
+Part-3 pre-START boundary, or an opt-in #349 ACTIVE session.
 A close listener removes a handed-off connection from the registry when its later owner closes it.
 Candidate construction, start, and callback failures close/remove the candidate and leave the
 accept loop available. Server shutdown and callback delivery share one gate, so shutdown cannot
@@ -148,11 +169,11 @@ diagnostic text is strictly validated where required by the wire schema but is d
 than surfaced. Exceptions, payload bytes, paths, ROM/save content, invitation material, and remote
 strings are never used as UI diagnostics.
 
-Invitation authentication, bounded manifest metadata, explicit consent, and bounded ROM/battery
-preparation are implemented only through the opt-in Part-1/Part-2/Part-3 API; encryption is **not**
-implemented. The protocol is plaintext TCP and does not provide confidentiality or protection
-against an on-path attacker. This boundary must not be presented as a secure or playable Internet
-netplay flow.
+Invitation authentication, bounded manifest metadata, explicit consent, bounded ROM/battery
+preparation, and checkpoint/gameplay are implemented only through explicit opt-in plans;
+encryption is **not** implemented. The protocol is plaintext TCP and does not provide
+confidentiality or protection against an on-path attacker. The developer foundation must not be
+presented as secure Internet netplay or as the default user flow.
 
 ## Verification
 
@@ -173,3 +194,11 @@ subsets, multiple ROM/battery proposals, lazy-provider gating, raw/DEFLATE frami
 normal/four-player exchanges, guest isolation, source/sink failure atomicity, exact progress
 deadlines, and the pre-START gate. `V9SwingPart3AdapterTest` covers EDT delivery, sanitized
 progress, explicit decisions/cancel, and queued stale-callback suppression.
+`ProtocolV9StateTransportTest` covers direct-v2 admission, validation precedence, non-consuming
+grant failures, bytewise/irregular/coalesced decode, exact deadlines, normal/four-player real
+socket activation, active resynchronization, and gameplay bounds. `LinkedControllerTest` covers
+frame-safe two-stage MACHINE and LINKED_SESSION commits, deterministic continuation, rollback on
+failure, and cancellation of queued input ownership. Its ROM-independent continuation locks are
+`909608afe8ea1510ea187b080ce48818b5b1f62379a0e23dde31cbb7ad61bd99` for the normal machine
+path and `f19740d73c745a76b8bb7a2898ff308bec7d8e855d191efb8f248108a33149ae` for the four-player
+linked path; both hash the canonical StateFile-v2 encoding after deterministic continuation.

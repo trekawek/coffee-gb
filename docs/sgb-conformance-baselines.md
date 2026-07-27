@@ -34,7 +34,7 @@ and any drift between the matrix and the production command registry.
 
 The model/clock decision inventory is
 [`controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv`](../controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv).
-Its 80 rows classify every matching production source file by stable symbol/context, current
+Its 81 rows classify every matching production source file by stable symbol/context, current
 consumer, model set, evidence, uncertainty, and the earliest owning #317 phase. The scanner covers
 `core`, `controller`, and `swing` production Java/Kotlin sources, ignores only package/import/comment
 lines, and compares the complete `(category, path, occurrence count)` map. A new match cannot be
@@ -45,21 +45,21 @@ part of the contract.
 
 | Category | Files | Normalized occurrences |
 | --- | ---: | ---: |
-| `HARDWARE_PROFILE` | 26 | 213 |
+| `HARDWARE_PROFILE` | 27 | 214 |
 | `GAMEBOY_TYPE` | 9 | 46 |
 | `CGB_FLAG` | 37 | 412 |
 | `SGB_FLAG` | 10 | 42 |
 | `CGB0` | 9 | 42 |
-| `BOOTSTRAP` | 11 | 83 |
+| `BOOTSTRAP` | 12 | 87 |
 | `CLOCK` | 24 | 214 |
-| `SGB_BORDER` | 7 | 43 |
-| `MEALYBUG` | 9 | 45 |
-| `CODEBREAKER` | 8 | 54 |
+| `SGB_BORDER` | 8 | 44 |
+| `MEALYBUG` | 10 | 46 |
+| `CODEBREAKER` | 9 | 55 |
 | `ROM_MODEL` | 8 | 55 |
-| `PORTABLE_PROFILE` | 4 | 42 |
+| `PORTABLE_PROFILE` | 5 | 43 |
 
-The 80 files comprise 41 hardware-policy, 15 compatibility-adapter, 7 configuration, 8
-portable-state-adapter, 5 platform-adapter, and 4 legacy-importer rows. Fifty-two rows retain the
+The 81 files comprise 41 hardware-policy, 15 compatibility-adapter, 7 configuration, 9
+portable-state-adapter, 5 platform-adapter, and 4 legacy-importer rows. Fifty-three rows retain the
 completed profile foundation (#343), 21 own exact SGB2 timing/identity work (#344), four own MGB
 registry/portable/network identity decisions (#345), two SGB display or palette rows belong to
 command completion (#341), and Joypad multiplayer belongs to #342.

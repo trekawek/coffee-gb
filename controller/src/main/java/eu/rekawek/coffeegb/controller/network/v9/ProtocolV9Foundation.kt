@@ -185,7 +185,8 @@ data class V9PostAuthBoundary(
  * `SEND_SERVER_MANIFEST`/`WAIT_SERVER_MANIFEST`. With an explicit caller-prepared [manifestPlan],
  * it exchanges and validates MANIFEST and stops at the immutable pre-consent boundary. With an
  * explicit [part3Plan], item-scoped CONSENT and bounded ROM/battery preparation are enabled and
- * stop at an immutable pre-START boundary. Checkpoint, START, diagnostics, discovery, and gameplay
+ * stop at an immutable pre-START boundary. An explicit [playPlan] additionally enables direct
+ * StateFile-v2 CHECKPOINT, START/READY, and bounded ACTIVE traffic. Diagnostics and discovery
  * remain unavailable.
  */
 class V9FoundationConnection(
@@ -200,6 +201,7 @@ class V9FoundationConnection(
     private val clientInvitation: V9ClientInvitation? = null,
     private val manifestPlan: V9ManifestPlan? = null,
     private val part3Plan: V9Part3Plan? = null,
+    private val playPlan: V9PlayPlan? = null,
 ) : Closeable, V9LifecycleSource {
   private val scheduler = scheduler ?: V9SystemDeadlineScheduler(clock)
   private val ownedScheduler = if (scheduler == null) this.scheduler as Closeable else null
@@ -217,12 +219,13 @@ class V9FoundationConnection(
                 add(V9MessageType.ERROR)
                 if (manifestPlan != null) add(V9MessageType.MANIFEST)
                 if (part3Plan != null) addAll(PART3_MESSAGES)
+                if (playPlan != null) addAll(PLAY_MESSAGES)
               },
           negotiatedCapabilities = V9Capability.entries.toSet(),
           linkMode = mode,
           headerAdmission =
-              if (part3Plan == null) null
-              else V9HeaderAdmission(::admitPart3Header),
+              if (part3Plan == null && playPlan == null) null
+              else V9HeaderAdmission(::admitDynamicHeader),
       )
   private val decoder = V9IncrementalDecoder(policy = decoderPolicy)
   private val writer = V9WriterQueue()
@@ -233,9 +236,11 @@ class V9FoundationConnection(
   private val postAuth = CountDownLatch(1)
   private val manifestComplete = CountDownLatch(1)
   private val preparationComplete = CountDownLatch(1)
+  private val activeComplete = CountDownLatch(1)
   @Volatile private var pairingBoundary: V9LifecycleSnapshot? = null
   @Volatile private var completedManifestBoundary: V9ManifestPairingBoundary? = null
   @Volatile private var completedPreparationBoundary: V9PreparationBoundary? = null
+  @Volatile private var completedActiveBoundary: V9ActiveBoundary? = null
   private val tasks = mutableListOf<Thread>()
   private val taskLock = Any()
   private val ownershipLock = Any()
@@ -253,6 +258,7 @@ class V9FoundationConnection(
   private var localManifestPayload: ByteArray? = null
   private var localManifest: V9Manifest? = null
   @Volatile private var part3Session: V9Part3Session? = null
+  @Volatile private var playSession: V9PlaySession? = null
   private var nextOutgoingSequence = 0L
 
   init {
@@ -266,6 +272,10 @@ class V9FoundationConnection(
       "v9 Part-3 requires an explicit manifest plan"
     }
     require(part3Plan == null || part3Plan.role == role && part3Plan.mode == mode)
+    require(playPlan == null || part3Plan != null) {
+      "v9 playable transport requires explicit Part-3 consent ownership"
+    }
+    require(playPlan == null || playPlan.role == role && playPlan.mode == mode)
     lifecycle.addListener { state ->
       scheduleDeadline(state)
       if (state.phase == V9LifecyclePhase.AWAITING_PAIRING) {
@@ -275,6 +285,7 @@ class V9FoundationConnection(
         boundary.countDown()
         manifestComplete.countDown()
         preparationComplete.countDown()
+        activeComplete.countDown()
       }
     }
   }
@@ -328,6 +339,13 @@ class V9FoundationConnection(
 
   fun preparationBoundary(): V9PreparationBoundary? = completedPreparationBoundary
 
+  fun awaitActiveBoundary(timeout: Long, unit: TimeUnit): V9ActiveBoundary? {
+    activeComplete.await(timeout, unit)
+    return completedActiveBoundary
+  }
+
+  fun activeBoundary(): V9ActiveBoundary? = completedActiveBoundary
+
   fun consentItems(): List<V9ConsentItem> = part3Session?.items().orEmpty()
 
   fun submitConsent(proposalId: Long, decision: V9ConsentDecision) {
@@ -379,7 +397,7 @@ class V9FoundationConnection(
       encodedLength: Long,
       decodedLength: Long,
   ): V9ErrorCode? {
-    return admitPart3Header(type, flags, channel, encodedLength, decodedLength)
+    return admitDynamicHeader(type, flags, channel, encodedLength, decodedLength)
   }
 
   internal fun configuredDecoderMessagesForTest(): Set<V9MessageType> =
@@ -396,7 +414,22 @@ class V9FoundationConnection(
     }
   }
 
-  /** The foundation deliberately refuses all caller-originated state-bearing traffic. */
+  fun sendCheckpoint(kind: V9CheckpointKind, owner: Int, frame: Long) {
+    val session = playSession ?: throw V9ProtocolException(V9ErrorCode.UNEXPECTED_MESSAGE, 0)
+    session.sendCheckpoint(kind, owner, frame)
+  }
+
+  fun sendInput(value: V9InputState) {
+    val session = playSession ?: throw V9ProtocolException(V9ErrorCode.UNEXPECTED_MESSAGE, 0)
+    session.sendInput(value)
+  }
+
+  fun sendControl(value: V9RuntimeControl) {
+    val session = playSession ?: throw V9ProtocolException(V9ErrorCode.UNEXPECTED_MESSAGE, 0)
+    session.sendControl(value)
+  }
+
+  /** The foundation refuses traffic that its explicitly supplied phase plans do not own. */
   fun sendUnavailable(type: V9MessageType): Nothing {
     require(type != V9MessageType.HELLO && type != V9MessageType.ERROR)
     throw V9ProtocolException(V9ErrorCode.UNEXPECTED_MESSAGE, 0)
@@ -575,6 +608,14 @@ class V9FoundationConnection(
               frame.header.channel,
               frame.payloadView(),
           ) ?: reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.TRANSFER_REJECTED)
+        V9MessageType.CHECKPOINT,
+        V9MessageType.START,
+        V9MessageType.READY,
+        V9MessageType.INPUT,
+        V9MessageType.RESET,
+        V9MessageType.STOP ->
+          playSession?.handle(frame)
+              ?: reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.TRANSFER_REJECTED)
         V9MessageType.CANCEL -> fail(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
         V9MessageType.GOODBYE -> {
           lifecycle.closeNormally()
@@ -915,7 +956,8 @@ class V9FoundationConnection(
                   V9ErrorCode.CONSENT_REJECTED,
                   V9Diagnostic.CONSENT_REJECTED,
               )
-      val session =
+      lateinit var session: V9Part3Session
+      session =
           V9Part3Session(
               role,
               mode,
@@ -927,10 +969,13 @@ class V9FoundationConnection(
               ::enqueuePart3,
               lifecycle::consentComplete,
               ::reject,
-          ) { prepared ->
-            completedPreparationBoundary = prepared
-            preparationComplete.countDown()
-          }
+              onPreparationComplete = { prepared ->
+                completedPreparationBoundary = prepared
+                preparationComplete.countDown()
+                if (playPlan != null) activatePlaySession(value, session)
+              },
+              checkpointTransportEnabled = playPlan != null,
+          )
       val registrations =
           synchronized(part3ListenerLock) {
             if (closed.get()) {
@@ -949,6 +994,39 @@ class V9FoundationConnection(
     }
     completedManifestBoundary = value
     manifestComplete.countDown()
+  }
+
+  private fun activatePlaySession(
+      boundary: V9ManifestPairingBoundary,
+      consentSession: V9Part3Session,
+  ) {
+    val plan = playPlan?.forGuest(role, boundary.authenticatedGuest)
+        ?: return reject(V9ErrorCode.CONSENT_REJECTED, V9Diagnostic.CONSENT_REJECTED)
+    val authorization = consentSession.checkpointAuthorization()
+        ?: return reject(V9ErrorCode.CONSENT_REJECTED, V9Diagnostic.CONSENT_REJECTED)
+    val session =
+        V9PlaySession(
+            role,
+            mode,
+            boundary.authenticatedGuest,
+            authorization,
+            plan,
+            ::startTask,
+            V9PlaySend(::enqueuePlay),
+            lifecycle,
+            ::reject,
+        ) { active ->
+          completedActiveBoundary = active
+          activeComplete.countDown()
+        }
+    synchronized(wireStateLock) {
+      if (closed.get() || playSession != null) {
+        session.close()
+        return
+      }
+      playSession = session
+    }
+    session.start()
   }
 
   private fun manifestContext(
@@ -1024,17 +1102,67 @@ class V9FoundationConnection(
         }
       }
 
-  private fun admitPart3Header(
+  private fun enqueuePlay(
+      type: V9MessageType,
+      flags: Int,
+      correlation: Long,
+      channel: Long,
+      payload: ByteArray,
+      onWritten: () -> Unit,
+  ): Long? =
+      synchronized(wireStateLock) {
+        if (closed.get() || snapshot().state == V9LifecycleState.TERMINAL_CLEANUP) {
+          return@synchronized null
+        }
+        val sequence = nextSequenceOrFail() ?: return@synchronized null
+        val encoded =
+            try {
+              V9FrameEncoder.encode(
+                  V9OutboundFrame(type, flags, sequence, correlation, channel, payload),
+                  playPolicy(),
+              )
+            } catch (e: V9ProtocolException) {
+              reject(e.reason, diagnosticFor(e.reason))
+              return@synchronized null
+            }
+        if (type == V9MessageType.START) {
+          try {
+            responseLedger.recordPeerRequest(sequence, V9MessageType.START)
+          } catch (_: RuntimeException) {
+            encoded.fill(0)
+            reject(V9ErrorCode.CORRELATION_ERROR, V9Diagnostic.TRANSFER_REJECTED)
+            return@synchronized null
+          }
+        }
+        advanceOutgoingSequence()
+        val offered =
+            try {
+              writer.offer(encoded, onWritten)
+            } finally {
+              encoded.fill(0)
+            }
+        if (offered) sequence else {
+          reject(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
+          null
+        }
+      }
+
+  private fun admitDynamicHeader(
       type: V9MessageType,
       flags: Int,
       channel: Long,
       encodedLength: Long,
       decodedLength: Long,
   ): V9ErrorCode? {
-    if (type !in PART3_MESSAGES) return null
+    if (type !in PART3_MESSAGES && type !in PLAY_MESSAGES) return null
     return synchronized(wireStateLock) {
-      val session = part3Session ?: return@synchronized V9ErrorCode.UNEXPECTED_MESSAGE
-      session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
+      if (type in PART3_MESSAGES) {
+        val session = part3Session ?: return@synchronized V9ErrorCode.UNEXPECTED_MESSAGE
+        session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
+      } else {
+        val session = playSession ?: return@synchronized V9ErrorCode.UNEXPECTED_MESSAGE
+        session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
+      }
     }
   }
 
@@ -1043,6 +1171,7 @@ class V9FoundationConnection(
     lifecycle.beginTerminalCleanup(reason, diagnostic)
     writer.close()
     part3Session?.close()
+    playSession?.close()
     localManifestPayload?.fill(0)
     localManifestPayload = null
     localManifest = null
@@ -1209,6 +1338,13 @@ class V9FoundationConnection(
           linkMode = mode,
       )
 
+  private fun playPolicy(): V9DecoderPolicy =
+      V9DecoderPolicy(
+          allowedMessages = PLAY_MESSAGES + V9MessageType.ERROR,
+          negotiatedCapabilities = negotiated?.capabilities ?: emptySet(),
+          linkMode = mode,
+      )
+
   private fun startTask(name: String, block: () -> Unit): Thread {
     check(!closed.get()) { "v9 foundation is closed" }
     val task = thread(start = false, isDaemon = true, name = name, block = block)
@@ -1267,6 +1403,8 @@ class V9FoundationConnection(
         }
     registrations.forEach(Closeable::close)
     session?.close()
+    playSession?.close()
+    playSession = null
     clientInvitation?.close()
     try {
       channel.close()
@@ -1281,6 +1419,7 @@ class V9FoundationConnection(
     postAuth.countDown()
     manifestComplete.countDown()
     preparationComplete.countDown()
+    activeComplete.countDown()
     val listeners =
         synchronized(closeListenerLock) {
           closeListeners.toList().also { closeListeners.clear() }
@@ -1363,6 +1502,16 @@ class V9FoundationConnection(
             V9MessageType.BATTERY_END,
         )
 
+    private val PLAY_MESSAGES =
+        setOf(
+            V9MessageType.CHECKPOINT,
+            V9MessageType.START,
+            V9MessageType.READY,
+            V9MessageType.INPUT,
+            V9MessageType.RESET,
+            V9MessageType.STOP,
+        )
+
     private fun randomNonce(): ByteArray = ByteArray(32).also(SecureRandom()::nextBytes)
   }
 }
@@ -1379,6 +1528,7 @@ class V9FoundationServer(
     private val invitationHost: V9InvitationHost? = null,
     private val manifestPlan: V9ManifestPlan? = null,
     private val part3Plan: V9Part3Plan? = null,
+    private val playPlan: V9PlayPlan? = null,
     private val onAwaitingPairing: (V9FoundationConnection) -> Unit,
 ) : Closeable {
   init {
@@ -1392,6 +1542,10 @@ class V9FoundationServer(
             part3Plan.role == V9Role.SERVER &&
             part3Plan.mode == mode) {
       "v9 Part-3 requires matching server manifest ownership"
+    }
+    require(playPlan == null ||
+        part3Plan != null && playPlan.role == V9Role.SERVER && playPlan.mode == mode) {
+      "v9 playable transport requires matching server Part-3 ownership"
     }
   }
 
@@ -1425,6 +1579,7 @@ class V9FoundationServer(
             invitationHost = invitationHost,
             manifestPlan = manifestPlan,
             part3Plan = part3Plan,
+            playPlan = playPlan,
         )
       }
 
@@ -1623,6 +1778,7 @@ object V9FoundationClient {
       invitation: V9ClientInvitation? = null,
       manifestPlan: V9ManifestPlan? = null,
       part3Plan: V9Part3Plan? = null,
+      playPlan: V9PlayPlan? = null,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
     require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
@@ -1630,6 +1786,8 @@ object V9FoundationClient {
         manifestPlan != null &&
             part3Plan.role == V9Role.CLIENT &&
             part3Plan.mode == mode)
+    require(playPlan == null ||
+        part3Plan != null && playPlan.role == V9Role.CLIENT && playPlan.mode == mode)
     return connectAccepted(
         address,
         mode,
@@ -1638,6 +1796,7 @@ object V9FoundationClient {
         invitation,
         manifestPlan,
         part3Plan,
+        playPlan,
         ::newV9SocketChannel,
     )
   }
@@ -1650,6 +1809,7 @@ object V9FoundationClient {
       invitation: V9ClientInvitation?,
       manifestPlan: V9ManifestPlan? = null,
       part3Plan: V9Part3Plan? = null,
+      playPlan: V9PlayPlan? = null,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
@@ -1658,6 +1818,8 @@ object V9FoundationClient {
         manifestPlan != null &&
             part3Plan.role == V9Role.CLIENT &&
             part3Plan.mode == mode)
+    require(playPlan == null ||
+        part3Plan != null && playPlan.role == V9Role.CLIENT && playPlan.mode == mode)
     return connectAccepted(
         address,
         mode,
@@ -1666,6 +1828,7 @@ object V9FoundationClient {
         invitation,
         manifestPlan,
         part3Plan,
+        playPlan,
         channelFactory,
     )
   }
@@ -1678,6 +1841,7 @@ object V9FoundationClient {
       invitation: V9ClientInvitation?,
       manifestPlan: V9ManifestPlan?,
       part3Plan: V9Part3Plan?,
+      playPlan: V9PlayPlan?,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     var channel: V9ConnectableChannel? = null
@@ -1694,6 +1858,7 @@ object V9FoundationClient {
           clientInvitation = invitation,
           manifestPlan = manifestPlan,
           part3Plan = part3Plan,
+          playPlan = playPlan,
       )
       connection = acceptedConnection
       acceptedConnection.start()
@@ -1750,6 +1915,7 @@ class V9FoundationConnectAttempt(
       invitation: V9ClientInvitation? = null,
       manifestPlan: V9ManifestPlan? = null,
       part3Plan: V9Part3Plan? = null,
+      playPlan: V9PlayPlan? = null,
       onComplete: (V9FoundationConnection?, V9ErrorCode?) -> Unit,
   ) {
     require(invitation == null || invitation.mode == mode)
@@ -1758,6 +1924,8 @@ class V9FoundationConnectAttempt(
         manifestPlan != null &&
             part3Plan.role == V9Role.CLIENT &&
             part3Plan.mode == mode)
+    require(playPlan == null ||
+        part3Plan != null && playPlan.role == V9Role.CLIENT && playPlan.mode == mode)
     var cancelledBeforeStart = false
     synchronized(lock) {
       check(callback == null) { "v9 connect attempt already started" }
@@ -1799,7 +1967,15 @@ class V9FoundationConnectAttempt(
 
     val worker =
         thread(start = false, isDaemon = true, name = "netplay-v9-connect") {
-          runAttempt(address, mode, optionalCapabilities, invitation, manifestPlan, part3Plan)
+          runAttempt(
+              address,
+              mode,
+              optionalCapabilities,
+              invitation,
+              manifestPlan,
+              part3Plan,
+              playPlan,
+          )
         }
     val startWorker =
         synchronized(lock) {
@@ -1839,6 +2015,7 @@ class V9FoundationConnectAttempt(
       invitation: V9ClientInvitation?,
       manifestPlan: V9ManifestPlan?,
       part3Plan: V9Part3Plan? = null,
+      playPlan: V9PlayPlan? = null,
   ) {
     var createdChannel: V9ConnectableChannel? = null
     try {
@@ -1866,6 +2043,7 @@ class V9FoundationConnectAttempt(
               clientInvitation = invitation,
               manifestPlan = manifestPlan,
               part3Plan = part3Plan,
+              playPlan = playPlan,
           )
       if (!adoptConnection(value)) {
         value.close()
