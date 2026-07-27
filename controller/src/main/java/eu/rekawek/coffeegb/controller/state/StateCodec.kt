@@ -94,6 +94,22 @@ object StateCodec {
 
   fun decode(bytes: ByteArray): StateFile {
     val envelope = decodeEnvelope(bytes)
+    return decode(envelope)
+  }
+
+  /** Protocol-v9 direct-StateFile boundary; applies network limits before inflate/allocation. */
+  internal fun decodeNetworkState(bytes: ByteArray): StateFile {
+    val envelope =
+        decodeEnvelope(
+            bytes,
+            StateLimits.NETPLAY_STATE_FILE_BYTES,
+            StateLimits.NETPLAY_STATE_FILE_BYTES,
+            StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES,
+        )
+    return decode(envelope)
+  }
+
+  private fun decode(envelope: DecodedEnvelope): StateFile {
     val sections = parseSections(envelope, decodeState = true)
     val identities =
         sections.identities
@@ -114,6 +130,22 @@ object StateCodec {
   /** Reads bounded envelope/directory/identity metadata without constructing a live emulator. */
   fun inspect(bytes: ByteArray): StateFileInspection {
     val envelope = decodeEnvelope(bytes)
+    return inspect(envelope)
+  }
+
+  /** Protocol-v9 inspection with the same pre-inflate network trust limits as decode. */
+  internal fun inspectNetworkState(bytes: ByteArray): StateFileInspection {
+    val envelope =
+        decodeEnvelope(
+            bytes,
+            StateLimits.NETPLAY_STATE_FILE_BYTES,
+            StateLimits.NETPLAY_STATE_FILE_BYTES,
+            StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES,
+        )
+    return inspect(envelope)
+  }
+
+  private fun inspect(envelope: DecodedEnvelope): StateFileInspection {
     val sections = parseSections(envelope, decodeState = false)
     val identities =
         sections.identities
@@ -163,6 +195,30 @@ object StateCodec {
           LinkedSessionStateRoot(controller.captureDetachedState()),
           diagnostics,
       )
+
+  /**
+   * Protocol-v9 capture contract. V9 always carries explicit canonical profile identity in
+   * StateFile v2, including profiles whose local/default capture remains byte-compatible v1.
+   */
+  fun version2(file: StateFile): StateFile =
+      if (file.formatVersion == LATEST_FORMAT_VERSION) file
+      else StateFile(file.identities, file.root, file.diagnostics, LATEST_FORMAT_VERSION)
+
+  fun captureVersion2(
+      configuration: Gameboy.GameboyConfiguration,
+      gameboy: Gameboy,
+      diagnostics: StateDiagnosticMetadata? = null,
+  ): StateFile = version2(capture(configuration, gameboy, diagnostics))
+
+  fun captureVersion2(
+      session: Session,
+      diagnostics: StateDiagnosticMetadata? = null,
+  ): StateFile = version2(capture(session, diagnostics))
+
+  fun captureVersion2(
+      controller: LinkedController,
+      diagnostics: StateDiagnosticMetadata? = null,
+  ): StateFile = version2(capture(controller, diagnostics))
 
   /**
    * Validates an already-decoded detached file against an expected network root and target
@@ -290,10 +346,15 @@ object StateCodec {
     return writer.toByteArray()
   }
 
-  private fun decodeEnvelope(bytes: ByteArray): DecodedEnvelope {
-    if (bytes.size > StateLimits.PORTABLE_MAX_FILE_BYTES) {
+  private fun decodeEnvelope(
+      bytes: ByteArray,
+      maximumFileBytes: Int = StateLimits.PORTABLE_MAX_FILE_BYTES,
+      maximumEncodedBytes: Int = StateLimits.PORTABLE_MAX_ENCODED_PAYLOAD_BYTES,
+      maximumDecodedBytes: Int = StateLimits.PORTABLE_MAX_DECODED_PAYLOAD_BYTES,
+  ): DecodedEnvelope {
+    if (bytes.size > maximumFileBytes) {
       PortableBounds.limit(
-          "Portable file ${bytes.size} exceeds ${StateLimits.PORTABLE_MAX_FILE_BYTES}")
+          "Portable file ${bytes.size} exceeds $maximumFileBytes")
     }
     val reader = PortableReader(bytes)
     repeat(MAGIC.size) { index ->
@@ -351,20 +412,20 @@ object StateCodec {
     val encodedLength =
         requireLength(
             reader.readLong(),
-            StateLimits.PORTABLE_MAX_ENCODED_PAYLOAD_BYTES,
+            maximumEncodedBytes,
             "encoded payload",
         )
     val decodedLength =
         requireLength(
             reader.readLong(),
-            StateLimits.PORTABLE_MAX_DECODED_PAYLOAD_BYTES,
+            maximumDecodedBytes,
             "decoded payload",
         )
     if (compression == StateCompression.NONE && encodedLength != decodedLength) {
       PortableBounds.malformed("Uncompressed encoded and decoded lengths differ")
     }
     val expectedChecksum = reader.readBytes(RomIdentity.SHA256_BYTES, RomIdentity.SHA256_BYTES)
-    val encoded = reader.readBytes(encodedLength, StateLimits.PORTABLE_MAX_ENCODED_PAYLOAD_BYTES)
+    val encoded = reader.readBytes(encodedLength, maximumEncodedBytes)
     reader.requireExhausted()
     if (!MessageDigest.isEqual(expectedChecksum, sha256(encoded))) {
       throw StateDecodeException(

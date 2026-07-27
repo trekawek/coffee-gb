@@ -199,6 +199,9 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
     patches.addAll(snapshot.patches)
   }
 
+  @Synchronized
+  internal fun oldestFrame(): Long? = states.firstOrNull()?.frame
+
   private fun emptyInputs() = List(mode.playerCount) { Input(emptyList(), emptyList()) }
 
   private fun trimHistory() {

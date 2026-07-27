@@ -589,6 +589,7 @@ internal class V9Part3Session(
     private val transitionToSynchronizing: () -> Unit,
     private val fail: (V9ErrorCode, V9Diagnostic) -> Unit,
     private val onPreparationComplete: (V9PreparationBoundary) -> Unit,
+    private val checkpointTransportEnabled: Boolean = false,
 ) : Closeable, V9Part3ProgressSource {
   private val lock = Any()
   private val listeners = CopyOnWriteArrayList<V9Part3ProgressListener>()
@@ -622,10 +623,15 @@ internal class V9Part3Session(
       proposals = value.proposals.sortedBy { it.proposalId }
       proposalById = proposals.associateBy { it.proposalId }
       check(proposalById.size == proposals.size)
+      val allowedClasses =
+          if (checkpointTransportEnabled) {
+            setOf(V9TransferClass.ROM, V9TransferClass.BATTERY, V9TransferClass.CHECKPOINT)
+          } else {
+            setOf(V9TransferClass.ROM, V9TransferClass.BATTERY)
+          }
       if (proposals.size > V9Limit.MANIFEST_PROPOSALS.value ||
-          proposals.any {
-            it.transferClass !in setOf(V9TransferClass.ROM, V9TransferClass.BATTERY)
-          }) {
+          proposals.any { it.transferClass !in allowedClasses } ||
+          proposals.count { it.transferClass == V9TransferClass.CHECKPOINT } > 1) {
         protocolFailure(V9ErrorCode.CONSENT_REJECTED)
         return
       }
@@ -648,6 +654,16 @@ internal class V9Part3Session(
 
   fun items(): List<V9ConsentItem> =
       synchronized(lock) { proposals.map(V9ConsentItem::from) }
+
+  internal fun checkpointAuthorization(): V9CheckpointAuthorization? =
+      synchronized(lock) {
+        if (closed || !allApprovedLocked()) return@synchronized null
+        val value = boundary ?: return@synchronized null
+        val proposal =
+            proposals.singleOrNull { it.transferClass == V9TransferClass.CHECKPOINT }
+                ?: return@synchronized null
+        V9CheckpointAuthorization(value, proposal)
+      }
 
   fun submitConsent(proposalId: Long, decision: V9ConsentDecision) {
     val payload: ByteArray
@@ -936,6 +952,11 @@ internal class V9Part3Session(
     var complete: V9PreparationBoundary? = null
     synchronized(lock) {
       if (closed) return
+      if (checkpointTransportEnabled && allApprovedLocked()) {
+        proposals
+            .filter { it.transferClass == V9TransferClass.CHECKPOINT }
+            .forEach { prepared.add(it.proposalId) }
+      }
       val next =
           proposals.firstOrNull {
             it.proposalId !in prepared &&

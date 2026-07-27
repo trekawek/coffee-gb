@@ -613,7 +613,7 @@ internal object DetachedStateAdapter {
     session.heldButtons = prepared.heldButtons
   }
 
-  private fun prepare(gameboy: Gameboy, state: MachineState): PreparedMachineState {
+  internal fun prepare(gameboy: Gameboy, state: MachineState): PreparedMachineState {
     validateTarget(gameboy, state)
     return reconstructMachine(state, gameboy.clockSpec)
   }
@@ -630,10 +630,15 @@ internal object DetachedStateAdapter {
     return PreparedMachineState(componentState, rtcRuntime, dmgFifoRuntime)
   }
 
-  private fun commit(gameboy: Gameboy, prepared: PreparedMachineState) {
+  internal fun commit(
+      gameboy: Gameboy,
+      prepared: PreparedMachineState,
+      probe: ((ApplyStage) -> Unit)? = null,
+  ) {
     gameboy.restoreState(prepared.componentState)
     gameboy.restoreDmgFifoRuntimeState(prepared.dmgFifoRuntime)
     gameboy.restoreRtcRuntimeState(prepared.rtcRuntime)
+    probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)
   }
 
   private fun serialPeripheral(endpoint: SerialEndpoint): SerialPeripheralState =
