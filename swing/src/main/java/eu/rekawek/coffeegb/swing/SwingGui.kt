@@ -43,6 +43,8 @@ class SwingGui private constructor(
 
   private var romLoading = false
 
+  private val romSessionState = RomSessionState()
+
   init {
     eventBus = EventBusImpl()
     emulator = SwingEmulator(eventBus, console, properties)
@@ -51,7 +53,15 @@ class SwingGui private constructor(
   private fun startGui() {
     mainWindow = JFrame("Coffee GB")
 
-    SwingMenu(properties, mainWindow, eventBus).addMenu()
+    SwingMenu(
+            properties,
+            mainWindow,
+            eventBus,
+            romSessionState,
+            ::showPreferences,
+            ::requestClose,
+        )
+        .addMenu()
     eventBus.register<RomLoadingEvent> {
       romLoading = true
       updateLoadingUi("Coffee GB: Loading ${it.rom.name}…", true)
@@ -59,6 +69,7 @@ class SwingGui private constructor(
     eventBus.register<EmulationStartedEvent> {
       activeWindowTitle = "Coffee GB: ${it.romName}"
       romLoading = false
+      romSessionState.markStarted()
       updateLoadingUi(activeWindowTitle, false)
     }
     eventBus.register<LoadRomFailedEvent> {
@@ -71,14 +82,19 @@ class SwingGui private constructor(
     }
     eventBus.register<EmulationStoppedEvent> {
       activeWindowTitle = "Coffee GB"
+      romSessionState.markStopped()
       if (!romLoading) {
         updateLoadingUi(activeWindowTitle, false)
       }
     }
 
-    mainWindow.defaultCloseOperation = JFrame.DISPOSE_ON_CLOSE
+    mainWindow.defaultCloseOperation = JFrame.DO_NOTHING_ON_CLOSE
     mainWindow.addWindowListener(
         object : WindowAdapter() {
+          override fun windowClosing(windowEvent: WindowEvent) {
+            requestClose()
+          }
+
           override fun windowClosed(windowEvent: WindowEvent) {
             stopGui()
           }
@@ -139,6 +155,41 @@ class SwingGui private constructor(
             "coffee-gb-settings-shutdown",
         )
         .start()
+  }
+
+  private fun requestClose() {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Application close must be requested from the Event Dispatch Thread"
+    }
+    val running = romSessionState.isRunning()
+    val proceed =
+        proceedWithRomChange(properties.romChangeConfirmationPolicy, running) {
+          JOptionPane.showConfirmDialog(
+              mainWindow,
+              if (running) {
+                "Quit Coffee GB and close the running game?"
+              } else {
+                "Quit Coffee GB?"
+              },
+              "Quit Coffee GB",
+              JOptionPane.YES_NO_OPTION,
+              JOptionPane.QUESTION_MESSAGE,
+          ) == JOptionPane.YES_OPTION
+        }
+    if (!proceed) {
+      return
+    }
+    mainWindow.dispose()
+  }
+
+  private fun showPreferences() {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Preferences must be opened from the Event Dispatch Thread"
+    }
+    PreferencesDialog.show(mainWindow, properties.applicationSettings) { edit ->
+      properties.updateApplicationSettings(edit::applyTo)
+      emulator.applyKeyboardMapping(properties.playerInputMapping)
+    }
   }
 
   private fun updateLoadingUi(title: String, loading: Boolean) {

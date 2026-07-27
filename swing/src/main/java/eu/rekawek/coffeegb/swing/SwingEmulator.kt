@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.network.ConnectionController
+import eu.rekawek.coffeegb.controller.properties.ControllerProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -104,6 +105,10 @@ class SwingEmulator(
     controller.close()
     sound.stopThread()
     display.stop()
+  }
+
+  fun applyKeyboardMapping(mapping: ControllerProperties.PlayerMapping) {
+    joypad.updateMapping(mapping)
   }
 
   private fun releaseForLifecycleChange() {

@@ -17,7 +17,7 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
 
     private static final int REWIND_KEY = KeyEvent.VK_BACK_SPACE;
 
-    private final Map<Integer, ControllerProperties.PlayerButton> mapping;
+    private Map<Integer, ControllerProperties.PlayerButton> mapping;
     private final EventBus eventBus;
     private final DesktopPlayerInput input;
     private final Object[] sourceIdentities = new Object[4];
@@ -28,7 +28,7 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
     @SuppressWarnings("unchecked")
     public SwingJoypad(ControllerProperties.PlayerMapping mapping, EventBus eventBus,
                        DesktopPlayerInput input) {
-        this.mapping = mapping.getKeyboard();
+        this.mapping = Map.copyOf(mapping.getKeyboard());
         this.eventBus = eventBus;
         this.input = input;
         this.pressed = new EnumSet[4];
@@ -92,6 +92,20 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
         releaseKeyboard();
         releaseRewind();
         input.releaseAll();
+    }
+
+    /**
+     * Replaces keyboard bindings without allowing held keys from the old map to become stuck.
+     *
+     * <p>The Preferences dialog calls this only after its complete draft has validated and been
+     * persisted. Releasing before swapping also means a physically held key must be released and
+     * pressed again before the new binding becomes active.
+     */
+    public synchronized void updateMapping(ControllerProperties.PlayerMapping mapping) {
+        releaseKeyboard();
+        releaseRewind();
+        input.releaseAll();
+        this.mapping = Map.copyOf(mapping.getKeyboard());
     }
 
     private void update(int player) {

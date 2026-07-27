@@ -79,10 +79,13 @@ import javax.swing.SwingUtilities
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
-class SwingMenu(
+internal class SwingMenu(
     private val properties: EmulatorProperties,
     private val window: JFrame,
     private val eventBus: EventBus,
+    private val romSessionState: RomSessionState,
+    private val onPreferences: () -> Unit,
+    private val onQuit: () -> Unit,
 ) {
 
   private var stateSlot = 0
@@ -173,24 +176,33 @@ class SwingMenu(
     fileMenu.add(recentRomsMenu)
     updateRecentRoms(recentRomsMenu)
 
-    val fc = JFileChooser()
-    properties.getProperty(EmulatorProperties.Key.RomDirectory, null)?.let {
-      fc.currentDirectory = File(it)
-    }
+    val fc = RomFileChooser()
+    val systemDefaultRomDirectory = fc.currentDirectory
 
     load.addActionListener {
+      properties.applicationSettings.general.romDirectory?.let(fc::useConfiguredDirectory)
+          ?: run { fc.currentDirectory = systemDefaultRomDirectory }
       val code = fc.showOpenDialog(load)
       if (code == JFileChooser.APPROVE_OPTION) {
         val rom = fc.selectedFile
-        properties.setProperty(EmulatorProperties.Key.RomDirectory, rom.parent)
         launchRom(recentRomsMenu, rom)
       }
     }
 
+    fileMenu.addSeparator()
+    val preferences = JMenuItem("Preferences…")
+    preferences.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, KEY_MODIFIER)
+    preferences.addActionListener {
+      onPreferences()
+      updateRecentRoms(recentRomsMenu)
+    }
+    fileMenu.add(preferences)
+
+    fileMenu.addSeparator()
     val quit = JMenuItem("Quit")
     quit.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_Q, KEY_MODIFIER)
     fileMenu.add(quit)
-    quit.addActionListener { window.dispose() }
+    quit.addActionListener { onQuit() }
 
     return fileMenu
   }
@@ -279,7 +291,11 @@ class SwingMenu(
     stop.isEnabled = false
     stop.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_S, KEY_MODIFIER)
     gameMenu.add(stop)
-    stop.addActionListener { eventBus.post(StopEmulationEvent()) }
+    stop.addActionListener {
+      if (confirmStopGame()) {
+        eventBus.post(StopEmulationEvent())
+      }
+    }
     enableWhenEmulationActive(stop)
 
     val cheatsMenu = JMenu("Cheats")
@@ -1004,6 +1020,9 @@ class SwingMenu(
   }
 
   private fun launchRom(recentRomsMenu: JMenu, rom: File) {
+    if (!confirmRomChange(rom)) {
+      return
+    }
     properties.recentRoms.addRom(rom.absolutePath)
     updateRecentRoms(recentRomsMenu)
     try {
@@ -1018,6 +1037,36 @@ class SwingMenu(
       )
     }
   }
+
+  private fun confirmRomChange(rom: File): Boolean {
+    val running = romSessionState.isRunning()
+    return proceedWithRomChange(properties.romChangeConfirmationPolicy, running) {
+      val message =
+          if (running) {
+            "Replace the running game with ${rom.name}?"
+          } else {
+            "Open ${rom.name}?"
+          }
+      JOptionPane.showConfirmDialog(
+          window,
+          message,
+          "Open ROM",
+          JOptionPane.YES_NO_OPTION,
+          JOptionPane.QUESTION_MESSAGE,
+      ) == JOptionPane.YES_OPTION
+    }
+  }
+
+  private fun confirmStopGame(): Boolean =
+      proceedWithRomChange(properties.romChangeConfirmationPolicy, isRomRunning = true) {
+        JOptionPane.showConfirmDialog(
+            window,
+            "Stop the running game?",
+            "Stop game",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+        ) == JOptionPane.YES_OPTION
+      }
 
   private companion object {
     const val CHEAT_CODE_MAX_LENGTH = 36

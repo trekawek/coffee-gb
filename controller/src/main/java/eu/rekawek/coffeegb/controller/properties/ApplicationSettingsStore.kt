@@ -300,9 +300,11 @@ class ApplicationSettingsStore(
         } catch (failure: Exception) {
           return recoverCorrupt(failure)
         }
-    val isLegacy = !raw.containsKey(ApplicationSettingsCodec.SCHEMA_VERSION_KEY)
+    val needsMigration =
+        raw[ApplicationSettingsCodec.SCHEMA_VERSION_KEY] !=
+            ApplicationSettings.CURRENT_SCHEMA_VERSION.toString()
     return try {
-      Loaded(ApplicationSettingsCodec.decode(raw), migrated = isLegacy)
+      Loaded(ApplicationSettingsCodec.decode(raw), migrated = needsMigration)
     } catch (future: UnsupportedApplicationSettingsVersionException) {
       Loaded(
           ApplicationSettingsDocument(ApplicationSettings()),
@@ -407,8 +409,9 @@ class ApplicationSettingsStore(
         "Settings file exceeds the $MAX_SETTINGS_BYTES-byte limit"
       }
       val text = if (hasAsciiSchemaMarker(bytes)) {
-        // Schema 1 is emitted as ASCII-safe UTF-8. Never silently replace malformed bytes in a
-        // versioned file, because a later write would otherwise destroy an unknown value.
+        // Versioned settings are emitted as ASCII-safe UTF-8. Never silently replace malformed
+        // bytes in a versioned file, because a later write would otherwise destroy an unknown
+        // value.
         StandardCharsets.UTF_8
             .newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)

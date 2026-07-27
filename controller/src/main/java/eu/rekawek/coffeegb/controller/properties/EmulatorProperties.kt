@@ -46,11 +46,43 @@ internal constructor(
   )
 
   internal val properties = Properties()
+  private val updateLock = Any()
 
   val profileOverride: HardwareProfile?
     get() = overrides.hardwareProfile
 
   val recentRoms = RecentRoms(this)
+
+  var recentFileCapacity: Int
+    get() = applicationSettings.general.recentFileCapacity
+    set(value) {
+      require(
+          value in
+              ApplicationSettings.MIN_RECENT_FILE_CAPACITY..
+                  ApplicationSettings.MAX_RECENT_FILE_CAPACITY) {
+            "Recent-file capacity must be between " +
+                "${ApplicationSettings.MIN_RECENT_FILE_CAPACITY} and " +
+                ApplicationSettings.MAX_RECENT_FILE_CAPACITY
+          }
+      updateSettings { current ->
+        val recent = current.general.recentRoms.take(value)
+        current.copy(
+            general =
+                current.general.copy(
+                    recentRoms = recent,
+                    recentFileCapacity = value,
+                ))
+      }
+    }
+
+  var romChangeConfirmationPolicy: ApplicationSettings.RomChangeConfirmationPolicy
+    get() = applicationSettings.general.romChangeConfirmationPolicy
+    set(value) {
+      updateSettings { current ->
+        current.copy(
+            general = current.general.copy(romChangeConfirmationPolicy = value))
+      }
+    }
 
   val display = DisplayProperties(this)
 
@@ -61,16 +93,16 @@ internal constructor(
   val saves = SavesProperties(this)
 
   val playerInputMapping: ControllerProperties.PlayerMapping
+    get() = applicationSettings.input.toPlayerMapping()
 
   /** Shared live-input service copied into each active machine configuration. */
   val playerInputSource = PlayerInputHub()
 
   val controllerMapping: Map<Int, eu.rekawek.coffeegb.core.joypad.Button>
+    get() = playerInputMapping.legacyPrimaryKeyboard()
 
   init {
     replaceCompatibilityProperties(settingsStore.current())
-    playerInputMapping = applicationSettings.input.toPlayerMapping()
-    controllerMapping = playerInputMapping.legacyPrimaryKeyboard()
   }
 
   val applicationSettings: ApplicationSettings
@@ -90,13 +122,30 @@ internal constructor(
   }
 
   internal fun updateSettings(update: (ApplicationSettings) -> ApplicationSettings) {
-    val current = currentDocument()
-    val updated = ApplicationSettingsDocument(update(current.settings), current.unknownProperties)
-    commitDocument(updated)
+    updateApplicationSettings(update)
   }
 
+  /**
+   * Atomically applies a typed Preferences edit to the latest settings while retaining
+   * unrecognized properties from the current document. The update is fully validated before the
+   * in-memory value changes or a persistence write is scheduled. Using a transform rather than a
+   * stale replacement value also preserves settings owned by Preferences sections not currently
+   * being edited.
+   */
+  fun updateApplicationSettings(
+      update: (ApplicationSettings) -> ApplicationSettings
+  ) =
+      synchronized(updateLock) {
+        val current = currentDocument()
+        commitDocument(
+            ApplicationSettingsDocument(
+                update(current.settings),
+                current.unknownProperties,
+            ))
+      }
+
   internal fun saveProperties() {
-    commitDocument(currentDocument())
+    synchronized(updateLock) { commitDocument(currentDocument()) }
   }
 
   fun consumeLoadWarning(): ApplicationSettingsLoadWarning? = settingsStore.consumeLoadWarning()
@@ -109,9 +158,11 @@ internal constructor(
   override fun close() = settingsStore.close()
 
   private fun updateRaw(update: (MutableMap<String, String>) -> Unit) {
-    val raw = compatibilityPropertiesMap().toMutableMap()
-    update(raw)
-    commitDocument(ApplicationSettingsCodec.decode(raw))
+    synchronized(updateLock) {
+      val raw = compatibilityPropertiesMap().toMutableMap()
+      update(raw)
+      commitDocument(ApplicationSettingsCodec.decode(raw))
+    }
   }
 
   private fun currentDocument(): ApplicationSettingsDocument =
