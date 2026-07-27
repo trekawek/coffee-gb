@@ -5,27 +5,54 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import org.junit.Test;
 
+import javax.swing.SwingUtilities;
+import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.Arrays;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.Assert.*;
+import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_HEIGHT;
+import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_WIDTH;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class SwingDisplayTest {
+
+    @Test
+    public void constructionRequiresTheEventDispatchThread() {
+        assertFalse(SwingUtilities.isEventDispatchThread());
+        assertThrows(
+                IllegalStateException.class,
+                () -> new SwingDisplay(
+                        new EmulatorProperties().getDisplay(),
+                        EventBus.NULL_EVENT_BUS,
+                        "test"));
+    }
 
     @Test
     public void romLoadingShowsPersistentNotificationUntilLoadingFinishes() throws Exception {
         EventBusImpl root = new EventBusImpl(null, null, false);
         EventBus session = root.fork("test");
-        SwingDisplay display = new SwingDisplay(
-                new EmulatorProperties().getDisplay(), root, "test");
+        SwingDisplay display = newDisplay(root);
         Field textField = SwingDisplay.class.getDeclaredField("persistentNotificationText");
         textField.setAccessible(true);
 
@@ -49,23 +76,14 @@ public class SwingDisplayTest {
     public void snapshotCompletionEventsShowAnOnScreenNotification() throws Exception {
         EventBusImpl root = new EventBusImpl(null, null, false);
         EventBus session = root.fork("test");
-        SwingDisplay display = new SwingDisplay(
-                new EmulatorProperties().getDisplay(), root, "test");
+        SwingDisplay display = newDisplay(root);
         Field textField = SwingDisplay.class.getDeclaredField("notificationText");
         textField.setAccessible(true);
 
         session.post(new Controller.SnapshotSavedEvent(3));
         assertEquals("State saved (slot 3)", textField.get(display));
 
-        display.setSize(display.getPreferredSize());
-        BufferedImage target = new BufferedImage(
-                display.getWidth(), display.getHeight(), BufferedImage.TYPE_INT_RGB);
-        Graphics graphics = target.getGraphics();
-        try {
-            display.paintComponent(graphics);
-        } finally {
-            graphics.dispose();
-        }
+        BufferedImage target = paintAtPreferredSize(display);
         boolean hasVisibleText = false;
         for (int y = 0; y < target.getHeight() && !hasVisibleText; y++) {
             for (int x = 0; x < target.getWidth(); x++) {
@@ -85,47 +103,85 @@ public class SwingDisplayTest {
     @Test
     public void newestFrameReplacesPendingTransitionFrame() throws Exception {
         EventBusImpl eventBus = new EventBusImpl(null, "test", false);
-        SwingDisplay display = new SwingDisplay(
-                new EmulatorProperties().getDisplay(), eventBus, "test");
+        SwingDisplay display = newDisplay(eventBus);
         int[] transition = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
-        java.util.Arrays.fill(transition, 3);
+        Arrays.fill(transition, 3);
         int[] blank = new int[transition.length];
+        int[] expectedBlank = dmgRgb(blank);
 
         eventBus.post(new Display.DmgFrameReadyEvent(transition));
         eventBus.post(new Display.DmgFrameReadyEvent(blank));
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            awaitDisplayedFrame(display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, expectedBlank);
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
 
-        Field waitingFrameField = SwingDisplay.class.getDeclaredField("waitingFrame");
-        waitingFrameField.setAccessible(true);
-        int[] waitingFrame = (int[]) waitingFrameField.get(display);
-        int[] expected = new int[waitingFrame.length];
-        new Display.DmgFrameReadyEvent(blank).toRgb(
-                expected, new EmulatorProperties().getDisplay().getGrayscale());
-        assertArrayEquals(expected, waitingFrame);
+    @Test
+    public void queuedFrameDoesNotRetainTheEmulatorOwnedBuffer() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        int[] emulatorOwned = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        Arrays.fill(emulatorOwned, 3);
+        int[] expected = dmgRgb(emulatorOwned);
+
+        eventBus.post(new Display.DmgFrameReadyEvent(emulatorOwned));
+        Arrays.fill(emulatorOwned, 0);
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            awaitDisplayedFrame(display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, expected);
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
+    public void cgbFrameIsTranslatedAndCopiedBeforePublication() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        int[] emulatorOwned = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        Arrays.fill(emulatorOwned, 0x4210);
+        int[] expected = gbcRgb(emulatorOwned);
+
+        eventBus.post(new Display.GbcFrameReadyEvent(emulatorOwned));
+        Arrays.fill(emulatorOwned, 0);
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            awaitDisplayedFrame(display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, expected);
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
     }
 
     @Test
     public void lcdBlankDoesNotBlendWithTransitionFrame() throws Exception {
         EventBusImpl eventBus = new EventBusImpl(null, "test", false);
-        SwingDisplay display = new SwingDisplay(
-                new EmulatorProperties().getDisplay(), eventBus, "test");
+        SwingDisplay display = newDisplay(eventBus);
         eventBus.post(new SwingDisplay.SetBlendingEvent(true));
         Thread displayThread = daemonThread(display);
         displayThread.start();
 
         int size = Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT;
         int[] scene = new int[size];
-        java.util.Arrays.fill(scene, 3);
+        Arrays.fill(scene, 3);
         int[] transition = new int[size];
         transition[0] = 3;
         int[] blank = new int[size];
-        int[] expectedBlank = new int[size];
-        new Display.DmgFrameReadyEvent(blank).toRgb(
-                expectedBlank, new EmulatorProperties().getDisplay().getGrayscale());
+        int[] expectedBlank = dmgRgb(blank);
 
         Field previousFrameField = SwingDisplay.class.getDeclaredField("previousFrame");
         previousFrameField.setAccessible(true);
-        Field imagePixelsField = SwingDisplay.class.getDeclaredField("imgPixels");
-        imagePixelsField.setAccessible(true);
         try {
             eventBus.post(new Display.DmgFrameReadyEvent(scene));
             awaitArray(previousFrameField, display, dmgRgb(scene));
@@ -135,11 +191,138 @@ public class SwingDisplayTest {
 
             eventBus.post(new Display.DmgFrameReadyEvent(blank, true));
             awaitArray(previousFrameField, display, expectedBlank);
-            assertArrayEquals(expectedBlank, (int[]) imagePixelsField.get(display));
+            awaitDisplayedFrame(
+                    display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, expectedBlank);
         } finally {
             display.stop();
             displayThread.join(2_000);
             eventBus.close();
+        }
+    }
+
+    @Test
+    public void sgbFrameDimensionsArePublishedIndependentlyFromTheComponentSize() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        int[] border = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+        Arrays.fill(border, 0x123456);
+        int[] expected = border.clone();
+
+        onEdt(() -> display.setSize(777, 555));
+        eventBus.post(new SgbDisplay.SgbFrameReadyEvent(border, true));
+        Arrays.fill(border, 0);
+        flushEdt();
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            DisplayFrameSnapshot snapshot =
+                    awaitDisplayedFrame(display, SGB_DISPLAY_WIDTH, SGB_DISPLAY_HEIGHT, expected);
+            assertEquals(0x123456, snapshot.rgbAt(SGB_DISPLAY_WIDTH - 1, SGB_DISPLAY_HEIGHT - 1));
+            assertEquals(new Dimension(512, 448), onEdt(display::getPreferredSize));
+            assertEquals(new Dimension(777, 555), onEdt(() -> {
+                return display.getSize();
+            }));
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
+    public void displaySizeUpdatesAreAppliedAndPublishedOnTheEdt() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        AtomicBoolean allEventsOnEdt = new AtomicBoolean(true);
+        AtomicInteger eventCount = new AtomicInteger();
+        AtomicReference<Dimension> latestSize = new AtomicReference<>();
+        eventBus.register(event -> {
+            allEventsOnEdt.compareAndSet(true, SwingUtilities.isEventDispatchThread());
+            eventCount.incrementAndGet();
+            latestSize.set(event.preferredSize());
+        }, SwingDisplay.DisplaySizeUpdatedEvent.class);
+
+        eventBus.post(new SwingDisplay.SetScaleModeEvent(DisplayScaleMode.EXPLICIT_3X));
+        flushEdt();
+        assertEquals(new Dimension(480, 432), latestSize.get());
+        assertEquals(new Dimension(480, 432), onEdt(display::getPreferredSize));
+
+        eventBus.post(new SwingDisplay.SetRotationEvent(90));
+        flushEdt();
+        assertEquals(new Dimension(432, 480), latestSize.get());
+        assertEquals(new Dimension(432, 480), onEdt(display::getPreferredSize));
+        assertEquals(2, eventCount.get());
+        assertTrue(allEventsOnEdt.get());
+        eventBus.close();
+    }
+
+    @Test
+    public void displaySizeEventDefensivelyCopiesItsDimension() {
+        Dimension original = new Dimension(320, 288);
+        SwingDisplay.DisplaySizeUpdatedEvent event =
+                new SwingDisplay.DisplaySizeUpdatedEvent(original);
+        original.setSize(1, 1);
+        Dimension received = event.preferredSize();
+        received.setSize(2, 2);
+
+        assertEquals(new Dimension(320, 288), event.preferredSize());
+    }
+
+    @Test
+    public void paintingUsesViewportLetterboxingAndTheConfiguredNeutralColor() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        Color letterbox = new Color(12, 34, 56);
+        int[] frame = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        int[] expected = dmgRgb(frame);
+        AtomicBoolean backgroundChangedOnEdt = new AtomicBoolean();
+        onEdt(() -> display.addPropertyChangeListener(
+                "background",
+                event -> backgroundChangedOnEdt.set(SwingUtilities.isEventDispatchThread())));
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            eventBus.post(new SwingDisplay.SetLetterboxColorEvent(letterbox));
+            eventBus.post(new SwingDisplay.SetScaleModeEvent(DisplayScaleMode.ASPECT_FIT));
+            eventBus.post(new Display.DmgFrameReadyEvent(frame));
+            awaitDisplayedFrame(display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, expected);
+            flushEdt();
+
+            BufferedImage target = onEdt(() -> {
+                display.setSize(500, 300);
+                BufferedImage image =
+                        new BufferedImage(500, 300, BufferedImage.TYPE_INT_RGB);
+                Graphics graphics = image.getGraphics();
+                try {
+                    display.paintComponent(graphics);
+                } finally {
+                    graphics.dispose();
+                }
+                return image;
+            });
+
+            assertEquals(letterbox.getRGB() & 0xffffff, target.getRGB(0, 150) & 0xffffff);
+            assertEquals(expected[0], target.getRGB(250, 150) & 0xffffff);
+            assertTrue(backgroundChangedOnEdt.get());
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
+    public void paintingRequiresTheEventDispatchThread() throws Exception {
+        SwingDisplay display = newDisplay();
+        BufferedImage target = new BufferedImage(320, 288, BufferedImage.TYPE_INT_RGB);
+        Graphics graphics = target.getGraphics();
+        try {
+            IllegalStateException error = assertThrows(
+                    IllegalStateException.class,
+                    () -> display.paintComponent(graphics));
+            assertTrue(error.getMessage().contains("Event Dispatch Thread"));
+        } finally {
+            graphics.dispose();
         }
     }
 
@@ -151,8 +334,8 @@ public class SwingDisplayTest {
         assertFalse(Modifier.isSynchronized(modifiers));
 
         SwingDisplay display = newDisplay();
+        onEdt(() -> display.setSize(display.getPreferredSize()));
         BufferedImage target = new BufferedImage(1024, 1024, BufferedImage.TYPE_INT_RGB);
-        Graphics graphics = target.getGraphics();
         CountDownLatch monitorHeld = new CountDownLatch(1);
         CountDownLatch releaseMonitor = new CountDownLatch(1);
         CountDownLatch painted = new CountDownLatch(1);
@@ -164,67 +347,58 @@ public class SwingDisplayTest {
                 await(releaseMonitor);
             }
         });
-        Thread painter = daemonThread(() -> paint(display, graphics, painted, failure));
+        Thread scheduler = daemonThread(() -> {
+            try {
+                onEdt(() -> {
+                    Graphics graphics = target.getGraphics();
+                    try {
+                        display.paintComponent(graphics);
+                    } finally {
+                        graphics.dispose();
+                    }
+                });
+            } catch (Throwable t) {
+                failure.set(t);
+            } finally {
+                painted.countDown();
+            }
+        });
         holder.start();
         assertTrue(monitorHeld.await(2, TimeUnit.SECONDS));
         try {
-            painter.start();
+            scheduler.start();
             assertTrue("painting blocked on the component monitor",
                     painted.await(2, TimeUnit.SECONDS));
         } finally {
             releaseMonitor.countDown();
             holder.join(2_000);
-            painter.join(2_000);
-            graphics.dispose();
+            scheduler.join(2_000);
         }
         assertNull(failure.get());
     }
 
-    @Test
-    public void paintingUsesTheDedicatedRasterLock() throws Exception {
-        Field lockField = SwingDisplay.class.getDeclaredField("rasterLock");
-        assertTrue(Modifier.isPrivate(lockField.getModifiers()));
-        assertTrue(Modifier.isFinal(lockField.getModifiers()));
-        lockField.setAccessible(true);
-
-        SwingDisplay display = newDisplay();
-        Object rasterLock = lockField.get(display);
-        BufferedImage target = new BufferedImage(1024, 1024, BufferedImage.TYPE_INT_RGB);
-        Graphics graphics = target.getGraphics();
-        CountDownLatch started = new CountDownLatch(1);
-        CountDownLatch painted = new CountDownLatch(1);
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        Thread painter = daemonThread(() -> {
-            started.countDown();
-            paint(display, graphics, painted, failure);
-        });
-
-        boolean blocked = false;
-        synchronized (rasterLock) {
-            painter.start();
-            assertTrue(started.await(2, TimeUnit.SECONDS));
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-            while (painted.getCount() != 0 && System.nanoTime() < deadline) {
-                if (painter.getState() == Thread.State.BLOCKED) {
-                    blocked = true;
-                    break;
-                }
-                Thread.yield();
-            }
-            assertTrue("painting did not wait for the raster lock", blocked);
-        }
-
-        try {
-            assertTrue(painted.await(2, TimeUnit.SECONDS));
-            assertNull(failure.get());
-        } finally {
-            painter.join(2_000);
-            graphics.dispose();
-        }
+    private static SwingDisplay newDisplay() throws Exception {
+        return newDisplay(EventBus.NULL_EVENT_BUS);
     }
 
-    private static SwingDisplay newDisplay() {
-        return new SwingDisplay(new EmulatorProperties().getDisplay(), EventBus.NULL_EVENT_BUS, "test");
+    private static SwingDisplay newDisplay(EventBus eventBus) throws Exception {
+        return onEdt(() -> new SwingDisplay(
+                new EmulatorProperties().getDisplay(), eventBus, "test"));
+    }
+
+    private static BufferedImage paintAtPreferredSize(SwingDisplay display) throws Exception {
+        return onEdt(() -> {
+            display.setSize(display.getPreferredSize());
+            BufferedImage target = new BufferedImage(
+                    display.getWidth(), display.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics graphics = target.getGraphics();
+            try {
+                display.paintComponent(graphics);
+            } finally {
+                graphics.dispose();
+            }
+            return target;
+        });
     }
 
     private static Thread daemonThread(Runnable runnable) {
@@ -240,29 +414,76 @@ public class SwingDisplayTest {
         return rgb;
     }
 
+    private static int[] gbcRgb(int[] pixels) {
+        int[] rgb = new int[pixels.length];
+        new Display.GbcFrameReadyEvent(pixels).toRgb(
+                rgb, new EmulatorProperties().getDisplay().getColorCorrection());
+        return rgb;
+    }
+
+    private static DisplayFrameSnapshot awaitDisplayedFrame(
+            SwingDisplay display, int width, int height, int[] expected) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline) {
+            DisplayFrameSnapshot actual = display.displayedFrame();
+            if (actual.width() == width
+                    && actual.height() == height
+                    && frameEquals(actual, expected)) {
+                return actual;
+            }
+            Thread.yield();
+        }
+        fail("display thread did not publish the expected frame");
+        throw new AssertionError();
+    }
+
+    private static boolean frameEquals(DisplayFrameSnapshot actual, int[] expected) {
+        if (expected.length != actual.width() * actual.height()) {
+            return false;
+        }
+        for (int i = 0; i < expected.length; i++) {
+            int x = i % actual.width();
+            int y = i / actual.width();
+            if (actual.rgbAt(x, y) != expected[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static void awaitArray(Field field, Object target, int[] expected) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (System.nanoTime() < deadline) {
             synchronized (target) {
                 int[] actual = (int[]) field.get(target);
-                if (actual != null && java.util.Arrays.equals(expected, actual)) {
+                if (actual != null && Arrays.equals(expected, actual)) {
                     return;
                 }
             }
             Thread.yield();
         }
-        fail("display thread did not upload the expected frame");
+        fail("display thread did not retain the expected blend history");
     }
 
-    private static void paint(SwingDisplay display, Graphics graphics, CountDownLatch painted,
-                              AtomicReference<Throwable> failure) {
-        try {
-            display.paintComponent(graphics);
-        } catch (Throwable t) {
-            failure.set(t);
-        } finally {
-            painted.countDown();
+    private static void flushEdt() throws Exception {
+        onEdt(() -> {
+        });
+    }
+
+    private static void onEdt(ThrowingRunnable runnable) throws Exception {
+        onEdt(() -> {
+            runnable.run();
+            return null;
+        });
+    }
+
+    private static <T> T onEdt(Callable<T> callable) throws Exception {
+        if (SwingUtilities.isEventDispatchThread()) {
+            return callable.call();
         }
+        FutureTask<T> task = new FutureTask<>(callable);
+        SwingUtilities.invokeAndWait(task);
+        return task.get();
     }
 
     private static void await(CountDownLatch latch) {
@@ -272,5 +493,10 @@ public class SwingDisplayTest {
             Thread.currentThread().interrupt();
             throw new AssertionError(e);
         }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }
