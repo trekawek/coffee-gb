@@ -26,6 +26,7 @@ class ProtocolV9ConsentTransferTest {
   fun immediateConsentWaitsForTheFinalManifestWriteTransition() {
     val bytes = privateBytes(2_113)
     val manifestGate = FrameWriteGate(V9MessageType.MANIFEST)
+    val consentProbe = FrameWriteGate(V9MessageType.CONSENT).also { it.release.countDown() }
     val fixture =
         connections(
             proposalPair(bytes),
@@ -33,6 +34,7 @@ class ProtocolV9ConsentTransferTest {
             targetPlan(),
             maximumWrite = Int.MAX_VALUE,
             capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+            serverWriteGate = consentProbe,
             clientWriteGate = manifestGate,
         )
     try {
@@ -42,7 +44,10 @@ class ProtocolV9ConsentTransferTest {
       assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
 
       fixture.server.submitConsent(41, V9ConsentDecision.APPROVE)
-      waitUntil { fixture.clientChannel.hasReadType(V9MessageType.CONSENT) }
+      assertTrue(
+          consentProbe.entered.await(5, TimeUnit.SECONDS),
+          "server did not put the immediate CONSENT frame on the peer wire",
+      )
       assertFalse(fixture.client.isClosed(), fixture.client.snapshot().toString())
       assertNull(fixture.client.part3Progress(), "CONSENT must wait behind MANIFEST completion")
 
@@ -66,6 +71,7 @@ class ProtocolV9ConsentTransferTest {
   fun immediateBeginWaitsForTheFinalConsentWriteTransition() {
     val bytes = privateBytes(2_117)
     val consentGate = FrameWriteGate(V9MessageType.CONSENT)
+    val beginProbe = FrameWriteGate(V9MessageType.ROM_BEGIN).also { it.release.countDown() }
     val fixture =
         connections(
             proposalPair(bytes),
@@ -73,6 +79,7 @@ class ProtocolV9ConsentTransferTest {
             targetPlan(),
             maximumWrite = Int.MAX_VALUE,
             capabilities = setOf(V9Capability.ROM_TRANSFER_V1),
+            serverWriteGate = beginProbe,
             clientWriteGate = consentGate,
         )
     try {
@@ -87,7 +94,10 @@ class ProtocolV9ConsentTransferTest {
 
       fixture.client.submitConsent(41, V9ConsentDecision.APPROVE)
       assertTrue(consentGate.entered.await(5, TimeUnit.SECONDS))
-      waitUntil { fixture.clientChannel.hasReadType(V9MessageType.ROM_BEGIN) }
+      assertTrue(
+          beginProbe.entered.await(5, TimeUnit.SECONDS),
+          "server did not put the immediate ROM_BEGIN frame on the peer wire",
+      )
       assertFalse(fixture.client.isClosed(), fixture.client.snapshot().toString())
       assertEquals(V9LifecycleState.EXCHANGE_CONSENT, fixture.client.snapshot().state)
       assertNull(fixture.client.preparationBoundary())
@@ -1805,7 +1815,9 @@ class ProtocolV9ConsentTransferTest {
           val decisive = observed.take(32).toByteArray()
           val typeId = ByteBuffer.wrap(decisive).order(ByteOrder.BIG_ENDIAN)
               .getShort(8).toInt() and 0xffff
-          V9MessageType.fromWireId(typeId)?.let(observedTypes::add)
+          V9MessageType.fromWireId(typeId)?.let {
+            observedTypes.add(it)
+          }
           if (observed.size < ProtocolV9.HEADER_BYTES) return
           val header = observed.take(ProtocolV9.HEADER_BYTES).toByteArray()
           val buffer = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN)
