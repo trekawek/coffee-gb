@@ -78,6 +78,44 @@ import kotlin.test.assertTrue
 class LinkedControllerTest {
 
   @Test
+  fun v9RollbackDiagnosticsObserveSafePointReplayWithoutChangingState() {
+    val (_, controller) = configuredController(LinkMode.NORMAL, 2)
+    val target = controller.createV9Target()
+    try {
+      repeat(6) { controller.runFrame() }
+      val accepted = AtomicReference<V9ErrorCode?>()
+      val lateFrame = controller.currentFrame() - 3
+      target.input(
+          eu.rekawek.coffeegb.controller.network.v9.V9InputState(lateFrame, 1, 0x10, 1),
+      ) { accepted.set(it) }
+      dispatchOnly(controller)
+      assertNull(accepted.get())
+      controller.runFrame()
+      val metrics = controller.rollbackMetricsSource().snapshot()
+      assertEquals(1, metrics.rollbackCount)
+      assertTrue(metrics.lastFramesRewound >= 2)
+      assertTrue(metrics.totalFramesResimulated >= 1)
+      assertEquals(eu.rekawek.coffeegb.controller.network.NetplayRollbackReason.REMOTE_INPUT,
+          metrics.lastReason)
+      assertTrue(metrics.historyEntries in 1..metrics.historyCapacity)
+      val stateAfterReplay = controller.encodedSessionStates()
+      repeat(100) { controller.rollbackMetricsSource().snapshot() }
+      assertEncodedStatesEqual(stateAfterReplay, controller.encodedSessionStates())
+
+      val rejected = AtomicReference<V9ErrorCode?>()
+      target.input(
+          eu.rekawek.coffeegb.controller.network.v9.V9InputState(-1, 1, 0, 2),
+      ) { rejected.set(it) }
+      dispatchOnly(controller)
+      assertEquals(V9ErrorCode.SEQUENCE_ERROR, rejected.get())
+      assertEquals(1, controller.rollbackMetricsSource().snapshot().tooOldInputs)
+    } finally {
+      target.close()
+      controller.closeWithState()
+    }
+  }
+
+  @Test
   fun v9ProviderCapturesAtFrameSafePointAndCancellationReleasesWaiter() {
     val (eventBus, controller) = configuredController(LinkMode.NORMAL, 2)
     val executor = Executors.newSingleThreadExecutor()

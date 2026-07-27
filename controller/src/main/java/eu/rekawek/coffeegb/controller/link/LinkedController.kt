@@ -52,6 +52,10 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerD
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.network.PeerFrameWindow
+import eu.rekawek.coffeegb.controller.network.NetplayRollbackMetrics
+import eu.rekawek.coffeegb.controller.network.NetplayRollbackMetricsSnapshot
+import eu.rekawek.coffeegb.controller.network.NetplayRollbackReason
+import eu.rekawek.coffeegb.controller.network.NetplaySnapshotSource
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointCommitCompletion
 import eu.rekawek.coffeegb.controller.network.v9.V9CapturedCheckpoint
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointKind
@@ -142,6 +146,11 @@ class LinkedController(
   private var rejectedLocalState: Controller.ControllerState? = null
 
   @VisibleForTesting internal val stateHistory: StateHistory = StateHistory(mode)
+
+  private val rollbackMetrics = NetplayRollbackMetrics(StateHistory.MAX_HISTORY_STATES)
+
+  internal fun rollbackMetricsSource(): NetplaySnapshotSource<NetplayRollbackMetricsSnapshot> =
+      rollbackMetrics
 
   @VisibleForTesting
   internal fun mainHeldButtons() = sessions[localPlayer]?.heldButtons ?: emptySet()
@@ -294,6 +303,7 @@ class LinkedController(
       currentInput = null
       lastInput = null
       rebaseHistoryToLiveState()
+      rollbackMetrics.recordCheckpoint(NetplayRollbackReason.CHECKPOINT)
     } catch (failure: Throwable) {
       try {
         rollback.forEach { (_, session, prepared) ->
@@ -363,6 +373,7 @@ class LinkedController(
       initialStateSynchronized = true
       rebaseHistoryToLiveState()
       syncV9RemoteButtons()
+      rollbackMetrics.recordCheckpoint(NetplayRollbackReason.RESYNCHRONIZATION)
     } catch (failure: Throwable) {
       try {
         links = oldLinks
@@ -661,7 +672,7 @@ class LinkedController(
       if (isFourPlayerHost()) {
         commitHostCheckpoint()
       } else {
-        commitStateBoundary()
+        commitStateBoundary(NetplayRollbackReason.RESET)
         if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditPending = true
       }
       eventBus.postAsync(RequestResetEvent(frame, localPlayer))
@@ -807,7 +818,7 @@ class LinkedController(
         if (isFourPlayerHost()) {
           commitHostCheckpoint()
         } else {
-          commitStateBoundary()
+          commitStateBoundary(NetplayRollbackReason.RESET)
           if (mode == LinkMode.FOUR_PLAYER_ADAPTER) grantCheckpointCredit(e.source)
         }
         eventBus.post(ValidatedPeerResetEvent(e))
@@ -829,7 +840,7 @@ class LinkedController(
         if (isFourPlayerHost()) {
           commitHostCheckpoint()
         } else {
-          commitStateBoundary()
+          commitStateBoundary(NetplayRollbackReason.TOPOLOGY_CHANGE)
         }
         eventBus.post(ValidatedPeerStopEvent(e))
       }
@@ -969,6 +980,7 @@ class LinkedController(
         sessions.map { it?.captureDetachedState() },
         sessions.map { it?.heldButtons ?: emptySet() },
     )
+    rollbackMetrics.updateHistory(stateHistory.entryCount())
 
     sessions[localPlayer]?.let { effectiveInput.send(it.eventBus) }
 
@@ -1196,6 +1208,8 @@ class LinkedController(
         LOG.warn("Unable to close replaced linked session", failure)
       }
     }
+    rollbackMetrics.recordCheckpoint(NetplayRollbackReason.CHECKPOINT)
+    rollbackMetrics.updateHistory(stateHistory.entryCount())
     return true
   }
 
@@ -1292,7 +1306,7 @@ class LinkedController(
             "Player ${player + 1} portable state could not be prepared atomically",
             failure,
         )
-    LOG.info("Rejecting player {} state: {}", player + 1, failure.message)
+    LOG.atDebug().log("Rejecting portable state for player {}", player + 1)
     source?.let(eventQueue::discardSource)
     source?.reject(ProtocolErrorReason.INVALID_PORTABLE_STATE, error)
   }
@@ -1317,12 +1331,12 @@ class LinkedController(
   }
 
   private fun validateRuntimeFrame(peerFrame: Long, source: PeerEventSource?): Boolean {
-    if (peerFrame < runtimeFrameFloor) {
+    val historyFloor = maxOf(runtimeFrameFloor, stateHistory.oldestFrame() ?: runtimeFrameFloor)
+    if (peerFrame < historyFloor) {
+      rollbackMetrics.recordHistoryExhausted()
       LOG.atDebug().log(
-          "Discarding player {} frame {} from before checkpoint floor {}",
+          "Discarding player {} frame from before retained history",
           source?.player?.plus(1),
-          peerFrame,
-          runtimeFrameFloor,
       )
       return false
     }
@@ -1334,10 +1348,13 @@ class LinkedController(
       player: Int,
       requireActiveSession: Boolean = true,
   ): V9ErrorCode? {
+    val historyExhausted =
+        peerFrame < runtimeFrameFloor || stateHistory.oldestFrame()?.let { peerFrame < it } == true
     if (player == localPlayer || player !in sessions.indices ||
         requireActiveSession && sessions[player] == null ||
         !requireActiveSession && configs[player] == null ||
-        peerFrame < runtimeFrameFloor || stateHistory.oldestFrame()?.let { peerFrame < it } == true) {
+        historyExhausted) {
+      if (historyExhausted) rollbackMetrics.recordHistoryExhausted()
       return V9ErrorCode.SEQUENCE_ERROR
     }
     return try {
@@ -1406,7 +1423,7 @@ class LinkedController(
     v9RemoteButtons[value.player] = null
     if (isFourPlayerHost()) commitHostCheckpoint()
     else {
-      commitStateBoundary()
+      commitStateBoundary(NetplayRollbackReason.RESET)
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditPending = true
     }
     eventBus.post(ValidatedPeerResetEvent(ReceivedRemoteResetEvent(value.frame, value.player)))
@@ -1418,7 +1435,8 @@ class LinkedController(
     sessions[value.player]?.close()
     sessions[value.player] = null
     v9RemoteButtons[value.player] = null
-    if (isFourPlayerHost()) commitHostCheckpoint() else commitStateBoundary()
+    if (isFourPlayerHost()) commitHostCheckpoint()
+    else commitStateBoundary(NetplayRollbackReason.TOPOLOGY_CHANGE)
     eventBus.post(ValidatedPeerStopEvent(ReceivedRemoteStopEvent(value.frame, value.player)))
   }
 
@@ -1513,8 +1531,8 @@ class LinkedController(
         validation()
         true
       } catch (e: IOException) {
-        LOG.info("Rejecting player {} frame at controller frame {}: {}",
-            source?.player?.plus(1), frame, e.message)
+        LOG.atDebug().log("Rejecting invalid peer frame for player {}",
+            source?.player?.plus(1))
         source?.let(eventQueue::discardSource)
         source?.reject(ProtocolErrorReason.INVALID_FRAME, e)
         false
@@ -1593,7 +1611,7 @@ class LinkedController(
 
   /** Applies every accepted old-generation patch before a topology snapshot is captured. */
   private fun reconcileHistory() {
-    if (!stateHistory.merge(configs)) return
+    val merge = stateHistory.mergeDetailed(configs) ?: return
     val head = stateHistory.getHead()
     for (player in sessions.indices) {
       val session = sessions[player]
@@ -1604,27 +1622,33 @@ class LinkedController(
       }
     }
     frame = head.frame
+    rollbackMetrics.recordRollback(merge.framesRewound, merge.framesResimulated)
+    rollbackMetrics.updateHistory(stateHistory.entryCount())
     LOG.atDebug().log("State merged to {}", frame)
   }
 
   /** Publishes and installs the same exact generation boundary used by remote clients. */
   private fun commitHostCheckpoint() {
-    commitStateBoundary()
+    commitStateBoundary(NetplayRollbackReason.TOPOLOGY_CHANGE)
     hostCheckpointPending = true
   }
 
   /** Coalesces mutations in one dispatch and captures any same-frame patches after the boundary. */
   private fun flushHostCheckpoint() {
     if (!hostCheckpointPending) return
-    commitStateBoundary()
+    commitStateBoundary(NetplayRollbackReason.TOPOLOGY_CHANGE, record = false)
     broadcastCurrentState()
     hostCheckpointPending = false
   }
 
   /** Ends the old input/history generation after a reset or topology mutation. */
-  private fun commitStateBoundary() {
+  private fun commitStateBoundary(
+      reason: NetplayRollbackReason = NetplayRollbackReason.CHECKPOINT,
+      record: Boolean = true,
+  ) {
     runtimeFrameFloor = frame
     rebaseHistoryToLiveState()
+    if (record) rollbackMetrics.recordCheckpoint(reason)
   }
 
   private fun rebaseHistoryToLiveState() {
@@ -1637,6 +1661,7 @@ class LinkedController(
         sessionStates,
         heldButtons,
     )
+    rollbackMetrics.updateHistory(stateHistory.entryCount())
   }
 
   override fun close() {}
@@ -1687,6 +1712,7 @@ class LinkedController(
 
     localSession?.eventBus?.post(Controller.EmulationStoppedEvent())
     sessions.forEach { it?.close() }
+    rollbackMetrics.close()
     eventBus.close()
 
     return state
@@ -1913,6 +1939,9 @@ internal class V9LinkedControllerTarget(
       completion.complete(V9ErrorCode.CANCELLED)
     }
   }
+
+  override fun rollbackMetricsSource(): NetplaySnapshotSource<NetplayRollbackMetricsSnapshot> =
+      controller.rollbackMetricsSource()
 
   override fun disconnected(player: Int) {
     close()

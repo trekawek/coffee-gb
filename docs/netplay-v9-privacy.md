@@ -30,7 +30,7 @@ copy are explicit disclosure operations and fail after invalidation. A URI `Stri
 returned to caller or clipboard code is immutable and cannot be zeroized; from that disclosure
 point the caller owns its lifetime and must not log or persist it.
 
-V9's planned TCP transport is plaintext. It does not encrypt ROM, battery, state, input, or
+V9's opt-in TCP transport is plaintext. It does not encrypt ROM, battery, state, input, or
 metadata and cannot authenticate a server against an on-path attacker. It is not safe merely
 because the URI contains a random token. V9 does not provide TLS, matchmaking, NAT traversal,
 relay, or public Internet hardening. Prefer a trusted local network or a separately secured tunnel
@@ -82,6 +82,39 @@ wired into the normal netplay menu.
 The exact grammar, limits, timeouts, errors, and state transitions are normative in
 [netplay-protocol-v9.md](netplay-protocol-v9.md).
 
+## In-session diagnostics and copied reports
+
+Transport and rollback diagnostics are opt-in local measurements. A snapshot contains stable
+role/mode/lifecycle/slot values, local-clock RTT aggregates, bounded ping counts, saturated byte
+counts, connection duration, frame/remote-input age, and bounded rollback/history aggregates. It
+does not contain invitation material, content payloads, peer diagnostic strings, ROM title or
+digest, input masks, save/state bytes, or paths. Peer PING timestamps are never trusted for RTT,
+timeouts, emulation, or host clock state.
+
+Copied diagnostics are constructed from that whitelist and capped at 8,192 characters; they are
+not exception or object dumps. Address is `redacted` by default. The Swing panel offers a separate
+explicit local checkbox to include only the numeric peer address and port; tokens remain
+impossible to include. Defense-in-depth text sanitization bounds input to 4,096 and output to
+1,024 characters and replaces invitation URIs, credentials, POSIX/Windows paths, DNS names,
+IPv4/bracketed IPv6 addresses, and controls. Runtime INPUT/RESET/STOP values and raw peer failures
+are not logged at INFO.
+
+## Trusted-LAN discovery
+
+Discovery is off by default and is address discovery only. While explicitly enabled and a v9 host
+is listening with an open slot, the local multicast advertisement contains protocol major 9, a
+random 128-bit **public** session ID, normal/four-player mode, open-slot count, pairing-required
+`true`, and the listener port. It contains no invitation token, ROM title/identity/hash, build,
+user, path, credential, content, or state. Results are untrusted, bounded, deduplicated by public
+session/address, and expire after five seconds. A forged LAN advertisement may mislabel or redirect
+an endpoint; possession of the separate invitation and explicit local confirmation are still
+required, and the existing AUTH/MANIFEST/two-sided-consent checks remain unchanged.
+
+The implementation uses TTL-1 multicast only; there is no central/Nintendo service, broadcast
+Internet scan, matchmaking, NAT traversal, UPnP, relay, automatic connection, or tokenless nonce
+flow. Discovery failure is isolated from direct invitation hosting. Plaintext TCP remains visible
+and mutable to an on-path attacker even when a host was discovered locally.
+
 ## Explicit #349 play boundary
 
 After successful AUTH, explicitly prepared peers exchange bounded MANIFEST metadata. An exact pair
@@ -125,6 +158,7 @@ retained rollback history instead terminates with a typed sequence failure befor
 that terminal boundary a fresh authenticated generation is required rather than an implicit
 checkpoint retry.
 
-Diagnostics and discovery remain for #350. The stale nonce-comparison roadmap checkbox is not a
-tokenless/manual-address bypass: v9 has no such flow. Discovery or a different invitation
-mechanism requires a separately reviewed capability and threat-model change.
+#350 implements only the bounded diagnostics and address-only trusted-LAN discovery described
+above. The stale nonce-comparison roadmap checkbox is not a tokenless/manual-address bypass: v9
+has no such flow. A different invitation or authentication mechanism still requires a separately
+reviewed capability and threat-model change.

@@ -55,11 +55,15 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
   }
 
   @Synchronized
-  fun merge(configs: List<GameboyConfiguration?>): Boolean {
+  fun merge(configs: List<GameboyConfiguration?>): Boolean = mergeDetailed(configs) != null
+
+  @Synchronized
+  internal fun mergeDetailed(configs: List<GameboyConfiguration?>): MergeResult? {
     require(configs.size == mode.playerCount)
     if (patches.isEmpty() || states.isEmpty()) {
-      return false
+      return null
     }
+    val previousHead = states.last().frame
     val baseFrame = min(patches.minOf { it.frame }, states.last().frame)
     val toFrame = max(states.last().frame, patches.maxOf { it.frame })
     LOG.atDebug().log("Rebasing from $baseFrame to $toFrame")
@@ -147,7 +151,10 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
     sessions.forEach { it?.close() }
 
     LOG.atDebug().log("Rebase from $baseFrame to $toFrame completed.")
-    return true
+    return MergeResult(
+        framesRewound = (previousHead - baseFrame).coerceAtLeast(0),
+        framesResimulated = Math.addExact(Math.subtractExact(toFrame, baseFrame), 1),
+    )
   }
 
   fun getHead() = states.last()
@@ -202,6 +209,9 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
   @Synchronized
   internal fun oldestFrame(): Long? = states.firstOrNull()?.frame
 
+  @Synchronized
+  internal fun entryCount(): Int = states.size
+
   private fun emptyInputs() = List(mode.playerCount) { Input(emptyList(), emptyList()) }
 
   private fun trimHistory() {
@@ -224,6 +234,11 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
       val patches: List<Patch>,
   )
 
+  internal data class MergeResult(
+      val framesRewound: Long,
+      val framesResimulated: Long,
+  )
+
   @VisibleForTesting
   internal data class GameboyJoypadPressEvent(
       val button: Button,
@@ -233,7 +248,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
 
   companion object {
     val LOG: Logger = LoggerFactory.getLogger(StateHistory::class.java)
-    private val MAX_HISTORY_STATES = StateLimits.NETPLAY_ROLLBACK_FRAMES.toInt()
+    internal val MAX_HISTORY_STATES = StateLimits.NETPLAY_ROLLBACK_FRAMES.toInt()
 
     internal fun createLinks(
         mode: LinkMode,

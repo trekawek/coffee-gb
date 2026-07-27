@@ -360,6 +360,11 @@ interface V9GameplayTarget {
   fun input(value: V9InputState, completion: V9GameplayCompletion)
   fun control(value: V9RuntimeControl, completion: V9GameplayCompletion)
   fun disconnected(player: Int) {}
+
+  /** Optional local-only diagnostics. It never participates in wire or deterministic state. */
+  fun rollbackMetricsSource():
+      eu.rekawek.coffeegb.controller.network.NetplaySnapshotSource<
+          eu.rekawek.coffeegb.controller.network.NetplayRollbackMetricsSnapshot>? = null
 }
 
 object V9GameplayCodec {

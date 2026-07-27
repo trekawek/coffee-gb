@@ -23,6 +23,9 @@ The platform-neutral controller package `controller.network.v9` owns:
   boundary;
 - an additional opt-in #349 play plan with direct StateFile-v2 checkpoints, two-stage target
   prepare/commit, START/READY, bounded ACTIVE input/control, and normal/four-player barriers;
+- optional #350 PING/PONG transport diagnostics, bounded rollback/history snapshots, a
+  whitelist-only export, an EDT-owned Swing diagnostics panel, and separately opt-in trusted-LAN
+  address discovery;
 - injected monotonic deadlines, bounded reader/writer retention, cancellation, idempotent close,
   socket/task ownership, and an accept loop that isolates malformed or stalled candidates; and
 - an EDT-marshalling Swing adapter whose controller-facing source has no Swing or AWT dependency.
@@ -169,8 +172,46 @@ authenticated generation.
 
 Callers that omit a play plan retain the Part-3 pre-START boundary; callers that omit Part 3 retain
 the Part-2 boundary; callers that also omit a manifest plan retain the Part-1 post-AUTH boundary.
-Diagnostics/discovery and Mobile Adapter behavior remain unavailable. The default
-`ConnectionController` still has no v9 reference; shipped netplay remains protocol v8.
+Diagnostics are also explicit: `V9DiagnosticsOptions.DISABLED` neither advertises `PING_V1` nor
+creates a probe task. Trusted-LAN discovery is a separate off-by-default controller service and
+does not make a v9 session or authentication path. Mobile Adapter behavior remains unavailable.
+The default `ConnectionController` still has no v9 reference; shipped netplay remains protocol v8.
+
+## Bounded diagnostics and trusted-LAN discovery
+
+When both explicit v9 endpoints enable diagnostics, capability 12 admits exact 16-byte PING/PONG
+frames only in ACTIVE. The default cadence is 10,000 ms and the local unanswered-probe timeout is
+20,000 ms. At most one request per direction and the newest 32 RTT samples are retained. A full
+pending set skips a new probe without allocating; two consecutive expired probes close with typed
+`TIMEOUT` if the frozen 30,000 ms ACTIVE-idle deadline has not already closed the connection.
+Expired correlations are removed, so late/duplicate PONG is rejected rather than growing request
+history. RTT, EWMA (1/8), and jitter (1/16) use only the injected local monotonic clock. The peer
+stamp is echoed and never controls a deadline, host clock, pacing, emulation, or RTT result.
+Byte/frame/age counters saturate at signed 64-bit maximum.
+
+`LinkedController` publishes a separate immutable rollback snapshot without entering StateFile or
+deterministic state. It retains 64 rewind samples and reports rollback count, last/maximum/rolling
+rewind, re-simulated frames, current 300-entry history occupancy, too-old inputs, checkpoint or
+resynchronization count, and one stable local reason. Counters saturate; publication retains one
+latest value, at most 16 listeners, and at most one lazily created daemon until the source closes.
+Producers use only bounded constant work and never wait for Swing.
+
+The Swing `V9SwingDiagnosticsPanel` consumes these detached sources, marshals rendering and
+clipboard access to the EDT, and detaches listeners on close. Its copy action is built from a
+field whitelist and is capped at 8,192 characters. Numeric peer address is redacted unless the
+user explicitly selects the local include-address checkbox. This component remains available to
+explicit v9 integrations; it does not add v9 to the shipped v8 menu.
+
+`TrustedLanNetplayDiscovery` is likewise explicit and disabled by default. Its Java-16 multicast
+backend sends a fixed 28-byte `CGBD` advertisement with TTL 1 over UDP port 37619, IPv4 group
+`239.255.67.66`, and IPv6 link-local group `ff02::4347:4244`. It advertises only while enabled,
+the bound v9 listener is running, and a guest slot is open. The controller retains at most 64
+public session IDs, eight numeric addresses per service, eight network interfaces, one outgoing
+packet, and one latest snapshot; entries expire after 5,000 monotonic ms and refresh every 1,000
+ms. Disable stops backend I/O and clears cache/tasks, and discovery failure never changes direct
+hosting.
+Selecting a result returns only a confirmed numeric endpoint marked as still requiring an
+authenticated invitation. It cannot connect, mint a token, or bypass AUTH, MANIFEST, or consent.
 
 ## Ownership, errors, and privacy
 

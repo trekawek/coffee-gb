@@ -724,6 +724,9 @@ class ProtocolV9StateTransportTest {
             manifestPlan = V9ManifestPlan.server(V9LinkMode.NORMAL, mapOf(1 to pair.server)),
             part3Plan = V9Part3Plan.server(V9LinkMode.NORMAL, mapOf(1 to part3Guest())),
             playPlan = V9PlayPlan.server(V9LinkMode.NORMAL, mapOf(1 to serverPlay)),
+            diagnosticsOptions =
+                V9DiagnosticsOptions(enabled = true, pingCadenceMillis = 1_000,
+                    pingTimeoutMillis = 2_000),
         ) { accepted.put(it) }
     var client: V9FoundationConnection? = null
     try {
@@ -738,6 +741,9 @@ class ProtocolV9StateTransportTest {
               manifestPlan = V9ManifestPlan.client(V9LinkMode.NORMAL, 1, pair.client),
               part3Plan = V9Part3Plan.client(V9LinkMode.NORMAL, 1, part3Guest()),
               playPlan = V9PlayPlan.client(V9LinkMode.NORMAL, 1, clientPlay),
+              diagnosticsOptions =
+                  V9DiagnosticsOptions(enabled = true, pingCadenceMillis = 1_000,
+                      pingTimeoutMillis = 2_000),
           )
       val serverConnection = assertNotNull(accepted.poll(5, TimeUnit.SECONDS))
       assertNotNull(serverConnection.awaitManifestBoundary(5, TimeUnit.SECONDS))
@@ -751,6 +757,30 @@ class ProtocolV9StateTransportTest {
       assertEquals(serverActive.sessionId, clientActive.sessionId)
       assertEquals(V9LifecycleState.ACTIVE, serverConnection.snapshot().state)
       assertEquals(V9LifecycleState.ACTIVE, client.snapshot().state)
+      assertTrue(V9Capability.PING_V1 in serverConnection.negotiatedCapabilities())
+      assertTrue(V9Capability.PING_V1 in client.negotiatedCapabilities())
+      val serverPingObserved = CountDownLatch(1)
+      val clientPingObserved = CountDownLatch(1)
+      val serverMetrics = assertNotNull(serverConnection.transportMetricsSource())
+      val clientMetrics = assertNotNull(client.transportMetricsSource())
+      val serverSubscription = serverMetrics.addListener {
+        if (it.currentRttMicros != null) serverPingObserved.countDown()
+      }
+      val clientSubscription = clientMetrics.addListener {
+        if (it.currentRttMicros != null) clientPingObserved.countDown()
+      }
+      assertTrue(serverPingObserved.await(5, TimeUnit.SECONDS))
+      assertTrue(clientPingObserved.await(5, TimeUnit.SECONDS))
+      serverSubscription.close()
+      clientSubscription.close()
+      assertEquals(0, serverMetrics.snapshot().unansweredPings)
+      assertEquals(0, clientMetrics.snapshot().unansweredPings)
+      assertEquals(9, serverMetrics.snapshot().localFrame)
+      assertEquals(9, serverMetrics.snapshot().remoteFrame)
+      assertEquals(9, clientMetrics.snapshot().localFrame)
+      assertEquals(9, clientMetrics.snapshot().remoteFrame)
+      assertTrue(requireNotNull(serverMetrics.snapshot().currentRttMicros) >= 0)
+      assertTrue(requireNotNull(clientMetrics.snapshot().currentRttMicros) >= 0)
       val applied = assertNotNull(clientApplied.get())
       assertContentEquals(
           MessageDigest.getInstance("SHA-256").digest(fixture.v2),
