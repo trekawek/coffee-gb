@@ -119,13 +119,25 @@ letting one guest close the other guests' shared owner. Empty physical ports rem
 root while the logical player mask remains `0f`.
 The peer validates the direct CGBS StateFile v2 off the emulator thread, prepares and retains exact
 target-owned reconstruction without live mutation, and commits only after START at the
-controller's frame safe point. READY is admitted only after that guest's atomic commit. A received
-READY acknowledges that guest commit; the host publishes its four-player ACTIVE boundary only
-after all three READY responses, while a client publishes only after its READY bytes are written.
+controller's frame safe point. Connection close owns pending generation capture, prepare, and
+queued commit: if close wins before the first safe-point mutation, the result is `CANCELLED`, the
+grant remains unused, and the retained transaction is discarded. If the controller safe point
+wins first, close waits for that one atomic apply-or-rollback outcome and its single completion.
+Task registration and close use the same ownership lock, so close cannot miss a just-created
+capture/prepare worker. READY is admitted only after that guest's atomic commit. A received READY
+is the guest protocol endpoint's assertion that its local commit completed; the host cannot
+independently inspect the remote controller. The host publishes its four-player ACTIVE boundary
+only after all three such responses, while a client publishes only after its READY bytes are
+written.
 In ACTIVE, normal resynchronization is SESSION and four-player resynchronization remains
 LINKED_SESSION. INPUT, RESET, and STOP carry stable masks/IDs and are accepted only at the same
-bounded frame-safe event boundary. History exhaustion and invalid frame windows reject the
-connection before input mutation.
+bounded frame-safe event boundary. In four-player mode each guest may originate only its
+authenticated player. The host applies that value first and then fans the accepted stable
+player/frame payload out to the other ACTIVE guest connections; those clients accept roster
+relays only from their host connection and reject direct/spoofed player claims. Host player zero
+is fanned out to every ACTIVE guest. Relay destinations are snapshotted under the coordinator lock
+and queued outside it, so a failed or slow downstream guest cannot revoke or block healthy peers.
+History exhaustion and invalid frame windows reject the connection before input mutation.
 
 The checkpoint declaration, directional consent grant, manifest pair, root, owner/mask/channel,
 unsigned increasing frame, SHA-256, exact ROM/slot identities, canonical profile/bootstrap/
@@ -224,9 +236,11 @@ deadlines, and the pre-START gate. `V9SwingPart3AdapterTest` covers EDT delivery
 progress, explicit decisions/cancel, and queued stale-callback suppression.
 `ProtocolV9StateTransportTest` covers direct-v2 admission, validation precedence, non-consuming
 grant failures, bytewise/irregular/coalesced decode, exact deadlines, normal/four-player real
-socket activation, active resynchronization, and gameplay bounds. `LinkedControllerTest` covers
+socket activation, active resynchronization, authenticated guest fan-out/rollback, spoof
+rejection, STOP/RESET, downstream isolation, and gameplay bounds. `LinkedControllerTest` covers
 frame-safe two-stage MACHINE and LINKED_SESSION commits, deterministic continuation, rollback on
-failure, and cancellation of queued input ownership. Its ROM-independent continuation locks are
+failure, cancellation before safe-point mutation, and the close-versus-safe-point atomic winner.
+Its ROM-independent continuation locks are
 `909608afe8ea1510ea187b080ce48818b5b1f62379a0e23dde31cbb7ad61bd99` for the normal machine
 path and `f19740d73c745a76b8bb7a2898ff308bec7d8e855d191efb8f248108a33149ae` for the four-player
 linked path; both hash the canonical StateFile-v2 encoding after deterministic continuation.

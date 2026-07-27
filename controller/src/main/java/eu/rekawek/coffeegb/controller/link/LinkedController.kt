@@ -95,7 +95,6 @@ import java.io.IOException
 import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -205,18 +204,16 @@ class LinkedController(
   internal var v9ApplyProbe: ((Int, ApplyStage) -> Unit)? = null
 
   internal fun enqueueV9CheckpointPreparation(
-      checkpoint: V9ValidatedCheckpoint,
-      generation: V9TargetGeneration,
-      completion: V9CheckpointPrepareCompletion,
+      preparation: V9PendingCheckpointPreparation,
+      lease: V9TargetLease,
   ) {
-    eventBus.post(V9CheckpointPrepareEvent(checkpoint, generation, completion))
+    eventBus.post(V9CheckpointPrepareEvent(preparation, lease))
   }
 
   internal fun enqueueV9CheckpointCommit(
       transaction: V9LinkedPreparedCheckpoint,
-      completion: V9CheckpointCommitCompletion,
   ) {
-    eventBus.post(V9CheckpointCommitEvent(transaction, completion))
+    eventBus.post(V9CheckpointCommitEvent(transaction))
   }
 
   internal fun enqueueV9CheckpointCapture(
@@ -703,30 +700,24 @@ class LinkedController(
     }
 
     eventQueue.register<V9CheckpointPrepareEvent> { event ->
-      try {
-        val prepared = prepareV9Checkpoint(event.checkpoint, event.generation)
-        event.completion.complete(
-            V9LinkedPreparedCheckpoint(this, event.checkpoint, prepared),
-            null,
-        )
-      } catch (_: Throwable) {
-        event.completion.complete(null, V9ErrorCode.TOPOLOGY_MISMATCH)
+      if (!event.lease.runIfActive {
+            event.preparation.execute { checkpoint, generation ->
+              val prepared = prepareV9Checkpoint(checkpoint, generation)
+              V9LinkedPreparedCheckpoint(
+                  this,
+                  checkpoint,
+                  prepared,
+                  event.lease,
+                  event.preparation::release,
+              )
+            }
+          }) {
+        event.preparation.cancel()
       }
     }
 
     eventQueue.register<V9CheckpointCommitEvent> { event ->
-      if (!event.transaction.beginSafePointCommit()) {
-        event.completion.complete(V9ErrorCode.CANCELLED)
-        return@register
-      }
-      try {
-        applyV9Checkpoint(event.transaction)
-        event.completion.complete(null)
-      } catch (_: Throwable) {
-        event.completion.complete(V9ErrorCode.TOPOLOGY_MISMATCH)
-      } finally {
-        event.transaction.finishSafePointCommit()
-      }
+      event.transaction.applyAtSafePoint { applyV9Checkpoint(event.transaction) }
     }
 
     eventQueue.register<V9CheckpointCaptureEvent> { event ->
@@ -1657,10 +1648,9 @@ class LinkedController(
             event.states.fold(0L) { total, state ->
               Math.addExact(total, peerStateWeight(state))
             }
-        is V9CheckpointPrepareEvent -> event.checkpoint.stateFile.let {
-          // The decoder has already enforced the 32 MiB direct-file and 128 MiB aggregate bounds.
+        is V9CheckpointPrepareEvent ->
+          // The decoder already enforced the 32 MiB direct-file and 128 MiB aggregate bounds.
           StateLimits.NETPLAY_STATE_FILE_DECODED_BYTES.toLong()
-        }
         is V9CheckpointCommitEvent -> 64L
         is V9CheckpointCaptureEvent -> 64L
         is V9GenerationCaptureEvent -> 64L
@@ -1746,14 +1736,12 @@ class LinkedController(
   ) : Event
 
   private data class V9CheckpointPrepareEvent(
-      val checkpoint: V9ValidatedCheckpoint,
-      val generation: V9TargetGeneration,
-      val completion: V9CheckpointPrepareCompletion,
+      val preparation: V9PendingCheckpointPreparation,
+      val lease: V9TargetLease,
   ) : Event
 
   private data class V9CheckpointCommitEvent(
       val transaction: V9LinkedPreparedCheckpoint,
-      val completion: V9CheckpointCommitCompletion,
   ) : Event
 
   private data class V9CheckpointCaptureEvent(
@@ -1839,6 +1827,8 @@ internal class V9LinkedControllerTarget(
   private val captureLock = Any()
   private val pendingCaptures = mutableSetOf<V9PendingCheckpointCapture>()
   private val pendingGenerations = mutableSetOf<V9PendingGenerationCapture>()
+  private val pendingPreparations = mutableSetOf<V9PendingCheckpointPreparation>()
+  private val preparedTransactions = mutableSetOf<V9LinkedPreparedCheckpoint>()
 
   override fun captureGeneration(): V9TargetGeneration {
     val pending = V9PendingGenerationCapture()
@@ -1884,8 +1874,32 @@ internal class V9LinkedControllerTarget(
       checkpoint: V9ValidatedCheckpoint,
       generation: V9TargetGeneration,
       completion: V9CheckpointPrepareCompletion,
-  ) {
-    controller.enqueueV9CheckpointPreparation(checkpoint, generation, completion)
+  ): Closeable {
+    lateinit var pending: V9PendingCheckpointPreparation
+    pending =
+        V9PendingCheckpointPreparation(
+            checkpoint,
+            generation,
+            completion,
+            onPrepared = { transaction ->
+              synchronized(captureLock) { preparedTransactions.add(transaction) }
+            },
+            onReleased = { transaction ->
+              synchronized(captureLock) { preparedTransactions.remove(transaction) }
+            },
+            onFinished = {
+              synchronized(captureLock) { pendingPreparations.remove(pending) }
+            },
+        )
+    synchronized(captureLock) {
+      if (!lease.runIfActive {
+            pendingPreparations.add(pending)
+            controller.enqueueV9CheckpointPreparation(pending, lease)
+          }) {
+        pending.cancel()
+      }
+    }
+    return pending
   }
 
   override fun input(value: V9InputState, completion: V9GameplayCompletion) {
@@ -1908,16 +1922,27 @@ internal class V9LinkedControllerTarget(
 
   override fun close() {
     lease.close()
-    synchronized(captureLock) {
+    val (preparations, transactions) = synchronized(captureLock) {
       pendingCaptures.forEach(V9PendingCheckpointCapture::cancel)
       pendingCaptures.clear()
       pendingGenerations.forEach(V9PendingGenerationCapture::cancel)
       pendingGenerations.clear()
+      val pending = pendingPreparations.toList().also { pendingPreparations.clear() }
+      val prepared = preparedTransactions.toList().also { preparedTransactions.clear() }
+      pending to prepared
     }
+    preparations.forEach(V9PendingCheckpointPreparation::cancel)
+    transactions.forEach(V9LinkedPreparedCheckpoint::cancelBeforeCommit)
   }
 
   internal fun pendingCaptureCount(): Int =
-      synchronized(captureLock) { pendingCaptures.size + pendingGenerations.size }
+      synchronized(captureLock) {
+        pendingCaptures.size + pendingGenerations.size + pendingPreparations.size
+      }
+
+  internal fun preparedTransactionCount(): Int =
+      synchronized(captureLock) { preparedTransactions.size }
+
 }
 
 internal class V9TargetLease {
@@ -1932,6 +1957,83 @@ internal class V9TargetLease {
   }
 
   fun close() = synchronized(lock) { active = false }
+}
+
+/** Owns decoded checkpoint state only until prepare wins or connection cancellation discards it. */
+internal class V9PendingCheckpointPreparation(
+    checkpoint: V9ValidatedCheckpoint,
+    generation: V9TargetGeneration,
+    completion: V9CheckpointPrepareCompletion,
+    private val onPrepared: (V9LinkedPreparedCheckpoint) -> Unit,
+    private val onReleased: (V9LinkedPreparedCheckpoint) -> Unit,
+    private val onFinished: () -> Unit,
+) : Closeable {
+  private val lock = Any()
+  private var checkpoint: V9ValidatedCheckpoint? = checkpoint
+  private var generation: V9TargetGeneration? = generation
+  private var completion: V9CheckpointPrepareCompletion? = completion
+
+  fun execute(
+      prepare: (V9ValidatedCheckpoint, V9TargetGeneration) -> V9PreparedCheckpoint,
+  ) {
+    val values = synchronized(lock) {
+      val value = checkpoint ?: return
+      val expected = generation ?: return
+      value to expected
+    }
+    var prepared: V9PreparedCheckpoint?
+    var failure: V9ErrorCode?
+    try {
+      prepared = prepare(values.first, values.second)
+      if (prepared is V9LinkedPreparedCheckpoint) onPrepared(prepared)
+      failure = null
+    } catch (_: Throwable) {
+      prepared = null
+      failure = V9ErrorCode.TOPOLOGY_MISMATCH
+    }
+    complete(prepared, failure)
+  }
+
+  fun release(transaction: V9LinkedPreparedCheckpoint) = onReleased(transaction)
+
+  private fun complete(prepared: V9PreparedCheckpoint?, failure: V9ErrorCode?) {
+    val callback = synchronized(lock) {
+      val value = completion
+      if (value == null) null else {
+        completion = null
+        checkpoint = null
+        generation = null
+        value
+      }
+    }
+    if (callback == null) prepared?.close()
+    else {
+      try {
+        callback.complete(prepared, failure)
+      } finally {
+        onFinished()
+      }
+    }
+  }
+
+  fun cancel() {
+    val callback = synchronized(lock) {
+      val value = completion
+      completion = null
+      checkpoint = null
+      generation = null
+      value
+    }
+    if (callback != null) {
+      try {
+        callback.complete(null, V9ErrorCode.CANCELLED)
+      } finally {
+        onFinished()
+      }
+    }
+  }
+
+  override fun close() = cancel()
 }
 
 internal class V9PendingCheckpointCapture {
@@ -2055,25 +2157,129 @@ internal class V9LinkedPreparedCheckpoint(
     private val controller: LinkedController,
     internal val checkpoint: V9ValidatedCheckpoint,
     internal val prepared: V9PreparedControllerState,
+    private val lease: V9TargetLease,
+    private val onFinished: (V9LinkedPreparedCheckpoint) -> Unit,
 ) : V9PreparedCheckpoint {
-  private val committed = AtomicBoolean()
-  private val closed = AtomicBoolean()
+  private val lock = Any()
+  private var state = CommitState.PREPARED
+  private var completion: V9CheckpointCommitCompletion? = null
+  private var released = false
 
   override fun commit(completion: V9CheckpointCommitCompletion) {
-    if (closed.get() || !committed.compareAndSet(false, true)) {
-      completion.complete(V9ErrorCode.CANCELLED)
-      return
+    val enqueue = synchronized(lock) {
+      if (state != CommitState.PREPARED) false else {
+        state = CommitState.QUEUED
+        this.completion = completion
+        true
+      }
     }
-    controller.enqueueV9CheckpointCommit(this, completion)
+    if (!enqueue) {
+      completion.complete(V9ErrorCode.CANCELLED)
+    } else {
+      try {
+        controller.enqueueV9CheckpointCommit(this)
+      } catch (_: RuntimeException) {
+        finishBeforeSafePoint(V9ErrorCode.CANCELLED)
+      }
+    }
   }
 
-  internal fun beginSafePointCommit(): Boolean = !closed.get()
+  internal fun applyAtSafePoint(apply: () -> Unit) {
+    var started = false
+    var failure: V9ErrorCode? = null
+    val active = lease.runIfActive {
+      started = synchronized(lock) {
+        if (state != CommitState.QUEUED) false else {
+          state = CommitState.APPLYING
+          true
+        }
+      }
+      if (started) {
+        try {
+          apply()
+        } catch (_: Throwable) {
+          failure = V9ErrorCode.TOPOLOGY_MISMATCH
+        }
+      }
+    }
+    if (!active || !started) {
+      finishBeforeSafePoint(V9ErrorCode.CANCELLED)
+    } else {
+      finishAfterSafePoint(failure)
+    }
+  }
 
-  internal fun finishSafePointCommit() {
-    closed.set(true)
+  private fun finishBeforeSafePoint(failure: V9ErrorCode) {
+    val callback = synchronized(lock) {
+      if (state == CommitState.APPLYING || state == CommitState.COMPLETED ||
+          state == CommitState.CANCELLED) {
+        null
+      } else {
+        state = CommitState.CANCELLED
+        completion.also { completion = null }
+      }
+    }
+    try {
+      callback?.complete(failure)
+    } finally {
+      releaseIfTerminal()
+    }
+  }
+
+  private fun finishAfterSafePoint(failure: V9ErrorCode?) {
+    val callback = synchronized(lock) {
+      if (state != CommitState.APPLYING) null else {
+        state = CommitState.COMPLETED
+        completion.also { completion = null }
+      }
+    }
+    try {
+      callback?.complete(failure)
+    } finally {
+      releaseIfTerminal()
+    }
+  }
+
+  override fun cancelBeforeCommit(): Boolean {
+    val (cancelled, callback) = synchronized(lock) {
+      when (state) {
+        CommitState.PREPARED -> {
+          state = CommitState.CANCELLED
+          true to null
+        }
+        CommitState.QUEUED -> {
+          state = CommitState.CANCELLED
+          true to completion.also { completion = null }
+        }
+        CommitState.CANCELLED -> true to null
+        CommitState.APPLYING,
+        CommitState.COMPLETED -> false to null
+      }
+    }
+    if (cancelled) {
+      try {
+        callback?.complete(V9ErrorCode.CANCELLED)
+      } finally {
+        releaseIfTerminal()
+      }
+    }
+    return cancelled
   }
 
   override fun close() {
-    closed.set(true)
+    cancelBeforeCommit()
   }
+
+  private fun releaseIfTerminal() {
+    val notify = synchronized(lock) {
+      if (released || state !in setOf(CommitState.COMPLETED, CommitState.CANCELLED)) false
+      else {
+        released = true
+        true
+      }
+    }
+    if (notify) onFinished(this)
+  }
+
+  private enum class CommitState { PREPARED, QUEUED, APPLYING, COMPLETED, CANCELLED }
 }

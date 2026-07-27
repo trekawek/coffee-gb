@@ -43,6 +43,7 @@ import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointKind
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointMetadata
 import eu.rekawek.coffeegb.controller.network.v9.V9CheckpointRequest
 import eu.rekawek.coffeegb.controller.network.v9.V9ErrorCode
+import eu.rekawek.coffeegb.controller.network.v9.V9PreparedCheckpoint
 import eu.rekawek.coffeegb.controller.network.v9.V9ValidatedCheckpoint
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
@@ -64,6 +65,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -124,6 +126,24 @@ class LinkedControllerTest {
           V9ErrorCode.CANCELLED,
           (failure.cause as eu.rekawek.coffeegb.controller.network.v9.V9ProtocolException).reason,
       )
+
+      val cancelledGenerationTarget = controller.createV9Target()
+      val cancelledGeneration =
+          executor.submit<eu.rekawek.coffeegb.controller.network.v9.V9TargetGeneration> {
+            cancelledGenerationTarget.captureGeneration()
+          }
+      awaitPendingCapture(cancelledGenerationTarget)
+      assertFalse(cancelledGeneration.isDone)
+      cancelledGenerationTarget.close()
+      val generationFailure = assertFailsWith<java.util.concurrent.ExecutionException> {
+        cancelledGeneration.get(5, TimeUnit.SECONDS)
+      }
+      assertEquals(
+          V9ErrorCode.CANCELLED,
+          (generationFailure.cause as
+              eu.rekawek.coffeegb.controller.network.v9.V9ProtocolException).reason,
+      )
+      assertEquals(0, cancelledGenerationTarget.pendingCaptureCount())
     } finally {
       executor.shutdownNow()
       controller.close()
@@ -462,6 +482,149 @@ class LinkedControllerTest {
       }
       encoded.fill(0)
     } finally {
+      source.close()
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun v9CancellationLinearizesQueuedPrepareAndCommitBeforeSafePointMutation() {
+    val (eventBus, controller) = configuredController(LinkMode.NORMAL, 2)
+    val sourceConfig = Controller.createGameboyConfig(EmulatorProperties(), Rom(ROM))
+        .setSupportBatterySave(false)
+    val source = Session(sourceConfig, EventBusImpl(), null)
+    val workers = Executors.newFixedThreadPool(2)
+    try {
+      repeat(4_096) { source.gameboy.tick() }
+      val file = StateCodec.captureVersion2(sourceConfig, source.gameboy)
+      val checkpoint =
+          V9ValidatedCheckpoint(
+              V9CheckpointMetadata(
+                  V9CheckpointKind.MACHINE,
+                  0x02,
+                  1,
+                  controller.currentFrame(),
+                  41,
+              ),
+              file,
+              MessageDigest.getInstance("SHA-256").digest(StateCodec.encode(file)),
+          )
+      val stableState = controller.captureDetachedState()
+      val stableHistory = controller.stateHistory.captureSnapshot()
+      val stableConfigs = privateList(controller, "configs")
+      val stableRoms = privateByteArrays(controller, "romBuffers")
+      val stableSlots = privateByteArrays(controller, "slotRomBuffers")
+      val stableBatteries = privateByteArrays(controller, "batteryBuffers")
+      val stableHeld = controller.heldButtonStates()
+
+      fun assertStable() {
+        assertEquals(stableState, controller.captureDetachedState())
+        assertEquals(stableHistory, controller.stateHistory.captureSnapshot())
+        stableConfigs.zip(privateList(controller, "configs")).forEach { (expected, actual) ->
+          assertTrue(expected === actual)
+        }
+        assertByteArraysEqual(stableRoms, privateByteArrays(controller, "romBuffers"))
+        assertByteArraysEqual(stableSlots, privateByteArrays(controller, "slotRomBuffers"))
+        assertByteArraysEqual(stableBatteries, privateByteArrays(controller, "batteryBuffers"))
+        assertEquals(stableHeld, controller.heldButtonStates())
+      }
+
+      val prepareTarget = controller.createV9Target()
+      val prepareGeneration = captureGeneration(prepareTarget, controller)
+      val prepareFailure = AtomicReference<V9ErrorCode?>()
+      val prepareDone = CountDownLatch(1)
+      prepareTarget.prepare(checkpoint, prepareGeneration) { prepared, failure ->
+        prepared?.close()
+        prepareFailure.set(failure)
+        prepareDone.countDown()
+      }
+      assertEquals(1, prepareTarget.pendingCaptureCount())
+      prepareTarget.close()
+      assertTrue(prepareDone.await(5, TimeUnit.SECONDS))
+      assertEquals(V9ErrorCode.CANCELLED, prepareFailure.get())
+      dispatchOnly(controller)
+      assertEquals(0, prepareTarget.pendingCaptureCount())
+      assertEquals(0, prepareTarget.preparedTransactionCount())
+      assertStable()
+
+      val queuedTarget = controller.createV9Target()
+      val queuedGeneration = captureGeneration(queuedTarget, controller)
+      val queuedPrepared = AtomicReference<V9PreparedCheckpoint?>()
+      queuedTarget.prepare(checkpoint, queuedGeneration) { prepared, failure ->
+        assertNull(failure)
+        queuedPrepared.set(prepared)
+      }
+      dispatchOnly(controller)
+      val queuedFailure = AtomicReference<V9ErrorCode?>()
+      val queuedDone = CountDownLatch(1)
+      assertNotNull(queuedPrepared.get()).commit { failure ->
+        queuedFailure.set(failure)
+        queuedDone.countDown()
+      }
+      queuedTarget.close()
+      assertTrue(queuedDone.await(5, TimeUnit.SECONDS))
+      assertEquals(V9ErrorCode.CANCELLED, queuedFailure.get())
+      dispatchOnly(controller)
+      assertEquals(0, queuedTarget.pendingCaptureCount())
+      assertEquals(0, queuedTarget.preparedTransactionCount())
+      assertStable()
+
+      val winningTarget = controller.createV9Target()
+      val winningGeneration = captureGeneration(winningTarget, controller)
+      val winningPrepared = AtomicReference<V9PreparedCheckpoint?>()
+      winningTarget.prepare(checkpoint, winningGeneration) { prepared, failure ->
+        assertNull(failure)
+        winningPrepared.set(prepared)
+      }
+      dispatchOnly(controller)
+      val enteredApply = CountDownLatch(1)
+      val releaseApply = CountDownLatch(1)
+      val completions = AtomicInteger()
+      val winningFailure = AtomicReference<V9ErrorCode?>()
+      controller.v9ApplyProbe = { player, stage ->
+        if (player == 1 && stage == ApplyStage.AFTER_MACHINE_MUTATION) {
+          enteredApply.countDown()
+          releaseApply.await()
+        }
+      }
+      assertNotNull(winningPrepared.get()).commit { failure ->
+        winningFailure.set(failure)
+        completions.incrementAndGet()
+      }
+      val dispatch = workers.submit {
+        while (enteredApply.count != 0L && completions.get() == 0) {
+          dispatchOnly(controller)
+        }
+      }
+      assertTrue(
+          enteredApply.await(5, TimeUnit.SECONDS),
+          "apply did not start: completions=${completions.get()} " +
+              "failure=${winningFailure.get()} prepared=${winningTarget.preparedTransactionCount()} " +
+              "dispatchDone=${dispatch.isDone}",
+      )
+      val closeStarted = CountDownLatch(1)
+      val close = workers.submit {
+        closeStarted.countDown()
+        winningTarget.close()
+      }
+      assertTrue(closeStarted.await(5, TimeUnit.SECONDS))
+      assertFalse(close.isDone, "target close must wait for the selected atomic safe-point outcome")
+      releaseApply.countDown()
+      dispatch.get(5, TimeUnit.SECONDS)
+      close.get(5, TimeUnit.SECONDS)
+      controller.v9ApplyProbe = null
+      assertEquals(1, completions.get())
+      assertNull(winningFailure.get())
+      assertEquals(
+          DetachedStateAdapter.capture(source.gameboy),
+          assertNotNull(controller.captureDetachedState().players[1].session).machine,
+      )
+      assertEquals(0, winningTarget.pendingCaptureCount())
+      assertEquals(0, winningTarget.preparedTransactionCount())
+    } finally {
+      controller.v9ApplyProbe = null
+      workers.shutdownNow()
       source.close()
       controller.close()
       eventBus.close()

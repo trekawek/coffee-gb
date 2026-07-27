@@ -98,8 +98,11 @@ detached root, the actual current frame, and post-transfer identities together a
 and encodes off-owner, so emulation may keep advancing during the handshake. The transport never
 consults the local legacy importer. The initial direct StateFile-v2 checkpoint is prepared without
 mutation and committed at the frame safe point. READY is admitted only after that guest commit;
-the host treats it as a per-guest acknowledgement and opens four-player ACTIVE only after all
-three acknowledgements. Normal ACTIVE resynchronization uses a SESSION root; four-player uses one
+the host treats it as the guest protocol endpoint's assertion of local completion (it cannot
+inspect the remote controller) and opens four-player ACTIVE only after all three responses.
+Closing before the first safe-point mutation cancels capture/prepare/queued commit without using a
+grant; if the safe point already won, close waits for its single atomic apply-or-rollback outcome.
+Normal ACTIVE resynchronization uses a SESSION root; four-player uses one
 coordinator-owned, generation-frozen LINKED_SESSION with logical mask `0f` and may preserve null
 physical ports. Coordinator close cancels its bounded shared capture worker and waiters. A
 replacement guest may reuse the captured generation only if the source generation and frame are
@@ -108,6 +111,11 @@ Rejection wipes retained state
 bytes where practicable, releases the candidate, and preserves the live sessions/history/input/
 topology transactionally. No path, token, ROM, battery, StateFile bytes, digest, remote title, or
 input value is emitted in INFO diagnostics.
+
+During four-player ACTIVE traffic, each guest originates only its authenticated player. The host
+applies accepted INPUT/RESET/STOP first and fans it out to the other ACTIVE guest connections;
+clients accept roster-player relays only from that host connection. Relay I/O occurs without the
+coordinator lock, and one failed downstream guest is removed without revoking healthy sessions.
 
 A healthy normal ACTIVE connection may request a SESSION resynchronization. Input older than the
 retained rollback history instead terminates with a typed sequence failure before mutation; after

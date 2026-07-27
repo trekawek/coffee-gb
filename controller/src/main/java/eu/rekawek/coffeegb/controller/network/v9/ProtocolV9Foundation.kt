@@ -258,7 +258,9 @@ class V9FoundationConnection(
   private var localManifestPayload: ByteArray? = null
   private var localManifest: V9Manifest? = null
   @Volatile private var part3Session: V9Part3Session? = null
+  private val playOwnershipLock = Any()
   @Volatile private var playSession: V9PlaySession? = null
+  @Volatile private var activatingPlayTarget: V9CheckpointTarget? = null
   private var nextOutgoingSequence = 0L
 
   init {
@@ -1005,6 +1007,17 @@ class V9FoundationConnection(
     val authorization = consentSession.checkpointAuthorization()
         ?: return reject(V9ErrorCode.CONSENT_REJECTED, V9Diagnostic.CONSENT_REJECTED)
     try {
+      val admitted = synchronized(wireStateLock) {
+        synchronized(playOwnershipLock) {
+          if (closed.get() || activatingPlayTarget != null || playSession != null) {
+            false
+          } else {
+            activatingPlayTarget = plan.checkpointTarget
+            true
+          }
+        }
+      }
+      if (!admitted) return reject(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
       startTask("netplay-v9-target-generation") {
         try {
           val generation = plan.checkpointTarget.captureGeneration()
@@ -1024,12 +1037,21 @@ class V9FoundationConnection(
                 completedActiveBoundary = active
                 activeComplete.countDown()
               }
-          synchronized(wireStateLock) {
-            if (closed.get() || playSession != null) {
-              session.close()
-              return@startTask
+          val discard = synchronized(wireStateLock) {
+            synchronized(playOwnershipLock) {
+              if (closed.get() || playSession != null) {
+                if (activatingPlayTarget === plan.checkpointTarget) activatingPlayTarget = null
+                true
+              } else {
+                if (activatingPlayTarget === plan.checkpointTarget) activatingPlayTarget = null
+                playSession = session
+                false
+              }
             }
-            playSession = session
+          }
+          if (discard) {
+            session.close()
+            return@startTask
           }
           session.start()
         } catch (failure: V9ProtocolException) {
@@ -1370,11 +1392,13 @@ class V9FoundationConnection(
       )
 
   private fun startTask(name: String, block: () -> Unit): Thread {
-    check(!closed.get()) { "v9 foundation is closed" }
-    val task = thread(start = false, isDaemon = true, name = name, block = block)
-    synchronized(taskLock) { tasks += task }
-    task.start()
-    return task
+    return synchronized(taskLock) {
+      check(!closed.get()) { "v9 foundation is closed" }
+      val task = thread(start = false, isDaemon = true, name = name, block = block)
+      tasks += task
+      task.start()
+      task
+    }
   }
 
   private fun scheduleDeadline(state: V9LifecycleSnapshot) {
@@ -1427,8 +1451,18 @@ class V9FoundationConnection(
         }
     registrations.forEach(Closeable::close)
     session?.close()
-    playSession?.close()
-    playSession = null
+    // Never wait for wireStateLock here: a deliberately blocked channel write owns that lock and
+    // must be released by the channel close below. Publication uses wireStateLock -> this lock;
+    // the closed flag plus this independent ownership handoff prevents any post-close install.
+    val (activePlaySession, activatingTarget) = synchronized(playOwnershipLock) {
+      val currentSession = playSession
+      playSession = null
+      val currentTarget = activatingPlayTarget
+      activatingPlayTarget = null
+      currentSession to currentTarget
+    }
+    activePlaySession?.close()
+    activatingTarget?.close()
     clientInvitation?.close()
     try {
       channel.close()

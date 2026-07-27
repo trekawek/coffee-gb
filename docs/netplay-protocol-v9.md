@@ -282,6 +282,13 @@ START is nonzero session ID u64 and initial frame u64. READY is its one correlat
 repeats that session ID. INPUT is frame u64, player u8, stable button mask u8, intra-frame order
 u16, and zero u32. RESET and STOP are frame u64, player u8, and seven zero bytes. For every
 player-bearing frame, channel is exactly `player + 1`; group channel remains `ffffffff`.
+In normal mode each endpoint accepts only the other endpoint's player. In four-player mode a guest
+originates only its authenticated player. The host validates and applies that frame first, then
+relays the accepted player/frame payload over its other ACTIVE guest connections; clients accept
+those roster-player relays only from the authenticated host connection. Host player zero is sent
+to every ACTIVE guest. A guest cannot directly claim another player, and the host never relays a
+rejected value. Relay queue admission occurs outside the coordinator lock, so one failed or slow
+guest is isolated from healthy guests.
 PING/PONG are opaque nonce u64 and diagnostic monotonic-microsecond
 stamp u64; the stamp never drives emulation.
 
@@ -431,6 +438,10 @@ on failure. Target-dependent construction is a separate no-mutation prepare phas
 directional grant is consumed only after the frame-safe commit reports success. Production capture
 uses the same controller event boundary and resolves identities from the post-consent/post-transfer
 target generation; StateFile encoding occurs after the detached capture leaves that owner.
+The connection retains cancellation ownership through target-generation capture, queued prepare,
+and queued commit. Close that linearizes before the first safe-point mutation produces one typed
+`CANCELLED` completion and consumes no grant. Once the safe-point apply wins, it is one atomic
+apply-or-rollback outcome; close waits for that result rather than creating a second outcome.
 
 The host is the four-player coordinator across three independently authenticated guest TCP
 sessions. After consent/transfer it obtains one immutable identity/topology generation at the
@@ -445,7 +456,8 @@ mask unchanged and cannot authorize START. The barrier opens only after all requ
 presented the same roster tuple, validated the same checkpoint identity/digest, completed their
 per-connection directional consents/transfers, and prepared without mutation. The coordinator
 then releases START on all sessions. Each guest commits its already-prepared target atomically
-before admitting its correlated READY. A READY acknowledges only that guest commit; the host opens
+before admitting its correlated READY. READY is the remote protocol endpoint's assertion that its
+local commit completed, not independently observed controller state at the host; the host opens
 ACTIVE after all three READY responses. Collision or candidate failure removes only that
 candidate; it cannot partially grow or alter the committed
 topology. After commitment, a replacement must authenticate the vacated slot and use the same

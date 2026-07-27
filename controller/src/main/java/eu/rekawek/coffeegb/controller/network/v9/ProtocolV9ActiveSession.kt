@@ -41,13 +41,18 @@ internal class V9PlaySession(
   private var checkpointFrame: Long? = null
   private var checkpointDigest: ByteArray? = null
   private var checkpointInFlight = false
+  private var preparingIncoming: PendingPrepareRegistration? = null
   private var preparedIncoming: V9PreparedCheckpoint? = null
   private var preparedTicket: V9CheckpointGrant.Ticket? = null
+  private var committingIncoming: CommittingCheckpoint? = null
   private var pendingStart: PendingStart? = null
   private var startSessionId: Long? = null
   private var startSequence: Long? = null
   private var coordinatorRegistration: Closeable? = null
+  private var runtimeRegistration: Closeable? = null
   private var activeBoundary: V9ActiveBoundary? = null
+  private var lastCheckpointOutcome: V9ErrorCode? = null
+  private var checkpointCompletionCount = 0
   private val lastInputOrder = mutableMapOf<Pair<Long, Int>, Int>()
 
   init {
@@ -61,6 +66,17 @@ internal class V9PlaySession(
         authorization,
         targetGeneration.identities,
     )
+    if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+      runtimeRegistration =
+          requireNotNull(plan.fourPlayerCoordinator)
+              .registerRuntime(
+                  authenticatedGuest,
+                  object : V9FourPlayerRuntimeRelay {
+                    override fun sendInput(value: V9InputState) = sendRelayedInput(value)
+                    override fun sendControl(value: V9RuntimeControl) = sendRelayedControl(value)
+                  },
+              )
+    }
   }
 
   fun start() {
@@ -177,6 +193,11 @@ internal class V9PlaySession(
 
   fun sendInput(value: V9InputState) {
     if (value.player != localActor()) throw IllegalArgumentException("v9 input player is not local")
+    if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+      ensureActive()
+      requireNotNull(plan.fourPlayerCoordinator).broadcastHostInput(value)
+      return
+    }
     sendRuntime(V9MessageType.INPUT, value.player, V9GameplayCodec.encodeInput(value))
   }
 
@@ -188,20 +209,40 @@ internal class V9PlaySession(
           V9RuntimeMessageKind.STOP -> V9MessageType.STOP
           V9RuntimeMessageKind.INPUT -> throw IllegalArgumentException("use sendInput")
         }
+    if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+      ensureActive()
+      requireNotNull(plan.fourPlayerCoordinator).broadcastHostControl(value)
+      return
+    }
+    sendRuntime(type, value.player, V9GameplayCodec.encodeControl(value))
+  }
+
+  private fun sendRelayedInput(value: V9InputState) {
+    if (role != V9Role.SERVER || mode != V9LinkMode.FOUR_PLAYER) return
+    sendRuntime(V9MessageType.INPUT, value.player, V9GameplayCodec.encodeInput(value))
+  }
+
+  private fun sendRelayedControl(value: V9RuntimeControl) {
+    if (role != V9Role.SERVER || mode != V9LinkMode.FOUR_PLAYER) return
+    val type =
+        if (value.kind == V9RuntimeMessageKind.RESET) V9MessageType.RESET
+        else V9MessageType.STOP
     sendRuntime(type, value.player, V9GameplayCodec.encodeControl(value))
   }
 
   private fun sendRuntime(type: V9MessageType, player: Int, payload: ByteArray) {
-    synchronized(lock) {
-      ensureOpen()
-      check(lifecycle.snapshot().state == V9LifecycleState.ACTIVE)
-    }
+    ensureActive()
     val sequence =
         send.send(type, 0, 0, player.toLong() + 1, payload, { Closeable {} }) {
           if (!isClosed()) lifecycle.activeProgress()
         }
     payload.fill(0)
     if (sequence == null) protocolFailure(V9ErrorCode.QUEUE_OVERFLOW)
+  }
+
+  private fun ensureActive() = synchronized(lock) {
+    ensureOpen()
+    check(lifecycle.snapshot().state == V9LifecycleState.ACTIVE)
   }
 
   private fun transmitCheckpoint(
@@ -329,6 +370,7 @@ internal class V9PlaySession(
       declaration: V9CheckpointDeclaration,
       state: ByteArray,
   ) {
+    val registration = PendingPrepareRegistration()
     try {
       val file =
           V9CheckpointStateValidation.decodeAndValidate(
@@ -337,47 +379,70 @@ internal class V9PlaySession(
               targetGeneration.identities,
           )
       val completed = AtomicBoolean(false)
-      plan.checkpointTarget.prepare(
-          V9ValidatedCheckpoint(declaration.metadata, file, declaration.digestView()),
-          targetGeneration,
-      ) { prepared, failure ->
-        if (!completed.compareAndSet(false, true)) {
-          prepared?.close()
-          return@prepare
+      synchronized(lock) {
+        if (closed || preparingIncoming != null) {
+          ticket.close()
+          checkpointInFlight = false
+          return
         }
-        if (failure == null && prepared != null && !isClosed()) {
-          val active = lifecycle.snapshot().state == V9LifecycleState.ACTIVE
-          synchronized(lock) {
-            if (closed || preparedIncoming != null || preparedTicket != null) {
-              prepared.close()
-              ticket.close()
-              checkpointInFlight = false
+        preparingIncoming = registration
+      }
+      val handle =
+          plan.checkpointTarget.prepare(
+              V9ValidatedCheckpoint(declaration.metadata, file, declaration.digestView()),
+              targetGeneration,
+          ) { prepared, failure ->
+            registration.finish()
+            synchronized(lock) {
+              if (preparingIncoming === registration) preparingIncoming = null
+            }
+            if (!completed.compareAndSet(false, true)) {
+              prepared?.close()
               return@prepare
             }
-            preparedIncoming = prepared
-            preparedTicket = ticket
-            checkpointFrame = declaration.metadata.frame
-            checkpointDigest?.fill(0)
-            checkpointDigest = declaration.digestView().copyOf()
-            if (!active) initialCheckpointReady = true
+            if (failure == null && prepared != null && !isClosed()) {
+              val active = lifecycle.snapshot().state == V9LifecycleState.ACTIVE
+              synchronized(lock) {
+                if (closed || preparedIncoming != null || preparedTicket != null ||
+                    committingIncoming != null) {
+                  prepared.close()
+                  ticket.close()
+                  checkpointInFlight = false
+                  return@prepare
+                }
+                preparedIncoming = prepared
+                preparedTicket = ticket
+                checkpointFrame = declaration.metadata.frame
+                checkpointDigest?.fill(0)
+                checkpointDigest = declaration.digestView().copyOf()
+                if (!active) initialCheckpointReady = true
+              }
+              if (active) {
+                commitPreparedCheckpoint { lifecycle.activeProgress() }
+              } else {
+                checkpointPrepared()
+              }
+            } else {
+              prepared?.close()
+              ticket.close()
+              synchronized(lock) { checkpointInFlight = false }
+              if (!isClosed()) protocolFailure(failure ?: V9ErrorCode.CANCELLED)
+            }
           }
-          if (active) {
-            commitPreparedCheckpoint { lifecycle.activeProgress() }
-          } else {
-            checkpointPrepared()
-          }
-        } else {
-          prepared?.close()
-          ticket.close()
-          synchronized(lock) { checkpointInFlight = false }
-          if (!isClosed()) protocolFailure(failure ?: V9ErrorCode.CANCELLED)
-        }
-      }
+      registration.install(handle)
     } catch (failure: V9ProtocolException) {
+      registration.close()
+      synchronized(lock) {
+        if (preparingIncoming === registration) preparingIncoming = null
+      }
       ticket.close()
       synchronized(lock) { checkpointInFlight = false }
       protocolFailure(failure.reason)
     } catch (_: Exception) {
+      registration.close()
+      synchronized(lock) {
+        if (preparingIncoming === registration) preparingIncoming = null
+      }
       ticket.close()
       synchronized(lock) { checkpointInFlight = false }
       protocolFailure(V9ErrorCode.INTERNAL_ERROR)
@@ -403,33 +468,46 @@ internal class V9PlaySession(
   }
 
   private fun commitPreparedCheckpoint(onSuccess: () -> Unit) {
-    val prepared: V9PreparedCheckpoint
-    val ticket: V9CheckpointGrant.Ticket
+    val committing: CommittingCheckpoint
     synchronized(lock) {
-      prepared = preparedIncoming ?: return protocolFailure(V9ErrorCode.TOPOLOGY_MISMATCH)
-      ticket = preparedTicket ?: return protocolFailure(V9ErrorCode.TOPOLOGY_MISMATCH)
+      val prepared = preparedIncoming ?: return protocolFailure(V9ErrorCode.TOPOLOGY_MISMATCH)
+      val ticket = preparedTicket ?: return protocolFailure(V9ErrorCode.TOPOLOGY_MISMATCH)
+      if (committingIncoming != null) return protocolFailure(V9ErrorCode.TOPOLOGY_MISMATCH)
       preparedIncoming = null
       preparedTicket = null
+      committing = CommittingCheckpoint(prepared, ticket, onSuccess)
+      committingIncoming = committing
     }
     try {
-      prepared.commit { failure ->
-        prepared.close()
-        if (failure == null && !isClosed()) {
-          ticket.commit()
-          synchronized(lock) { checkpointInFlight = false }
-          onSuccess()
-        } else {
-          ticket.close()
-          synchronized(lock) { checkpointInFlight = false }
-          if (!isClosed()) protocolFailure(failure ?: V9ErrorCode.CANCELLED)
-        }
+      committing.prepared.commit { failure ->
+        completeCommit(committing, failure)
       }
     } catch (_: RuntimeException) {
-      prepared.close()
-      ticket.close()
-      synchronized(lock) { checkpointInFlight = false }
-      protocolFailure(V9ErrorCode.INTERNAL_ERROR)
+      completeCommit(committing, V9ErrorCode.INTERNAL_ERROR)
     }
+  }
+
+  private fun completeCommit(
+      committing: CommittingCheckpoint,
+      failure: V9ErrorCode?,
+  ) {
+    if (!committing.completed.compareAndSet(false, true)) return
+    synchronized(lock) {
+      if (committingIncoming === committing) committingIncoming = null
+      checkpointInFlight = false
+      lastCheckpointOutcome = failure
+      checkpointCompletionCount++
+    }
+    committing.prepared.close()
+    if (failure == null) {
+      // The safe-point winner is one complete atomic outcome even if transport close races later.
+      committing.ticket.commit()
+      if (!isClosed()) committing.onSuccess()
+    } else {
+      committing.ticket.close()
+      if (!isClosed()) protocolFailure(failure)
+    }
+    if (isClosed()) grant.close()
   }
 
   private fun markCheckpointReady(frame: Long, digest: ByteArray, initial: Boolean) {
@@ -588,12 +666,22 @@ internal class V9PlaySession(
       if (closed || activeBoundary != null) return
       activeBoundary = value
     }
+    if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+      try {
+        requireNotNull(plan.fourPlayerCoordinator).activateRuntime(authenticatedGuest)
+      } catch (failure: V9ProtocolException) {
+        protocolFailure(failure.reason)
+        return
+      }
+    }
     onActive(value)
   }
 
   private fun handleInput(channel: Long, payload: ByteArray) {
     val value = V9GameplayCodec.decodeInput(payload, channel)
-    if (value.player != peerActor()) throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+    if (!acceptsPeerRuntimePlayer(value.player)) {
+      throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+    }
     synchronized(lock) {
       val key = value.frame to value.player
       val previous = lastInputOrder[key]
@@ -607,19 +695,46 @@ internal class V9PlaySession(
       }
     }
     plan.gameplayTarget.input(value) { failure ->
-      if (failure == null && !isClosed()) lifecycle.activeProgress()
-      else if (failure != null && !isClosed()) protocolFailure(failure)
+      if (failure == null && !isClosed()) {
+        lifecycle.activeProgress()
+        if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+          try {
+            requireNotNull(plan.fourPlayerCoordinator)
+                .relayGuestInput(authenticatedGuest, value)
+          } catch (problem: V9ProtocolException) {
+            protocolFailure(problem.reason)
+          }
+        }
+      } else if (failure != null && !isClosed()) protocolFailure(failure)
     }
   }
 
   private fun handleControl(type: V9MessageType, channel: Long, payload: ByteArray) {
     val value = V9GameplayCodec.decodeControl(type, payload, channel)
-    if (value.player != peerActor()) throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+    if (!acceptsPeerRuntimePlayer(value.player)) {
+      throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+    }
     plan.gameplayTarget.control(value) { failure ->
-      if (failure == null && !isClosed()) lifecycle.activeProgress()
-      else if (failure != null && !isClosed()) protocolFailure(failure)
+      if (failure == null && !isClosed()) {
+        lifecycle.activeProgress()
+        if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+          try {
+            requireNotNull(plan.fourPlayerCoordinator)
+                .relayGuestControl(authenticatedGuest, value)
+          } catch (problem: V9ProtocolException) {
+            protocolFailure(problem.reason)
+          }
+        }
+      } else if (failure != null && !isClosed()) protocolFailure(failure)
     }
   }
+
+  private fun acceptsPeerRuntimePlayer(player: Int): Boolean =
+      if (mode == V9LinkMode.NORMAL || role == V9Role.SERVER) {
+        player == peerActor()
+      } else {
+        player in 0..3 && player != authenticatedGuest
+      }
 
   private fun checkpointChannel(metadata: V9CheckpointMetadata): Long =
       if (metadata.kind == V9CheckpointKind.LINKED_SESSION) ProtocolV9.GROUP_CHANNEL
@@ -654,11 +769,19 @@ internal class V9PlaySession(
 
   override fun close() {
     val registration: Closeable?
+    val runtime: Closeable?
+    val preparing: PendingPrepareRegistration?
+    val committing: CommittingCheckpoint?
     synchronized(lock) {
       if (closed) return
       closed = true
       registration = coordinatorRegistration
       coordinatorRegistration = null
+      runtime = runtimeRegistration
+      runtimeRegistration = null
+      preparing = preparingIncoming
+      preparingIncoming = null
+      committing = committingIncoming
       checkpointDigest?.fill(0)
       checkpointDigest = null
       preparedIncoming?.close()
@@ -669,10 +792,24 @@ internal class V9PlaySession(
       lastInputOrder.clear()
     }
     registration?.close()
+    runtime?.close()
+    preparing?.close()
+    val commitStillApplying =
+        committing != null && !committing.prepared.cancelBeforeCommit()
+    if (committing != null && !commitStillApplying) {
+      completeCommit(committing, V9ErrorCode.CANCELLED)
+    }
     if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
       plan.fourPlayerCoordinator?.abandon(authenticatedGuest)
     }
-    grant.close()
+    // A safe-point commit that already won retains its grant ticket through its one completion.
+    // Closing it here would make the complete atomic apply look unconsumed after disconnect.
+    if (!commitStillApplying) grant.close()
+    try {
+      plan.checkpointTarget.close()
+    } catch (_: RuntimeException) {
+      // Cancellation is final; caller-owned cleanup cannot reopen the session.
+    }
     try {
       plan.gameplayTarget.disconnected(peerActor())
     } catch (_: RuntimeException) {
@@ -681,6 +818,50 @@ internal class V9PlaySession(
   }
 
   internal fun grantUses(): Int = grant.used()
+
+  internal fun checkpointOutcome(): V9ErrorCode? = synchronized(lock) { lastCheckpointOutcome }
+
+  internal fun checkpointCompletions(): Int = synchronized(lock) { checkpointCompletionCount }
+
+  private class PendingPrepareRegistration : Closeable {
+    private val lock = Any()
+    private var handle: Closeable? = null
+    private var finished = false
+    private var cancelled = false
+
+    fun install(value: Closeable) {
+      val discard = synchronized(lock) {
+        if (finished || cancelled) true else {
+          handle = value
+          false
+        }
+      }
+      if (discard) value.close()
+    }
+
+    fun finish() = synchronized(lock) {
+      finished = true
+      handle = null
+    }
+
+    override fun close() {
+      val owned = synchronized(lock) {
+        if (finished || cancelled) null else {
+          cancelled = true
+          handle.also { handle = null }
+        }
+      }
+      owned?.close()
+    }
+  }
+
+  private class CommittingCheckpoint(
+      val prepared: V9PreparedCheckpoint,
+      val ticket: V9CheckpointGrant.Ticket,
+      val onSuccess: () -> Unit,
+  ) {
+    val completed = AtomicBoolean(false)
+  }
 
   private data class PendingStart(val sequence: Long, val sessionId: Long, val frame: Long)
 }
