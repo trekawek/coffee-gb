@@ -1,5 +1,8 @@
 package eu.rekawek.coffeegb.controller.network.v9
 
+import eu.rekawek.coffeegb.controller.network.BoundedSnapshotPublisher
+import eu.rekawek.coffeegb.controller.network.NetplaySnapshotListener
+import eu.rekawek.coffeegb.controller.network.NetplaySnapshotSource
 import java.io.Closeable
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -27,6 +30,9 @@ interface V9TransportChannel : Closeable {
 
   @Throws(IOException::class)
   fun shutdownOutput()
+
+  /** Local diagnostics only. Implementations must return a numeric address, never peer text. */
+  fun remoteEndpoint(): V9DiagnosticEndpoint? = null
 }
 
 interface V9ConnectableChannel : V9TransportChannel {
@@ -58,6 +64,16 @@ class V9SocketChannel(private val socket: Socket) : V9ConnectableChannel {
 
   override fun shutdownOutput() {
     if (!socket.isOutputShutdown) socket.shutdownOutput()
+  }
+
+  override fun remoteEndpoint(): V9DiagnosticEndpoint? {
+    val address = socket.remoteSocketAddress as? InetSocketAddress ?: return null
+    val numeric = address.address?.hostAddress ?: return null
+    return try {
+      V9DiagnosticEndpoint(numeric, address.port)
+    } catch (_: IllegalArgumentException) {
+      null
+    }
   }
 
   override fun close() {
@@ -177,6 +193,13 @@ data class V9PostAuthBoundary(
     val state: V9LifecycleState,
 )
 
+data class V9FoundationServerStatus(
+    val listening: Boolean,
+    val port: Int,
+    val mode: V9LinkMode,
+    val openSlots: Int,
+)
+
 /**
  * Opt-in protocol-v9 transport foundation.
  *
@@ -202,11 +225,19 @@ class V9FoundationConnection(
     private val manifestPlan: V9ManifestPlan? = null,
     private val part3Plan: V9Part3Plan? = null,
     private val playPlan: V9PlayPlan? = null,
+    private val diagnosticsOptions: V9DiagnosticsOptions = V9DiagnosticsOptions.DISABLED,
 ) : Closeable, V9LifecycleSource {
   private val scheduler = scheduler ?: V9SystemDeadlineScheduler(clock)
   private val ownedScheduler = if (scheduler == null) this.scheduler as Closeable else null
   private val lifecycle = V9Lifecycle(role, clock)
-  private val localHello = V9HelloCodec.create(role, nonce, optionalCapabilities)
+  private val effectiveOptionalCapabilities =
+      (optionalCapabilities - V9Capability.PING_V1) +
+          if (diagnosticsOptions.enabled) setOf(V9Capability.PING_V1) else emptySet()
+  private val localHello = V9HelloCodec.create(role, nonce, effectiveOptionalCapabilities)
+  private val transportMetrics =
+      diagnosticsOptions.takeIf { it.enabled }?.let {
+        V9TransportMetrics(clock, role, mode, channel.remoteEndpoint())
+      }
   private val decoderPolicy =
       V9DecoderPolicy(
           allowedMessages =
@@ -250,6 +281,7 @@ class V9FoundationConnection(
   private val part3Registrations = mutableSetOf<Part3ListenerRegistration>()
   private val wireStateLock = Any()
   private var timeoutTask: Closeable? = null
+  private var pingTask: Closeable? = null
   private var writerTask: Thread? = null
   private var negotiated: V9NegotiatedCapabilities? = null
   private var remoteHello: V9Hello? = null
@@ -262,6 +294,11 @@ class V9FoundationConnection(
   @Volatile private var playSession: V9PlaySession? = null
   @Volatile private var activatingPlayTarget: V9CheckpointTarget? = null
   private var nextOutgoingSequence = 0L
+  private var nextPingNonce = SecureRandom().nextLong()
+  private var consecutivePingTimeouts = 0
+  @Volatile private var activeRollbackMetrics:
+      eu.rekawek.coffeegb.controller.network.NetplaySnapshotSource<
+          eu.rekawek.coffeegb.controller.network.NetplayRollbackMetricsSnapshot>? = null
 
   init {
     require(invitationHost == null || role == V9Role.SERVER && invitationHost.mode == mode)
@@ -280,6 +317,8 @@ class V9FoundationConnection(
     require(playPlan == null || playPlan.role == role && playPlan.mode == mode)
     lifecycle.addListener { state ->
       scheduleDeadline(state)
+      transportMetrics?.recordLifecycle(state, authenticatedBoundary?.slot)
+      if (state.state == V9LifecycleState.ACTIVE) schedulePingIfNeeded()
       if (state.phase == V9LifecyclePhase.AWAITING_PAIRING) {
         pairingBoundary = state
         boundary.countDown()
@@ -379,6 +418,15 @@ class V9FoundationConnection(
 
   fun negotiatedCapabilities(): Set<V9Capability> =
       negotiated?.capabilities?.toSet() ?: emptySet()
+
+  fun transportMetricsSource():
+      eu.rekawek.coffeegb.controller.network.NetplaySnapshotSource<V9TransportMetricsSnapshot>? =
+      transportMetrics
+
+  fun rollbackMetricsSource():
+      eu.rekawek.coffeegb.controller.network.NetplaySnapshotSource<
+          eu.rekawek.coffeegb.controller.network.NetplayRollbackMetricsSnapshot>? =
+      activeRollbackMetrics
 
   fun writerQueueSnapshot(): V9QueueSnapshot = writer.snapshot()
 
@@ -504,6 +552,7 @@ class V9FoundationConnection(
           return
         }
         if (count == 0) continue
+        transportMetrics?.recordRead(count)
         if (snapshot().state == V9LifecycleState.TERMINAL_CLEANUP) {
           // Output is half-closed. Peer bytes are drained only to observe EOF; no frame is admitted.
           continue
@@ -622,6 +671,8 @@ class V9FoundationConnection(
         V9MessageType.STOP ->
           playSession?.handle(frame)
               ?: reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.TRANSFER_REJECTED)
+        V9MessageType.PING -> handlePing(frame)
+        V9MessageType.PONG -> handlePong(frame)
         V9MessageType.CANCEL -> fail(V9ErrorCode.CANCELLED, V9Diagnostic.CANCELLED)
         V9MessageType.GOODBYE -> {
           lifecycle.closeNormally()
@@ -639,7 +690,6 @@ class V9FoundationConnection(
           }
           fail(remote.error, diagnosticFor(remote.error))
         }
-        else -> reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.HELLO_REJECTED)
       }
     }
   }
@@ -1041,6 +1091,7 @@ class V9FoundationConnection(
                 completedActiveBoundary = active
                 activeComplete.countDown()
               }
+          session.attachTransportMetrics(transportMetrics)
           val discard = synchronized(wireStateLock) {
             synchronized(playOwnershipLock) {
               if (closed.get() || playSession != null) {
@@ -1057,6 +1108,7 @@ class V9FoundationConnection(
             session.close()
             return@startTask
           }
+          activeRollbackMetrics = plan.gameplayTarget.rollbackMetricsSource()
           session.start()
         } catch (failure: V9ProtocolException) {
           reject(failure.reason, diagnosticFor(failure.reason))
@@ -1168,9 +1220,11 @@ class V9FoundationConnection(
             }
         var requestRecorded = false
         var admissionRollback: Closeable? = null
-        if (type == V9MessageType.START) {
+        val requestType =
+            type.takeIf { it == V9MessageType.START || it == V9MessageType.PING }
+        if (requestType != null) {
           try {
-            responseLedger.recordPeerRequest(sequence, V9MessageType.START)
+            responseLedger.recordPeerRequest(sequence, requestType)
             requestRecorded = true
           } catch (_: RuntimeException) {
             encoded.fill(0)
@@ -1190,7 +1244,7 @@ class V9FoundationConnection(
         if (offered) sequence else {
           admissionRollback?.close()
           if (requestRecorded) {
-            responseLedger.cancelPeerRequest(sequence, V9MessageType.START)
+            responseLedger.cancelPeerRequest(sequence, requireNotNull(requestType))
           }
           reject(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
           null
@@ -1206,6 +1260,15 @@ class V9FoundationConnection(
   ): V9ErrorCode? {
     if (type !in PART3_MESSAGES && type !in PLAY_MESSAGES) return null
     return synchronized(wireStateLock) {
+      if (type == V9MessageType.PING || type == V9MessageType.PONG) {
+        if (negotiated?.capabilities?.contains(V9Capability.PING_V1) != true) {
+          return@synchronized V9ErrorCode.CAPABILITY_MISMATCH
+        }
+        if (snapshot().state != V9LifecycleState.ACTIVE || playSession == null) {
+          return@synchronized V9ErrorCode.UNEXPECTED_MESSAGE
+        }
+        return@synchronized null
+      }
       if (type in PART3_MESSAGES) {
         val session = part3Session ?: return@synchronized V9ErrorCode.UNEXPECTED_MESSAGE
         session.headerAdmission(type, flags, channel, encodedLength, decodedLength)
@@ -1340,6 +1403,7 @@ class V9FoundationConnection(
       val count = channel.write(bytes, offset, bytes.size - offset)
       if (count <= 0) throw IOException("v9 writer made no progress")
       offset = Math.addExact(offset, count)
+      transportMetrics?.recordWrite(count)
     }
     if (offset != bytes.size) throw IOException("v9 writer closed")
   }
@@ -1424,6 +1488,120 @@ class V9FoundationConnection(
     }
   }
 
+  private fun schedulePingIfNeeded() {
+    if (!diagnosticsOptions.enabled ||
+        negotiated?.capabilities?.contains(V9Capability.PING_V1) != true ||
+        snapshot().state != V9LifecycleState.ACTIVE) return
+    synchronized(taskLock) {
+      if (closed.get() || pingTask != null) return
+      val cadenceDeadline =
+          addSaturated(clock.nowMillis(), diagnosticsOptions.pingCadenceMillis)
+      val deadline =
+          transportMetrics?.nextExpiryDeadline(diagnosticsOptions.pingTimeoutMillis)
+              ?.let { minOf(cadenceDeadline, it) }
+              ?: cadenceDeadline
+      pingTask = scheduler.schedule(deadline) {
+        synchronized(taskLock) {
+          pingTask?.close()
+          pingTask = null
+        }
+        if (closed.get() || snapshot().state != V9LifecycleState.ACTIVE) return@schedule
+        val metrics = transportMetrics ?: return@schedule
+        val livenessFailed = synchronized(wireStateLock) {
+          val expired = metrics.expirePings(diagnosticsOptions.pingTimeoutMillis)
+          expired.forEach { responseLedger.cancelPeerRequest(it, V9MessageType.PING) }
+          consecutivePingTimeouts =
+              (consecutivePingTimeouts + expired.size).coerceAtMost(MAX_TIMED_OUT_PINGS)
+          consecutivePingTimeouts >= MAX_TIMED_OUT_PINGS
+        }
+        if (livenessFailed) {
+          fail(V9ErrorCode.TIMEOUT, V9Diagnostic.TIMEOUT)
+          return@schedule
+        }
+        sendPing()
+        schedulePingIfNeeded()
+      }
+    }
+  }
+
+  private fun sendPing() {
+    val metrics = transportMetrics ?: return
+    if (metrics.pendingCount() >= V9TransportMetrics.MAX_PENDING_PINGS) {
+      // The configured timeout may span several cadence intervals. Retain the existing probe and
+      // try again at the next cadence instead of allocating or failing early.
+      return
+    }
+    val nonce = nextPingNonce++
+    val micros = multiplySaturated(clock.nowMillis().coerceAtLeast(0), 1_000)
+    val value = V9PingPayload(nonce, micros)
+    val payload = V9PingCodec.encode(value)
+    try {
+      enqueuePlay(
+          V9MessageType.PING,
+          0,
+          0,
+          ProtocolV9.CONTROL_CHANNEL,
+          payload,
+          { sequence ->
+            if (!metrics.registerPing(sequence, value)) {
+              throw IllegalStateException("v9 pending ping bound reached")
+            }
+            Closeable { metrics.cancelPing(sequence) }
+          },
+          {},
+      )
+    } finally {
+      payload.fill(0)
+    }
+  }
+
+  private fun handlePing(frame: V9Frame) {
+    if (negotiated?.capabilities?.contains(V9Capability.PING_V1) != true) {
+      reject(V9ErrorCode.CAPABILITY_MISMATCH, V9Diagnostic.HELLO_REJECTED)
+      return
+    }
+    if (snapshot().state != V9LifecycleState.ACTIVE) {
+      reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.HELLO_REJECTED)
+      return
+    }
+    val payload = V9PingCodec.encode(V9PingCodec.decode(frame.payloadView()))
+    val admitted =
+        enqueuePlay(
+            V9MessageType.PONG,
+            V9Flag.RESPONSE.wireMask,
+            frame.header.sequence,
+            ProtocolV9.CONTROL_CHANNEL,
+            payload,
+            { Closeable {} },
+            { if (!closed.get()) lifecycle.activeProgress() },
+        )
+    payload.fill(0)
+    if (admitted == null) reject(V9ErrorCode.QUEUE_OVERFLOW, V9Diagnostic.QUEUE_FULL)
+  }
+
+  private fun handlePong(frame: V9Frame) {
+    if (negotiated?.capabilities?.contains(V9Capability.PING_V1) != true) {
+      reject(V9ErrorCode.CAPABILITY_MISMATCH, V9Diagnostic.HELLO_REJECTED)
+      return
+    }
+    if (snapshot().state != V9LifecycleState.ACTIVE) {
+      reject(V9ErrorCode.UNEXPECTED_MESSAGE, V9Diagnostic.HELLO_REJECTED)
+      return
+    }
+    val metrics = transportMetrics
+        ?: return reject(V9ErrorCode.CORRELATION_ERROR, V9Diagnostic.HELLO_REJECTED)
+    val failure =
+        metrics.acceptPong(
+            frame.header.correlation,
+            V9PingCodec.decode(frame.payloadView()),
+        )
+    if (failure != null) reject(failure, V9Diagnostic.HELLO_REJECTED)
+    else {
+      consecutivePingTimeouts = 0
+      lifecycle.activeProgress()
+    }
+  }
+
   private fun fail(reason: V9ErrorCode, diagnostic: V9Diagnostic) {
     if (!closed.get()) lifecycle.fail(reason, diagnostic)
     closeResources()
@@ -1438,6 +1616,8 @@ class V9FoundationConnection(
     synchronized(taskLock) {
       timeoutTask?.close()
       timeoutTask = null
+      pingTask?.close()
+      pingTask = null
     }
     writer.close()
     slotReservation?.close()
@@ -1466,6 +1646,7 @@ class V9FoundationConnection(
       currentSession to currentTarget
     }
     activePlaySession?.close()
+    activeRollbackMetrics = null
     activatingTarget?.close()
     clientInvitation?.close()
     try {
@@ -1477,6 +1658,7 @@ class V9FoundationConnection(
       tasks.filter { it !== Thread.currentThread() }.forEach(Thread::interrupt)
     }
     ownedScheduler?.close()
+    transportMetrics?.close()
     boundary.countDown()
     postAuth.countDown()
     manifestComplete.countDown()
@@ -1572,7 +1754,21 @@ class V9FoundationConnection(
             V9MessageType.INPUT,
             V9MessageType.RESET,
             V9MessageType.STOP,
+            V9MessageType.PING,
+            V9MessageType.PONG,
         )
+
+    private const val MAX_TIMED_OUT_PINGS = 2
+
+    private fun addSaturated(left: Long, right: Long): Long =
+        try {
+          Math.addExact(left, right)
+        } catch (_: ArithmeticException) {
+          Long.MAX_VALUE
+        }
+
+    private fun multiplySaturated(value: Long, multiplier: Long): Long =
+        if (value > Long.MAX_VALUE / multiplier) Long.MAX_VALUE else value * multiplier
 
     private fun randomNonce(): ByteArray = ByteArray(32).also(SecureRandom()::nextBytes)
   }
@@ -1591,6 +1787,7 @@ class V9FoundationServer(
     private val manifestPlan: V9ManifestPlan? = null,
     private val part3Plan: V9Part3Plan? = null,
     private val playPlan: V9PlayPlan? = null,
+    private val diagnosticsOptions: V9DiagnosticsOptions = V9DiagnosticsOptions.DISABLED,
     private val onAwaitingPairing: (V9FoundationConnection) -> Unit,
 ) : Closeable {
   init {
@@ -1628,6 +1825,11 @@ class V9FoundationServer(
       )
   private var listener: ServerSocket? = null
   private var acceptThread: Thread? = null
+  private val statusPublisher =
+      BoundedSnapshotPublisher(
+          V9FoundationServerStatus(false, 0, mode, 0),
+          "netplay-v9-server-status",
+      )
 
   internal var connectionFactory:
       (V9TransportChannel, V9Role, V9LinkMode, Set<V9Capability>) ->
@@ -1642,12 +1844,15 @@ class V9FoundationServer(
             manifestPlan = manifestPlan,
             part3Plan = part3Plan,
             playPlan = playPlan,
+            diagnosticsOptions = diagnosticsOptions,
         )
       }
 
   internal var candidateHooks = V9ServerCandidateHooks()
 
   val localPort: Int get() = listener?.localPort ?: 0
+
+  fun statusSource(): NetplaySnapshotSource<V9FoundationServerStatus> = statusPublisher
 
   internal fun activeConnectionCount(): Int = connections.size
 
@@ -1666,6 +1871,7 @@ class V9FoundationServer(
           thread(isDaemon = true, name = "netplay-v9-accept") {
             acceptLoop(requireNotNull(listener))
           }
+      publishStatus()
     }
   }
 
@@ -1689,6 +1895,8 @@ class V9FoundationServer(
     playPlan?.close()
     invitationHost?.close()
     acceptThread?.interrupt()
+    statusPublisher.update(V9FoundationServerStatus(false, 0, mode, 0))
+    statusPublisher.close()
   }
 
   private fun acceptLoop(server: ServerSocket) {
@@ -1745,7 +1953,13 @@ class V9FoundationServer(
               optionalCapabilities,
           )
       connections += connection
-      connection.addCloseListener { connections.remove(connection) }
+      lateinit var statusSubscription: Closeable
+      statusSubscription = connection.addListener { publishStatus() }
+      connection.addCloseListener {
+        statusSubscription.close()
+        connections.remove(connection)
+        publishStatus()
+      }
       connection.start()
       val state =
           connection.awaitPairingBoundary(
@@ -1790,6 +2004,20 @@ class V9FoundationServer(
         // Candidate construction/start/callback failures remain isolated to this socket.
       }
     }
+  }
+
+  private fun publishStatus() {
+    val listening = !stopped.get() && listener?.isClosed == false
+    val capacity = if (mode == V9LinkMode.NORMAL) 1 else 3
+    val occupied = invitationHost?.occupiedSlots()?.size ?: capacity
+    statusPublisher.update(
+        V9FoundationServerStatus(
+            listening,
+            if (listening) localPort else 0,
+            mode,
+            (capacity - occupied).coerceIn(0, capacity),
+        ),
+    )
   }
 
   private inner class V9PendingCandidate(
@@ -1842,6 +2070,7 @@ object V9FoundationClient {
       manifestPlan: V9ManifestPlan? = null,
       part3Plan: V9Part3Plan? = null,
       playPlan: V9PlayPlan? = null,
+      diagnosticsOptions: V9DiagnosticsOptions = V9DiagnosticsOptions.DISABLED,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
     require(manifestPlan == null || manifestPlan.role == V9Role.CLIENT && manifestPlan.mode == mode)
@@ -1860,6 +2089,7 @@ object V9FoundationClient {
         manifestPlan,
         part3Plan,
         playPlan,
+        diagnosticsOptions,
         ::newV9SocketChannel,
     )
   }
@@ -1873,6 +2103,7 @@ object V9FoundationClient {
       manifestPlan: V9ManifestPlan? = null,
       part3Plan: V9Part3Plan? = null,
       playPlan: V9PlayPlan? = null,
+      diagnosticsOptions: V9DiagnosticsOptions = V9DiagnosticsOptions.DISABLED,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     require(invitation == null || invitation.mode == mode)
@@ -1892,6 +2123,7 @@ object V9FoundationClient {
         manifestPlan,
         part3Plan,
         playPlan,
+        diagnosticsOptions,
         channelFactory,
     )
   }
@@ -1905,6 +2137,7 @@ object V9FoundationClient {
       manifestPlan: V9ManifestPlan?,
       part3Plan: V9Part3Plan?,
       playPlan: V9PlayPlan?,
+      diagnosticsOptions: V9DiagnosticsOptions,
       channelFactory: () -> V9ConnectableChannel,
   ): V9FoundationConnection {
     var channel: V9ConnectableChannel? = null
@@ -1922,6 +2155,7 @@ object V9FoundationClient {
           manifestPlan = manifestPlan,
           part3Plan = part3Plan,
           playPlan = playPlan,
+          diagnosticsOptions = diagnosticsOptions,
       )
       connection = acceptedConnection
       acceptedConnection.start()
@@ -1979,6 +2213,7 @@ class V9FoundationConnectAttempt(
       manifestPlan: V9ManifestPlan? = null,
       part3Plan: V9Part3Plan? = null,
       playPlan: V9PlayPlan? = null,
+      diagnosticsOptions: V9DiagnosticsOptions = V9DiagnosticsOptions.DISABLED,
       onComplete: (V9FoundationConnection?, V9ErrorCode?) -> Unit,
   ) {
     require(invitation == null || invitation.mode == mode)
@@ -2038,6 +2273,7 @@ class V9FoundationConnectAttempt(
               manifestPlan,
               part3Plan,
               playPlan,
+              diagnosticsOptions,
           )
         }
     val startWorker =
@@ -2079,6 +2315,7 @@ class V9FoundationConnectAttempt(
       manifestPlan: V9ManifestPlan?,
       part3Plan: V9Part3Plan? = null,
       playPlan: V9PlayPlan? = null,
+      diagnosticsOptions: V9DiagnosticsOptions = V9DiagnosticsOptions.DISABLED,
   ) {
     var createdChannel: V9ConnectableChannel? = null
     try {
@@ -2107,6 +2344,7 @@ class V9FoundationConnectAttempt(
               manifestPlan = manifestPlan,
               part3Plan = part3Plan,
               playPlan = playPlan,
+              diagnosticsOptions = diagnosticsOptions,
           )
       if (!adoptConnection(value)) {
         value.close()

@@ -62,6 +62,11 @@ internal class V9PlaySession(
   private var lastCheckpointOutcome: V9ErrorCode? = null
   private var checkpointCompletionCount = 0
   private val lastInputOrder = mutableMapOf<Pair<Long, Int>, Int>()
+  @Volatile private var transportMetrics: V9TransportMetrics? = null
+
+  internal fun attachTransportMetrics(value: V9TransportMetrics?) {
+    transportMetrics = value
+  }
 
   init {
     val proposal = authorization.proposal
@@ -307,6 +312,11 @@ internal class V9PlaySession(
   private fun sendRuntime(type: V9MessageType, player: Int, payload: ByteArray) {
     try {
       ensureActive()
+      if (payload.size >= java.lang.Long.BYTES) {
+        transportMetrics?.recordLocalFrame(
+            ByteBuffer.wrap(payload, 0, java.lang.Long.BYTES).order(ByteOrder.BIG_ENDIAN).long,
+        )
+      }
       val sequence =
           send.send(type, 0, 0, player.toLong() + 1, payload, { Closeable {} }) {
             if (!isClosed()) lifecycle.activeProgress()
@@ -569,16 +579,18 @@ internal class V9PlaySession(
       failure: V9ErrorCode?,
   ) {
     if (!committing.completed.compareAndSet(false, true)) return
-    synchronized(lock) {
+    val completedFrame = synchronized(lock) {
       if (committingIncoming === committing) committingIncoming = null
       checkpointInFlight = false
       lastCheckpointOutcome = failure
       checkpointCompletionCount++
+      checkpointFrame
     }
     committing.prepared.close()
     if (failure == null) {
       // The safe-point winner is one complete atomic outcome even if transport close races later.
       committing.ticket.commit()
+      completedFrame?.let { transportMetrics?.recordRemoteFrame(it) }
       if (!isClosed()) committing.onSuccess()
     } else {
       committing.ticket.close()
@@ -602,6 +614,7 @@ internal class V9PlaySession(
       if (pending != null && initialCheckpointReady) pendingStart = null
     }
     if (active) {
+      transportMetrics?.recordLocalFrame(frame)
       lifecycle.activeProgress()
       return
     }
@@ -751,6 +764,8 @@ internal class V9PlaySession(
         return
       }
     }
+    transportMetrics?.recordLocalFrame(frame)
+    transportMetrics?.recordRemoteFrame(frame)
     onActive(value)
   }
 
@@ -773,6 +788,7 @@ internal class V9PlaySession(
     }
     plan.gameplayTarget.input(value) { failure ->
       if (failure == null && !isClosed()) {
+        transportMetrics?.recordRemoteInput(value.frame)
         lifecycle.activeProgress()
         if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
           try {
@@ -793,6 +809,7 @@ internal class V9PlaySession(
     }
     plan.gameplayTarget.control(value) { failure ->
       if (failure == null && !isClosed()) {
+        transportMetrics?.recordRemoteFrame(value.frame)
         lifecycle.activeProgress()
         if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
           try {

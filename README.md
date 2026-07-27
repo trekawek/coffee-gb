@@ -56,7 +56,12 @@ verified receivers deliver only complete detached candidates. Callers without th
 their earlier boundary. Own-ROM exact match remains the default and performs no transfer.
 An additional #349 developer plan enables direct StateFile-v2 checkpoints, atomic frame-safe
 restore, START/READY, and bounded ACTIVE input/reset/stop. It remains opt-in and is not wired to the
-default UI; discovery also remains unavailable. Current user netplay remains v8. V9 deliberately
+default UI. Explicit v9 callers may enable bounded PING/rollback metrics and an EDT-safe sanitized
+diagnostics panel. A separate trusted-LAN discovery service is off by default and advertises only
+an untrusted numeric endpoint/public session ID while a listener has an open slot; confirmation
+and the existing one-use authenticated invitation are still mandatory. It provides no automatic
+connection, tokenless flow, matchmaking, NAT traversal, or encryption. Current user netplay
+remains v8. V9 deliberately
 does not interoperate or
 downgrade to v8. Its TCP transport is plaintext—not confidential or secure against an on-path
 attacker. See

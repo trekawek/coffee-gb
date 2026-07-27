@@ -80,6 +80,14 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   transport-foundation tests. It adds no binary fixture, invitation secret, remote capture, ROM,
   save, StateFile, credential, endpoint, or downloaded artifact; all resource bytes and manifest
   hashes from Phase #346 remain unchanged.
+- Phase #350 adds no fixture or downloaded artifact. PING/PONG, rollback, diagnostics-redaction,
+  discovery-cache, and Swing publication cases are generated in test code from synthetic numeric
+  values and documentation-reserved example addresses. The optional multicast smoke sends only
+  the fixed synthetic 28-byte public advertisement on the local host and skips when multicast
+  loopback is unavailable. The inline schema-1 normal-mode vector (port 8765, public session ID 1)
+  has SHA-256 `869a2044ee029f2876988a809864f4a0a220d0f8701b92ad8aa2248091958b36`.
+  Existing `netplay-v9` contract resources and released StateFile/legacy fixtures are not
+  rewritten.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB

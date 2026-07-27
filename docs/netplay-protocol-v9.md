@@ -293,8 +293,13 @@ most 256 runtime values and one worker. The controller safe-point callback perfo
 non-blocking offer; sequence assignment, writer-queue admission, and socket writes happen on that
 worker. A full handoff fails only that destination with `QUEUE_OVERFLOW`, and connection close
 clears the handoff and interrupts its worker.
-PING/PONG are opaque nonce u64 and diagnostic monotonic-microsecond
-stamp u64; the stamp never drives emulation.
+PING/PONG are opaque nonce u64 and diagnostic monotonic-microsecond stamp u64; the stamp never
+drives emulation. Production PING is opt-in, requires negotiated capability 12, and is legal only
+in ACTIVE. Default local cadence is 10,000 ms, unanswered timeout is 20,000 ms, pending requests
+are capped at one per direction, and RTT history is capped at 32. PONG echoes the complete PING
+payload and correlates exactly once to its request. RTT/EWMA/jitter and all liveness decisions use
+only the receiver's injected monotonic clock; late, duplicate, unsolicited, wrong-nonce, or
+wrong-correlation PONG fails closed. A full pending set skips another probe rather than allocating.
 
 CHECKPOINT is checkpoint kind u8 (`0` initial MACHINE, `1` normal SESSION, `2` four-player
 LINKED_SESSION), player mask u8, owner player u8, zero u8, frame u64, StateFile byte length u32,
@@ -514,9 +519,22 @@ coffeegb://HOST:PORT/join?v=9&mode=MODE&slot=SLOT&exp=EXP&token=TOKEN
 - Parsing is strict: a noncanonical spelling is rejected, never normalized. Rendering always emits
   this form. `invitation-vectors.tsv` freezes success and typed failure behavior.
 
-V9 has no tokenless/manual-address authentication path. Adding nonce comparison, discovery, or a
-different invitation mechanism requires a separately reviewed capability and threat-model change;
-it cannot bypass AUTH/MANIFEST/CONSENT in this wire generation.
+V9 has no tokenless/manual-address authentication path. #350's separately reviewed trusted-LAN
+discovery advertises only an untrusted numeric endpoint and the fixed public fields below; it
+cannot bypass AUTH/MANIFEST/CONSENT. Adding nonce comparison or a different invitation mechanism
+still requires a separately reviewed capability and threat-model change.
+
+### Trusted-LAN address advertisement (not a CGB9 session frame)
+
+The optional discovery datagram is exactly 28 bytes, big-endian, and is parsed as untrusted input
+before cache mutation: `0..3="CGBD"`, `4=schema 1`, `5=protocol major 9`, `6=mode` (`0` normal,
+`1` four-player), `7=open slots` (`1` normal or `1..3` four-player), `8=pairing-required 1`,
+`9=zero`, `10..11=listener port u16 (1..65535)`, and `12..27=random public session ID`. A receive
+buffer is capped at 64 bytes and any non-exact length/value is discarded. The TTL-1 implementation
+uses UDP 37619 and both `239.255.67.66` and `ff02::4347:4244`; the cache holds 64 services and eight
+numeric addresses per service, refreshes every 1,000 monotonic ms, and expires at `now >= last +
+5,000 ms`. The session ID is public deduplication data, not a token or identity proof. Selection is
+an explicit local endpoint confirmation and still requires the canonical authenticated invitation.
 
 Invitation parsing is local and uses stable reason names (not wire ERROR numbers): `INV_TOO_LONG`,
 `INV_CONTROL`, `INV_ENCODING`, `INV_FRAGMENT`, `INV_SCHEME`, `INV_PATH`, `INV_AUTHORITY`,
@@ -538,7 +556,7 @@ does not provide TLS, matchmaking, rendezvous, NAT traversal, relay, or public i
 | #348 Part 2 | MANIFEST ordering, exact roster/identity comparison, and item proposals | implemented through an immutable pre-consent boundary; manifests are caller-prepared metadata and no private content is opened or hashed on transport threads |
 | #348 Part 3 | CONSENT ordering and ROM/battery transactions | implemented through immutable preparation completion; lazy sources open only after two exact approvals and verified receivers deliver only whole detached candidates; callers without a play plan remain blocked before START |
 | #349 | CHECKPOINT schema, StateFile-v2 identity, atomic group/history rules | implemented behind an explicit play plan: initial MACHINE or full-roster LINKED_SESSION, normal ACTIVE SESSION resync, START/READY, bounded INPUT/RESET/STOP, and two-stage frame-safe atomic commit; default v8/UI remain isolated |
-| #350 | cancellation/cleanup/diagnostic contracts, hostile lifecycle cases, and any separately reviewed discovery mechanism | no hardening rollout or v8 retirement occurs after #347; no nonce/manual-address bypass exists |
+| #350 | PING/PONG transport metrics, rollback/history snapshots, sanitized Swing diagnostics, and separately reviewed trusted-LAN endpoint discovery | implemented as bounded opt-ins; no hardening rollout, v8 retirement, central service, or nonce/manual-address bypass exists |
 | #351 | Mobile clean-room ADR/source inventory/transcripts | no production Mobile engine exists in #346 |
 | #352 | bounded async backend/status/cancellation contract | no DNS/socket/backend work exists in #346 |
 | #353 | desktop adapter/configuration/privacy documentation | no Mobile UI or external-service preset exists in #346 |
