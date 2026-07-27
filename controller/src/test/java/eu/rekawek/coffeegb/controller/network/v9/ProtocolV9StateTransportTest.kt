@@ -32,6 +32,7 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import java.io.Closeable
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -40,6 +41,7 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -683,6 +685,162 @@ class ProtocolV9StateTransportTest {
     } finally {
       grant.close()
       fixture.close()
+    }
+  }
+
+  @Test
+  fun foundationPingSchedulerNegotiationCadencePendingBoundAndLivenessAreExact() {
+    diagnosticPair(serverDiagnostics = true, clientDiagnostics = false).use { disabled ->
+      assertFalse(V9Capability.PING_V1 in disabled.server.negotiatedCapabilities())
+      assertFalse(V9Capability.PING_V1 in disabled.client.negotiatedCapabilities())
+      assertNotNull(disabled.server.transportMetricsSource())
+      assertNull(disabled.client.transportMetricsSource())
+      assertEquals(listOf(30_000L), disabled.serverScheduler.activeDeadlines())
+      assertEquals(listOf(30_000L), disabled.clientScheduler.activeDeadlines())
+      disabled.serverScheduler.runAt(1_000)
+      assertEquals(0, disabled.serverChannel.messageCount(V9MessageType.PING))
+      assertEquals(0, disabled.clientChannel.messageCount(V9MessageType.PING))
+      assertEquals(V9LifecycleState.ACTIVE, disabled.server.snapshot().state)
+    }
+
+    val timed = diagnosticPair(serverDiagnostics = true, clientDiagnostics = true)
+    val metrics = assertNotNull(timed.server.transportMetricsSource()) as V9TransportMetrics
+    val callbacks = AtomicInteger()
+    val subscription = metrics.addListener { callbacks.incrementAndGet() }
+    try {
+      assertTrue(V9Capability.PING_V1 in timed.server.negotiatedCapabilities())
+      assertTrue(V9Capability.PING_V1 in timed.client.negotiatedCapabilities())
+      assertTrue(timed.serverScheduler.activeDeadlines().contains(1_000L))
+      timed.clientChannel.blockWrites()
+      timed.serverScheduler.runAt(1_000)
+      assertTrue(timed.clientChannel.awaitBlockedWrite(1, TimeUnit.SECONDS))
+      waitUntil { timed.serverChannel.messageCount(V9MessageType.PING) == 1 }
+      val firstPing = timed.serverChannel.lastMessage(V9MessageType.PING)
+      assertEquals(ProtocolV9.HEADER_BYTES + V9PingCodec.PAYLOAD_BYTES, firstPing.size)
+      val firstHeader = ByteBuffer.wrap(firstPing).order(ByteOrder.BIG_ENDIAN)
+      assertEquals(0, firstHeader.getShort(10).toInt())
+      assertEquals(V9PingCodec.PAYLOAD_BYTES, firstHeader.getInt(20))
+      assertEquals(V9PingCodec.PAYLOAD_BYTES, firstHeader.getInt(24))
+      assertEquals(ProtocolV9.CONTROL_CHANNEL.toInt(), firstHeader.getInt(28))
+      firstPing.fill(0)
+      assertEquals(1, metrics.pendingCount())
+      assertEquals(1, metrics.snapshot().unansweredPings)
+
+      timed.serverScheduler.runAt(2_000)
+      timed.serverScheduler.runAt(3_000)
+      timed.serverScheduler.runAt(3_999)
+      assertEquals(1, timed.serverChannel.messageCount(V9MessageType.PING))
+      assertEquals(0, metrics.snapshot().timedOutPings)
+      assertEquals(V9LifecycleState.ACTIVE, timed.server.snapshot().state)
+
+      timed.serverScheduler.runAt(4_000)
+      waitUntil { timed.serverChannel.messageCount(V9MessageType.PING) == 2 }
+      assertEquals(1, metrics.snapshot().timedOutPings)
+      assertEquals(1, metrics.pendingCount())
+      timed.serverScheduler.runAt(5_000)
+      timed.serverScheduler.runAt(6_000)
+      timed.serverScheduler.runAt(6_999)
+      assertEquals(V9LifecycleState.ACTIVE, timed.server.snapshot().state)
+      timed.serverScheduler.runAt(7_000)
+      assertEquals(V9LifecycleState.CLOSED, timed.server.snapshot().state)
+      assertEquals(V9ErrorCode.TIMEOUT, timed.server.snapshot().failure?.reason)
+      assertEquals(2, metrics.snapshot().timedOutPings)
+      assertEquals(0, metrics.pendingCount())
+    } finally {
+      timed.close()
+    }
+    assertEquals(0, timed.serverScheduler.activeTaskCount())
+    assertEquals(0, timed.clientScheduler.activeTaskCount())
+    assertEquals(0, metrics.pendingCount())
+    assertEquals(0, metrics.listenerCountForTest())
+    subscription.close()
+  }
+
+  @Test
+  fun validPongResetsFoundationTimeoutProgressionAndCloseCancelsPingOwnership() {
+    val pair = diagnosticPair(serverDiagnostics = true, clientDiagnostics = true)
+    val metrics = assertNotNull(pair.server.transportMetricsSource()) as V9TransportMetrics
+    try {
+      pair.server.seedConsecutivePingTimeoutsForTest(1)
+      pair.serverScheduler.runAt(1_000)
+      waitUntil { metrics.pendingCount() == 0 && metrics.snapshot().currentRttMicros != null }
+      assertEquals(V9LifecycleState.ACTIVE, pair.server.snapshot().state)
+
+      pair.clientChannel.blockWrites()
+      pair.serverScheduler.runAt(2_000)
+      assertTrue(pair.clientChannel.awaitBlockedWrite(1, TimeUnit.SECONDS))
+      pair.serverScheduler.runAt(3_000)
+      pair.serverScheduler.runAt(4_000)
+      pair.serverScheduler.runAt(4_999)
+      assertEquals(V9LifecycleState.ACTIVE, pair.server.snapshot().state)
+      pair.serverScheduler.runAt(5_000)
+      // The valid PONG reset the consecutive counter: this is the first new missed probe.
+      assertEquals(V9LifecycleState.ACTIVE, pair.server.snapshot().state)
+      assertEquals(1, metrics.snapshot().timedOutPings)
+      assertEquals(1, metrics.pendingCount())
+    } finally {
+      pair.close()
+    }
+    assertEquals(0, pair.serverScheduler.activeTaskCount())
+    assertEquals(0, pair.clientScheduler.activeTaskCount())
+    assertEquals(0, metrics.pendingCount())
+  }
+
+  @Test
+  fun liveFoundationRejectsLateDuplicateWrongCorrelationAndWrongNoncePongs() {
+    fun rejected(
+        expected: V9ErrorCode,
+        prepare: (DiagnosticConnectionPair) -> ByteArray,
+    ) {
+      diagnosticPair(serverDiagnostics = true, clientDiagnostics = true).use { pair ->
+        val hostile = prepare(pair)
+        pair.clientChannel.injectToPeer(hostile)
+        hostile.fill(0)
+        waitUntil { pair.server.snapshot().failure != null }
+        assertEquals(expected, pair.server.snapshot().failure?.reason)
+      }
+    }
+
+    rejected(V9ErrorCode.CORRELATION_ERROR) { pair ->
+      pair.clientChannel.blockWrites()
+      pair.serverScheduler.runAt(1_000)
+      assertTrue(pair.clientChannel.awaitBlockedWrite(1, TimeUnit.SECONDS))
+      val pong = pair.clientChannel.lastMessage(V9MessageType.PONG)
+      pair.clientChannel.discardBlockedWrite(keepBlocking = false)
+      ByteBuffer.wrap(pong).order(ByteOrder.BIG_ENDIAN).putInt(16, 0x7fffffff)
+      pong
+    }
+
+    rejected(V9ErrorCode.CORRELATION_ERROR) { pair ->
+      pair.clientChannel.blockWrites()
+      pair.serverScheduler.runAt(1_000)
+      assertTrue(pair.clientChannel.awaitBlockedWrite(1, TimeUnit.SECONDS))
+      val pong = pair.clientChannel.lastMessage(V9MessageType.PONG)
+      pair.clientChannel.discardBlockedWrite(keepBlocking = false)
+      pong[ProtocolV9.HEADER_BYTES] = (pong[ProtocolV9.HEADER_BYTES].toInt() xor 1).toByte()
+      val digest = MessageDigest.getInstance("SHA-256")
+          .digest(pong.copyOfRange(ProtocolV9.HEADER_BYTES, pong.size))
+      System.arraycopy(digest, 0, pong, 32, digest.size)
+      digest.fill(0)
+      pong
+    }
+
+    rejected(V9ErrorCode.CORRELATION_ERROR) { pair ->
+      pair.clientChannel.blockWrites()
+      pair.serverScheduler.runAt(1_000)
+      assertTrue(pair.clientChannel.awaitBlockedWrite(1, TimeUnit.SECONDS))
+      val late = pair.clientChannel.lastMessage(V9MessageType.PONG)
+      pair.serverScheduler.runAt(2_000)
+      pair.serverScheduler.runAt(3_000)
+      pair.serverScheduler.runAt(4_000)
+      late
+    }
+
+    rejected(V9ErrorCode.SEQUENCE_ERROR) { pair ->
+      pair.serverScheduler.runAt(1_000)
+      val metrics = assertNotNull(pair.server.transportMetricsSource())
+      waitUntil { metrics.snapshot().currentRttMicros != null }
+      pair.clientChannel.lastMessage(V9MessageType.PONG)
     }
   }
 
@@ -2699,6 +2857,263 @@ class ProtocolV9StateTransportTest {
     override fun close() {
       controller.closeWithState()
       Files.deleteIfExists(romPath)
+    }
+  }
+
+  private fun diagnosticPair(
+      serverDiagnostics: Boolean,
+      clientDiagnostics: Boolean,
+  ): DiagnosticConnectionPair {
+    val fixture = stateFixture()
+    val manifests = manifestPair(fixture.identity)
+    val host = V9InvitationHost(V9LinkMode.NORMAL)
+    val channels = DiagnosticMemoryChannel.pair()
+    val clock = MutableClock()
+    val serverScheduler = DiagnosticManualScheduler(clock)
+    val clientScheduler = DiagnosticManualScheduler(clock)
+    val serverTarget = target(fixture.identities, AtomicReference(), LinkedBlockingQueue())
+    val clientTarget = target(fixture.identities, AtomicReference(), LinkedBlockingQueue())
+    val serverGeneration = serverTarget.captureGeneration()
+    val serverPlan =
+        V9GuestPlayPlan(
+            serverTarget,
+            serverTarget,
+            provider(serverGeneration) { fixture.v2.copyOf() },
+            V9CheckpointKind.MACHINE,
+            0,
+            V9SessionIdSource { 0x0102030405060708L },
+        )
+    val clientPlan =
+        V9GuestPlayPlan(
+            clientTarget,
+            clientTarget,
+            initialKind = V9CheckpointKind.MACHINE,
+            initialOwnerPlayer = 0,
+        )
+    val invitation =
+        host.createInvitation("127.0.0.1", 8765, 1).forClientAuthentication()
+    val options = { enabled: Boolean ->
+      V9DiagnosticsOptions(enabled = enabled, pingCadenceMillis = 1_000,
+          pingTimeoutMillis = 3_000)
+    }
+    val server =
+        V9FoundationConnection(
+            channels.first,
+            V9Role.SERVER,
+            V9LinkMode.NORMAL,
+            clock = clock,
+            scheduler = serverScheduler,
+            invitationHost = host,
+            manifestPlan = V9ManifestPlan.server(V9LinkMode.NORMAL, mapOf(1 to manifests.server)),
+            part3Plan = V9Part3Plan.server(V9LinkMode.NORMAL, mapOf(1 to part3Guest())),
+            playPlan = V9PlayPlan.server(V9LinkMode.NORMAL, mapOf(1 to serverPlan)),
+            diagnosticsOptions = options(serverDiagnostics),
+        )
+    val client =
+        V9FoundationConnection(
+            channels.second,
+            V9Role.CLIENT,
+            V9LinkMode.NORMAL,
+            clock = clock,
+            scheduler = clientScheduler,
+            clientInvitation = invitation,
+            manifestPlan = V9ManifestPlan.client(V9LinkMode.NORMAL, 1, manifests.client),
+            part3Plan = V9Part3Plan.client(V9LinkMode.NORMAL, 1, part3Guest()),
+            playPlan = V9PlayPlan.client(V9LinkMode.NORMAL, 1, clientPlan),
+            diagnosticsOptions = options(clientDiagnostics),
+        )
+    val result =
+        DiagnosticConnectionPair(
+            fixture,
+            host,
+            channels.first,
+            channels.second,
+            clock,
+            serverScheduler,
+            clientScheduler,
+            server,
+            client,
+        )
+    try {
+      server.start()
+      client.start()
+      assertNotNull(server.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      server.submitConsent(41, V9ConsentDecision.APPROVE)
+      client.submitConsent(41, V9ConsentDecision.APPROVE)
+      assertNotNull(server.awaitActiveBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(client.awaitActiveBoundary(5, TimeUnit.SECONDS))
+      assertEquals(V9LifecycleState.ACTIVE, server.snapshot().state)
+      assertEquals(V9LifecycleState.ACTIVE, client.snapshot().state)
+      return result
+    } catch (failure: Throwable) {
+      result.close()
+      throw failure
+    }
+  }
+
+  private data class DiagnosticConnectionPair(
+      val fixture: StateFixture,
+      val host: V9InvitationHost,
+      val serverChannel: DiagnosticMemoryChannel,
+      val clientChannel: DiagnosticMemoryChannel,
+      val clock: MutableClock,
+      val serverScheduler: DiagnosticManualScheduler,
+      val clientScheduler: DiagnosticManualScheduler,
+      val server: V9FoundationConnection,
+      val client: V9FoundationConnection,
+  ) : Closeable {
+    override fun close() {
+      server.close()
+      client.close()
+      host.close()
+      fixture.close()
+    }
+  }
+
+  private class DiagnosticManualScheduler(private val clock: MutableClock) :
+      V9DeadlineScheduler {
+    private val tasks = mutableListOf<Task>()
+
+    @Synchronized
+    override fun schedule(deadlineMillis: Long, action: Runnable): Closeable {
+      val task = Task(deadlineMillis, action)
+      tasks += task
+      return Closeable { task.active.set(false) }
+    }
+
+    fun runAt(now: Long) {
+      require(now >= clock.now)
+      clock.now = now
+      while (true) {
+        val task = synchronized(this) {
+          tasks.firstOrNull { it.active.get() && it.deadline <= clock.now }
+        } ?: return
+        if (task.active.compareAndSet(true, false)) task.action.run()
+      }
+    }
+
+    @Synchronized
+    fun activeDeadlines(): List<Long> =
+        tasks.filter { it.active.get() }.map(Task::deadline).sorted()
+
+    @Synchronized
+    fun activeTaskCount(): Int = tasks.count { it.active.get() }
+
+    private data class Task(
+        val deadline: Long,
+        val action: Runnable,
+        val active: AtomicBoolean = AtomicBoolean(true),
+    )
+  }
+
+  private class DiagnosticMemoryChannel : V9TransportChannel {
+    private val incoming = LinkedBlockingQueue<Int>()
+    private val writes = Collections.synchronizedList(mutableListOf<ByteArray>())
+    private val gateDecisions = LinkedBlockingQueue<Boolean>()
+    private val closed = AtomicBoolean(false)
+    private val blockedWrites = AtomicInteger()
+    private val completedBlocked = AtomicInteger()
+    @Volatile private var blocking = false
+    @Volatile private var blocked = CountDownLatch(0)
+    private lateinit var peer: DiagnosticMemoryChannel
+
+    fun blockWrites() {
+      blocked = CountDownLatch(1)
+      blocking = true
+    }
+
+    fun awaitBlockedWrite(timeout: Long, unit: TimeUnit): Boolean = blocked.await(timeout, unit)
+
+    fun blockedWriteCount(): Int = blockedWrites.get()
+
+    fun completedBlockedWrites(): Int = completedBlocked.get()
+
+    fun discardBlockedWrite(keepBlocking: Boolean) {
+      blocking = keepBlocking
+      gateDecisions.offer(false)
+    }
+
+    fun injectToPeer(bytes: ByteArray) {
+      bytes.forEach { peer.incoming.put(it.toInt() and 0xff) }
+    }
+
+    fun messageCount(type: V9MessageType): Int = synchronized(writes) {
+      writes.count { messageType(it) == type }
+    }
+
+    fun lastMessage(type: V9MessageType): ByteArray = synchronized(writes) {
+      requireNotNull(writes.lastOrNull { messageType(it) == type }).copyOf()
+    }
+
+    override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+      val first = incoming.take()
+      if (first < 0) return -1
+      bytes[offset] = first.toByte()
+      var count = 1
+      while (count < length) {
+        val next = incoming.poll() ?: break
+        if (next < 0) {
+          incoming.offer(next)
+          break
+        }
+        bytes[offset + count++] = next.toByte()
+      }
+      return count
+    }
+
+    override fun write(bytes: ByteArray, offset: Int, length: Int): Int {
+      if (closed.get()) throw IOException("closed")
+      val owned = bytes.copyOfRange(offset, offset + length)
+      writes += owned
+      if (blocking) {
+        blockedWrites.incrementAndGet()
+        blocked.countDown()
+        val deliver = try {
+          gateDecisions.take()
+        } catch (interrupted: InterruptedException) {
+          Thread.currentThread().interrupt()
+          throw IOException("diagnostic write gate was cancelled", interrupted)
+        } finally {
+          completedBlocked.incrementAndGet()
+        }
+        if (!deliver) return length
+      }
+      injectToPeer(owned)
+      return length
+    }
+
+    override fun shutdownOutput() {
+      peer.incoming.offer(-1)
+    }
+
+    override fun close() {
+      if (!closed.compareAndSet(false, true)) return
+      blocking = false
+      repeat(4) { gateDecisions.offer(false) }
+      incoming.offer(-1)
+      if (::peer.isInitialized) peer.incoming.offer(-1)
+      synchronized(writes) {
+        writes.forEach { it.fill(0) }
+        writes.clear()
+      }
+    }
+
+    private fun messageType(bytes: ByteArray): V9MessageType? {
+      if (bytes.size < ProtocolV9.HEADER_BYTES ||
+          !bytes.copyOfRange(0, 4).contentEquals(ProtocolV9.MAGIC)) return null
+      val id = ((bytes[8].toInt() and 0xff) shl 8) or (bytes[9].toInt() and 0xff)
+      return V9MessageType.fromWireId(id)
+    }
+
+    companion object {
+      fun pair(): Pair<DiagnosticMemoryChannel, DiagnosticMemoryChannel> {
+        val first = DiagnosticMemoryChannel()
+        val second = DiagnosticMemoryChannel()
+        first.peer = second
+        second.peer = first
+        return first to second
+      }
     }
   }
 

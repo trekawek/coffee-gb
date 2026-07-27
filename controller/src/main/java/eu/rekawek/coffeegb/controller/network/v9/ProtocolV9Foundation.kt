@@ -209,8 +209,9 @@ data class V9FoundationServerStatus(
  * it exchanges and validates MANIFEST and stops at the immutable pre-consent boundary. With an
  * explicit [part3Plan], item-scoped CONSENT and bounded ROM/battery preparation are enabled and
  * stop at an immutable pre-START boundary. An explicit [playPlan] additionally enables direct
- * StateFile-v2 CHECKPOINT, START/READY, and bounded ACTIVE traffic. Diagnostics and discovery
- * remain unavailable.
+ * StateFile-v2 CHECKPOINT, START/READY, and bounded ACTIVE traffic. Explicit diagnostics options
+ * additionally negotiate bounded PING/PONG transport metrics. Trusted-LAN discovery is a separate,
+ * off-by-default address-only service and never changes this connection's authentication flow.
  */
 class V9FoundationConnection(
     private val channel: V9TransportChannel,
@@ -439,6 +440,11 @@ class V9FoundationConnection(
   internal fun isClosed(): Boolean = closed.get()
 
   internal fun activeTaskCount(): Int = synchronized(taskLock) { tasks.count(Thread::isAlive) }
+
+  internal fun seedConsecutivePingTimeoutsForTest(value: Int) {
+    require(value in 0 until MAX_TIMED_OUT_PINGS)
+    synchronized(wireStateLock) { consecutivePingTimeouts = value }
+  }
 
   internal fun runtimeRelayQueueSizeForTest(): Int = synchronized(playOwnershipLock) {
     playSession?.runtimeRelayQueueSize() ?: 0
@@ -1775,8 +1781,7 @@ class V9FoundationConnection(
 }
 
 /**
- * Opt-in listener used only by foundation/Part-1/Part-2 diagnostics and tests until later pairing
- * phases.
+ * Opt-in listener for the complete authenticated v9 foundation and its optional diagnostics.
  * It is intentionally not reachable from [eu.rekawek.coffeegb.controller.network.ConnectionController].
  */
 class V9FoundationServer(
