@@ -1226,6 +1226,7 @@ class ProtocolV9StateTransportTest {
     val clientTargets = recipients.map { it.controller.createV9Target() }
     val identities = captureGeneration(captureTarget, source.controller).identities
     assertTrue(identities.all { it.identity != null })
+    assertTrue(identities.all { it.identity?.profile?.canonicalProfileId != "sgb" })
     assertTrue(clientTargets.zip(recipients).all { (target, recipient) ->
       captureGeneration(target, recipient.controller).identities == identities
     })
@@ -1267,6 +1268,55 @@ class ProtocolV9StateTransportTest {
     val clients = mutableListOf<V9FoundationConnection>()
     try {
       server.start()
+      val beforeBadCandidate = source.controller.captureDetachedState()
+      val beforeBadRecipient = recipients[2].controller.captureDetachedState()
+      val badPair = pairs.getValue(3)
+      val badInvitation =
+          host.createInvitation("127.0.0.1", server.localPort, 3)
+              .forClientAuthentication()
+      val badClient =
+          V9FoundationClient.connect(
+              InetSocketAddress("127.0.0.1", server.localPort),
+              V9LinkMode.FOUR_PLAYER,
+              setOf(V9Capability.FOUR_PLAYER_V1),
+              V9Timeout.WAIT_SERVER_HELLO.milliseconds.toInt(),
+              badInvitation,
+              V9ManifestPlan.client(
+                  V9LinkMode.FOUR_PLAYER,
+                  3,
+                  manifestWithProfile(badPair.client, 3, "sgb"),
+              ),
+              V9Part3Plan.client(V9LinkMode.FOUR_PLAYER, 3, part3Guest()),
+              V9PlayPlan.client(
+                  V9LinkMode.FOUR_PLAYER,
+                  3,
+                  V9GuestPlayPlan(
+                      clientTargets[2],
+                      clientTargets[2],
+                      initialKind = V9CheckpointKind.LINKED_SESSION,
+                      initialOwnerPlayer = 0,
+                  ),
+              ),
+          ) { FragmentingSocketChannel() }
+      val badServer = assertNotNull(accepted.poll(5, TimeUnit.SECONDS))
+      waitUntil {
+        badClient.snapshot().failure != null || badServer.snapshot().failure != null ||
+            badClient.manifestBoundary() != null || badServer.manifestBoundary() != null
+      }
+      assertTrue(
+          badClient.snapshot().failure?.reason == V9ErrorCode.MANIFEST_MISMATCH ||
+              badServer.snapshot().failure?.reason == V9ErrorCode.MANIFEST_MISMATCH,
+          "bad candidate was not rejected: client=${badClient.snapshot()} " +
+              "server=${badServer.snapshot()}",
+      )
+      assertEquals(beforeBadCandidate, source.controller.captureDetachedState())
+      assertEquals(beforeBadRecipient, recipients[2].controller.captureDetachedState())
+      assertEquals(0, coordinator.candidateCount())
+      assertEquals(0, coordinator.captureCount())
+      badClient.close()
+      badServer.close()
+      waitUntil { server.activeConnectionCount() == 0 }
+
       (1..3).forEach { guest ->
         val invitation =
             host.createInvitation("127.0.0.1", server.localPort, guest)
@@ -1544,6 +1594,41 @@ class ProtocolV9StateTransportTest {
         )
     return ManifestPair(manifest(0, true), manifest(guest, false), proposal)
   }
+
+  private fun manifestWithProfile(
+      manifest: V9Manifest,
+      player: Int,
+      profileId: String,
+  ): V9Manifest =
+      V9Manifest(
+          manifest.mode,
+          manifest.senderPlayer,
+          manifest.rosterGeneration,
+          manifest.rosterCommitment(),
+          manifest.entries.map { entry ->
+            if (entry.player != player) entry
+            else V9ManifestEntry(
+                entry.player,
+                entry.primaryRomPresent,
+                entry.slotRomPresent,
+                entry.batteryPresent,
+                entry.bootstrap,
+                entry.accessoryFlags,
+                profileId,
+                entry.internalTitle,
+                entry.cartridgeType,
+                entry.mapperFamily,
+                entry.primaryRomLength,
+                entry.slotRomLength,
+                entry.primaryRomSha256(),
+                entry.slotRomSha256(),
+                entry.bootRomSha256(),
+                entry.patchSetSha256(),
+            )
+          },
+          manifest.differences,
+          manifest.proposals,
+      )
 
   private fun manifestEntry(
       player: Int,
