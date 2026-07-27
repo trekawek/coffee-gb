@@ -169,7 +169,7 @@ class MachineSnapshotBenchmarkTest {
     val bean = ManagementFactory.getThreadMXBean() as? ThreadMXBean ?: return null
     if (!bean.isThreadAllocatedMemorySupported) return null
     if (!bean.isThreadAllocatedMemoryEnabled) bean.isThreadAllocatedMemoryEnabled = true
-    return AllocationCounter(bean, Thread.currentThread().threadId())
+    return AllocationCounter(bean, Thread.currentThread().id)
   }
 
   private data class AllocationCounter(

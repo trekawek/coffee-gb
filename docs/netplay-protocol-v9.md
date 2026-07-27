@@ -433,9 +433,12 @@ uses the same controller event boundary and resolves identities from the post-co
 target generation; StateFile encoding occurs after the detached capture leaves that owner.
 
 The host is the four-player coordinator across three independently authenticated guest TCP
-sessions. It selects one nonzero target generation, roster mask `0f`, roster commitment, and one
-frame-safe LINKED_SESSION capture before candidate admission. The same immutable bytes and digest
-are reused for all three guests even if emulation advances between their transports. Candidate
+sessions. After consent/transfer it obtains one immutable identity/topology generation at the
+controller safe point. The shared coordinator then owns one bounded provider/worker and selects
+the actual frame together with one frame-safe LINKED_SESSION capture for that activation
+generation. The same immutable bytes, digest, and frame are reused for all three guests even if
+emulation advances between their transports. Closing the coordinator cancels every shared-capture
+waiter and wipes retained encoded state where practicable. Candidate
 occupancy is separate from the committed/live emulator topology. Guest 1 and guest 2 preparation
 therefore leave the live
 mask unchanged and cannot authorize START. The barrier opens only after all required guests have
@@ -446,8 +449,14 @@ before admitting its correlated READY. A READY acknowledges only that guest comm
 ACTIVE after all three READY responses. Collision or candidate failure removes only that
 candidate; it cannot partially grow or alter the committed
 topology. After commitment, a replacement must authenticate the vacated slot and use the same
-committed slot, generation, commitment, and checkpoint identity; changing topology requires a new
-session generation.
+committed slot, generation, commitment, checkpoint identity, and captured frame. If the source
+frame or topology generation has changed, the stale replacement is rejected and a new coherent
+session generation is required.
+
+Normal ACTIVE SESSION resynchronization is available only before a terminal failure. Input older
+than retained rollback history is rejected as a typed sequence failure before mutation and closes
+that connection; recovery then requires a new authenticated generation rather than an automatic
+checkpoint on the closed session.
 
 ## Invitation URI and threat model
 

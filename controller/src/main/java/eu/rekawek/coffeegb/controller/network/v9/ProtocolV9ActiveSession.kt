@@ -26,6 +26,7 @@ internal class V9PlaySession(
     private val authenticatedGuest: Int,
     authorization: V9CheckpointAuthorization,
     private val plan: V9GuestPlayPlan,
+    private val targetGeneration: V9TargetGeneration,
     private val startTask: (String, () -> Unit) -> Thread,
     private val send: V9PlaySend,
     private val lifecycle: V9Lifecycle,
@@ -58,19 +59,14 @@ internal class V9PlaySession(
     }
     V9CheckpointStateValidation.validateManifestIdentities(
         authorization,
-        plan.checkpointTarget.expectedIdentities(),
+        targetGeneration.identities,
     )
   }
 
   fun start() {
     val proposal = authorization.proposal
     if (proposal.sourcePlayer == localActor()) {
-      sendCheckpoint(
-          plan.initialKind,
-          plan.initialOwnerPlayer,
-          plan.initialFrame,
-          initial = true,
-      )
+      beginCheckpoint(plan.initialKind, plan.initialOwnerPlayer, null, initial = true)
     } else if (proposal.targetPlayer != localActor()) {
       protocolFailure(V9ErrorCode.CONSENT_REJECTED)
     }
@@ -140,6 +136,16 @@ internal class V9PlaySession(
   }
 
   fun sendCheckpoint(kind: V9CheckpointKind, owner: Int, frame: Long, initial: Boolean = false) {
+    if (initial) throw IllegalArgumentException("initial checkpoint frame is selected at safe point")
+    beginCheckpoint(kind, owner, frame, false)
+  }
+
+  private fun beginCheckpoint(
+      kind: V9CheckpointKind,
+      owner: Int,
+      frame: Long?,
+      initial: Boolean,
+  ) {
     synchronized(lock) {
       ensureOpen()
       val state = lifecycle.snapshot().state
@@ -150,7 +156,7 @@ internal class V9PlaySession(
           else V9CheckpointKind.LINKED_SESSION
       if (kind != requiredKind || owner != localActor() ||
           state == V9LifecycleState.SYNCHRONIZING &&
-              (!initial || frame != plan.initialFrame || owner != plan.initialOwnerPlayer)) {
+              (!initial || frame != null || owner != plan.initialOwnerPlayer)) {
         throw IllegalArgumentException("v9 checkpoint root/owner does not match session phase")
       }
       if (checkpointInFlight) throw IllegalStateException("v9 checkpoint is already in flight")
@@ -201,25 +207,34 @@ internal class V9PlaySession(
   private fun transmitCheckpoint(
       kind: V9CheckpointKind,
       owner: Int,
-      frame: Long,
+      requestedFrame: Long?,
       initial: Boolean,
   ) {
+    val sharedInitial = initial && mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER
     val provider = plan.checkpointProvider
-        ?: return protocolFailure(V9ErrorCode.INTERNAL_ERROR)
+    if (!sharedInitial && provider == null) {
+      return protocolFailure(V9ErrorCode.INTERNAL_ERROR)
+    }
     val mask = if (mode == V9LinkMode.NORMAL) 1 shl owner else 0x0f
-    val metadata =
-        V9CheckpointMetadata(kind, mask, owner, frame, authorization.proposal.proposalId)
     var state: ByteArray? = null
+    var captured: V9CapturedCheckpoint? = null
     var ticket: V9CheckpointGrant.Ticket? = null
     try {
-      val request = V9CheckpointRequest(kind, mask, owner, frame)
-      state =
-          if (initial && mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
+      val request = V9CheckpointRequest(kind, mask, owner, requestedFrame)
+      captured =
+          if (sharedInitial) {
             requireNotNull(plan.fourPlayerCoordinator)
-                .captureInitial(authenticatedGuest, request, provider)
+                .captureInitial(authenticatedGuest, request)
           } else {
-            provider.capture(request)
+            requireNotNull(provider).capture(request)
           }
+      val frame = captured.frame
+      if (!captured.generation.sameIdentityGeneration(targetGeneration)) {
+        throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
+      }
+      val metadata =
+          V9CheckpointMetadata(kind, mask, owner, frame, authorization.proposal.proposalId)
+      state = captured.takeStateFile()
       val declaration =
           V9CheckpointDeclaration(
               metadata,
@@ -236,7 +251,11 @@ internal class V9PlaySession(
       V9CheckpointStateValidation.decodeAndValidate(
           state,
           declaration,
-          plan.checkpointTarget.expectedIdentities(),
+          captured.generation.identities,
+      )
+      V9CheckpointStateValidation.validateManifestIdentities(
+          authorization,
+          captured.generation.identities,
       )
       val payload = V9CheckpointCodec.encode(metadata, state)
       val queuedTicket = checkNotNull(ticket)
@@ -261,6 +280,7 @@ internal class V9PlaySession(
       protocolFailure(V9ErrorCode.INTERNAL_ERROR)
     } finally {
       ticket?.close()
+      captured?.close()
       state?.fill(0)
       synchronized(lock) {
         // A successful queued write remains in flight until its callback commits the ticket.
@@ -279,8 +299,7 @@ internal class V9PlaySession(
     if (declaration.metadata.kind != requiredKind ||
         declaration.metadata.ownerPlayer != peerActor() ||
         lifecycleState == V9LifecycleState.SYNCHRONIZING &&
-            (declaration.metadata.frame != plan.initialFrame ||
-                declaration.metadata.ownerPlayer != plan.initialOwnerPlayer)) {
+            declaration.metadata.ownerPlayer != plan.initialOwnerPlayer) {
       throw V9ProtocolException(V9ErrorCode.ROOT_KIND_MISMATCH, 0)
     }
     val ticket =
@@ -315,11 +334,12 @@ internal class V9PlaySession(
           V9CheckpointStateValidation.decodeAndValidate(
               state,
               declaration,
-              plan.checkpointTarget.expectedIdentities(),
+              targetGeneration.identities,
           )
       val completed = AtomicBoolean(false)
       plan.checkpointTarget.prepare(
           V9ValidatedCheckpoint(declaration.metadata, file, declaration.digestView()),
+          targetGeneration,
       ) { prepared, failure ->
         if (!completed.compareAndSet(false, true)) {
           prepared?.close()

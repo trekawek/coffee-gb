@@ -105,12 +105,18 @@ callbacks.
 
 Issue #349 is a fourth, explicit extension. `V9PlayPlan` binds one checkpoint provider and one
 frame-safe target to the authenticated manifest/consent tuple. The production `LinkedController`
-adapter captures the detached root and its current post-transfer ROM/profile identities on the
-controller event safe point, then performs StateFile-v2 encoding off the emulation owner. The host
-sends an initial MACHINE root in normal mode or one logical-full-roster LINKED_SESSION in
-four-player mode. A four-player generation captures that LINKED_SESSION once and gives all three
-guest connections owned copies; advancing emulation cannot produce three different activation
-roots. Empty physical ports remain null in the root while the logical player mask remains `0f`.
+adapter publishes an immutable identity/topology generation only from its controller event safe
+point after consent and any transfer. Network and capture workers never read live controller
+identity or topology directly. The provider selects the initial detached root, exact frame, and
+post-transfer ROM/profile identities together at a later safe point, then performs StateFile-v2
+encoding off the emulation owner; handshake progress therefore cannot stale a caller-supplied
+initial frame. The host sends an initial MACHINE root in normal mode or one logical-full-roster
+LINKED_SESSION in four-player mode. A four-player coordinator owns one bounded capture worker and
+provider, captures that LINKED_SESSION once, and gives all three guest connections owned copies;
+advancing emulation cannot produce three different activation roots. Closing the plan cancels all
+capture waiters, closes the provider, and wipes retained encoded state where practicable without
+letting one guest close the other guests' shared owner. Empty physical ports remain null in the
+root while the logical player mask remains `0f`.
 The peer validates the direct CGBS StateFile v2 off the emulator thread, prepares and retains exact
 target-owned reconstruction without live mutation, and commits only after START at the
 controller's frame safe point. READY is admitted only after that guest's atomic commit. A received
@@ -132,8 +138,18 @@ failed prepare or commit does not consume the grant. Commit verifies that sessio
 and identities are still the exact generation used by prepare; it never reconstructs against a
 changed target. `LinkedController` captures rollback state, configuration/buffer ownership,
 history, frame floor, and inputs and restores them if any member of the frame-safe transaction
-fails. Closing its caller-owned provider cancels a pending safe-point capture and wipes encoded
-bytes if cancellation races encoding.
+fails. A disconnected four-player guest may reuse the frozen activation checkpoint only while the
+provider still reports the same generation and frame. If the source has advanced or its topology
+has changed, replacement is rejected as `TOPOLOGY_MISMATCH`; the caller must create a coherent new
+activation generation rather than silently starting from stale bytes. Closing a caller-owned
+normal provider, or the four-player coordinator that owns its shared provider, cancels a pending
+safe-point capture and wipes encoded bytes if cancellation races encoding.
+
+Normal ACTIVE SESSION resynchronization is explicit and remains available while the connection is
+healthy. A late input older than retained history is a terminal typed `SEQUENCE_ERROR` with no
+input mutation; the closed connection does not automatically reopen itself for a checkpoint.
+Resynchronization must therefore occur before that terminal boundary, or through a newly
+authenticated generation.
 
 Callers that omit a play plan retain the Part-3 pre-START boundary; callers that omit Part 3 retain
 the Part-2 boundary; callers that also omit a manifest plan retain the Part-1 post-AUTH boundary.

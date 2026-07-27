@@ -15,7 +15,11 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Collections
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Future
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Stable CHECKPOINT-v1 kind tags. Declaration order is never a wire identity. */
@@ -247,24 +251,84 @@ fun interface V9GameplayCompletion {
 }
 
 interface V9CheckpointTarget {
-  /** Canonical roster player identities. Normal targets may contain players 0 and 1. */
-  fun expectedIdentities(): List<StateIdentityEntry>
+  /**
+   * Captures one coherent target identity/topology generation at the emulation-owner safe point.
+   * Implementations may block the calling foundation worker, never the network reader or owner.
+   */
+  fun captureGeneration(): V9TargetGeneration
 
   /** Must arrange target-dependent preparation at the owning emulation frame safe point. */
-  fun prepare(checkpoint: V9ValidatedCheckpoint, completion: V9CheckpointPrepareCompletion)
+  fun prepare(
+      checkpoint: V9ValidatedCheckpoint,
+      generation: V9TargetGeneration,
+      completion: V9CheckpointPrepareCompletion,
+  )
 }
 
-fun interface V9CheckpointProvider {
-  /** Returns one direct, complete CGBS StateFile. Ownership transfers to the foundation. */
-  fun capture(request: V9CheckpointRequest): ByteArray
+interface V9CheckpointProvider : Closeable {
+  /** Captures the provider's current coherent identity/topology generation at its safe point. */
+  fun captureGeneration(): V9TargetGeneration
+
+  /** Returns one direct, complete CGBS StateFile plus its actual safe-point frame/generation. */
+  fun capture(request: V9CheckpointRequest): V9CapturedCheckpoint
+
+  override fun close() {}
 }
 
 data class V9CheckpointRequest(
     val kind: V9CheckpointKind,
     val slotMask: Int,
     val ownerPlayer: Int,
-    val frame: Long,
+    /** Null selects the actual initial frame atomically at the provider safe point. */
+    val frame: Long?,
 )
+
+class V9TargetGeneration(
+    val id: Long,
+    val mode: V9LinkMode,
+    val observedFrame: Long,
+    identities: List<StateIdentityEntry>,
+) {
+  val identities: List<StateIdentityEntry> =
+      Collections.unmodifiableList(identities.toList())
+
+  init {
+    require(id > 0 && observedFrame >= 0)
+  }
+
+  internal fun sameIdentityGeneration(other: V9TargetGeneration): Boolean =
+      id == other.id && mode == other.mode && identities == other.identities
+
+  override fun toString(): String =
+      "V9TargetGeneration(id=$id, mode=$mode, frame=$observedFrame, identities=[redacted])"
+}
+
+class V9CapturedCheckpoint(
+    val generation: V9TargetGeneration,
+    val frame: Long,
+    stateFile: ByteArray,
+) : Closeable {
+  private val lock = Any()
+  private var ownedState: ByteArray? = stateFile
+
+  init {
+    require(frame == generation.observedFrame)
+  }
+
+  internal fun takeStateFile(): ByteArray = synchronized(lock) {
+    ownedState.also { ownedState = null }
+        ?: throw V9ProtocolException(V9ErrorCode.CANCELLED, 0)
+  }
+
+  internal fun copyStateFile(): ByteArray = synchronized(lock) {
+    ownedState?.copyOf() ?: throw V9ProtocolException(V9ErrorCode.CANCELLED, 0)
+  }
+
+  override fun close() = synchronized(lock) {
+    ownedState?.fill(0)
+    ownedState = null
+  }
+}
 
 enum class V9RuntimeMessageKind { INPUT, RESET, STOP }
 
@@ -364,13 +428,11 @@ class V9GuestPlayPlan(
     val checkpointProvider: V9CheckpointProvider? = null,
     val initialKind: V9CheckpointKind,
     val initialOwnerPlayer: Int,
-    val initialFrame: Long,
     val sessionIds: V9SessionIdSource = V9SessionIdSource.SECURE,
     val fourPlayerCoordinator: V9FourPlayerCoordinator? = null,
 ) {
   init {
     require(initialOwnerPlayer in 0..3)
-    require(initialFrame >= 0)
   }
 }
 
@@ -378,7 +440,7 @@ class V9PlayPlan private constructor(
     val role: V9Role,
     val mode: V9LinkMode,
     plansByGuest: Map<Int, V9GuestPlayPlan>,
-) {
+) : Closeable {
   private val plans = Collections.unmodifiableMap(plansByGuest.toMap())
 
   init {
@@ -389,9 +451,8 @@ class V9PlayPlan private constructor(
       require(plans.keys == setOf(1, 2, 3))
       val coordinator = plans.values.first().fourPlayerCoordinator
       require(coordinator != null && plans.values.all { it.fourPlayerCoordinator === coordinator })
-      val provider = plans.values.first().checkpointProvider
-      require(provider != null && plans.values.all { it.checkpointProvider === provider }) {
-        "four-player activation requires one shared frame-safe checkpoint provider"
+      require(plans.values.all { it.checkpointProvider == null }) {
+        "four-player shared capture is owned only by its coordinator"
       }
     }
     val requiredInitialKind =
@@ -404,6 +465,12 @@ class V9PlayPlan private constructor(
 
   internal fun forGuest(connectionRole: V9Role, guest: Int): V9GuestPlayPlan? =
       if (connectionRole == role) plans[guest] else null
+
+  override fun close() {
+    if (role == V9Role.SERVER && mode == V9LinkMode.FOUR_PLAYER) {
+      plans.values.first().fourPlayerCoordinator?.close()
+    }
+  }
 
   companion object {
     fun server(mode: V9LinkMode, plansByGuest: Map<Int, V9GuestPlayPlan>) =
@@ -434,7 +501,10 @@ data class V9ActiveBoundary(
 )
 
 /** Server-side exact-roster barrier shared by the three isolated four-player TCP sessions. */
-class V9FourPlayerCoordinator {
+class V9FourPlayerCoordinator(
+    private val provider: V9CheckpointProvider,
+    executor: ThreadPoolExecutor? = null,
+) : Closeable {
   private val lock = Any()
   private val prepared = mutableMapOf<Int, Prepared>()
   private val ready = mutableMapOf<Int, () -> Unit>()
@@ -444,6 +514,17 @@ class V9FourPlayerCoordinator {
   private var committedFrame: Long? = null
   private var capture: InitialCapture? = null
   private val captureClaimants = mutableSetOf<Int>()
+  private val closed = AtomicBoolean()
+  private val ownedExecutor = executor == null
+  private val captureExecutor =
+      executor ?: ThreadPoolExecutor(
+          1,
+          1,
+          0,
+          TimeUnit.MILLISECONDS,
+          ArrayBlockingQueue(1),
+          { task -> Thread(task, "netplay-v9-linked-capture").also { it.isDaemon = true } },
+      )
 
   /**
    * Captures one exact LINKED_SESSION file for the whole activation generation. Concurrent guest
@@ -453,18 +534,20 @@ class V9FourPlayerCoordinator {
   internal fun captureInitial(
       guest: Int,
       request: V9CheckpointRequest,
-      provider: V9CheckpointProvider,
-  ): ByteArray {
+  ): V9CapturedCheckpoint {
     require(guest in 1..3 && request.kind == V9CheckpointKind.LINKED_SESSION)
     val selected: InitialCapture
     val leader: Boolean
+    val replacement: Boolean
     synchronized(lock) {
+      if (closed.get()) throw V9ProtocolException(V9ErrorCode.CANCELLED, 0)
       captureClaimants.add(guest)
       val existing = capture
       if (existing == null) {
         selected = InitialCapture(request)
         capture = selected
         leader = true
+        replacement = false
       } else {
         if (existing.request != request) {
           captureClaimants.remove(guest)
@@ -472,13 +555,26 @@ class V9FourPlayerCoordinator {
         }
         selected = existing
         leader = false
+        replacement = committedDigest != null || activated.isNotEmpty()
       }
     }
     if (leader) {
       try {
-        selected.complete(provider.capture(request), null)
-      } catch (failure: Throwable) {
+        selected.task = captureExecutor.submit {
+          try {
+            selected.complete(provider.capture(request), null)
+          } catch (failure: Throwable) {
+            selected.complete(null, failure)
+          }
+        }
+      } catch (failure: RuntimeException) {
         selected.complete(null, failure)
+      }
+    } else if (replacement && selected.committed()) {
+      val current = provider.captureGeneration()
+      if (!selected.matchesCurrent(current)) {
+        synchronized(lock) { captureClaimants.remove(guest) }
+        throw V9ProtocolException(V9ErrorCode.TOPOLOGY_MISMATCH, 0)
       }
     }
     try {
@@ -486,7 +582,10 @@ class V9FourPlayerCoordinator {
     } catch (failure: Throwable) {
       synchronized(lock) {
         captureClaimants.remove(guest)
-        if (capture === selected) {
+        // Cancelling one guest must not revoke the shared capture while another authenticated
+        // guest is still waiting for it. A provider-wide failure, or the last waiter leaving,
+        // does retire the unusable generation so a later candidate can start a fresh capture.
+        if (capture === selected && (selected.failed() || captureClaimants.isEmpty())) {
           capture = null
           selected.close()
         }
@@ -569,6 +668,12 @@ class V9FourPlayerCoordinator {
 
   internal fun captureCount(): Int = synchronized(lock) { capture?.providerCaptures ?: 0 }
 
+  internal fun pendingCaptureCount(): Int = synchronized(lock) {
+    if (capture?.pending() == true) 1 else 0
+  }
+
+  internal fun captureClaimantCount(): Int = synchronized(lock) { captureClaimants.size }
+
   private fun releaseGenerationIfUnused() {
     if (prepared.isEmpty() && captureClaimants.isEmpty()) {
       capture?.close()
@@ -584,29 +689,51 @@ class V9FourPlayerCoordinator {
 
   private class Prepared(val frame: Long, val digest: ByteArray, val start: () -> Unit)
 
+  override fun close() {
+    if (!closed.compareAndSet(false, true)) return
+    val selected = synchronized(lock) {
+      captureClaimants.clear()
+      prepared.values.forEach { it.digest.fill(0) }
+      prepared.clear()
+      ready.clear()
+      started.clear()
+      activated.clear()
+      committedDigest?.fill(0)
+      committedDigest = null
+      committedFrame = null
+      capture.also { capture = null }
+    }
+    selected?.close()
+    provider.close()
+    if (ownedExecutor) captureExecutor.shutdownNow()
+  }
+
+  internal fun workerTerminated(): Boolean =
+      !ownedExecutor || captureExecutor.isTerminated
+
   private class InitialCapture(val request: V9CheckpointRequest) : Closeable {
     private val done = CountDownLatch(1)
     private val lock = Any()
-    private var bytes: ByteArray? = null
+    private var checkpoint: V9CapturedCheckpoint? = null
     private var failure: Throwable? = null
+    @Volatile var task: Future<*>? = null
     var providerCaptures: Int = 0
       private set
 
-    fun complete(value: ByteArray?, problem: Throwable?) {
+    fun complete(value: V9CapturedCheckpoint?, problem: Throwable?) {
       synchronized(lock) {
         if (done.count == 0L) {
-          value?.fill(0)
+          value?.close()
           return
         }
         providerCaptures = 1
-        bytes = value?.copyOf()
-        value?.fill(0)
+        checkpoint = value
         failure = problem
         done.countDown()
       }
     }
 
-    fun awaitCopy(): ByteArray {
+    fun awaitCopy(): V9CapturedCheckpoint {
       try {
         done.await()
       } catch (interrupted: InterruptedException) {
@@ -615,14 +742,32 @@ class V9FourPlayerCoordinator {
       }
       synchronized(lock) {
         failure?.let { throw it }
-        return checkNotNull(bytes).copyOf()
+        val value = checkNotNull(checkpoint)
+        return V9CapturedCheckpoint(value.generation, value.frame, value.copyStateFile())
       }
     }
 
+    fun pending(): Boolean = done.count != 0L
+
+    fun failed(): Boolean = synchronized(lock) { done.count == 0L && failure != null }
+
+    fun committed(): Boolean = synchronized(lock) { checkpoint != null && done.count == 0L }
+
+    fun matchesCurrent(current: V9TargetGeneration): Boolean = synchronized(lock) {
+      checkpoint?.let {
+        it.frame == current.observedFrame && it.generation.sameIdentityGeneration(current)
+      } == true
+    }
+
     override fun close() {
+      task?.cancel(true)
       synchronized(lock) {
-        bytes?.fill(0)
-        bytes = null
+        checkpoint?.close()
+        checkpoint = null
+        if (done.count != 0L) {
+          failure = V9ProtocolException(V9ErrorCode.CANCELLED, 0)
+          done.countDown()
+        }
       }
     }
   }
