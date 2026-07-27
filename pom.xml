@@ -102,6 +102,9 @@
                     <argLine>-Xmx4096m</argLine>
                     <systemPropertyVariables>
                         <integration.test.threadCount>${integration.test.threadCount}</integration.test.threadCount>
+                        <!-- Desktop settings tests and controller fixtures must never inspect or
+                             migrate the developer/CI account's real settings file. -->
+                        <user.home>${project.build.directory}/test-home</user.home>
                     </systemPropertyVariables>
                     <excludes>
                         <exclude>**/integration/**</exclude>

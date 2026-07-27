@@ -2,21 +2,20 @@ package eu.rekawek.coffeegb.controller.properties
 
 class DisplayProperties(private val properties: EmulatorProperties) {
   val scale
-    get() = properties.getProperty(EmulatorProperties.Key.DisplayScale, "2").toInt()
+    get() = properties.applicationSettings.display.scale
 
   val grayscale
-    get() = properties.getProperty(EmulatorProperties.Key.DisplayGrayscale, "false").toBoolean()
+    get() = properties.applicationSettings.display.grayscale
 
   val showSgbBorder
-    get() = properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, "false").toBoolean()
+    get() = properties.applicationSettings.display.showSgbBorder
 
   val blending
-    get() = properties.getProperty(EmulatorProperties.Key.DisplayBlending, "true").toBoolean()
+    get() = properties.applicationSettings.display.blending
 
   val colorCorrection
-    get() =
-        properties.getProperty(EmulatorProperties.Key.DisplayColorCorrection, "true").toBoolean()
+    get() = properties.applicationSettings.display.colorCorrection
 
   val rotation
-    get() = properties.getProperty(EmulatorProperties.Key.DisplayRotation, "0").toInt()
+    get() = properties.applicationSettings.display.rotation.degrees
 }

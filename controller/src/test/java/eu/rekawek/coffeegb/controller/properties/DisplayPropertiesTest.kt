@@ -7,7 +7,7 @@ import org.junit.Test
 class DisplayPropertiesTest {
   @Test
   fun `frame blending is enabled for fresh profiles`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     properties.properties.remove(EmulatorProperties.Key.DisplayBlending.propertyName)
 
     assertTrue(properties.display.blending)
@@ -15,7 +15,7 @@ class DisplayPropertiesTest {
 
   @Test
   fun `explicit frame blending preference is preserved`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     properties.properties[EmulatorProperties.Key.DisplayBlending.propertyName] = "false"
 
     assertFalse(properties.display.blending)
@@ -23,7 +23,7 @@ class DisplayPropertiesTest {
 
   @Test
   fun `CGB color correction is enabled for fresh profiles`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     properties.properties.remove(EmulatorProperties.Key.DisplayColorCorrection.propertyName)
 
     assertTrue(properties.display.colorCorrection)
@@ -31,7 +31,7 @@ class DisplayPropertiesTest {
 
   @Test
   fun `explicit CGB color correction preference is preserved`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     properties.properties[EmulatorProperties.Key.DisplayColorCorrection.propertyName] = "false"
 
     assertFalse(properties.display.colorCorrection)

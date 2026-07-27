@@ -6,23 +6,19 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 
 class SystemProperties(private val properties: EmulatorProperties) {
   val profileOverride
-    get() = properties.profileOverride
+    get() = properties.overrides.hardwareProfile
+
+  val dmgGamesSelection
+    get() = properties.applicationSettings.advanced.dmgGamesProfile
+
+  val cgbGamesSelection
+    get() = properties.applicationSettings.advanced.cgbGamesProfile
 
   val dmgGamesProfile
-    get() =
-        HardwareProfileRegistry.resolveSetting(
-            properties.getProperty(
-                EmulatorProperties.Key.DmgGamesType,
-                HardwareProfileRegistry.SGB.id(),
-            ))
+    get() = dmgGamesSelection.effective(HardwareProfileRegistry.SGB)
 
   val cgbGamesProfile
-    get() =
-        HardwareProfileRegistry.resolveSetting(
-            properties.getProperty(
-                EmulatorProperties.Key.CgbGamesType,
-                HardwareProfileRegistry.CGB.id(),
-            ))
+    get() = cgbGamesSelection.effective(HardwareProfileRegistry.CGB)
 
   @Deprecated("Use dmgGamesProfile")
   val dmgGamesType
@@ -34,9 +30,6 @@ class SystemProperties(private val properties: EmulatorProperties) {
 
   val bootstrapMode
     get() =
-        BootstrapMode.valueOf(
-            properties.getProperty(
-                EmulatorProperties.Key.BootstrapMode,
-                BootstrapMode.SKIP.name,
-            ))
+        properties.overrides.bootstrapMode
+            ?: properties.applicationSettings.advanced.bootstrapMode
 }

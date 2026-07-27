@@ -1,14 +1,16 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.SystemProperties
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileIdentity
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
-import eu.rekawek.coffeegb.core.events.Event
-import eu.rekawek.coffeegb.controller.state.MachineState
+import eu.rekawek.coffeegb.core.memory.Bios
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.io.File
@@ -110,16 +112,22 @@ interface Controller : AutoCloseable {
       val isDatel =
           rom.cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER)
       if (isDatel) {
-        properties.getProperty(EmulatorProperties.Key.DatelSlotRom, null)?.let { path ->
-          val file = File(path)
+        properties.applicationSettings.advanced.datelSlotRom?.let { path ->
+          val file = path.toFile()
           if (file.isFile) {
             config.setSlotRom(Rom(file))
           }
         }
       }
       val hardwareProfile = getHardwareProfile(properties.system, rom)
+      val bootstrapMode = properties.system.bootstrapMode
+      require(bootstrapMode == Gameboy.BootstrapMode.SKIP || Bios.hasBundledBootRom(hardwareProfile)) {
+        "Profile ${hardwareProfile.id()} has no bundled boot ROM; " +
+            "select skip bootstrap before starting the session"
+      }
       config.setHardwareProfile(hardwareProfile)
-      config.setBootstrapMode(properties.system.bootstrapMode)
+      config.setBootstrapMode(bootstrapMode)
+      config.setSupportBatterySave(properties.saves.batterySavesEnabled)
       config.setPlayerInputSource(properties.playerInputSource)
       if (!config.hardwareProfile.capabilities().superGameboyBorder() ||
           !rom.isSuperGameboyFlag) {
@@ -132,24 +140,28 @@ interface Controller : AutoCloseable {
     }
 
     fun getHardwareProfile(properties: SystemProperties, rom: Rom): HardwareProfile {
+      val colorSelection =
+          rom.gameboyColorFlag == Rom.GameboyColorFlag.CGB ||
+              rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL ||
+              rom.cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER)
+      val persistedSelection =
+          if (colorSelection) properties.cgbGamesSelection else properties.dmgGamesSelection
       val selected =
           properties.profileOverride
-              ?: if (
-              rom.gameboyColorFlag == Rom.GameboyColorFlag.CGB ||
-                  rom.gameboyColorFlag == Rom.GameboyColorFlag.UNIVERSAL ||
-                  rom.cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER)
-          ) {
-            if (properties.cgbGamesProfile.capabilities().superGameboyCommands() &&
-                !rom.isSuperGameboyFlag) {
-              HardwareProfileRegistry.CGB
-            } else {
-              properties.cgbGamesProfile
-            }
-          } else {
-            properties.dmgGamesProfile
-          }
+              ?: if (colorSelection) {
+                if (properties.cgbGamesProfile.capabilities().superGameboyCommands() &&
+                    !rom.isSuperGameboyFlag) {
+                  HardwareProfileRegistry.CGB
+                } else {
+                  properties.cgbGamesProfile
+                }
+              } else {
+                properties.dmgGamesProfile
+              }
       return if (
           selected == HardwareProfileRegistry.CGB &&
+              properties.profileOverride == null &&
+              persistedSelection is ApplicationSettings.ProfileSelection.Auto &&
               rom.cartridgeProperties.has(CartridgeProperties.Feature.CGB0_REVISION)
       ) {
         HardwareProfileRegistry.CGB0

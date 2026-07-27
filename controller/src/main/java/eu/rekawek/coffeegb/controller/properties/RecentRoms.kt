@@ -1,57 +1,20 @@
 package eu.rekawek.coffeegb.controller.properties
 
-import java.util.*
-import java.util.stream.Collectors
+import java.nio.file.Path
 
 class RecentRoms(private val emulatorProperties: EmulatorProperties) {
-  private val roms = LinkedList<String>()
-
-  private val properties = emulatorProperties.properties
-
-  init {
-    for (i in 0 until MAX_ROMS) {
-      val key = ROM_KEY_PREFIX + i
-      if (properties.containsKey(key)) {
-        roms.add(properties.getProperty(key))
-      }
-    }
-  }
-
-  fun getRoms(): List<String> {
-    return roms
-  }
+  fun getRoms(): List<String> =
+      emulatorProperties.applicationSettings.general.recentRoms.map(Path::toString)
 
   fun addRom(rom: String) {
-    roms.remove(rom)
-    roms.addFirst(rom)
-    while (roms.size > MAX_ROMS) {
-      roms.removeLast()
+    val path = Path.of(rom)
+    emulatorProperties.updateSettings { current ->
+      val recent = current.general.recentRoms.filterNot { it.toString() == rom }.toMutableList()
+      recent.add(0, path)
+      ApplicationSettings.MAX_RECENT_ROMS.let { maximum ->
+        while (recent.size > maximum) recent.removeLast()
+      }
+      current.copy(general = current.general.copy(recentRoms = recent.toList()))
     }
-    cleanProperties()
-    setProperties()
-    emulatorProperties.saveProperties()
-  }
-
-  private fun cleanProperties() {
-    val keys =
-        properties.keys
-            .stream()
-            .map { o: Any -> o as String }
-            .filter { k: String -> k.startsWith(ROM_KEY_PREFIX) }
-            .collect(Collectors.toList())
-    for (k in keys) {
-      properties.remove(k)
-    }
-  }
-
-  private fun setProperties() {
-    for (i in roms.indices) {
-      properties.setProperty(ROM_KEY_PREFIX + i, roms[i])
-    }
-  }
-
-  private companion object {
-    const val ROM_KEY_PREFIX = "rom.recent."
-    const val MAX_ROMS = 10
   }
 }

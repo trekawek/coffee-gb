@@ -39,6 +39,15 @@ is recommended and is the version used by CI and release builds.
    java -jar coffee-gb-VERSION.jar path/to/game.gb
    ```
 
+Run `java -jar coffee-gb-VERSION.jar --help` for the complete option list or
+`java -jar coffee-gb-VERSION.jar --version` to print the packaged version. Command-line parsing is
+strict: unknown, malformed, or conflicting options write a diagnostic to standard error and exit
+with status 2 before Swing starts. Use `--` to end option parsing when a ROM path begins with `-`:
+
+```bash
+java -jar coffee-gb-VERSION.jar -- -homebrew.gb
+```
+
 ROMs are not included. Coffee GB accepts `.gb`, `.gbc`, and `.rom` files, as
 well as ZIP and 7z archives containing a ROM. On macOS, game-controller support
 also requires SDL2 (`brew install sdl2`); keyboard input works without it.
@@ -88,8 +97,15 @@ java -jar coffee-gb-VERSION.jar --profile=mgb path/to/game.gb
 The legacy `--force-dmg`/`-d` and `--force-cgb`/`-c` flags remain available and map to `dmg` and
 `cgb`. `--profile` cannot be combined with either force flag, and the two force flags cannot be
 combined with each other. Unknown or malformed profile IDs fail before a core session is created
-and report all supported IDs. Persisted uppercase `DMG`, `CGB`, `CGB0`, and `SGB` values are migrated
-as finite compatibility aliases; new settings use canonical lowercase IDs. See
+and report all supported IDs. Use `--use-bootstrap`/`-b` to run a bundled boot ROM normally; a
+profile without a bundled boot ROM is rejected. Use `--disable-battery-saves`/`-db` to disable
+battery-file reads and writes for that launch.
+
+All explicit command-line choices are process-local overrides: they take priority over persisted
+settings but are never written to `~/.coffeegb.properties`. Persisted uppercase `DMG`, `CGB`,
+`CGB0`, and `SGB` values are migrated as finite compatibility aliases; new settings use canonical
+lowercase IDs. See the [desktop command-line and settings contract](docs/desktop-settings.md) for
+precedence, validation, migration, and recovery behavior, and
 [`docs/hardware-profiles.md`](docs/hardware-profiles.md) for clocks, boot policy, state identity,
 and extension rules.
 
@@ -118,23 +134,26 @@ states, and rewind are disabled during netplay.
 <details>
 <summary>Custom keyboard and game-controller mapping</summary>
 
-Edit `~/.coffeegb.properties` and use
+Desktop settings are stored in `~/.coffeegb.properties`; the complete typed schema, validation,
+migration, and recovery rules are documented in the
+[desktop command-line and settings contract](docs/desktop-settings.md). For keyboard mappings, use
 [`KeyEvent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/event/KeyEvent.html)
 constant names:
 
 ```properties
-btn_up=VK_UP
-btn_down=VK_DOWN
-btn_left=VK_LEFT
-btn_right=VK_RIGHT
-btn_a=VK_Z
-btn_b=VK_X
-btn_start=VK_ENTER
-btn_select=VK_SHIFT
+input.p1.btn_up=VK_UP
+input.p1.btn_down=VK_DOWN
+input.p1.btn_left=VK_LEFT
+input.p1.btn_right=VK_RIGHT
+input.p1.btn_a=VK_Z
+input.p1.btn_b=VK_X
+input.p1.btn_start=VK_ENTER
+input.p1.btn_select=VK_SHIFT
 ```
 
-Those historical `btn_*` names remain the P1 mapping. SGB games can use independent P2-P4
-keyboard mappings with disjoint keys:
+Unversioned legacy files may use the historical `btn_*` P1 aliases; migration accepts and
+rewrites them to the canonical `input.p1.btn_*` keys above. Do not add both forms to a versioned
+settings file. SGB games can use independent P2-P4 keyboard mappings with disjoint keys:
 
 ```properties
 input.p2.btn_up=VK_W
@@ -148,8 +167,9 @@ input.p2.btn_select=VK_R
 ```
 
 The same `input.pN.btn_<button>=VK_*` grammar accepts `p1` through `p4`. A key may belong to
-only one logical player; malformed players/buttons/keys and collisions stop startup with a clear
-configuration error instead of silently overwriting another mapping.
+only one logical player. If a manual edit contains a malformed player/button/key or a collision,
+Coffee GB preserves the invalid file, starts with safe defaults, and shows a clear settings warning
+instead of silently overwriting a mapping.
 
 P1 uses the first available SDL game controller by default. The explicit grammar is
 `input.pN.gamepad=auto|none|sdl-<64 lowercase hex digits>`. Coffee GB logs every attached

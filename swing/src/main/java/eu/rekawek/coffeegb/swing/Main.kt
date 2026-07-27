@@ -1,106 +1,227 @@
 package eu.rekawek.coffeegb.swing
 
-import eu.rekawek.coffeegb.swing.SwingGui.Companion.run
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import eu.rekawek.coffeegb.core.memory.Bios
+import eu.rekawek.coffeegb.swing.SwingGui.Companion.run
 import java.io.File
 import java.io.PrintStream
+import kotlin.system.exitProcess
 
-fun main(args: Array<String>) {
-  val parsedArgs = ParsedArgs.Companion.parse(args)
-  if (parsedArgs.shortParams.contains("h") || parsedArgs.params.contains("help")) {
-    printUsage(System.out)
-    return
-  }
-  if (parsedArgs.args.size > 1) {
-    printUsage(System.err)
-    return
-  }
+private const val SUCCESS = 0
+private const val USAGE_ERROR = 2
+private const val DEVELOPMENT_VERSION = "development"
 
-  val debug = parsedArgs.params.contains("debug")
+/** Everything the CLI contributes to one desktop launch. CLI values remain process-local. */
+data class CliLaunchRequest(
+    val debug: Boolean,
+    val initialRom: File?,
+    val settingsOverrides: ApplicationSettingsOverrides,
+)
 
-  val profileOverride =
-      try {
-        parsedArgs.hardwareProfileOverride()
-      } catch (failure: IllegalArgumentException) {
-        System.err.println(failure.message)
-        printUsage(System.err)
-        return
-      }
+private sealed class CliCommand {
+  data class Launch(val request: CliLaunchRequest) : CliCommand()
 
-  var initialRom: File? = null
-  if (parsedArgs.args.size == 1) {
-    initialRom = File(parsedArgs.args[0]!!)
-  }
-  run(debug, initialRom, profileOverride)
+  object Help : CliCommand()
+
+  object Version : CliCommand()
 }
 
-private fun printUsage(stream: PrintStream) {
+fun main(args: Array<String>) {
+  val exitCode =
+      runCli(args, System.out, System.err, applicationVersion()) { request ->
+        run(request.debug, request.initialRom, request.settingsOverrides)
+      }
+  if (exitCode != SUCCESS) {
+    exitProcess(exitCode)
+  }
+}
+
+/**
+ * Runs only the deterministic command-line boundary. The launcher callback keeps help, version,
+ * and error tests independent from Swing and the EDT.
+ */
+internal fun runCli(
+    args: Array<String>,
+    stdout: PrintStream,
+    stderr: PrintStream,
+    version: String,
+    launcher: (CliLaunchRequest) -> Unit,
+): Int {
+  val command =
+      try {
+        parseCli(args)
+      } catch (failure: IllegalArgumentException) {
+        stderr.println("coffee-gb: ${failure.message}")
+        stderr.println("Try 'java -jar coffee-gb.jar --help' for more information.")
+        return USAGE_ERROR
+      }
+
+  return when (command) {
+    is CliCommand.Launch -> {
+      launcher(command.request)
+      SUCCESS
+    }
+    CliCommand.Help -> {
+      printUsage(stdout)
+      SUCCESS
+    }
+    CliCommand.Version -> {
+      stdout.println("Coffee GB $version")
+      SUCCESS
+    }
+  }
+}
+
+private fun parseCli(args: Array<String>): CliCommand {
+  var parseOptions = true
+  var help = false
+  var version = false
+  var debug = false
+  var forceDmg = false
+  var forceCgb = false
+  var useBootstrap = false
+  var disableBatterySaves = false
+  var profileId: String? = null
+  var profileOccurrences = 0
+  val positional = mutableListOf<String>()
+
+  for (argument in args) {
+    if (!parseOptions) {
+      positional += argument
+      continue
+    }
+    if (argument == "--") {
+      parseOptions = false
+      continue
+    }
+    if (argument == "-" || !argument.startsWith("-")) {
+      positional += argument
+      continue
+    }
+    if (argument.startsWith("--profile=")) {
+      profileOccurrences++
+      if (profileOccurrences > 1) {
+        repeatedOption("--profile")
+      }
+      val value = argument.substringAfter("--profile=")
+      if (value.isBlank() || value.contains('=')) {
+        cliError("--profile requires one non-empty stable ID")
+      }
+      profileId = value
+      continue
+    }
+
+    when (argument) {
+      "-h", "--help" -> {
+        if (help) repeatedOption("--help")
+        help = true
+      }
+      "--version" -> {
+        if (version) repeatedOption("--version")
+        version = true
+      }
+      "--debug" -> {
+        if (debug) repeatedOption("--debug")
+        debug = true
+      }
+      "-d", "--force-dmg" -> {
+        if (forceDmg) repeatedOption("--force-dmg")
+        forceDmg = true
+      }
+      "-c", "--force-cgb" -> {
+        if (forceCgb) repeatedOption("--force-cgb")
+        forceCgb = true
+      }
+      "-b", "--use-bootstrap" -> {
+        if (useBootstrap) repeatedOption("--use-bootstrap")
+        useBootstrap = true
+      }
+      "-db", "--disable-battery-saves" -> {
+        if (disableBatterySaves) repeatedOption("--disable-battery-saves")
+        disableBatterySaves = true
+      }
+      "--profile" -> cliError("--profile requires =<id>")
+      else -> cliError("Unknown option '$argument'")
+    }
+  }
+
+  if (positional.size > 1) {
+    cliError("Expected at most one ROM file, received ${positional.size}")
+  }
+  if (help && version) {
+    cliError("--help and --version cannot be used together")
+  }
+  if (forceDmg && forceCgb) {
+    cliError("--force-dmg and --force-cgb cannot be used together")
+  }
+  if (profileId != null && (forceDmg || forceCgb)) {
+    cliError("--profile conflicts with --force-dmg/--force-cgb")
+  }
+
+  val profileOverride =
+      when {
+        profileId != null -> HardwareProfileRegistry.resolve(profileId)
+        forceDmg -> HardwareProfileRegistry.DMG
+        forceCgb -> HardwareProfileRegistry.CGB
+        else -> null
+      }
+  validateBootstrapProfile(useBootstrap, profileOverride)
+
+  if (help) {
+    return CliCommand.Help
+  }
+  if (version) {
+    return CliCommand.Version
+  }
+
+  return CliCommand.Launch(
+      CliLaunchRequest(
+          debug = debug,
+          initialRom = positional.singleOrNull()?.let(::File),
+          settingsOverrides =
+              ApplicationSettingsOverrides(
+                  hardwareProfile = profileOverride,
+                  bootstrapMode = if (useBootstrap) BootstrapMode.NORMAL else null,
+                  batterySavesEnabled = if (disableBatterySaves) false else null,
+              ),
+      ))
+}
+
+private fun validateBootstrapProfile(useBootstrap: Boolean, profile: HardwareProfile?) {
+  if (useBootstrap && profile != null && !Bios.hasBundledBootRom(profile)) {
+    cliError(
+        "--use-bootstrap cannot be used with profile '${profile.id()}': " +
+            "Coffee GB does not bundle its boot ROM")
+  }
+}
+
+private fun cliError(message: String): Nothing = throw IllegalArgumentException(message)
+
+private fun repeatedOption(option: String): Nothing =
+    cliError("Option '$option' may be specified only once")
+
+internal fun printUsage(stream: PrintStream) {
   stream.println("Usage:")
   stream.println("java -jar coffee-gb.jar [OPTIONS] [ROM_FILE]")
   stream.println()
   stream.println("Available options:")
-  stream.println("  -d  --force-dmg                Emulate classic GB (DMG) for universal ROMs")
-  stream.println("  -c  --force-cgb                Emulate color GB (CGB) for all ROMs")
-  stream.println("      --profile=<id>             Select profile: ${HardwareProfileRegistry.supportedIds().joinToString(", ")}")
-  stream.println("  -b  --use-bootstrap            Start with the GB bootstrap")
-  stream.println("  -db --disable-battery-saves    Disable battery saves")
-  stream.println("  -h  --help                     Displays this info")
+  stream.println("  -d  --force-dmg                Select the DMG profile for all ROMs")
+  stream.println("  -c  --force-cgb                Select the CGB profile for all ROMs")
+  stream.println(
+      "      --profile=<id>             Select profile: " +
+          HardwareProfileRegistry.supportedIds().joinToString(", "))
+  stream.println("  -b  --use-bootstrap            Run the bundled boot ROM normally")
+  stream.println("  -db --disable-battery-saves    Disable battery save reads and writes")
   stream.println("      --debug                    Enable debug console")
+  stream.println("  -h  --help                     Display this help and exit")
+  stream.println("      --version                  Display version and exit")
+  stream.println("      --                         Treat the remaining argument as the ROM file")
 }
 
-class ParsedArgs(
-    val params: MutableSet<String?>,
-    val shortParams: MutableSet<String?>,
-    val args: MutableList<String?>
-) {
-  fun hardwareProfileOverride(): HardwareProfile? {
-    val long = params.filterNotNull()
-    val profileOptions = long.filter { it == "profile" || it.startsWith("profile=") }
-    if (profileOptions.size > 1) {
-      throw IllegalArgumentException("Specify --profile exactly once")
-    }
-    val forceDmg = long.contains("force-dmg") || shortParams.contains("d")
-    val forceCgb = long.contains("force-cgb") || shortParams.contains("c")
-    if (forceDmg && forceCgb) {
-      throw IllegalArgumentException("--force-dmg and --force-cgb cannot be used together")
-    }
-    if (profileOptions.isNotEmpty() && (forceDmg || forceCgb)) {
-      throw IllegalArgumentException("--profile conflicts with --force-dmg/--force-cgb")
-    }
-    if (profileOptions.isNotEmpty()) {
-      val option = profileOptions.single()
-      if (option == "profile") {
-        throw IllegalArgumentException("--profile requires =<id>")
-      }
-      val id = option.substringAfter("profile=")
-      if (id.isBlank() || id.contains('=')) {
-        throw IllegalArgumentException("--profile requires one non-empty stable ID")
-      }
-      return HardwareProfileRegistry.resolve(id)
-    }
-    return when {
-      forceDmg -> HardwareProfileRegistry.DMG
-      forceCgb -> HardwareProfileRegistry.CGB
-      else -> null
-    }
-  }
+private object VersionMarker
 
-  companion object {
-    fun parse(args: Array<String>): ParsedArgs {
-      val params: MutableSet<String?> = LinkedHashSet<String?>()
-      val shortParams: MutableSet<String?> = LinkedHashSet<String?>()
-      val restArgs: MutableList<String?> = ArrayList<String?>()
-      for (a in args) {
-        if (a.startsWith("--")) {
-          params.add(a.substring(2))
-        } else if (a.startsWith("-")) {
-          shortParams.add(a.substring(1))
-        } else {
-          restArgs.add(a)
-        }
-      }
-      return ParsedArgs(params, shortParams, restArgs)
-    }
-  }
-}
+private fun applicationVersion(): String =
+    VersionMarker::class.java.`package`?.implementationVersion ?: DEVELOPMENT_VERSION

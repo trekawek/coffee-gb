@@ -25,6 +25,10 @@
                         <manifest>
                             <mainClass>eu.rekawek.coffeegb.swing.MainKt</mainClass>
                         </manifest>
+                        <manifestEntries>
+                            <Implementation-Title>Coffee GB</Implementation-Title>
+                            <Implementation-Version>${project.version}</Implementation-Version>
+                        </manifestEntries>
                     </archive>
                     <descriptorRefs>
                         <descriptorRef>jar-with-dependencies</descriptorRef>
