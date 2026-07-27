@@ -83,31 +83,34 @@ class LinkedControllerTest {
       val target = controller.createV9Target()
       val frame = controller.currentFrame()
       val machine =
-          executor.submit<ByteArray> {
+          executor.submit<eu.rekawek.coffeegb.controller.network.v9.V9CapturedCheckpoint> {
             target.capture(V9CheckpointRequest(V9CheckpointKind.MACHINE, 0x02, 1, frame))
           }
       awaitPendingCapture(target)
       assertFalse(machine.isDone)
       dispatchOnly(controller)
-      val machineBytes = machine.get(5, TimeUnit.SECONDS)
+      val machineCapture = machine.get(5, TimeUnit.SECONDS)
+      val machineBytes = machineCapture.takeStateFile()
+      assertEquals(frame, machineCapture.frame)
       assertEquals(frame, controller.currentFrame())
       assertTrue(StateCodec.decode(machineBytes).root is MachineStateRoot)
       machineBytes.fill(0)
 
       val session =
-          executor.submit<ByteArray> {
+          executor.submit<eu.rekawek.coffeegb.controller.network.v9.V9CapturedCheckpoint> {
             target.capture(V9CheckpointRequest(V9CheckpointKind.SESSION, 0x02, 1, frame))
           }
       awaitPendingCapture(target)
       assertFalse(session.isDone)
       dispatchOnly(controller)
-      val sessionBytes = session.get(5, TimeUnit.SECONDS)
+      val sessionCapture = session.get(5, TimeUnit.SECONDS)
+      val sessionBytes = sessionCapture.takeStateFile()
       assertTrue(StateCodec.decode(sessionBytes).root is SessionStateRoot)
       sessionBytes.fill(0)
 
       val cancelledTarget = controller.createV9Target()
       val cancelled =
-          executor.submit<ByteArray> {
+          executor.submit<eu.rekawek.coffeegb.controller.network.v9.V9CapturedCheckpoint> {
             cancelledTarget.capture(
                 V9CheckpointRequest(V9CheckpointKind.MACHINE, 0x02, 1, frame))
           }
@@ -136,7 +139,7 @@ class LinkedControllerTest {
     try {
       fun capture(): eu.rekawek.coffeegb.controller.state.StateFile {
         val future =
-            executor.submit<ByteArray> {
+            executor.submit<eu.rekawek.coffeegb.controller.network.v9.V9CapturedCheckpoint> {
               target.capture(
                   V9CheckpointRequest(
                       V9CheckpointKind.LINKED_SESSION,
@@ -148,7 +151,7 @@ class LinkedControllerTest {
             }
         awaitPendingCapture(target)
         dispatchOnly(controller)
-        val bytes = future.get(5, TimeUnit.SECONDS)
+        val bytes = future.get(5, TimeUnit.SECONDS).takeStateFile()
         return StateCodec.decode(bytes).also { bytes.fill(0) }
       }
 
@@ -161,6 +164,7 @@ class LinkedControllerTest {
       )
 
       val preparedRef = AtomicReference<eu.rekawek.coffeegb.controller.network.v9.V9PreparedCheckpoint?>()
+      val generation = captureGeneration(target, controller)
       target.prepare(
           V9ValidatedCheckpoint(
               V9CheckpointMetadata(
@@ -173,6 +177,7 @@ class LinkedControllerTest {
               initial,
               MessageDigest.getInstance("SHA-256").digest(StateCodec.encode(initial)),
           ),
+          generation,
       ) { prepared, failure ->
         assertNull(failure)
         preparedRef.set(prepared)
@@ -226,7 +231,7 @@ class LinkedControllerTest {
     val target = controller.createV9Target()
     val executor = Executors.newSingleThreadExecutor()
     try {
-      assertNull(target.expectedIdentities()[1].identity)
+      assertNull(captureGeneration(target, controller).identities[1].identity)
       val transferredRom = mbc2Rom()
       eventBus.post(
           PeerLoadedGameEvent(
@@ -240,9 +245,10 @@ class LinkedControllerTest {
           ),
       )
       controller.runFrame()
-      val postTransferIdentity = assertNotNull(target.expectedIdentities()[1].identity)
+      val postTransferIdentity =
+          assertNotNull(captureGeneration(target, controller).identities[1].identity)
       val future =
-          executor.submit<ByteArray> {
+          executor.submit<eu.rekawek.coffeegb.controller.network.v9.V9CapturedCheckpoint> {
             target.capture(
                 V9CheckpointRequest(
                     V9CheckpointKind.MACHINE,
@@ -254,7 +260,7 @@ class LinkedControllerTest {
           }
       awaitPendingCapture(target)
       dispatchOnly(controller)
-      val bytes = future.get(5, TimeUnit.SECONDS)
+      val bytes = future.get(5, TimeUnit.SECONDS).takeStateFile()
       val file = StateCodec.decode(bytes)
       bytes.fill(0)
       val capturedIdentity = assertNotNull(file.identities.single().identity)
@@ -297,11 +303,12 @@ class LinkedControllerTest {
               MessageDigest.getInstance("SHA-256").digest(encoded),
           )
       val target = controller.createV9Target()
+      val targetGeneration = captureGeneration(target, controller)
       val prepared = AtomicReference<eu.rekawek.coffeegb.controller.network.v9.V9PreparedCheckpoint?>()
       val preparationFailure = AtomicReference<V9ErrorCode?>()
       val preparedLatch = CountDownLatch(1)
       val before = controller.captureDetachedState()
-      target.prepare(checkpoint) { transaction, failure ->
+      target.prepare(checkpoint, targetGeneration) { transaction, failure ->
         prepared.set(transaction)
         preparationFailure.set(failure)
         preparedLatch.countDown()
@@ -363,6 +370,7 @@ class LinkedControllerTest {
               sessionFile,
               MessageDigest.getInstance("SHA-256").digest(StateCodec.encode(sessionFile)),
           ),
+          targetGeneration,
       ) { transaction, failure ->
         assertNull(failure)
         resyncPrepared.set(transaction)
@@ -399,6 +407,7 @@ class LinkedControllerTest {
               sessionFile,
               MessageDigest.getInstance("SHA-256").digest(StateCodec.encode(sessionFile)),
           ),
+          targetGeneration,
       ) { transaction, failure ->
         assertNull(failure)
         rollbackPrepared.set(transaction)
@@ -437,6 +446,7 @@ class LinkedControllerTest {
                 wrongFile,
                 MessageDigest.getInstance("SHA-256").digest(StateCodec.encode(wrongFile)),
             ),
+            targetGeneration,
         ) { transaction, error ->
           badPrepared.set(transaction)
           failure.set(error)
@@ -481,7 +491,9 @@ class LinkedControllerTest {
       val before = targetController.captureDetachedState()
       val prepared = AtomicReference<eu.rekawek.coffeegb.controller.network.v9.V9PreparedCheckpoint?>()
       val preparedLatch = CountDownLatch(1)
-      targetController.createV9Target().prepare(checkpoint) { transaction, failure ->
+      val v9Target = targetController.createV9Target()
+      val targetGeneration = captureGeneration(v9Target, targetController)
+      v9Target.prepare(checkpoint, targetGeneration) { transaction, failure ->
         assertNull(failure)
         prepared.set(transaction)
         preparedLatch.countDown()
@@ -2131,6 +2143,23 @@ class LinkedControllerTest {
       while (target.pendingCaptureCount() == 0) {
         if (System.nanoTime() >= deadline) throw AssertionError("capture was not enqueued")
         Thread.yield()
+      }
+    }
+
+    fun captureGeneration(
+        target: V9LinkedControllerTarget,
+        controller: LinkedController,
+    ): eu.rekawek.coffeegb.controller.network.v9.V9TargetGeneration {
+      val executor = Executors.newSingleThreadExecutor()
+      return try {
+        val future = executor.submit<eu.rekawek.coffeegb.controller.network.v9.V9TargetGeneration> {
+          target.captureGeneration()
+        }
+        awaitPendingCapture(target)
+        dispatchOnly(controller)
+        future.get(5, TimeUnit.SECONDS)
+      } finally {
+        executor.shutdownNow()
       }
     }
 

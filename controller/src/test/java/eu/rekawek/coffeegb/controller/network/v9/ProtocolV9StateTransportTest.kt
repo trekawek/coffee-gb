@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.state.RomIdentity
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.link.V9LinkedControllerTarget
 import eu.rekawek.coffeegb.controller.link.LinkMode
@@ -11,6 +12,7 @@ import eu.rekawek.coffeegb.controller.link.StateHistory
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.events.EventQueue
+import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionStateRoot
@@ -26,7 +28,10 @@ import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -34,11 +39,16 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -53,14 +63,14 @@ class ProtocolV9StateTransportTest {
     val lifecycle = serverLifecycleAtSynchronizing()
     val active = AtomicReference<V9ActiveBoundary?>()
     val target = target(fixture.identities, AtomicReference(), LinkedBlockingQueue())
+    val generation = target.captureGeneration()
     val plan =
         V9GuestPlayPlan(
             target,
             target,
-            V9CheckpointProvider { fixture.v2.copyOf() },
+            provider(generation) { fixture.v2.copyOf() },
             V9CheckpointKind.MACHINE,
             0,
-            9,
             V9SessionIdSource { 0x1020304050607080L },
         )
     lateinit var session: V9PlaySession
@@ -100,6 +110,7 @@ class ProtocolV9StateTransportTest {
             1,
             authorization(fixture.identity),
             plan,
+            generation,
             { _, task -> Thread().also { task() } },
             sender,
             lifecycle,
@@ -493,7 +504,7 @@ class ProtocolV9StateTransportTest {
   }
 
   @Test
-  fun realSocketAuthManifestConsentCheckpointStartReadyAndActiveInputAreProductionIntegrated() {
+  fun realSocketProductionFlowAndConcurrentCheckpointRuntimeCloseDoNotDeadlock() {
     val fixture = stateFixture()
     val pair = manifestPair(fixture.identity)
     val host = V9InvitationHost(V9LinkMode.NORMAL)
@@ -503,17 +514,17 @@ class ProtocolV9StateTransportTest {
     val clientInputs = LinkedBlockingQueue<V9InputState>()
     val serverTarget = target(fixture.identities, AtomicReference(), serverInputs)
     val clientTarget = target(fixture.identities, clientApplied, clientInputs)
+    val serverGeneration = serverTarget.captureGeneration()
     val serverPlay =
         V9GuestPlayPlan(
             serverTarget,
             serverTarget,
-            V9CheckpointProvider { request ->
+            provider(serverGeneration) { request ->
               if (request.kind == V9CheckpointKind.MACHINE) fixture.v2.copyOf()
               else fixture.v2Session.copyOf()
             },
             V9CheckpointKind.MACHINE,
             0,
-            9,
             V9SessionIdSource { 0x1020304050607080L },
         )
     val clientPlay =
@@ -522,7 +533,6 @@ class ProtocolV9StateTransportTest {
             clientTarget,
             initialKind = V9CheckpointKind.MACHINE,
             initialOwnerPlayer = 0,
-            initialFrame = 9,
         )
     val server =
         V9FoundationServer(
@@ -579,6 +589,37 @@ class ProtocolV9StateTransportTest {
       assertEquals(0x20, assertNotNull(serverInputs.poll(5, TimeUnit.SECONDS)).buttonMask)
       assertNull(serverConnection.snapshot().failure)
       assertNull(client.snapshot().failure)
+
+      val concurrent = Executors.newFixedThreadPool(3)
+      val ready = java.util.concurrent.CountDownLatch(3)
+      val start = java.util.concurrent.CountDownLatch(1)
+      val finished = AtomicInteger()
+      fun submit(action: () -> Unit) = concurrent.submit {
+        ready.countDown()
+        start.await()
+        try {
+          action()
+        } catch (_: IllegalStateException) {
+          // Close is allowed to win admission; termination, not a specific winner, is invariant.
+        } finally {
+          finished.incrementAndGet()
+        }
+      }
+      val calls =
+          listOf(
+              submit { serverConnection.sendCheckpoint(V9CheckpointKind.SESSION, 0, 12) },
+              submit {
+                serverConnection.sendControl(
+                    V9RuntimeControl(V9RuntimeMessageKind.RESET, 12, 0),
+                )
+              },
+              submit { serverConnection.close() },
+          )
+      assertTrue(ready.await(5, TimeUnit.SECONDS))
+      start.countDown()
+      calls.forEach { it.get(5, TimeUnit.SECONDS) }
+      concurrent.shutdownNow()
+      assertEquals(3, finished.get())
     } finally {
       client?.close()
       server.close()
@@ -591,16 +632,18 @@ class ProtocolV9StateTransportTest {
   @Test
   fun realSocketNormalUsesLinkedControllerSafePointForInitialAndActiveResync() {
     val source = linkedControllerFixture(LinkMode.NORMAL, 0, 2)
-    val recipient = linkedControllerFixture(LinkMode.NORMAL, 0, 2)
+    val recipient = linkedControllerFixture(LinkMode.NORMAL, 1, 2)
     val sourceTarget = source.controller.createV9Target()
     val recipientTarget = recipient.controller.createV9Target()
-    val identity = assertNotNull(sourceTarget.expectedIdentities()[0].identity)
-    assertEquals(sourceTarget.expectedIdentities(), recipientTarget.expectedIdentities())
+    val sourceGeneration = captureGeneration(sourceTarget, source.controller)
+    val recipientGeneration = captureGeneration(recipientTarget, recipient.controller)
+    val identity = assertNotNull(sourceGeneration.identities[0].identity)
+    assertEquals(sourceGeneration.identities, recipientGeneration.identities)
     val pair = manifestPair(identity)
     val frame = source.controller.currentFrame()
     assertEquals(frame, recipient.controller.currentFrame())
-    val expectedMachineHash = machineHash(source.controller, 0)
     val host = V9InvitationHost(V9LinkMode.NORMAL)
+    val transport = FragmentingSocketChannel()
     val accepted = LinkedBlockingQueue<V9FoundationConnection>()
     val server =
         V9FoundationServer(
@@ -619,7 +662,6 @@ class ProtocolV9StateTransportTest {
                                 sourceTarget,
                                 V9CheckpointKind.MACHINE,
                                 0,
-                                frame,
                                 V9SessionIdSource { 0x0102030405060708L },
                             ),
                     ),
@@ -647,35 +689,90 @@ class ProtocolV9StateTransportTest {
                       recipientTarget,
                       initialKind = V9CheckpointKind.MACHINE,
                       initialOwnerPlayer = 0,
-                      initialFrame = frame,
                   ),
               ),
-          ) { FragmentingSocketChannel() }
+          ) { transport }
       val serverConnection = assertNotNull(accepted.poll(5, TimeUnit.SECONDS))
       assertNotNull(serverConnection.awaitManifestBoundary(5, TimeUnit.SECONDS))
       assertNotNull(client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      repeat(3) {
+        source.controller.runFrame()
+        recipient.controller.runFrame()
+      }
+      val captureFrame = source.controller.currentFrame()
+      val expectedMachineHash = machineHash(source.controller, 0)
       serverConnection.submitConsent(41, V9ConsentDecision.APPROVE)
       client.submitConsent(41, V9ConsentDecision.APPROVE)
 
-      awaitCapture(sourceTarget)
-      dispatchOnly(source.controller)
-      pumpSafePoints(listOf(recipient.controller)) {
+      pumpSafePoints(listOf(source.controller, recipient.controller)) {
         serverConnection.activeBoundary() != null && client.activeBoundary() != null
       }
+      assertEquals(captureFrame, assertNotNull(serverConnection.activeBoundary()).initialFrame)
       assertContentEquals(expectedMachineHash, machineHash(recipient.controller, 0))
       assertEquals(V9LifecycleState.ACTIVE, serverConnection.snapshot().state)
       assertEquals(V9LifecycleState.ACTIVE, client.snapshot().state)
 
+      val replayEvents = AtomicInteger()
+      val replayBus = EventBusImpl().also { bus ->
+        bus.register<StateHistory.GameboyJoypadPressEvent> { event ->
+          if (event.gameboy == 1 && event.button == Button.A) replayEvents.incrementAndGet()
+        }
+      }
+      source.controller.stateHistory.debugEventBus = replayBus
+      val delayedFrame = recipient.controller.currentFrame()
+      recipient.eventBus.post(ButtonPressEvent(Button.A))
+      recipient.controller.runFrame()
+      transport.scheduleWrites()
+      client.sendInput(V9InputState(delayedFrame, 1, 0x10, 1))
+      waitUntil { transport.blockedWriteCount() >= 1 }
+      transport.allowWriteFragments(1)
+      waitUntil { transport.blockedWriteCount() >= 2 }
+      source.controller.runFrame()
+      transport.allowWriteFragments(2)
+      waitUntil { transport.blockedWriteCount() >= 4 }
+      source.controller.runFrame()
+      recipient.controller.runFrame()
+      transport.releaseScheduledWrites()
+      waitUntil {
+        dispatchOnly(source.controller)
+        source.controller.stateHistory.captureSnapshot().patches.isNotEmpty()
+      }
+      source.controller.runFrame()
+      while (recipient.controller.currentFrame() < source.controller.currentFrame()) {
+        recipient.controller.runFrame()
+      }
+      assertTrue(replayEvents.get() > 0, "late v9 input must drive controller rollback replay")
+      val sourceContinuation = source.controller.captureDetachedState()
+      val recipientContinuation = recipient.controller.captureDetachedState()
+      assertEquals(sourceContinuation.frame, recipientContinuation.frame)
+      sourceContinuation.players.indices.forEach { player ->
+        assertEquals(
+            sourceContinuation.players[player].session,
+            recipientContinuation.players[player].session,
+            "late-input continuation differs for player $player",
+        )
+      }
+      assertContentEquals(linkedHash(source.controller), linkedHash(recipient.controller))
+      source.controller.stateHistory.debugEventBus = null
+      replayBus.close()
+
+      source.controller.runFrame()
       val resyncFrame = source.controller.currentFrame()
       val expectedSessionHash = sessionHash(source.controller, 0)
       serverConnection.sendCheckpoint(V9CheckpointKind.SESSION, 0, resyncFrame)
-      awaitCapture(sourceTarget)
-      dispatchOnly(source.controller)
-      pumpSafePoints(listOf(recipient.controller)) {
+      pumpSafePoints(listOf(source.controller, recipient.controller)) {
         sessionHash(recipient.controller, 0).contentEquals(expectedSessionHash)
       }
-      // The exact initial MACHINE and active SESSION hashes above are the continuation seeds;
-      // gameplay/rollback progression remains covered by the controller-owned history tests.
+      repeat(StateLimits.NETPLAY_ROLLBACK_FRAMES.toInt() + 2) {
+        source.controller.runFrame()
+      }
+      val staleFrame = assertNotNull(source.controller.stateHistory.oldestFrame()) - 1
+      val beforeRejectedInput = source.controller.captureDetachedState()
+      client.sendInput(V9InputState(staleFrame, 1, 0, 2))
+      pumpSafePoints(listOf(source.controller)) {
+        serverConnection.snapshot().failure?.reason == V9ErrorCode.SEQUENCE_ERROR
+      }
+      assertEquals(beforeRejectedInput, source.controller.captureDetachedState())
       assertEquals(0, sourceTarget.pendingCaptureCount())
       assertEquals(0, recipientTarget.pendingCaptureCount())
     } finally {
@@ -727,7 +824,8 @@ class ProtocolV9StateTransportTest {
 
   @Test
   fun fourPlayerCoordinatorKeepsFailedCandidatesOutsideTheAtomicStartAndReadyBarriers() {
-    val coordinator = V9FourPlayerCoordinator()
+    val generation = targetGeneration(emptyList(), V9LinkMode.FOUR_PLAYER, frame = 9)
+    val coordinator = V9FourPlayerCoordinator(provider(generation) { ByteArray(1) })
     val digest = ByteArray(32) { 0x31 }
     val wrong = ByteArray(32) { 0x32 }
     var starts = 0
@@ -762,22 +860,27 @@ class ProtocolV9StateTransportTest {
     second.close()
     replacement.close()
     assertEquals(0, coordinator.candidateCount())
+    coordinator.close()
   }
 
   @Test
   fun fourPlayerCoordinatorFreezesOneAdvancingCaptureAndLetsFailedGuestBeReplaced() {
-    val coordinator = V9FourPlayerCoordinator()
     val request =
         V9CheckpointRequest(V9CheckpointKind.LINKED_SESSION, 0x0f, 0, 11)
     var captures = 0
+    val generation = targetGeneration(emptyList(), V9LinkMode.FOUR_PLAYER, frame = 11)
     val provider =
-        V9CheckpointProvider {
+        provider(generation) {
           captures++
           ByteArray(96) { index -> (captures * 31 + index).toByte() }
         }
-    val firstBytes = coordinator.captureInitial(1, request, provider)
-    val secondBytes = coordinator.captureInitial(2, request, provider)
-    val failedBytes = coordinator.captureInitial(3, request, provider)
+    val coordinator = V9FourPlayerCoordinator(provider)
+    val firstCapture = coordinator.captureInitial(1, request)
+    val secondCapture = coordinator.captureInitial(2, request)
+    val failedCapture = coordinator.captureInitial(3, request)
+    val firstBytes = firstCapture.copyStateFile()
+    val secondBytes = secondCapture.copyStateFile()
+    val failedBytes = failedCapture.copyStateFile()
     assertEquals(1, captures)
     assertEquals(1, coordinator.captureCount())
     assertContentEquals(firstBytes, secondBytes)
@@ -793,7 +896,8 @@ class ProtocolV9StateTransportTest {
         }.reason,
     )
     coordinator.abandon(3)
-    val replacementBytes = coordinator.captureInitial(3, request, provider)
+    val replacementCapture = coordinator.captureInitial(3, request)
+    val replacementBytes = replacementCapture.copyStateFile()
     assertContentEquals(firstBytes, replacementBytes)
     assertEquals(1, captures)
     val replacement = coordinator.prepared(3, 11, digest) {}
@@ -801,6 +905,10 @@ class ProtocolV9StateTransportTest {
     replacement.close()
     first.close()
     second.close()
+    firstCapture.close()
+    secondCapture.close()
+    failedCapture.close()
+    replacementCapture.close()
     firstBytes.fill(0)
     secondBytes.fill(0)
     failedBytes.fill(0)
@@ -808,6 +916,140 @@ class ProtocolV9StateTransportTest {
     digest.fill(0)
     wrongDigest.fill(0)
     assertEquals(0, coordinator.candidateCount())
+    coordinator.close()
+  }
+
+  @Test
+  fun fourPlayerCoordinatorRejectsStaleReplacementAndWipesItsOwnedGeneration() {
+    val initialGeneration = targetGeneration(emptyList(), V9LinkMode.FOUR_PLAYER, frame = 11)
+    val currentGeneration = AtomicReference(initialGeneration)
+    val ownedState = ByteArray(96) { index -> (index * 7 + 3).toByte() }
+    val provider =
+        object : V9CheckpointProvider {
+          override fun captureGeneration(): V9TargetGeneration = currentGeneration.get()
+          override fun capture(request: V9CheckpointRequest) =
+              V9CapturedCheckpoint(initialGeneration, 11, ownedState)
+        }
+    val coordinator = V9FourPlayerCoordinator(provider)
+    val request = V9CheckpointRequest(V9CheckpointKind.LINKED_SESSION, 0x0f, 0, null)
+    val captures = (1..3).associateWith { coordinator.captureInitial(it, request) }
+    val bytes = captures.getValue(1).copyStateFile()
+    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+    val registrations =
+        (1..3).associateWith { guest -> coordinator.prepared(guest, 11, digest) {} }
+    registrations.getValue(3).close()
+    currentGeneration.set(
+        V9TargetGeneration(
+            initialGeneration.id,
+            V9LinkMode.FOUR_PLAYER,
+            12,
+            initialGeneration.identities,
+        ),
+    )
+    assertEquals(
+        V9ErrorCode.TOPOLOGY_MISMATCH,
+        assertFailsWith<V9ProtocolException> {
+          coordinator.captureInitial(3, request)
+        }.reason,
+    )
+    assertEquals(2, coordinator.candidateCount())
+    assertEquals(1, coordinator.captureCount())
+    captures.values.forEach(V9CapturedCheckpoint::close)
+    registrations.getValue(1).close()
+    registrations.getValue(2).close()
+    bytes.fill(0)
+    digest.fill(0)
+    coordinator.close()
+    assertTrue(ownedState.all { it == 0.toByte() })
+  }
+
+  @Test
+  fun closingSharedFourPlayerCaptureCancelsProviderWorkerAndEveryWaiter() {
+    val source = linkedControllerFixture(LinkMode.FOUR_PLAYER_ADAPTER, 0, 4)
+    val target = source.controller.createV9Target()
+    val coordinator = V9FourPlayerCoordinator(target)
+    val waiter = Executors.newSingleThreadExecutor()
+    try {
+      val capture = waiter.submit<V9CapturedCheckpoint> {
+        coordinator.captureInitial(
+            1,
+            V9CheckpointRequest(V9CheckpointKind.LINKED_SESSION, 0x0f, 0, null),
+        )
+      }
+      awaitCapture(target)
+      assertEquals(1, coordinator.pendingCaptureCount())
+      coordinator.close()
+      val failure = assertFailsWith<java.util.concurrent.ExecutionException> {
+        capture.get(5, TimeUnit.SECONDS)
+      }
+      assertEquals(
+          V9ErrorCode.CANCELLED,
+          (failure.cause as V9ProtocolException).reason,
+      )
+      waitUntil {
+        target.pendingCaptureCount() == 0 && coordinator.workerTerminated()
+      }
+      assertEquals(0, coordinator.pendingCaptureCount())
+    } finally {
+      coordinator.close()
+      waiter.shutdownNow()
+      source.close()
+    }
+  }
+
+  @Test
+  fun cancellingOneSharedCaptureWaiterDoesNotCloseHealthyFourPlayerGuests() {
+    val generation = targetGeneration(emptyList(), V9LinkMode.FOUR_PLAYER, frame = 13)
+    val entered = java.util.concurrent.CountDownLatch(1)
+    val release = java.util.concurrent.CountDownLatch(1)
+    val providerClosed = AtomicBoolean()
+    val ownedState = ByteArray(96) { index -> (index * 11 + 5).toByte() }
+    val provider =
+        object : V9CheckpointProvider {
+          override fun captureGeneration(): V9TargetGeneration = generation
+
+          override fun capture(request: V9CheckpointRequest): V9CapturedCheckpoint {
+            entered.countDown()
+            try {
+              release.await()
+            } catch (interrupted: InterruptedException) {
+              Thread.currentThread().interrupt()
+              throw V9ProtocolException(V9ErrorCode.CANCELLED, 0)
+            }
+            return V9CapturedCheckpoint(generation, generation.observedFrame, ownedState)
+          }
+
+          override fun close() {
+            providerClosed.set(true)
+            release.countDown()
+          }
+        }
+    val coordinator = V9FourPlayerCoordinator(provider)
+    val waiters = Executors.newFixedThreadPool(2)
+    val request = V9CheckpointRequest(V9CheckpointKind.LINKED_SESSION, 0x0f, 0, null)
+    try {
+      val cancelled = waiters.submit<V9CapturedCheckpoint> {
+        coordinator.captureInitial(1, request)
+      }
+      assertTrue(entered.await(5, TimeUnit.SECONDS))
+      val healthy = waiters.submit<V9CapturedCheckpoint> {
+        coordinator.captureInitial(2, request)
+      }
+      waitUntil { coordinator.captureClaimantCount() == 2 }
+      assertTrue(cancelled.cancel(true))
+      waitUntil { coordinator.captureClaimantCount() == 1 }
+      assertFalse(providerClosed.get())
+      release.countDown()
+      val capture = healthy.get(5, TimeUnit.SECONDS)
+      assertContentEquals(ownedState, capture.copyStateFile())
+      capture.close()
+      assertEquals(1, coordinator.captureClaimantCount())
+    } finally {
+      coordinator.close()
+      waiters.shutdownNow()
+    }
+    assertTrue(providerClosed.get())
+    assertTrue(ownedState.all { it == 0.toByte() })
   }
 
   @Test
@@ -845,25 +1087,31 @@ class ProtocolV9StateTransportTest {
   @Test
   fun realSocketFourPlayerBarrierRequiresOneCoherentLinkedCheckpointBeforeAllGuestsBecomeActive() {
     val fixture = linkedStateFixture()
-    val coordinator = V9FourPlayerCoordinator()
+    val sharedGeneration =
+        targetGeneration(fixture.identities, V9LinkMode.FOUR_PLAYER, frame = 11)
+    val sharedProvider = provider(sharedGeneration) { fixture.bytes.copyOf() }
+    val coordinator = V9FourPlayerCoordinator(sharedProvider)
     val host = V9InvitationHost(V9LinkMode.FOUR_PLAYER)
     val accepted = LinkedBlockingQueue<V9FoundationConnection>()
     val pairs = (1..3).associateWith { fourManifestPair(it, fixture.identities) }
     val serverTargets = (1..3).associateWith {
-      target(fixture.identities, AtomicReference(), LinkedBlockingQueue())
+      target(
+          fixture.identities,
+          AtomicReference(),
+          LinkedBlockingQueue(),
+          V9LinkMode.FOUR_PLAYER,
+          11,
+      )
     }
-    val sharedProvider = V9CheckpointProvider { fixture.bytes.copyOf() }
     val serverPlans =
         (1..3).associateWith { guest ->
           V9GuestPlayPlan(
-              serverTargets.getValue(guest),
-              serverTargets.getValue(guest),
-              sharedProvider,
-              V9CheckpointKind.LINKED_SESSION,
-              0,
-              11,
-              V9SessionIdSource { 0x1122334455667788L },
-              coordinator,
+              checkpointTarget = serverTargets.getValue(guest),
+              gameplayTarget = serverTargets.getValue(guest),
+              initialKind = V9CheckpointKind.LINKED_SESSION,
+              initialOwnerPlayer = 0,
+              sessionIds = V9SessionIdSource { 0x1122334455667788L },
+              fourPlayerCoordinator = coordinator,
           )
         }
     val server =
@@ -887,7 +1135,14 @@ class ProtocolV9StateTransportTest {
     try {
       server.start()
       (1..3).forEach { guest ->
-        val clientTarget = target(fixture.identities, AtomicReference(), LinkedBlockingQueue())
+        val clientTarget =
+            target(
+                fixture.identities,
+                AtomicReference(),
+                LinkedBlockingQueue(),
+                V9LinkMode.FOUR_PLAYER,
+                11,
+            )
         val invitation =
             host.createInvitation("127.0.0.1", server.localPort, guest)
                 .forClientAuthentication()
@@ -914,7 +1169,6 @@ class ProtocolV9StateTransportTest {
                             clientTarget,
                             initialKind = V9CheckpointKind.LINKED_SESSION,
                             initialOwnerPlayer = 0,
-                            initialFrame = 11,
                         ),
                     ),
             )
@@ -938,7 +1192,11 @@ class ProtocolV9StateTransportTest {
       }
       val serverActive =
           (1..3).map { guest ->
-            assertNotNull(serverConnections.getValue(guest).awaitActiveBoundary(10, TimeUnit.SECONDS))
+            assertNotNull(
+                serverConnections.getValue(guest).awaitActiveBoundary(10, TimeUnit.SECONDS),
+                "four-player server did not activate: " +
+                    (serverConnections.values + clients).map { it.snapshot() },
+            )
           }
       val clientActive =
           clients.map { assertNotNull(it.awaitActiveBoundary(10, TimeUnit.SECONDS)) }
@@ -959,18 +1217,21 @@ class ProtocolV9StateTransportTest {
   @Test
   fun realSocketFourPlayerUsesOneLinkedControllerGenerationAcrossAllGuests() {
     val source = linkedControllerFixture(LinkMode.FOUR_PLAYER_ADAPTER, 0, 4)
-    val recipients = (1..3).map { linkedControllerFixture(LinkMode.FOUR_PLAYER_ADAPTER, 0, 4) }
+    val recipients =
+        (1..3).map { guest ->
+          linkedControllerFixture(LinkMode.FOUR_PLAYER_ADAPTER, guest, 4)
+        }
     val captureTarget = source.controller.createV9Target()
     val serverTargets = (1..3).associateWith { source.controller.createV9Target() }
     val clientTargets = recipients.map { it.controller.createV9Target() }
-    val identities = captureTarget.expectedIdentities()
+    val identities = captureGeneration(captureTarget, source.controller).identities
     assertTrue(identities.all { it.identity != null })
-    assertTrue(clientTargets.all { it.expectedIdentities() == identities })
+    assertTrue(clientTargets.zip(recipients).all { (target, recipient) ->
+      captureGeneration(target, recipient.controller).identities == identities
+    })
     val pairs = (1..3).associateWith { fourManifestPair(it, identities) }
-    val frame = source.controller.currentFrame()
     val expectedHash = linkedHash(source.controller)
-    val coordinator = V9FourPlayerCoordinator()
-    val sharedProvider = V9CheckpointProvider(captureTarget::capture)
+    val coordinator = V9FourPlayerCoordinator(captureTarget)
     val host = V9InvitationHost(V9LinkMode.FOUR_PLAYER)
     val accepted = LinkedBlockingQueue<V9FoundationConnection>()
     val server =
@@ -993,14 +1254,12 @@ class ProtocolV9StateTransportTest {
                     V9LinkMode.FOUR_PLAYER,
                     (1..3).associateWith { guest ->
                       V9GuestPlayPlan(
-                          serverTargets.getValue(guest),
-                          serverTargets.getValue(guest),
-                          sharedProvider,
-                          V9CheckpointKind.LINKED_SESSION,
-                          0,
-                          frame,
-                          V9SessionIdSource { 0x1112131415161718L },
-                          coordinator,
+                          checkpointTarget = serverTargets.getValue(guest),
+                          gameplayTarget = serverTargets.getValue(guest),
+                          initialKind = V9CheckpointKind.LINKED_SESSION,
+                          initialOwnerPlayer = 0,
+                          sessionIds = V9SessionIdSource { 0x1112131415161718L },
+                          fourPlayerCoordinator = coordinator,
                       )
                     },
                 ),
@@ -1033,7 +1292,6 @@ class ProtocolV9StateTransportTest {
                         clientTargets[guest - 1],
                         initialKind = V9CheckpointKind.LINKED_SESSION,
                         initialOwnerPlayer = 0,
-                        initialFrame = frame,
                     ),
                 ),
             ) { FragmentingSocketChannel() }
@@ -1051,9 +1309,16 @@ class ProtocolV9StateTransportTest {
         serverConnection.submitConsent(40L + guest, V9ConsentDecision.APPROVE)
         client.submitConsent(40L + guest, V9ConsentDecision.APPROVE)
       }
-      awaitCapture(captureTarget)
-      dispatchOnly(source.controller)
-      pumpSafePoints(recipients.map { it.controller }) {
+      pumpSafePoints(
+          listOf(source.controller) + recipients.map { it.controller },
+          failureDetail = {
+            " snapshots=" + (serverConnections.values + clients).map { it.snapshot() } +
+                " capture=${coordinator.pendingCaptureCount()}/${coordinator.captureCount()}" +
+                " targets=" + listOf(captureTarget.pendingCaptureCount()) +
+                serverTargets.values.map { it.pendingCaptureCount() } +
+                clientTargets.map { it.pendingCaptureCount() }
+          },
+      ) {
         serverConnections.values.all { it.activeBoundary() != null } &&
             clients.all { it.activeBoundary() != null }
       }
@@ -1062,6 +1327,18 @@ class ProtocolV9StateTransportTest {
       assertTrue((serverConnections.values + clients).all {
         it.snapshot().state == V9LifecycleState.ACTIVE && it.snapshot().failure == null
       })
+      val hotPlugTarget = recipients.first().controller
+      val controlFrame = hotPlugTarget.currentFrame()
+      serverConnections.getValue(1).sendControl(
+          V9RuntimeControl(V9RuntimeMessageKind.STOP, controlFrame, 0),
+      )
+      pumpSafePoints(listOf(hotPlugTarget)) { hotPlugTarget.activeSessionCount() == 3 }
+      assertNull(hotPlugTarget.captureDetachedState().players[0].session)
+      serverConnections.getValue(1).sendControl(
+          V9RuntimeControl(V9RuntimeMessageKind.RESET, controlFrame, 0),
+      )
+      pumpSafePoints(listOf(hotPlugTarget)) { hotPlugTarget.activeSessionCount() == 4 }
+      assertNotNull(hotPlugTarget.captureDetachedState().players[0].session)
       assertEquals(0, captureTarget.pendingCaptureCount())
       clientTargets.forEach { assertEquals(0, it.pendingCaptureCount()) }
     } finally {
@@ -1081,9 +1358,20 @@ class ProtocolV9StateTransportTest {
       identities: List<StateIdentityEntry>,
       checkpoint: AtomicReference<V9ValidatedCheckpoint?>,
       inputs: LinkedBlockingQueue<V9InputState>,
+      mode: V9LinkMode = V9LinkMode.NORMAL,
+      frame: Long = 9,
   ) = object : V9CheckpointTarget, V9GameplayTarget {
-    override fun expectedIdentities(): List<StateIdentityEntry> = identities
-    override fun prepare(value: V9ValidatedCheckpoint, completion: V9CheckpointPrepareCompletion) {
+    private val generation = targetGeneration(identities, mode, frame)
+    override fun captureGeneration(): V9TargetGeneration = generation
+    override fun prepare(
+        value: V9ValidatedCheckpoint,
+        expectedGeneration: V9TargetGeneration,
+        completion: V9CheckpointPrepareCompletion,
+    ) {
+      if (!generation.sameIdentityGeneration(expectedGeneration)) {
+        completion.complete(null, V9ErrorCode.TOPOLOGY_MISMATCH)
+        return
+      }
       completion.complete(
           object : V9PreparedCheckpoint {
             private var closed = false
@@ -1108,6 +1396,28 @@ class ProtocolV9StateTransportTest {
     }
     override fun control(value: V9RuntimeControl, completion: V9GameplayCompletion) {
       completion.complete(null)
+    }
+  }
+
+  private fun targetGeneration(
+      identities: List<StateIdentityEntry>,
+      mode: V9LinkMode = V9LinkMode.NORMAL,
+      frame: Long = 9,
+      id: Long = 1,
+  ) = V9TargetGeneration(id, mode, frame, identities)
+
+  private fun provider(
+      generation: V9TargetGeneration,
+      capture: (V9CheckpointRequest) -> ByteArray,
+  ): V9CheckpointProvider = object : V9CheckpointProvider {
+    override fun captureGeneration(): V9TargetGeneration = generation
+    override fun capture(request: V9CheckpointRequest): V9CapturedCheckpoint {
+      val frame = request.frame ?: generation.observedFrame
+      return V9CapturedCheckpoint(
+          V9TargetGeneration(generation.id, generation.mode, frame, generation.identities),
+          frame,
+          capture(request),
+      )
     }
   }
 
@@ -1352,7 +1662,7 @@ class ProtocolV9StateTransportTest {
   private fun machineHash(controller: LinkedController, player: Int): ByteArray {
     val linked = controller.captureDetachedState()
     val machine = assertNotNull(linked.players[player].session).machine
-    val identity = assertNotNull(controller.captureV9PortableIdentities()[player].identity)
+    val identity = assertNotNull(controller.capturePortableIdentities()[player].identity)
     val bytes =
         StateCodec.encode(
             StateFile(
@@ -1368,7 +1678,7 @@ class ProtocolV9StateTransportTest {
   private fun sessionHash(controller: LinkedController, player: Int): ByteArray {
     val linked = controller.captureDetachedState()
     val state = assertNotNull(linked.players[player].session)
-    val identity = assertNotNull(controller.captureV9PortableIdentities()[player].identity)
+    val identity = assertNotNull(controller.capturePortableIdentities()[player].identity)
     val bytes =
         StateCodec.encode(
             StateFile(
@@ -1388,7 +1698,7 @@ class ProtocolV9StateTransportTest {
     val bytes =
         StateCodec.encode(
             StateFile(
-                controller.captureV9PortableIdentities(),
+                controller.capturePortableIdentities().take(4),
                 LinkedSessionStateRoot(normalized),
                 formatVersion = 2,
             ),
@@ -1408,15 +1718,33 @@ class ProtocolV9StateTransportTest {
     waitUntil { target.pendingCaptureCount() == 1 }
   }
 
+  private fun captureGeneration(
+      target: V9LinkedControllerTarget,
+      controller: LinkedController,
+  ): V9TargetGeneration {
+    val executor = Executors.newSingleThreadExecutor()
+    return try {
+      val future = executor.submit<V9TargetGeneration> { target.captureGeneration() }
+      awaitCapture(target)
+      dispatchOnly(controller)
+      future.get(5, TimeUnit.SECONDS)
+    } finally {
+      executor.shutdownNow()
+    }
+  }
+
   private fun pumpSafePoints(
       controllers: List<LinkedController>,
       timeoutMillis: Long = 10_000,
+      failureDetail: () -> String = { "" },
       condition: () -> Boolean,
   ) {
     val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
     while (!condition()) {
       controllers.forEach(::dispatchOnly)
-      if (System.nanoTime() >= deadline) throw AssertionError("safe-point operation did not finish")
+      if (System.nanoTime() >= deadline) {
+        throw AssertionError("safe-point operation did not finish" + failureDetail())
+      }
       Thread.yield()
     }
   }
@@ -1491,12 +1819,33 @@ class ProtocolV9StateTransportTest {
     }
   }
 
-  /** Deterministic transport scheduling: every read/write is fragmented without sleeping. */
+  /** Deterministic transport scheduling: fragments may be explicitly released without sleeping. */
   private class FragmentingSocketChannel : V9ConnectableChannel {
     private val delegate = V9SocketChannel(Socket())
     private val fragments = intArrayOf(1, 3, 17, 5, 64, 2, 31)
+    private val scheduledWrites = AtomicBoolean()
+    private val writePermits = Semaphore(0)
+    private val blockedWrites = AtomicInteger()
     private var readIndex = 0
     private var writeIndex = 0
+
+    fun scheduleWrites() {
+      check(scheduledWrites.compareAndSet(false, true))
+      blockedWrites.set(0)
+      writePermits.drainPermits()
+    }
+
+    fun blockedWriteCount(): Int = blockedWrites.get()
+
+    fun allowWriteFragments(count: Int) {
+      require(count > 0)
+      writePermits.release(count)
+    }
+
+    fun releaseScheduledWrites() {
+      scheduledWrites.set(false)
+      writePermits.release(1_024)
+    }
 
     override fun connect(address: InetSocketAddress, timeoutMillis: Int) =
         delegate.connect(address, timeoutMillis)
@@ -1508,6 +1857,15 @@ class ProtocolV9StateTransportTest {
     }
 
     override fun write(bytes: ByteArray, offset: Int, length: Int): Int {
+      if (scheduledWrites.get()) {
+        blockedWrites.incrementAndGet()
+        try {
+          writePermits.acquire()
+        } catch (interrupted: InterruptedException) {
+          Thread.currentThread().interrupt()
+          throw IOException("scheduled write was cancelled", interrupted)
+        }
+      }
       val result = delegate.write(bytes, offset, minOf(length, fragments[writeIndex++ % fragments.size]))
       Thread.yield()
       return result
@@ -1515,7 +1873,10 @@ class ProtocolV9StateTransportTest {
 
     override fun shutdownOutput() = delegate.shutdownOutput()
 
-    override fun close() = delegate.close()
+    override fun close() {
+      releaseScheduledWrites()
+      delegate.close()
+    }
   }
 
   private class MutableClock(var now: Long = 0) : V9MonotonicClock {

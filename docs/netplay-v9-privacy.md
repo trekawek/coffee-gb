@@ -91,17 +91,28 @@ open one lazy ROM/battery source. A verified transaction ends at an immutable pr
 `SYNCHRONIZING` boundary. Manifest preparation itself still supplies hashes, sizes, sanitized
 title/type/profile identity, and availability only—never ROM, battery, StateFile, or path bytes.
 
-Only an additional `V9PlayPlan` can cross that boundary. Its production LinkedController provider
-captures one detached root plus current post-transfer identities at the frame safe point and
-encodes off-owner; the transport never consults the local legacy importer. The initial direct
-StateFile-v2 checkpoint is prepared without mutation and committed at the frame safe point. READY
-is admitted only after that guest commit; the host treats it as a per-guest acknowledgement and
-opens four-player ACTIVE only after all three acknowledgements. Normal ACTIVE resynchronization
-uses a SESSION root; four-player uses one generation-frozen LINKED_SESSION with logical mask `0f`
-and may preserve null physical ports. Rejection wipes retained state
+Only an additional `V9PlayPlan` can cross that boundary. Its production LinkedController target
+publishes one immutable identity/topology generation at its frame safe point; foundation, network,
+and capture workers do not inspect live controller ownership. The provider later captures one
+detached root, the actual current frame, and post-transfer identities together at that safe point
+and encodes off-owner, so emulation may keep advancing during the handshake. The transport never
+consults the local legacy importer. The initial direct StateFile-v2 checkpoint is prepared without
+mutation and committed at the frame safe point. READY is admitted only after that guest commit;
+the host treats it as a per-guest acknowledgement and opens four-player ACTIVE only after all
+three acknowledgements. Normal ACTIVE resynchronization uses a SESSION root; four-player uses one
+coordinator-owned, generation-frozen LINKED_SESSION with logical mask `0f` and may preserve null
+physical ports. Coordinator close cancels its bounded shared capture worker and waiters. A
+replacement guest may reuse the captured generation only if the source generation and frame are
+unchanged; otherwise it is rejected and pairing must restart with a new coherent generation.
+Rejection wipes retained state
 bytes where practicable, releases the candidate, and preserves the live sessions/history/input/
 topology transactionally. No path, token, ROM, battery, StateFile bytes, digest, remote title, or
 input value is emitted in INFO diagnostics.
+
+A healthy normal ACTIVE connection may request a SESSION resynchronization. Input older than the
+retained rollback history instead terminates with a typed sequence failure before mutation; after
+that terminal boundary a fresh authenticated generation is required rather than an implicit
+checkpoint retry.
 
 Diagnostics and discovery remain for #350. The stale nonce-comparison roadmap checkbox is not a
 tokenless/manual-address bypass: v9 has no such flow. Discovery or a different invitation

@@ -1004,29 +1004,43 @@ class V9FoundationConnection(
         ?: return reject(V9ErrorCode.CONSENT_REJECTED, V9Diagnostic.CONSENT_REJECTED)
     val authorization = consentSession.checkpointAuthorization()
         ?: return reject(V9ErrorCode.CONSENT_REJECTED, V9Diagnostic.CONSENT_REJECTED)
-    val session =
-        V9PlaySession(
-            role,
-            mode,
-            boundary.authenticatedGuest,
-            authorization,
-            plan,
-            ::startTask,
-            V9PlaySend(::enqueuePlay),
-            lifecycle,
-            ::reject,
-        ) { active ->
-          completedActiveBoundary = active
-          activeComplete.countDown()
+    try {
+      startTask("netplay-v9-target-generation") {
+        try {
+          val generation = plan.checkpointTarget.captureGeneration()
+          val session =
+              V9PlaySession(
+                  role,
+                  mode,
+                  boundary.authenticatedGuest,
+                  authorization,
+                  plan,
+                  generation,
+                  ::startTask,
+                  V9PlaySend(::enqueuePlay),
+                  lifecycle,
+                  ::reject,
+              ) { active ->
+                completedActiveBoundary = active
+                activeComplete.countDown()
+              }
+          synchronized(wireStateLock) {
+            if (closed.get() || playSession != null) {
+              session.close()
+              return@startTask
+            }
+            playSession = session
+          }
+          session.start()
+        } catch (failure: V9ProtocolException) {
+          reject(failure.reason, diagnosticFor(failure.reason))
+        } catch (_: Exception) {
+          reject(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.IO_FAILURE)
         }
-    synchronized(wireStateLock) {
-      if (closed.get() || playSession != null) {
-        session.close()
-        return
       }
-      playSession = session
+    } catch (_: RuntimeException) {
+      reject(V9ErrorCode.INTERNAL_ERROR, V9Diagnostic.IO_FAILURE)
     }
-    session.start()
   }
 
   private fun manifestContext(
@@ -1634,6 +1648,7 @@ class V9FoundationServer(
     neverStarted.filterIsInstance<V9PendingCandidate>().forEach(V9PendingCandidate::close)
     pending.toTypedArray().forEach(V9PendingCandidate::close)
     connections.toTypedArray().forEach(V9FoundationConnection::close)
+    playPlan?.close()
     invitationHost?.close()
     acceptThread?.interrupt()
   }
