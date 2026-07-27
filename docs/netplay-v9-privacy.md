@@ -115,7 +115,10 @@ input value is emitted in INFO diagnostics.
 During four-player ACTIVE traffic, each guest originates only its authenticated player. The host
 applies accepted INPUT/RESET/STOP first and fans it out to the other ACTIVE guest connections;
 clients accept roster-player relays only from that host connection. Relay I/O occurs without the
-coordinator lock, and one failed downstream guest is removed without revoking healthy sessions.
+coordinator lock. The safe-point callback performs only a non-blocking offer into each bounded
+256-value connection-owned FIFO; its worker owns later writer admission and socket I/O. A blocked,
+failed, or full destination cannot block the controller or another guest, and close clears the
+pending values before releasing that destination without revoking healthy sessions.
 
 A healthy normal ACTIVE connection may request a SESSION resynchronization. Input older than the
 retained rollback history instead terminates with a typed sequence failure before mutation; after

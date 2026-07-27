@@ -4,6 +4,8 @@ import java.io.Closeable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal fun interface V9PlaySend {
@@ -50,6 +52,12 @@ internal class V9PlaySession(
   private var startSequence: Long? = null
   private var coordinatorRegistration: Closeable? = null
   private var runtimeRegistration: Closeable? = null
+  private val runtimeRelayLock = Any()
+  private val runtimeRelayQueue =
+      ArrayBlockingQueue<RuntimeRelay>(V9Limit.QUEUED_FRAMES.value.toInt())
+  private var runtimeRelayClosed = false
+  private var runtimeRelayTask: Thread? = null
+  private val runtimeRelayOverflow = AtomicBoolean(false)
   private var activeBoundary: V9ActiveBoundary? = null
   private var lastCheckpointOutcome: V9ErrorCode? = null
   private var checkpointCompletionCount = 0
@@ -67,15 +75,22 @@ internal class V9PlaySession(
         targetGeneration.identities,
     )
     if (mode == V9LinkMode.FOUR_PLAYER && role == V9Role.SERVER) {
-      runtimeRegistration =
-          requireNotNull(plan.fourPlayerCoordinator)
-              .registerRuntime(
-                  authenticatedGuest,
-                  object : V9FourPlayerRuntimeRelay {
-                    override fun sendInput(value: V9InputState) = sendRelayedInput(value)
-                    override fun sendControl(value: V9RuntimeControl) = sendRelayedControl(value)
-                  },
-              )
+      try {
+        runtimeRelayTask = startTask("netplay-v9-runtime-relay") { runtimeRelayLoop() }
+        runtimeRegistration =
+            requireNotNull(plan.fourPlayerCoordinator)
+                .registerRuntime(
+                    authenticatedGuest,
+                    object : V9FourPlayerRuntimeRelay {
+                      override fun sendInput(value: V9InputState) = offerRelayedInput(value)
+                      override fun sendControl(value: V9RuntimeControl) =
+                          offerRelayedControl(value)
+                    },
+                )
+      } catch (problem: RuntimeException) {
+        closeRuntimeRelay()
+        throw problem
+      }
     }
   }
 
@@ -217,27 +232,89 @@ internal class V9PlaySession(
     sendRuntime(type, value.player, V9GameplayCodec.encodeControl(value))
   }
 
-  private fun sendRelayedInput(value: V9InputState) {
+  private fun offerRelayedInput(value: V9InputState) {
     if (role != V9Role.SERVER || mode != V9LinkMode.FOUR_PLAYER) return
-    sendRuntime(V9MessageType.INPUT, value.player, V9GameplayCodec.encodeInput(value))
+    offerRuntimeRelay(RuntimeRelay.Input(value))
   }
 
-  private fun sendRelayedControl(value: V9RuntimeControl) {
+  private fun offerRelayedControl(value: V9RuntimeControl) {
     if (role != V9Role.SERVER || mode != V9LinkMode.FOUR_PLAYER) return
-    val type =
-        if (value.kind == V9RuntimeMessageKind.RESET) V9MessageType.RESET
-        else V9MessageType.STOP
-    sendRuntime(type, value.player, V9GameplayCodec.encodeControl(value))
+    offerRuntimeRelay(RuntimeRelay.Control(value))
+  }
+
+  /**
+   * Controller callbacks perform only this bounded, non-blocking offer. The connection-owned
+   * worker may wait for wire-state ordering or socket I/O, but the emulation safe point cannot.
+   */
+  private fun offerRuntimeRelay(value: RuntimeRelay) {
+    val admitted = synchronized(runtimeRelayLock) {
+      !runtimeRelayClosed && runtimeRelayQueue.offer(value)
+    }
+    if (admitted) return
+    if (!isClosed() && runtimeRelayOverflow.compareAndSet(false, true)) {
+      try {
+        startTask("netplay-v9-runtime-relay-overflow") {
+          if (!isClosed()) protocolFailure(V9ErrorCode.QUEUE_OVERFLOW)
+        }
+      } catch (_: RuntimeException) {
+        // Connection close won task ownership; it already owns destination cleanup.
+      }
+    }
+    throw V9ProtocolException(V9ErrorCode.QUEUE_OVERFLOW, 0)
+  }
+
+  private fun runtimeRelayLoop() {
+    try {
+      while (true) {
+        val value = runtimeRelayQueue.poll(50, TimeUnit.MILLISECONDS)
+        val stopped = synchronized(runtimeRelayLock) { runtimeRelayClosed }
+        if (stopped) return
+        when (value) {
+          is RuntimeRelay.Input ->
+            sendRuntime(
+                V9MessageType.INPUT,
+                value.value.player,
+                V9GameplayCodec.encodeInput(value.value),
+            )
+          is RuntimeRelay.Control -> {
+            val type =
+                if (value.value.kind == V9RuntimeMessageKind.RESET) V9MessageType.RESET
+                else V9MessageType.STOP
+            sendRuntime(type, value.value.player, V9GameplayCodec.encodeControl(value.value))
+          }
+          null -> Unit
+        }
+      }
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+    } catch (problem: V9ProtocolException) {
+      if (!isClosed()) protocolFailure(problem.reason)
+    } catch (_: RuntimeException) {
+      if (!isClosed()) protocolFailure(V9ErrorCode.INTERNAL_ERROR)
+    }
+  }
+
+  private fun closeRuntimeRelay() {
+    val task = synchronized(runtimeRelayLock) {
+      if (runtimeRelayClosed) return
+      runtimeRelayClosed = true
+      runtimeRelayQueue.clear()
+      runtimeRelayTask.also { runtimeRelayTask = null }
+    }
+    task?.takeUnless { it === Thread.currentThread() }?.interrupt()
   }
 
   private fun sendRuntime(type: V9MessageType, player: Int, payload: ByteArray) {
-    ensureActive()
-    val sequence =
-        send.send(type, 0, 0, player.toLong() + 1, payload, { Closeable {} }) {
-          if (!isClosed()) lifecycle.activeProgress()
-        }
-    payload.fill(0)
-    if (sequence == null) protocolFailure(V9ErrorCode.QUEUE_OVERFLOW)
+    try {
+      ensureActive()
+      val sequence =
+          send.send(type, 0, 0, player.toLong() + 1, payload, { Closeable {} }) {
+            if (!isClosed()) lifecycle.activeProgress()
+          }
+      if (sequence == null) protocolFailure(V9ErrorCode.QUEUE_OVERFLOW)
+    } finally {
+      payload.fill(0)
+    }
   }
 
   private fun ensureActive() = synchronized(lock) {
@@ -749,6 +826,12 @@ internal class V9PlaySession(
 
   private fun isClosed(): Boolean = synchronized(lock) { closed }
 
+  internal fun runtimeRelayQueueSize(): Int = synchronized(runtimeRelayLock) {
+    runtimeRelayQueue.size
+  }
+
+  internal fun offerRelayedInputForTest(value: V9InputState) = offerRelayedInput(value)
+
   private fun protocolFailure(reason: V9ErrorCode) {
     fail(reason, diagnostic(reason))
   }
@@ -791,6 +874,7 @@ internal class V9PlaySession(
       pendingStart = null
       lastInputOrder.clear()
     }
+    closeRuntimeRelay()
     registration?.close()
     runtime?.close()
     preparing?.close()
@@ -822,6 +906,11 @@ internal class V9PlaySession(
   internal fun checkpointOutcome(): V9ErrorCode? = synchronized(lock) { lastCheckpointOutcome }
 
   internal fun checkpointCompletions(): Int = synchronized(lock) { checkpointCompletionCount }
+
+  private sealed class RuntimeRelay {
+    data class Input(val value: V9InputState) : RuntimeRelay()
+    data class Control(val value: V9RuntimeControl) : RuntimeRelay()
+  }
 
   private class PendingPrepareRegistration : Closeable {
     private val lock = Any()

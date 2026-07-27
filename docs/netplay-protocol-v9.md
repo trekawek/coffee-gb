@@ -288,7 +288,11 @@ relays the accepted player/frame payload over its other ACTIVE guest connections
 those roster-player relays only from the authenticated host connection. Host player zero is sent
 to every ACTIVE guest. A guest cannot directly claim another player, and the host never relays a
 rejected value. Relay queue admission occurs outside the coordinator lock, so one failed or slow
-guest is isolated from healthy guests.
+guest is isolated from healthy guests. Each server-to-guest connection owns one FIFO handoff of at
+most 256 runtime values and one worker. The controller safe-point callback performs only a
+non-blocking offer; sequence assignment, writer-queue admission, and socket writes happen on that
+worker. A full handoff fails only that destination with `QUEUE_OVERFLOW`, and connection close
+clears the handoff and interrupts its worker.
 PING/PONG are opaque nonce u64 and diagnostic monotonic-microsecond
 stamp u64; the stamp never drives emulation.
 
