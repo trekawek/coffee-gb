@@ -1,20 +1,22 @@
 package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.controller.Controller;
-import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
-import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
+import eu.rekawek.coffeegb.controller.properties.DisplayProperties;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
-import eu.rekawek.coffeegb.controller.properties.DisplayProperties;
 
 import javax.swing.*;
 import java.awt.*;
-import java.awt.image.BufferedImage;
-import java.awt.image.DataBufferInt;
+import java.util.Arrays;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_HEIGHT;
 import static eu.rekawek.coffeegb.core.gpu.Display.DISPLAY_WIDTH;
@@ -25,28 +27,27 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private static final int NOTIFICATION_DURATION_MS = 1500;
 
+    private static final Color DEFAULT_LETTERBOX_COLOR = Color.BLACK;
+
     private final EventBus eventBus;
-
-    private BufferedImage img;
-
-    private int[] imgPixels;
-
-    /** Guards replacement, upload, and painting of {@link #img}'s directly accessed raster. */
-    private final Object rasterLock = new Object();
 
     private final int[] waitingFrame;
 
-    private boolean isSgbBorder;
+    private final AtomicReference<DisplayFrameSnapshot> displayedFrame;
+
+    private final AtomicLong preferredSizeRevision = new AtomicLong();
+
+    private PendingFrame pendingFrame;
+
+    private volatile int displayWidth = DISPLAY_WIDTH;
+
+    private volatile int displayHeight = DISPLAY_HEIGHT;
 
     private volatile boolean doStop;
 
     private volatile boolean isStopped;
 
-    private boolean frameIsWaiting;
-
-    private boolean resetBlendForWaitingFrame;
-
-    private int scale;
+    private volatile DisplayScaleMode scaleMode;
 
     private boolean grayscale;
 
@@ -54,7 +55,7 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private boolean colorCorrection;
 
-    private int rotation;
+    private volatile int rotation;
 
     private int[] previousFrame;
 
@@ -74,18 +75,32 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
         super();
+        requireEventDispatchThread("SwingDisplay construction");
         this.eventBus = eventBus;
-        createFrameImage(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        setOpaque(true);
+        setBackground(DEFAULT_LETTERBOX_COLOR);
         waitingFrame = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+        displayedFrame = new AtomicReference<>(DisplayFrameSnapshot.copyOf(
+                DISPLAY_WIDTH,
+                DISPLAY_HEIGHT,
+                new int[DISPLAY_WIDTH * DISPLAY_HEIGHT]));
+        this.grayscale = properties.getGrayscale();
+        this.rotation = normalizeRotation(properties.getRotation());
+        this.scaleMode = legacyScaleMode(properties.getScale());
+        setBlending(properties.getBlending());
+        setColorCorrection(properties.getColorCorrection());
+
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
         eventBus.register(this::onSgbFrame, SgbDisplay.SgbFrameReadyEvent.class, callerId);
         eventBus.register(this::onHardwareProfile, Controller.HardwareProfileEvent.class, callerId);
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
-        eventBus.register(e -> this.grayscale = e.grayscale, SetGrayscaleEvent.class);
+        eventBus.register(e -> setScaleMode(e.mode), SetScaleModeEvent.class);
+        eventBus.register(e -> setGrayscale(e.grayscale), SetGrayscaleEvent.class);
         eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
         eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
         eventBus.register(e -> setRotation(e.rotation), SetRotationEvent.class);
+        eventBus.register(e -> setLetterboxColor(e.color), SetLetterboxColorEvent.class);
         eventBus.register(e -> this.rumbling = e.on(), RumbleEvent.class, callerId);
         eventBus.register(e -> showNotification("State saved (slot " + e.getSlot() + ")"),
                 Controller.SnapshotSavedEvent.class, callerId);
@@ -99,11 +114,7 @@ public class SwingDisplay extends JPanel implements Runnable {
                 Controller.RomLoadingCancelledEvent.class);
         eventBus.register(e -> clearPersistentNotification(),
                 Controller.EmulationStartedEvent.class, callerId);
-        this.grayscale = properties.getGrayscale();
-        this.rotation = normalizeRotation(properties.getRotation());
-        setBlending(properties.getBlending());
-        setColorCorrection(properties.getColorCorrection());
-        setScale(properties.getScale());
+        requestPreferredSizeUpdate();
     }
 
     private synchronized void onHardwareProfile(Controller.HardwareProfileEvent e) {
@@ -111,69 +122,79 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private synchronized void onGbcFrame(Display.GbcFrameReadyEvent e) {
+        requireFrameLength(e.pixels().length, DISPLAY_WIDTH, DISPLAY_HEIGHT);
         e.toRgb(waitingFrame, colorCorrection);
-        setBorder(false);
-        frameQueued(false);
+        setFrameSize(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        frameQueued(DISPLAY_WIDTH, DISPLAY_HEIGHT, false);
     }
 
     private synchronized void onDmgFrame(Display.DmgFrameReadyEvent e) {
         if (hardwareProfile.capabilities().superGameboyBorder()) {
             return;
         }
+        requireFrameLength(e.pixels().length, DISPLAY_WIDTH, DISPLAY_HEIGHT);
         e.toRgb(waitingFrame, grayscale);
-        setBorder(false);
-        frameQueued(e.lcdBlank());
+        setFrameSize(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        frameQueued(DISPLAY_WIDTH, DISPLAY_HEIGHT, e.lcdBlank());
     }
 
     private synchronized void onSgbFrame(SgbDisplay.SgbFrameReadyEvent e) {
+        int width = e.includeBorder() ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
+        int height = e.includeBorder() ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
+        requireFrameLength(e.buffer().length, width, height);
         e.toRgb(waitingFrame, grayscale);
-        setBorder(e.includeBorder());
-        frameQueued(false);
+        setFrameSize(width, height);
+        frameQueued(width, height, false);
+    }
+
+    private static void requireFrameLength(int actualLength, int width, int height) {
+        int expectedLength = Math.multiplyExact(width, height);
+        if (actualLength != expectedLength) {
+            throw new IllegalArgumentException(
+                    "Frame pixel count must be exactly " + expectedLength);
+        }
     }
 
     /**
-     * Keep the newest panel state while the display thread has not uploaded the pending
+     * Keep the newest panel state while the display thread has not published the pending
      * frame yet. In particular, LCD-off can replace a just-finished partial scanout before
      * Swing paints it instead of leaving that stale transition visible for a host frame.
      */
-    private void frameQueued(boolean resetBlend) {
-        resetBlendForWaitingFrame = resetBlend;
-        if (!frameIsWaiting) {
-            frameIsWaiting = true;
-            notify();
+    private void frameQueued(int width, int height, boolean resetBlend) {
+        if (!Thread.holdsLock(this)) {
+            throw new IllegalStateException(
+                    "Frame queue must be updated while holding the display lock");
+        }
+        int size = Math.multiplyExact(width, height);
+        pendingFrame = new PendingFrame(
+                width, height, Arrays.copyOf(waitingFrame, size), resetBlend);
+        notifyAll();
+    }
+
+    private void setFrameSize(int width, int height) {
+        if (!Thread.holdsLock(this)) {
+            throw new IllegalStateException(
+                    "Frame size must be updated while holding the display lock");
+        }
+        if (width != displayWidth || height != displayHeight) {
+            displayWidth = width;
+            displayHeight = height;
+            requestPreferredSizeUpdate();
         }
     }
 
-    private void setBorder(boolean isSgbBorder) {
-        if (isSgbBorder != this.isSgbBorder) {
-            this.isSgbBorder = isSgbBorder;
-            createFrameImage(getDisplayWidth(), getDisplayHeight());
-            setScale(scale);
-        }
+    private void setScale(int scale) {
+        setScaleMode(legacyScaleMode(scale));
     }
 
-    /**
-     * The image raster is written directly (setRGB would convert every pixel through the
-     * color model); TYPE_INT_RGB matches the int-packed RGB produced by the emulator.
-     */
-    private void createFrameImage(int width, int height) {
-        synchronized (rasterLock) {
-            img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-            imgPixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
-        }
+    private void setScaleMode(DisplayScaleMode mode) {
+        scaleMode = Objects.requireNonNull(mode, "mode");
+        requestPreferredSizeUpdate();
     }
 
-    private synchronized void setScale(int scale) {
-        this.scale = scale;
-        setPreferredSize(rotatedPreferredSize());
-        eventBus.post(new DisplaySizeUpdatedEvent(getPreferredSize()));
-    }
-
-    private synchronized void setRotation(int degrees) {
+    private void setRotation(int degrees) {
         this.rotation = normalizeRotation(degrees);
-        setPreferredSize(rotatedPreferredSize());
-        eventBus.post(new DisplaySizeUpdatedEvent(getPreferredSize()));
-        repaint();
+        requestPreferredSizeUpdate();
     }
 
     private static int normalizeRotation(int degrees) {
@@ -182,56 +203,92 @@ public class SwingDisplay extends JPanel implements Runnable {
         return (r / 90) * 90;
     }
 
-    private Dimension rotatedPreferredSize() {
-        int w = getDisplayWidth() * scale;
-        int h = getDisplayHeight() * scale;
-        return (rotation == 90 || rotation == 270) ? new Dimension(h, w) : new Dimension(w, h);
+    private static DisplayScaleMode legacyScaleMode(int scale) {
+        if (scale <= 1) {
+            return DisplayScaleMode.EXPLICIT_1X;
+        } else if (scale == 2) {
+            return DisplayScaleMode.EXPLICIT_2X;
+        } else if (scale == 3) {
+            return DisplayScaleMode.EXPLICIT_3X;
+        } else {
+            return DisplayScaleMode.EXPLICIT_4X;
+        }
     }
 
-    // run() uploads directly into img's raster. The EDT uses the dedicated raster lock while
-    // scanning it, or alternating frames can be shown with a horizontal boundary between the
-    // old and new pictures (F-1 Race, issue #147). Do not use the component monitor here:
-    // Swing paints children while holding the AWT tree lock, and border resizing takes that
-    // lock while handling a synchronized frame callback.
+    private void requestPreferredSizeUpdate() {
+        int width;
+        int height;
+        int localRotation;
+        DisplayScaleMode localMode;
+        long revision;
+        synchronized (this) {
+            width = displayWidth;
+            height = displayHeight;
+            localRotation = rotation;
+            localMode = scaleMode;
+            revision = preferredSizeRevision.incrementAndGet();
+        }
+        Dimension preferredSize =
+                DisplayViewport.preferredSize(width, height, localRotation, localMode);
+        runOnEventDispatchThread(() -> {
+            requireEventDispatchThread("Display size update");
+            if (preferredSizeRevision.get() != revision) {
+                return;
+            }
+            Dimension appliedSize = new Dimension(preferredSize);
+            setPreferredSize(appliedSize);
+            revalidate();
+            eventBus.post(new DisplaySizeUpdatedEvent(appliedSize));
+            repaint();
+        });
+    }
+
+    /**
+     * Updates the letterbox/pillarbox color. Calls from emulation or settings threads are
+     * marshalled to the EDT.
+     */
+    public void setLetterboxColor(Color color) {
+        Color copiedColor = Objects.requireNonNull(color, "color");
+        runOnEventDispatchThread(() -> {
+            requireEventDispatchThread("Letterbox color update");
+            setBackground(copiedColor);
+            repaint();
+        });
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
+        requireEventDispatchThread("Display painting");
         super.paintComponent(g);
 
-        int localScale = scale;
-        BufferedImage localImg;
-        synchronized (rasterLock) {
-            localImg = img;
-        }
-        int w = localImg.getWidth() * localScale;
-        int h = localImg.getHeight() * localScale;
-        Graphics2D g2d = (Graphics2D) g.create();
-        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+        DisplayFrameSnapshot frame = displayedFrame.get();
+        DisplayViewport viewport = DisplayViewport.calculate(
+                getWidth(),
+                getHeight(),
+                frame.width(),
+                frame.height(),
+                rotation,
+                scaleMode);
+        Graphics2D frameGraphics = (Graphics2D) g.create();
+        frameGraphics.setRenderingHint(
+                RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        frameGraphics.setRenderingHint(
+                RenderingHints.KEY_RENDERING,
+                RenderingHints.VALUE_RENDER_SPEED);
         if (rumbling) {
             rumblePhase++;
-            g2d.translate((rumblePhase & 2) == 0 ? 1 : -1, (rumblePhase & 1) == 0 ? 1 : -1);
+            frameGraphics.translate(
+                    (rumblePhase & 2) == 0 ? 1 : -1,
+                    (rumblePhase & 1) == 0 ? 1 : -1);
         }
-        switch (rotation) {
-            case 90 -> {
-                g2d.translate(h, 0);
-                g2d.rotate(Math.PI / 2);
-            }
-            case 180 -> {
-                g2d.translate(w, h);
-                g2d.rotate(Math.PI);
-            }
-            case 270 -> {
-                g2d.translate(0, w);
-                g2d.rotate(3 * Math.PI / 2);
-            }
-            default -> {
-            }
-        }
-        synchronized (rasterLock) {
-            g2d.drawImage(localImg, 0, 0, w, h, null);
-        }
-        paintNotification(g2d, w, h, localScale);
-        g2d.dispose();
+        frameGraphics.transform(viewport.sourceToComponentTransform());
+        frame.paint(frameGraphics);
+        frameGraphics.dispose();
+
+        Graphics2D notificationGraphics = (Graphics2D) g.create();
+        paintNotification(notificationGraphics, viewport);
+        notificationGraphics.dispose();
     }
 
     private void showNotification(String text) {
@@ -255,7 +312,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private void repaintNotification(int repaintAfterMs) {
-        SwingUtilities.invokeLater(() -> {
+        runOnEventDispatchThread(() -> {
             repaint();
             if (repaintAfterMs > 0) {
                 Timer timer = new Timer(repaintAfterMs, e -> repaint());
@@ -265,13 +322,15 @@ public class SwingDisplay extends JPanel implements Runnable {
         });
     }
 
-    private void paintNotification(Graphics2D g, int width, int height, int localScale) {
+    private void paintNotification(Graphics2D g, DisplayViewport viewport) {
         String persistentText = persistentNotificationText;
         String text = persistentText != null ? persistentText : notificationText;
         if (text == null || (persistentText == null && System.nanoTime() >= notificationExpiresAt)) {
             return;
         }
 
+        Rectangle bounds = viewport.paintBounds();
+        int localScale = Math.max(1, (int) Math.floor(viewport.scale()));
         int fontSize = Math.max(12, 7 * localScale);
         g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, fontSize));
         FontMetrics metrics = g.getFontMetrics();
@@ -279,8 +338,8 @@ public class SwingDisplay extends JPanel implements Runnable {
         int paddingY = Math.max(4, 2 * localScale);
         int boxWidth = metrics.stringWidth(text) + 2 * paddingX;
         int boxHeight = metrics.getHeight() + 2 * paddingY;
-        int x = (width - boxWidth) / 2;
-        int y = height - boxHeight - Math.max(4, 4 * localScale);
+        int x = bounds.x + (bounds.width - boxWidth) / 2;
+        int y = bounds.y + bounds.height - boxHeight - Math.max(4, 4 * localScale);
         int arc = Math.max(6, 4 * localScale);
 
         g.setColor(new Color(0, 0, 0, 190));
@@ -289,45 +348,40 @@ public class SwingDisplay extends JPanel implements Runnable {
         g.drawString(text, x + paddingX, y + paddingY + metrics.getAscent());
     }
 
-    private int getDisplayWidth() {
-        return isSgbBorder ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
-    }
-
-    private int getDisplayHeight() {
-        return isSgbBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
-    }
-
     @Override
     public void run() {
         doStop = false;
         isStopped = false;
-        frameIsWaiting = false;
 
         while (!doStop) {
+            PendingFrame frame;
             synchronized (this) {
-                if (frameIsWaiting) {
-                    if (blending) {
-                        if (resetBlendForWaitingFrame) {
-                            // LCD-off is a new panel state, not another rendered frame to
-                            // average. Retaining a partial scanout here creates ghost sprites.
-                            previousFrame = null;
-                        }
-                        blendWithPreviousFrame();
-                    }
-                    synchronized (rasterLock) {
-                        System.arraycopy(waitingFrame, 0, imgPixels, 0,
-                                getDisplayWidth() * getDisplayHeight());
-                    }
-                    repaint();
-                    frameIsWaiting = false;
-                } else {
+                while (!doStop && pendingFrame == null) {
                     try {
                         wait(10);
                     } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
+                        Thread.currentThread().interrupt();
+                        doStop = true;
                     }
                 }
+                if (doStop) {
+                    break;
+                }
+                frame = pendingFrame;
+                pendingFrame = null;
+                if (blending) {
+                    if (frame.resetBlend()) {
+                        // LCD-off is a new panel state, not another rendered frame to
+                        // average. Retaining a partial scanout here creates ghost sprites.
+                        previousFrame = null;
+                    }
+                    blendWithPreviousFrame(frame.rgb());
+                }
             }
+
+            displayedFrame.set(DisplayFrameSnapshot.copyOf(
+                    frame.width(), frame.height(), frame.rgb()));
+            requestRepaint();
         }
         isStopped = true;
         synchronized (this) {
@@ -338,11 +392,13 @@ public class SwingDisplay extends JPanel implements Runnable {
     public void stop() {
         doStop = true;
         synchronized (this) {
+            notifyAll();
             while (!isStopped) {
                 try {
                     wait(10);
                 } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
+                    Thread.currentThread().interrupt();
+                    return;
                 }
             }
         }
@@ -350,6 +406,10 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private synchronized void setColorCorrection(boolean colorCorrection) {
         this.colorCorrection = colorCorrection;
+    }
+
+    private synchronized void setGrayscale(boolean grayscale) {
+        this.grayscale = grayscale;
     }
 
     private synchronized void setBlending(boolean blending) {
@@ -361,22 +421,49 @@ public class SwingDisplay extends JPanel implements Runnable {
      * Approximates the ghosting of the original LCD by averaging with the previous frame;
      * games flickering sprites at 30 Hz (like Chikyuu Kaihou Gun ZAS) rely on it.
      */
-    private void blendWithPreviousFrame() {
-        int size = getDisplayWidth() * getDisplayHeight();
+    private void blendWithPreviousFrame(int[] frame) {
+        int size = frame.length;
         if (previousFrame == null || previousFrame.length != size) {
-            previousFrame = new int[size];
-            System.arraycopy(waitingFrame, 0, previousFrame, 0, size);
+            previousFrame = frame.clone();
             return;
         }
         for (int i = 0; i < size; i++) {
-            int a = waitingFrame[i];
+            int a = frame[i];
             int b = previousFrame[i];
             previousFrame[i] = a;
-            waitingFrame[i] = (((a ^ b) & 0xfefefe) >> 1) + (a & b);
+            frame[i] = (((a ^ b) & 0xfefefe) >> 1) + (a & b);
+        }
+    }
+
+    DisplayFrameSnapshot displayedFrame() {
+        return displayedFrame.get();
+    }
+
+    private void requestRepaint() {
+        runOnEventDispatchThread(this::repaint);
+    }
+
+    private static void runOnEventDispatchThread(Runnable runnable) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            runnable.run();
+        } else {
+            SwingUtilities.invokeLater(runnable);
+        }
+    }
+
+    private static void requireEventDispatchThread(String operation) {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            throw new IllegalStateException(operation + " must run on the Event Dispatch Thread");
         }
     }
 
     public record SetScaleEvent(int scale) implements Event {
+    }
+
+    public record SetScaleModeEvent(DisplayScaleMode mode) implements Event {
+        public SetScaleModeEvent {
+            Objects.requireNonNull(mode, "mode");
+        }
     }
 
     public record SetGrayscaleEvent(boolean grayscale) implements Event {
@@ -388,9 +475,26 @@ public class SwingDisplay extends JPanel implements Runnable {
     public record SetRotationEvent(int rotation) implements Event {
     }
 
+    public record SetLetterboxColorEvent(Color color) implements Event {
+        public SetLetterboxColorEvent {
+            Objects.requireNonNull(color, "color");
+        }
+    }
+
     public record SetBlendingEvent(boolean blending) implements Event {
     }
 
     public record DisplaySizeUpdatedEvent(Dimension preferredSize) implements Event {
+        public DisplaySizeUpdatedEvent {
+            preferredSize = new Dimension(Objects.requireNonNull(preferredSize, "preferredSize"));
+        }
+
+        @Override
+        public Dimension preferredSize() {
+            return new Dimension(preferredSize);
+        }
+    }
+
+    private record PendingFrame(int width, int height, int[] rgb, boolean resetBlend) {
     }
 }
