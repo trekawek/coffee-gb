@@ -1544,7 +1544,8 @@ class LinkedController(
     val romBuffer = config.rom.file.toPath().readBytes()
     val slotRomBuffer = config.slotRom?.file?.toPath()?.readBytes()
     val saveFile = Cartridge.getSaveName(config.rom.file)
-    val batteryBuffer = if (saveFile.exists()) saveFile.toPath().readBytes() else null
+    val batteryBuffer =
+        if (config.isSupportBatterySave && saveFile.exists()) saveFile.toPath().readBytes() else null
     romBuffers[localPlayer] = romBuffer
     slotRomBuffers[localPlayer] = slotRomBuffer
     batteryBuffers[localPlayer] = batteryBuffer

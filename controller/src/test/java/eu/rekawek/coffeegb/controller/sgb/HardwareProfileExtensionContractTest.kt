@@ -59,13 +59,13 @@ class HardwareProfileExtensionContractTest {
 
     val cli = Files.readString(root.resolve("swing/src/main/java/eu/rekawek/coffeegb/swing/Main.kt"))
     val menu = Files.readString(root.resolve("swing/src/main/java/eu/rekawek/coffeegb/swing/SwingMenu.kt"))
-    val settings =
+    val settingsCodec =
         Files.readString(
             root.resolve(
-                "controller/src/main/java/eu/rekawek/coffeegb/controller/properties/SystemProperties.kt"))
+                "controller/src/main/java/eu/rekawek/coffeegb/controller/properties/ApplicationSettingsCodec.kt"))
     assertTrue(cli.contains("HardwareProfileRegistry.supportedIds()"))
     assertTrue(menu.contains("HardwareProfileRegistry.supportedProfiles()"))
-    assertTrue(settings.contains("HardwareProfileRegistry.resolveSetting("))
+    assertTrue(settingsCodec.contains("HardwareProfileRegistry.resolveSetting("))
   }
 
   private fun repositoryRoot(): Path {

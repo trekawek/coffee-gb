@@ -1280,6 +1280,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return this;
         }
 
+        public boolean isSupportBatterySave() {
+            return supportBatterySave;
+        }
+
         public GameboyConfiguration setBootCancellation(BooleanSupplier bootCancellation) {
             this.bootCancellation = bootCancellation == null ? () -> false : bootCancellation;
             return this;

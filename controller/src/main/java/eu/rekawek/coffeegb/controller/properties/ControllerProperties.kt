@@ -12,6 +12,8 @@ object ControllerProperties {
   private val playerGamepad = Regex("input\\.p(\\d+)\\.gamepad")
   private val stableGamepadId = Regex("sdl-[0-9a-f]{64}")
 
+  internal fun isStableGamepadId(value: String): Boolean = stableGamepadId.matches(value)
+
   data class PlayerButton(val player: Int, val button: Button) {
     init {
       require(player in 0..3) { "Logical player index must be in 0..3" }
@@ -40,12 +42,26 @@ object ControllerProperties {
         keyboard.filterValues { it.player == 0 }.mapValues { it.value.button }
   }
 
-  fun getPlayerMapping(properties: Properties): PlayerMapping {
-    val perPlayer = List(4) { EnumMap<Button, Int>(Button::class.java) }
-    defaultPrimaryKeys().forEach { (button, key) -> perPlayer[0][button] = key }
+  fun getPlayerMapping(properties: Properties): PlayerMapping = getInputSettings(properties).toPlayerMapping()
+
+  internal fun getInputSettings(
+      properties: Properties,
+      legacyDefaults: Boolean = true,
+  ): ApplicationSettings.Input {
+    val perPlayer =
+        List(4) { EnumMap<Button, ApplicationSettings.KeyboardKey>(Button::class.java) }
+    if (legacyDefaults) {
+      ApplicationSettings.Input.defaultPrimaryKeyboard().forEach { (button, key) ->
+        perPlayer[0][button] = key
+      }
+    }
     val explicitLegacy = mutableSetOf<Button>()
     val explicitPlayer = mutableSetOf<Pair<Int, Button>>()
-    val gamepads = mutableMapOf(0 to GamepadAssignment.AUTO)
+    val gamepads =
+        mutableMapOf<Int, ApplicationSettings.GamepadSelection>(
+            0 to
+                if (legacyDefaults) ApplicationSettings.GamepadSelection.Auto
+                else ApplicationSettings.GamepadSelection.Disabled)
 
     properties.stringPropertyNames().sorted().forEach { key ->
       val value = properties.getProperty(key).trim()
@@ -74,47 +90,42 @@ object ControllerProperties {
           require(value == "none" || value == GamepadAssignment.AUTO || stableGamepadId.matches(value)) {
             "$key must be 'none', 'auto', or sdl- followed by 64 lowercase hex digits"
           }
-          gamepads[player] = value
+          val selection =
+              when (value) {
+                "none" -> ApplicationSettings.GamepadSelection.Disabled
+                GamepadAssignment.AUTO -> ApplicationSettings.GamepadSelection.Auto
+                else -> ApplicationSettings.GamepadSelection.Device(value)
+              }
+          if (player == 0 || selection != ApplicationSettings.GamepadSelection.Disabled) {
+            gamepads[player] = selection
+          } else {
+            // Missing secondary entries are the canonical representation of disabled players.
+            gamepads.remove(player)
+          }
         }
         key.startsWith("input.") -> throw IllegalArgumentException("Unknown input property: $key")
       }
     }
 
-    val keyboard = linkedMapOf<Int, PlayerButton>()
+    val keyboard = linkedMapOf<PlayerButton, ApplicationSettings.KeyboardKey>()
+    val usedKeys = linkedMapOf<Int, PlayerButton>()
     perPlayer.forEachIndexed { player, bindings ->
       bindings.forEach { (button, key) ->
-        val previous = keyboard.put(key, PlayerButton(player, button))
+        val binding = PlayerButton(player, button)
+        val previous = usedKeys.put(key.code, binding)
         require(previous == null) {
-          "Key ${KeyEvent.getKeyText(key)} is assigned to both P${previous!!.player + 1} " +
+          "Key ${KeyEvent.getKeyText(key.code)} is assigned to both P${previous!!.player + 1} " +
               "${previous.button} and P${player + 1} $button"
         }
+        keyboard[binding] = key
       }
     }
 
-    val assignments = gamepads.entries
-        .filter { it.value != "none" }
-        .sortedBy { it.key }
-        .map { GamepadAssignment(it.key, it.value) }
-    val duplicate = assignments.groupBy { it.selector }.entries.firstOrNull { it.value.size > 1 }
-    require(duplicate == null) {
-      "Gamepad selector ${duplicate!!.key} is assigned to multiple logical players"
-    }
-    return PlayerMapping(keyboard.toMap(), assignments)
+    return ApplicationSettings.Input(keyboard.toMap(), gamepads.toMap()).also { it.toPlayerMapping() }
   }
 
   fun getControllerMapping(properties: Properties): Map<Int, Button> =
       getPlayerMapping(properties).legacyPrimaryKeyboard()
-
-  private fun defaultPrimaryKeys() = mapOf(
-      Button.LEFT to KeyEvent.VK_LEFT,
-      Button.RIGHT to KeyEvent.VK_RIGHT,
-      Button.UP to KeyEvent.VK_UP,
-      Button.DOWN to KeyEvent.VK_DOWN,
-      Button.A to KeyEvent.VK_Z,
-      Button.B to KeyEvent.VK_X,
-      Button.START to KeyEvent.VK_ENTER,
-      Button.SELECT to KeyEvent.VK_SHIFT,
-  )
 
   private fun parsePlayer(value: String, property: String): Int {
     val human = value.toIntOrNull()
@@ -129,14 +140,6 @@ object ControllerProperties {
     throw IllegalArgumentException("Unknown Game Boy button in $property: $value")
   }
 
-  private fun parseKey(value: String, property: String): Int {
-    require(value.startsWith("VK_")) { "$property must name a java.awt.event.KeyEvent VK_* constant" }
-    val field = try {
-      KeyEvent::class.java.getField(value)
-    } catch (_: ReflectiveOperationException) {
-      throw IllegalArgumentException("Unknown keyboard key in $property: $value")
-    }
-    require(field.type == Int::class.javaPrimitiveType) { "Invalid keyboard key in $property: $value" }
-    return field.getInt(null)
-  }
+  private fun parseKey(value: String, property: String): ApplicationSettings.KeyboardKey =
+      ApplicationSettings.KeyboardKey.parse(value, property)
 }

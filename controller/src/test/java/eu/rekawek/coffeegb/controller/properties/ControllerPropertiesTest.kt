@@ -99,7 +99,7 @@ class ControllerPropertiesTest {
 
   @Test
   fun controllerConfigurationsShareTheExactLiveInputService() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     val rom = Rom(ByteArray(0x8000))
     val config = Controller.createGameboyConfig(properties, rom)
 
@@ -113,7 +113,7 @@ class ControllerPropertiesTest {
     val sgbRom = Rom(StateCodecTestSupport.rom(sgb = true))
 
     listOf(HardwareProfileRegistry.CGB, HardwareProfileRegistry.CGB0).forEach { profile ->
-      val properties = EmulatorProperties(profile)
+      val properties = testEmulatorProperties(profile)
       properties.properties[EmulatorProperties.Key.ShowSgbBorder.propertyName] = "true"
       val config = Controller.createGameboyConfig(properties, cgbRom)
 

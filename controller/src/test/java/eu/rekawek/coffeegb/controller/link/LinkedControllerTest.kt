@@ -23,6 +23,7 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerD
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerProtocolErrorEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.ApplyStage
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
@@ -76,6 +77,50 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LinkedControllerTest {
+
+  @Test
+  fun localRomEventIncludesAdjacentBatteryOnlyWhenBatterySavesAreEnabled() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-battery")
+    val rom = directory.resolve("linked-battery.gb")
+    val battery = directory.resolve("linked-battery.sav")
+    val batteryBytes = byteArrayOf(0x12, 0x34, 0x56, 0x78)
+    Files.copy(ROM.toPath(), rom)
+    Files.write(battery, batteryBytes)
+
+    fun load(enabled: Boolean): LinkedController.LocalRomLoadedEvent {
+      val eventBus = EventBusImpl()
+      val properties =
+          EmulatorProperties(
+              settingsPath = directory.resolve("settings-$enabled.properties"),
+              overrides = ApplicationSettingsOverrides(batterySavesEnabled = enabled),
+          )
+      val controller = LinkedController(eventBus, properties, null).also {
+        it.timingTicker.disabled = true
+      }
+      val received = AtomicReference<LinkedController.LocalRomLoadedEvent?>()
+      eventBus.register<LinkedController.LocalRomLoadedEvent>(received::set)
+      try {
+        eventBus.post(LoadRomEvent(rom.toFile()))
+        controller.runFrame()
+        return assertNotNull(received.get())
+      } finally {
+        controller.close()
+        properties.close()
+        eventBus.close()
+      }
+    }
+
+    try {
+      assertNull(load(enabled = false).batteryFile)
+      assertContentEquals(batteryBytes, assertNotNull(load(enabled = true).batteryFile))
+    } finally {
+      Files.deleteIfExists(directory.resolve("settings-false.properties"))
+      Files.deleteIfExists(directory.resolve("settings-true.properties"))
+      Files.deleteIfExists(battery)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+    }
+  }
 
   @Test
   fun v9RollbackDiagnosticsObserveSafePointReplayWithoutChangingState() {

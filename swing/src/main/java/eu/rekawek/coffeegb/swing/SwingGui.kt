@@ -10,9 +10,9 @@ import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
-import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import java.awt.Cursor
@@ -20,13 +20,15 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import javax.swing.JFrame
+import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
+import org.slf4j.LoggerFactory
 
 class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
-    profileOverride: HardwareProfile?,
+    private val properties: EmulatorProperties,
 ) {
 
   private val eventBus: EventBus
@@ -34,8 +36,6 @@ class SwingGui private constructor(
   private val emulator: SwingEmulator
 
   private val console: Console? = if (debug) Console() else null
-
-  private val properties: EmulatorProperties = EmulatorProperties(profileOverride)
 
   private lateinit var mainWindow: JFrame
 
@@ -90,6 +90,14 @@ class SwingGui private constructor(
     mainWindow.setLocationRelativeTo(null)
     mainWindow.isResizable = false
     mainWindow.isVisible = true
+    properties.consumeLoadWarning()?.let { warning ->
+      JOptionPane.showMessageDialog(
+          mainWindow,
+          warning.message,
+          "Settings warning",
+          JOptionPane.WARNING_MESSAGE,
+      )
+    }
     if (console != null) {
       Thread(console).start()
     }
@@ -104,7 +112,33 @@ class SwingGui private constructor(
     eventBus.post(StopClientEvent())
     console?.stop()
     emulator.stop()
-    exitProcess(0)
+    // The final settings force/move can block briefly. The window is already disposed, so finish
+    // persistence off the EDT and keep this non-daemon thread alive until the bounded close ends.
+    Thread(
+            {
+              try {
+                properties.close()
+              } catch (failure: IllegalStateException) {
+                runCatching {
+                  SwingUtilities.invokeAndWait {
+                    JOptionPane.showMessageDialog(
+                        null,
+                        "Coffee GB could not save the latest settings. " +
+                            "The previous complete settings file was preserved.\n\n" +
+                            (failure.cause?.message
+                                ?: failure.message
+                                ?: failure.javaClass.simpleName),
+                        "Settings save failed",
+                        JOptionPane.ERROR_MESSAGE,
+                    )
+                  }
+                }
+              }
+              exitProcess(0)
+            },
+            "coffee-gb-settings-shutdown",
+        )
+        .start()
   }
 
   private fun updateLoadingUi(title: String, loading: Boolean) {
@@ -124,8 +158,36 @@ class SwingGui private constructor(
   }
 
   companion object {
-    fun run(debug: Boolean, initialRom: File?, profileOverride: HardwareProfile? = null) {
-      SwingUtilities.invokeLater { SwingGui(debug, initialRom, profileOverride).startGui() }
+    private val LOG = LoggerFactory.getLogger(SwingGui::class.java)
+
+    fun run(
+        debug: Boolean,
+        initialRom: File?,
+        settingsOverrides: ApplicationSettingsOverrides = ApplicationSettingsOverrides(),
+    ) {
+      // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
+      // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
+      val properties = EmulatorProperties(settingsOverrides)
+      Runtime.getRuntime().addShutdownHook(
+          createSettingsShutdownHook(properties) { failure ->
+            LOG.error("Unable to close application settings during JVM shutdown", failure)
+          })
+      SwingUtilities.invokeLater { SwingGui(debug, initialRom, properties).startGui() }
     }
   }
 }
+
+internal fun createSettingsShutdownHook(
+    settings: AutoCloseable,
+    onFailure: (Exception) -> Unit,
+): Thread =
+    Thread(
+        {
+          try {
+            settings.close()
+          } catch (failure: Exception) {
+            onFailure(failure)
+          }
+        },
+        "coffee-gb-settings-shutdown-hook",
+    )

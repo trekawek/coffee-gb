@@ -14,7 +14,7 @@ class SystemPropertiesTest {
 
   @Test
   fun `bootstrap mode defaults to skip`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     properties.properties.remove(EmulatorProperties.Key.BootstrapMode.propertyName)
 
     assertEquals(BootstrapMode.SKIP, properties.system.bootstrapMode)
@@ -22,7 +22,7 @@ class SystemPropertiesTest {
 
   @Test
   fun `stored bootstrap mode is preserved`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
 
     for (mode in BootstrapMode.entries) {
       properties.properties[EmulatorProperties.Key.BootstrapMode.propertyName] = mode.name
@@ -32,7 +32,7 @@ class SystemPropertiesTest {
 
   @Test
   fun `controller configuration uses selected bootstrap mode`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     val rom = Rom(Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile())
 
     for (mode in BootstrapMode.entries) {
@@ -43,7 +43,7 @@ class SystemPropertiesTest {
 
   @Test
   fun `profile settings default to registry ids and migrate finite legacy values`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     properties.properties.remove(EmulatorProperties.Key.DmgGamesType.propertyName)
     properties.properties.remove(EmulatorProperties.Key.CgbGamesType.propertyName)
     assertEquals(HardwareProfileRegistry.SGB, properties.system.dmgGamesProfile)
@@ -68,7 +68,7 @@ class SystemPropertiesTest {
 
   @Test
   fun `unknown persisted profile fails actionably before configuration construction`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] = "ordinal-0"
     properties.properties[EmulatorProperties.Key.CgbGamesType.propertyName] = "ordinal-0"
 
@@ -82,7 +82,7 @@ class SystemPropertiesTest {
 
   @Test
   fun `explicit profile override reaches constructed configuration`() {
-    val properties = EmulatorProperties(HardwareProfileRegistry.DMG)
+    val properties = testEmulatorProperties(HardwareProfileRegistry.DMG)
     val rom = Rom(Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile())
 
     assertEquals(
@@ -93,7 +93,7 @@ class SystemPropertiesTest {
 
   @Test
   fun `desktop auto selection is represented by an absent mapping property`() {
-    val properties = EmulatorProperties()
+    val properties = testEmulatorProperties()
     val key = EmulatorProperties.Key.DmgGamesType
     properties.properties.remove(key.propertyName)
     assertTrue(!properties.hasProperty(key))
