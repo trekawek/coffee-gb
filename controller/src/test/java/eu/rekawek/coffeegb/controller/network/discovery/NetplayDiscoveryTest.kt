@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.controller.network.v9.V9LinkMode
 import eu.rekawek.coffeegb.controller.network.v9.V9MonotonicClock
 import java.io.Closeable
 import java.net.InetAddress
+import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
@@ -52,6 +53,7 @@ class NetplayDiscoveryTest {
     val localId = id(1)
     val discovery = TrustedLanNetplayDiscovery(backend, clock, scheduler, localId)
     discovery.enable()
+    settle(discovery)
     assertTrue(backend.advertisements.isEmpty())
 
     discovery.updateHost(V9FoundationServerStatus(true, 8765, V9LinkMode.NORMAL, 0))
@@ -89,12 +91,16 @@ class NetplayDiscoveryTest {
     val badReserved = packet.copyOf().also { it[9] = 1 }
     assertEquals(null, NetplayDiscoveryCodec.decode(badReserved))
     discovery.disable()
+    settle(discovery)
     assertEquals(1, backend.stopCount)
     assertFalse(discovery.snapshot().enabled)
     discovery.enable()
+    settle(discovery)
     assertEquals(2, backend.startCount)
     discovery.disable()
+    settle(discovery)
     discovery.close()
+    settle(discovery)
   }
 
   @Test
@@ -104,6 +110,7 @@ class NetplayDiscoveryTest {
     val backend = FakeBackend()
     val discovery = TrustedLanNetplayDiscovery(backend, clock, scheduler, id(0))
     discovery.enable()
+    settle(discovery)
     val advertisement =
         NetplayDiscoveryAdvertisement(9, id(2), V9LinkMode.FOUR_PLAYER, 3, true, 9000)
     val bytes = NetplayDiscoveryCodec.encode(advertisement)
@@ -159,6 +166,7 @@ class NetplayDiscoveryTest {
       it.advertisement.sessionId == mostRecent.advertisement.sessionId
     })
     discovery.close()
+    settle(discovery)
     assertFalse(discovery.snapshot().enabled)
     assertTrue(discovery.snapshot().hosts.isEmpty())
   }
@@ -170,18 +178,22 @@ class NetplayDiscoveryTest {
     val failing = FakeBackend(failStart = true)
     val isolated = TrustedLanNetplayDiscovery(failing, clock, scheduler, id(0))
     isolated.enable()
+    settle(isolated)
     assertFalse(isolated.snapshot().backendHealthy)
     // Discovery failure never changes or throws from the direct-listener status update.
     isolated.updateHost(V9FoundationServerStatus(true, 7777, V9LinkMode.NORMAL, 1))
     isolated.close()
+    settle(isolated)
 
     val advertiseFailure = FakeBackend(failAdvertise = true)
     val advertiseIsolated =
         TrustedLanNetplayDiscovery(advertiseFailure, clock, scheduler, id(8))
     advertiseIsolated.enable()
+    settle(advertiseIsolated)
     advertiseIsolated.updateHost(V9FoundationServerStatus(true, 7777, V9LinkMode.NORMAL, 1))
     assertFalse(advertiseIsolated.snapshot().backendHealthy)
     advertiseIsolated.close()
+    settle(advertiseIsolated)
 
     val schedulingBackend = FakeBackend()
     val schedulingIsolated =
@@ -192,12 +204,15 @@ class NetplayDiscoveryTest {
             id(10),
         )
     schedulingIsolated.enable()
+    settle(schedulingIsolated)
     assertFalse(schedulingIsolated.snapshot().backendHealthy)
     schedulingIsolated.close()
+    settle(schedulingIsolated)
 
     val backend = FakeBackend()
     val discovery = TrustedLanNetplayDiscovery(backend, clock, scheduler, id(0))
     discovery.enable()
+    settle(discovery)
     val bytes =
         NetplayDiscoveryCodec.encode(
             NetplayDiscoveryAdvertisement(9, id(7), V9LinkMode.NORMAL, 1, true, 7777),
@@ -228,7 +243,48 @@ class NetplayDiscoveryTest {
     scheduler.runDue()
     assertEquals(count, backend.advertisements.size)
     discovery.close()
+    settle(discovery)
     assertEquals(1, backend.closeCount)
+  }
+
+  @Test
+  fun disableAndCloseFenceAStartThatCompletesAfterTheLifecycleChanges() {
+    val clock = MutableClock()
+    val disabledBackend = FakeBackend(blockStart = true)
+    val disabled =
+        TrustedLanNetplayDiscovery(disabledBackend, clock, ManualScheduler(clock), id(40))
+    disabled.enable()
+    assertTrue(disabledBackend.startEntered.await(1, TimeUnit.SECONDS))
+    disabled.updateHost(V9FoundationServerStatus(true, 8765, V9LinkMode.NORMAL, 1))
+    disabled.disable()
+    assertFalse(disabled.snapshot().enabled)
+    assertTrue(disabled.snapshot().hosts.isEmpty())
+    assertTrue(disabledBackend.advertisements.isEmpty())
+    disabledBackend.releaseStart.countDown()
+    settle(disabled)
+    assertFalse(disabled.backendRunningForTest())
+    assertFalse(disabledBackend.running)
+    assertEquals(1, disabledBackend.stopCount)
+    assertTrue(disabledBackend.advertisements.isEmpty())
+    disabled.close()
+    settle(disabled)
+    assertTrue(disabled.awaitLifecycleWorkerStoppedForTest(1, TimeUnit.SECONDS))
+    assertFalse(disabled.lifecycleWorkerAliveForTest())
+
+    val closedBackend = FakeBackend(blockStart = true)
+    val closed = TrustedLanNetplayDiscovery(closedBackend, clock, ManualScheduler(clock), id(41))
+    closed.enable()
+    assertTrue(closedBackend.startEntered.await(1, TimeUnit.SECONDS))
+    closed.updateHost(V9FoundationServerStatus(true, 8765, V9LinkMode.NORMAL, 1))
+    closed.close()
+    closedBackend.releaseStart.countDown()
+    settle(closed)
+    assertFalse(closed.backendRunningForTest())
+    assertFalse(closedBackend.running)
+    assertEquals(1, closedBackend.closeCount)
+    assertTrue(closedBackend.advertisements.isEmpty())
+    assertTrue(closed.awaitLifecycleWorkerStoppedForTest(1, TimeUnit.SECONDS))
+    assertFalse(closed.lifecycleWorkerAliveForTest())
   }
 
   @Test
@@ -272,6 +328,24 @@ class NetplayDiscoveryTest {
         assumeTrue("multicast is unavailable on this host", false)
       }
       assumeTrue("multicast loopback is unavailable on this host", observed.await(2, TimeUnit.SECONDS))
+      sender.advertise(expected)
+      receiver.stop()
+      sender.stop()
+      assertTrue(receiver.awaitWorkersStopped(2, TimeUnit.SECONDS))
+      assertTrue(sender.awaitWorkersStopped(2, TimeUnit.SECONDS))
+      assertEquals(0, receiver.liveWorkerCount())
+      assertEquals(0, sender.liveWorkerCount())
+      assertEquals(0, receiver.queuedAdvertisementCount())
+      assertEquals(0, sender.queuedAdvertisementCount())
+
+      receiver.start {}
+      sender.start {}
+      receiver.stop()
+      sender.stop()
+      assertTrue(receiver.awaitWorkersStopped(2, TimeUnit.SECONDS))
+      assertTrue(sender.awaitWorkersStopped(2, TimeUnit.SECONDS))
+      assertEquals(0, receiver.liveWorkerCount())
+      assertEquals(0, sender.liveWorkerCount())
     } finally {
       receiver.close()
       sender.close()
@@ -283,6 +357,10 @@ class NetplayDiscoveryTest {
       NetplayPublicSessionId(ByteArray(16).also { it[12] = (number ushr 24).toByte();
         it[13] = (number ushr 16).toByte(); it[14] = (number ushr 8).toByte();
         it[15] = number.toByte() })
+
+  private fun settle(discovery: TrustedLanNetplayDiscovery) {
+    assertTrue(discovery.awaitBackendLifecycle(2, TimeUnit.SECONDS))
+  }
 
   private class MutableClock(var now: Long = 0) : V9MonotonicClock {
     override fun nowMillis(): Long = now
@@ -311,25 +389,32 @@ class NetplayDiscoveryTest {
   private class FakeBackend(
       private val failStart: Boolean = false,
       private val failAdvertise: Boolean = false,
+      private val blockStart: Boolean = false,
   ) : NetplayDiscoveryBackend {
-    var receiver: ((NetplayDiscoveryDatagram) -> Unit)? = null
-    val advertisements = mutableListOf<ByteArray>()
+    @Volatile var receiver: ((NetplayDiscoveryDatagram) -> Unit)? = null
+    val advertisements = Collections.synchronizedList(mutableListOf<ByteArray>())
+    val startEntered = CountDownLatch(1)
+    val releaseStart = CountDownLatch(if (blockStart) 1 else 0)
+    @Volatile var running = false
     var stopCount = 0
     var closeCount = 0
     var startCount = 0
     var withdrawCount = 0
     override fun start(receiver: (NetplayDiscoveryDatagram) -> Unit) {
       startCount++
+      startEntered.countDown()
+      releaseStart.await()
       if (failStart) throw IllegalStateException("synthetic backend failure")
       this.receiver = receiver
+      running = true
     }
     override fun advertise(bytes: ByteArray) {
       if (failAdvertise) throw IllegalStateException("synthetic advertise failure")
       advertisements += bytes.copyOf()
     }
     override fun withdraw() { withdrawCount++ }
-    override fun stop() { stopCount++; receiver = null }
-    override fun close() { closeCount++; receiver = null }
+    override fun stop() { stopCount++; running = false; receiver = null }
+    override fun close() { closeCount++; running = false; receiver = null }
     fun emit(bytes: ByteArray, address: String) {
       receiver?.invoke(NetplayDiscoveryDatagram(bytes.copyOf(), InetAddress.getByName(address)))
     }

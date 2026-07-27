@@ -21,6 +21,8 @@ import java.nio.ByteOrder
 import java.security.SecureRandom
 import java.util.Collections
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -179,11 +181,23 @@ class TrustedLanNetplayDiscovery internal constructor(
   private val publicSessionId = sessionId
   private val cache = LinkedHashMap<NetplayPublicSessionId, CachedHost>()
   private var enabled = false
-  private var started = false
   private var closed = false
+  private var backendRunning = false
   private var backendHealthy = true
+  private var lifecycleGeneration = 0L
+  private var lifecycleSettled = CountDownLatch(0)
   private var hostStatus: V9FoundationServerStatus? = null
   private var refreshTask: Closeable? = null
+  private val lifecycleSignals = ArrayBlockingQueue<Unit>(1)
+  private val lifecycleWorkerTerminated = CountDownLatch(1)
+  private val lifecycleWorker =
+      thread(isDaemon = true, name = "netplay-v9-discovery-lifecycle") {
+        try {
+          lifecycleLoop()
+        } finally {
+          lifecycleWorkerTerminated.countDown()
+        }
+      }
   private val publisher =
       BoundedSnapshotPublisher(
           NetplayDiscoverySnapshot(false, true, emptyList()),
@@ -196,46 +210,27 @@ class TrustedLanNetplayDiscovery internal constructor(
       publisher.addListener(listener)
 
   override fun enable() {
-    val shouldStart = synchronized(lock) {
+    synchronized(lock) {
       check(!closed) { "netplay discovery is closed" }
       if (enabled) return
       enabled = true
-      if (!started) {
-        started = true
-        true
-      } else false
+      advanceLifecycleLocked()
     }
-    if (shouldStart) {
-      try {
-        backend.start(::receive)
-        synchronized(lock) { backendHealthy = true }
-      } catch (_: RuntimeException) {
-        synchronized(lock) { backendHealthy = false }
-      } catch (_: IOException) {
-        synchronized(lock) { backendHealthy = false }
-      }
-    }
-    refresh()
-    scheduleRefresh()
+    signalLifecycle()
+    publisher.update(synchronized(lock) { snapshotLocked() })
   }
 
   override fun disable() {
     val value = synchronized(lock) {
       if (!enabled) return
       enabled = false
-      started = false
       cache.clear()
       refreshTask?.close()
       refreshTask = null
+      advanceLifecycleLocked()
       snapshotLocked()
     }
-    try {
-      backend.stop()
-    } catch (_: RuntimeException) {
-      synchronized(lock) { backendHealthy = false }
-    } catch (_: IOException) {
-      synchronized(lock) { backendHealthy = false }
-    }
+    signalLifecycle()
     publisher.update(value)
   }
 
@@ -268,6 +263,18 @@ class TrustedLanNetplayDiscovery internal constructor(
 
   internal fun cacheSize(): Int = synchronized(lock) { cache.size }
 
+  internal fun awaitBackendLifecycle(timeout: Long, unit: TimeUnit): Boolean {
+    val settled = synchronized(lock) { lifecycleSettled }
+    return settled.await(timeout, unit)
+  }
+
+  internal fun backendRunningForTest(): Boolean = synchronized(lock) { backendRunning }
+
+  internal fun lifecycleWorkerAliveForTest(): Boolean = lifecycleWorker.isAlive
+
+  internal fun awaitLifecycleWorkerStoppedForTest(timeout: Long, unit: TimeUnit): Boolean =
+      lifecycleWorkerTerminated.await(timeout, unit)
+
   private fun receive(value: NetplayDiscoveryDatagram) {
     if (value.bytes.size > MAX_PACKET_BYTES) return
     val decoded = NetplayDiscoveryCodec.decode(value.bytes) ?: return
@@ -298,13 +305,16 @@ class TrustedLanNetplayDiscovery internal constructor(
 
   private fun refresh() {
     val packet: ByteArray?
+    val mayUseBackend: Boolean
     synchronized(lock) {
       if (closed) return
       val now = clock.nowMillis()
       cache.entries.removeIf { elapsedMillis(now, it.value.lastSeen) >= CACHE_EXPIRY_MILLIS }
       val status = hostStatus
+      mayUseBackend = backendRunning
       packet =
-          if (enabled && backendHealthy && status?.listening == true && status.openSlots > 0) {
+          if (mayUseBackend && enabled && backendHealthy &&
+              status?.listening == true && status.openSlots > 0) {
             NetplayDiscoveryCodec.encode(
                 NetplayDiscoveryAdvertisement(
                     9,
@@ -316,6 +326,10 @@ class TrustedLanNetplayDiscovery internal constructor(
                 ),
             )
           } else null
+    }
+    if (!mayUseBackend) {
+      publisher.update(synchronized(lock) { snapshotLocked() })
+      return
     }
     if (packet != null) {
       try {
@@ -383,8 +397,91 @@ class TrustedLanNetplayDiscovery internal constructor(
       cache.clear()
       refreshTask?.close()
       refreshTask = null
+      advanceLifecycleLocked()
       snapshotLocked()
     }
+    signalLifecycle()
+    ownedScheduler?.close()
+    publisher.update(finalSnapshot)
+    publisher.close()
+  }
+
+  private fun lifecycleLoop() {
+    while (true) {
+      try {
+        lifecycleSignals.take()
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return
+      }
+      while (true) {
+        val target = synchronized(lock) {
+          LifecycleTarget(lifecycleGeneration, enabled, closed, backendRunning)
+        }
+        if (target.closed) {
+          closeBackend()
+          synchronized(lock) {
+            backendRunning = false
+            settleLifecycleLocked(target.generation)
+          }
+          return
+        }
+        if (target.enabled && !target.running) {
+          val startedSuccessfully = startBackend()
+          val accepted = synchronized(lock) {
+            if (startedSuccessfully) backendRunning = true
+            startedSuccessfully && !closed && enabled &&
+                lifecycleGeneration == target.generation
+          }
+          if (!accepted && startedSuccessfully) {
+            stopBackend()
+            synchronized(lock) { backendRunning = false }
+          }
+          if (accepted) {
+            refresh()
+            scheduleRefresh()
+          }
+        } else if (!target.enabled && target.running) {
+          stopBackend()
+          synchronized(lock) { backendRunning = false }
+        }
+        val reconciled = synchronized(lock) {
+          if (lifecycleGeneration == target.generation) {
+            settleLifecycleLocked(target.generation)
+            true
+          } else {
+            false
+          }
+        }
+        if (reconciled) break
+      }
+    }
+  }
+
+  private fun startBackend(): Boolean =
+      try {
+        backend.start(::receive)
+        synchronized(lock) { backendHealthy = true }
+        true
+      } catch (_: RuntimeException) {
+        synchronized(lock) { backendHealthy = false }
+        false
+      } catch (_: IOException) {
+        synchronized(lock) { backendHealthy = false }
+        false
+      }
+
+  private fun stopBackend() {
+    try {
+      backend.stop()
+    } catch (_: RuntimeException) {
+      synchronized(lock) { backendHealthy = false }
+    } catch (_: IOException) {
+      synchronized(lock) { backendHealthy = false }
+    }
+  }
+
+  private fun closeBackend() {
     try {
       backend.close()
     } catch (_: RuntimeException) {
@@ -392,10 +489,28 @@ class TrustedLanNetplayDiscovery internal constructor(
     } catch (_: IOException) {
       // Discovery is ancillary and cannot affect direct hosting cleanup.
     }
-    ownedScheduler?.close()
-    publisher.update(finalSnapshot)
-    publisher.close()
   }
+
+  private fun advanceLifecycleLocked() {
+    lifecycleSettled.countDown()
+    lifecycleGeneration = addSaturated(lifecycleGeneration, 1)
+    lifecycleSettled = CountDownLatch(1)
+  }
+
+  private fun settleLifecycleLocked(generation: Long) {
+    if (generation == lifecycleGeneration) lifecycleSettled.countDown()
+  }
+
+  private fun signalLifecycle() {
+    lifecycleSignals.offer(Unit)
+  }
+
+  private data class LifecycleTarget(
+      val generation: Long,
+      val enabled: Boolean,
+      val closed: Boolean,
+      val running: Boolean,
+  )
 
   private class CachedHost(
       var advertisement: NetplayDiscoveryAdvertisement,
@@ -457,6 +572,7 @@ class NetplayDiscoveryHostBinding(
  * invitation or emulator content. All socket work is owned by two daemon threads.
  */
 internal class V9MulticastDiscoveryBackend : NetplayDiscoveryBackend {
+  private val lifecycleLock = Any()
   private val closed = AtomicBoolean(false)
   private val running = AtomicBoolean(false)
   private val outgoing = ArrayBlockingQueue<ByteArray>(1)
@@ -464,62 +580,95 @@ internal class V9MulticastDiscoveryBackend : NetplayDiscoveryBackend {
   private var interfaces: List<NetworkInterface> = emptyList()
   private var receiverTask: Thread? = null
   private var senderTask: Thread? = null
+  private var receiverTerminated = CountDownLatch(0)
+  private var senderTerminated = CountDownLatch(0)
 
   override fun start(receiver: (NetplayDiscoveryDatagram) -> Unit) {
-    check(!closed.get()) { "discovery backend is closed" }
-    check(running.compareAndSet(false, true)) { "discovery backend already started" }
-    val value = MulticastSocket(null)
-    try {
-      value.reuseAddress = true
-      value.bind(InetSocketAddress(PORT))
-      value.timeToLive = 1
-      val interfaces =
-          (NetworkInterface.getNetworkInterfaces()?.let(Collections::list) ?: emptyList())
-              .filter { it.isUp }
-              .sortedBy { it.name }
-              .take(MAX_INTERFACES)
-      this.interfaces = interfaces
-      for (network in interfaces) {
-        try {
-          value.joinGroup(InetSocketAddress(IPV4_GROUP, PORT), network)
-        } catch (_: IOException) {
-          // One interface/family failure does not disable direct hosting or other interfaces.
+    synchronized(lifecycleLock) {
+      check(!closed.get()) { "discovery backend is closed" }
+      check(receiverTask?.isAlive != true && senderTask?.isAlive != true) {
+        "discovery backend workers have not terminated"
+      }
+      check(running.compareAndSet(false, true)) { "discovery backend already started" }
+      val value = MulticastSocket(null)
+      try {
+        value.reuseAddress = true
+        value.bind(InetSocketAddress(PORT))
+        value.timeToLive = 1
+        val interfaces =
+            (NetworkInterface.getNetworkInterfaces()?.let(Collections::list) ?: emptyList())
+                .filter { it.isUp }
+                .sortedBy { it.name }
+                .take(MAX_INTERFACES)
+        this.interfaces = interfaces
+        for (network in interfaces) {
+          try {
+            value.joinGroup(InetSocketAddress(IPV4_GROUP, PORT), network)
+          } catch (_: IOException) {
+            // One interface/family failure does not disable direct hosting or other interfaces.
+          }
+          try {
+            value.joinGroup(InetSocketAddress(IPV6_GROUP, PORT), network)
+          } catch (_: IOException) {
+            // IPv6 is best effort on hosts without a multicast route.
+          }
         }
-        try {
-          value.joinGroup(InetSocketAddress(IPV6_GROUP, PORT), network)
-        } catch (_: IOException) {
-          // IPv6 is best effort on hosts without a multicast route.
+        value.soTimeout = 250
+        socket = value
+        receiverTerminated = CountDownLatch(1)
+        senderTerminated = CountDownLatch(1)
+        val receiverDone = receiverTerminated
+        val senderDone = senderTerminated
+        receiverTask = thread(isDaemon = true, name = "netplay-v9-discovery-receive") {
+          try {
+            receiveLoop(value, receiver)
+          } finally {
+            receiverDone.countDown()
+          }
         }
+        senderTask = thread(isDaemon = true, name = "netplay-v9-discovery-send") {
+          try {
+            sendLoop(value)
+          } finally {
+            senderDone.countDown()
+          }
+        }
+      } catch (failure: RuntimeException) {
+        value.close()
+        running.set(false)
+        receiverTask?.interrupt()
+        senderTask?.interrupt()
+        awaitTermination(receiverTask, receiverTerminated)
+        awaitTermination(senderTask, senderTerminated)
+        receiverTask = null
+        senderTask = null
+        throw failure
+      } catch (failure: IOException) {
+        value.close()
+        running.set(false)
+        receiverTask?.interrupt()
+        senderTask?.interrupt()
+        awaitTermination(receiverTask, receiverTerminated)
+        awaitTermination(senderTask, senderTerminated)
+        receiverTask = null
+        senderTask = null
+        throw failure
       }
-      value.soTimeout = 250
-      socket = value
-      receiverTask = thread(isDaemon = true, name = "netplay-v9-discovery-receive") {
-        receiveLoop(value, receiver)
-      }
-      senderTask = thread(isDaemon = true, name = "netplay-v9-discovery-send") {
-        sendLoop(value)
-      }
-    } catch (failure: RuntimeException) {
-      value.close()
-      running.set(false)
-      throw failure
-    } catch (failure: IOException) {
-      value.close()
-      running.set(false)
-      throw failure
     }
   }
 
   override fun advertise(bytes: ByteArray) {
     require(bytes.size == NetplayDiscoveryCodec.BYTES)
-    if (closed.get() || !running.get()) return
-    val owned = bytes.copyOf()
-    outgoing.poll()?.fill(0)
-    if (!outgoing.offer(owned)) owned.fill(0)
+    synchronized(lifecycleLock) {
+      if (closed.get() || !running.get()) return
+      val owned = bytes.copyOf()
+      outgoing.poll()?.fill(0)
+      if (!outgoing.offer(owned)) owned.fill(0)
+    }
   }
 
   override fun withdraw() {
-    outgoing.poll()?.fill(0)
+    synchronized(lifecycleLock) { outgoing.poll()?.fill(0) }
   }
 
   private fun receiveLoop(
@@ -586,21 +735,77 @@ internal class V9MulticastDiscoveryBackend : NetplayDiscoveryBackend {
   }
 
   override fun stop() {
-    if (!running.compareAndSet(true, false)) return
-    socket?.close()
-    socket = null
-    interfaces = emptyList()
+    val stopped = synchronized(lifecycleLock) {
+      if (!running.compareAndSet(true, false)) {
+        wipeOutgoing()
+        return
+      }
+      val value = StopState(
+          socket,
+          receiverTask,
+          senderTask,
+          receiverTerminated,
+          senderTerminated,
+      )
+      socket = null
+      interfaces = emptyList()
+      value.socket?.close()
+      value.receiver?.takeUnless { it === Thread.currentThread() }?.interrupt()
+      value.sender?.takeUnless { it === Thread.currentThread() }?.interrupt()
+      wipeOutgoing()
+      value
+    }
+    val receiverStopped = awaitTermination(stopped.receiver, stopped.receiverDone)
+    val senderStopped = awaitTermination(stopped.sender, stopped.senderDone)
+    synchronized(lifecycleLock) {
+      if (receiverStopped && receiverTask === stopped.receiver) receiverTask = null
+      if (senderStopped && senderTask === stopped.sender) senderTask = null
+    }
+  }
+
+  internal fun liveWorkerCount(): Int = synchronized(lifecycleLock) {
+    listOfNotNull(receiverTask, senderTask).count(Thread::isAlive)
+  }
+
+  internal fun queuedAdvertisementCount(): Int = outgoing.size
+
+  internal fun awaitWorkersStopped(timeout: Long, unit: TimeUnit): Boolean {
+    val deadlines = synchronized(lifecycleLock) { receiverTerminated to senderTerminated }
+    val started = System.nanoTime()
+    if (!deadlines.first.await(timeout, unit)) return false
+    val budgetNanos = unit.toNanos(timeout)
+    val remaining = (budgetNanos - (System.nanoTime() - started)).coerceAtLeast(0)
+    return deadlines.second.await(remaining, TimeUnit.NANOSECONDS)
+  }
+
+  private fun awaitTermination(task: Thread?, terminated: CountDownLatch): Boolean {
+    if (task == null) return true
+    if (task === Thread.currentThread()) return false
+    return try {
+      terminated.await(STOP_WAIT_MILLIS, TimeUnit.MILLISECONDS)
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+      false
+    }
+  }
+
+  private fun wipeOutgoing() {
     outgoing.forEach { it.fill(0) }
     outgoing.clear()
-    receiverTask?.takeUnless { it === Thread.currentThread() }?.interrupt()
-    senderTask?.takeUnless { it === Thread.currentThread() }?.interrupt()
-    receiverTask = null
-    senderTask = null
   }
+
+  private data class StopState(
+      val socket: MulticastSocket?,
+      val receiver: Thread?,
+      val sender: Thread?,
+      val receiverDone: CountDownLatch,
+      val senderDone: CountDownLatch,
+  )
 
   companion object {
     private const val PORT = 37_619
     private const val MAX_INTERFACES = 8
+    private const val STOP_WAIT_MILLIS = 1_000L
     private val IPV4_GROUP = InetAddress.getByName("239.255.67.66")
     private val IPV6_GROUP = InetAddress.getByName("ff02::4347:4244")
   }
