@@ -47,6 +47,11 @@ class ApplicationSettingsStoreTest {
         ),
         settings.general.recentRoms,
     )
+    assertEquals(10, settings.general.recentFileCapacity)
+    assertEquals(
+        ApplicationSettings.RomChangeConfirmationPolicy.WHEN_RUNNING,
+        settings.general.romChangeConfirmationPolicy,
+    )
     assertEquals(4, settings.display.scale)
     assertTrue(settings.display.grayscale)
     assertFalse(settings.display.blending)
@@ -216,6 +221,18 @@ class ApplicationSettingsStoreTest {
             mapOf("display.showSgbBorder" to "enabled"),
             mapOf("sound.enabled" to "sometimes"),
             mapOf("saves.batteryEnabled" to "y"),
+            mapOf(
+                "settings.schemaVersion" to "2",
+                "general.recentFileCapacity" to "-1",
+            ),
+            mapOf(
+                "settings.schemaVersion" to "2",
+                "general.recentFileCapacity" to "51",
+            ),
+            mapOf(
+                "settings.schemaVersion" to "2",
+                "general.romChangeConfirmationPolicy" to "when_running",
+            ),
             mapOf("system.bootstrapMode" to "fast_forward"),
             mapOf("system.dmgGames" to "MGB"),
             mapOf("system.cgbGames" to "ordinal-1"),
@@ -375,6 +392,51 @@ class ApplicationSettingsStoreTest {
     }
 
     assertTrue(original.contentEquals(Files.readAllBytes(path)))
+  }
+
+  @Test
+  fun `schema one file is rewritten once as canonical schema two`() {
+    val directory = Files.createTempDirectory("coffee-gb-settings-schema-one")
+    val path = directory.resolve("settings.properties")
+    val schemaOne =
+        mapOf(
+            ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "1",
+            "rom.recent.0" to "/roms/active.gb",
+            "${ApplicationSettingsCodec.RECENT_ROM_PREFIX}0" to "/plugin/future.gb",
+            ApplicationSettingsCodec.RECENT_FILE_CAPACITY_KEY to "plugin-capacity",
+            "plugin.setting" to "preserve me",
+        )
+    Files.write(path, ApplicationSettingsStore.encodeProperties(schemaOne))
+
+    val canonicalBytes =
+        ApplicationSettingsStore(path, debounceMillis = 60_000).use { store ->
+          assertFalse(store.isReadOnly())
+          assertNull(store.consumeLoadWarning())
+          assertEquals(
+              listOf(Path.of("/roms/active.gb")),
+              store.current().settings.general.recentRoms,
+          )
+          assertEquals(
+              "/plugin/future.gb",
+              store.current().unknownProperties["${ApplicationSettingsCodec.RECENT_ROM_PREFIX}0"],
+          )
+          assertEquals(
+              "plugin-capacity",
+              store.current().unknownProperties[ApplicationSettingsCodec.RECENT_FILE_CAPACITY_KEY],
+          )
+
+          Files.readAllBytes(path).also { bytes ->
+            val canonical = ApplicationSettingsStore.decodeProperties(bytes)
+            assertEquals("2", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+            assertEquals(store.current(), ApplicationSettingsCodec.decode(canonical))
+            assertEquals(canonical, ApplicationSettingsCodec.encode(store.current()))
+          }
+        }
+
+    ApplicationSettingsStore(path, debounceMillis = 60_000).use { store ->
+      assertEquals("2", store.current().settings.schemaVersion.toString())
+    }
+    assertTrue(canonicalBytes.contentEquals(Files.readAllBytes(path)))
   }
 
   @Test
@@ -732,6 +794,8 @@ class ApplicationSettingsStoreTest {
               "display.scale" to "4",
               "display.showSgbBorder" to "true",
               "fullchanger.character" to "07 ま Magnesium Powered",
+              "general.recentFileCapacity" to "10",
+              "general.romChangeConfirmationPolicy" to "WHEN_RUNNING",
               "input.p1.btn_a" to "VK_Q",
               "input.p1.btn_b" to "VK_X",
               "input.p1.btn_down" to "VK_DOWN",
@@ -745,11 +809,11 @@ class ApplicationSettingsStoreTest {
               "input.p2.gamepad" to "sdl-" + "a".repeat(64),
               "plugin.setting" to "preserve me",
               "rom.directory" to "/legacy/roms",
-              "rom.recent.0" to "/legacy/roms/first.gb",
-              "rom.recent.1" to "/legacy/roms/second.gbc",
+              "general.recent.0" to "/legacy/roms/first.gb",
+              "general.recent.1" to "/legacy/roms/second.gbc",
               "rom.recent.future" to "preserve future recent metadata",
               "saves.batteryEnabled" to "false",
-              "settings.schemaVersion" to "1",
+              "settings.schemaVersion" to "2",
               "sound.enabled" to "false",
               "system.bootstrapMode" to "FAST_FORWARD",
               "system.cgbGames" to "cgb0",

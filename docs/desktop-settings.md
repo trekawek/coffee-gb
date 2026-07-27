@@ -45,12 +45,12 @@ The application owns one immutable `ApplicationSettings` value with typed `gener
 `audio`, `input`, `saves`, and `advanced` sections. The controller-facing `EmulatorProperties`
 class is a compatibility facade over that model while older menu code is migrated.
 
-Schema 1 continues to use `${user.home}/.coffeegb.properties` and the established keys so the
-portable JAR remains compatible during the migration window.
+Schema 2 continues to use `${user.home}/.coffeegb.properties`; schema 0 and schema 1 are migrated
+in place so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `1` |
+| `settings.schemaVersion` | exact supported schema version | `2` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
@@ -63,7 +63,11 @@ portable JAR remains compatible during the migration window.
 | `sound.enabled` | boolean | `true` |
 | `saves.batteryEnabled` | boolean | `true` |
 | `rom.directory` | optional local path | absent |
-| `rom.recent.<index>` | ordered local path | empty, capacity 10 |
+| `general.recentFileCapacity` | integer in `0..50` | `10` |
+| `general.romChangeConfirmationPolicy` | `ALWAYS`, `WHEN_RUNNING`, or `NEVER` | `WHEN_RUNNING` |
+| `general.recent.<index>` | ordered local path | empty |
+| `rom.recent.<index>` | legacy ten-entry history imported during migration | empty |
+| `settings.preservedUnknownCollisions.<chunk>` | bounded internal migration metadata | absent |
 | `datel.slot.rom` | optional local path | absent |
 | `fullchanger.character` | optional stable menu value | absent |
 | `btn_*`, `input.pN.btn_*` | validated keyboard binding | documented P1 defaults |
@@ -74,18 +78,43 @@ or `false` (case-insensitive); numeric settings have explicit ranges; hardware p
 bootstrap modes, input players, buttons, keys, and gamepad selectors must be known. Invalid input
 does not partially update the active settings.
 
-Unrecognized legacy keys are retained verbatim when schema 1 is saved. Keys in a reserved grammar,
+`WHEN_RUNNING` asks before replacing or closing an active emulation session, while an idle
+application may close without a redundant prompt. `ALWAYS` also confirms an idle application
+close, and `NEVER` suppresses this ordinary confirmation. A battery/autosave flush failure remains
+actionable regardless of this preference. Setting recent-file capacity to zero disables history;
+reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 2
+does not invent or persist an update-check preference.
+
+Unrecognized legacy keys are retained losslessly when schema 2 is saved. Keys in a reserved grammar,
 such as an unknown `input.*` key, remain errors so a misspelled control binding is not silently
-ignored. Schema 1 writes every active keyboard binding and the explicit P1 gamepad selection;
-an absent schema-1 binding is therefore unbound rather than silently restored to a default.
+ignored. Schema 2 stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
+key beyond Coffee GB's old ten-entry history remains untouched even if capacity later grows. Schema
+2 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
+binding is therefore unbound rather than silently restored to a default. If an older unknown key
+occupies a newly reserved schema-2 name, Coffee GB keeps its original key/value in bounded internal
+migration metadata rather than overwriting or reinterpreting it.
+
+## Preferences
+
+Open **File → Preferences…** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd>) to change the
+default ROM directory, recent-file capacity, ROM-change confirmation policy, and keyboard controls
+without editing the properties file. The Input tab shows all eight current bindings for Players
+1–4. Choose **Capture** and press a key, or use the explicit **Dialog key…** action for Enter or
+Escape. Tab remains reserved for focus navigation and Backspace remains reserved for Rewind.
+Conflicting bindings identify the existing assignment and are not applied; each row also supports
+Clear and Reset.
+
+**Apply** validates the complete draft, writes one settings update, and switches the live keyboard
+mapping only after persistence accepts it. **Cancel**, the window close button, and Escape discard
+unapplied edits. **Restore Defaults** only changes the visible draft until Apply is chosen.
 
 ## Migration and recovery
 
-A file without `settings.schemaVersion` is legacy schema 0. Migration is a pure conversion into
-schema 1, preserves unknown keys, retains absent profile mappings as Auto, and canonicalizes the
-finite historical uppercase profile aliases. Repeating load/migrate/save produces the same
-normalized settings. Legacy text is decoded with the platform-default charset used by the former
-`FileReader`; versioned files use strict UTF-8 with deterministic ASCII escapes.
+A file without `settings.schemaVersion` is legacy schema 0. Schema 0 and schema 1 migration is a
+pure conversion into schema 2, preserves unknown keys, retains absent profile mappings as Auto, and
+canonicalizes the finite historical uppercase profile aliases. Repeating load/migrate/save produces
+the same normalized settings. Legacy text is decoded with the platform-default charset used by the
+former `FileReader`; versioned files use strict UTF-8 with deterministic ASCII escapes.
 
 The complete file is bounded, parsed, migrated, and validated before it can replace the in-memory
 defaults. If syntax or a recognized value is corrupt, Coffee GB moves the original bytes to a

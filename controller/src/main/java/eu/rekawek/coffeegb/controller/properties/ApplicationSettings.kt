@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
 import java.awt.event.KeyEvent
+import java.lang.reflect.Modifier
 import java.nio.file.Path
 import java.util.Collections
 import java.util.EnumMap
@@ -23,9 +24,6 @@ data class ApplicationSettings(
     require(schemaVersion == CURRENT_SCHEMA_VERSION) {
       "Application settings schema must be $CURRENT_SCHEMA_VERSION"
     }
-    require(general.recentRoms.size <= MAX_RECENT_ROMS) {
-      "At most $MAX_RECENT_ROMS recent ROMs are supported"
-    }
     require(display.scale in SUPPORTED_SCALES) {
       "Display scale must be one of ${SUPPORTED_SCALES.sorted()}"
     }
@@ -37,24 +35,75 @@ data class ApplicationSettings(
   class General(
       val romDirectory: Path? = null,
       recentRoms: List<Path> = emptyList(),
+      val recentFileCapacity: Int = DEFAULT_RECENT_FILE_CAPACITY,
+      val romChangeConfirmationPolicy: RomChangeConfirmationPolicy =
+          RomChangeConfirmationPolicy.WHEN_RUNNING,
   ) {
     val recentRoms: List<Path> = immutableListCopy(recentRoms)
+
+    init {
+      require(recentFileCapacity in MIN_RECENT_FILE_CAPACITY..MAX_RECENT_FILE_CAPACITY) {
+        "Recent-file capacity must be between $MIN_RECENT_FILE_CAPACITY and " +
+            "$MAX_RECENT_FILE_CAPACITY"
+      }
+      require(this.recentRoms.size <= recentFileCapacity) {
+        "Recent ROM history contains ${this.recentRoms.size} entries but capacity is " +
+            recentFileCapacity
+      }
+    }
 
     fun copy(
         romDirectory: Path? = this.romDirectory,
         recentRoms: List<Path> = this.recentRoms,
-    ): General = General(romDirectory, recentRoms)
+        recentFileCapacity: Int = this.recentFileCapacity,
+        romChangeConfirmationPolicy: RomChangeConfirmationPolicy =
+            this.romChangeConfirmationPolicy,
+    ): General =
+        General(
+            romDirectory,
+            recentRoms,
+            recentFileCapacity,
+            romChangeConfirmationPolicy,
+        )
 
     override fun equals(other: Any?): Boolean =
         this === other ||
             (other is General &&
                 romDirectory == other.romDirectory &&
-                recentRoms == other.recentRoms)
+                recentRoms == other.recentRoms &&
+                recentFileCapacity == other.recentFileCapacity &&
+                romChangeConfirmationPolicy == other.romChangeConfirmationPolicy)
 
-    override fun hashCode(): Int = 31 * (romDirectory?.hashCode() ?: 0) + recentRoms.hashCode()
+    override fun hashCode(): Int {
+      var result = romDirectory?.hashCode() ?: 0
+      result = 31 * result + recentRoms.hashCode()
+      result = 31 * result + recentFileCapacity
+      result = 31 * result + romChangeConfirmationPolicy.hashCode()
+      return result
+    }
 
     override fun toString(): String =
-        "General(romDirectory=$romDirectory, recentRoms=$recentRoms)"
+        "General(romDirectory=$romDirectory, recentRoms=$recentRoms, " +
+            "recentFileCapacity=$recentFileCapacity, " +
+            "romChangeConfirmationPolicy=$romChangeConfirmationPolicy)"
+  }
+
+  enum class RomChangeConfirmationPolicy {
+    /** Confirm every request, including an application close while no ROM is running. */
+    ALWAYS,
+
+    /** Confirm only when replacing or closing an active emulation session. */
+    WHEN_RUNNING,
+
+    /** Never show the ordinary ROM-change confirmation. Save failures still require a decision. */
+    NEVER;
+
+    fun shouldConfirm(isRomRunning: Boolean): Boolean =
+        when (this) {
+          ALWAYS -> true
+          WHEN_RUNNING -> isRomRunning
+          NEVER -> false
+        }
   }
 
   data class Display(
@@ -182,6 +231,22 @@ data class ApplicationSettings(
     override fun toString(): String = propertyName
 
     companion object {
+      /**
+       * Resolves a captured AWT key code to the canonical persisted VK_* name. Some JDK constants
+       * are aliases, so lexicographic ordering makes the serialized result stable across reflection
+       * order and runs.
+       */
+      fun fromKeyCode(keyCode: Int): KeyboardKey {
+        require(keyCode != KeyEvent.VK_UNDEFINED) {
+          "VK_UNDEFINED cannot be used as a keyboard binding"
+        }
+        val propertyName =
+            canonicalPropertyNamesByCode[keyCode]
+                ?: throw IllegalArgumentException(
+                    "Key code $keyCode does not name a java.awt.event.KeyEvent VK_* constant")
+        return KeyboardKey(propertyName, keyCode)
+      }
+
       fun parse(propertyName: String, property: String): KeyboardKey {
         require(propertyName.startsWith("VK_")) {
           "$property must name a java.awt.event.KeyEvent VK_* constant"
@@ -199,6 +264,18 @@ data class ApplicationSettings(
       }
 
       internal fun of(propertyName: String, code: Int) = KeyboardKey(propertyName, code)
+
+      private val canonicalPropertyNamesByCode: Map<Int, String> by lazy {
+        KeyEvent::class.java.fields
+            .asSequence()
+            .filter {
+              it.name.startsWith("VK_") &&
+                  it.type == Int::class.javaPrimitiveType &&
+                  Modifier.isStatic(it.modifiers)
+            }
+            .groupBy { it.getInt(null) }
+            .mapValues { (_, fields) -> fields.minOf { it.name } }
+      }
     }
   }
 
@@ -242,8 +319,10 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 1
-    const val MAX_RECENT_ROMS = 10
+    const val CURRENT_SCHEMA_VERSION = 2
+    const val MIN_RECENT_FILE_CAPACITY = 0
+    const val DEFAULT_RECENT_FILE_CAPACITY = 10
+    const val MAX_RECENT_FILE_CAPACITY = 50
     private val SUPPORTED_SCALES: Set<Int> =
         Collections.unmodifiableSet(linkedSetOf(1, 2, 4))
   }
@@ -260,7 +339,7 @@ data class ApplicationSettingsOverrides(
   }
 }
 
-/** Typed settings plus unrecognized legacy fields retained losslessly across schema-1 writes. */
+/** Typed settings plus unrecognized legacy fields retained losslessly across versioned writes. */
 class ApplicationSettingsDocument(
     val settings: ApplicationSettings,
     unknownProperties: Map<String, String> = emptyMap(),

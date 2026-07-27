@@ -57,6 +57,41 @@ public class SwingJoypadTest {
         assertEquals(List.of(true, false, true, false), rewinds);
     }
 
+    @Test
+    public void replacingMappingReleasesOldBindingsBeforeNewBindingsBecomeLive() {
+        EventBusImpl bus = new EventBusImpl(null, null, false);
+        PlayerInputHub hub = new PlayerInputHub();
+        DesktopPlayerInput input = new DesktopPlayerInput(hub, bus);
+        SwingJoypad joypad =
+                new SwingJoypad(
+                        ControllerProperties.INSTANCE.getPlayerMapping(new Properties()),
+                        bus,
+                        input);
+        List<Boolean> rewinds = new ArrayList<>();
+        bus.register(event -> rewinds.add(event.getActive()), Controller.RewindEvent.class);
+        Object gamepadSource = new Object();
+
+        joypad.keyPressed(key(KeyEvent.VK_Z, KeyEvent.KEY_PRESSED));
+        joypad.keyPressed(key(KeyEvent.VK_BACK_SPACE, KeyEvent.KEY_PRESSED));
+        input.update(gamepadSource, 1, Set.of(Button.B));
+        assertEquals(Set.of(Button.A), hub.sample().buttons(0));
+        assertEquals(Set.of(Button.B), hub.sample().buttons(1));
+
+        Properties replacement = new Properties();
+        replacement.setProperty("input.p1.btn_a", "VK_C");
+        joypad.updateMapping(ControllerProperties.INSTANCE.getPlayerMapping(replacement));
+        assertTrue(hub.sample().players().stream().allMatch(Set::isEmpty));
+        assertEquals(List.of(true, false), rewinds);
+
+        joypad.keyPressed(key(KeyEvent.VK_Z, KeyEvent.KEY_PRESSED));
+        assertTrue(hub.sample().players().stream().allMatch(Set::isEmpty));
+        joypad.keyPressed(key(KeyEvent.VK_C, KeyEvent.KEY_PRESSED));
+        assertEquals(Set.of(Button.A), hub.sample().buttons(0));
+
+        input.update(gamepadSource, 1, Set.of(Button.B));
+        assertEquals(Set.of(Button.B), hub.sample().buttons(1));
+    }
+
     private static KeyEvent key(int code, int id) {
         return new KeyEvent(new Canvas(), id, 0, 0, code, KeyEvent.CHAR_UNDEFINED);
     }
