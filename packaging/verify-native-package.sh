@@ -91,6 +91,7 @@ java \
   --root "$extraction" \
   --source-app-jar "${app_jars[0]}" \
   --source-sbom "${sboms[0]}" \
+  --source-legal "$repository_root/packaging/resources/legal" \
   --dist "$build_root/dist" \
   --run-smoke \
   --smoke-home "$build_root/unpacked-smoke-home"

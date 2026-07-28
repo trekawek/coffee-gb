@@ -53,7 +53,18 @@ public final class NativePackageVerifier {
     private static final Set<String> SIGNING_SUFFIXES = Set.of(
             ".p12", ".pfx", ".pem", ".key", ".keystore", ".jks", ".mobileprovision");
     private static final Set<String> TEXT_SUFFIXES = Set.of(
-            ".cfg", ".conf", ".desktop", ".json", ".properties", ".txt", ".xml", ".yaml", ".yml");
+            ".cfg",
+            ".conf",
+            ".desktop",
+            ".ini",
+            ".json",
+            ".md",
+            ".plist",
+            ".properties",
+            ".txt",
+            ".xml",
+            ".yaml",
+            ".yml");
     private static final Pattern DEVELOPER_PATH = Pattern.compile(
             "(?i)(?:/home/[a-z0-9._-]+/|/Users/[a-z0-9._-]+/|[a-z]:\\\\Users\\\\[^\\\\]+\\\\)");
     private static final Pattern SECRET_MATERIAL = Pattern.compile(
@@ -61,7 +72,9 @@ public final class NativePackageVerifier {
                     + "|\\bAKIA[0-9A-Z]{16}\\b"
                     + "|\\bgithub_pat_[A-Za-z0-9_]{20,}\\b"
                     + "|\\bgh[pousr]_[A-Za-z0-9]{20,}\\b"
-                    + "|\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b)");
+                    + "|\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b"
+                    + "|\\b(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
+                    + "\\s*[:=]\\s*[\"']?[A-Za-z0-9+/=_-]{12,})");
 
     private NativePackageVerifier() {
     }
@@ -87,6 +100,7 @@ public final class NativePackageVerifier {
                     "--root",
                     "--source-app-jar",
                     "--source-sbom",
+                    "--source-legal",
                     "--dist",
                     "--smoke-home",
                     "--run-smoke"));
@@ -98,7 +112,8 @@ public final class NativePackageVerifier {
                     packageType,
                     parsed.requiredPath("--root"),
                     parsed.requiredPath("--source-app-jar"),
-                    parsed.requiredPath("--source-sbom")));
+                    parsed.requiredPath("--source-sbom"),
+                    parsed.requiredPath("--source-legal")));
             if (parsed.has("--dist")) {
                 verifyDistribution(
                         parsed.requiredPath("--dist"), nativeTarget, packageType, result.appVersion());
@@ -168,18 +183,7 @@ public final class NativePackageVerifier {
         requireRegularFile(runtimeJava, "packaged runtime java");
         requireRegularFile(runtime.resolve("lib").resolve("modules"), "packaged runtime modules");
 
-        List<Path> applicationPaths = boundedWalk(applicationRoot, "packaged application");
-        assertNoUnexpectedLinks(applicationPaths, appDirectory);
-        long runtimeCount = applicationPaths.stream()
-                .filter(path -> path.getFileName().toString().equals("modules"))
-                .filter(path -> path.getParent() != null
-                        && path.getParent().getFileName().toString().equals("lib"))
-                .filter(path -> path.getParent().getParent() != null
-                        && path.getParent().getParent().getFileName().toString().equals("runtime"))
-                .count();
-        if (runtimeCount != 1) {
-            throw new IOException("Expected one packaged runtime, found " + runtimeCount);
-        }
+        verifyPayloadPolicy(payloadPaths, root, appDirectory, runtime, request.target());
 
         Map<String, String> inventory = readStrictProperties(manifests.get(0));
         String sourceVersion =
@@ -211,8 +215,7 @@ public final class NativePackageVerifier {
         NativePackageStager.verifyNeutralAppJar(packagedJar);
         verifySbom(packagedSbom, sourceVersion);
         verifyNativeInventory(appDirectory, request.target());
-        verifyLegalInventory(appDirectory.resolve("legal"));
-        verifyForbiddenContent(applicationPaths, applicationRoot, appDirectory, runtime);
+        verifyLegalInventory(appDirectory.resolve("legal"), request.sourceLegal());
 
         return new VerificationResult(
                 request.target(),
@@ -341,7 +344,18 @@ public final class NativePackageVerifier {
         }
         Path artifact = safeDistributionPath(root, required(result, "artifact.path"));
         String kind = required(result, "artifact.kind");
+        Set<String> expectedKeys = new HashSet<>(Set.of(
+                "schema",
+                "target",
+                "package.type",
+                "app.version",
+                "signing",
+                "artifact.path",
+                "artifact.kind",
+                "sbom.path",
+                "sbom.sha256"));
         if ("file".equals(kind)) {
+            expectedKeys.add("artifact.sha256");
             requireRegularFile(artifact, "primary package artifact");
             requireValue(result, "artifact.sha256", NativePackageStager.sha256(artifact));
             String suffix = "." + expectedType.id();
@@ -356,6 +370,7 @@ public final class NativePackageVerifier {
         } else {
             throw new IOException("Unknown artifact.kind: " + kind);
         }
+        requireExactKeys(result, expectedKeys, "package result");
         Path sbom = safeDistributionPath(root, required(result, "sbom.path"));
         requireRegularFile(sbom, "release SBOM");
         requireValue(result, "sbom.sha256", NativePackageStager.sha256(sbom));
@@ -398,54 +413,118 @@ public final class NativePackageVerifier {
         }
     }
 
-    private static void verifyLegalInventory(Path legal) throws IOException {
+    static void verifyLegalInventory(Path legal, Path sourceLegal) throws IOException {
         if (!Files.isDirectory(legal, LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Packaged legal directory is missing");
         }
-        Set<String> actual = boundedWalk(legal, "package legal inventory").stream()
+        if (!Files.isDirectory(sourceLegal, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("Authoritative legal directory is missing: " + sourceLegal);
+        }
+        Map<String, Path> actual = boundedWalk(legal, "package legal inventory").stream()
                 .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
-                .map(path -> relativePortable(legal, path))
-                .collect(Collectors.toSet());
-        if (!actual.equals(LEGAL_FILES)) {
-            throw new IOException("Packaged legal inventory mismatch: " + actual);
+                .collect(Collectors.toMap(path -> relativePortable(legal, path), path -> path));
+        Map<String, Path> source = boundedWalk(sourceLegal, "authoritative legal inventory").stream()
+                .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                .collect(Collectors.toMap(
+                        path -> relativePortable(sourceLegal, path), path -> path));
+        if (!actual.keySet().equals(LEGAL_FILES) || !source.keySet().equals(LEGAL_FILES)) {
+            throw new IOException(
+                    "Packaged or authoritative legal inventory mismatch; packaged="
+                            + actual.keySet() + ", authoritative=" + source.keySet());
+        }
+        for (String relative : LEGAL_FILES) {
+            if (!NativePackageStager.sha256(actual.get(relative))
+                    .equals(NativePackageStager.sha256(source.get(relative)))) {
+                throw new IOException("Packaged legal notice differs from source: " + relative);
+            }
         }
     }
 
-    private static void verifyForbiddenContent(
-            List<Path> applicationPaths,
-            Path applicationRoot,
+    static void verifyPayloadPolicy(
+            Path payloadRoot,
             Path appDirectory,
-            Path runtime)
+            Path runtime,
+            NativeTarget target)
             throws IOException {
-        for (Path path : applicationPaths) {
+        Path root = payloadRoot.toAbsolutePath().normalize();
+        verifyPayloadPolicy(
+                boundedWalk(root, "package payload"),
+                root,
+                appDirectory.toAbsolutePath().normalize(),
+                runtime.toAbsolutePath().normalize(),
+                target);
+    }
+
+    private static void verifyPayloadPolicy(
+            List<Path> payloadPaths,
+            Path payloadRoot,
+            Path appDirectory,
+            Path runtime,
+            NativeTarget target)
+            throws IOException {
+        assertNoUnexpectedLinks(payloadPaths, appDirectory);
+        long runtimeCount = payloadPaths.stream()
+                .filter(path -> path.getFileName().toString().equals("modules"))
+                .filter(path -> path.getParent() != null
+                        && path.getParent().getFileName().toString().equals("lib"))
+                .filter(path -> path.getParent().getParent() != null
+                        && path.getParent().getParent().getFileName().toString().equals("runtime"))
+                .count();
+        if (runtimeCount != 1) {
+            throw new IOException("Expected one packaged runtime, found " + runtimeCount);
+        }
+        verifyForbiddenContent(payloadPaths, payloadRoot, runtime, target);
+    }
+
+    private static void verifyForbiddenContent(
+            List<Path> payloadPaths,
+            Path payloadRoot,
+            Path runtime,
+            NativeTarget target)
+            throws IOException {
+        Set<String> foreignNativeSuffixes = foreignNativeSuffixes(target);
+        for (Path path : payloadPaths) {
             String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
             if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
                 if (endsWith(name, ROM_SUFFIXES)) {
                     throw new IOException("Packaged payload contains a ROM-like file: "
-                            + relativePortable(applicationRoot, path));
+                            + relativePortable(payloadRoot, path));
                 }
                 if (endsWith(name, SIGNING_SUFFIXES)) {
                     throw new IOException("Packaged payload contains signing material: "
-                            + relativePortable(applicationRoot, path));
+                            + relativePortable(payloadRoot, path));
+                }
+                if (endsWith(name, foreignNativeSuffixes)) {
+                    throw new IOException("Packaged payload contains a foreign native library: "
+                            + relativePortable(payloadRoot, path));
                 }
             }
-            if (!path.startsWith(appDirectory)
-                    || path.startsWith(runtime)
+            if (path.startsWith(runtime)
                     || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
                     || !endsWith(name, TEXT_SUFFIXES)
                     || Files.size(path) > MAX_TEXT_BYTES) {
                 continue;
             }
             String text = Files.readString(path, StandardCharsets.UTF_8);
-            if (DEVELOPER_PATH.matcher(text).find()) {
+            String normalizedText = text.replace("\\\\", "\\");
+            if (DEVELOPER_PATH.matcher(text).find()
+                    || DEVELOPER_PATH.matcher(normalizedText).find()) {
                 throw new IOException("Packaged text contains a developer home path: "
-                        + relativePortable(applicationRoot, path));
+                        + relativePortable(payloadRoot, path));
             }
             if (SECRET_MATERIAL.matcher(text).find()) {
                 throw new IOException("Packaged text contains secret-like material: "
-                        + relativePortable(applicationRoot, path));
+                        + relativePortable(payloadRoot, path));
             }
         }
+    }
+
+    private static Set<String> foreignNativeSuffixes(NativeTarget target) {
+        return switch (target) {
+            case LINUX_X86_64 -> Set.of(".dll", ".dylib", ".jnilib");
+            case WINDOWS_X86_64 -> Set.of(".so", ".dylib", ".jnilib");
+            case MACOS_X86_64, MACOS_AARCH64 -> Set.of(".dll", ".so");
+        };
     }
 
     private static void assertNoUnexpectedLinks(List<Path> paths, Path appDirectory)
@@ -643,6 +722,20 @@ public final class NativePackageVerifier {
         }
     }
 
+    private static void requireExactKeys(
+            Map<String, String> values, Set<String> expected, String description)
+            throws IOException {
+        if (!values.keySet().equals(expected)) {
+            Set<String> missing = new TreeSet<>(expected);
+            missing.removeAll(values.keySet());
+            Set<String> unexpected = new TreeSet<>(values.keySet());
+            unexpected.removeAll(expected);
+            throw new IOException(
+                    description + " keys mismatch; missing=" + missing
+                            + ", unexpected=" + unexpected);
+        }
+    }
+
     private static void requireRegularFile(Path file, String description) throws IOException {
         if (Files.isSymbolicLink(file)
                 || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
@@ -663,7 +756,8 @@ public final class NativePackageVerifier {
             NativePackageMetadata.PackageType packageType,
             Path root,
             Path sourceAppJar,
-            Path sourceSbom) {
+            Path sourceSbom,
+            Path sourceLegal) {
 
         public VerificationRequest {
             Objects.requireNonNull(target, "target");
@@ -671,6 +765,7 @@ public final class NativePackageVerifier {
             Objects.requireNonNull(root, "root");
             Objects.requireNonNull(sourceAppJar, "sourceAppJar");
             Objects.requireNonNull(sourceSbom, "sourceSbom");
+            Objects.requireNonNull(sourceLegal, "sourceLegal");
         }
     }
 
@@ -701,6 +796,7 @@ public final class NativePackageVerifier {
                 throw new IllegalArgumentException(
                         "Usage: NativePackageVerifier verify --target ID --type TYPE "
                                 + "--root PATH --source-app-jar PATH --source-sbom PATH "
+                                + "--source-legal PATH "
                                 + "[--dist PATH] [--run-smoke --smoke-home PATH]");
             }
             Map<String, String> values = new HashMap<>();

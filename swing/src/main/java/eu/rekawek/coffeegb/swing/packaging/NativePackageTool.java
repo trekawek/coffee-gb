@@ -181,7 +181,8 @@ public final class NativePackageTool {
                         packageType,
                         packagedPayload,
                         stage.appJar(),
-                        stage.sbom()));
+                        stage.sbom(),
+                        resources.resolve("legal")));
         NativePackageVerifier.runSmokes(
                 verification, buildRoot.resolve("package-smoke-home"));
 
