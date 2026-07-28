@@ -95,6 +95,16 @@ internal constructor(
   val playerInputMapping: ControllerProperties.PlayerMapping
     get() = applicationSettings.input.toPlayerMapping()
 
+  val gamepadTunings: Map<String, ApplicationSettings.GamepadTuning>
+    get() = applicationSettings.input.gamepadTunings
+
+  fun gamepadTuning(stableId: String): ApplicationSettings.GamepadTuning {
+    require(ControllerProperties.isStableGamepadId(stableId)) {
+      "Gamepad tuning device must be sdl- followed by 64 lowercase hex digits"
+    }
+    return gamepadTunings[stableId] ?: ApplicationSettings.GamepadTuning()
+  }
+
   /** Shared live-input service copied into each active machine configuration. */
   val playerInputSource = PlayerInputHub()
 

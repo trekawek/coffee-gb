@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -31,19 +32,24 @@ public class SwingGamepad implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(SwingGamepad.class);
     private static final int POLL_MS = 8;
-    private static final int AXIS_THRESHOLD = 16384;
-    static final int TILT_DEAD_ZONE = 4096;
+    static final int TILT_DEAD_ZONE =
+            GamepadConfiguration.Tuning.DEFAULT_TILT_DEAD_ZONE;
 
     private final EventBus eventBus;
     private final DesktopPlayerInput input;
     private final DesktopTiltInput tiltInput;
-    private final List<ControllerProperties.GamepadAssignment> assignments;
     private final GamepadBackend backend;
     private final Consumer<GamepadBackend.DeviceInfo> discoveryObserver;
+    private final GamepadCatalog catalog = new GamepadCatalog();
     private final Map<Integer, ActiveDevice> active = new HashMap<>();
     private final Set<String> discovered = new HashSet<>();
+    private final Set<Integer> playersRequiringNeutral = new HashSet<>();
     private final Object tiltSourceIdentity = new Object();
 
+    private GamepadConfiguration requestedConfiguration;
+    private GamepadConfiguration appliedConfiguration;
+    private boolean rearmRequested;
+    private boolean hasPolled;
     private volatile boolean doStop;
     private volatile boolean rumbleRequested;
     private boolean rumbleActive;
@@ -51,25 +57,82 @@ public class SwingGamepad implements Runnable {
 
     public SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
                         DesktopTiltInput tiltInput, EventBus eventBus) {
-        this(mapping, input, tiltInput, eventBus, new SdlGamepadBackend(), ignored -> {});
+        this(GamepadConfiguration.from(mapping), input, tiltInput, eventBus,
+                new SdlGamepadBackend(), ignored -> {});
+    }
+
+    public SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
+                        DesktopTiltInput tiltInput, EventBus eventBus) {
+        this(configuration, input, tiltInput, eventBus,
+                new SdlGamepadBackend(), ignored -> {});
     }
 
     SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
                  DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend) {
-        this(mapping, input, tiltInput, eventBus, backend, ignored -> {});
+        this(GamepadConfiguration.from(mapping), input, tiltInput, eventBus,
+                backend, ignored -> {});
     }
 
     SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
                  DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend,
                  Consumer<GamepadBackend.DeviceInfo> discoveryObserver) {
-        this.assignments = List.copyOf(mapping.getGamepads());
-        this.input = input;
-        this.tiltInput = tiltInput;
-        this.eventBus = eventBus;
-        this.backend = backend;
-        this.discoveryObserver = discoveryObserver;
+        this(GamepadConfiguration.from(mapping), input, tiltInput, eventBus,
+                backend, discoveryObserver);
+    }
+
+    SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
+                 DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend) {
+        this(configuration, input, tiltInput, eventBus, backend, ignored -> {});
+    }
+
+    SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
+                 DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend,
+                 Consumer<GamepadBackend.DeviceInfo> discoveryObserver) {
+        this.requestedConfiguration = Objects.requireNonNull(configuration, "configuration");
+        this.appliedConfiguration = configuration;
+        this.input = Objects.requireNonNull(input, "input");
+        this.tiltInput = Objects.requireNonNull(tiltInput, "tiltInput");
+        this.eventBus = Objects.requireNonNull(eventBus, "eventBus");
+        this.backend = Objects.requireNonNull(backend, "backend");
+        this.discoveryObserver =
+                Objects.requireNonNull(discoveryObserver, "discoveryObserver");
         tiltInput.registerResetter(this::releaseTiltAndRumble);
         eventBus.register(e -> rumbleRequested = e.on(), RumbleEvent.class);
+    }
+
+    /** A lock-free immutable device view that is safe to read from Swing's EDT. */
+    public GamepadCatalog catalog() {
+        return catalog;
+    }
+
+    /**
+     * Requests a complete runtime replacement without calling SDL on the caller's thread.
+     *
+     * <p>The shared input hub is released before this method returns. The polling thread performs
+     * device close/open and waits for a neutral physical sample before the new mapping can latch.
+     */
+    public synchronized void updateConfiguration(GamepadConfiguration configuration) {
+        GamepadConfiguration next = Objects.requireNonNull(configuration, "configuration");
+        if (next.equals(requestedConfiguration)) {
+            return;
+        }
+        requestedConfiguration = next;
+        rearmRequested = true;
+        rumbleRequested = false;
+        input.releaseAll();
+        tiltInput.clear(tiltSourceIdentity);
+    }
+
+    public void updateMapping(ControllerProperties.PlayerMapping mapping) {
+        updateConfiguration(GamepadConfiguration.from(mapping));
+    }
+
+    /** Releases transient input at ROM/controller replacement and rearms only from neutral. */
+    public synchronized void releaseForLifecycleChange() {
+        rearmRequested = true;
+        rumbleRequested = false;
+        input.releaseAll();
+        tiltInput.clear(tiltSourceIdentity);
     }
 
     public void stop() {
@@ -80,6 +143,7 @@ public class SwingGamepad implements Runnable {
 
     @Override
     public void run() {
+        boolean backendUnavailable = false;
         try {
             backend.initialize();
             while (!doStop) {
@@ -92,6 +156,7 @@ public class SwingGamepad implements Runnable {
                 }
             }
         } catch (UnsatisfiedLinkError unavailable) {
+            backendUnavailable = true;
             if (isMac()) {
                 LOG.warn("Game controllers need SDL2, which macOS builds don't bundle. "
                         + "Install it with 'brew install sdl2' and restart. Keyboard input still works.");
@@ -99,14 +164,21 @@ public class SwingGamepad implements Runnable {
                 LOG.info("Game controllers unavailable (no SDL2 native): {}", unavailable.getMessage());
             }
         } catch (Throwable failure) {
+            backendUnavailable = true;
             LOG.info("Game controllers unavailable: {}", failure.toString());
         } finally {
             closeAll();
             backend.close();
+            if (backendUnavailable) {
+                catalog.publishUnavailable();
+            } else {
+                catalog.publishStopped();
+            }
         }
     }
 
     synchronized void pollOnce() {
+        applyRequestedConfiguration();
         backend.update();
         Map<String, GamepadBackend.DeviceInfo> devices = new HashMap<>();
         backend.devices().stream().sorted(Comparator.comparing(GamepadBackend.DeviceInfo::stableId))
@@ -116,6 +188,7 @@ public class SwingGamepad implements Runnable {
             ActiveDevice device = entry.getValue();
             if (!device.device.attached() || !devices.containsKey(device.device.stableId())) {
                 devices.remove(device.device.stableId());
+                playersRequiringNeutral.add(entry.getKey());
                 disconnect(entry.getKey(), "disconnected");
             }
         });
@@ -129,7 +202,7 @@ public class SwingGamepad implements Runnable {
                 });
 
         Set<String> claimed = new HashSet<>();
-        assignments.stream()
+        appliedConfiguration.assignments().stream()
                 .filter(assignment -> !assignment.getSelector().equals(
                         ControllerProperties.GamepadAssignment.AUTO))
                 .forEach(assignment -> {
@@ -137,7 +210,7 @@ public class SwingGamepad implements Runnable {
                     assign(assignment.getPlayer(), desired);
                     if (desired != null) claimed.add(desired.stableId());
                 });
-        assignments.stream()
+        appliedConfiguration.assignments().stream()
                 .filter(assignment -> assignment.getSelector().equals(
                         ControllerProperties.GamepadAssignment.AUTO))
                 .forEach(assignment -> {
@@ -162,6 +235,22 @@ public class SwingGamepad implements Runnable {
             updateTilt(0, 0);
             rumbleActive = false;
         }
+        publishCatalog(devices);
+        hasPolled = true;
+    }
+
+    private void applyRequestedConfiguration() {
+        if (!appliedConfiguration.equals(requestedConfiguration)) {
+            playersRequiringNeutral.addAll(List.of(0, 1, 2, 3));
+            new ArrayList<>(active.keySet())
+                    .forEach(player -> disconnect(player, "configuration changed"));
+            appliedConfiguration = requestedConfiguration;
+        }
+        if (rearmRequested) {
+            playersRequiringNeutral.addAll(List.of(0, 1, 2, 3));
+            active.values().forEach(device -> device.waitingForNeutral = true);
+            rearmRequested = false;
+        }
     }
 
     private void assign(int player, GamepadBackend.DeviceInfo desired) {
@@ -176,7 +265,9 @@ public class SwingGamepad implements Runnable {
         if (current != null) disconnect(player, "assignment changed");
         GamepadBackend.GamepadDevice opened = backend.open(desired);
         if (opened != null && opened.attached()) {
-            ActiveDevice next = new ActiveDevice(opened);
+            boolean waitForNeutral =
+                    playersRequiringNeutral.remove(player) || hasPolled;
+            ActiveDevice next = new ActiveDevice(opened, waitForNeutral);
             active.put(player, next);
             LOG.info("Game controller {} assigned to P{} as {}",
                     opened.name(), player + 1, opened.stableId());
@@ -187,33 +278,52 @@ public class SwingGamepad implements Runnable {
 
     private void poll(int player, ActiveDevice activeDevice) {
         GamepadBackend.GamepadDevice device = activeDevice.device;
+        GamepadConfiguration.Tuning tuning =
+                appliedConfiguration.tuningFor(device.stableId());
+        PhysicalState state = PhysicalState.read(device);
         EnumSet<Button> buttons = EnumSet.noneOf(Button.class);
-        if (input.isFocused()) {
-            int x = device.axis(LEFT_X);
-            int y = device.axis(LEFT_Y);
-            add(buttons, Button.UP, device.button(UP) || y < -AXIS_THRESHOLD);
-            add(buttons, Button.DOWN, device.button(DOWN) || y > AXIS_THRESHOLD);
-            add(buttons, Button.LEFT, device.button(LEFT) || x < -AXIS_THRESHOLD);
-            add(buttons, Button.RIGHT, device.button(RIGHT) || x > AXIS_THRESHOLD);
-            add(buttons, Button.A, device.button(A));
-            add(buttons, Button.B, device.button(B) || device.button(X));
-            add(buttons, Button.START, device.button(START));
-            add(buttons, Button.SELECT, device.button(BACK));
+        if (activeDevice.waitingForNeutral) {
+            if (state.isNeutral(tuning)) {
+                activeDevice.waitingForNeutral = false;
+            }
+        } else if (input.isFocused()) {
+            int x = invertAxis(state.leftX, tuning.invertMovementX());
+            int y = invertAxis(state.leftY, tuning.invertMovementY());
+            int threshold = tuning.movementDeadZone();
+            add(buttons, Button.UP, state.buttons.contains(UP) || y < -threshold);
+            add(buttons, Button.DOWN, state.buttons.contains(DOWN) || y > threshold);
+            add(buttons, Button.LEFT, state.buttons.contains(LEFT) || x < -threshold);
+            add(buttons, Button.RIGHT, state.buttons.contains(RIGHT) || x > threshold);
+            add(buttons, Button.A, state.buttons.contains(A));
+            add(buttons, Button.B, state.buttons.contains(B) || state.buttons.contains(X));
+            add(buttons, Button.START, state.buttons.contains(START));
+            add(buttons, Button.SELECT, state.buttons.contains(BACK));
         }
         input.update(activeDevice.sourceIdentity, player, buttons);
 
         if (player == 0) {
-            if (input.isFocused()) {
-                updateTilt(device.axis(RIGHT_X), device.axis(RIGHT_Y));
+            if (input.isFocused() && !activeDevice.waitingForNeutral) {
+                updateTilt(
+                        invertAxis(state.rightX, tuning.invertTiltX()),
+                        invertAxis(state.rightY, tuning.invertTiltY()),
+                        tuning.tiltDeadZone());
             } else {
                 updateTilt(0, 0);
             }
-            boolean requested = input.isFocused() && rumbleRequested;
+            boolean requested =
+                    input.isFocused() && !activeDevice.waitingForNeutral && rumbleRequested;
             if (requested != rumbleActive) {
                 device.rumble(requested);
                 rumbleActive = requested;
             }
         }
+    }
+
+    static int invertAxis(int value, boolean invert) {
+        if (!invert) {
+            return value;
+        }
+        return value == Short.MIN_VALUE ? Short.MAX_VALUE : -value;
     }
 
     private static void add(Set<Button> buttons, Button button, boolean down) {
@@ -241,8 +351,12 @@ public class SwingGamepad implements Runnable {
     }
 
     void updateTilt(int rawX, int rawY) {
-        double x = normalizeTiltAxis(rawX);
-        double y = normalizeTiltAxis(rawY);
+        updateTilt(rawX, rawY, TILT_DEAD_ZONE);
+    }
+
+    private void updateTilt(int rawX, int rawY, int deadZone) {
+        double x = normalizeTiltAxis(rawX, deadZone);
+        double y = normalizeTiltAxis(rawY, deadZone);
         if (x != 0 || y != 0) {
             tiltInput.update(tiltSourceIdentity, x, y);
             tiltActive = true;
@@ -254,31 +368,76 @@ public class SwingGamepad implements Runnable {
 
     private synchronized void releaseTiltAndRumble() {
         rumbleRequested = false;
-        ActiveDevice primary = active.get(0);
-        if (primary != null && rumbleActive) {
-            primary.device.rumble(false);
-        }
-        rumbleActive = false;
         tiltActive = false;
     }
 
     static double normalizeTiltAxis(int raw) {
+        return normalizeTiltAxis(raw, TILT_DEAD_ZONE);
+    }
+
+    static double normalizeTiltAxis(int raw, int deadZone) {
         int magnitude = Math.abs(raw);
-        if (magnitude <= TILT_DEAD_ZONE) return 0;
-        double normalized = (double) (magnitude - TILT_DEAD_ZONE) / (32767 - TILT_DEAD_ZONE);
+        if (magnitude <= deadZone) return 0;
+        double normalized = (double) (magnitude - deadZone) / (32767 - deadZone);
         return Math.copySign(Math.min(1, normalized), raw);
+    }
+
+    private void publishCatalog(Map<String, GamepadBackend.DeviceInfo> devices) {
+        Map<String, Integer> playersByStableId = new HashMap<>();
+        active.forEach((player, activeDevice) ->
+                playersByStableId.put(activeDevice.device.stableId(), player));
+        catalog.publishAvailable(devices.values().stream()
+                .map(device -> new GamepadCatalog.Device(
+                        device.stableId(),
+                        device.name(),
+                        playersByStableId.get(device.stableId())))
+                .toList());
     }
 
     private static boolean isMac() {
         return System.getProperty("os.name", "").toLowerCase().contains("mac");
     }
 
+    private record PhysicalState(
+            int leftX,
+            int leftY,
+            int rightX,
+            int rightY,
+            EnumSet<GamepadBackend.PadButton> buttons) {
+
+        private static PhysicalState read(GamepadBackend.GamepadDevice device) {
+            EnumSet<GamepadBackend.PadButton> buttons =
+                    EnumSet.noneOf(GamepadBackend.PadButton.class);
+            for (GamepadBackend.PadButton button : GamepadBackend.PadButton.values()) {
+                if (device.button(button)) {
+                    buttons.add(button);
+                }
+            }
+            return new PhysicalState(
+                    device.axis(LEFT_X),
+                    device.axis(LEFT_Y),
+                    device.axis(RIGHT_X),
+                    device.axis(RIGHT_Y),
+                    buttons);
+        }
+
+        private boolean isNeutral(GamepadConfiguration.Tuning tuning) {
+            return buttons.isEmpty()
+                    && Math.abs(leftX) <= tuning.movementDeadZone()
+                    && Math.abs(leftY) <= tuning.movementDeadZone()
+                    && Math.abs(rightX) <= tuning.tiltDeadZone()
+                    && Math.abs(rightY) <= tuning.tiltDeadZone();
+        }
+    }
+
     private static final class ActiveDevice {
         private final GamepadBackend.GamepadDevice device;
         private final Object sourceIdentity = new Object();
+        private boolean waitingForNeutral;
 
-        private ActiveDevice(GamepadBackend.GamepadDevice device) {
+        private ActiveDevice(GamepadBackend.GamepadDevice device, boolean waitingForNeutral) {
             this.device = device;
+            this.waitingForNeutral = waitingForNeutral;
         }
     }
 }

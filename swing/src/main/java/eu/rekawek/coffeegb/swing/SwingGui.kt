@@ -15,10 +15,12 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.sound.Sound
 import java.awt.Cursor
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JFrame
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
@@ -44,6 +46,8 @@ class SwingGui private constructor(
   private var romLoading = false
 
   private val romSessionState = RomSessionState()
+
+  private val shutdownStarted = AtomicBoolean()
 
   init {
     eventBus = EventBusImpl()
@@ -123,38 +127,50 @@ class SwingGui private constructor(
   }
 
   private fun stopGui() {
-    eventBus.post(StopEmulationEvent())
-    eventBus.post(StopServerEvent())
-    eventBus.post(StopClientEvent())
-    console?.stop()
-    emulator.stop()
-    // The final settings force/move can block briefly. The window is already disposed, so finish
-    // persistence off the EDT and keep this non-daemon thread alive until the bounded close ends.
-    Thread(
-            {
-              try {
-                properties.close()
-              } catch (failure: IllegalStateException) {
-                runCatching {
-                  SwingUtilities.invokeAndWait {
-                    JOptionPane.showMessageDialog(
-                        null,
-                        "Coffee GB could not save the latest settings. " +
-                            "The previous complete settings file was preserved.\n\n" +
-                            (failure.cause?.message
-                                ?: failure.message
-                                ?: failure.javaClass.simpleName),
-                        "Settings save failed",
-                        JOptionPane.ERROR_MESSAGE,
-                    )
-                  }
-                }
+    if (!shutdownStarted.compareAndSet(false, true)) {
+      return
+    }
+    // A controller close waits for its emulation and ROM-loader workers, and audio teardown may
+    // wait for a platform mixer. The window is already disposed, so none of that work belongs on
+    // Swing's Event Dispatch Thread.
+    val shutdown =
+        launchDesktopShutdown {
+          try {
+            eventBus.post(StopEmulationEvent())
+            eventBus.post(StopServerEvent())
+            eventBus.post(StopClientEvent())
+            console?.stop()
+            emulator.stop()
+          } catch (failure: RuntimeException) {
+            LOG.error("Desktop runtime did not shut down cleanly", failure)
+          }
+          try {
+            properties.close()
+          } catch (failure: IllegalStateException) {
+            runCatching {
+              SwingUtilities.invokeAndWait {
+                JOptionPane.showMessageDialog(
+                    null,
+                    "Coffee GB could not save the latest settings. " +
+                        "The previous complete settings file was preserved.\n\n" +
+                        (failure.cause?.message
+                            ?: failure.message
+                            ?: failure.javaClass.simpleName),
+                    "Settings save failed",
+                    JOptionPane.ERROR_MESSAGE,
+                )
               }
-              exitProcess(0)
-            },
-            "coffee-gb-settings-shutdown",
-        )
-        .start()
+            }
+          }
+          exitProcess(0)
+        }
+    launchDesktopShutdownWatchdog(shutdown, DESKTOP_SHUTDOWN_TIMEOUT_MILLIS) {
+      LOG.error(
+          "Desktop shutdown exceeded {} ms; terminating rather than leaving a hung process",
+          DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
+      )
+      exitProcess(1)
+    }
   }
 
   private fun requestClose() {
@@ -186,9 +202,17 @@ class SwingGui private constructor(
     check(SwingUtilities.isEventDispatchThread()) {
       "Preferences must be opened from the Event Dispatch Thread"
     }
-    PreferencesDialog.show(mainWindow, properties.applicationSettings) { edit ->
+    PreferencesDialog.show(
+        owner = mainWindow,
+        initial = properties.applicationSettings,
+        gamepadCatalog = emulator.gamepadCatalog(),
+        audioDevices = AudioDeviceProvider(emulator::audioDevices),
+    ) { edit ->
       properties.updateApplicationSettings(edit::applyTo)
-      emulator.applyKeyboardMapping(properties.playerInputMapping)
+      val applied = properties.applicationSettings
+      emulator.applyKeyboardMapping(applied.input.toPlayerMapping())
+      emulator.applyDeviceSettings(applied)
+      eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
     }
   }
 
@@ -210,6 +234,7 @@ class SwingGui private constructor(
 
   companion object {
     private val LOG = LoggerFactory.getLogger(SwingGui::class.java)
+    private const val DESKTOP_SHUTDOWN_TIMEOUT_MILLIS = 15_000L
 
     fun run(
         debug: Boolean,
@@ -242,3 +267,35 @@ internal fun createSettingsShutdownHook(
         },
         "coffee-gb-settings-shutdown-hook",
     )
+
+internal fun launchDesktopShutdown(shutdown: () -> Unit): Thread =
+    Thread(shutdown, "coffee-gb-desktop-shutdown").apply {
+      isDaemon = false
+      start()
+    }
+
+internal fun launchDesktopShutdownWatchdog(
+    shutdown: Thread,
+    timeoutMillis: Long,
+    onTimeout: () -> Unit,
+): Thread {
+  require(timeoutMillis > 0) { "Desktop shutdown timeout must be positive" }
+  return Thread(
+          {
+            try {
+              shutdown.join(timeoutMillis)
+              if (shutdown.isAlive) {
+                shutdown.interrupt()
+                onTimeout()
+              }
+            } catch (_: InterruptedException) {
+              Thread.currentThread().interrupt()
+            }
+          },
+          "coffee-gb-desktop-shutdown-watchdog",
+      )
+      .apply {
+        isDaemon = true
+        start()
+      }
+}

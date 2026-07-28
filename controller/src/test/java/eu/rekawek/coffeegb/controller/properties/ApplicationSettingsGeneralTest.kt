@@ -402,7 +402,7 @@ class ApplicationSettingsGeneralTest {
     val raw =
         buildMap {
           put(ApplicationSettingsCodec.SCHEMA_VERSION_KEY, "2")
-          repeat(2_034) { index -> put("plugin.$index", "value") }
+          repeat(2_031) { index -> put("plugin.$index", "value") }
           serialized.chunked(60_000).forEachIndexed { index, chunk ->
             put(
                 "${ApplicationSettingsCodec.PRESERVED_UNKNOWN_COLLISIONS_PREFIX}$index",

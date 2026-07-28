@@ -39,7 +39,11 @@ class PreferencesDialogTest {
                 mapOf(
                     0 to GamepadSelection.Auto,
                     1 to GamepadSelection.Device("sdl-" + "a".repeat(64)),
-                ))
+                ),
+            gamepadTunings =
+                mapOf(
+                    "sdl-" + "a".repeat(64) to
+                        ApplicationSettings.GamepadTuning(invertMovementX = true)))
     val recent = (1..4).map { Paths.get("rom-$it.gb") }
     val current =
         ApplicationSettings(
@@ -61,6 +65,17 @@ class PreferencesDialogTest {
             recentFileCapacity = 2,
             confirmationPolicy = RomChangeConfirmationPolicy.NEVER,
             keyboard = emptyMap(),
+            gamepads = mapOf(0 to GamepadSelection.Disabled),
+            gamepadTunings =
+                mapOf(
+                    "sdl-" + "b".repeat(64) to
+                        ApplicationSettings.GamepadTuning(tiltDeadZone = 1_024)),
+            audio =
+                ApplicationSettings.Audio(
+                    enabled = true,
+                    volume = 25,
+                    latency = ApplicationSettings.AudioLatency.SAFE,
+                ),
         )
 
     val updated = edit.applyTo(current)
@@ -70,9 +85,10 @@ class PreferencesDialogTest {
     assertEquals(2, updated.general.recentFileCapacity)
     assertEquals(RomChangeConfirmationPolicy.NEVER, updated.general.romChangeConfirmationPolicy)
     assertTrue(updated.input.keyboard.isEmpty())
-    assertEquals(currentInput.gamepads, updated.input.gamepads)
+    assertEquals(edit.gamepads, updated.input.gamepads)
+    assertEquals(edit.gamepadTunings, updated.input.gamepadTunings)
     assertEquals(current.display, updated.display)
-    assertEquals(current.audio, updated.audio)
+    assertEquals(edit.audio, updated.audio)
     assertEquals(current.saves, updated.saves)
     assertEquals(current.advanced, updated.advanced)
   }
@@ -98,6 +114,8 @@ class PreferencesDialogTest {
         assertEquals(listOf("apply", "close"), events)
         assertEquals(ApplicationSettings.DEFAULT_RECENT_FILE_CAPACITY, received?.recentFileCapacity)
         assertEquals(ApplicationSettings.Input.defaults().keyboard, received?.keyboard)
+        assertEquals(ApplicationSettings.Input.defaults().gamepads, received?.gamepads)
+        assertEquals(ApplicationSettings.Audio(), received?.audio)
       }
 
   @Test
@@ -116,7 +134,22 @@ class PreferencesDialogTest {
                         recentFileCapacity = 3,
                         romChangeConfirmationPolicy = RomChangeConfirmationPolicy.NEVER,
                     ),
-                input = defaults.input.copy(keyboard = changedKeyboard),
+                audio =
+                    ApplicationSettings.Audio(
+                        enabled = false,
+                        volume = 13,
+                        latency = ApplicationSettings.AudioLatency.LOW,
+                    ),
+                input =
+                    defaults.input.copy(
+                        keyboard = changedKeyboard,
+                        gamepads = mapOf(0 to GamepadSelection.Disabled),
+                        gamepadTunings =
+                            mapOf(
+                                "sdl-" + "c".repeat(64) to
+                                    ApplicationSettings.GamepadTuning(
+                                        invertMovementY = true)),
+                    ),
             )
         var applyCount = 0
         var closeCount = 0
@@ -139,6 +172,9 @@ class PreferencesDialogTest {
             restored.confirmationPolicy,
         )
         assertEquals(defaults.input.keyboard, restored.keyboard)
+        assertEquals(defaults.input.gamepads, restored.gamepads)
+        assertEquals(defaults.input.gamepadTunings, restored.gamepadTunings)
+        assertEquals(defaults.audio, restored.audio)
         assertEquals(0, applyCount)
         assertEquals(1, closeCount)
       }

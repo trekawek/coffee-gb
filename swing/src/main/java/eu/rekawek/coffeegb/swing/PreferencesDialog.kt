@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.RomChangeConfirmationPolicy
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties
+import eu.rekawek.coffeegb.swing.io.AudioDeviceSnapshot
+import eu.rekawek.coffeegb.swing.io.GamepadCatalog
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -44,7 +46,7 @@ import javax.swing.event.DocumentListener
  * The validated portion of Preferences currently exposed by the desktop UI.
  *
  * Applying this object to the latest settings, instead of replacing the document captured when the
- * dialog opened, preserves every hidden section and any gamepad changes made by another owner.
+ * dialog opened, preserves every hidden section.
  */
 internal data class PreferencesEdit(
     val romDirectory: Path?,
@@ -55,12 +57,16 @@ internal data class PreferencesEdit(
             ControllerProperties.PlayerButton,
             ApplicationSettings.KeyboardKey,
         >,
+    val gamepads: Map<Int, ApplicationSettings.GamepadSelection>,
+    val gamepadTunings: Map<String, ApplicationSettings.GamepadTuning>,
+    val audio: ApplicationSettings.Audio,
 ) {
   init {
     require(
         recentFileCapacity in
             ApplicationSettings.MIN_RECENT_FILE_CAPACITY..
                 ApplicationSettings.MAX_RECENT_FILE_CAPACITY)
+    ApplicationSettings.Input(keyboard, gamepads, gamepadTunings).toPlayerMapping()
   }
 
   fun applyTo(current: ApplicationSettings): ApplicationSettings =
@@ -72,7 +78,13 @@ internal data class PreferencesEdit(
                   recentFileCapacity = recentFileCapacity,
                   romChangeConfirmationPolicy = confirmationPolicy,
               ),
-          input = current.input.copy(keyboard = keyboard),
+          audio = audio,
+          input =
+              current.input.copy(
+                  keyboard = keyboard,
+                  gamepads = gamepads,
+                  gamepadTunings = gamepadTunings,
+              ),
       )
 }
 
@@ -88,13 +100,24 @@ internal class PreferencesPanel private constructor(
     initial: ApplicationSettings,
     private val defaults: ApplicationSettings = ApplicationSettings(),
     private val directoryChooser: RomDirectoryChooser = SYSTEM_DIRECTORY_CHOOSER,
+    gamepadSnapshots: GamepadSnapshotProvider = EMPTY_GAMEPAD_SNAPSHOTS,
+    audioDevices: AudioDeviceProvider = SYSTEM_AUDIO_DEVICES,
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
 ) : JPanel(BorderLayout(0, 8)) {
   constructor(
       initial: ApplicationSettings,
       defaults: ApplicationSettings = ApplicationSettings(),
       directoryChooser: RomDirectoryChooser = SYSTEM_DIRECTORY_CHOOSER,
-  ) : this(initial, defaults, directoryChooser, requireEdt())
+      gamepadSnapshots: GamepadSnapshotProvider = EMPTY_GAMEPAD_SNAPSHOTS,
+      audioDevices: AudioDeviceProvider = SYSTEM_AUDIO_DEVICES,
+  ) : this(
+      initial,
+      defaults,
+      directoryChooser,
+      gamepadSnapshots,
+      audioDevices,
+      requireEdt(),
+  )
 
   internal val directoryField = JTextField(initial.general.romDirectory?.toString().orEmpty(), 32)
   internal val directoryError = JLabel(" ")
@@ -115,6 +138,10 @@ internal class PreferencesPanel private constructor(
             }
       }
   internal val keyboardEditor = KeyboardMappingEditor(initial.input, defaults.input)
+  internal val gamepadEditor =
+      GamepadPreferencesEditor(initial.input, defaults.input, gamepadSnapshots)
+  internal val audioEditor =
+      AudioPreferencesEditor(initial.audio, defaults.audio, audioDevices)
   internal val validationSummary = JLabel(" ")
   internal val tabs = JTabbedPane()
 
@@ -125,6 +152,8 @@ internal class PreferencesPanel private constructor(
     tabs.accessibleContext.accessibleName = "Preference categories"
     tabs.addTab("General", createGeneralPanel())
     tabs.addTab("Input", JScrollPane(keyboardEditor).apply { border = null })
+    tabs.addTab("Gamepads", JScrollPane(gamepadEditor).apply { border = null })
+    tabs.addTab("Audio", JScrollPane(audioEditor).apply { border = null })
     tabs.addChangeListener {
       if (tabs.selectedIndex != INPUT_TAB) {
         keyboardEditor.cancelCapture()
@@ -146,6 +175,8 @@ internal class PreferencesPanel private constructor(
           it.policy == defaults.general.romChangeConfirmationPolicy
         }
     keyboardEditor.resetToDefaults()
+    gamepadEditor.restoreDefaults()
+    audioEditor.restoreDefaults()
     clearErrors()
   }
 
@@ -162,12 +193,49 @@ internal class PreferencesPanel private constructor(
           tabs.selectedIndex = INPUT_TAB
           throw PreferencesValidationException(validationSummary.text, keyboardEditor)
         }
+    val gamepad =
+        try {
+          gamepadEditor.validatedDraft()
+        } catch (failure: PreferenceEditorValidationException) {
+          validationSummary.text = failure.message ?: "Resolve the gamepad settings error."
+          tabs.selectedIndex = GAMEPADS_TAB
+          throw PreferencesValidationException(
+              validationSummary.text,
+              failure.invalidComponent,
+          )
+        }
+    val audio =
+        try {
+          audioEditor.validatedAudio()
+        } catch (failure: PreferenceEditorValidationException) {
+          validationSummary.text = failure.message ?: "Resolve the audio settings error."
+          tabs.selectedIndex = AUDIO_TAB
+          throw PreferencesValidationException(
+              validationSummary.text,
+              failure.invalidComponent,
+          )
+        }
     return PreferencesEdit(
         romDirectory = directory,
         recentFileCapacity = capacity,
         confirmationPolicy = (confirmationPolicy.selectedItem as ConfirmationOption).policy,
         keyboard = input.keyboard,
+        gamepads = gamepad.selections,
+        gamepadTunings = gamepad.tunings,
+        audio = audio,
     )
+  }
+
+  internal fun stopBackgroundWork() {
+    requireEdt()
+    keyboardEditor.cancelCapture()
+    gamepadEditor.stopCatalogUpdates()
+    audioEditor.cancelDeviceLoading()
+  }
+
+  override fun removeNotify() {
+    stopBackgroundWork()
+    super.removeNotify()
   }
 
   internal fun showApplyFailure(failure: RuntimeException) {
@@ -367,6 +435,8 @@ internal class PreferencesPanel private constructor(
   private companion object {
     const val GENERAL_TAB = 0
     const val INPUT_TAB = 1
+    const val GAMEPADS_TAB = 2
+    const val AUDIO_TAB = 3
     val ERROR_COLOR = Color(0xB0, 0x00, 0x20)
     val CONFIRMATION_OPTIONS =
         listOf(
@@ -394,6 +464,18 @@ internal class PreferencesPanel private constructor(
           }
         }
 
+    val EMPTY_GAMEPAD_SNAPSHOTS =
+        GamepadSnapshotProvider {
+          GamepadCatalog.Snapshot(
+              GamepadCatalog.Status.UNAVAILABLE,
+              emptyList(),
+              "Game controllers are unavailable. Keyboard input remains available.",
+          )
+        }
+
+    val SYSTEM_AUDIO_DEVICES =
+        AudioDeviceProvider { listOf(AudioDeviceSnapshot.systemDefaultDevice()) }
+
     fun parseDirectory(value: String): Path? =
         value.trim().takeIf(String::isNotEmpty)?.let(Paths::get)
 
@@ -416,6 +498,9 @@ internal object PreferencesDialog {
       owner: Window,
       initial: ApplicationSettings,
       defaults: ApplicationSettings = ApplicationSettings(),
+      gamepadCatalog: GamepadCatalog = GamepadCatalog(),
+      audioDevices: AudioDeviceProvider =
+          AudioDeviceProvider { listOf(AudioDeviceSnapshot.systemDefaultDevice()) },
       applyEdit: (PreferencesEdit) -> Unit,
   ) {
     check(SwingUtilities.isEventDispatchThread()) {
@@ -423,7 +508,13 @@ internal object PreferencesDialog {
     }
 
     val dialog = JDialog(owner, "Preferences", Dialog.ModalityType.APPLICATION_MODAL)
-    val panel = PreferencesPanel(initial, defaults)
+    val panel =
+        PreferencesPanel(
+            initial,
+            defaults,
+            gamepadSnapshots = GamepadSnapshotProvider(gamepadCatalog::snapshot),
+            audioDevices = audioDevices,
+        )
     val applyButton = JButton("Apply")
     val cancelButton = JButton("Cancel")
     val restoreButton = JButton("Restore Defaults")
@@ -479,10 +570,14 @@ internal class PreferencesDialogActions(
       panel.showApplyFailure(failure)
       return
     }
+    panel.stopBackgroundWork()
     close()
   }
 
-  fun cancel() = close()
+  fun cancel() {
+    panel.stopBackgroundWork()
+    close()
+  }
 
   fun restoreDefaults() = panel.restoreDefaults()
 }

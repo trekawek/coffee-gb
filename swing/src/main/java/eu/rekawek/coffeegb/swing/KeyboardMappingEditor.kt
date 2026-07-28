@@ -83,6 +83,7 @@ class KeyboardMappingEditor private constructor(
   private val keyboard =
       initialInput.keyboard.toMutableMap().also { initialInput.toPlayerMapping() }
   private val gamepads = initialInput.gamepads.toMap()
+  private val gamepadTunings = initialInput.gamepadTunings.toMap()
   private val defaultKeyboard =
       defaultInput.keyboard.toMap().also { defaultInput.toPlayerMapping() }
   private val rows = linkedMapOf<Binding, Row>()
@@ -167,7 +168,9 @@ class KeyboardMappingEditor private constructor(
    */
   fun validatedDraft(): ApplicationSettings.Input {
     requireEventDispatchThread()
-    return ApplicationSettings.Input(keyboard.toMap(), gamepads).also { it.toPlayerMapping() }
+    return ApplicationSettings.Input(keyboard.toMap(), gamepads, gamepadTunings).also {
+      it.toPlayerMapping()
+    }
   }
 
   fun currentBinding(

@@ -134,8 +134,10 @@ states, and rewind are disabled during netplay.
 <details>
 <summary>Custom keyboard and game-controller mapping</summary>
 
-Desktop settings are stored in `~/.coffeegb.properties`; the complete typed schema, validation,
-migration, and recovery rules are documented in the
+Desktop settings are stored in `~/.coffeegb.properties`. **File > Preferences…** configures
+General behavior, four-player keyboard bindings, gamepad assignment/tuning, and audio
+device/volume/mute/latency without manual editing. The complete typed schema, validation,
+migration, device fallback, and recovery rules are documented in the
 [desktop command-line and settings contract](docs/desktop-settings.md). For keyboard mappings, use
 [`KeyEvent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/event/KeyEvent.html)
 constant names:
@@ -179,6 +181,15 @@ may use a given ID, and only one `auto` assignment is allowed. The ID hashes SDL
 path, and name. If SDL exposes no path, the current connection's instance ID disambiguates otherwise
 identical pads. IDs are stable across enumeration-order changes; an OS path change (or reconnect on
 a path-less backend) is conservatively treated as device replacement.
+
+Per-device movement and tilt dead zones plus X/Y inversion are available in Preferences. Controller
+discovery stays on the SDL polling thread; disconnects, focus loss, ROM changes, and mapping changes
+release held input to prevent stuck buttons.
+
+Audio Preferences lists outputs asynchronously and retains an unavailable configured output while
+using the system default as a safe runtime fallback, then returns to the configured output when it
+reappears. Master volume and mute are software controlled; the LOW, BALANCED, and SAFE presets trade
+latency for additional buffering without changing emulation timing.
 
 Independent SGB P2-P4 desktop input is available only in local/basic-controller mode. Netplay
 protocol v8 carries one frame-owned P1 stream per linked emulator and has no representation for
