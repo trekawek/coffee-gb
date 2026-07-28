@@ -105,8 +105,7 @@ public class SwingDisplayTest {
     public void ownerAndSessionLifecycleResetHostRumbleWithoutCoreTeardownEvent() throws Exception {
         EventBusImpl root = new EventBusImpl(null, null, false);
         EventBus session = root.fork("test");
-        SwingDisplay display = new SwingDisplay(
-                new EmulatorProperties().getDisplay(), root, "test");
+        SwingDisplay display = newDisplay(root);
         Field rumbling = SwingDisplay.class.getDeclaredField("rumbling");
         rumbling.setAccessible(true);
 
