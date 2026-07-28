@@ -9,6 +9,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -379,6 +380,66 @@ public class FileBatteryTest {
             assertArrayEquals(new int[] {4, 3, 2, 1}, loaded);
             assertArrayEquals(new byte[] {4, 3, 2, 1}, Files.readAllBytes(target));
             assertArrayEquals(new byte[] {4, 3, 2, 1}, Files.readAllBytes(fallback));
+        });
+    }
+
+    @Test
+    public void newerPreviousDestinationReplacesStaleActiveTargetWithoutDeletingEitherGeneration()
+            throws Exception {
+        withDirectory(directory -> {
+            Path active = Files.createDirectory(directory.resolve("active"));
+            Path previous = Files.createDirectory(directory.resolve("previous"));
+            Path target = active.resolve("battery.sav");
+            Path fallback = previous.resolve("battery.sav");
+            Files.write(target, new byte[] {1, 1, 1, 1});
+            Files.write(fallback, new byte[] {8, 7, 6, 5});
+            Files.setLastModifiedTime(target, FileTime.fromMillis(1_000));
+            Files.setLastModifiedTime(fallback, FileTime.fromMillis(2_000));
+            FileBattery battery =
+                    new FileBattery(
+                            new BatteryStorage(
+                                    BatteryStorage.Source.managed(target, active),
+                                    List.of(
+                                            BatteryStorage.Source.managed(
+                                                    fallback, previous))),
+                            4);
+            int[] loaded = new int[4];
+
+            battery.loadRam(loaded);
+
+            assertArrayEquals(new int[] {8, 7, 6, 5}, loaded);
+            assertArrayEquals(new byte[] {8, 7, 6, 5}, Files.readAllBytes(target));
+            assertArrayEquals(new byte[] {8, 7, 6, 5}, Files.readAllBytes(fallback));
+        });
+    }
+
+    @Test
+    public void newerActiveDestinationWinsAfterMigrationAndIsNotRolledBackOnRestart()
+            throws Exception {
+        withDirectory(directory -> {
+            Path active = Files.createDirectory(directory.resolve("active"));
+            Path previous = Files.createDirectory(directory.resolve("previous"));
+            Path target = active.resolve("battery.sav");
+            Path fallback = previous.resolve("battery.sav");
+            Files.write(target, new byte[] {9, 9, 9, 9});
+            Files.write(fallback, new byte[] {2, 2, 2, 2});
+            Files.setLastModifiedTime(fallback, FileTime.fromMillis(1_000));
+            Files.setLastModifiedTime(target, FileTime.fromMillis(2_000));
+            FileBattery battery =
+                    new FileBattery(
+                            new BatteryStorage(
+                                    BatteryStorage.Source.managed(target, active),
+                                    List.of(
+                                            BatteryStorage.Source.managed(
+                                                    fallback, previous))),
+                            4);
+            int[] loaded = new int[4];
+
+            battery.loadRam(loaded);
+
+            assertArrayEquals(new int[] {9, 9, 9, 9}, loaded);
+            assertArrayEquals(new byte[] {9, 9, 9, 9}, Files.readAllBytes(target));
+            assertArrayEquals(new byte[] {2, 2, 2, 2}, Files.readAllBytes(fallback));
         });
     }
 

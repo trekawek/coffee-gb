@@ -488,6 +488,18 @@ class PreferencesDialogTest {
   }
 
   @Test
+  fun `system save validator rejects filesystem root but accepts a named writable child`() {
+    val root = Paths.get("/").toAbsolutePath().normalize()
+    val child = Files.createTempDirectory("preferences-named-save-root")
+
+    val rootError = SYSTEM_SAVE_DIRECTORY_VALIDATOR.validate(root)
+    val childError = SYSTEM_SAVE_DIRECTORY_VALIDATOR.validate(child)
+
+    assertTrue(rootError.orEmpty().contains("named directory"))
+    assertEquals(null, childError)
+  }
+
+  @Test
   fun `validation rejection restores Apply state and owned executor closes with dialog`() {
     val directory = Files.createTempDirectory("preferences-saves-rejected")
     var applying = false

@@ -208,6 +208,7 @@ class BasicController private constructor(
       rewindManager: RewindManager,
       stateWorkspaceFactory: StateWorkspaceFactory,
       stateWorkerFactory: StateOperationWorkerFactory,
+      closeTimeoutMillis: Long = CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   ) : this(
       parentEventBus,
       properties,
@@ -218,7 +219,7 @@ class BasicController private constructor(
       rewindManager,
       stateWorkspaceFactory,
       stateWorkerFactory,
-      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+      closeTimeoutMillis,
   )
 
   private val timingTicker = TimingTicker()
@@ -253,6 +254,9 @@ class BasicController private constructor(
 
   private var sessionStartedNanos: Long? = null
 
+  /** User pause state retained while an automatic resume scan/dialog owns the pause. */
+  private var pauseStateBeforeResume: Boolean? = null
+
   @Volatile private var doStop = false
 
   private var isPaused = false
@@ -281,6 +285,10 @@ class BasicController private constructor(
 
   private var closeAutosaveCapture: StateFile? = null
 
+  private var closeAutosavePlayDurationNanos: Long? = null
+
+  private var closeAutosavePlayDurationCaptured = false
+
   private var closeAutosaveAttempt: RetainedCloseAutosave? = null
 
   private var closeAutosaveCompletedSessionId: Long? = null
@@ -288,6 +296,8 @@ class BasicController private constructor(
   private var closeAutosaveSkippedSessionId: Long? = null
 
   private var closeAutosaveWaiverSessionId: Long? = null
+
+  private var closeAutosaveWaivableRequestId: Long? = null
 
   private var closed = false
 
@@ -364,12 +374,16 @@ class BasicController private constructor(
     eventQueue.register<Controller.PauseEmulationEvent> {
       if (pauseStateBeforeLoading != null) {
         pauseStateBeforeLoading = true
+      } else if (pauseStateBeforeResume != null) {
+        pauseStateBeforeResume = true
       }
       setPaused(true)
     }
     eventQueue.register<Controller.ResumeEmulationEvent> {
       if (pauseStateBeforeLoading != null) {
         pauseStateBeforeLoading = false
+      } else if (pauseStateBeforeResume != null) {
+        pauseStateBeforeResume = false
       } else {
         setPaused(false)
       }
@@ -501,13 +515,23 @@ class BasicController private constructor(
   }
 
   private fun requestStateCatalog(event: StateCatalogRequestEvent) {
-    val context = requireStateContext(event.requestId, StateOperation.CATALOG) ?: return
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.CATALOG,
+        ) ?: return
     latestStateRequests[StateOperation.CATALOG] = event.requestId
     stateWorker.catalog(context, event.requestId)
   }
 
   private fun requestStateSave(event: StateSaveRequestEvent) {
-    val context = requireStateContext(event.requestId, StateOperation.SAVE) ?: return
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.SAVE,
+        ) ?: return
     val currentSession = session ?: return
     try {
       val captured = capturePortableState(currentSession)
@@ -536,7 +560,12 @@ class BasicController private constructor(
   }
 
   private fun requestStateLoad(event: StateLoadRequestEvent) {
-    val context = requireStateContext(event.requestId, StateOperation.LOAD) ?: return
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.LOAD,
+        ) ?: return
     latestStateRequests[StateOperation.LOAD] = event.requestId
     stateWorker.load(
         context,
@@ -547,25 +576,45 @@ class BasicController private constructor(
   }
 
   private fun requestStateDelete(event: StateDeleteRequestEvent) {
-    val context = requireStateContext(event.requestId, StateOperation.DELETE) ?: return
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.DELETE,
+        ) ?: return
     latestStateRequests[StateOperation.DELETE] = event.requestId
     stateWorker.delete(context, event.requestId, event.key)
   }
 
   private fun requestStateExport(event: StateExportRequestEvent) {
-    val context = requireStateContext(event.requestId, StateOperation.EXPORT) ?: return
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.EXPORT,
+        ) ?: return
     latestStateRequests[StateOperation.EXPORT] = event.requestId
     stateWorker.export(context, event.requestId, event.key, event.destination)
   }
 
   private fun requestScreenshot(event: StateScreenshotRequestEvent) {
-    val context = requireStateContext(event.requestId, StateOperation.SCREENSHOT) ?: return
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.SCREENSHOT,
+        ) ?: return
     latestStateRequests[StateOperation.SCREENSHOT] = event.requestId
     stateWorker.screenshot(context, event.requestId, event.image)
   }
 
   private fun requestOpenStateFolder(event: StateOpenFolderRequestEvent) {
-    val context = requireStateContext(event.requestId, StateOperation.OPEN_FOLDER) ?: return
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.OPEN_FOLDER,
+        ) ?: return
     latestStateRequests[StateOperation.OPEN_FOLDER] = event.requestId
     stateWorker.openFolder(context, event.requestId)
   }
@@ -651,16 +700,15 @@ class BasicController private constructor(
       properties: EmulatorProperties,
       event: Controller.LoadRomEvent,
   ) {
-    cancelPendingRomSwitch()
+    cancelPendingRomSwitch(restorePause = true)
     val currentSession = session
     val context = stateContext
-    val shouldAutosave =
+    val autosaveRequired =
         currentSession != null &&
-            context != null &&
             properties.saves.autosavePolicy ==
                 eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
                     .ON_CLOSE_AND_ROM_SWITCH
-    if (!shouldAutosave) {
+    if (!autosaveRequired) {
       requestLoad(properties, event)
       return
     }
@@ -670,8 +718,27 @@ class BasicController private constructor(
     cancelLoadJob()
     discardReplacement(restorePause = true)
     discardStop(restorePause = true)
+    acquireLoadingPause()
 
     val requestId = nextPersistenceRequestId++
+    if (context == null) {
+      val error =
+          StateUserError(
+              "ROM switch was cancelled because autosave is unavailable.",
+              "The configured save workspace could not be initialized for the active game.",
+              "Choose a writable Saves directory, retry opening the ROM, or disable autosave.",
+          )
+      restorePauseStateAfterLoading()
+      eventBus.post(
+          Controller.LoadRomFailedEvent(
+              event.rom,
+              error.summary,
+              event.openRequestId,
+              Controller.RomLoadFailureKind.PERSISTENCE,
+              error.detail,
+          ))
+      return
+    }
     try {
       val pending =
           PendingRomSwitch(
@@ -685,6 +752,7 @@ class BasicController private constructor(
       submitRomSwitchAutosave(pending)
     } catch (failure: Throwable) {
       pendingRomSwitch = null
+      restorePauseStateAfterLoading()
       val error =
           stateError(
               "ROM switch was cancelled because autosave could not be captured.",
@@ -898,6 +966,8 @@ class BasicController private constructor(
       StateWorkerPurpose.RESUME_SCAN -> {
         if (isLatest(StateOperation.RESUME, event.requestId)) {
           postStateFailure(event.requestId, StateOperation.RESUME, error)
+          pendingResume = null
+          releaseResumePause()
         }
       }
       StateWorkerPurpose.MANUAL -> {
@@ -919,13 +989,27 @@ class BasicController private constructor(
       result: StateWorkerResult.Resume,
   ) {
     if (!isLatest(StateOperation.RESUME, event.requestId)) return
-    val located = result.located ?: return
+    val located =
+        result.located
+            ?: run {
+              releaseResumePause()
+              return
+            }
     when (properties.saves.resumePolicy) {
-      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.NEVER -> Unit
-      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.ALWAYS ->
-          applyLoadedState(event.requestId, StateOperation.RESUME, located.first, located.second)
+      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.NEVER ->
+          releaseResumePause()
+      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.ALWAYS -> {
+        applyLoadedState(event.requestId, StateOperation.RESUME, located.first, located.second)
+        releaseResumePause()
+      }
       eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.ASK -> {
-        pendingResume = PendingResume(event.requestId, located.first, located.second)
+        pendingResume =
+            PendingResume(
+                event.requestId,
+                event.context.sessionId,
+                located.first,
+                located.second,
+            )
         eventBus.post(
             StateResumeAvailableEvent(
                 event.requestId,
@@ -940,7 +1024,11 @@ class BasicController private constructor(
 
   private fun applyResumeDecision(event: StateResumeDecisionEvent) {
     val pending = pendingResume ?: return
-    if (pending.requestId != event.requestId) return
+    if (pending.requestId != event.requestId ||
+        pending.sessionId != event.expectedSessionId ||
+        stateContext?.sessionId != event.expectedSessionId) {
+      return
+    }
     pendingResume = null
     if (event.accept) {
       applyLoadedState(
@@ -950,6 +1038,7 @@ class BasicController private constructor(
           pending.read,
       )
     }
+    releaseResumePause()
   }
 
   private fun applyLoadedState(
@@ -967,6 +1056,10 @@ class BasicController private constructor(
           currentSession.gameboy,
           context.identity,
       )
+      // A portable state contains the cartridge clock pause bit. Pause ownership belongs to the
+      // live desktop workflow, so loading must not let an old capture override the effective
+      // pause selected for this session.
+      currentSession.gameboy.setCartridgeClockPaused(isPaused)
       rewindManager.clear()
       eventBus.post(
           StateOperationCompletedEvent(
@@ -997,18 +1090,27 @@ class BasicController private constructor(
 
   private fun requireStateContext(
       requestId: Long,
+      expectedSessionId: Long,
       operation: StateOperation,
   ): StateWorkerContext? {
     val context = stateContext
-    if (context == null || session == null) {
+    if (context == null ||
+        session == null ||
+        context.sessionId != expectedSessionId) {
       postStateFailure(
           requestId,
           operation,
           StateUserError(
-              "No local game is available for this state operation.",
-              "State operations require an active standalone emulation session.",
-              "Open a ROM locally and retry.",
+              "The state request is no longer current.",
+              if (context == null || session == null) {
+                "State operations require an active standalone emulation session."
+              } else {
+                "The request targeted session $expectedSessionId, but session " +
+                    "${context.sessionId} now owns the emulator."
+              },
+              "Return to the current game and retry the operation.",
           ),
+          sessionId = expectedSessionId,
       )
       return null
     }
@@ -1032,6 +1134,39 @@ class BasicController private constructor(
   private fun currentPlayDurationNanos(): Long? =
       sessionStartedNanos?.let { started -> (System.nanoTime() - started).coerceAtLeast(0L) }
 
+  private fun acquireResumePause() {
+    if (pauseStateBeforeResume == null) {
+      pauseStateBeforeResume = isPaused
+    }
+    setPaused(true)
+  }
+
+  private fun releaseResumePause() {
+    val restorePaused = pauseStateBeforeResume ?: return
+    pauseStateBeforeResume = null
+    if (pauseStateBeforeLoading == null) {
+      setPaused(restorePaused)
+    } else {
+      // A ROM load may have acquired its own pause while the resume scan was still queued. The
+      // loading owner keeps the old session frozen until replacement/cancellation completes.
+      setPaused(true)
+    }
+    // setPaused intentionally avoids redundant core calls. State loading may have restored a
+    // different cartridge-clock bit, so explicitly establish the effective live value.
+    session?.gameboy?.setCartridgeClockPaused(isPaused)
+  }
+
+  private fun acquireLoadingPause() {
+    if (pauseStateBeforeLoading == null) {
+      // A resume scan owns a forced pause, so isPaused itself is not the user's desired state.
+      pauseStateBeforeLoading = pauseStateBeforeResume ?: isPaused
+    }
+    pendingResume = null
+    pauseStateBeforeResume = null
+    latestStateRequests.remove(StateOperation.RESUME)
+    setPaused(true)
+  }
+
   private fun nextInternalStateRequestId(): Long = internalStateRequestId.incrementAndGet()
 
   private fun isLatest(operation: StateOperation, requestId: Long): Boolean =
@@ -1041,11 +1176,12 @@ class BasicController private constructor(
       requestId: Long,
       operation: StateOperation,
       error: StateUserError,
+      sessionId: Long = stateContext?.sessionId ?: stateSessionId,
   ) {
     eventBus.post(
         StateOperationFailedEvent(
             requestId,
-            stateContext?.sessionId ?: stateSessionId,
+            sessionId,
             operation,
             error,
         ))
@@ -1117,17 +1253,13 @@ class BasicController private constructor(
 
     cancelPendingRomSwitch()
     discardStop(restorePause = true)
-    if (pauseStateBeforeLoading == null) {
-      pauseStateBeforeLoading = isPaused
-    }
+    acquireLoadingPause()
     cancelLoadJob()
     discardReplacement(restorePause = false)
 
     // Keep the last completed frame on screen, but stop the old game immediately. Continuing to
     // animate while the window says that another ROM is loading makes it look as though the load
     // request was ignored and also allows the old game to consume input meant for the new one.
-    setPaused(true)
-
     eventBus.post(Controller.RomLoadingEvent(event.rom, event.openRequestId))
     val task = PreparedLoadTask { sessionPreparer.prepare(properties, event) }
     loadJob = LoadJob(event, clearPatches, task)
@@ -1444,7 +1576,14 @@ class BasicController private constructor(
     try {
       committedSession.activate()
       start(job.event.openRequestId)
-      setPaused(pauseNewSession)
+      if (pauseStateBeforeResume != null) {
+        // start() acquired the resume-scan pause for the new session. Carry the loading workflow's
+        // desired user state underneath it without releasing either pause owner.
+        pauseStateBeforeResume = pauseNewSession
+        setPaused(true)
+      } else {
+        setPaused(pauseNewSession)
+      }
     } catch (activationFailure: RuntimeException) {
       // Rolling back would reattach an already stopped/closing machine. Keep the committed
       // candidate retained and paused so the failure is explicit without corrupting ownership.
@@ -1488,7 +1627,10 @@ class BasicController private constructor(
     }
   }
 
-  private fun cancelPendingRomSwitch(notifyCancellation: Boolean = true) {
+  private fun cancelPendingRomSwitch(
+      notifyCancellation: Boolean = true,
+      restorePause: Boolean = true,
+  ) {
     val pending = pendingRomSwitch ?: return
     pendingRomSwitch = null
     if (notifyCancellation) {
@@ -1497,6 +1639,9 @@ class BasicController private constructor(
               pending.event.rom,
               pending.event.openRequestId,
           ))
+    }
+    if (restorePause) {
+      restorePauseStateAfterLoading()
     }
   }
 
@@ -1558,13 +1703,17 @@ class BasicController private constructor(
     val session = session ?: return
 
     isPaused = false
+    pauseStateBeforeResume = null
     sessionStartedNanos = System.nanoTime()
     stateSessionId = nextStateSessionId()
     closeAutosaveCapture = null
+    closeAutosavePlayDurationNanos = null
+    closeAutosavePlayDurationCaptured = false
     closeAutosaveAttempt = null
     closeAutosaveCompletedSessionId = null
     closeAutosaveSkippedSessionId = null
     closeAutosaveWaiverSessionId = null
+    closeAutosaveWaivableRequestId = null
     var stateUnavailableReason: StateUserError? = null
     stateContext =
         try {
@@ -1625,6 +1774,7 @@ class BasicController private constructor(
     if (context != null &&
         properties.saves.resumePolicy !=
             eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.NEVER) {
+      acquireResumePause()
       val requestId = nextInternalStateRequestId()
       latestStateRequests[StateOperation.RESUME] = requestId
       stateWorker.scanResume(context, requestId)
@@ -1635,6 +1785,8 @@ class BasicController private constructor(
       saves: eu.rekawek.coffeegb.controller.properties.ApplicationSettings.Saves
   ) {
     cancelPendingRomSwitch()
+    pendingResume = null
+    releaseResumePause()
     isRewinding = false
     rewindManager = configuredRewindManager(saves)
     val currentSession = session ?: return
@@ -1654,10 +1806,13 @@ class BasicController private constructor(
     )
     stateSessionId = nextStateSessionId()
     closeAutosaveCapture = null
+    closeAutosavePlayDurationNanos = null
+    closeAutosavePlayDurationCaptured = false
     closeAutosaveAttempt = null
     closeAutosaveCompletedSessionId = null
     closeAutosaveSkippedSessionId = null
     closeAutosaveWaiverSessionId = null
+    closeAutosaveWaivableRequestId = null
     var stateUnavailableReason: StateUserError? = null
     stateContext =
         try {
@@ -1709,6 +1864,7 @@ class BasicController private constructor(
     }
     stateContext = null
     pendingResume = null
+    pauseStateBeforeResume = null
     cancelPendingRomSwitch()
     pendingCloseRequestId = null
     latestStateRequests.clear()
@@ -1804,13 +1960,12 @@ class BasicController private constructor(
     // Close is a synchronous API: its caller owns retry/cancel presentation. Avoid invoking
     // arbitrary lifecycle subscribers on this thread while the one overall deadline is running.
     cancelLoadJob(notifyCancellation = false)
-    cancelPendingRomSwitch(notifyCancellation = false)
+    cancelPendingRomSwitch(notifyCancellation = false, restorePause = false)
     discardReplacement(restorePause = false, notifyCancellation = false)
     discardStop(restorePause = false)
     pauseStateBeforeLoading = null
+    pauseStateBeforeResume = null
     setPaused(true)
-
-    persistCloseAutosave(closeDeadlineNanos)
 
     if (closeState == null) {
       closeState =
@@ -1818,9 +1973,45 @@ class BasicController private constructor(
             Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
           }
     }
+    if (!closeAutosavePlayDurationCaptured) {
+      closeAutosavePlayDurationNanos = currentPlayDurationNanos()
+      closeAutosavePlayDurationCaptured = true
+    }
+    if (closeAutosaveCapture == null &&
+        stateContext != null &&
+        shouldPersistCloseAutosave()) {
+      try {
+        closeAutosaveCapture = session?.let(::capturePortableState)
+      } catch (failure: Throwable) {
+        throw closeBarrierFailure(
+            "Close autosave could not be captured. The session is retained.",
+            failure,
+            "autosave state",
+            autosaveWaivable = true,
+        )
+      }
+    }
     if (closeCapture == null) {
       closeCapture = session?.gameboy?.prepareCartridgeFlush() ?: BatteryFlush.none()
     }
+
+    // Once timing has stopped, drain every already-admitted ordinary state mutation. The exact
+    // terminal autosave is written directly only after this worker is closed, so a queued delete
+    // or older save can never run after and overwrite/remove it.
+    try {
+      stateWorker.close(
+          remainingCloseNanos(closeDeadlineNanos, "state worker teardown"),
+          TimeUnit.NANOSECONDS,
+      )
+    } catch (failure: IllegalStateException) {
+      throw closeBarrierFailure(
+          "State worker did not stop before the close deadline. Close can be retried.",
+          failure,
+      )
+    }
+
+    persistCloseAutosave(closeDeadlineNanos)
+
     val capture = checkNotNull(closeCapture)
     val persistence = persistCloseCapture(capture, closeDeadlineNanos)
     if (persistence is BatteryPersistenceResult.Failure) {
@@ -1838,18 +2029,10 @@ class BasicController private constructor(
     val state = closeState
 
     try {
-      try {
-        stateWorker.close(
-            remainingCloseNanos(closeDeadlineNanos, "state worker teardown"),
-            TimeUnit.NANOSECONDS,
-        )
-      } catch (failure: IllegalStateException) {
-        throw closeBarrierFailure(
-            "State worker did not stop before the close deadline. Close can be retried.",
-            failure,
-        )
-      }
       shutdownExecutors(closeDeadlineNanos)
+      session?.let {
+        postSessionEventSafely(it, StateUxSessionEvent(stateSessionId, false, null))
+      }
       eventBus.close(
           remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),
           TimeUnit.NANOSECONDS,
@@ -1876,24 +2059,19 @@ class BasicController private constructor(
     closeRequestId = null
     closePersistenceAttempt = null
     closeAutosaveCapture = null
+    closeAutosavePlayDurationNanos = null
+    closeAutosavePlayDurationCaptured = false
     closeAutosaveAttempt = null
     closeAutosaveCompletedSessionId = null
     closeAutosaveSkippedSessionId = null
     closeAutosaveWaiverSessionId = null
+    closeAutosaveWaivableRequestId = null
     return state
   }
 
   private fun persistCloseAutosave(closeDeadlineNanos: Long) {
-    if (properties.saves.autosavePolicy !=
-        eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
-            .ON_CLOSE_AND_ROM_SWITCH) {
-      return
-    }
+    if (!shouldPersistCloseAutosave()) return
     val currentSession = session ?: return
-    if (closeAutosaveCompletedSessionId == stateSessionId ||
-        closeAutosaveSkippedSessionId == stateSessionId) {
-      return
-    }
     val context =
         stateContext
             ?: throw closeBarrierFailure(
@@ -1902,10 +2080,20 @@ class BasicController private constructor(
                     "without autosave.",
                 java.io.IOException("Managed state workspace is unavailable"),
                 "autosave state",
+                autosaveWaivable = true,
             )
     val capture =
         closeAutosaveCapture
-            ?: capturePortableState(currentSession).also { closeAutosaveCapture = it }
+            ?: try {
+              capturePortableState(currentSession).also { closeAutosaveCapture = it }
+            } catch (failure: Throwable) {
+              throw closeBarrierFailure(
+                  "Close autosave could not be captured. The session is retained.",
+                  failure,
+                  "autosave state",
+                  autosaveWaivable = true,
+              )
+            }
     val attempt =
         closeAutosaveAttempt
             ?: RetainedCloseAutosave(
@@ -1918,7 +2106,7 @@ class BasicController private constructor(
                             StateSaveMetadata(
                                 label = "Autosave",
                                 savedAt = java.time.Instant.now(),
-                                playDurationNanos = currentPlayDurationNanos(),
+                                playDurationNanos = closeAutosavePlayDurationNanos,
                             ),
                             null,
                         )
@@ -1947,6 +2135,7 @@ class BasicController private constructor(
                   "The immutable capture remains retained and close can be retried.",
               java.io.IOException("Close autosave timed out"),
               "autosave state",
+              autosaveWaivable = false,
           )
       is CloseAutosaveResult.Failure -> {
         if (attempt.isDone) {
@@ -1956,6 +2145,7 @@ class BasicController private constructor(
             "${result.error.summary} ${result.error.suggestedAction}",
             java.io.IOException(result.error.detail),
             "autosave state",
+            autosaveWaivable = true,
         )
       }
       CloseAutosaveResult.Success -> {
@@ -1966,6 +2156,14 @@ class BasicController private constructor(
       }
     }
   }
+
+  private fun shouldPersistCloseAutosave(): Boolean =
+      session != null &&
+          properties.saves.autosavePolicy ==
+              eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
+                  .ON_CLOSE_AND_ROM_SWITCH &&
+          closeAutosaveCompletedSessionId != stateSessionId &&
+          closeAutosaveSkippedSessionId != stateSessionId
 
   private fun awaitTimingThread(closeDeadlineNanos: Long) {
     if (Thread.currentThread() === thread || !thread.isAlive) {
@@ -2072,16 +2270,41 @@ class BasicController private constructor(
       message: String,
       cause: Throwable,
       fileName: String = closeFileName(),
+      autosaveWaivable: Boolean = false,
   ): Controller.PersistenceBarrierException {
     val requestId = closeRequestId ?: nextPersistenceRequestId++
     closeRequestId = requestId
+    closeAutosaveWaivableRequestId = requestId.takeIf { autosaveWaivable }
     return Controller.PersistenceBarrierException(
         requestId,
         Controller.PersistenceBarrierOperation.CLOSE,
         fileName,
         message,
         cause,
+        closeAutosaveWaivable = autosaveWaivable,
     )
+  }
+
+  @Synchronized
+  override fun waiveCloseAutosave(requestId: Long): Boolean {
+    if (closed ||
+        closeRequestId != requestId ||
+        closeAutosaveWaivableRequestId != requestId ||
+        session == null ||
+        properties.saves.autosavePolicy !=
+            eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
+                .ON_CLOSE_AND_ROM_SWITCH ||
+        closeAutosaveCompletedSessionId == stateSessionId ||
+        closeAutosaveAttempt?.isDone == false) {
+      return false
+    }
+    closeAutosaveSkippedSessionId = stateSessionId
+    closeAutosaveCapture = null
+    closeAutosavePlayDurationNanos = null
+    closeAutosavePlayDurationCaptured = false
+    closeAutosaveAttempt = null
+    closeAutosaveWaivableRequestId = null
+    return true
   }
 
   private fun closeFileName(): String =
@@ -2216,6 +2439,7 @@ class BasicController private constructor(
 
   private data class PendingResume(
       val requestId: Long,
+      val sessionId: Long,
       val key: StateEntryKey,
       val read: StateReadResult,
   )

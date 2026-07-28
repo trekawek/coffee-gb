@@ -93,6 +93,9 @@ object BatteryStorageResolver {
 
   private fun safeSidecarSource(path: Path): BatteryStorage.Source {
     val normalized = path.toAbsolutePath().normalize()
-    return BatteryStorage.Source.managed(normalized, requireNotNull(normalized.parent))
+    // A ROM may legally live directly below a filesystem root (`/game.gb`, `C:\game.gb`). The
+    // direct source performs the same no-follow walk from that root and does not require inventing
+    // an invalid managed root whose own parent/name is absent.
+    return BatteryStorage.Source.direct(normalized)
   }
 }

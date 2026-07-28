@@ -156,6 +156,16 @@ class SwingEmulator(
     )
   }
 
+  /**
+   * Applies an explicit close-autosave waiver to the controller retained by a failed stop. The
+   * lifecycle gate permits this narrow operation while stopping, but still rejects it once
+   * controller ownership has been released.
+   */
+  fun waiveCloseAutosave(requestId: Long): Boolean =
+      controllerLifecycle.withRetainedController {
+        controller.waiveCloseAutosave(requestId)
+      } ?: false
+
   fun applyKeyboardMapping(mapping: ControllerProperties.PlayerMapping) {
     joypad.updateMapping(mapping)
   }
@@ -360,6 +370,15 @@ internal class ControllerLifecycleGate {
         }
         transition()
         true
+      }
+
+  fun <T> withRetainedController(action: () -> T): T? =
+      synchronized(lock) {
+        if (stopped || controllerOwnershipReleased) {
+          null
+        } else {
+          action()
+        }
       }
 
   fun stop(

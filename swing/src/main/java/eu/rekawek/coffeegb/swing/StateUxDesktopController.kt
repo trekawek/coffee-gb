@@ -97,8 +97,28 @@ internal class StateUxDesktopController(
         val current = currentSession
         if (current == null || event.sessionId >= current.sessionId) {
           currentSession = event
+          pendingClose = null
           browser?.updateSession(event)
         }
+      }
+    }
+    eventBus.register<ControllerOwnershipChangingEvent> {
+      onEdt {
+        val current = currentSession ?: return@onEdt
+        val unavailable =
+            current.copy(
+                available = false,
+                gameDirectory = null,
+                unavailableReason =
+                    StateUserError(
+                        "Managed states are unavailable in linked play.",
+                        "Portable managed-state capture and restore are supported only by a standalone local session.",
+                        "Return to single-player emulation to manage states.",
+                    ),
+            )
+        currentSession = unavailable
+        pendingClose = null
+        browser?.updateSession(unavailable)
       }
     }
     eventBus.register<StateOperationCompletedEvent> { event ->
@@ -149,6 +169,7 @@ internal class StateUxDesktopController(
     eventBus.register<StateResumeAvailableEvent> { event ->
       onEdt {
         if (!isCurrent(event.sessionId)) return@onEdt
+        val expectedSessionId = event.sessionId
         val saved =
             event.savedAt?.let {
               formatStateTimestamp(it, RESUME_TIME_FORMAT)
@@ -163,7 +184,14 @@ internal class StateUxDesktopController(
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.QUESTION_MESSAGE,
             ) == JOptionPane.YES_OPTION
-        eventBus.post(StateResumeDecisionEvent(event.requestId, accept))
+        if (isCurrent(expectedSessionId)) {
+          eventBus.post(
+              StateResumeDecisionEvent(
+                  event.requestId,
+                  expectedSessionId,
+                  accept,
+              ))
+        }
       }
     }
     eventBus.register<StatePrepareCloseCompletedEvent> { event ->
@@ -197,6 +225,7 @@ internal class StateUxDesktopController(
   fun takeScreenshot() {
     requireEdt("Screenshot request")
     if (!requireAvailableSession()) return
+    val expectedSessionId = checkNotNull(currentSession).sessionId
     val image =
         try {
           captureDisplayImage()
@@ -211,13 +240,15 @@ internal class StateUxDesktopController(
           )
           return
         }
-    eventBus.post(StateScreenshotRequestEvent(nextRequestId(), image))
+    if (!isCurrent(expectedSessionId)) return
+    eventBus.post(StateScreenshotRequestEvent(nextRequestId(), expectedSessionId, image))
   }
 
   fun openSaveFolder() {
     requireEdt("Open-save-folder request")
     if (!requireAvailableSession()) return
-    eventBus.post(StateOpenFolderRequestEvent(nextRequestId()))
+    val expectedSessionId = checkNotNull(currentSession).sessionId
+    eventBus.post(StateOpenFolderRequestEvent(nextRequestId(), expectedSessionId))
   }
 
   fun prepareClose(onPrepared: () -> Unit) {
@@ -470,13 +501,18 @@ internal class StateBrowserDialog(
 
   private fun requestCatalog() {
     requireEdt("State catalog request")
-    if (session?.available != true || disposed.get()) {
+    val expectedSessionId = availableSessionId()
+    if (expectedSessionId == null || disposed.get()) {
       updateAvailability()
       return
     }
     latestCatalogRequest = nextRequestId()
     status.text = "Refreshing states…"
-    eventBus.post(eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent(latestCatalogRequest))
+    eventBus.post(
+        eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent(
+            latestCatalogRequest,
+            expectedSessionId,
+        ))
   }
 
   private fun applyCatalog(catalog: StateBrowserCatalog) {
@@ -498,6 +534,7 @@ internal class StateBrowserDialog(
 
   private fun saveSelected() {
     requireEdt("State save request")
+    val expectedSessionId = availableSessionId() ?: return
     val selected = selectedEntry() ?: return
     if (selected.ref == StateRef.Autosave) return
     val label =
@@ -508,11 +545,13 @@ internal class StateBrowserDialog(
         }
     val requestId = nextRequestId()
     val thumbnail = captureThumbnailOrReport() ?: return
+    if (availableSessionId() != expectedSessionId) return
     pendingOperations += requestId
     status.text = "Saving $label…"
     eventBus.post(
         StateSaveRequestEvent(
             requestId,
+            expectedSessionId,
             selected.ref,
             label,
             thumbnail,
@@ -522,6 +561,7 @@ internal class StateBrowserDialog(
 
   private fun loadSelected() {
     requireEdt("State load request")
+    val expectedSessionId = availableSessionId() ?: return
     val selected = selectedEntry() ?: return
     if (!selected.canLoad) {
       status.text = selected.disabledReason ?: "This state cannot be loaded."
@@ -530,13 +570,13 @@ internal class StateBrowserDialog(
     val requestId = nextRequestId()
     pendingOperations += requestId
     status.text = "Loading ${model.name(selected)}…"
-    eventBus.post(StateLoadRequestEvent(requestId, selected.key))
+    eventBus.post(StateLoadRequestEvent(requestId, expectedSessionId, selected.key))
     updateSelection()
   }
 
   private fun newNamed() {
     requireEdt("Named state request")
-    if (session?.available != true) return
+    val expectedSessionId = availableSessionId() ?: return
     val label =
         JOptionPane.showInputDialog(
             dialog,
@@ -554,11 +594,13 @@ internal class StateBrowserDialog(
     }
     val requestId = nextRequestId()
     val thumbnail = captureThumbnailOrReport() ?: return
+    if (availableSessionId() != expectedSessionId) return
     pendingOperations += requestId
     status.text = "Saving $label…"
     eventBus.post(
         StateSaveRequestEvent(
             requestId,
+            expectedSessionId,
             StateRef.Named(UUID.randomUUID()),
             label,
             thumbnail,
@@ -568,6 +610,7 @@ internal class StateBrowserDialog(
 
   private fun deleteSelected() {
     requireEdt("State delete request")
+    val expectedSessionId = availableSessionId() ?: return
     val selected = selectedEntry() ?: return
     if (selected.isEmpty) return
     val answer =
@@ -579,15 +622,17 @@ internal class StateBrowserDialog(
             JOptionPane.WARNING_MESSAGE,
         )
     if (answer != JOptionPane.YES_OPTION) return
+    if (availableSessionId() != expectedSessionId) return
     val requestId = nextRequestId()
     pendingOperations += requestId
     status.text = "Deleting ${model.name(selected)}…"
-    eventBus.post(StateDeleteRequestEvent(requestId, selected.key))
+    eventBus.post(StateDeleteRequestEvent(requestId, expectedSessionId, selected.key))
     updateSelection()
   }
 
   private fun exportSelected() {
     requireEdt("State export request")
+    val expectedSessionId = availableSessionId() ?: return
     val selected = selectedEntry() ?: return
     if (selected.isEmpty) return
     val chooser =
@@ -597,6 +642,7 @@ internal class StateBrowserDialog(
           selectedFile = java.io.File(model.exportFileName(selected))
         }
     if (chooser.showSaveDialog(dialog) != JFileChooser.APPROVE_OPTION) return
+    if (availableSessionId() != expectedSessionId) return
     var destination = chooser.selectedFile.toPath()
     if (!destination.fileName.toString().endsWith(".cgbstate", ignoreCase = true)) {
       destination =
@@ -605,12 +651,21 @@ internal class StateBrowserDialog(
     val requestId = nextRequestId()
     pendingOperations += requestId
     status.text = "Exporting ${model.name(selected)}…"
-    eventBus.post(StateExportRequestEvent(requestId, selected.key, destination))
+    eventBus.post(
+        StateExportRequestEvent(
+            requestId,
+            expectedSessionId,
+            selected.key,
+            destination,
+        ))
     updateSelection()
   }
 
   private fun selectedEntry(): StateBrowserEntry? =
       table.selectedRow.takeIf { it >= 0 }?.let(model::entryAt)
+
+  private fun availableSessionId(): Long? =
+      session?.takeIf { it.available }?.sessionId
 
   private fun captureThumbnailOrReport(): StateImage? =
       try {
