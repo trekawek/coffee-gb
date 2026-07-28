@@ -47,7 +47,11 @@ internal class SavesPreferencesEditor private constructor(
   ) : this(initial, defaults, directoryChooser, requireSavesEdt())
 
   internal val directoryField = JTextField(initial.directory?.toString().orEmpty(), 32)
-  internal val batterySaves = JCheckBox("Enable battery saves", initial.batterySavesEnabled)
+  internal val batterySaves =
+      JCheckBox(
+          "Enable battery saves for the next opened game",
+          initial.batterySavesEnabled,
+      )
   internal val rewindEnabled = JCheckBox("Enable rewind", initial.rewindEnabled)
   internal val rewindSeconds =
       JSpinner(
@@ -120,7 +124,11 @@ internal class SavesPreferencesEditor private constructor(
     add(directoryError, constraints)
 
     batterySaves.mnemonic = KeyEvent.VK_A
-    batterySaves.accessibleContext.accessibleName = "Enable battery saves"
+    batterySaves.accessibleContext.accessibleName =
+        "Enable battery saves for the next opened game"
+    batterySaves.toolTipText =
+        "The current game keeps its existing battery-save behavior until another game is opened."
+    batterySaves.accessibleContext.accessibleDescription = batterySaves.toolTipText
     addFullRow(constraints, 2, batterySaves)
 
     rewindEnabled.mnemonic = KeyEvent.VK_W
@@ -171,6 +179,11 @@ internal class SavesPreferencesEditor private constructor(
           directoryError.text = "Enter a valid directory path."
           throw PreferenceEditorValidationException(directoryError.text, directoryField)
         }
+    if (directory != null &&
+        !ApplicationSettings.Saves.isStructurallySafeDirectory(directory)) {
+      directoryError.text = "Choose a named directory below the filesystem root."
+      throw PreferenceEditorValidationException(directoryError.text, directoryField)
+    }
     val seconds =
         commitInteger(
             rewindSeconds,
@@ -218,15 +231,12 @@ internal class SavesPreferencesEditor private constructor(
   }
 
   private fun previousDirectories(directory: Path?): List<Path> {
-    if (samePath(directory, initial.directory)) return initial.previousDirectories
-    return (listOfNotNull(initial.directory) + initial.previousDirectories)
-        .filterNot { samePath(it, directory) }
-        .distinctBy { it.toAbsolutePath().normalize() }
-        .take(ApplicationSettings.MAX_PREVIOUS_SAVE_DIRECTORIES)
+    return retainedPreviousSaveDirectories(
+        directory,
+        initial.directory,
+        initial.previousDirectories,
+    )
   }
-
-  private fun samePath(first: Path?, second: Path?): Boolean =
-      first?.toAbsolutePath()?.normalize() == second?.toAbsolutePath()?.normalize()
 
   private fun commitInteger(
       spinner: JSpinner,
@@ -323,6 +333,33 @@ internal class SavesPreferencesEditor private constructor(
     fun parseDirectory(value: String): Path? =
         value.trim().takeIf(String::isNotEmpty)?.let(Paths::get)
   }
+}
+
+internal fun retainedPreviousSaveDirectories(
+    directory: Path?,
+    initialDirectory: Path?,
+    initialPreviousDirectories: List<Path>,
+): List<Path> {
+  val candidates =
+      if (sameSavePath(directory, initialDirectory)) {
+        initialPreviousDirectories
+      } else {
+        listOfNotNull(initialDirectory) + initialPreviousDirectories
+      }
+  return candidates
+      .filter(ApplicationSettings.Saves::isStructurallySafeDirectory)
+      .filterNot { sameSavePath(it, directory) }
+      .distinctBy { it.toAbsolutePath().normalize() }
+      .take(ApplicationSettings.MAX_PREVIOUS_SAVE_DIRECTORIES)
+}
+
+private fun sameSavePath(first: Path?, second: Path?): Boolean {
+  if (first == null || second == null) return first == null && second == null
+  val normalizedFirst =
+      runCatching { first.toAbsolutePath().normalize() }.getOrNull() ?: return false
+  val normalizedSecond =
+      runCatching { second.toAbsolutePath().normalize() }.getOrNull() ?: return false
+  return normalizedFirst == normalizedSecond
 }
 
 internal val SYSTEM_SAVE_DIRECTORY_CHOOSER =

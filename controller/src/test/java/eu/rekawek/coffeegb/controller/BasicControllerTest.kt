@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
 import eu.rekawek.coffeegb.controller.Controller.HardwareProfileEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
@@ -23,6 +24,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
@@ -1065,6 +1067,163 @@ class BasicControllerTest {
   }
 
   @Test
+  fun batterySaveEnablementChangesOnlyTheNextOpenedGame() {
+    val directory = Files.createTempDirectory("coffee-gb-battery-setting")
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0)
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val configurations = CopyOnWriteArrayList<Gameboy.GameboyConfiguration>()
+    val liveResolutions = AtomicInteger()
+    val rom = namedRom("BATTERY_SETTING")
+    eventBus.register<EmulationStartedEvent>(started::add)
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          configurations += config
+          PreparedSession.Ready(config, config.build())
+        }
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            preparer,
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory.DEFAULT,
+            StateOperationWorkerFactory.DEFAULT,
+            liveBatteryStorageResolver =
+                LiveBatteryStorageResolver { saves, configuration, hashes ->
+                  liveResolutions.incrementAndGet()
+                  BatteryStorageResolver.resolve(saves, configuration, hashes)
+                },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertTrue(configurations.single().isSupportBatterySave)
+
+      properties.updateApplicationSettings { settings ->
+        settings.copy(saves = settings.saves.copy(batterySavesEnabled = false))
+      }
+      eventBus.post(Controller.UpdatedSavesSettingsEvent(properties.applicationSettings.saves))
+      awaitValue(liveResolutions, 1)
+      assertTrue(
+          configurations[0].isSupportBatterySave,
+          "disabling battery saves must not replace the active cartridge's construction policy",
+      )
+
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertFalse(configurations[1].isSupportBatterySave)
+
+      properties.updateApplicationSettings { settings ->
+        settings.copy(saves = settings.saves.copy(batterySavesEnabled = true))
+      }
+      eventBus.post(Controller.UpdatedSavesSettingsEvent(properties.applicationSettings.saves))
+      awaitValue(liveResolutions, 2)
+      assertFalse(
+          configurations[1].isSupportBatterySave,
+          "enabling battery saves must not retrofit persistence into the active cartridge",
+      )
+
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertTrue(configurations[2].isSupportBatterySave)
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      rom.delete()
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun rejectedLiveBatteryDestinationRetainsThePriorTargetAndTimingThread() {
+    val directory = Files.createTempDirectory("coffee-gb-battery-live-failure")
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0)
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    val resolverCalls = AtomicInteger()
+    val liveStorageCalls = AtomicInteger()
+    val priorStorage = BatteryStorage.direct(directory.resolve("prior.sav"))
+    val rom = namedRom("BATTERY_FAILURE")
+    lateinit var activeConfiguration: Gameboy.GameboyConfiguration
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<GbcFrameReadyEvent>(frames::add)
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+                  .setBatteryStorage(priorStorage, null)
+          activeConfiguration = config
+          val gameboy =
+              object : Gameboy(config) {
+                override fun setBatteryStorage(
+                    primary: BatteryStorage?,
+                    slot: BatteryStorage?,
+                ) {
+                  liveStorageCalls.incrementAndGet()
+                  super.setBatteryStorage(primary, slot)
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            preparer,
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory.DEFAULT,
+            StateOperationWorkerFactory.DEFAULT,
+            liveBatteryStorageResolver =
+                LiveBatteryStorageResolver { _, _, _ ->
+                  resolverCalls.incrementAndGet()
+                  throw IllegalArgumentException("injected unsafe Saves root")
+                },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      frames.clear()
+
+      eventBus.post(Controller.UpdatedSavesSettingsEvent(properties.applicationSettings.saves))
+      awaitValue(resolverCalls, 1)
+
+      assertSame(priorStorage, activeConfiguration.batteryStorage)
+      assertEquals(
+          0,
+          liveStorageCalls.get(),
+          "failed resolution must not touch the active cartridge destination",
+      )
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "a rejected Saves update must not terminate the controller timing thread",
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      rom.delete()
+      deleteTree(directory)
+    }
+  }
+
+  @Test
   fun rejectedSnapshotIsReportedAndControllerKeepsProcessingEvents() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
@@ -1316,6 +1475,13 @@ class BasicControllerTest {
     }
     title.toByteArray(Charsets.US_ASCII).copyInto(bytes, 0x0134, endIndex = title.length.coerceAtMost(15))
     return Files.createTempFile("coffee-gb-$title", ".gbc").toFile().also { it.writeBytes(bytes) }
+  }
+
+  private fun deleteTree(path: Path) {
+    if (!Files.exists(path)) return
+    Files.walk(path).use { stream ->
+      stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+    }
   }
 
   private fun awaitValue(value: AtomicInteger, expected: Int) {

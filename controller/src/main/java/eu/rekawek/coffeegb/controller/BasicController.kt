@@ -1,10 +1,12 @@
 package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.events.EventQueue
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.ExclusiveWriteRecovery
+import eu.rekawek.coffeegb.controller.state.ResolvedBatteryStorage
 import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
 import eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateCompression
@@ -84,6 +86,8 @@ class BasicController private constructor(
     private val stateWorkspaceFactory: StateWorkspaceFactory,
     private val stateWorkerFactory: StateOperationWorkerFactory,
     private val closeTimeoutMillis: Long,
+    private val liveBatteryStorageResolver: LiveBatteryStorageResolver =
+        LiveBatteryStorageResolver.DEFAULT,
 ) : Controller, SnapshotSupport {
 
   constructor(
@@ -209,6 +213,8 @@ class BasicController private constructor(
       stateWorkspaceFactory: StateWorkspaceFactory,
       stateWorkerFactory: StateOperationWorkerFactory,
       closeTimeoutMillis: Long = CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+      liveBatteryStorageResolver: LiveBatteryStorageResolver =
+          LiveBatteryStorageResolver.DEFAULT,
   ) : this(
       parentEventBus,
       properties,
@@ -220,6 +226,7 @@ class BasicController private constructor(
       stateWorkspaceFactory,
       stateWorkerFactory,
       closeTimeoutMillis,
+      liveBatteryStorageResolver,
   )
 
   private val timingTicker = TimingTicker()
@@ -1795,15 +1802,31 @@ class BasicController private constructor(
           "Active session has no precomputed ROM identity"
         }
     val batteryStorage =
-        BatteryStorageResolver.configure(
-            saves,
-            currentSession.config,
-            romHashes,
-        )
-    currentSession.gameboy.setBatteryStorage(
-        batteryStorage.primary,
-        batteryStorage.slot,
-    )
+        try {
+          liveBatteryStorageResolver.resolve(
+              saves,
+              currentSession.config,
+              romHashes,
+          )
+        } catch (failure: RuntimeException) {
+          LOG.warn(
+              "Unable to reconfigure battery storage; retaining the active destination",
+              failure,
+          )
+          null
+        }
+    if (batteryStorage != null) {
+      // Resolution is pure. Commit both views only after both primary and slot paths passed, so a
+      // malformed update cannot replace the active cartridge's previous destination.
+      currentSession.gameboy.setBatteryStorage(
+          batteryStorage.primary,
+          batteryStorage.slot,
+      )
+      currentSession.config.setBatteryStorage(
+          batteryStorage.primary,
+          batteryStorage.slot,
+      )
+    }
     stateSessionId = nextStateSessionId()
     closeAutosaveCapture = null
     closeAutosavePlayDurationNanos = null
@@ -2599,12 +2622,24 @@ internal fun interface StateOperationWorkerFactory {
   }
 }
 
+internal fun interface LiveBatteryStorageResolver {
+  fun resolve(
+      saves: ApplicationSettings.Saves,
+      configuration: Gameboy.GameboyConfiguration,
+      hashes: StateRomHashes,
+  ): ResolvedBatteryStorage
+
+  companion object {
+    val DEFAULT = LiveBatteryStorageResolver(BatteryStorageResolver::resolve)
+  }
+}
+
 private fun configuredRewindManager(
     properties: EmulatorProperties
 ): RewindManager = configuredRewindManager(properties.applicationSettings.saves)
 
 private fun configuredRewindManager(
-    saves: eu.rekawek.coffeegb.controller.properties.ApplicationSettings.Saves
+    saves: ApplicationSettings.Saves
 ): RewindManager =
     RewindManager(
         enabled = saves.rewindEnabled,

@@ -401,8 +401,14 @@ data class ApplicationSettings(
       require(directory == null || directory.toString().isNotEmpty()) {
         "Save directory must not be an empty path"
       }
+      require(directory == null || isStructurallySafeDirectory(directory)) {
+        "Save directory must be a named directory below the filesystem root"
+      }
       require(this.previousDirectories.none { it.toString().isEmpty() }) {
         "Previous save directories must not contain an empty path"
+      }
+      require(this.previousDirectories.all(::isStructurallySafeDirectory)) {
+        "Previous save directories must be named directories below the filesystem root"
       }
       require(this.previousDirectories.size <= MAX_PREVIOUS_SAVE_DIRECTORIES) {
         "At most $MAX_PREVIOUS_SAVE_DIRECTORIES previous save directories may be stored"
@@ -475,6 +481,21 @@ data class ApplicationSettings(
             "batterySavesEnabled=$batterySavesEnabled, rewindEnabled=$rewindEnabled, " +
             "rewindSeconds=$rewindSeconds, autosavePolicy=$autosavePolicy, " +
             "resumePolicy=$resumePolicy, rewindMemoryMiB=$rewindMemoryMiB)"
+
+    companion object {
+      /**
+       * Managed save roots must have both a final name and a parent after absolute
+       * normalization. A filesystem root cannot safely own the fixed `games` hierarchy.
+       */
+      @JvmStatic
+      fun isStructurallySafeDirectory(directory: Path): Boolean =
+          try {
+            val normalized = directory.toAbsolutePath().normalize()
+            normalized.fileName != null && normalized.parent != null
+          } catch (_: RuntimeException) {
+            false
+          }
+    }
   }
 
   enum class AutosavePolicy {
