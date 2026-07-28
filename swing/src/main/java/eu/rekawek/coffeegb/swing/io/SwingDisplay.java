@@ -96,7 +96,9 @@ public class SwingDisplay extends JPanel implements Runnable {
         eventBus.register(this::onSgbFrame, SgbDisplay.SgbFrameReadyEvent.class, callerId);
         eventBus.register(this::onHardwareProfile, Controller.HardwareProfileEvent.class, callerId);
         eventBus.register(e -> setScale(e.scale), SetScaleEvent.class);
-        eventBus.register(e -> setScaleMode(e.mode), SetScaleModeEvent.class);
+        eventBus.register(
+                e -> setScaleMode(e.mode, e.forcePreferredSizeUpdate),
+                SetScaleModeEvent.class);
         eventBus.register(e -> setGrayscale(e.grayscale), SetGrayscaleEvent.class);
         eventBus.register(e -> setBlending(e.blending), SetBlendingEvent.class);
         eventBus.register(e -> setColorCorrection(e.colorCorrection), SetColorCorrectionEvent.class);
@@ -197,12 +199,12 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private void setScale(int scale) {
-        setScaleMode(legacyScaleMode(scale));
+        setScaleMode(legacyScaleMode(scale), false);
     }
 
-    private void setScaleMode(DisplayScaleMode mode) {
+    private void setScaleMode(DisplayScaleMode mode, boolean forcePreferredSizeUpdate) {
         DisplayScaleMode requiredMode = Objects.requireNonNull(mode, "mode");
-        if (requiredMode == scaleMode) {
+        if (requiredMode == scaleMode && !forcePreferredSizeUpdate) {
             return;
         }
         scaleMode = requiredMode;
@@ -508,7 +510,13 @@ public class SwingDisplay extends JPanel implements Runnable {
     public record SetScaleEvent(int scale) implements Event {
     }
 
-    public record SetScaleModeEvent(DisplayScaleMode mode) implements Event {
+    public record SetScaleModeEvent(
+            DisplayScaleMode mode,
+            boolean forcePreferredSizeUpdate) implements Event {
+        public SetScaleModeEvent(DisplayScaleMode mode) {
+            this(mode, false);
+        }
+
         public SetScaleModeEvent {
             Objects.requireNonNull(mode, "mode");
         }

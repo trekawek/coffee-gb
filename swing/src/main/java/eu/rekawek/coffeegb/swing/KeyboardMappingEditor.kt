@@ -5,7 +5,9 @@ import eu.rekawek.coffeegb.controller.properties.ControllerProperties
 import eu.rekawek.coffeegb.core.joypad.Button
 import java.awt.BorderLayout
 import java.awt.Component
-import java.awt.GridLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.Insets
 import java.awt.KeyEventDispatcher
 import java.awt.KeyboardFocusManager
 import java.awt.Window
@@ -15,7 +17,6 @@ import java.awt.event.WindowEvent
 import java.beans.PropertyChangeEvent
 import java.beans.PropertyChangeListener
 import javax.swing.BorderFactory
-import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -55,12 +56,6 @@ class KeyboardMappingEditor private constructor(
         val key: ApplicationSettings.KeyboardKey?,
     ) : EditResult
 
-    data class Conflict(
-        val binding: Binding,
-        val key: ApplicationSettings.KeyboardKey,
-        val existingBinding: Binding,
-    ) : EditResult
-
     data class Reserved(
         val binding: Binding,
         val keyCode: Int,
@@ -72,13 +67,15 @@ class KeyboardMappingEditor private constructor(
     ) : EditResult
   }
 
-  private data class Capture(val binding: Binding, val allowReserved: Boolean)
+  private data class Capture(val binding: Binding)
 
   private data class Row(
       val currentBinding: JLabel,
       val capture: JButton,
-      val captureDialogKey: JButton,
+      val card: JPanel,
   )
+
+  internal data class PadPosition(val column: Int, val row: Int)
 
   private val keyboard =
       initialInput.keyboard.toMutableMap().also { initialInput.toPlayerMapping() }
@@ -148,7 +145,7 @@ class KeyboardMappingEditor private constructor(
     status.accessibleContext.accessibleDescription = status.text
     footer.add(status, BorderLayout.CENTER)
     footer.add(
-        JButton("Restore keyboard defaults").apply {
+        JButton("Reset keyboard defaults").apply {
           accessibleContext.accessibleName = "Restore all keyboard defaults"
           accessibleContext.accessibleDescription =
               "Restore the default keyboard mapping for every player."
@@ -163,8 +160,9 @@ class KeyboardMappingEditor private constructor(
   /**
    * Returns a new validated input draft and preserves the initial gamepad choices unchanged.
    *
-   * Conflict edits are rejected immediately, so this method normally cannot fail. The explicit
-   * validation is retained as a boundary check for a Preferences Apply handler.
+   * Conflicting key assignments are resolved atomically while editing, so this method normally
+   * cannot fail. The explicit validation is retained as a boundary check for a Preferences Apply
+   * handler.
    */
   fun validatedDraft(): ApplicationSettings.Input {
     requireEventDispatchThread()
@@ -184,15 +182,13 @@ class KeyboardMappingEditor private constructor(
   /**
    * Attempts to assign one Java AWT key code.
    *
-   * Tab, Escape, and Enter are rejected by default because they navigate or operate the enclosing
-   * dialog. A caller must pass [allowReserved] only following a deliberate "Capture dialog key"
-   * action.
+   * Escape and Enter are valid bindings. Tab remains reserved for focus navigation and Backspace
+   * remains reserved for Rewind.
    */
   fun editBinding(
       player: Int,
       button: Button,
       keyCode: Int,
-      allowReserved: Boolean = false,
   ): EditResult {
     requireEventDispatchThread()
     val binding = Binding(player, button)
@@ -206,13 +202,6 @@ class KeyboardMappingEditor private constructor(
             })
       }
     }
-    if (!allowReserved && keyCode in RESERVED_DIALOG_KEYS) {
-      return EditResult.Reserved(binding, keyCode).also {
-        showStatus(
-            "${KeyEvent.getKeyText(keyCode)} is a dialog key. Use Capture dialog key to assign it.")
-      }
-    }
-
     val key =
         try {
           ApplicationSettings.KeyboardKey.fromKeyCode(keyCode)
@@ -222,50 +211,33 @@ class KeyboardMappingEditor private constructor(
           }
         }
     val target = binding.toPlayerButton()
+    val previousTargetKey = keyboard[target]
     val conflict =
         keyboard.entries.firstOrNull { (candidate, candidateKey) ->
           candidate != target && candidateKey.code == key.code
         }
     if (conflict != null) {
       val existing = conflict.key.toBinding()
-      return EditResult.Conflict(binding, key, existing).also {
-        showStatus(
-            "${key.displayName()} is already assigned to ${existing.displayName}. " +
-                "Clear that binding first.")
+      keyboard.remove(conflict.key)
+      if (previousTargetKey != null) {
+        keyboard[conflict.key] = previousTargetKey
       }
+      keyboard[target] = key
+      refreshRows()
+      showStatus(
+          buildString {
+            append("${binding.displayName} is now ${key.displayName()}; ")
+            append("${existing.displayName} is now ")
+            append(previousTargetKey?.displayName() ?: "unassigned")
+            append('.')
+          })
+      return EditResult.Applied(binding, key)
     }
 
     keyboard[target] = key
     refreshRows()
     showStatus("${binding.displayName} is now ${key.displayName()}.")
     return EditResult.Applied(binding, key)
-  }
-
-  fun clearBinding(
-      player: Int,
-      button: Button,
-  ): EditResult.Applied {
-    requireEventDispatchThread()
-    val binding = Binding(player, button)
-    cancelCapture()
-    keyboard.remove(binding.toPlayerButton())
-    refreshRows()
-    showStatus("${binding.displayName} is unassigned.")
-    return EditResult.Applied(binding, null)
-  }
-
-  fun resetBinding(
-      player: Int,
-      button: Button,
-  ): EditResult {
-    requireEventDispatchThread()
-    cancelCapture()
-    val binding = Binding(player, button)
-    val defaultKey = defaultKeyboard[binding.toPlayerButton()]
-    if (defaultKey == null) {
-      return clearBinding(player, button)
-    }
-    return editBinding(player, button, defaultKey.code, allowReserved = true)
   }
 
   fun resetToDefaults() {
@@ -298,6 +270,18 @@ class KeyboardMappingEditor private constructor(
   internal fun isCaptureDispatcherInstalled(): Boolean {
     requireEventDispatchThread()
     return dispatcherInstalled
+  }
+
+  /** Returns the actual GridBag position of one binding card without relying on pixel bounds. */
+  internal fun padPosition(
+      player: Int,
+      button: Button,
+  ): PadPosition {
+    requireEventDispatchThread()
+    val card = checkNotNull(rows[Binding(player, button)]).card
+    val layout = card.parent.layout as GridBagLayout
+    val constraints = layout.getConstraints(card)
+    return PadPosition(constraints.gridx, constraints.gridy)
   }
 
   override fun addNotify() {
@@ -341,20 +325,11 @@ class KeyboardMappingEditor private constructor(
         if (event.keyCode in MODIFIER_KEYS) {
           pendingModifier = event.keyCode
           true
-        } else if (!capture.allowReserved && event.keyCode == KeyEvent.VK_TAB) {
-          finishCapture()
-          showStatus("Keyboard capture cancelled; Tab remains available for dialog navigation.")
-          false
-        } else if (!capture.allowReserved && event.keyCode == KeyEvent.VK_ESCAPE) {
-          finishCapture(event.keyCode)
-          showStatus("Keyboard capture cancelled.")
-          true
         } else {
           editBinding(
               capture.binding.player,
               capture.binding.button,
               event.keyCode,
-              capture.allowReserved,
           )
           finishCapture(event.keyCode)
           true
@@ -366,7 +341,6 @@ class KeyboardMappingEditor private constructor(
               capture.binding.player,
               capture.binding.button,
               event.keyCode,
-              capture.allowReserved,
           )
           finishCapture()
           true
@@ -379,21 +353,11 @@ class KeyboardMappingEditor private constructor(
   }
 
   private fun createPlayerPanel(player: Int): JPanel {
-    val panel = JPanel()
-    panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+    val panel = JPanel(GridBagLayout())
     panel.accessibleContext.accessibleName = "Player ${player + 1} keyboard mappings"
+    panel.border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
 
-    panel.add(
-        JPanel(GridLayout(1, COLUMN_COUNT, 6, 0)).apply {
-          add(header("Button"))
-          add(header("Current binding"))
-          add(header("Capture"))
-          add(header("Dialog key"))
-          add(header("Clear"))
-          add(header("Reset"))
-        })
-
-    BUTTON_ORDER.forEach { button ->
+    PAD_FOCUS_ORDER.forEach { button ->
       val binding = Binding(player, button)
       val bindingLabel =
           JLabel("", SwingConstants.CENTER).apply {
@@ -401,47 +365,50 @@ class KeyboardMappingEditor private constructor(
           }
       val capture =
           actionButton("Capture", "Capture ${binding.displayName} keyboard binding") {
-            startCapture(binding, allowReserved = false)
+            startCapture(binding)
           }
-      val captureDialogKey =
-          actionButton(
-              "Dialog key…",
-              "Capture dialog key for ${binding.displayName} keyboard binding",
-          ) {
-            startCapture(binding, allowReserved = true)
-          }
-      val clear =
-          actionButton("Clear", "Clear ${binding.displayName} keyboard binding") {
-            clearBinding(player, button)
-          }
-      val reset =
-          actionButton("Reset", "Reset ${binding.displayName} keyboard binding") {
-            resetBinding(player, button)
-          }
-      rows[binding] = Row(bindingLabel, capture, captureDialogKey)
-
-      panel.add(
-          JPanel(GridLayout(1, COLUMN_COUNT, 6, 0)).apply {
+      val card =
+          JPanel(BorderLayout(4, 4)).apply {
             accessibleContext.accessibleName = "${binding.displayName} mapping controls"
+            border = BorderFactory.createTitledBorder(button.keyboardEditorDisplayName())
             add(
-                JLabel(button.keyboardEditorDisplayName()).apply {
+                JLabel("Current key", SwingConstants.CENTER).apply {
                   labelFor = capture
                   accessibleContext.accessibleName = "${binding.displayName} button"
-                })
-            add(bindingLabel)
-            add(capture)
-            add(captureDialogKey)
-            add(clear)
-            add(reset)
-          })
+                },
+                BorderLayout.NORTH,
+            )
+            add(bindingLabel, BorderLayout.CENTER)
+            add(capture, BorderLayout.SOUTH)
+          }
+      rows[binding] = Row(bindingLabel, capture, card)
+
+      val position = PAD_POSITIONS.getValue(button)
+      panel.add(
+          card,
+          GridBagConstraints().apply {
+            gridx = position.column
+            gridy = position.row
+            anchor = GridBagConstraints.CENTER
+            fill = GridBagConstraints.HORIZONTAL
+            weightx = 1.0
+            insets = Insets(6, 6, 6, 6)
+          },
+      )
     }
+    panel.add(
+        JPanel(),
+        GridBagConstraints().apply {
+          gridx = 0
+          gridy = PAD_ROW_COUNT
+          gridwidth = PAD_COLUMN_COUNT
+          weightx = 1.0
+          weighty = 1.0
+          fill = GridBagConstraints.BOTH
+        },
+    )
     return panel
   }
-
-  private fun header(text: String) =
-      JLabel(text, SwingConstants.CENTER).apply {
-        accessibleContext.accessibleName = "$text column"
-      }
 
   private fun actionButton(
       text: String,
@@ -454,12 +421,9 @@ class KeyboardMappingEditor private constructor(
         addActionListener { action() }
       }
 
-  private fun startCapture(
-      binding: Binding,
-      allowReserved: Boolean,
-  ) {
+  private fun startCapture(binding: Binding) {
     requireEventDispatchThread()
-    activeCapture = Capture(binding, allowReserved)
+    activeCapture = Capture(binding)
     pendingModifier = null
     suppressedKeyCode = null
     if (isDisplayable) {
@@ -467,11 +431,7 @@ class KeyboardMappingEditor private constructor(
     }
     refreshRows()
     showStatus(
-        if (allowReserved) {
-          "Press one key for ${binding.displayName}; dialog navigation is temporarily suspended."
-        } else {
-          "Press one key for ${binding.displayName}. Tab navigates, Escape cancels, and Enter is reserved."
-        })
+        "Press one key for ${binding.displayName}; dialog navigation is temporarily suspended.")
   }
 
   private fun finishCapture(suppressUntilRelease: Int? = null) {
@@ -492,10 +452,7 @@ class KeyboardMappingEditor private constructor(
           "${binding.displayName}: ${row.currentBinding.text}"
       val capture = activeCapture
       row.capture.text =
-          if (capture?.binding == binding && !capture.allowReserved) "Press a key…" else "Capture"
-      row.captureDialogKey.text =
-          if (capture?.binding == binding && capture.allowReserved) "Press a key…"
-          else "Dialog key…"
+          if (capture?.binding == binding) "Press a key…" else "Capture"
     }
   }
 
@@ -530,24 +487,31 @@ class KeyboardMappingEditor private constructor(
 
   private companion object {
     const val PLAYER_COUNT = 4
-    const val COLUMN_COUNT = 6
+    const val PAD_COLUMN_COUNT = 7
+    const val PAD_ROW_COUNT = 4
 
-    val BUTTON_ORDER =
+    val PAD_FOCUS_ORDER =
         listOf(
             Button.UP,
-            Button.DOWN,
             Button.LEFT,
             Button.RIGHT,
-            Button.A,
-            Button.B,
+            Button.DOWN,
             Button.SELECT,
             Button.START,
+            Button.B,
+            Button.A,
         )
 
-    val RESERVED_DIALOG_KEYS =
-        setOf(
-            KeyEvent.VK_ESCAPE,
-            KeyEvent.VK_ENTER,
+    val PAD_POSITIONS =
+        mapOf(
+            Button.UP to PadPosition(1, 0),
+            Button.LEFT to PadPosition(0, 1),
+            Button.RIGHT to PadPosition(2, 1),
+            Button.DOWN to PadPosition(1, 2),
+            Button.SELECT to PadPosition(3, 3),
+            Button.START to PadPosition(4, 3),
+            Button.B to PadPosition(5, 2),
+            Button.A to PadPosition(6, 1),
         )
 
     val UNAVAILABLE_GAMEPLAY_KEYS =

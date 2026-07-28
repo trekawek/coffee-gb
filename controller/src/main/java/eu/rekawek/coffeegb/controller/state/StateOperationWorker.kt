@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.state
 
+import eu.rekawek.coffeegb.controller.CompatibilitySnapshot
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import java.io.IOException
@@ -38,6 +39,13 @@ internal sealed interface StateWorkerResult {
   data class Loaded(
       val key: StateEntryKey,
       val result: StateReadResult,
+  ) : StateWorkerResult
+
+  data class Missing(val ref: StateRef) : StateWorkerResult
+
+  data class CompatibilityLoaded(
+      val ref: StateRef,
+      val snapshot: CompatibilitySnapshot,
   ) : StateWorkerResult
 
   data class Deleted(
@@ -136,6 +144,23 @@ internal class StateOperationWorker(
           purpose,
       ) {
         StateWorkerResult.Loaded(key, context.workspace.read(key))
+      }
+
+  /** Resolves active/fallback source identity on the state worker without requesting a UI catalog. */
+  fun loadFirst(
+      context: StateWorkerContext,
+      requestId: Long,
+      ref: StateRef,
+      compatibilityFallback: () -> CompatibilitySnapshot? = { null },
+  ) =
+      submit(context, requestId, StateOperation.LOAD, StateWorkerPurpose.MANUAL) {
+        context.workspace
+            .readFirst(ref)
+            ?.let { (key, read) -> StateWorkerResult.Loaded(key, read) }
+            ?: compatibilityFallback()?.let {
+              StateWorkerResult.CompatibilityLoaded(ref, it)
+            }
+            ?: StateWorkerResult.Missing(ref)
       }
 
   fun delete(context: StateWorkerContext, requestId: Long, key: StateEntryKey) =

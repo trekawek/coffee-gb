@@ -124,16 +124,18 @@ class DesktopDisplayControllerTest {
               settings,
               eventBus,
               fullscreen,
-              DisplayWindowSizingRuntime { windowed -> operations += "windowed:$windowed" },
+              DisplayWindowSizingRuntime { windowed, forceExplicitPack ->
+                operations += "windowed:$windowed:$forceExplicitPack"
+              },
           )
         }
 
     onEdt { controller.apply(initial.copy(fullscreen = false), persist = true) }
-    assertEquals(listOf("fullscreen:false", "scale", "windowed:true"), operations)
+    assertEquals(listOf("fullscreen:false", "scale", "windowed:true:false"), operations)
 
     operations.clear()
     onEdt { controller.apply(initial.copy(fullscreen = true), persist = true) }
-    assertEquals(listOf("windowed:false", "scale", "fullscreen:true"), operations)
+    assertEquals(listOf("windowed:false:false", "scale", "fullscreen:true"), operations)
 
     // A source/explicit-size change while fullscreen uses the base fullscreen minimum. Exiting
     // must still force a windowed sizing refresh even if the subsequent scale event is unchanged.
@@ -144,7 +146,48 @@ class DesktopDisplayControllerTest {
 
     operations.clear()
     onEdt { controller.apply(larger.copy(fullscreen = false), persist = true) }
-    assertEquals(listOf("fullscreen:false", "scale", "windowed:true"), operations)
+    assertEquals(listOf("fullscreen:false", "scale", "windowed:true:false"), operations)
+    eventBus.close()
+  }
+
+  @Test
+  fun `window scale command forces a repeated size event and survives fullscreen restoration`() {
+    val initial = ApplicationSettings.Display(explicitScale = 2)
+    val settings = FakeDisplaySettings(initial)
+    val fullscreen = FakeFullscreenRuntime()
+    val sizing = mutableListOf<Pair<Boolean, Boolean>>()
+    val scaleEvents = mutableListOf<SwingDisplay.SetScaleModeEvent>()
+    val eventBus = EventBusImpl()
+    eventBus.register<SwingDisplay.SetScaleModeEvent> { scaleEvents += it }
+    val controller =
+        onEdt {
+          DesktopDisplayController(
+              settings,
+              eventBus,
+              fullscreen,
+              DisplayWindowSizingRuntime { windowed, force -> sizing += windowed to force },
+          )
+        }
+
+    onEdt { controller.selectWindowScale(2) }
+    assertEquals(DisplayScaleMode.EXPLICIT_2X, scaleEvents.single().mode())
+    assertTrue(scaleEvents.single().forcePreferredSizeUpdate())
+    assertEquals(initial, settings.display)
+
+    onEdt { controller.setFullscreen(true) }
+    sizing.clear()
+    scaleEvents.clear()
+
+    onEdt { controller.selectWindowScale(1) }
+    assertTrue(scaleEvents.single().forcePreferredSizeUpdate())
+    assertTrue(sizing.isEmpty())
+
+    scaleEvents.clear()
+    onEdt { controller.setFullscreen(false) }
+    assertFalse(scaleEvents.single().forcePreferredSizeUpdate())
+    assertEquals(listOf(true to true), sizing)
+    assertEquals(1, settings.display.explicitScale)
+    assertFalse(settings.display.fullscreen)
     eventBus.close()
   }
 

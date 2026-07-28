@@ -128,8 +128,8 @@ precedence, validation, migration, and recovery behavior, and
 [`docs/hardware-profiles.md`](docs/hardware-profiles.md) for clocks, boot policy, state identity,
 and extension rules.
 
-The registry-generated System menu exposes `Auto (default)` plus every profile, including distinct
-SGB, SGB2, and MGB choices. SGB2 and MGB require skip-bootstrap mode because Coffee GB does not
+The System tab in Preferences exposes `Auto (default)` plus every profile, including distinct SGB,
+SGB2, and MGB choices. SGB2 and MGB require skip-bootstrap mode because Coffee GB does not
 bundle their Nintendo boot ROMs. New SGB/SGB2/MGB local snapshots use StateFile v2 so exact model
 identity and RTC phase meaning are unambiguous; old v1 snapshots remain importable. Protocol v8 is
 frozen to StateFile v1, so SGB, SGB2, and MGB are rejected for netplay rather than transmitting an
@@ -146,12 +146,15 @@ ambiguous or aliased identity.
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
 | Take screenshot | <kbd>F12</kbd> |
 | Rewind | Hold <kbd>Backspace</kbd> |
-| Toggle fullscreen | <kbd>F11</kbd> (disabled if assigned to an emulated button) |
+| Toggle fullscreen | <kbd>F11</kbd> (disabled if assigned to an emulated button); <kbd>Esc</kbd> always exits fullscreen |
 
-In single-player mode, **Emulation > Manage States…** provides ten stable slots, named states,
-previews, export, and autosave/resume. The original <kbd>F5</kbd>/<kbd>F7</kbd> quick slots and their
-`.sn0`&ndash;`.sn9` files remain supported. Managed states and screenshots are namespaced by exact ROM
-hash in a hidden directory beside the ROM, or below the directory selected in Saves preferences.
+In single-player mode, **Game > Manage States…** provides ten stable slots, named states, previews,
+export, and autosave/resume. <kbd>F5</kbd>/<kbd>F7</kbd> save and load the selected one of those same ten
+managed slots, including a state found in a configured fallback directory. Historical
+`.sn0`&ndash;`.sn9` sidecars are loaded read-only by <kbd>F7</kbd> when the selected managed slot is
+empty, and are never overwritten by managed quick saves. Managed states and
+screenshots are namespaced by exact ROM hash in a hidden directory beside the ROM, or below the
+directory selected in Saves preferences.
 A selected Saves directory also owns collision-safe battery saves; leaving it blank retains the
 portable `.sav` sidecar behavior.
 See [managed states, autosave, screenshots, and rewind](docs/state-management.md) for storage,
@@ -162,11 +165,12 @@ during netplay.
 <summary>Custom keyboard and game-controller mapping</summary>
 
 Desktop settings are stored in `~/.coffeegb.properties`. **File > Preferences…** configures
-General behavior, aspect-correct integer/fit/1×–4× display scaling, letterboxing, fullscreen,
+General and System behavior, 1×/2×/4× window sizing, letterboxing, fullscreen, display filters,
 four-player keyboard bindings, gamepad assignment/tuning, audio device/volume/mute/latency, and
 Saves policy (directory, battery saves, rewind bounds, autosave, and resume) without manual editing.
-The resizable display preserves DMG/CGB and SGB-border geometry; fullscreen restores and clamps
-prior window placement across monitor and DPI changes. The complete typed schema, validation,
+The resizable display always fits the complete DMG/CGB or SGB-border image while preserving its
+aspect ratio; fullscreen restores and clamps prior window placement across monitor and DPI changes.
+The complete typed schema, validation,
 rendering fallback, migration, device fallback, and recovery rules are documented in the
 [desktop command-line and settings contract](docs/desktop-settings.md). For keyboard mappings, use
 [`KeyEvent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/event/KeyEvent.html)

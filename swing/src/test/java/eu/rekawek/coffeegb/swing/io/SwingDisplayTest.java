@@ -282,6 +282,12 @@ public class SwingDisplayTest {
         eventBus.post(new SwingDisplay.SetRotationEvent(90));
         flushEdt();
         assertEquals(2, eventCount.get());
+
+        // A user-invoked window-size command must publish even when its scale is already active.
+        eventBus.post(new SwingDisplay.SetScaleModeEvent(DisplayScaleMode.EXPLICIT_3X, true));
+        flushEdt();
+        assertEquals(3, eventCount.get());
+        assertEquals(new Dimension(432, 480), latestSize.get());
         assertTrue(allEventsOnEdt.get());
         eventBus.close();
     }

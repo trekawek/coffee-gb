@@ -15,28 +15,28 @@ public class DisplayViewportTest {
     private static final double EPSILON = 1e-9;
 
     @Test
-    public void integerFitUsesLargestWholeDmgScaleAndCentersOddRemainders() {
-        DisplayViewport viewport = DisplayViewport.calculate(
-                805, 725, 160, 144, 0, DisplayScaleMode.INTEGER_FIT);
+    public void everyPersistedScaleModeUsesTheSameLargestUniformDmgFit() {
+        for (DisplayScaleMode mode : DisplayScaleMode.values()) {
+            DisplayViewport viewport = DisplayViewport.calculate(
+                    1_000, 700, 160, 144, 0, mode);
 
-        assertEquals(5.0, viewport.scale(), EPSILON);
-        assertEquals(2, viewport.x());
-        assertEquals(2, viewport.y());
-        assertEquals(800.0, viewport.width(), EPSILON);
-        assertEquals(720.0, viewport.height(), EPSILON);
-        assertEquals(new Rectangle(2, 2, 800, 720), viewport.paintBounds());
-        // The odd spare pixels deliberately remain on the trailing edges.
-        assertEquals(3, 805 - viewport.paintBounds().x - viewport.paintBounds().width);
-        assertEquals(3, 725 - viewport.paintBounds().y - viewport.paintBounds().height);
+            assertEquals(700.0 / 144.0, viewport.scale(), EPSILON);
+            assertEquals(160 * viewport.scale(), viewport.width(), EPSILON);
+            assertEquals(700.0, viewport.height(), EPSILON);
+            assertEquals(111, viewport.x());
+            assertEquals(0, viewport.y());
+            assertEquals(new Rectangle(111, 0, 778, 700), viewport.paintBounds());
+            assertUniformTransform(viewport, 160, 144);
+        }
     }
 
     @Test
-    public void integerFitUsesSgbBorderDimensions() {
+    public void legacyIntegerFitAspectFitsSgbBorderDimensions() {
         DisplayViewport viewport = DisplayViewport.calculate(
                 1_030, 900, 256, 224, 0, DisplayScaleMode.INTEGER_FIT);
 
-        assertEquals(4.0, viewport.scale(), EPSILON);
-        assertEquals(new Rectangle(3, 2, 1_024, 896), viewport.paintBounds());
+        assertEquals(900.0 / 224.0, viewport.scale(), EPSILON);
+        assertEquals(new Rectangle(0, 0, 1_029, 900), viewport.paintBounds());
     }
 
     @Test
@@ -76,14 +76,14 @@ public class DisplayViewportTest {
     }
 
     @Test
-    public void ninetyDegreeRotationFitsUsingSwappedSourceDimensions() {
+    public void ninetyDegreeRotationAspectFitsUsingSwappedSourceDimensions() {
         DisplayViewport viewport = DisplayViewport.calculate(
                 300, 333, 160, 144, 90, DisplayScaleMode.INTEGER_FIT);
 
-        assertEquals(2.0, viewport.scale(), EPSILON);
+        assertEquals(333.0 / 160.0, viewport.scale(), EPSILON);
         assertEquals(144, viewport.rotatedSourceWidth());
         assertEquals(160, viewport.rotatedSourceHeight());
-        assertEquals(new Rectangle(6, 6, 288, 320), viewport.paintBounds());
+        assertEquals(new Rectangle(0, 0, 300, 333), viewport.paintBounds());
         assertRotatedCornersStayInsideExactViewport(viewport, 160, 144);
     }
 
@@ -102,46 +102,47 @@ public class DisplayViewportTest {
     }
 
     @Test
-    public void oneHundredEightyDegreeTransformPreservesTheDmgViewport() {
+    public void oneHundredEightyDegreeTransformAspectFitsAnExplicitWindow() {
         DisplayViewport viewport = DisplayViewport.calculate(
-                321, 289, 160, 144, 180, DisplayScaleMode.EXPLICIT_2X);
+                400, 360, 160, 144, 180, DisplayScaleMode.EXPLICIT_2X);
 
         assertEquals(0, viewport.x());
         assertEquals(0, viewport.y());
-        assertEquals(new Rectangle(0, 0, 320, 288), viewport.paintBounds());
+        assertEquals(2.5, viewport.scale(), EPSILON);
+        assertEquals(new Rectangle(0, 0, 400, 360), viewport.paintBounds());
         Point2D mappedOrigin = viewport.sourceToComponentTransform()
                 .transform(new Point2D.Double(0, 0), null);
         Point2D mappedOpposite = viewport.sourceToComponentTransform()
                 .transform(new Point2D.Double(160, 144), null);
-        assertEquals(320.0, mappedOrigin.getX(), EPSILON);
-        assertEquals(288.0, mappedOrigin.getY(), EPSILON);
+        assertEquals(400.0, mappedOrigin.getX(), EPSILON);
+        assertEquals(360.0, mappedOrigin.getY(), EPSILON);
         assertEquals(0.0, mappedOpposite.getX(), EPSILON);
         assertEquals(0.0, mappedOpposite.getY(), EPSILON);
     }
 
     @Test
-    public void eachExplicitScaleIsExactAndCenteredWithoutRescalingToFit() {
+    public void everyExplicitWindowScaleUsesTheSameAspectFitViewport() {
         DisplayScaleMode[] modes = {
                 DisplayScaleMode.EXPLICIT_1X,
                 DisplayScaleMode.EXPLICIT_2X,
                 DisplayScaleMode.EXPLICIT_3X,
                 DisplayScaleMode.EXPLICIT_4X
         };
-        for (int i = 0; i < modes.length; i++) {
-            int factor = i + 1;
+        for (DisplayScaleMode mode : modes) {
             DisplayViewport viewport = DisplayViewport.calculate(
-                    1_001, 901, 160, 144, 0, modes[i]);
+                    1_000, 700, 160, 144, 0, mode);
 
-            assertEquals(factor, viewport.scale(), EPSILON);
-            assertEquals(160.0 * factor, viewport.width(), EPSILON);
-            assertEquals(144.0 * factor, viewport.height(), EPSILON);
-            assertEquals((int) Math.floor((1_001 - 160.0 * factor) / 2.0), viewport.x());
-            assertEquals((int) Math.floor((901 - 144.0 * factor) / 2.0), viewport.y());
+            assertEquals(700.0 / 144.0, viewport.scale(), EPSILON);
+            assertEquals(160 * viewport.scale(), viewport.width(), EPSILON);
+            assertEquals(700.0, viewport.height(), EPSILON);
+            assertEquals(111, viewport.x());
+            assertEquals(0, viewport.y());
+            assertEquals(new Rectangle(111, 0, 778, 700), viewport.paintBounds());
         }
     }
 
     @Test
-    public void explicitScaleFallsBackUniformlyInsteadOfCroppingWhenComponentIsTooSmall() {
+    public void explicitWindowScaleAspectFitsAnUndersizedComponentWithoutCropping() {
         DisplayViewport viewport = DisplayViewport.calculate(
                 319, 287, 160, 144, 0, DisplayScaleMode.EXPLICIT_2X);
 

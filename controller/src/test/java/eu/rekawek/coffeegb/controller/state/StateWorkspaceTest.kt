@@ -6,6 +6,7 @@ import java.nio.file.Files
 import java.time.Instant
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -34,6 +35,9 @@ class StateWorkspaceTest {
     assertEquals(1, fallbackRow.key.sourceIndex)
     assertTrue(fallbackRow.canLoad)
     assertEquals(fixture.file, workspace.read(fallbackRow.key).state)
+    val fallbackRead = workspace.readFirst(StateRef.Slot(3))!!
+    assertEquals(1, fallbackRead.first.sourceIndex)
+    assertEquals(fixture.file, fallbackRead.second.state)
 
     workspace.save(
         StateRef.Slot(3),
@@ -45,6 +49,12 @@ class StateWorkspaceTest {
         workspace.catalog(fixture.identity).entries.single { it.ref == StateRef.Slot(3) }
     assertEquals(0, activeRow.key.sourceIndex)
     assertEquals("active slot", activeRow.catalogEntry?.metadata?.label)
+    assertEquals(0, workspace.readFirst(StateRef.Slot(3))!!.first.sourceIndex)
+
+    Files.write(active.stateFile(StateRef.Slot(3)), byteArrayOf(1, 2, 3, 4))
+    assertFailsWith<StateDecodeException> {
+      workspace.readFirst(StateRef.Slot(3))
+    }
 
     val export = Files.createTempDirectory("workspace-export").resolve("old.cgbstate")
     workspace.export(fallbackRow.key, export)

@@ -64,6 +64,8 @@ class SwingEmulator(
 
   private var boundPanel: JPanel? = null
 
+  private var preferredSizeChangedWhileFullscreen = false
+
   private val controllerLifecycle = ControllerLifecycleGate()
 
   init {
@@ -220,6 +222,9 @@ class SwingEmulator(
         "Display window sizing must run on the Event Dispatch Thread"
       }
       val windowed = isWindowedLayout()
+      if (!windowed) {
+        preferredSizeChangedWhileFullscreen = true
+      }
       applyDisplayWindowSizing(
           jFrame,
           mainPanel,
@@ -227,15 +232,17 @@ class SwingEmulator(
           windowed,
           forceExplicitPack = true,
       )
+      if (windowed) {
+        preferredSizeChangedWhileFullscreen = false
+      }
     }
   }
 
-  /**
-   * Refreshes top-level constraints at a fullscreen boundary even when renderer geometry did not
-   * change. On exit, pack only if the restored content area cannot contain the current exact
-   * explicit size; otherwise preserve the remembered window bounds.
-   */
-  fun refreshDisplayWindowSizing(windowed: Boolean) {
+  /** Refreshes top-level constraints at a fullscreen boundary even when geometry did not change. */
+  fun refreshDisplayWindowSizing(
+      windowed: Boolean,
+      forceExplicitPack: Boolean,
+  ) {
     check(SwingUtilities.isEventDispatchThread()) {
       "Display window sizing must run on the Event Dispatch Thread"
     }
@@ -262,8 +269,13 @@ class SwingEmulator(
                 preferred,
                 currentContent,
                 windowed,
+                forceRequested = forceExplicitPack,
+                preferredSizeChangedWhileFullscreen = preferredSizeChangedWhileFullscreen,
             ),
     )
+    if (windowed) {
+      preferredSizeChangedWhileFullscreen = false
+    }
   }
 
   private fun applyDisplayWindowSizing(
@@ -303,11 +315,7 @@ class SwingEmulator(
   }
 }
 
-/**
- * Explicit scale is a real windowed pixel-size contract, so manual resizing cannot crop it.
- * Fullscreen and fit modes retain the sensible native-frame minimum; the viewport supplies a
- * uniform fit fallback if the host cannot honor an explicit top-level minimum.
- */
+/** Every display mode remains resizable down to one native Game Boy frame. */
 internal fun minimumDisplayContentSize(
     scaleMode: DisplayScaleMode,
     preferredSize: Dimension,
@@ -317,13 +325,7 @@ internal fun minimumDisplayContentSize(
     "Preferred display size must be positive"
   }
   val base = Dimension(160, 144)
-  if (!windowed || !scaleMode.isExplicit) {
-    return base
-  }
-  return Dimension(
-      maxOf(base.width, preferredSize.width),
-      maxOf(base.height, preferredSize.height),
-  )
+  return base
 }
 
 internal fun shouldPackExplicitWindow(
@@ -331,6 +333,8 @@ internal fun shouldPackExplicitWindow(
     preferredSize: Dimension,
     currentContentSize: Dimension,
     windowed: Boolean,
+    forceRequested: Boolean = false,
+    preferredSizeChangedWhileFullscreen: Boolean = false,
 ): Boolean {
   require(preferredSize.width > 0 && preferredSize.height > 0) {
     "Preferred display size must be positive"
@@ -340,8 +344,7 @@ internal fun shouldPackExplicitWindow(
   }
   return windowed &&
       scaleMode.isExplicit &&
-      (currentContentSize.width < preferredSize.width ||
-          currentContentSize.height < preferredSize.height)
+      (forceRequested || preferredSizeChangedWhileFullscreen)
 }
 
 internal fun closeControllerAfterLifecycleRelease(

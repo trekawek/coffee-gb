@@ -1,14 +1,18 @@
 package eu.rekawek.coffeegb.controller.state
 
+import eu.rekawek.coffeegb.controller.CompatibilitySnapshot
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.nio.file.Files
+import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.Test
@@ -147,6 +151,114 @@ class StateOperationWorkerTest {
     } finally {
       release.countDown()
       worker.close()
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `load by ref keeps fallback resolution independent from catalog coalescing`() {
+    val bus = EventBusImpl(null, null, false)
+    val completed = LinkedBlockingQueue<StateWorkerCompletedEvent>()
+    bus.register(completed::add, StateWorkerCompletedEvent::class.java)
+    val started = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val worker =
+        StateOperationWorker(
+            bus,
+            externalActions =
+                StateExternalActions {
+                  started.countDown()
+                  release.await()
+                  false
+                },
+        )
+    val configuration = StateCodecTestSupport.configuration()
+    val gameboy = configuration.build()
+    val sessionBus = EventBusImpl(null, null, false)
+    gameboy.init(sessionBus, SerialEndpoint.NULL_ENDPOINT, null)
+    val ref = StateRef.Slot(4)
+    val active = StateStorageLayout(Files.createTempDirectory("load-ref-active"))
+    val fallback = StateStorageLayout(Files.createTempDirectory("load-ref-fallback"))
+    StateRepository(fallback)
+        .save(
+            ref,
+            StateCodec.encode(StateCodec.capture(configuration, gameboy), StateCompression.DEFLATE),
+            StateSaveMetadata("fallback", Instant.EPOCH),
+        )
+    val identity = StateIdentity.from(configuration)
+    val context =
+        StateWorkerContext(
+            1,
+            StateWorkspace(
+                StateStoragePaths(active, active.screenshotsDirectory, listOf(fallback))),
+            identity,
+            identity.profile.canonicalProfileId,
+        )
+    try {
+      worker.openFolder(context, 1)
+      assertTrue(started.await(5, TimeUnit.SECONDS))
+      worker.catalog(context, 2)
+      worker.loadFirst(context, 3, ref)
+      worker.catalog(context, 4)
+
+      val displaced = assertNotNull(completed.poll(5, TimeUnit.SECONDS))
+      assertEquals(2, displaced.requestId)
+      assertIs<StateWorkerResult.Failure>(displaced.result)
+
+      release.countDown()
+      assertEquals(1, assertNotNull(completed.poll(5, TimeUnit.SECONDS)).requestId)
+      val loaded = assertNotNull(completed.poll(5, TimeUnit.SECONDS))
+      assertEquals(3, loaded.requestId)
+      val result = assertIs<StateWorkerResult.Loaded>(loaded.result)
+      assertEquals(ref, result.key.ref)
+      assertEquals(1, result.key.sourceIndex)
+      val refreshed = assertNotNull(completed.poll(5, TimeUnit.SECONDS))
+      assertEquals(4, refreshed.requestId)
+      assertIs<StateWorkerResult.Catalog>(refreshed.result)
+    } finally {
+      release.countDown()
+      worker.close()
+      gameboy.stop()
+      gameboy.close()
+      sessionBus.close()
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `compatibility fallback is prepared on the state worker`() {
+    val bus = EventBusImpl(null, null, false)
+    val completed = LinkedBlockingQueue<StateWorkerCompletedEvent>()
+    bus.register(completed::add, StateWorkerCompletedEvent::class.java)
+    val worker = StateOperationWorker(bus)
+    val configuration = StateCodecTestSupport.configuration()
+    val gameboy = configuration.build()
+    val sessionBus = EventBusImpl(null, null, false)
+    gameboy.init(sessionBus, SerialEndpoint.NULL_ENDPOINT, null)
+    val ref = StateRef.Slot(8)
+    val candidate =
+        CompatibilitySnapshot.Portable(
+            StateCodec.capture(configuration, gameboy),
+            StateIdentity.from(configuration),
+        )
+    val fallbackThread = AtomicReference<String?>()
+    try {
+      worker.loadFirst(context("compatibility-fallback"), 17, ref) {
+        fallbackThread.set(Thread.currentThread().name)
+        candidate
+      }
+
+      val event = assertNotNull(completed.poll(5, TimeUnit.SECONDS))
+      assertEquals(17, event.requestId)
+      assertEquals("coffee-gb-state-worker", fallbackThread.get())
+      val result = assertIs<StateWorkerResult.CompatibilityLoaded>(event.result)
+      assertEquals(ref, result.ref)
+      assertTrue(result.snapshot === candidate)
+    } finally {
+      worker.close()
+      gameboy.stop()
+      gameboy.close()
+      sessionBus.close()
       bus.close()
     }
   }

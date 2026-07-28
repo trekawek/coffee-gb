@@ -6,7 +6,6 @@ import java.awt.Component
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
-import java.text.ParseException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
 import javax.swing.BorderFactory
@@ -15,8 +14,7 @@ import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
-import javax.swing.JSpinner
-import javax.swing.SpinnerNumberModel
+import javax.swing.JSlider
 import javax.swing.SwingUtilities
 import javax.swing.SwingWorker
 
@@ -69,13 +67,22 @@ internal class AudioPreferencesEditor private constructor(
         accessibleContext.accessibleName = "Mute audio"
       }
   internal val volume =
-      JSpinner(
-          SpinnerNumberModel(
-              initial.volume,
-              ApplicationSettings.MIN_AUDIO_VOLUME,
-              ApplicationSettings.MAX_AUDIO_VOLUME,
-              1,
-          ))
+      JSlider(
+            ApplicationSettings.MIN_AUDIO_VOLUME,
+            ApplicationSettings.MAX_AUDIO_VOLUME,
+            initial.volume,
+          )
+          .apply {
+            majorTickSpacing = 25
+            minorTickSpacing = 5
+            paintTicks = true
+            paintLabels = true
+            accessibleContext.accessibleName = "Master volume"
+            accessibleContext.accessibleDescription =
+                "Choose the master volume from ${ApplicationSettings.MIN_AUDIO_VOLUME} to " +
+                    "${ApplicationSettings.MAX_AUDIO_VOLUME} percent."
+            toolTipText = accessibleContext.accessibleDescription
+          }
   internal val latency =
       JComboBox(ApplicationSettings.AudioLatency.entries.toTypedArray()).apply {
         selectedItem = initial.latency
@@ -85,39 +92,17 @@ internal class AudioPreferencesEditor private constructor(
       JLabel("Audio outputs have not been checked yet.").apply {
         accessibleContext.accessibleName = "Audio output discovery status"
       }
-  internal val volumeError =
-      JLabel(" ").apply {
-        foreground = ERROR_COLOR
-        accessibleContext.accessibleName = "Master volume error"
-      }
-
   init {
     getAccessibleContext().accessibleName = "Audio preferences"
     getAccessibleContext().accessibleDescription =
         "Choose an output, mute state, master volume, and latency preset."
     border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
-    volume.accessibleContext.accessibleName = "Master volume"
-    volume.toolTipText =
-        "Choose between ${ApplicationSettings.MIN_AUDIO_VOLUME} and " +
-            "${ApplicationSettings.MAX_AUDIO_VOLUME} percent."
     refreshOutputOptions()
     createRows()
   }
 
   internal fun validatedAudio(): ApplicationSettings.Audio {
     requireEdt()
-    volumeError.text = " "
-    try {
-      volume.commitEdit()
-    } catch (_: ParseException) {
-      volumeError.text =
-          "Enter a whole-number volume from ${ApplicationSettings.MIN_AUDIO_VOLUME} to " +
-              "${ApplicationSettings.MAX_AUDIO_VOLUME}."
-      throw PreferenceEditorValidationException(
-          volumeError.text,
-          (volume.editor as JSpinner.DefaultEditor).textField,
-      )
-    }
     val outputSelection =
         if (selectedOutputId == AudioDeviceSnapshot.SYSTEM_DEFAULT_ID) {
           ApplicationSettings.AudioOutputSelection.Default
@@ -127,7 +112,7 @@ internal class AudioPreferencesEditor private constructor(
     return ApplicationSettings.Audio(
         enabled = !muted.isSelected,
         output = outputSelection,
-        volume = (volume.value as Number).toInt(),
+        volume = volume.value,
         latency = latency.selectedItem as ApplicationSettings.AudioLatency,
     )
   }
@@ -138,7 +123,6 @@ internal class AudioPreferencesEditor private constructor(
     muted.isSelected = !defaults.enabled
     volume.value = defaults.volume
     latency.selectedItem = defaults.latency
-    volumeError.text = " "
     refreshOutputOptions()
   }
 
@@ -226,17 +210,13 @@ internal class AudioPreferencesEditor private constructor(
     volumeLabel.displayedMnemonic = java.awt.event.KeyEvent.VK_V
     addRow(constraints, 3, volumeLabel, volume)
 
-    constraints.gridx = 1
-    constraints.gridy = 4
-    add(volumeError, constraints)
-
     val latencyLabel = JLabel("Latency preset:")
     latencyLabel.labelFor = latency
     latencyLabel.displayedMnemonic = java.awt.event.KeyEvent.VK_L
-    addRow(constraints, 5, latencyLabel, latency)
+    addRow(constraints, 4, latencyLabel, latency)
 
     constraints.gridx = 0
-    constraints.gridy = 6
+    constraints.gridy = 5
     constraints.gridwidth = 2
     constraints.weightx = 1.0
     constraints.weighty = 1.0

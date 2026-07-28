@@ -21,7 +21,6 @@ class DisplayPreferencesEditorTest {
       onEdt {
         val editor = DisplayPreferencesEditor(ApplicationSettings.Display())
 
-        selectScalingMode(editor, ApplicationSettings.DisplayScalingMode.INTEGER_FIT)
         selectScale(editor, 4)
         editor.letterboxColor.text = "#1a2B3c"
         editor.fullscreen.isSelected = true
@@ -33,7 +32,7 @@ class DisplayPreferencesEditorTest {
 
         assertEquals(
             ApplicationSettings.Display(
-                scalingMode = ApplicationSettings.DisplayScalingMode.INTEGER_FIT,
+                scalingMode = ApplicationSettings.DisplayScalingMode.EXPLICIT,
                 explicitScale = 4,
                 letterboxColor = 0x1A2B3C,
                 fullscreen = true,
@@ -48,23 +47,69 @@ class DisplayPreferencesEditorTest {
       }
 
   @Test
-  fun `explicit scale is enabled only in explicit mode without losing its draft value`() =
+  fun `window scale exposes only supported resize commands and persists explicit mode`() =
       onEdt {
-        val editor =
-            DisplayPreferencesEditor(
-                ApplicationSettings.Display(
-                    scalingMode = ApplicationSettings.DisplayScalingMode.EXPLICIT,
-                    explicitScale = 3,
-                ))
+        val initial =
+            ApplicationSettings.Display(
+                scalingMode = ApplicationSettings.DisplayScalingMode.INTEGER_FIT,
+                explicitScale = 3,
+            )
+        val editor = DisplayPreferencesEditor(initial)
 
         assertTrue(editor.explicitScale.isEnabled)
-        selectScalingMode(editor, ApplicationSettings.DisplayScalingMode.ASPECT_FIT)
-        assertFalse(editor.explicitScale.isEnabled)
-        selectScalingMode(editor, ApplicationSettings.DisplayScalingMode.INTEGER_FIT)
-        assertFalse(editor.explicitScale.isEnabled)
-        selectScalingMode(editor, ApplicationSettings.DisplayScalingMode.EXPLICIT)
-        assertTrue(editor.explicitScale.isEnabled)
-        assertEquals(3, editor.validatedDisplay().explicitScale)
+        assertFalse(editor.windowScaleCommandRequested)
+        assertEquals(
+            listOf(1, 2, 4),
+            (0 until editor.explicitScale.itemCount)
+                .map(editor.explicitScale::getItemAt)
+                .map { it.scale },
+        )
+        // A legacy 3x value is presented as the nearest available command but remains untouched
+        // until that command is actually selected.
+        assertEquals(
+            2,
+            (editor.explicitScale.selectedItem as DisplayPreferencesEditor.ScaleOption).scale,
+        )
+        assertEquals(initial, editor.validatedDisplay())
+
+        selectScale(editor, 4)
+        assertTrue(editor.windowScaleCommandRequested)
+        assertEquals(
+            ApplicationSettings.DisplayScalingMode.EXPLICIT,
+            editor.validatedDisplay().scalingMode,
+        )
+        assertEquals(4, editor.validatedDisplay().explicitScale)
+      }
+
+  @Test
+  fun `untouched legacy fit modes preserve their exact persisted scale`() =
+      onEdt {
+        for (mode in
+            listOf(
+                ApplicationSettings.DisplayScalingMode.INTEGER_FIT,
+                ApplicationSettings.DisplayScalingMode.ASPECT_FIT,
+            )) {
+          val initial =
+              ApplicationSettings.Display(
+                  scalingMode = mode,
+                  explicitScale = 3,
+              )
+          val editor = DisplayPreferencesEditor(initial)
+
+          assertEquals(initial, editor.validatedDisplay())
+          assertFalse(editor.windowScaleCommandRequested)
+        }
+      }
+
+  @Test
+  fun `reselecting the current preference scale remains an explicit window-size command`() =
+      onEdt {
+        val editor = DisplayPreferencesEditor(ApplicationSettings.Display(explicitScale = 2))
+        assertFalse(editor.windowScaleCommandRequested)
+
+        selectScale(editor, 2)
+
+        assertTrue(editor.windowScaleCommandRequested)
       }
 
   @Test
@@ -90,7 +135,7 @@ class DisplayPreferencesEditorTest {
       }
 
   @Test
-  fun `restore defaults changes the draft only and refreshes dependent controls`() =
+  fun `restore defaults changes the draft and canonicalizes the window scale mode`() =
       onEdt {
         val defaults =
             ApplicationSettings.Display(
@@ -116,9 +161,13 @@ class DisplayPreferencesEditorTest {
 
         editor.restoreDefaults()
 
-        assertEquals(defaults, editor.validatedDisplay())
+        assertEquals(
+            defaults.copy(scalingMode = ApplicationSettings.DisplayScalingMode.EXPLICIT),
+            editor.validatedDisplay(),
+        )
         assertEquals("#445566", editor.letterboxColor.text)
-        assertFalse(editor.explicitScale.isEnabled)
+        assertTrue(editor.explicitScale.isEnabled)
+        assertTrue(editor.windowScaleCommandRequested)
       }
 
   @Test
@@ -128,12 +177,8 @@ class DisplayPreferencesEditorTest {
         val labels = descendants(editor).filterIsInstance<JLabel>().toList()
 
         assertSame(
-            editor.scalingMode,
-            labels.single { it.text == "Scaling mode:" }.labelFor,
-        )
-        assertSame(
             editor.explicitScale,
-            labels.single { it.text == "Explicit scale:" }.labelFor,
+            labels.single { it.text == "Window scale:" }.labelFor,
         )
         assertSame(
             editor.letterboxColor,
@@ -144,10 +189,10 @@ class DisplayPreferencesEditorTest {
             labels.single { it.text == "Rotation:" }.labelFor,
         )
         assertEquals(
-            KeyEvent.VK_S,
-            labels.single { it.text == "Scaling mode:" }.displayedMnemonic,
+            KeyEvent.VK_W,
+            labels.single { it.text == "Window scale:" }.displayedMnemonic,
         )
-        assertEquals("Display scaling mode", editor.scalingMode.accessibleContext.accessibleName)
+        assertEquals("Window scale", editor.explicitScale.accessibleContext.accessibleName)
         assertEquals(
             "Letterbox color preview",
             editor.letterboxPreview.accessibleContext.accessibleName,
@@ -160,16 +205,6 @@ class DisplayPreferencesEditorTest {
     assertFailsWith<IllegalStateException> {
       DisplayPreferencesEditor(ApplicationSettings.Display())
     }
-  }
-
-  private fun selectScalingMode(
-      editor: DisplayPreferencesEditor,
-      mode: ApplicationSettings.DisplayScalingMode,
-  ) {
-    editor.scalingMode.selectedItem =
-        (0 until editor.scalingMode.itemCount)
-            .map(editor.scalingMode::getItemAt)
-            .single { it.mode == mode }
   }
 
   private fun selectScale(editor: DisplayPreferencesEditor, scale: Int) {

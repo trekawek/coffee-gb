@@ -200,8 +200,16 @@ class StateRepository(
 
   /** Fully decodes a detached state and its trusted matching metadata without mutating a machine. */
   fun read(ref: StateRef): StateReadResult =
+      readIfPresent(ref) ?: throw NoSuchFileException(layout.stateFile(ref).toString())
+
+  /**
+   * The nullable form used while resolving active/fallback workspaces. Null means the authoritative
+   * state is genuinely absent; a present but unreadable or invalid state still fails and therefore
+   * prevents an older fallback from silently winning.
+   */
+  internal fun readIfPresent(ref: StateRef): StateReadResult? =
       lock(ref).withLock {
-        val raw = readRaw(ref) ?: throw NoSuchFileException(layout.stateFile(ref).toString())
+        val raw = readRaw(ref) ?: return@withLock null
         decodeRaw(raw)
       }
 

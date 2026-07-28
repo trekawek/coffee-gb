@@ -85,6 +85,26 @@ data class StateLoadRequestEvent(
   }
 }
 
+/**
+ * Loads the first managed state for [ref], resolving the active repository before configured
+ * fallback repositories. Unlike [StateLoadRequestEvent], the caller does not need a browser
+ * catalog (and therefore cannot interfere with catalog refresh coalescing).
+ *
+ * The desktop currently exposes this only for stable slots. If no managed source contains the
+ * slot, BasicController may consult the preserved legacy `.snN` sidecar as a read-only
+ * compatibility fallback.
+ */
+data class StateLoadRefRequestEvent(
+    val requestId: Long,
+    val expectedSessionId: Long,
+    val ref: StateRef.Slot,
+) : Event {
+  init {
+    requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
+  }
+}
+
 data class StateDeleteRequestEvent(
     val requestId: Long,
     val expectedSessionId: Long,

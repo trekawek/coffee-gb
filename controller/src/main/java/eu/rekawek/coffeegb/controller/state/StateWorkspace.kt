@@ -80,6 +80,19 @@ class StateWorkspace(
   fun read(key: StateEntryKey): StateReadResult =
       repository(key).read(key.ref)
 
+  /**
+   * Reads the first active/fallback copy of [ref]. A corrupt, incompatible, or unreadable earlier
+   * source is deliberately authoritative and fails instead of falling through to an older copy.
+   */
+  internal fun readFirst(ref: StateRef): Pair<StateEntryKey, StateReadResult>? {
+    repositories.forEachIndexed { source, repository ->
+      repository.readIfPresent(ref)?.let { read ->
+        return StateEntryKey(ref, source) to read
+      }
+    }
+    return null
+  }
+
   fun delete(key: StateEntryKey): StateDeleteResult =
       repository(key).delete(key.ref)
 

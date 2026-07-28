@@ -7,12 +7,7 @@ import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
-import eu.rekawek.coffeegb.controller.Controller.SaveSnapshotEvent
-import eu.rekawek.coffeegb.controller.Controller.SnapshotSavedEvent
-import eu.rekawek.coffeegb.controller.Controller.SnapshotLoadFailedEvent
-import eu.rekawek.coffeegb.controller.Controller.SessionSnapshotSupportEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
-import eu.rekawek.coffeegb.controller.SnapshotSupport
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.network.ConnectionController
@@ -27,14 +22,7 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEve
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.BootstrapMode
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.CgbGamesType
-import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGamesType
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
-import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.FAST_FORWARD
-import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.NORMAL
-import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.SKIP
-import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatDatabase
@@ -54,8 +42,6 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
 import javax.swing.ButtonGroup
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
@@ -79,6 +65,38 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.filechooser.FileNameExtensionFilter
 
+internal data class ManagedStateMenuAvailability(
+    val quickCommandsAvailable: Boolean = false,
+    val localSessionActive: Boolean = false,
+)
+
+/** Keeps modeless managed-state controls aligned across local/link ownership transitions. */
+internal class ManagedStateMenuAvailabilityBinding(
+    eventBus: EventBus,
+    private val apply: (ManagedStateMenuAvailability) -> Unit,
+) {
+  private var current = ManagedStateMenuAvailability()
+
+  init {
+    eventBus.register<StateUxSessionEvent> { session ->
+      dispatchSwingMutation {
+        current =
+            ManagedStateMenuAvailability(
+                quickCommandsAvailable = session.available,
+                localSessionActive = session.available || session.unavailableReason != null,
+            )
+        apply(current)
+      }
+    }
+    eventBus.register<ControllerOwnershipChangingEvent> {
+      dispatchSwingMutation {
+        current = current.copy(quickCommandsAvailable = false)
+        apply(current)
+      }
+    }
+  }
+}
+
 internal class SwingMenu(
     private val properties: EmulatorProperties,
     private val window: JFrame,
@@ -88,6 +106,8 @@ internal class SwingMenu(
     private val onOpenRom: (path: java.nio.file.Path, source: RomOpenSource) -> Unit,
     private val acceptRomLifecycle: (Long?) -> Boolean,
     private val onPreferences: () -> Unit,
+    private val onSaveState: (slot: Int) -> Unit,
+    private val onLoadState: (slot: Int) -> Unit,
     private val onManageStates: () -> Unit,
     private val onScreenshot: () -> Unit,
     private val onOpenSaveFolder: () -> Unit,
@@ -96,16 +116,7 @@ internal class SwingMenu(
 
   @Volatile private var stateSlot = 0
 
-  @Volatile private var snapshotSupport: SnapshotSupport? = null
-
   private var pauseSupport: Boolean = false
-
-  private val snapshotAvailabilityGeneration = AtomicLong()
-
-  private val snapshotAvailabilityExecutor =
-      Executors.newSingleThreadExecutor { task ->
-        Thread(task, "coffee-gb-snapshot-menu").apply { isDaemon = true }
-      }
 
   private lateinit var cameraController: CameraPeripheralController<WebcamCameraSource>
 
@@ -161,10 +172,6 @@ internal class SwingMenu(
         },
         handleReplacement = { it.openRequestId == null },
     )
-    eventBus.register<SessionSnapshotSupportEvent> { event ->
-      snapshotAvailabilityGeneration.incrementAndGet()
-      dispatchSwingMutation { snapshotSupport = event.snapshotSupport }
-    }
     eventBus.register<Controller.SessionPauseSupportEvent> { event ->
       dispatchSwingMutation { pauseSupport = event.enabled }
     }
@@ -203,7 +210,6 @@ internal class SwingMenu(
 
     menuBar.add(createFileMenu())
     menuBar.add(createGameMenu())
-    menuBar.add(createSystemMenu())
     menuBar.add(createScreenMenu())
     menuBar.add(createAudioMenu())
     menuBar.add(createPeripheralsMenu())
@@ -299,113 +305,6 @@ internal class SwingMenu(
       }
     }
 
-    val saveSnapshot = JMenuItem("Save state")
-    val loadSnapshot = JMenuItem("Load state")
-    saveSnapshot.isEnabled = false
-    saveSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0)
-    gameMenu.add(saveSnapshot)
-    saveSnapshot.addActionListener {
-      eventBus.post(SaveSnapshotEvent(stateSlot))
-    }
-    eventBus.register<SnapshotSavedEvent> { event ->
-      snapshotAvailabilityGeneration.incrementAndGet()
-      dispatchSwingMutation {
-        if (event.slot == stateSlot) {
-          loadSnapshot.isEnabled = true
-        }
-      }
-    }
-    eventBus.register<SnapshotLoadFailedEvent> { event ->
-      dispatchSwingMutation {
-        JOptionPane.showMessageDialog(
-            window,
-            event.message,
-            "Unable to load state",
-            JOptionPane.ERROR_MESSAGE,
-        )
-      }
-    }
-    eventBus.register<EmulationStartedEvent> { event ->
-      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
-        saveSnapshot.isEnabled = snapshotSupport != null
-      }
-    }
-    eventBus.register<EmulationStoppedEvent> {
-      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
-        saveSnapshot.isEnabled = false
-      }
-    }
-
-    loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
-    gameMenu.add(loadSnapshot)
-    loadSnapshot.addActionListener { eventBus.post(Controller.RestoreSnapshotEvent(stateSlot)) }
-    loadSnapshot.isEnabled = false
-
-    eventBus.register<EmulationStartedEvent> { event ->
-      refreshSnapshotAvailability(loadSnapshot, event.openRequestId)
-    }
-    eventBus.register<EmulationStoppedEvent> {
-      snapshotAvailabilityGeneration.incrementAndGet()
-      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
-        loadSnapshot.isEnabled = false
-      }
-    }
-
-    val slotMenu = JMenu("State slot")
-    gameMenu.add(slotMenu)
-    for (i in (0..9)) {
-      val slotItem = JCheckBoxMenuItem("Slot $i", i == stateSlot)
-      slotItem.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_0 + i, KEY_MODIFIER)
-      slotItem.addActionListener {
-        stateSlot = i
-        refreshSnapshotAvailability(loadSnapshot, null)
-        uncheckAllBut(slotMenu, slotItem)
-      }
-      slotMenu.add(slotItem)
-    }
-    slotMenu.isEnabled = false
-    eventBus.register<EmulationStartedEvent> { event ->
-      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
-        slotMenu.isEnabled = snapshotSupport != null
-      }
-    }
-    eventBus.register<EmulationStoppedEvent> {
-      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
-        slotMenu.isEnabled = false
-      }
-    }
-
-    gameMenu.addSeparator()
-    val manageStates = JMenuItem("Manage States…")
-    manageStates.mnemonic = KeyEvent.VK_M
-    manageStates.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
-    manageStates.addActionListener { onManageStates() }
-    gameMenu.add(manageStates)
-
-    val screenshot = JMenuItem("Take Screenshot")
-    screenshot.mnemonic = KeyEvent.VK_T
-    screenshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F12, 0)
-    screenshot.addActionListener { onScreenshot() }
-    gameMenu.add(screenshot)
-
-    val openSaveFolder = JMenuItem("Open Save Folder")
-    openSaveFolder.mnemonic = KeyEvent.VK_O
-    openSaveFolder.addActionListener { onOpenSaveFolder() }
-    gameMenu.add(openSaveFolder)
-
-    eventBus.register<StateUxSessionEvent> { session ->
-      val localSessionActive = session.available || session.unavailableReason != null
-      SwingUtilities.invokeLater {
-        manageStates.isEnabled = localSessionActive
-        screenshot.isEnabled = localSessionActive
-        openSaveFolder.isEnabled = localSessionActive
-      }
-    }
-    manageStates.isEnabled = false
-    screenshot.isEnabled = false
-    openSaveFolder.isEnabled = false
-
-    gameMenu.addSeparator()
     val resetGame = JMenuItem("Reset")
     resetGame.isEnabled = false
     resetGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_R, KEY_MODIFIER)
@@ -424,6 +323,58 @@ internal class SwingMenu(
     }
     enableWhenEmulationActive(stop)
 
+    gameMenu.addSeparator()
+
+    val saveSnapshot = JMenuItem("Save state")
+    val loadSnapshot = JMenuItem("Load state")
+    saveSnapshot.isEnabled = false
+    saveSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0)
+    gameMenu.add(saveSnapshot)
+    saveSnapshot.addActionListener { onSaveState(stateSlot) }
+
+    loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
+    gameMenu.add(loadSnapshot)
+    loadSnapshot.addActionListener { onLoadState(stateSlot) }
+    loadSnapshot.isEnabled = false
+
+    val slotMenu = JMenu("State slot")
+    gameMenu.add(slotMenu)
+    for (i in (0..9)) {
+      val slotItem = JCheckBoxMenuItem("Slot $i", i == stateSlot)
+      slotItem.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_0 + i, KEY_MODIFIER)
+      slotItem.addActionListener {
+        stateSlot = i
+        uncheckAllBut(slotMenu, slotItem)
+      }
+      slotMenu.add(slotItem)
+    }
+    slotMenu.isEnabled = false
+
+    val manageStates = JMenuItem("Manage States…")
+    manageStates.mnemonic = KeyEvent.VK_M
+    manageStates.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
+    manageStates.addActionListener { onManageStates() }
+    gameMenu.add(manageStates)
+
+    val openSaveFolder = JMenuItem("Open Save Folder")
+    openSaveFolder.mnemonic = KeyEvent.VK_O
+    openSaveFolder.addActionListener { onOpenSaveFolder() }
+    gameMenu.add(openSaveFolder)
+
+    ManagedStateMenuAvailabilityBinding(eventBus) { availability ->
+      saveSnapshot.isEnabled = availability.quickCommandsAvailable
+      loadSnapshot.isEnabled = availability.quickCommandsAvailable
+      slotMenu.isEnabled = availability.quickCommandsAvailable
+      manageStates.isEnabled = availability.localSessionActive
+      openSaveFolder.isEnabled = availability.localSessionActive
+    }
+    saveSnapshot.isEnabled = false
+    loadSnapshot.isEnabled = false
+    slotMenu.isEnabled = false
+    manageStates.isEnabled = false
+    openSaveFolder.isEnabled = false
+
+    gameMenu.addSeparator()
     val cheatsMenu = JMenu("Cheats")
     gameMenu.add(cheatsMenu)
 
@@ -864,69 +815,24 @@ internal class SwingMenu(
     }
   }
 
-  private fun createSystemMenu(): JMenu {
-    val systemMenu = JMenu("System")
-
-    for (gameType in listOf(DmgGamesType, CgbGamesType)) {
-      val (title, value) =
-          when (gameType) {
-            DmgGamesType -> "DMG games" to properties.system.dmgGamesProfile
-            CgbGamesType -> "CGB games" to properties.system.cgbGamesProfile
-            else -> throw IllegalStateException()
-          }
-
-      val menu = JMenu(title)
-      systemMenu.add(menu)
-
-      val auto = JCheckBoxMenuItem("Auto (default)", !properties.hasProperty(gameType))
-      menu.add(auto)
-      auto.addActionListener {
-        properties.clearProperty(gameType)
-        uncheckAllBut(menu, auto)
-        eventBus.post(Controller.UpdatedSystemMappingEvent())
-      }
-
-      for (profile in HardwareProfileRegistry.supportedProfiles()) {
-        val item =
-            JCheckBoxMenuItem(
-                profile.displayName(),
-                properties.hasProperty(gameType) && profile == value,
-            )
-        menu.add(item)
-        item.addActionListener {
-          properties.setProperty(gameType, profile.id())
-          uncheckAllBut(menu, item)
-          eventBus.post(Controller.UpdatedSystemMappingEvent())
-        }
-      }
-    }
-
-    val bootstrapMenu = JMenu("Bootstrap")
-    systemMenu.add(bootstrapMenu)
-    for ((mode, title) in
-        listOf(
-            SKIP to "Skip",
-            FAST_FORWARD to "Fast-forward",
-            NORMAL to "Full",
-        )) {
-      val item = JCheckBoxMenuItem(title, mode == properties.system.bootstrapMode)
-      bootstrapMenu.add(item)
-      item.addActionListener {
-        properties.setProperty(BootstrapMode, mode.name)
-        uncheckAllBut(bootstrapMenu, item)
-        eventBus.post(Controller.UpdatedSystemMappingEvent())
-      }
-    }
-
-    return systemMenu
-  }
-
   private fun createScreenMenu(): JMenu {
-    return createScreenMenu(
-        displayController,
-        eventBus,
-        keyboardBindings = { properties.applicationSettings.input.keyboard.values },
-    )
+    val screenMenu =
+        createScreenMenu(
+            displayController,
+            eventBus,
+            keyboardBindings = { properties.applicationSettings.input.keyboard.values },
+        )
+    val screenshot = JMenuItem("Take Screenshot")
+    screenshot.mnemonic = KeyEvent.VK_T
+    screenshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F12, 0)
+    screenshot.addActionListener { onScreenshot() }
+    screenshot.isEnabled = false
+    screenMenu.insert(screenshot, 1)
+    eventBus.register<StateUxSessionEvent> { session ->
+      val localSessionActive = session.available || session.unavailableReason != null
+      dispatchSwingMutation { screenshot.isEnabled = localSessionActive }
+    }
+    return screenMenu
   }
 
   private fun createAudioMenu(): JMenu {
@@ -1121,27 +1027,6 @@ internal class SwingMenu(
     }
   }
 
-  private fun refreshSnapshotAvailability(item: JMenuItem, openRequestId: Long?) {
-    dispatchAcceptedRomLifecycle(openRequestId, acceptRomLifecycle) {
-      val support = snapshotSupport
-      val slot = stateSlot
-      val generation = snapshotAvailabilityGeneration.incrementAndGet()
-      item.isEnabled = false
-      snapshotAvailabilityExecutor.execute {
-        val available =
-            runCatching { support?.snapshotAvailable(slot) == true }
-                .getOrElse { false }
-        dispatchAcceptedRomLifecycle(openRequestId, acceptRomLifecycle) {
-          if (snapshotAvailabilityGeneration.get() == generation &&
-              snapshotSupport === support &&
-              stateSlot == slot) {
-            item.isEnabled = available
-          }
-        }
-      }
-    }
-  }
-
   internal fun updateRecentRoms() {
     recentRomsMenu.removeAll()
     for (romPath in properties.recentRoms.getPaths()) {
@@ -1314,43 +1199,18 @@ internal fun createScreenMenu(
   val scale = JMenu("Scale")
   screenMenu.add(scale)
   val scaleGroup = ButtonGroup()
-  val scaleItems =
-      mutableMapOf<Pair<ApplicationSettings.DisplayScalingMode, Int>, JRadioButtonMenuItem>()
+  val supportedScales = listOf(1, 2, 4)
+  val initialScale = supportedScales.minBy { kotlin.math.abs(it - initial.explicitScale) }
+  val scaleItems = mutableMapOf<Int, JRadioButtonMenuItem>()
 
-  fun addScale(
-      title: String,
-      mode: ApplicationSettings.DisplayScalingMode,
-      explicitScale: Int = initial.explicitScale,
-  ) {
-    val key =
-        mode to
-            if (mode == ApplicationSettings.DisplayScalingMode.EXPLICIT) {
-              explicitScale
-            } else {
-              0
-            }
-    val selected =
-        initial.scalingMode == mode &&
-            (mode != ApplicationSettings.DisplayScalingMode.EXPLICIT ||
-                initial.explicitScale == explicitScale)
-    val item = JRadioButtonMenuItem(title, selected)
-    item.addActionListener {
-      displayController.update { current ->
-        current.copy(scalingMode = mode, explicitScale = explicitScale)
-      }
-    }
+  fun addScale(explicitScale: Int) {
+    val item = JRadioButtonMenuItem("${explicitScale}x", explicitScale == initialScale)
+    item.addActionListener { displayController.selectWindowScale(explicitScale) }
     scaleGroup.add(item)
     scale.add(item)
-    scaleItems[key] = item
+    scaleItems[explicitScale] = item
   }
-  addScale("Integer fit", ApplicationSettings.DisplayScalingMode.INTEGER_FIT)
-  addScale("Fit to window", ApplicationSettings.DisplayScalingMode.ASPECT_FIT)
-  scale.addSeparator()
-  for (factor in
-      ApplicationSettings.MIN_EXPLICIT_DISPLAY_SCALE..
-          ApplicationSettings.MAX_EXPLICIT_DISPLAY_SCALE) {
-    addScale("${factor}x", ApplicationSettings.DisplayScalingMode.EXPLICIT, factor)
-  }
+  supportedScales.forEach(::addScale)
 
   val rotate = JMenu("Rotate")
   screenMenu.add(rotate)
@@ -1374,19 +1234,6 @@ internal fun createScreenMenu(
     displayController.update { it.copy(grayscale = grayscale.state) }
   }
 
-  val colorCorrection =
-      JCheckBoxMenuItem("CGB color correction", initial.colorCorrection)
-  screenMenu.add(colorCorrection)
-  colorCorrection.addActionListener {
-    displayController.update { it.copy(colorCorrection = colorCorrection.state) }
-  }
-
-  val blending = JCheckBoxMenuItem("LCD ghosting (frame blend)", initial.blending)
-  screenMenu.add(blending)
-  blending.addActionListener {
-    displayController.update { it.copy(blending = blending.state) }
-  }
-
   val showSgbBorder = JCheckBoxMenuItem("Show SGB border", initial.showSgbBorder)
   screenMenu.add(showSgbBorder)
   showSgbBorder.addActionListener {
@@ -1394,20 +1241,12 @@ internal fun createScreenMenu(
   }
 
   fun synchronize(display: ApplicationSettings.Display) {
-    val scaleKey =
-        display.scalingMode to
-            if (display.scalingMode == ApplicationSettings.DisplayScalingMode.EXPLICIT) {
-              display.explicitScale
-            } else {
-              0
-            }
+    val scaleKey = supportedScales.minBy { kotlin.math.abs(it - display.explicitScale) }
     scaleItems[scaleKey]?.isSelected = true
     rotateItems[display.rotation.degrees]?.isSelected = true
     fullscreen.accelerator = fullscreenAccelerator()
     fullscreen.state = display.fullscreen
     grayscale.state = display.grayscale
-    colorCorrection.state = display.colorCorrection
-    blending.state = display.blending
     showSgbBorder.state = display.showSgbBorder
   }
   eventBus.register<DisplaySettingsChangedEvent> { event ->

@@ -74,6 +74,8 @@ class SwingGui private constructor(
 
   private lateinit var displayController: DesktopDisplayController
 
+  private lateinit var fullscreenEscape: FullscreenEscapeDispatcher
+
   private lateinit var romOpen: DesktopRomOpen
 
   private lateinit var dropFeedback: RomDropFeedback
@@ -117,6 +119,10 @@ class SwingGui private constructor(
           romOpen.close()
           runDesktopEdtStep(stateUxController::close)
           console?.stop()
+          // No process-wide key dispatcher may persist display settings once store closure begins.
+          // Removal runs on the EDT, so a queued Escape either completes before this boundary or
+          // cannot race the settings close below.
+          runDesktopEdtStep(fullscreenEscape::close)
           closeSettings()
           jvmShutdown.markCompleted()
         },
@@ -149,6 +155,13 @@ class SwingGui private constructor(
             ),
             DisplayWindowSizingRuntime(emulator::refreshDisplayWindowSizing),
         )
+    fullscreenEscape =
+        FullscreenEscapeDispatcher(
+                mainWindow,
+                isFullscreen = { displayController.current().fullscreen },
+                exitFullscreen = { displayController.setFullscreen(false) },
+            )
+            .also(FullscreenEscapeDispatcher::install)
     stateUxController =
         StateUxDesktopController(
             mainWindow,
@@ -197,6 +210,8 @@ class SwingGui private constructor(
             romOpen::open,
             ::acceptRomLifecycle,
             ::showPreferences,
+            stateUxController::saveSlot,
+            stateUxController::loadSlot,
             stateUxController::showBrowser,
             stateUxController::takeScreenshot,
             stateUxController::openSaveFolder,
@@ -358,6 +373,7 @@ class SwingGui private constructor(
   private fun finishSuccessfulShutdown() {
     SwingUtilities.invokeLater {
       dropFeedback.close()
+      fullscreenEscape.close()
       displayController.close()
       mainWindow.dispose()
       exitProcess(0)
@@ -500,13 +516,21 @@ class SwingGui private constructor(
         gamepadCatalog = emulator.gamepadCatalog(),
         audioDevices = AudioDeviceProvider(emulator::audioDevices),
     ) { edit ->
+      val previousAdvanced = properties.applicationSettings.advanced
       properties.updateApplicationSettings(edit::applyTo)
       val applied = properties.applicationSettings
       emulator.applyKeyboardMapping(applied.input.toPlayerMapping())
       emulator.applyDeviceSettings(applied)
-      displayController.apply(applied.display, persist = false)
+      displayController.apply(
+          applied.display,
+          persist = false,
+          forceWindowSize = edit.forceWindowSize,
+      )
       eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
       eventBus.post(Controller.UpdatedSavesSettingsEvent(applied.saves))
+      if (applied.advanced != previousAdvanced) {
+        eventBus.post(Controller.UpdatedSystemMappingEvent())
+      }
     }
   }
 

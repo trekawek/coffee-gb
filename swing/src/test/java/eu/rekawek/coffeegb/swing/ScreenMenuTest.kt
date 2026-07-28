@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.swing.io.DisplayScaleMode
 import eu.rekawek.coffeegb.swing.io.SwingDisplay
@@ -22,6 +23,54 @@ import org.junit.Test
 class ScreenMenuTest {
 
   @Test
+  fun `managed state commands disable for linked ownership and recover for a new local session`() {
+    val eventBus = EventBusImpl()
+    val updates = mutableListOf<ManagedStateMenuAvailability>()
+    try {
+      onScreenMenuEdt {
+        ManagedStateMenuAvailabilityBinding(eventBus, updates::add)
+      }
+
+      eventBus.post(
+          StateUxSessionEvent(
+              sessionId = 1,
+              available = true,
+              gameDirectory = java.nio.file.Path.of("local-game"),
+          ))
+      flushScreenMenuEdt()
+      assertEquals(
+          ManagedStateMenuAvailability(
+              quickCommandsAvailable = true,
+              localSessionActive = true,
+          ),
+          updates.last(),
+      )
+
+      eventBus.post(ControllerOwnershipChangingEvent())
+      flushScreenMenuEdt()
+      assertEquals(
+          ManagedStateMenuAvailability(
+              quickCommandsAvailable = false,
+              localSessionActive = true,
+          ),
+          updates.last(),
+      )
+
+      eventBus.post(
+          StateUxSessionEvent(
+              sessionId = 2,
+              available = true,
+              gameDirectory = java.nio.file.Path.of("next-local-game"),
+          ))
+      flushScreenMenuEdt()
+      assertTrue(updates.last().quickCommandsAvailable)
+      assertTrue(updates.last().localSessionActive)
+    } finally {
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun `scale and rotation choices are exclusive radios whose clicks update the coordinator`() {
     Fixture(
             ApplicationSettings.Display(
@@ -36,11 +85,11 @@ class ScreenMenuTest {
             val scaleItems = scale.items()
             val rotateItems = rotate.items()
             assertEquals(
-                listOf("Integer fit", "Fit to window", "1x", "2x", "3x", "4x"),
+                listOf("1x", "2x", "4x"),
                 scaleItems.map { it.text },
             )
             assertTrue(scaleItems.all { it is JRadioButtonMenuItem })
-            assertEquals(listOf("Fit to window"), scaleItems.selectedLabels())
+            assertEquals(listOf("4x"), scaleItems.selectedLabels())
             assertEquals(
                 listOf("None", "90°", "180°", "270°"),
                 rotateItems.map { it.text },
@@ -50,20 +99,27 @@ class ScreenMenuTest {
           }
 
           var runtimeScale: DisplayScaleMode? = null
+          var forceWindowSize = false
           fixture.eventBus.register<SwingDisplay.SetScaleModeEvent> {
             runtimeScale = it.mode()
+            forceWindowSize = it.forcePreferredSizeUpdate()
           }
-          onScreenMenuEdt { scale.item("3x").doClick() }
+          onScreenMenuEdt { scale.item("2x").doClick() }
 
           assertEquals(
               ApplicationSettings.DisplayScalingMode.EXPLICIT,
               fixture.settings.display.scalingMode,
           )
-          assertEquals(3, fixture.settings.display.explicitScale)
-          assertEquals(DisplayScaleMode.EXPLICIT_3X, runtimeScale)
+          assertEquals(2, fixture.settings.display.explicitScale)
+          assertEquals(DisplayScaleMode.EXPLICIT_2X, runtimeScale)
+          assertTrue(forceWindowSize)
           onScreenMenuEdt {
-            assertEquals(listOf("3x"), scale.items().selectedLabels())
+            assertEquals(listOf("2x"), scale.items().selectedLabels())
           }
+
+          forceWindowSize = false
+          onScreenMenuEdt { scale.item("2x").doClick() }
+          assertTrue(forceWindowSize)
 
           onScreenMenuEdt { rotate.item("270°").doClick() }
 
@@ -71,7 +127,7 @@ class ScreenMenuTest {
           onScreenMenuEdt {
             assertEquals(listOf("270°"), rotate.items().selectedLabels())
           }
-          assertEquals(2, fixture.settings.replacements)
+          assertEquals(3, fixture.settings.replacements)
         }
   }
 
@@ -105,9 +161,11 @@ class ScreenMenuTest {
         assertEquals(listOf("180°"), fixture.menu.submenu("Rotate").items().selectedLabels())
         assertTrue(fixture.menu.checkItem("Fullscreen").state)
         assertTrue(fixture.menu.checkItem("DMG grayscale").state)
-        assertFalse(fixture.menu.checkItem("LCD ghosting (frame blend)").state)
-        assertFalse(fixture.menu.checkItem("CGB color correction").state)
         assertTrue(fixture.menu.checkItem("Show SGB border").state)
+        assertTrue(
+            fixture.menu.items().none {
+              it.text == "LCD ghosting (frame blend)" || it.text == "CGB color correction"
+            })
       }
       assertEquals(0, fixture.settings.replacements)
     }

@@ -27,6 +27,8 @@ internal class DesktopDisplayController(
     private val fullscreenRuntime: FullscreenRuntime,
     private val windowSizingRuntime: DisplayWindowSizingRuntime = DisplayWindowSizingRuntime.NOOP,
 ) {
+  private var forceWindowSizeOnFullscreenExit = false
+
   constructor(
       properties: EmulatorProperties,
       eventBus: EventBus,
@@ -48,9 +50,31 @@ internal class DesktopDisplayController(
     apply(transform(current()), persist = true)
   }
 
+  /** Applies one exposed scale as a window-size command, even when it is already selected. */
+  fun selectWindowScale(explicitScale: Int) {
+    requireEdt()
+    require(explicitScale in EXPOSED_WINDOW_SCALES) {
+      "Window scale must be one of ${EXPOSED_WINDOW_SCALES.joinToString()}"
+    }
+    apply(
+        current().copy(
+            scalingMode = ApplicationSettings.DisplayScalingMode.EXPLICIT,
+            explicitScale = explicitScale,
+        ),
+        persist = true,
+        forceWindowSize = true,
+    )
+  }
+
   fun apply(
       display: ApplicationSettings.Display,
       persist: Boolean,
+  ) = apply(display, persist, forceWindowSize = false)
+
+  fun apply(
+      display: ApplicationSettings.Display,
+      persist: Boolean,
+      forceWindowSize: Boolean,
   ) {
     requireEdt()
     if (persist) {
@@ -59,17 +83,26 @@ internal class DesktopDisplayController(
 
     val enteringFullscreen = display.fullscreen && !fullscreenRuntime.isFullscreen()
     val exitingFullscreen = !display.fullscreen && fullscreenRuntime.isFullscreen()
+    if (forceWindowSize) {
+      // A command issued while fullscreen is applied after the saved window bounds are restored.
+      // Windowed commands get an immediate forced preferred-size event below.
+      forceWindowSizeOnFullscreenExit = display.fullscreen
+    }
 
     // A large windowed explicit/SGB minimum must not constrain borderless fullscreen bounds.
     // Conversely, restore the current dynamic minimum after exit even when scale/rotation did not
     // change and SwingDisplay therefore correctly suppressed its ordinary size event.
     if (enteringFullscreen) {
-      windowSizingRuntime.refresh(windowed = false)
+      windowSizingRuntime.refresh(windowed = false, forceExplicitPack = false)
     }
     if (exitingFullscreen) {
       fullscreenRuntime.setFullscreen(false)
     }
-    eventBus.post(SetScaleModeEvent(display.toRuntimeScaleMode()))
+    eventBus.post(
+        SetScaleModeEvent(
+            display.toRuntimeScaleMode(),
+            forceWindowSize,
+        ))
     eventBus.post(SetRotationEvent(display.rotation.degrees))
     eventBus.post(SetGrayscaleEvent(display.grayscale))
     eventBus.post(SetBlendingEvent(display.blending))
@@ -80,7 +113,12 @@ internal class DesktopDisplayController(
       fullscreenRuntime.setFullscreen(true)
     }
     if (exitingFullscreen) {
-      windowSizingRuntime.refresh(windowed = true)
+      val forceExplicitPack = forceWindowSizeOnFullscreenExit
+      forceWindowSizeOnFullscreenExit = false
+      windowSizingRuntime.refresh(
+          windowed = true,
+          forceExplicitPack = forceExplicitPack,
+      )
     }
     eventBus.post(DisplaySettingsChangedEvent(display))
   }
@@ -114,10 +152,10 @@ internal interface DisplaySettingsAccess {
 }
 
 internal fun interface DisplayWindowSizingRuntime {
-  fun refresh(windowed: Boolean)
+  fun refresh(windowed: Boolean, forceExplicitPack: Boolean)
 
   companion object {
-    val NOOP = DisplayWindowSizingRuntime {}
+    val NOOP = DisplayWindowSizingRuntime { _, _ -> }
   }
 }
 
@@ -142,3 +180,5 @@ internal fun ApplicationSettings.Display.toRuntimeScaleMode(): DisplayScaleMode 
       ApplicationSettings.DisplayScalingMode.EXPLICIT ->
           DisplayScaleMode.explicit(explicitScale)
     }
+
+private val EXPOSED_WINDOW_SCALES = setOf(1, 2, 4)

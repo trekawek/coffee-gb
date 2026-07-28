@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.controller.state.StateExportRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateExternalActions
 import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.controller.state.StateIdentity
+import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateLoadRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateOpenFolderRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateOperation
@@ -346,6 +347,7 @@ class BasicController private constructor(
     eventQueue.register<StateCatalogRequestEvent> { requestStateCatalog(it) }
     eventQueue.register<StateSaveRequestEvent> { requestStateSave(it) }
     eventQueue.register<StateLoadRequestEvent> { requestStateLoad(it) }
+    eventQueue.register<StateLoadRefRequestEvent> { requestStateLoadRef(it) }
     eventQueue.register<StateDeleteRequestEvent> { requestStateDelete(it) }
     eventQueue.register<StateExportRequestEvent> { requestStateExport(it) }
     eventQueue.register<StateScreenshotRequestEvent> { requestScreenshot(it) }
@@ -580,6 +582,20 @@ class BasicController private constructor(
         StateWorkerPurpose.MANUAL,
         event.key,
     )
+  }
+
+  private fun requestStateLoadRef(event: StateLoadRefRequestEvent) {
+    val context =
+        requireStateContext(
+            event.requestId,
+            event.expectedSessionId,
+            StateOperation.LOAD,
+        ) ?: return
+    latestStateRequests[StateOperation.LOAD] = event.requestId
+    val compatibilityManager = snapshotManager
+    stateWorker.loadFirst(context, event.requestId, event.ref) {
+      compatibilityManager?.readSnapshotReadOnly(event.ref.index)
+    }
   }
 
   private fun requestStateDelete(event: StateDeleteRequestEvent) {
@@ -825,6 +841,14 @@ class BasicController private constructor(
               result.result,
           )
         }
+      }
+      is StateWorkerResult.Missing -> {
+        if (!isLatest(StateOperation.LOAD, event.requestId)) return
+        postMissingQuickSlot(event.requestId, result.ref)
+      }
+      is StateWorkerResult.CompatibilityLoaded -> {
+        if (!isLatest(StateOperation.LOAD, event.requestId)) return
+        finishCompatibilityQuickLoad(event.requestId, result.ref, result.snapshot)
       }
       is StateWorkerResult.Deleted -> {
         if (!isLatest(StateOperation.DELETE, event.requestId)) return
@@ -1093,6 +1117,103 @@ class BasicController private constructor(
           ),
       )
     }
+  }
+
+  /**
+   * A managed quick load reaches this compatibility path only after every configured managed source
+   * reported the slot absent. A present but corrupt/incompatible managed state fails in the worker
+   * and never falls through here.
+   */
+  private fun finishCompatibilityQuickLoad(
+      requestId: Long,
+      ref: StateRef,
+      snapshot: CompatibilitySnapshot,
+  ) {
+    val slot = ref as? StateRef.Slot
+    if (slot == null) {
+      postStateFailure(
+          requestId,
+          StateOperation.LOAD,
+          StateUserError(
+              "State could not be loaded.",
+              "No managed state exists for ${ref.storageKey()}.",
+              "Choose an available state in Manage States and retry.",
+          ),
+      )
+      return
+    }
+    val currentSession = session ?: return
+    if (loadJob != null || replacementJob != null || stopJob != null) {
+      postStateFailure(
+          requestId,
+          StateOperation.LOAD,
+          StateUserError(
+              "State could not be loaded.",
+              "A ROM replacement or shutdown is in progress.",
+              "Retry the state restore after the current operation finishes.",
+          ),
+      )
+      return
+    }
+    val manager = snapshotManager
+    if (manager == null) {
+      postMissingQuickSlot(requestId, slot)
+      return
+    }
+    try {
+      manager.applySnapshotReadOnly(snapshot, currentSession.gameboy)
+      // Match managed-load ownership: a saved cartridge clock pause bit must not override the
+      // effective pause chosen for the live desktop session.
+      currentSession.gameboy.setCartridgeClockPaused(isPaused)
+      rewindManager.clear()
+      eventBus.post(
+          StateOperationCompletedEvent(
+              requestId,
+              checkNotNull(stateContext).sessionId,
+              StateOperation.LOAD,
+              slot,
+              message = "Legacy state loaded from Slot ${slot.index}.",
+          ))
+    } catch (failure: Throwable) {
+      LOG.warn("Unable to load legacy snapshot slot {} as managed fallback", slot.index, failure)
+      postStateFailure(
+          requestId,
+          StateOperation.LOAD,
+          stateError(
+              "State could not be loaded.",
+              failure,
+              "The running game was preserved. Save a new managed state or inspect the legacy sidecar with an older Coffee GB build.",
+          ),
+      )
+    }
+  }
+
+  private fun postMissingQuickSlot(
+      requestId: Long,
+      ref: StateRef,
+  ) {
+    val slot = ref as? StateRef.Slot
+    if (slot == null) {
+      postStateFailure(
+          requestId,
+          StateOperation.LOAD,
+          StateUserError(
+              "State could not be loaded.",
+              "No managed state exists for ${ref.storageKey()}.",
+              "Choose an available state in Manage States and retry.",
+          ),
+      )
+      return
+    }
+    postStateFailure(
+        requestId,
+        StateOperation.LOAD,
+        StateUserError(
+            "No state is saved in Slot ${slot.index}.",
+            "The slot is empty in managed storage and no preserved .sn${slot.index} sidecar is available.",
+            "Save a state into this slot or choose another slot.",
+        ),
+    )
   }
 
   private fun requireStateContext(
