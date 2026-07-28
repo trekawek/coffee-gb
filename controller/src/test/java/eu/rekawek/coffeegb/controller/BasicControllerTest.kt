@@ -10,12 +10,20 @@ import eu.rekawek.coffeegb.controller.Controller.HardwareProfileEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
+import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.events.Event
+import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import java.io.File
 import java.io.IOException
@@ -26,14 +34,237 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerTest {
+
+  @Test
+  fun closeDeadlineBoundsBlockedTimingThreadAndAllowsRetry() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    val tickEntered = CountDownLatch(1)
+    val releaseTick = CountDownLatch(1)
+    val rom = namedRom("BLOCKED_CLOSE")
+    val preparer =
+        SessionPreparer { properties, event ->
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun tick(): Boolean {
+                  tickEntered.countDown()
+                  while (releaseTick.count != 0L) {
+                    try {
+                      releaseTick.await()
+                    } catch (_: InterruptedException) {
+                      // Model core/platform work that does not cooperate with interruption.
+                    }
+                  }
+                  return false
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller =
+        BasicController(eventBus, EmulatorProperties(), null, preparer, closeTimeoutMillis = 75)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertTrue(tickEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      val closeStarted = System.nanoTime()
+      val failure =
+          assertFailsWith<Controller.PersistenceBarrierException> {
+            controller.closeWithState()
+          }
+      val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStarted)
+
+      assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
+      assertTrue(elapsedMillis < 1_000, "close took ${elapsedMillis}ms")
+
+      releaseTick.countDown()
+      assertNotNull(controller.closeWithState())
+    } finally {
+      releaseTick.countDown()
+      runCatching { controller.close() }
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun closeTimeoutRetainsOneWriterUntilItFinishes() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    val writerEntered = CountDownLatch(1)
+    val releaseWriter = CountDownLatch(1)
+    val writerStarts = AtomicInteger()
+    val concurrentWriters = AtomicInteger()
+    val maxConcurrentWriters = AtomicInteger()
+    val lastPublishedWriter = AtomicInteger()
+    val completions = AtomicInteger()
+    val capture =
+        object : BatteryFlush {
+          override fun persist(): BatteryPersistenceResult {
+            val writer = writerStarts.incrementAndGet()
+            val concurrent = concurrentWriters.incrementAndGet()
+            maxConcurrentWriters.updateAndGet { previous -> maxOf(previous, concurrent) }
+            writerEntered.countDown()
+            try {
+              while (releaseWriter.count != 0L) {
+                try {
+                  releaseWriter.await()
+                } catch (_: InterruptedException) {
+                  // A filesystem call may ignore interruption; retries still must not overlap it.
+                }
+              }
+              lastPublishedWriter.set(writer)
+              return BatteryPersistenceResult.Success(writer)
+            } finally {
+              concurrentWriters.decrementAndGet()
+            }
+          }
+
+          override fun complete(result: BatteryPersistenceResult) {
+            completions.incrementAndGet()
+          }
+        }
+    val rom = namedRom("ONE_WRITER")
+    val preparer =
+        SessionPreparer { properties, event ->
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun prepareCartridgeFlush(): BatteryFlush = capture
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller =
+        BasicController(eventBus, EmulatorProperties(), null, preparer, closeTimeoutMillis = 500)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      assertFailsWith<Controller.PersistenceBarrierException> { controller.closeWithState() }
+      assertTrue(writerEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertFailsWith<Controller.PersistenceBarrierException> { controller.closeWithState() }
+
+      assertEquals(1, writerStarts.get())
+      assertEquals(1, maxConcurrentWriters.get())
+      assertEquals(0, completions.get())
+      assertEquals(0, lastPublishedWriter.get())
+
+      releaseWriter.countDown()
+      assertNotNull(controller.closeWithState())
+      assertEquals(1, writerStarts.get())
+      assertEquals(1, maxConcurrentWriters.get())
+      assertEquals(1, lastPublishedWriter.get())
+      assertEquals(1, completions.get())
+    } finally {
+      releaseWriter.countDown()
+      runCatching { controller.close() }
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun finalClosePropagatesSessionBusTimeoutAndDefersMachineCleanupUntilRetry() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    val subscriberEntered = CountDownLatch(1)
+    val releaseSubscriber = CountDownLatch(1)
+    val subscriberReturned = CountDownLatch(1)
+    val cleanupCalls = AtomicInteger()
+    val rom = namedRom("CLOSE_BUS_WAIT")
+    val preparer =
+        SessionPreparer { properties, event ->
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun init(
+                    eventBus: EventBus,
+                    serialEndpoint: SerialEndpoint,
+                    infraredEndpoint: InfraredEndpoint,
+                    console: Console?,
+                ) {
+                  super.init(eventBus, serialEndpoint, infraredEndpoint, console)
+                  eventBus.register<FinalCloseEvent> {
+                    subscriberEntered.countDown()
+                    while (releaseSubscriber.count != 0L) {
+                      try {
+                        releaseSubscriber.await()
+                      } catch (_: InterruptedException) {
+                        // The final close caller owns the retry while this subscriber unwinds.
+                      }
+                    }
+                    subscriberReturned.countDown()
+                  }
+                  eventBus.postAsync(FinalCloseEvent())
+                }
+
+                override fun closeAfterCartridgeFlush() {
+                  cleanupCalls.incrementAndGet()
+                  super.closeAfterCartridgeFlush()
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller =
+        BasicController(eventBus, EmulatorProperties(), null, preparer, closeTimeoutMillis = 500)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertTrue(subscriberEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      val closeStarted = System.nanoTime()
+      val failure =
+          assertFailsWith<Controller.PersistenceBarrierException> {
+            controller.closeWithState()
+          }
+      val closeMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStarted)
+
+      assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
+      assertTrue(closeMillis < 2_000, "close took ${closeMillis}ms")
+      assertEquals(
+          0,
+          cleanupCalls.get(),
+          "machine cleanup must wait until the session bus has actually stopped",
+      )
+
+      releaseSubscriber.countDown()
+      assertTrue(subscriberReturned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertNotNull(controller.closeWithState())
+      assertEquals(1, cleanupCalls.get())
+    } finally {
+      releaseSubscriber.countDown()
+      runCatching { controller.close() }
+      eventBus.close()
+      rom.delete()
+    }
+  }
 
   @Test
   fun persistedSgb2AndMgbSelectionsReloadTheRunningSessionWithExactProfile() {
@@ -313,6 +544,190 @@ class BasicControllerTest {
   }
 
   @Test
+  fun coreInitializationFailureLeavesOldSessionRunning() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val stopped = LinkedBlockingQueue<EmulationStoppedEvent>()
+    val failures = LinkedBlockingQueue<LoadRomFailedEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<EmulationStoppedEvent> { stopped.add(it) }
+    eventBus.register<LoadRomFailedEvent> { failures.add(it) }
+    eventBus.register<GbcFrameReadyEvent> { frames.add(it) }
+    val failingRom = namedRom("INIT_FAILURE")
+    val preparer =
+        SessionPreparer { properties, event ->
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          val gameboy =
+              if (event.rom == failingRom) {
+                object : Gameboy(config) {
+                  override fun init(
+                      eventBus: EventBus,
+                      serialEndpoint: SerialEndpoint,
+                      infraredEndpoint: InfraredEndpoint,
+                      console: Console?,
+                  ) {
+                    super.init(eventBus, serialEndpoint, infraredEndpoint, console)
+                    throw IOException("injected core initialization failure")
+                  }
+                }
+              } else {
+                config.build()
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val console = TrackingConsole()
+    val controller = BasicController(eventBus, EmulatorProperties(), console, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val oldGameboy = assertNotNull(console.attachedGameboy)
+      started.clear()
+      stopped.clear()
+      frames.clear()
+
+      eventBus.post(LoadRomEvent(failingRom))
+
+      assertEquals(
+          failingRom,
+          assertNotNull(failures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).rom,
+      )
+      assertNull(stopped.poll(300, TimeUnit.MILLISECONDS))
+      assertNull(started.poll(300, TimeUnit.MILLISECONDS))
+      assertSame(oldGameboy, console.attachedGameboy)
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "the old session must resume after candidate initialization fails",
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      failingRom.delete()
+    }
+  }
+
+  @Test
+  fun successfulReplacementKeepsConsoleAttachedToNewSession() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    val console = TrackingConsole()
+    val nextRom = namedRom("CONSOLE_NEXT")
+    val controller = BasicController(eventBus, EmulatorProperties(), console)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val oldGameboy = assertNotNull(console.attachedGameboy)
+
+      eventBus.post(LoadRomEvent(nextRom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      assertNotNull(console.attachedGameboy)
+      assertTrue(console.attachedGameboy !== oldGameboy)
+    } finally {
+      controller.close()
+      eventBus.close()
+      nextRom.delete()
+    }
+  }
+
+  @Test
+  fun stalledOldSessionSubscriberDefersCleanupWithoutRollingBackReplacement() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val failures = LinkedBlockingQueue<LoadRomFailedEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<LoadRomFailedEvent> { failures.add(it) }
+    val oldSubscriberEntered = CountDownLatch(1)
+    val releaseOldSubscriber = CountDownLatch(1)
+    val oldSubscriberReturned = CountDownLatch(1)
+    val oldDeliveries = AtomicInteger()
+    val oldRom = namedRom("STALLED_OLD")
+    val nextRom = namedRom("ACTIVE_NEXT")
+    val preparer =
+        SessionPreparer { properties, event ->
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          val gameboy =
+              if (event.rom == oldRom) {
+                object : Gameboy(config) {
+                  override fun init(
+                      eventBus: EventBus,
+                      serialEndpoint: SerialEndpoint,
+                      infraredEndpoint: InfraredEndpoint,
+                      console: Console?,
+                  ) {
+                    super.init(eventBus, serialEndpoint, infraredEndpoint, console)
+                    eventBus.register<StalledSessionEvent> {
+                      oldDeliveries.incrementAndGet()
+                      oldSubscriberEntered.countDown()
+                      while (releaseOldSubscriber.count != 0L) {
+                        try {
+                          releaseOldSubscriber.await()
+                        } catch (_: InterruptedException) {
+                          // Deliberately emulate an async presentation subscriber that ignores
+                          // interruption. Replacement still owns a bounded commit boundary.
+                        }
+                      }
+                      oldSubscriberReturned.countDown()
+                    }
+                    eventBus.postAsync(StalledSessionEvent())
+                  }
+                }
+              } else {
+                config.build()
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val console = TrackingConsole()
+    val controller = BasicController(eventBus, EmulatorProperties(), console, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(oldRom))
+      assertEquals("STALLED_OLD", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
+      assertTrue(oldSubscriberEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val oldGameboy = assertNotNull(console.attachedGameboy)
+
+      val replacementStarted = System.nanoTime()
+      eventBus.post(LoadRomEvent(nextRom))
+      assertEquals(
+          "ACTIVE_NEXT",
+          started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName,
+          "the prepared candidate must activate after the bounded old-bus close attempt",
+      )
+      val replacementMillis =
+          TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - replacementStarted)
+      assertTrue(replacementMillis < 5_000, "replacement took ${replacementMillis}ms")
+      assertNull(failures.poll(250, TimeUnit.MILLISECONDS))
+      assertTrue(console.attachedGameboy !== oldGameboy)
+
+      eventBus.post(StalledSessionEvent())
+      assertEquals(
+          1,
+          oldDeliveries.get(),
+          "the stopping old bus must not deliver events after its close timeout",
+      )
+
+      releaseOldSubscriber.countDown()
+      assertTrue(oldSubscriberReturned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+    } finally {
+      releaseOldSubscriber.countDown()
+      runCatching { controller.close() }
+      eventBus.close()
+      oldRom.delete()
+      nextRom.delete()
+    }
+  }
+
+  @Test
   fun rejectedSnapshotIsReportedAndControllerKeepsProcessingEvents() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
@@ -495,4 +910,16 @@ class BasicControllerTest {
       AtomicFileWriter.system().write(target, intendedBytes)
     }
   }
+
+  private class TrackingConsole : Console() {
+    @Volatile var attachedGameboy: Gameboy? = null
+
+    override fun setGameboy(gameboy: Gameboy?) {
+      this.attachedGameboy = gameboy
+    }
+  }
+
+  private class StalledSessionEvent : Event
+
+  private class FinalCloseEvent : Event
 }

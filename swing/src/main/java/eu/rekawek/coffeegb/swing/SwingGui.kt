@@ -6,10 +6,7 @@ import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
 import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingCancelledEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
-import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
@@ -23,6 +20,7 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JFrame
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
@@ -45,15 +43,32 @@ class SwingGui private constructor(
 
   private lateinit var displayController: DesktopDisplayController
 
-  private var applicationDisposeRequested = false
-
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
 
   private val romSessionState = RomSessionState()
 
-  private val shutdownStarted = AtomicBoolean()
+  private val shutdownCoordinator by lazy {
+    DesktopShutdownCoordinator(
+        shutdown = {
+          emulator.stop()
+          console?.stop()
+          closeSettings()
+        },
+        timeoutMillis = DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
+        onPersistenceFailure = ::showClosePersistenceFailure,
+        onFailure = ::showCloseFailure,
+        onTimeout = ::showCloseTimeout,
+        onSuccess = {
+          SwingUtilities.invokeLater {
+            displayController.close()
+            mainWindow.dispose()
+            exitProcess(0)
+          }
+        },
+    )
+  }
 
   init {
     eventBus = EventBusImpl()
@@ -116,14 +131,6 @@ class SwingGui private constructor(
           override fun windowClosing(windowEvent: WindowEvent) {
             requestClose()
           }
-
-          override fun windowClosed(windowEvent: WindowEvent) {
-            // Borderless fullscreen requires dispose/re-show so JFrame decorations can change.
-            // Only the explicit application-close path owns runtime shutdown.
-            if (applicationDisposeRequested) {
-              stopGui()
-            }
-          }
         })
 
     emulator.bind(mainWindow) { !displayController.current().fullscreen }
@@ -156,53 +163,6 @@ class SwingGui private constructor(
     }
   }
 
-  private fun stopGui() {
-    if (!shutdownStarted.compareAndSet(false, true)) {
-      return
-    }
-    // A controller close waits for its emulation and ROM-loader workers, and audio teardown may
-    // wait for a platform mixer. The window is already disposed, so none of that work belongs on
-    // Swing's Event Dispatch Thread.
-    val shutdown =
-        launchDesktopShutdown {
-          try {
-            eventBus.post(StopEmulationEvent())
-            eventBus.post(StopServerEvent())
-            eventBus.post(StopClientEvent())
-            console?.stop()
-            emulator.stop()
-          } catch (failure: RuntimeException) {
-            LOG.error("Desktop runtime did not shut down cleanly", failure)
-          }
-          try {
-            properties.close()
-          } catch (failure: IllegalStateException) {
-            runCatching {
-              SwingUtilities.invokeAndWait {
-                JOptionPane.showMessageDialog(
-                    null,
-                    "Coffee GB could not save the latest settings. " +
-                        "The previous complete settings file was preserved.\n\n" +
-                        (failure.cause?.message
-                            ?: failure.message
-                            ?: failure.javaClass.simpleName),
-                    "Settings save failed",
-                    JOptionPane.ERROR_MESSAGE,
-                )
-              }
-            }
-          }
-          exitProcess(0)
-        }
-    launchDesktopShutdownWatchdog(shutdown, DESKTOP_SHUTDOWN_TIMEOUT_MILLIS) {
-      LOG.error(
-          "Desktop shutdown exceeded {} ms; terminating rather than leaving a hung process",
-          DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
-      )
-      exitProcess(1)
-    }
-  }
-
   private fun requestClose() {
     check(SwingUtilities.isEventDispatchThread()) {
       "Application close must be requested from the Event Dispatch Thread"
@@ -225,9 +185,87 @@ class SwingGui private constructor(
     if (!proceed) {
       return
     }
-    displayController.close()
-    applicationDisposeRequested = true
-    mainWindow.dispose()
+    if (shutdownCoordinator.request()) {
+      updateLoadingUi("Coffee GB: Saving before quit…", true)
+    }
+  }
+
+  private fun showClosePersistenceFailure(
+      failure: Controller.PersistenceBarrierException,
+      retry: () -> Unit,
+      cancel: () -> Unit,
+  ) {
+    SwingUtilities.invokeLater {
+      val choice =
+          JOptionPane.showOptionDialog(
+              mainWindow,
+              "Coffee GB could not safely persist ${failure.fileName}. " +
+                  "The session and its pending changes are retained, paused awaiting retry.\n\n" +
+                  (failure.message ?: failure.cause?.message ?: failure.javaClass.simpleName),
+              "Save before quit failed",
+              JOptionPane.YES_NO_OPTION,
+              JOptionPane.ERROR_MESSAGE,
+              null,
+              arrayOf("Retry", "Keep paused session open"),
+              "Retry",
+          )
+      if (choice == JOptionPane.YES_OPTION) {
+        updateLoadingUi("Coffee GB: Retrying save before quit…", true)
+        retry()
+      } else {
+        cancel()
+        updateLoadingUi(activeWindowTitle, false)
+      }
+    }
+  }
+
+  private fun showCloseFailure(failure: Exception) {
+    LOG.error("Desktop runtime did not shut down cleanly", failure)
+    SwingUtilities.invokeLater {
+      updateLoadingUi(activeWindowTitle, false)
+      JOptionPane.showMessageDialog(
+          mainWindow,
+          "Coffee GB did not finish shutting down. The window has been kept open.\n\n" +
+              (failure.message ?: failure.javaClass.simpleName),
+          "Quit failed",
+          JOptionPane.ERROR_MESSAGE,
+      )
+    }
+  }
+
+  private fun showCloseTimeout() {
+    LOG.error("Desktop shutdown exceeded {} ms", DESKTOP_SHUTDOWN_TIMEOUT_MILLIS)
+    SwingUtilities.invokeLater {
+      updateLoadingUi(activeWindowTitle, false)
+      JOptionPane.showMessageDialog(
+          mainWindow,
+          "Coffee GB kept the window open instead of forcing an unsafe exit. " +
+              "Shutdown work may still be unwinding; a late completion will not close the window.",
+          "Quit is taking too long",
+          JOptionPane.WARNING_MESSAGE,
+      )
+    }
+  }
+
+  private fun closeSettings() {
+    try {
+      properties.close()
+    } catch (failure: IllegalStateException) {
+      runCatching {
+        SwingUtilities.invokeAndWait {
+          JOptionPane.showMessageDialog(
+              mainWindow,
+              "Coffee GB could not save the latest settings. " +
+                  "The previous complete settings file was preserved.\n\n" +
+                  (failure.cause?.message
+                      ?: failure.message
+                      ?: failure.javaClass.simpleName),
+              "Settings save failed",
+              JOptionPane.ERROR_MESSAGE,
+          )
+        }
+      }
+    }
   }
 
   private fun showPreferences() {
@@ -303,9 +341,102 @@ internal fun createSettingsShutdownHook(
 
 internal fun launchDesktopShutdown(shutdown: () -> Unit): Thread =
     Thread(shutdown, "coffee-gb-desktop-shutdown").apply {
-      isDaemon = false
+      isDaemon = true
       start()
     }
+
+internal class DesktopShutdownCoordinator(
+    private val shutdown: () -> Unit,
+    private val timeoutMillis: Long,
+    private val onPersistenceFailure:
+        (Controller.PersistenceBarrierException, retry: () -> Unit, cancel: () -> Unit) -> Unit,
+    private val onFailure: (Exception) -> Unit,
+    private val onTimeout: () -> Unit,
+    private val onSuccess: () -> Unit,
+) {
+  private val activeAttempt = AtomicReference<ShutdownAttempt?>()
+  private val decisionPending = AtomicBoolean()
+  private val completed = AtomicBoolean()
+
+  fun request(): Boolean {
+    if (completed.get() || decisionPending.get()) {
+      return false
+    }
+    val attempt = ShutdownAttempt()
+    if (!activeAttempt.compareAndSet(null, attempt)) {
+      return false
+    }
+    val worker =
+        launchDesktopShutdown {
+          try {
+            shutdown()
+          } catch (failure: Controller.PersistenceBarrierException) {
+            finishPersistenceFailure(attempt, failure)
+            return@launchDesktopShutdown
+          } catch (failure: Exception) {
+            finishFailure(attempt, failure)
+            return@launchDesktopShutdown
+          }
+          finishSuccess(attempt)
+        }
+    launchDesktopShutdownWatchdog(worker, timeoutMillis) {
+      if (attempt.terminal.compareAndSet(false, true)) {
+        onTimeout()
+      }
+    }
+    return true
+  }
+
+  private fun finishPersistenceFailure(
+      attempt: ShutdownAttempt,
+      failure: Controller.PersistenceBarrierException,
+  ) {
+    if (!attempt.terminal.compareAndSet(false, true)) {
+      activeAttempt.compareAndSet(attempt, null)
+      return
+    }
+    decisionPending.set(true)
+    activeAttempt.compareAndSet(attempt, null)
+    onPersistenceFailure(
+        failure,
+        { resolvePersistenceFailure(retry = true) },
+        { resolvePersistenceFailure(retry = false) },
+    )
+  }
+
+  private fun finishFailure(attempt: ShutdownAttempt, failure: Exception) {
+    if (attempt.terminal.compareAndSet(false, true)) {
+      activeAttempt.compareAndSet(attempt, null)
+      onFailure(failure)
+    } else {
+      activeAttempt.compareAndSet(attempt, null)
+    }
+  }
+
+  private fun finishSuccess(attempt: ShutdownAttempt) {
+    if (attempt.terminal.compareAndSet(false, true)) {
+      completed.set(true)
+      activeAttempt.compareAndSet(attempt, null)
+      onSuccess()
+    } else {
+      // The watchdog already retained the UI. Never let this late success dispose or exit.
+      activeAttempt.compareAndSet(attempt, null)
+    }
+  }
+
+  private fun resolvePersistenceFailure(retry: Boolean) {
+    if (!decisionPending.compareAndSet(true, false)) {
+      return
+    }
+    if (retry) {
+      request()
+    }
+  }
+
+  private class ShutdownAttempt {
+    val terminal = AtomicBoolean()
+  }
+}
 
 internal fun launchDesktopShutdownWatchdog(
     shutdown: Thread,

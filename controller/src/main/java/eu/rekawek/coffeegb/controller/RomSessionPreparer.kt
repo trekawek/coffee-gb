@@ -27,8 +27,9 @@ internal class RomSessionPreparer(
 
   override fun prepare(properties: EmulatorProperties, event: LoadRomEvent): PreparedSession {
     ensureActive()
+    val rom = event.image?.let(::Rom) ?: Rom(event.rom)
     val config =
-        Controller.createGameboyConfig(properties, Rom(event.rom))
+        Controller.createGameboyConfig(properties, rom)
             .setBootCancellation { Thread.currentThread().isInterrupted }
     ensureActive()
 
@@ -38,12 +39,10 @@ internal class RomSessionPreparer(
       return PreparedSession.FromBootState(config, it)
     }
 
-    val gameboy = config.build()
-    if (Thread.currentThread().isInterrupted) {
-      gameboy.discardUnstarted()
-      throw CancellationException("ROM preparation superseded")
-    }
-    return PreparedSession.Ready(config, gameboy)
+    // Exotic/RTC cartridges cannot use a battery-free boot template. Defer their real machine
+    // construction until after the outgoing session's persistence barrier, when the worker can
+    // load the just-committed RAM/RTC bytes without touching the controller timing thread.
+    return PreparedSession.Deferred(config)
   }
 
   private fun ensureActive() {
@@ -170,14 +169,23 @@ internal sealed class PreparedSession(open val config: GameboyConfiguration) {
     override fun materialize(): Gameboy = materializeRestored { DetachedStateAdapter.apply(it, state) }
   }
 
-  data class Ready(
+  data class Deferred(
       override val config: GameboyConfiguration,
-      val gameboy: Gameboy,
   ) : PreparedSession(config) {
-    override fun materialize(): Gameboy = gameboy
+    override fun materialize(): Gameboy = config.build()
+  }
+
+  class Ready(
+      override val config: GameboyConfiguration,
+      gameboy: Gameboy,
+  ) : PreparedSession(config) {
+    private val owned = java.util.concurrent.atomic.AtomicReference(gameboy)
+
+    override fun materialize(): Gameboy =
+        owned.getAndSet(null) ?: throw CancellationException("Prepared machine already transferred")
 
     override fun discard() {
-      gameboy.discardUnstarted()
+      owned.getAndSet(null)?.discardUnstarted()
     }
   }
 

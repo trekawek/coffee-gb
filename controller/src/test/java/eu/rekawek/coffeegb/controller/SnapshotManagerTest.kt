@@ -24,6 +24,8 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.RomImage
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.ByteArrayInputStream
@@ -48,6 +50,62 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class SnapshotManagerTest {
+
+  @Test
+  fun archiveEntriesUseDistinctSnapshotAnchors() {
+    withDirectory { directory ->
+      val container = directory.resolve("collection.zip")
+      val firstOrigin = RomOrigin.archiveEntry(container, "red/game.gb", false)
+      val secondOrigin = RomOrigin.archiveEntry(container, "blue/game.gb", false)
+      val firstConfig =
+          Gameboy.GameboyConfiguration(Rom(RomImage(firstOrigin, ROM.readBytes())))
+              .setBootstrapMode(BootstrapMode.SKIP)
+      val secondConfig =
+          Gameboy.GameboyConfiguration(Rom(RomImage(secondOrigin, ROM.readBytes())))
+              .setBootstrapMode(BootstrapMode.SKIP)
+      val first = firstConfig.build()
+      val second = secondConfig.build()
+      try {
+        SnapshotManager(firstConfig).saveSnapshot(0, first)
+        SnapshotManager(secondConfig).saveSnapshot(0, second)
+
+        val firstFile = firstOrigin.persistencePath(".sn0").orElseThrow()
+        val secondFile = secondOrigin.persistencePath(".sn0").orElseThrow()
+        assertTrue(Files.isRegularFile(firstFile))
+        assertTrue(Files.isRegularFile(secondFile))
+        assertTrue(firstFile != secondFile)
+        assertFalse(Files.exists(directory.resolve("collection.sn0")))
+      } finally {
+        first.discardUnstarted()
+        second.discardUnstarted()
+      }
+    }
+  }
+
+  @Test
+  fun singleEntryArchiveCanLoadLegacyContainerSnapshot() {
+    withDirectory { directory ->
+      val container = directory.resolve("collection.zip")
+      val origin = RomOrigin.archiveEntry(container, "game.gb", true)
+      val config =
+          Gameboy.GameboyConfiguration(Rom(RomImage(origin, ROM.readBytes())))
+              .setBootstrapMode(BootstrapMode.SKIP)
+      val gameboy = config.build()
+      try {
+        val manager = SnapshotManager(config)
+        manager.saveSnapshot(0, gameboy)
+        val primary = origin.persistencePath(".sn0").orElseThrow()
+        val legacy = origin.legacyArchivePersistencePath(".sn0").orElseThrow()
+        Files.move(primary, legacy)
+
+        assertTrue(manager.snapshotAvailable(0))
+        assertTrue(manager.loadSnapshot(0, gameboy))
+        assertFalse(Files.exists(primary))
+      } finally {
+        gameboy.discardUnstarted()
+      }
+    }
+  }
 
   @Test
   fun failedReplacementRetainsReadablePriorSnapshotAndLaterRetrySucceeds() {

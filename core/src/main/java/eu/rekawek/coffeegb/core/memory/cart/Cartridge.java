@@ -9,14 +9,15 @@ import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush;
 import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.type.*;
-import org.apache.commons.io.FilenameUtils;
-
 import java.io.File;
+import java.nio.file.Path;
+
 public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     private final MemoryController addressSpace;
@@ -24,7 +25,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     private final Battery battery;
 
     public Cartridge(Rom rom, boolean supportBatterySaves) {
-        this(rom, supportBatterySaves && rom.getFile() != null ? createBattery(rom) : Battery.NULL_BATTERY,
+        this(rom, supportBatterySaves && canPersist(rom) ? createBattery(rom) : Battery.NULL_BATTERY,
                 new SystemTimeSource(), ClockSpec.LEGACY);
     }
 
@@ -33,7 +34,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     }
 
     public Cartridge(Rom rom, boolean supportBatterySaves, TimeSource rtcTimeSource) {
-        this(rom, supportBatterySaves && rom.getFile() != null ? createBattery(rom) : Battery.NULL_BATTERY,
+        this(rom, supportBatterySaves && canPersist(rom) ? createBattery(rom) : Battery.NULL_BATTERY,
                 rtcTimeSource, ClockSpec.LEGACY);
     }
 
@@ -43,7 +44,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     public Cartridge(Rom rom, boolean supportBatterySaves, TimeSource rtcTimeSource,
                      ClockSpec clockSpec) {
-        this(rom, supportBatterySaves && rom.getFile() != null ? createBattery(rom) : Battery.NULL_BATTERY,
+        this(rom, supportBatterySaves && canPersist(rom) ? createBattery(rom) : Battery.NULL_BATTERY,
                 rtcTimeSource, clockSpec);
     }
 
@@ -139,6 +140,11 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         addressSpace.flushRam();
     }
 
+    /** Captures RAM and RTC data without running persistence I/O on the emulation thread. */
+    public BatteryFlush prepareBatteryFlush() {
+        return battery.prepareFlush(addressSpace::flushRam);
+    }
+
     /** Advances cartridge hardware clocked from the Game Boy master clock. */
     public void tick() {
         addressSpace.tick();
@@ -215,16 +221,40 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             if (rom.getType().isMbc7()) {
                 ramSize = 0x100; // 93LC56 EEPROM
             }
-            return new FileBattery(getSaveName(rom.getFile()), ramSize);
+            Path savePath = rom.getOrigin().persistencePath(".sav").orElseThrow();
+            Path legacyPath =
+                    rom.getOrigin()
+                            .legacyArchivePersistencePath(".sav")
+                            .orElse(null);
+            return new FileBattery(
+                    savePath.toFile(),
+                    legacyPath == null ? null : legacyPath.toFile(),
+                    legacyPath != null,
+                    ramSize);
         } else {
             return Battery.NULL_BATTERY;
         }
     }
 
+    private static boolean canPersist(Rom rom) {
+        return rom.getOrigin().persistencePath(".sav").isPresent();
+    }
+
     public static File getSaveName(File romFile) {
-        File parent = romFile.getParentFile();
-        String baseName = FilenameUtils.removeExtension(romFile.getName());
-        return new File(parent, baseName + ".sav");
+        return RomOrigin.directFile(romFile.toPath())
+                .persistencePath(".sav")
+                .orElseThrow()
+                .toFile();
+    }
+
+    public static File getSaveName(Rom rom) {
+        return rom.getOrigin()
+                        .persistencePath(".sav")
+                        .orElseThrow(
+                                () ->
+                                        new IllegalArgumentException(
+                                                "In-memory ROM has no implicit battery path"))
+                        .toFile();
     }
 
     @Override

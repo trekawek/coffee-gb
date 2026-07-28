@@ -16,6 +16,14 @@ public interface Battery extends StatefulComponent<Battery> {
 
     void flush();
 
+    /**
+     * Captures mapper RAM/RTC at the caller's emulation safe point without performing file I/O.
+     */
+    default BatteryFlush prepareFlush(Runnable captureMapperState) {
+        captureMapperState.run();
+        return BatteryFlush.none();
+    }
+
     /** Supplies the session event route after machine construction. */
     default void init(EventBus eventBus) {
     }

@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.core.events;
 
 import org.jetbrains.annotations.NotNull;
 
+import java.util.concurrent.TimeUnit;
+
 public interface EventBus extends AutoCloseable {
     <E extends Event> void register(Subscriber<E> subscriber, Class<E> eventType, String callerFilter);
 
@@ -13,11 +15,20 @@ public interface EventBus extends AutoCloseable {
 
     @NotNull EventBus fork(String callerId);
 
-    void close();
+    default void close() {
+        close(1, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Stops this bus and all descendants within one shared deadline.
+     *
+     * @throws EventBusTeardownTimeoutException if an asynchronous subscriber has not returned
+     */
+    void close(long timeout, TimeUnit unit);
 
     EventBus NULL_EVENT_BUS = new EventBus() {
         @Override
-        public void close() {
+        public void close(long timeout, TimeUnit unit) {
         }
 
         @Override

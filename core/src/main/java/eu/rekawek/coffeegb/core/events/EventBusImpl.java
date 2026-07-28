@@ -6,18 +6,23 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.concurrent.BlockingDeque;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
 
 public class EventBusImpl implements EventBus {
     private static final Logger LOG = LoggerFactory.getLogger(EventBusImpl.class);
+    private static final long DEFAULT_CLOSE_TIMEOUT_MILLIS = 1_000;
 
     private final List<Registration> registrations = new CopyOnWriteArrayList<>();
     private final EventBusImpl parent;
     private final List<EventBusImpl> children = new CopyOnWriteArrayList<>();
     private final String callerId;
     private final boolean asyncEventsEnabled;
+    private final long closeTimeoutMillis;
+    private final Thread asyncThread;
+    private final CountDownLatch stoppedSignal = new CountDownLatch(1);
 
     private volatile boolean doStop;
     private volatile boolean stopped;
@@ -29,18 +34,36 @@ public class EventBusImpl implements EventBus {
     }
 
     public EventBusImpl(EventBusImpl parent, String callerId, boolean asyncEventsEnabled) {
+        this(parent, callerId, asyncEventsEnabled, DEFAULT_CLOSE_TIMEOUT_MILLIS);
+    }
+
+    EventBusImpl(
+            EventBusImpl parent,
+            String callerId,
+            boolean asyncEventsEnabled,
+            long closeTimeoutMillis) {
+        if (closeTimeoutMillis <= 0) {
+            throw new IllegalArgumentException("Close timeout must be positive");
+        }
         this.parent = parent;
         this.callerId = callerId;
         this.asyncEventsEnabled = asyncEventsEnabled;
+        this.closeTimeoutMillis = closeTimeoutMillis;
         if (asyncEventsEnabled) {
-            new Thread(new AsyncRunnable()).start();
+            asyncThread = new Thread(new AsyncRunnable(), eventThreadName(callerId));
+            // A subscriber must not make the process immortal. close() still waits for the
+            // bounded deadline and reports a typed failure so application teardown can retry.
+            asyncThread.setDaemon(true);
+            asyncThread.start();
+        } else {
+            asyncThread = null;
         }
     }
 
     @Override
     public <E extends Event> void register(
             Subscriber<E> subscriber, Class<E> eventType, String callerFilter) {
-        if (stopped) {
+        if (doStop || stopped) {
             throw new IllegalStateException("This EventBus is no longer active.");
         }
         registrations.add(new Registration(subscriber, eventType, callerFilter));
@@ -60,6 +83,9 @@ public class EventBusImpl implements EventBus {
     public <E extends Event> void postAsync(E event) {
         if (!asyncEventsEnabled) {
             throw new IllegalStateException("Async events are disabled");
+        }
+        if (doStop || stopped) {
+            throw new IllegalStateException("This EventBus is no longer active.");
         }
         asyncEvents.addLast(event);
     }
@@ -81,8 +107,7 @@ public class EventBusImpl implements EventBus {
     }
 
     private <E extends Event> void doPost(E event, String callerId) {
-        if (stopped) {
-            LOG.atInfo().log("This EventBus is no longer active.");
+        if (doStop || stopped) {
             return;
         }
         for (Registration r : registrations) {
@@ -100,6 +125,9 @@ public class EventBusImpl implements EventBus {
     @Override
     @NotNull
     public EventBusImpl fork(String callerId) {
+        if (doStop || stopped) {
+            throw new IllegalStateException("This EventBus is no longer active.");
+        }
         EventBusImpl child = new EventBusImpl(this, callerId, asyncEventsEnabled);
         children.add(child);
         return child;
@@ -111,17 +139,70 @@ public class EventBusImpl implements EventBus {
 
     @Override
     public void close() {
-        for (EventBus c : children) {
-            c.close();
+        close(closeTimeoutMillis, TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public void close(long timeout, TimeUnit unit) {
+        if (timeout <= 0) {
+            throw new IllegalArgumentException("Close timeout must be positive");
         }
+        long timeoutNanos = unit.toNanos(timeout);
+        if (timeoutNanos <= 0) {
+            timeoutNanos = 1;
+        }
+        closeBefore(System.nanoTime() + timeoutNanos);
+    }
+
+    private void closeBefore(long deadlineNanos) {
+        for (EventBusImpl child : children) {
+            child.closeBefore(deadlineNanos);
+        }
+
         doStop = true;
-        if (asyncEventsEnabled) {
-            while (!stopped) {
-            }
+        if (asyncThread == null) {
+            stopped = true;
+            stoppedSignal.countDown();
+        } else if (!stopped) {
+            asyncThread.interrupt();
+            awaitWorker(deadlineNanos);
         }
+
         if (parent != null) {
             parent.removeChild(this);
         }
+    }
+
+    private void awaitWorker(long deadlineNanos) {
+        if (Thread.currentThread() == asyncThread) {
+            throw new EventBusTeardownTimeoutException(
+                    "An event bus cannot synchronously close from its own asynchronous worker");
+        }
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            throw closeTimeout();
+        }
+        try {
+            if (!stoppedSignal.await(remainingNanos, TimeUnit.NANOSECONDS)) {
+                throw closeTimeout();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new EventBusTeardownTimeoutException(
+                    "Interrupted while waiting for the event-bus worker to stop");
+        }
+    }
+
+    private EventBusTeardownTimeoutException closeTimeout() {
+        String identity = callerId == null ? "root" : callerId;
+        return new EventBusTeardownTimeoutException(
+                "Timed out while stopping the " + identity + " event-bus worker");
+    }
+
+    private static String eventThreadName(String callerId) {
+        return callerId == null
+                ? "coffee-gb-events"
+                : "coffee-gb-events-" + callerId;
     }
 
     private record Registration(Subscriber<?> subscriber, Class<?> eventType, String callerFilter) {
@@ -130,24 +211,34 @@ public class EventBusImpl implements EventBus {
     private class AsyncRunnable implements Runnable {
         @Override
         public void run() {
-            while (!doStop) {
-                try {
+            try {
+                while (!doStop) {
                     // peek first and remove only after dispatching, so the queue reads
                     // as non-empty for the whole duration of the dispatch (drainAsyncEvents
                     // relies on it)
                     Event event = asyncEvents.peekFirst();
                     if (event == null) {
-                        Thread.sleep(1);
+                        try {
+                            Thread.sleep(1);
+                        } catch (InterruptedException e) {
+                            if (!doStop) {
+                                Thread.currentThread().interrupt();
+                            }
+                        }
                         continue;
                     }
-                    post(event);
-                    asyncEvents.removeFirst();
-                } catch (Exception e) {
-                    LOG.atError().setCause(e).log("Error processing event");
-                    asyncEvents.pollFirst();
+                    try {
+                        post(event);
+                        asyncEvents.removeFirst();
+                    } catch (Exception e) {
+                        LOG.atError().setCause(e).log("Error processing event");
+                        asyncEvents.pollFirst();
+                    }
                 }
+            } finally {
+                stopped = true;
+                stoppedSignal.countDown();
             }
-            stopped = true;
         }
     }
 

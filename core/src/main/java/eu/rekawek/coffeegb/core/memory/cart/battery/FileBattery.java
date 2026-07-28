@@ -10,12 +10,15 @@ import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Objects;
 
 public class FileBattery implements Battery {
 
@@ -29,23 +32,52 @@ public class FileBattery implements Battery {
 
     private final AtomicFileWriter persistence;
 
+    private final Path legacySaveFile;
+
+    private final boolean migrateLegacySave;
+
     private boolean isClockPresent;
 
     private boolean isDirty;
+
+    private long generation;
+
+    private int deferredFlushDepth;
+
+    private boolean legacyMigrationChecked;
 
     private EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
     private BatteryPersistenceFailedEvent pendingFailure;
 
     public FileBattery(File saveFile, int ramSize) {
-        this(saveFile, ramSize, AtomicFileWriter.system());
+        this(saveFile, null, false, ramSize, AtomicFileWriter.system());
     }
 
     FileBattery(File saveFile, int ramSize, AtomicFileWriter persistence) {
+        this(saveFile, null, false, ramSize, persistence);
+    }
+
+    public FileBattery(
+            File saveFile,
+            File legacySaveFile,
+            boolean migrateLegacySave,
+            int ramSize) {
+        this(saveFile, legacySaveFile, migrateLegacySave, ramSize, AtomicFileWriter.system());
+    }
+
+    FileBattery(
+            File saveFile,
+            File legacySaveFile,
+            boolean migrateLegacySave,
+            int ramSize,
+            AtomicFileWriter persistence) {
         this.saveFile = saveFile;
         this.clockBuffer = new byte[11 * 4];
         this.ramBuffer = new byte[ramSize];
         this.persistence = persistence;
+        this.legacySaveFile = legacySaveFile == null ? null : legacySaveFile.toPath();
+        this.migrateLegacySave = migrateLegacySave;
     }
 
     @Override
@@ -61,6 +93,7 @@ public class FileBattery implements Battery {
     @Override
     public synchronized void loadRamWithClock(int[] ram, long[] clockData) {
         try {
+            migrateLegacySaveIfNeeded();
             LoadedBattery loaded =
                     persistence.read(saveFile.toPath(), recovered -> {
                         if (!Files.exists(recovered)) {
@@ -102,26 +135,119 @@ public class FileBattery implements Battery {
             isClockPresent = true;
         }
         isDirty = true;
+        generation++;
     }
 
-    public synchronized void flush() {
-        if (!isDirty) {
-            return;
+    @Override
+    public void flush() {
+        BatteryFlush capture;
+        synchronized (this) {
+            if (deferredFlushDepth > 0) {
+                return;
+            }
+            capture = captureCurrentFlush();
         }
+        BatteryPersistenceResult result = capture.persist();
+        capture.complete(result);
+        if (result instanceof BatteryPersistenceResult.Failure failure) {
+            reportFailure(BatteryPersistenceFailedEvent.Operation.SAVE, failure.cause());
+        }
+    }
+
+    @Override
+    public BatteryFlush prepareFlush(Runnable captureMapperState) {
+        Objects.requireNonNull(captureMapperState, "captureMapperState");
+        synchronized (this) {
+            deferredFlushDepth++;
+            try {
+                captureMapperState.run();
+            } finally {
+                deferredFlushDepth--;
+            }
+            return captureCurrentFlush();
+        }
+    }
+
+    private BatteryFlush captureCurrentFlush() {
+        if (!isDirty) {
+            return BatteryFlush.none();
+        }
+        long capturedGeneration = generation;
         int clockBytes = isClockPresent ? clockBuffer.length : 0;
         byte[] intended = new byte[ramBuffer.length + clockBytes];
         System.arraycopy(ramBuffer, 0, intended, 0, ramBuffer.length);
         if (isClockPresent) {
             System.arraycopy(clockBuffer, 0, intended, ramBuffer.length, clockBuffer.length);
         }
-        try {
-            persistence.write(saveFile.toPath(), intended);
+        return new FileBatteryFlush(capturedGeneration, intended);
+    }
+
+    private synchronized void completeFlush(
+            long capturedGeneration,
+            BatteryPersistenceResult result) {
+        if (result instanceof BatteryPersistenceResult.Success
+                && generation == capturedGeneration) {
             isClockPresent = false;
             isDirty = false;
-        } catch (IOException e) {
-            // Keep the exact RAM/RTC buffers and dirty flag for a later retry, including when
-            // replacement committed but a post-rename operation reported failure.
-            reportFailure(BatteryPersistenceFailedEvent.Operation.SAVE, e);
+        }
+    }
+
+    private void migrateLegacySaveIfNeeded() throws IOException {
+        if (legacyMigrationChecked) {
+            return;
+        }
+        if (!migrateLegacySave || legacySaveFile == null) {
+            legacyMigrationChecked = true;
+            return;
+        }
+        Path target = saveFile.toPath();
+        if (persistence.exists(target) || !persistence.exists(legacySaveFile)) {
+            legacyMigrationChecked = true;
+            return;
+        }
+        byte[] legacyBytes =
+                persistence.read(
+                        legacySaveFile,
+                        source -> {
+                            int maximum = ramBuffer.length + clockBuffer.length;
+                            return readBoundedLegacySave(source, maximum);
+                        });
+        // Import rather than delete: older portable-JAR versions retain their fallback save.
+        persistence.write(target, legacyBytes);
+        legacyMigrationChecked = true;
+    }
+
+    private static byte[] readBoundedLegacySave(Path source, int maximum) throws IOException {
+        ByteArrayOutputStream bytes =
+                new ByteArrayOutputStream(Math.min(maximum, 8 * 1024));
+        byte[] buffer = new byte[Math.min(Math.max(maximum + 1, 1), 8 * 1024)];
+        int total = 0;
+        try (InputStream input = Files.newInputStream(source)) {
+            while (true) {
+                int read = input.read(buffer);
+                if (read < 0) {
+                    return bytes.toByteArray();
+                }
+                if (read == 0) {
+                    int value = input.read();
+                    if (value < 0) {
+                        return bytes.toByteArray();
+                    }
+                    if (total == maximum) {
+                        throw new IOException(
+                                "Legacy battery save exceeds the expected cartridge size");
+                    }
+                    bytes.write(value);
+                    total++;
+                } else {
+                    if (read > maximum - total) {
+                        throw new IOException(
+                                "Legacy battery save exceeds the expected cartridge size");
+                    }
+                    bytes.write(buffer, 0, read);
+                    total += read;
+                }
+            }
         }
     }
 
@@ -157,8 +283,12 @@ public class FileBattery implements Battery {
     private void doSaveClock(long[] clockData) {
         ByteBuffer buff = ByteBuffer.wrap(clockBuffer);
         buff.order(ByteOrder.LITTLE_ENDIAN);
-        for (long d : clockData) {
-            buff.putInt((int) d);
+        // The released battery format has eleven 32-bit RTC words. HuC3 and TAMA5 expose
+        // twelve-element compatibility arrays, but their twelfth word is unused; retain the
+        // on-disk format instead of overflowing the fixed legacy buffer.
+        int persistedWords = Math.min(clockData.length, clockBuffer.length / Integer.BYTES);
+        for (int i = 0; i < persistedWords; i++) {
+            buff.putInt((int) clockData[i]);
         }
     }
 
@@ -206,9 +336,12 @@ public class FileBattery implements Battery {
         System.arraycopy(mem.ramBuffer, 0, this.ramBuffer, 0, this.ramBuffer.length);
         this.isClockPresent = mem.isClockPresent;
         this.isDirty = mem.isDirty;
+        generation++;
     }
 
-    private void reportFailure(BatteryPersistenceFailedEvent.Operation operation, IOException e) {
+    private synchronized void reportFailure(
+            BatteryPersistenceFailedEvent.Operation operation,
+            IOException e) {
         LOG.warn("Unable to {} battery file {}", operation.name().toLowerCase(), saveFile, e);
         String detail = e.getClass().getSimpleName();
         String message = "Unable to " + operation.name().toLowerCase() + " battery save "
@@ -241,6 +374,44 @@ public class FileBattery implements Battery {
 
     synchronized boolean isClockPresentForTesting() {
         return isClockPresent;
+    }
+
+    private final class FileBatteryFlush implements BatteryFlush {
+
+        private final long capturedGeneration;
+
+        private final byte[] intended;
+
+        private FileBatteryFlush(long capturedGeneration, byte[] intended) {
+            this.capturedGeneration = capturedGeneration;
+            this.intended = intended;
+        }
+
+        @Override
+        public BatteryPersistenceResult persist() {
+            try {
+                persistence.write(saveFile.toPath(), intended);
+                return new BatteryPersistenceResult.Success(1);
+            } catch (IOException e) {
+                String detail = e.getClass().getSimpleName();
+                String message =
+                        "Unable to save battery save "
+                                + saveFile.getName()
+                                + " ("
+                                + detail
+                                + "). Changes remain pending and can be retried.";
+                return new BatteryPersistenceResult.Failure(
+                        BatteryPersistenceResult.FailureKind.WRITE_FAILED,
+                        saveFile.getName(),
+                        message,
+                        e);
+            }
+        }
+
+        @Override
+        public void complete(BatteryPersistenceResult result) {
+            completeFlush(capturedGeneration, result);
+        }
     }
 
     private record LoadedBattery(int[] ram, long[] clock) {

@@ -91,15 +91,18 @@ import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
-import kotlin.io.path.readBytes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 import org.slf4j.Logger
@@ -648,7 +651,7 @@ class LinkedController(
       e.config.setPlayerInputSource(PlayerInputSource.RELEASED)
       configs[localPlayer] = e.config
       initSession(localPlayer, frame, e.snapshot)
-      sendLocalRom(includeState = e.snapshot != null)
+      sendLocalRom(includeState = e.snapshot != null, batteryBuffer = e.battery)
       if (checkpoint) commitHostCheckpoint()
     }
 
@@ -888,7 +891,7 @@ class LinkedController(
     }
 
     eventBus.register<LoadRomEvent> {
-      val rom = Rom(it.rom)
+      val rom = it.image?.let { image -> Rom(image) } ?: Rom(it.rom)
       val config = createGameboyConfig(properties, rom)
       if (!StateProfilePolicy.protocolV8Representable(config.hardwareProfile)) {
         // Protocol v8 is permanently StateFile-v1-only. Its SGB RTC phase has the released legacy
@@ -909,6 +912,26 @@ class LinkedController(
         }
         return@register
       }
+      val battery =
+          try {
+            readLocalBattery(config)
+          } catch (failure: IOException) {
+            val fileName =
+                config.rom.origin
+                    .persistencePath(".sav")
+                    .map { path -> path.fileName.toString() }
+                    .orElse(config.rom.origin.displayName())
+            val message = failure.message ?: "Unable to read battery save"
+            LOG.warn("Unable to read bounded linked battery payload from {}", fileName, failure)
+            eventBus.post(
+                BatteryPersistenceFailedEvent(
+                    BatteryPersistenceFailedEvent.Operation.LOAD,
+                    fileName,
+                    message,
+                ))
+            eventBus.post(Controller.LoadRomFailedEvent(it.rom, message))
+            return@register
+          }
       rejectedLocalState = null
       eventBus.post(Controller.GameboyTypeEvent(config.gameboyType))
       eventBus.post(Controller.HardwareProfileEvent(config.hardwareProfile))
@@ -919,6 +942,7 @@ class LinkedController(
           LoadedLocalConfigEvent(
               config = config,
               snapshot = it.state,
+              battery = battery,
           ))
     }
 
@@ -927,7 +951,7 @@ class LinkedController(
         val newProfile = Controller.getHardwareProfile(properties.system, config.rom)
         val newBootstrapMode = properties.system.bootstrapMode
         if (newProfile != config.hardwareProfile || newBootstrapMode != config.bootstrapMode) {
-          eventBus.post(LoadRomEvent(config.rom.file))
+          eventBus.post(LoadRomEvent(config.rom.image))
         }
       }
     }
@@ -1538,14 +1562,14 @@ class LinkedController(
         false
       }
 
-  private fun sendLocalRom(includeState: Boolean) {
+  private fun sendLocalRom(
+      includeState: Boolean,
+      batteryBuffer: ByteArray?,
+  ) {
     val config = configs[localPlayer] ?: return
     val session = sessions[localPlayer] ?: return
-    val romBuffer = config.rom.file.toPath().readBytes()
-    val slotRomBuffer = config.slotRom?.file?.toPath()?.readBytes()
-    val saveFile = Cartridge.getSaveName(config.rom.file)
-    val batteryBuffer =
-        if (config.isSupportBatterySave && saveFile.exists()) saveFile.toPath().readBytes() else null
+    val romBuffer = config.rom.image.bytes()
+    val slotRomBuffer = config.slotRom?.image?.bytes()
     romBuffers[localPlayer] = romBuffer
     slotRomBuffers[localPlayer] = slotRomBuffer
     batteryBuffers[localPlayer] = batteryBuffer
@@ -1575,6 +1599,53 @@ class LinkedController(
             displaySgbBorder = config.isDisplaySgbBorder,
             player = localPlayer,
         ))
+  }
+
+  private fun readLocalBattery(config: GameboyConfiguration): ByteArray? {
+    val saveFile =
+        config.rom.origin
+            .persistencePath(".sav")
+            .map { Cartridge.getSaveName(config.rom) }
+            .orElse(null)
+    return if (config.isSupportBatterySave && saveFile?.exists() == true) {
+      readBoundedBattery(saveFile.toPath())
+    } else {
+      null
+    }
+  }
+
+  private fun readBoundedBattery(path: Path): ByteArray {
+    val limit = StateLimits.BATTERY.decodedBytes
+    val declaredSize = Files.size(path)
+    if (declaredSize > limit) {
+      throw IOException("Battery file exceeds the $limit-byte safety limit")
+    }
+    val initialSize = minOf(declaredSize.coerceAtLeast(0), 32L * 1024).toInt()
+    return Files.newInputStream(path).use { input ->
+      val output = ByteArrayOutputStream(initialSize)
+      val buffer = ByteArray(32 * 1024)
+      var total = 0
+      while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        if (read == 0) {
+          val value = input.read()
+          if (value < 0) break
+          if (total == limit) {
+            throw IOException("Battery file exceeds the $limit-byte safety limit")
+          }
+          output.write(value)
+          total++
+        } else {
+          if (read > limit - total) {
+            throw IOException("Battery file exceeds the $limit-byte safety limit")
+          }
+          output.write(buffer, 0, read)
+          total += read
+        }
+      }
+      output.toByteArray()
+    }
   }
 
   private fun broadcastCurrentState() {
@@ -1760,6 +1831,7 @@ class LinkedController(
   data class LoadedLocalConfigEvent(
       val config: GameboyConfiguration,
       val snapshot: MachineState?,
+      val battery: ByteArray?,
   ) : Event
 
   private data class V9CheckpointPrepareEvent(

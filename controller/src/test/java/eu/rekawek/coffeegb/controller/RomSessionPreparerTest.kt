@@ -5,6 +5,9 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.RomImage
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import java.nio.file.Files
 import java.nio.file.Paths
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -56,6 +59,26 @@ class RomSessionPreparerTest {
       assertEquals(0, cache.size)
     } finally {
       restored.discardUnstarted()
+    }
+  }
+
+  @Test
+  fun exactArchiveImagePreservesSelectedEntryAcrossControllerContract() {
+    val container = Files.createTempFile("coffee-gb-selected-entry", ".zip")
+    try {
+      val bytes = ROM.readBytes()
+      val origin = RomOrigin.archiveEntry(container, "nested/selected.GBC", false)
+      val image = RomImage(origin, bytes)
+
+      val prepared =
+          RomSessionPreparer(BootStateCache(2))
+              .prepare(PROPERTIES, LoadRomEvent(image))
+
+      assertEquals(origin, prepared.config.rom.origin)
+      assertEquals("nested/selected.GBC", prepared.config.rom.origin.archiveEntry().orElseThrow())
+      assertEquals(bytes.toList(), prepared.config.rom.image.bytes().toList())
+    } finally {
+      Files.deleteIfExists(container)
     }
   }
 
