@@ -24,6 +24,7 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerPlayerD
 import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerProtocolErrorEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.ApplyStage
@@ -72,6 +73,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.MessageDigest
 import java.util.concurrent.LinkedBlockingQueue
@@ -290,6 +292,100 @@ class LinkedControllerTest {
         files.forEach { Files.deleteIfExists(it) }
       }
       Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun missingSelectedBatteryTargetIsRecoveredBeforeLinkedPayloadPublication() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-selected-battery-recovery")
+    val rom = directory.resolve("managed.gb")
+    val active = Files.createDirectory(directory.resolve("active"))
+    val romBytes = batteryRomBytes()
+    Files.write(rom, romBytes)
+    val target = managedBatteryPath(active, romBytes)
+    Files.createDirectories(target.parent)
+    val recoveredBytes = byteArrayOf(0x11, 0x22, 0x33, 0x44)
+    val backup = atomicBackupPath(target)
+    Files.write(backup, recoveredBytes)
+
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    properties.updateApplicationSettings { settings ->
+      settings.copy(saves = ApplicationSettings.Saves(directory = active))
+    }
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val loaded = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+    eventBus.register<LinkedController.LocalRomLoadedEvent> { loaded.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(rom.toFile()))
+      controller.runFrame()
+
+      val payload = assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
+      assertContentEquals(recoveredBytes, assertNotNull(payload.batteryFile))
+      assertContentEquals(recoveredBytes, Files.readAllBytes(target))
+      assertFalse(Files.exists(backup))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      directory.toFile().deleteRecursively()
+    }
+  }
+
+  @Test
+  fun missingBatteryFallbackIsRecoveredBeforeLinkedPayloadPublication() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-fallback-battery-recovery")
+    val rom = directory.resolve("managed.gb")
+    val active = Files.createDirectory(directory.resolve("active"))
+    val previous = Files.createDirectory(directory.resolve("previous"))
+    val romBytes = batteryRomBytes()
+    Files.write(rom, romBytes)
+    val target = managedBatteryPath(active, romBytes)
+    val fallback = managedBatteryPath(previous, romBytes)
+    Files.createDirectories(fallback.parent)
+    val recoveredBytes = byteArrayOf(0x55, 0x66, 0x77, 0x01)
+    val backup = atomicBackupPath(fallback)
+    Files.write(backup, recoveredBytes)
+
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    properties.updateApplicationSettings { settings ->
+      settings.copy(
+          saves =
+              ApplicationSettings.Saves(
+                  directory = active,
+                  previousDirectories = listOf(previous),
+              ))
+    }
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val loaded = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+    eventBus.register<LinkedController.LocalRomLoadedEvent> { loaded.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(rom.toFile()))
+      controller.runFrame()
+
+      val payload = assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
+      assertContentEquals(recoveredBytes, assertNotNull(payload.batteryFile))
+      assertContentEquals(recoveredBytes, Files.readAllBytes(fallback))
+      assertContentEquals(recoveredBytes, Files.readAllBytes(target))
+      assertFalse(Files.exists(backup))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      directory.toFile().deleteRecursively()
     }
   }
 
@@ -4117,6 +4213,25 @@ class LinkedControllerTest {
           it[0x0147] = 0x06
           it[0x0148] = 0x00
         }
+
+    fun batteryRomBytes() =
+        ROM_BYTES.clone().also {
+          it[0x0147] = 0x03 // MBC1 + RAM + battery
+          it[0x0149] = 0x02 // 8 KiB RAM
+          var headerChecksum = 0
+          for (address in 0x0134..0x014c) {
+            headerChecksum = (headerChecksum - (it[address].toInt() and 0xff) - 1) and 0xff
+          }
+          it[0x014d] = headerChecksum.toByte()
+        }
+
+    fun managedBatteryPath(root: Path, romBytes: ByteArray): Path =
+        root.resolve("games").resolve(sha256Hex(romBytes)).resolve("battery.sav")
+
+    fun atomicBackupPath(target: Path): Path {
+      val artifactId = sha256Hex(target.fileName.toString().toByteArray(Charsets.UTF_8)).take(32)
+      return target.parent.resolve(".coffeegb-$artifactId.backup")
+    }
 
     fun assertJoypadEventsEqual(
         expectedButtons: List<Joypad.JoypadPressEvent>,

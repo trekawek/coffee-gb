@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -66,7 +67,8 @@ class BatteryStorageResolverTest {
         ),
         resolved.primary?.importSources()?.map { it.path() },
     )
-    assertTrue(resolved.primary!!.importSources().all { it.managedRoot().isPresent })
+    assertTrue(resolved.primary!!.importSources().take(2).all { it.managedRoot().isPresent })
+    assertFalse(resolved.primary!!.importSources().last().managedRoot().isPresent)
     assertSame(resolved.primary, configuration.batteryStorage)
     assertSame(resolved.slot, configuration.slotBatteryStorage)
     assertSame(configuration.batteryStorage, configuration.forRestore().batteryStorage)
@@ -134,5 +136,33 @@ class BatteryStorageResolverTest {
         storage.importSources().any {
           it.path().fileName.toString().startsWith("collection--game-")
         })
+  }
+
+  @Test
+  fun `filesystem-root ROM sidecar remains a direct safe target and configured fallback`() {
+    val root = Path.of("/").toAbsolutePath().normalize()
+    val rom = Rom(StateCodecTestSupport.rom(seed = 12), root.resolve("game.gb").toFile())
+    val identity = StateIdentity.hash(rom)
+
+    val portable =
+        requireNotNull(
+            BatteryStorageResolver.storage(
+                ApplicationSettings.Saves(),
+                rom,
+                identity,
+            ))
+    assertEquals(root.resolve("game.sav"), portable.targetPath())
+
+    val configuredRoot = Files.createTempDirectory("battery-root-rom")
+    val configured =
+        requireNotNull(
+            BatteryStorageResolver.storage(
+                ApplicationSettings.Saves(directory = configuredRoot),
+                rom,
+                identity,
+            ))
+    val sidecar =
+        requireNotNull(configured.importSources().firstOrNull { it.path() == root.resolve("game.sav") })
+    assertFalse(sidecar.managedRoot().isPresent)
   }
 }

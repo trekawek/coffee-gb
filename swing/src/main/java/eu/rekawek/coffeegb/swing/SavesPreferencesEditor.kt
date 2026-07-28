@@ -356,6 +356,9 @@ internal val SYSTEM_SAVE_DIRECTORY_VALIDATOR =
 
 private fun validateSaveDirectory(directory: Path): String? {
   val normalized = directory.toAbsolutePath().normalize()
+  if (normalized.fileName == null || normalized.parent == null) {
+    return "Choose a named directory below the filesystem root."
+  }
   if (!Files.exists(normalized, LinkOption.NOFOLLOW_LINKS)) {
     return "Choose an existing save data directory."
   }

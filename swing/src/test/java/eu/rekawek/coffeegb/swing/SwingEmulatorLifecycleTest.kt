@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -156,6 +157,25 @@ class SwingEmulatorLifecycleTest {
     assertEquals(2, releaseCalls.get())
     assertEquals(1, teardownCalls.get())
     assertTrue(!gate.transitionIfActive { transitions.incrementAndGet() })
+  }
+
+  @Test
+  fun `failed stop exposes only the retained controller until ownership is released`() {
+    val gate = ControllerLifecycleGate()
+    assertFailsWith<IOException> {
+      gate.stop(
+          releaseControllerOwnership = { throw IOException("autosave barrier") },
+          finishTeardown = {},
+      )
+    }
+
+    assertEquals("waived", gate.withRetainedController { "waived" })
+    assertTrue(
+        gate.stop(
+            releaseControllerOwnership = {},
+            finishTeardown = {},
+        ))
+    assertNull(gate.withRetainedController { "too late" })
   }
 
   @Test

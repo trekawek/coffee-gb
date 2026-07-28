@@ -18,6 +18,69 @@ import org.junit.Test
 
 class SwingGuiShutdownTest {
   @Test
+  fun `JVM shutdown attempts every teardown step and preserves the first failure`() {
+    val calls = mutableListOf<String>()
+
+    val failure =
+        assertFailsWith<IOException> {
+          runDesktopJvmShutdownSteps(
+              {
+                calls += "quiesce"
+                throw IOException("quiesce failed")
+              },
+              { calls += "controller" },
+              {
+                calls += "ROM service"
+                throw IOException("ROM close failed")
+              },
+              { calls += "settings" },
+          )
+        }
+
+    assertEquals(listOf("quiesce", "controller", "ROM service", "settings"), calls)
+    assertEquals("quiesce failed", failure.message)
+    assertEquals(1, failure.suppressed.size)
+  }
+
+  @Test
+  fun `JVM shutdown participant replaces fallback and executes at most once`() {
+    val fallbackCalls = AtomicInteger()
+    val participantCalls = AtomicInteger()
+    val failures = AtomicInteger()
+    val coordinator =
+        DesktopJvmShutdownCoordinator(
+            fallback = { fallbackCalls.incrementAndGet() },
+            timeoutMillis = 2_000,
+            onFailure = { failures.incrementAndGet() },
+        )
+    assertTrue(coordinator.installParticipant { participantCalls.incrementAndGet() })
+
+    coordinator.createHook().run()
+    coordinator.createHook().run()
+
+    assertEquals(0, fallbackCalls.get())
+    assertEquals(1, participantCalls.get())
+    assertEquals(0, failures.get())
+  }
+
+  @Test
+  fun `completed desktop shutdown prevents a second JVM close`() {
+    val calls = AtomicInteger()
+    val coordinator =
+        DesktopJvmShutdownCoordinator(
+            fallback = { calls.incrementAndGet() },
+            timeoutMillis = 2_000,
+            onFailure = { throw AssertionError("unexpected JVM shutdown failure", it) },
+        )
+    coordinator.installParticipant { calls.incrementAndGet() }
+    coordinator.markCompleted()
+
+    coordinator.createHook().run()
+
+    assertEquals(0, calls.get())
+  }
+
+  @Test
   fun `desktop watchdog exceeds every sequential component deadline plus scheduling margin`() {
     val sequentialComponentBudget =
         ROM_OPEN_QUIESCE_SHUTDOWN_BUDGET_MILLIS +

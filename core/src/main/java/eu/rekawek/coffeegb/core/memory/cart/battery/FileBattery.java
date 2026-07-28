@@ -21,6 +21,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.util.List;
 import java.util.Objects;
 
@@ -231,18 +232,22 @@ public class FileBattery implements Battery {
         BatteryStorage currentStorage = storage;
         currentStorage.ensureTargetSafe();
         Path target = currentStorage.targetPath();
-        if (persistence.exists(target)) {
-            fallbackImportChecked = true;
-            return;
+        boolean targetExists = persistence.exists(target);
+        FileTime targetModified = null;
+        if (targetExists) {
+            currentStorage.ensureReadableTarget(target);
+            targetModified =
+                    Files.getLastModifiedTime(target, LinkOption.NOFOLLOW_LINKS);
         }
-        Path source = firstRecoverableImport(currentStorage);
-        if (source == null) {
+        RecoverableImport source = mostRecentRecoverableImport(currentStorage);
+        if (source == null
+                || (targetModified != null && source.modified().compareTo(targetModified) <= 0)) {
             fallbackImportChecked = true;
             return;
         }
         byte[] legacyBytes =
                 persistence.read(
-                        source,
+                        source.path(),
                         recovered -> {
                             currentStorage.ensureReadableImport(recovered);
                             int maximum = ramBuffer.length + clockBuffer.length;
@@ -254,8 +259,10 @@ public class FileBattery implements Battery {
         fallbackImportChecked = true;
     }
 
-    private Path firstRecoverableImport(BatteryStorage currentStorage) throws IOException {
+    private RecoverableImport mostRecentRecoverableImport(BatteryStorage currentStorage)
+            throws IOException {
         IOException unsafeSource = null;
+        RecoverableImport newest = null;
         for (BatteryStorage.Source source : currentStorage.importSources()) {
             try {
                 if (!currentStorage.ensureImportCandidateSafe(source.path())) {
@@ -263,7 +270,15 @@ public class FileBattery implements Battery {
                 }
                 if (persistence.exists(source.path())) {
                     currentStorage.ensureReadableImport(source.path());
-                    return source.path();
+                    RecoverableImport candidate =
+                            new RecoverableImport(
+                                    source.path(),
+                                    Files.getLastModifiedTime(
+                                            source.path(), LinkOption.NOFOLLOW_LINKS));
+                    if (newest == null
+                            || candidate.modified().compareTo(newest.modified()) > 0) {
+                        newest = candidate;
+                    }
                 }
             } catch (IOException failure) {
                 if (unsafeSource == null) {
@@ -271,10 +286,10 @@ public class FileBattery implements Battery {
                 }
             }
         }
-        if (unsafeSource != null) {
+        if (newest == null && unsafeSource != null) {
             throw unsafeSource;
         }
-        return null;
+        return newest;
     }
 
     private static byte[] readBoundedLegacySave(Path source, int maximum) throws IOException {
@@ -504,6 +519,9 @@ public class FileBattery implements Battery {
     }
 
     private record LoadedBattery(int[] ram, long[] clock) {
+    }
+
+    private record RecoverableImport(Path path, FileTime modified) {
     }
 
     private static BatteryStorage legacyStorage(

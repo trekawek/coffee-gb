@@ -44,9 +44,13 @@ data class StateUxSessionEvent(
     val unavailableReason: StateUserError? = null,
 ) : Event
 
-data class StateCatalogRequestEvent(val requestId: Long) : Event {
+data class StateCatalogRequestEvent(
+    val requestId: Long,
+    val expectedSessionId: Long,
+) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
   }
 }
 
@@ -58,56 +62,70 @@ data class StateCatalogReadyEvent(
 
 data class StateSaveRequestEvent(
     val requestId: Long,
+    val expectedSessionId: Long,
     val ref: StateRef,
     val label: String?,
     val thumbnail: StateImage?,
 ) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
     require(ref != StateRef.Autosave) { "Autosave is controller-owned" }
   }
 }
 
 data class StateLoadRequestEvent(
     val requestId: Long,
+    val expectedSessionId: Long,
     val key: StateEntryKey,
 ) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
   }
 }
 
 data class StateDeleteRequestEvent(
     val requestId: Long,
+    val expectedSessionId: Long,
     val key: StateEntryKey,
 ) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
   }
 }
 
 data class StateExportRequestEvent(
     val requestId: Long,
+    val expectedSessionId: Long,
     val key: StateEntryKey,
     val destination: Path,
 ) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
   }
 }
 
 data class StateScreenshotRequestEvent(
     val requestId: Long,
+    val expectedSessionId: Long,
     val image: StateImage,
 ) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
   }
 }
 
-data class StateOpenFolderRequestEvent(val requestId: Long) : Event {
+data class StateOpenFolderRequestEvent(
+    val requestId: Long,
+    val expectedSessionId: Long,
+) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
   }
 }
 
@@ -139,10 +157,12 @@ data class StateResumeAvailableEvent(
 
 data class StateResumeDecisionEvent(
     val requestId: Long,
+    val expectedSessionId: Long,
     val accept: Boolean,
 ) : Event {
   init {
     requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
   }
 }
 
@@ -177,4 +197,8 @@ data class StatePrepareCloseCompletedEvent(
 
 private fun requireRequestId(value: Long) {
   require(value > 0) { "State request ID must be positive" }
+}
+
+private fun requireSessionId(value: Long) {
+  require(value > 0) { "Expected state session ID must be positive" }
 }

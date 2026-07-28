@@ -19,6 +19,9 @@ import java.awt.Insets
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JFrame
@@ -49,6 +52,7 @@ class SwingGui private constructor(
     private val initialRom: File?,
     private val properties: EmulatorProperties,
     private val desktopOpenFiles: DesktopOpenFilesBridge,
+    private val jvmShutdown: DesktopJvmShutdownCoordinator,
 ) {
 
   private val eventBus: EventBus
@@ -88,6 +92,7 @@ class SwingGui private constructor(
           stateUxController.close()
           console?.stop()
           closeSettings()
+          jvmShutdown.markCompleted()
         },
         timeoutMillis = DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
         onPersistenceFailure = ::showClosePersistenceFailure,
@@ -138,6 +143,14 @@ class SwingGui private constructor(
             romSessionState,
             onRecentChanged = { menu.updateRecentRoms() },
         )
+    jvmShutdown.installParticipant {
+      runDesktopJvmShutdownSteps(
+          romOpen::quiesce,
+          emulator::stop,
+          romOpen::close,
+          properties::close,
+      )
+    }
     menu =
         SwingMenu(
             properties,
@@ -291,10 +304,10 @@ class SwingGui private constructor(
     if (!proceed) {
       return
     }
-    stateUxController.prepareClose {
-      if (shutdownCoordinator.request()) {
-        updateLoadingUi("Coffee GB: Saving before quit…", true)
-      }
+    // The coordinator's watchdog owns the entire shutdown, including managed-state autosave.
+    // Starting it here prevents a slow state writer from running outside the desktop deadline.
+    if (shutdownCoordinator.request()) {
+      updateLoadingUi("Coffee GB: Saving before quit…", true)
     }
   }
 
@@ -304,6 +317,12 @@ class SwingGui private constructor(
       cancel: () -> Unit,
   ) {
     SwingUtilities.invokeLater {
+      val options =
+          if (failure.closeAutosaveWaivable) {
+            arrayOf("Retry", "Close without autosave", "Keep paused session open")
+          } else {
+            arrayOf("Retry", "Keep paused session open")
+          }
       val choice =
           JOptionPane.showOptionDialog(
               mainWindow,
@@ -311,18 +330,36 @@ class SwingGui private constructor(
                   "The session and its pending changes are retained, paused awaiting retry.\n\n" +
                   (failure.message ?: failure.cause?.message ?: failure.javaClass.simpleName),
               "Save before quit failed",
-              JOptionPane.YES_NO_OPTION,
+              JOptionPane.DEFAULT_OPTION,
               JOptionPane.ERROR_MESSAGE,
               null,
-              arrayOf("Retry", "Keep paused session open"),
-              "Retry",
+              options,
+              options[0],
           )
-      if (choice == JOptionPane.YES_OPTION) {
-        updateLoadingUi("Coffee GB: Retrying save before quit…", true)
-        retry()
-      } else {
-        cancel()
-        pausedQuitRetryUi().let { updateLoadingUi(it.title, it.blocksInput) }
+      when {
+        choice == 0 -> {
+          updateLoadingUi("Coffee GB: Retrying save before quit…", true)
+          retry()
+        }
+        failure.closeAutosaveWaivable && choice == 1 -> {
+          if (emulator.waiveCloseAutosave(failure.requestId)) {
+            updateLoadingUi("Coffee GB: Closing without a new autosave…", true)
+            retry()
+          } else {
+            cancel()
+            pausedQuitRetryUi().let { updateLoadingUi(it.title, it.blocksInput) }
+            JOptionPane.showMessageDialog(
+                mainWindow,
+                "The autosave attempt changed before it could be waived. Close again to retry.",
+                "Close choice expired",
+                JOptionPane.WARNING_MESSAGE,
+            )
+          }
+        }
+        else -> {
+          cancel()
+          pausedQuitRetryUi().let { updateLoadingUi(it.title, it.blocksInput) }
+        }
       }
     }
   }
@@ -412,12 +449,16 @@ class SwingGui private constructor(
       // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
       // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
       val properties = EmulatorProperties(settingsOverrides)
-      Runtime.getRuntime().addShutdownHook(
-          createSettingsShutdownHook(properties) { failure ->
-            LOG.error("Unable to close application settings during JVM shutdown", failure)
-          })
+      val jvmShutdown =
+          DesktopJvmShutdownCoordinator(
+              fallback = properties::close,
+              timeoutMillis = DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
+          ) { failure ->
+            LOG.error("Unable to complete bounded desktop JVM shutdown", failure)
+          }
+      Runtime.getRuntime().addShutdownHook(jvmShutdown.createHook())
       SwingUtilities.invokeLater {
-        SwingGui(debug, initialRom, properties, desktopOpenFiles).startGui()
+        SwingGui(debug, initialRom, properties, desktopOpenFiles, jvmShutdown).startGui()
       }
     }
   }
@@ -459,6 +500,93 @@ internal fun createSettingsShutdownHook(
         },
         "coffee-gb-settings-shutdown-hook",
     )
+
+internal fun runDesktopJvmShutdownSteps(vararg steps: () -> Unit) {
+  var failure: Exception? = null
+  steps.forEach { step ->
+    try {
+      step()
+    } catch (problem: Exception) {
+      if (failure == null) {
+        failure = problem
+      } else {
+        failure.addSuppressed(problem)
+      }
+    }
+  }
+  failure?.let { throw it }
+}
+
+/**
+ * A JVM hook is registered before Swing initialization, then upgraded to the complete desktop
+ * participant once the emulator exists. Normal coordinated shutdown marks it complete before
+ * exit, preventing a second controller/settings close.
+ */
+internal class DesktopJvmShutdownCoordinator(
+    private val fallback: () -> Unit,
+    private val timeoutMillis: Long,
+    private val onFailure: (Exception) -> Unit,
+) {
+  private val participant = AtomicReference<(() -> Unit)?>(null)
+  private val started = AtomicBoolean()
+  private val completed = AtomicBoolean()
+
+  init {
+    require(timeoutMillis > 0) { "JVM shutdown timeout must be positive" }
+  }
+
+  fun installParticipant(action: () -> Unit): Boolean {
+    if (completed.get() || started.get()) return false
+    participant.set(action)
+    return !completed.get() && !started.get()
+  }
+
+  fun markCompleted() {
+    completed.set(true)
+  }
+
+  fun createHook(): Thread =
+      Thread(
+          {
+            if (completed.get() || !started.compareAndSet(false, true)) {
+              return@Thread
+            }
+            val finished = CountDownLatch(1)
+            val failure = AtomicReference<Exception?>()
+            val worker =
+                Thread(
+                        {
+                          try {
+                            (participant.get() ?: fallback).invoke()
+                          } catch (problem: Exception) {
+                            failure.set(problem)
+                          } finally {
+                            finished.countDown()
+                          }
+                        },
+                        "coffee-gb-jvm-shutdown-worker",
+                    )
+                    .apply { isDaemon = true }
+            worker.start()
+            try {
+              if (!finished.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
+                worker.interrupt()
+                failure.compareAndSet(
+                    null,
+                    IOException("Desktop JVM shutdown exceeded $timeoutMillis ms"),
+                )
+              }
+            } catch (interrupted: InterruptedException) {
+              Thread.currentThread().interrupt()
+              worker.interrupt()
+              failure.compareAndSet(null, IOException("Desktop JVM shutdown was interrupted", interrupted))
+            }
+            failure.get()?.let(onFailure)
+            completed.set(true)
+          },
+          "coffee-gb-desktop-shutdown-hook",
+      )
+}
 
 internal fun launchDesktopShutdown(shutdown: () -> Unit): Thread =
     Thread(shutdown, "coffee-gb-desktop-shutdown").apply {

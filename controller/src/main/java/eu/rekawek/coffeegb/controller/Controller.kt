@@ -24,6 +24,12 @@ interface Controller : AutoCloseable {
 
   fun closeWithState(): ControllerState?
 
+  /**
+   * Waives only a completed/unavailable managed close-autosave barrier retained by this controller.
+   * In-flight writers are never waivable, and stale request IDs are rejected.
+   */
+  fun waiveCloseAutosave(requestId: Long): Boolean = false
+
   data class EmulationStartedEvent
   @JvmOverloads
   constructor(
@@ -122,6 +128,7 @@ interface Controller : AutoCloseable {
       val fileName: String,
       message: String,
       cause: Throwable,
+      val closeAutosaveWaivable: Boolean = false,
   ) : IllegalStateException(message, cause)
 
   class PauseEmulationEvent : Event

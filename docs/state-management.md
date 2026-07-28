@@ -27,9 +27,11 @@ incompatible state remains visible with loading disabled, so it can still be ins
 or deleted from the exact source in which it was found.
 
 State disk work uses one bounded worker queue. Repeated refresh, resume-scan, and screenshot requests
-are coalesced, queue saturation is reported as a normal operation failure, and ROM-switch/close
-autosaves run ahead of queued manual work. Shutdown first drains the queue and then interrupts and
-fully awaits the worker if the drain deadline expires.
+are coalesced, queue saturation is reported as a normal operation failure, and ROM-switch autosaves
+run ahead of queued manual work. Shutdown stops emulation, drains every admitted manual operation,
+closes the worker, and only then writes the exact terminal autosave directly. A queued save or
+delete therefore cannot run after the terminal autosave. The whole sequence shares the desktop
+close deadline.
 
 The original <kbd>F5</kbd>/<kbd>F7</kbd> quick save/load shortcuts and their `.sn0`-`.sn9` files
 remain supported for compatibility. They are separate from the managed browser's stable slots.
@@ -52,7 +54,10 @@ When a directory is selected in **File > Preferences… > Saves**, the root beco
 ROM titles and filenames are never used as path components. The exact ROM hash prevents two files
 with the same display name from sharing save data. The configured directory must already exist,
 must be writable, and must not contain symbolic-link path components. Coffee GB checks those
-properties on a background worker before Apply changes either runtime or persisted settings.
+properties on a background worker before Apply changes either runtime or persisted settings. A
+filesystem root itself is not accepted as the Saves directory; choose a named directory below it.
+ROMs stored directly below a filesystem root remain supported, including their portable `.sav`
+sidecars.
 
 Each game root contains:
 
@@ -87,9 +92,11 @@ configured roots are persisted in settings and remain read-only fallbacks after 
 retain at most four previous roots, and a battery storage plan accepts at most eight ordered import
 candidates. Managed state browsing also checks the default root. Battery loading checks those
 previous roots, the default root, the original `.sav` sidecar, and an old archive-wide sidecar only
-when the archive scan proved that migration unambiguous. The first valid battery is imported
-atomically into the active destination without deleting its source, so an older portable Coffee GB
-remains usable. Unsafe symlink/non-file fallback entries are rejected. An unsafe parent component
+when the archive scan proved that migration unambiguous. On first load, Coffee GB compares the
+recoverable active target and every safe fallback candidate and atomically imports the most recently
+modified valid battery into the active destination. This prevents switching A → B → A (or clearing
+the configured directory) from restoring stale progress. The source is not deleted, so an older
+portable Coffee GB remains usable. Unsafe symlink/non-file fallback entries are rejected. An unsafe parent component
 also prevents Preferences Apply and blocks a managed load or write rather than substituting a
 sibling path. New states, autosaves, screenshots, battery writes, and recovery writes always go to
 the active destination. Deleting or exporting a fallback state acts only on the source identified
@@ -102,9 +109,11 @@ Coffee GB displays the full selectable path instead.
 
 The Saves preferences tab controls whether Coffee GB writes a distinct autosave before a ROM switch
 and before the window closes. A ROM switch is cancelled when the autosave cannot be captured or
-committed, leaving the current game active. On close, the error dialog offers retry, close without
-autosaving, or cancel. No failed load replaces the active session: decoding and validation complete
-first, and applying the state has rollback protection at the frame boundary.
+committed, leaving the current game active. On close, a completed permanent autosave failure or an
+unavailable workspace offers retry, close without a new autosave, or cancel. A timed-out writer
+remains retained and cannot be waived because it may still commit; retry or cancel remains
+available. No failed load replaces the active session: decoding and validation complete first, and
+applying the state has rollback protection at the frame boundary.
 
 On the next launch of the same ROM, resume policy can be:
 
@@ -114,6 +123,12 @@ On the next launch of the same ROM, resume policy can be:
 
 Only the active directory receives a new autosave. An existing autosave may be discovered in a
 fallback root, which makes a directory change reversible.
+
+Managed states, autosave/resume, pause, and rewind are standalone-session features and become
+unavailable when linked/netplay ownership begins. A linked session keeps the battery storage plan
+captured at handoff; live Saves-preference changes are intentionally not applied to that managed
+session. The new settings take effect after returning to single-player emulation or opening the
+next local ROM.
 
 ## Screenshots and privacy
 
