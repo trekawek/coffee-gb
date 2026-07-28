@@ -49,6 +49,8 @@ public class NativePackagingScriptTest {
         assertTrue(sh.contains("pwd -P"));
         assertTrue(ps.contains("-Dcoffee-gb.test.tmpdir=$MavenTemp"));
         assertTrue(ps.contains("Resolve-Path -LiteralPath $MavenTemp"));
+        assertTrue(pom.contains(
+                "<coffee-gb.test.tmpdir>${project.build.directory}</coffee-gb.test.tmpdir>"));
         assertTrue(pom.contains("-Djava.io.tmpdir=\"${coffee-gb.test.tmpdir}\""));
         assertTrue(pom.contains(
                 "<artifactId>maven-jar-plugin</artifactId>\n"
