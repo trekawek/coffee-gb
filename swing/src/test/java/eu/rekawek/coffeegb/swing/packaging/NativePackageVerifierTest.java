@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.junit.Assert.assertEquals;
@@ -19,6 +20,19 @@ public class NativePackageVerifierTest {
 
     @Rule
     public TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+    @Test
+    public void realDesktopSmokeRequiresAnExplicitCiOptIn() {
+        assertEquals(false, NativePackageVerifier.desktopSmokeEnabled(Map.of()));
+        assertEquals(
+                true,
+                NativePackageVerifier.desktopSmokeEnabled(
+                        Map.of("COFFEE_GB_DESKTOP_SMOKE", "TrUe")));
+        assertEquals(
+                false,
+                NativePackageVerifier.desktopSmokeEnabled(
+                        Map.of("COFFEE_GB_DESKTOP_SMOKE", "false")));
+    }
 
     @Test
     public void distributionResultAndExactChecksumCoverageRoundTrip() throws Exception {

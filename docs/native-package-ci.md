@@ -37,6 +37,12 @@ reviewable instructions; no ROM, save, screenshot, or StateFile fixture is commi
 The smoke covers a complete display frame, an audio buffer, live input press/release, and the
 existing portable-state codec/load path.
 
+Each target also launches the packaged production desktop with an isolated home. Linux runs under
+Xvfb; Windows and macOS use their hosted desktop sessions. This smoke accepts success only after a
+visible, displayable `JFrame` contains the production menu and display, writes exclusive readiness
+evidence off the EDT, and completes the normal bounded shutdown path. A synthetic core-only smoke
+cannot satisfy this gate.
+
 The content verifier bounds traversal and rejects symlinks in application input, a second runtime,
 foreign or altered target natives, ROM-like files, signing-store exports, private-key/token-shaped
 text, developer home paths, missing notices, version drift, altered SBOMs, duplicate or stale
@@ -60,6 +66,12 @@ Publication waits for all four matrix jobs and a Linux release-gate job. The gat
 downloads the results, requires one default installer and one target-specific SBOM per target,
 renames installers with explicit architecture, retains detached signatures, and creates one
 release-level checksum file.
+
+Publishing never happens merely because a release tag was pushed. The reusable release call must
+request publication, and the final upload job targets the protected `native-release` environment.
+Configure that environment with required reviewers; a reviewer approves only after downloading the
+complete bundle and recording the install/uninstall and hardware checklist evidence described in
+`native-release-checklist.md`.
 
 No partial matrix is uploaded. A missing platform fails the release workflow, and the GitHub
 release must not be announced as complete. If maintainers deliberately withdraw a target in a

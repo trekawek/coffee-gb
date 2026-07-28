@@ -4,6 +4,10 @@ Record the release tag, target, OS version, architecture, package filename/SHA-2
 tester, hardware/VM, and date for every row. CI launch smokes are necessary but do not replace
 human audio, input, fullscreen, file-association, persistence, or uninstall evidence.
 
+The completed record is the approval evidence for the protected `native-release` GitHub
+environment. Do not approve that environment—or publish its bundle—until every required row below
+has a named tester, target/architecture, date, and result. A tag push alone must never publish.
+
 ## Automated gate
 
 - [ ] The Maven release tag is exactly `coffee-gb-VERSION`, is non-SNAPSHOT, and matches every

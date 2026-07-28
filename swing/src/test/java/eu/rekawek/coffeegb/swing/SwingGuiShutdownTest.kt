@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.swing.io.DisplayScaleMode
 import java.awt.Dimension
 import java.awt.Insets
 import java.io.IOException
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -113,6 +114,39 @@ class SwingGuiShutdownTest {
         shouldApplyRomLifecycleEvent(null, false) { it == visibleId },
         "reset, profile restart, and ordinary stop events remain supported",
     )
+  }
+
+  @Test
+  fun `desktop startup evidence is exclusive off-thread and bounded to its marker`() {
+    val directory = Files.createTempDirectory("desktop-ready-evidence")
+    val marker = directory.resolve("ready.marker")
+    val completed = CountDownLatch(1)
+    var failure: Exception? = null
+    var callbackWasEdt = true
+
+    val worker =
+        writeDesktopStartupEvidence(marker, "Coffee GB desktop ready OK:\n") {
+          failure = it
+          callbackWasEdt = SwingUtilities.isEventDispatchThread()
+          completed.countDown()
+        }
+
+    assertTrue(completed.await(2, TimeUnit.SECONDS))
+    worker.join(2_000)
+    assertEquals(null, failure)
+    assertFalse(callbackWasEdt)
+    assertEquals("Coffee GB desktop ready OK:\n", Files.readString(marker))
+
+    val duplicate = CountDownLatch(1)
+    writeDesktopStartupEvidence(marker, "replacement\n") {
+      failure = it
+      duplicate.countDown()
+    }
+    assertTrue(duplicate.await(2, TimeUnit.SECONDS))
+    assertTrue(failure is IllegalStateException)
+    assertEquals("Coffee GB desktop ready OK:\n", Files.readString(marker))
+    Files.delete(marker)
+    Files.delete(directory)
   }
 
   @Test
