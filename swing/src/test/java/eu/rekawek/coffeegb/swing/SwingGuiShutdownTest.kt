@@ -8,6 +8,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
@@ -268,6 +269,85 @@ class SwingGuiShutdownTest {
     assertFalse(workerWasEdt)
     assertTrue(worker.isDaemon)
     assertFalse(worker.isAlive)
+  }
+
+  @Test
+  fun `desktop EDT step preserves UI affinity and callback failure`() {
+    var callbackWasEdt = false
+    val calls = mutableListOf<String>()
+
+    runDesktopEdtStep {
+      callbackWasEdt = SwingUtilities.isEventDispatchThread()
+      calls += "step"
+    }
+    calls += "returned"
+
+    assertTrue(callbackWasEdt)
+    assertEquals(listOf("step", "returned"), calls)
+
+    val expected = IOException("injected UI disposal failure")
+    val actual =
+        assertFailsWith<IOException> {
+          runDesktopEdtStep {
+            throw expected
+          }
+        }
+
+    assertTrue(actual === expected, "the coordinator must receive the original callback failure")
+  }
+
+  @Test
+  fun `interrupted desktop EDT step cancels queued UI disposal`() {
+    val edtBlocked = CountDownLatch(1)
+    val releaseEdt = CountDownLatch(1)
+    SwingUtilities.invokeLater {
+      edtBlocked.countDown()
+      try {
+        releaseEdt.await(5, TimeUnit.SECONDS)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+      }
+    }
+    assertTrue(edtBlocked.await(2, TimeUnit.SECONDS))
+
+    val workerStarted = CountDownLatch(1)
+    val stepCalls = AtomicInteger()
+    val workerFailure = AtomicReference<Throwable?>()
+    val workerWasInterrupted = AtomicBoolean()
+    val worker =
+        Thread {
+          workerStarted.countDown()
+          try {
+            runDesktopEdtStep { stepCalls.incrementAndGet() }
+          } catch (failure: Throwable) {
+            workerFailure.set(failure)
+            workerWasInterrupted.set(Thread.currentThread().isInterrupted)
+          }
+        }
+    worker.start()
+
+    try {
+      assertTrue(workerStarted.await(2, TimeUnit.SECONDS))
+      val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+      while (worker.state != Thread.State.WAITING && System.nanoTime() < deadline) {
+        Thread.sleep(5)
+      }
+      assertEquals(Thread.State.WAITING, worker.state)
+      worker.interrupt()
+      worker.join(2_000)
+      assertFalse(worker.isAlive)
+    } finally {
+      releaseEdt.countDown()
+      SwingUtilities.invokeAndWait {}
+      if (worker.isAlive) {
+        worker.interrupt()
+        worker.join(2_000)
+      }
+    }
+
+    assertTrue(workerFailure.get() is InterruptedException)
+    assertTrue(workerWasInterrupted.get())
+    assertEquals(0, stepCalls.get(), "cancelled UI disposal must not run after the EDT resumes")
   }
 
   @Test

@@ -115,7 +115,7 @@ class SwingGui private constructor(
           // persistence failure or watchdog timeout retains a quiesced (not closed) ROM service.
           menu.closeCameraAfterSuccessfulStop(CAMERA_SHUTDOWN_BUDGET_MILLIS)
           romOpen.close()
-          stateUxController.close()
+          runDesktopEdtStep(stateUxController::close)
           console?.stop()
           closeSettings()
           jvmShutdown.markCompleted()
@@ -780,6 +780,58 @@ internal fun launchDesktopShutdown(shutdown: () -> Unit): Thread =
       isDaemon = true
       start()
     }
+
+/** Runs UI-only shutdown work synchronously while retaining the coordinator's failure boundary. */
+internal fun runDesktopEdtStep(step: () -> Unit) {
+  if (SwingUtilities.isEventDispatchThread()) {
+    step()
+    return
+  }
+
+  val state = AtomicReference(DesktopEdtStepState.QUEUED)
+  val completed = CountDownLatch(1)
+  val failure = AtomicReference<Throwable?>()
+  SwingUtilities.invokeLater {
+    if (!state.compareAndSet(DesktopEdtStepState.QUEUED, DesktopEdtStepState.RUNNING)) {
+      completed.countDown()
+      return@invokeLater
+    }
+    try {
+      step()
+    } catch (problem: Throwable) {
+      failure.set(problem)
+    } finally {
+      state.set(DesktopEdtStepState.COMPLETED)
+      completed.countDown()
+    }
+  }
+
+  try {
+    completed.await()
+  } catch (interrupted: InterruptedException) {
+    if (!state.compareAndSet(DesktopEdtStepState.QUEUED, DesktopEdtStepState.CANCELLED)) {
+      // Once the EDT owns the step, wait for its result so the coordinator never races work that
+      // has already become irreversible. Further interrupts remain represented by the original.
+      while (completed.count != 0L) {
+        try {
+          completed.await()
+        } catch (_: InterruptedException) {}
+      }
+      failure.get()?.let(interrupted::addSuppressed)
+    }
+    Thread.currentThread().interrupt()
+    throw interrupted
+  }
+
+  failure.get()?.let { throw it }
+}
+
+private enum class DesktopEdtStepState {
+  QUEUED,
+  RUNNING,
+  CANCELLED,
+  COMPLETED,
+}
 
 internal class DesktopShutdownCoordinator(
     private val shutdown: () -> Unit,

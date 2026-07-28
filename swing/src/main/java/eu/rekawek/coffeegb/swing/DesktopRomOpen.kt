@@ -107,8 +107,13 @@ internal class DesktopRomOpen(
     if (SwingUtilities.isEventDispatchThread()) {
       progress.close()
     } else {
-      runCatching { SwingUtilities.invokeAndWait(progress::close) }
-          .onFailure { LOG.warn("Unable to close ROM progress UI", it) }
+      try {
+        runDesktopEdtStep(progress::close)
+      } catch (interrupted: InterruptedException) {
+        throw interrupted
+      } catch (failure: Exception) {
+        LOG.warn("Unable to close ROM progress UI", failure)
+      }
     }
   }
 
