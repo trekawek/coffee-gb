@@ -732,6 +732,8 @@ class LinkedController(
 
   @VisibleForTesting internal var timingFrameProbe: (() -> Unit)? = null
 
+  @VisibleForTesting internal var localWorkerExitProbe: (() -> Unit)? = null
+
   private var currentInput: Input? = null
 
   private var lastInput: Input? = null
@@ -1729,14 +1731,23 @@ class LinkedController(
     cancelCurrentLocalSessionCommand()
   }
 
-  private fun executeLocalTask(task: FutureTask<*>) {
-    localLoadExecutor.execute {
-      localWorkerTasks.incrementAndGet()
-      try {
-        task.run()
-      } finally {
-        localWorkerTasks.decrementAndGet()
+  private fun executeLocalTask(task: PhysicallyTrackedFutureTask<*>) {
+    localWorkerTasks.incrementAndGet()
+    try {
+      localLoadExecutor.execute {
+        try {
+          task.run()
+        } finally {
+          try {
+            localWorkerExitProbe?.invoke()
+          } finally {
+            task.finishPhysicalExecution()
+          }
+        }
       }
+    } catch (failure: RuntimeException) {
+      task.finishPhysicalExecution()
+      throw failure
     }
   }
 
@@ -3276,8 +3287,8 @@ class LinkedController(
   )
 
   /** Retains/discards prepared machines correctly across FutureTask cancellation races. */
-  private class LocalPreparationTask(callable: Callable<LocalLoadPreparation>) :
-      FutureTask<LocalLoadPreparation>(callable) {
+  private inner class LocalPreparationTask(callable: Callable<LocalLoadPreparation>) :
+      PhysicallyTrackedFutureTask<LocalLoadPreparation>(callable) {
 
     private val prepared = AtomicReference<PreparedSession>()
 
@@ -3307,8 +3318,8 @@ class LinkedController(
   }
 
   /** Owns a worker-materialized candidate until the timing thread commits or discards it. */
-  private class LocalReplacementTask(callable: Callable<LocalReplacementResult>) :
-      FutureTask<LocalReplacementResult>(callable) {
+  private inner class LocalReplacementTask(callable: Callable<LocalReplacementResult>) :
+      PhysicallyTrackedFutureTask<LocalReplacementResult>(callable) {
 
     private val candidate = AtomicReference<Session>()
 
@@ -3343,8 +3354,8 @@ class LinkedController(
   }
 
   /** Retains a reset candidate across the worker/timing ownership handoff. */
-  private class LocalSessionCommandTask(callable: Callable<LocalSessionCommandResult>) :
-      FutureTask<LocalSessionCommandResult>(callable) {
+  private inner class LocalSessionCommandTask(callable: Callable<LocalSessionCommandResult>) :
+      PhysicallyTrackedFutureTask<LocalSessionCommandResult>(callable) {
 
     private val candidate = AtomicReference<Session>()
 
@@ -3375,6 +3386,37 @@ class LinkedController(
     fun cancelAndDiscard() {
       cancel(true)
       candidate.getAndSet(null)?.discardUnstarted()
+    }
+  }
+
+  /**
+   * Publishes normal completion only after the physical worker count has been released.
+   *
+   * [FutureTask.get] may otherwise return before an executor wrapper reaches its `finally` block.
+   * A manually driven safe point can then mistake that completed wrapper for live cancelled work
+   * and leave an already-admitted peer event queued for an extra frame. Cancellation deliberately
+   * retains the count until [finishPhysicalExecution] runs from the executor wrapper, because the
+   * callable may still be unwinding after `get()` observes the cancelled state.
+   */
+  private abstract inner class PhysicallyTrackedFutureTask<T>(callable: Callable<T>) :
+      FutureTask<T>(callable) {
+
+    private val physicalExecutionFinished = AtomicBoolean()
+
+    override fun set(value: T) {
+      finishPhysicalExecution()
+      super.set(value)
+    }
+
+    override fun setException(failure: Throwable) {
+      finishPhysicalExecution()
+      super.setException(failure)
+    }
+
+    fun finishPhysicalExecution() {
+      if (physicalExecutionFinished.compareAndSet(false, true)) {
+        localWorkerTasks.decrementAndGet()
+      }
     }
   }
 
