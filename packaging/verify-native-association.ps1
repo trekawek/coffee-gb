@@ -193,6 +193,7 @@ try {
         $env:COFFEE_GB_ASSOCIATION_SMOKE_ROM = $Fixture.Path
         # Start-Process delegates to ShellExecute for a document path. This must select the
         # installed default handler; invoking Coffee GB.exe directly would not prove association.
+        Write-Host "Dispatching installed Windows $($Fixture.Extension) association."
         Start-Process -FilePath $Fixture.Path
 
         $Deadline = [DateTime]::UtcNow.AddSeconds(60)
@@ -262,16 +263,30 @@ try {
             }
         }
 
+        $ExitDeadline = [DateTime]::UtcNow.AddSeconds(60)
         while ((Get-Process -Id $AssociationPid -ErrorAction SilentlyContinue) -and
-               [DateTime]::UtcNow -lt $Deadline) {
+               [DateTime]::UtcNow -lt $ExitDeadline) {
             Start-Sleep -Milliseconds 100
         }
         if (Get-Process -Id $AssociationPid -ErrorAction SilentlyContinue) {
             throw "The exact Windows $($Fixture.Extension) association process did not exit"
         }
-        if ((Get-CoffeeGbProcesses).Count -gt 0) {
-            throw "Another Coffee GB process remained before the next association fixture"
+
+        # The jpackage launcher can restart itself once and wait for the JVM-hosting child.
+        # After that child writes shutdown evidence and exits, give the transient parent a
+        # bounded opportunity to observe the exit before enforcing the no-leftovers invariant.
+        $LauncherExitDeadline = [DateTime]::UtcNow.AddSeconds(60)
+        $RemainingProcesses = @(Get-CoffeeGbProcesses)
+        while ($RemainingProcesses.Count -gt 0 -and
+               [DateTime]::UtcNow -lt $LauncherExitDeadline) {
+            Start-Sleep -Milliseconds 100
+            $RemainingProcesses = @(Get-CoffeeGbProcesses)
         }
+        if ($RemainingProcesses.Count -gt 0) {
+            $RemainingPids = @($RemainingProcesses | ForEach-Object { $_.Id }) -join ", "
+            throw "Coffee GB launcher processes remained after the Windows $($Fixture.Extension) association lifecycle (marker pid=$AssociationPid): remaining pids=$RemainingPids; launcher=$Launcher"
+        }
+        Write-Host "Installed Windows $($Fixture.Extension) association lifecycle passed (pid=$AssociationPid)."
     }
 
     Invoke-Msi -Action "/x" -Log (Join-Path $SmokeRoot "uninstall.log")
