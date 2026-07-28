@@ -13,6 +13,7 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Files
+import java.nio.file.Path
 import org.slf4j.LoggerFactory
 
 /** The two unambiguous local snapshot prefixes admitted by [SnapshotManager]. */
@@ -233,14 +234,11 @@ class SnapshotManager private constructor(
       AtomicFileWriter.system(),
   )
 
-  private val rom: File =
-      requireNotNull(configuration.rom.file) {
-        "Local snapshots require a file-backed primary ROM"
-      }
+  private val origin = configuration.rom.origin
 
   fun snapshotAvailable(slot: Int): Boolean =
       try {
-        persistence.exists(getSnapshotFile(slot).toPath())
+        getSnapshotPaths(slot).any(persistence::exists)
       } catch (failure: IOException) {
         LOG.warn("Unable to recover snapshot slot {} before checking availability", slot, failure)
         false
@@ -257,16 +255,19 @@ class SnapshotManager private constructor(
   }
 
   fun loadSnapshot(slot: Int, gameboy: Gameboy): Boolean {
-    val snapshotFile = getSnapshotFile(slot)
-
     val target = StateIdentity.from(configuration)
+    var snapshotFile: File? = null
     val snapshot =
         try {
-          persistence.read(snapshotFile.toPath()) { recovered ->
-            if (!Files.exists(recovered)) {
-              null
-            } else {
-              SnapshotFileReader.read(recovered.toFile(), readLimits)
+          getSnapshotPaths(slot).firstNotNullOfOrNull { path ->
+            persistence.read(path) { recovered ->
+              if (!Files.exists(recovered)) {
+                null
+              } else {
+                SnapshotFileReader.read(recovered.toFile(), readLimits).also {
+                  snapshotFile = path.toFile()
+                }
+              }
             }
           }
         } catch (failure: SnapshotReadException) {
@@ -293,7 +294,7 @@ class SnapshotManager private constructor(
     when (snapshot.format) {
       SnapshotFileFormat.PORTABLE -> loadPortable(snapshot.bytes, target, gameboy)
       SnapshotFileFormat.LEGACY_JAVA ->
-          loadLegacy(snapshotFile, snapshot.bytes, target, gameboy)
+          loadLegacy(requireNotNull(snapshotFile), snapshot.bytes, target, gameboy)
     }
     return true
   }
@@ -399,9 +400,15 @@ class SnapshotManager private constructor(
   }
 
   private fun getSnapshotFile(slot: Int): File {
-    val parentDir = rom.parentFile
-    val name = rom.nameWithoutExtension + ".sn${slot}"
-    return parentDir.resolve(name)
+    return origin.persistencePath(".sn${slot}").orElseThrow {
+      IllegalArgumentException("Local snapshots require a persistent ROM origin")
+    }.toFile()
+  }
+
+  private fun getSnapshotPaths(slot: Int): List<Path> {
+    val primary = getSnapshotFile(slot).toPath()
+    val legacy = origin.legacyArchivePersistencePath(".sn${slot}").orElse(null)
+    return listOfNotNull(primary, legacy).distinct()
   }
 
   private fun MachineIdentity.description(): String =

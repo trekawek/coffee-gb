@@ -27,6 +27,7 @@ import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
 import java.awt.Dimension
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -59,6 +60,10 @@ class SwingEmulator(
 
   private var boundPanel: JPanel? = null
 
+  private val stopping = AtomicBoolean()
+
+  private val stopped = AtomicBoolean()
+
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
     sound =
@@ -89,10 +94,20 @@ class SwingEmulator(
     eventBus.register<ConnectionController.ClientConnectedToServerEvent> {
       startLinkedController(it.mode, it.player)
     }
-    eventBus.register<ConnectionController.ServerLostConnectionEvent> { startBasicController() }
-    eventBus.register<ConnectionController.StopServerEvent> { startBasicController() }
+    eventBus.register<ConnectionController.ServerLostConnectionEvent> {
+      if (!stopping.get()) {
+        startBasicController()
+      }
+    }
+    eventBus.register<ConnectionController.StopServerEvent> {
+      if (!stopping.get()) {
+        startBasicController()
+      }
+    }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      startBasicController()
+      if (!stopping.get()) {
+        startBasicController()
+      }
     }
     eventBus.register<Controller.RomLoadingEvent> { releaseForLifecycleChange() }
     eventBus.register<Controller.EmulationStoppedEvent> { releaseForLifecycleChange() }
@@ -103,7 +118,7 @@ class SwingEmulator(
     val state = controller.closeWithState()
     controller = BasicController(eventBus, properties, console).also { it.startController() }
     if (state != null) {
-      eventBus.post(Controller.LoadRomEvent(state.rom.file, state.state))
+      eventBus.post(Controller.LoadRomEvent(state.rom.image, state.state))
     }
   }
 
@@ -113,19 +128,35 @@ class SwingEmulator(
     controller =
         LinkedController(eventBus, properties, console, mode, player).also { it.startController() }
     if (state != null) {
-      eventBus.post(Controller.LoadRomEvent(state.rom.file, state.state))
+      eventBus.post(Controller.LoadRomEvent(state.rom.image, state.state))
     }
   }
 
+  @Synchronized
   fun stop() {
+    if (stopped.get()) {
+      return
+    }
+    // Gate disconnect callbacks before close so they cannot replace the controller halfway
+    // through its persistence transaction. A failed close clears the gate and leaves every
+    // peripheral intact; BasicController retains the paused capture for a later retry.
+    stopping.set(true)
+    try {
+      controller.close()
+    } catch (failure: Exception) {
+      stopping.set(false)
+      throw failure
+    }
+    eventBus.post(ConnectionController.StopServerEvent())
+    eventBus.post(ConnectionController.StopClientEvent())
     joypad.stop()
     tiltInput.stop()
     gamepad.stop()
     gamepadThread.interrupt()
     gamepadThread.join(1000)
-    controller.close()
     sound.stopThread()
     display.stop()
+    stopped.set(true)
   }
 
   fun applyKeyboardMapping(mapping: ControllerProperties.PlayerMapping) {

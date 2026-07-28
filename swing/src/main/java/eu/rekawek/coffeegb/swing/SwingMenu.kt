@@ -115,16 +115,34 @@ internal class SwingMenu(
   private lateinit var connectToServerItem: JCheckBoxMenuItem
 
   init {
-    PersistenceFailureHandler(eventBus) { title, message ->
-      SwingUtilities.invokeLater {
-        JOptionPane.showMessageDialog(
-            window,
-            message,
-            title,
-            JOptionPane.ERROR_MESSAGE,
-        )
-      }
-    }
+    PersistenceFailureHandler(
+        eventBus,
+        showError = { title, message ->
+          SwingUtilities.invokeLater {
+            JOptionPane.showMessageDialog(
+                window,
+                message,
+                title,
+                JOptionPane.ERROR_MESSAGE,
+            )
+          }
+        },
+        requestRetryOrCancel = { title, message, decide ->
+          SwingUtilities.invokeLater {
+            decide(
+                JOptionPane.showOptionDialog(
+                    window,
+                    message,
+                    title,
+                    JOptionPane.DEFAULT_OPTION,
+                    JOptionPane.ERROR_MESSAGE,
+                    null,
+                    arrayOf("Retry", "Cancel"),
+                    "Retry",
+                ) == 0)
+          }
+        },
+    )
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
     eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
     eventBus.register<LoadRomEvent> { pendingRomFileName = it.rom.nameWithoutExtension }

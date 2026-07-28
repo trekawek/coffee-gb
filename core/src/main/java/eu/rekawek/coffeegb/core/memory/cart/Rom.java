@@ -3,25 +3,64 @@ package eu.rekawek.coffeegb.core.memory.cart;
 import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry;
 import org.apache.commons.compress.archivers.sevenz.SevenZFile;
 import org.apache.commons.io.FilenameUtils;
-import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.Objects;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.util.zip.ZipFile;
 
 public class Rom {
 
     private static final Logger LOG = LoggerFactory.getLogger(Rom.class);
 
+    static final int MAX_ARCHIVE_ENTRIES = 4096;
+
+    static final long MAX_ARCHIVE_CONTAINER_BYTES = 128L * 1024 * 1024;
+
+    static final long MAX_ARCHIVE_UNCOMPRESSED_BYTES = 256L * 1024 * 1024;
+
+    /**
+     * Defense-in-depth limit for Commons Compress's supported decoder memory (including
+     * LZMA/LZMA2) and archive-statistics checks. It is not a complete metadata-allocation bound:
+     * Commons Compress 1.28 may allocate count-sized 7z header structures before validating its
+     * statistics. Direct 7z loading therefore remains a legacy compatibility path.
+     */
+    static final int MAX_SEVEN_Z_MEMORY_KIB = 64 * 1024;
+
+    private static final int ZIP_END_MIN_SIZE = 22;
+
+    private static final int ZIP64_END_MIN_SIZE = 56;
+
+    private static final int ZIP64_LOCATOR_SIZE = 20;
+
+    private static final int ZIP_CENTRAL_HEADER_SIZE = 46;
+
+    private static final int ZIP_END_SIGNATURE = 0x06054b50;
+
+    private static final int ZIP64_END_SIGNATURE = 0x06064b50;
+
+    private static final int ZIP64_LOCATOR_SIGNATURE = 0x07064b50;
+
+    private static final int ZIP_CENTRAL_HEADER_SIGNATURE = 0x02014b50;
+
+    private static final int ZIP_CENTRAL_DIGITAL_SIGNATURE = 0x05054b50;
+
     private final String title;
 
     private final File romFile;
+
+    private final RomImage image;
 
     private final CartridgeType cartridgeType;
 
@@ -39,15 +78,42 @@ public class Rom {
 
     private final CartridgeProperties cartridgeProperties;
 
+    /**
+     * Legacy file-opening compatibility path.
+     *
+     * <p>ZIP metadata is preflighted on a bounded channel, but {@link ZipFile} subsequently
+     * reopens the path. Security-sensitive callers must use the unified snapshotting open service
+     * rather than treating this constructor as a TOCTOU-safe trust boundary.
+     */
     public Rom(File romFile) throws IOException {
         this(loadFile(romFile), romFile);
     }
 
     public Rom(byte[] romByteArray) throws IOException {
-        this(romByteArray, null);
+        this(RomImage.memory(romByteArray, "memory-rom"), null);
     }
 
+    /**
+     * Legacy direct-file constructor.
+     *
+     * <p>Archive callers must use {@link #Rom(RomImage)} so the selected entry remains part of
+     * the identity rather than being conflated with its container.
+     */
     public Rom(byte[] romByteArray, File romFile) throws IOException {
+        this(
+                romFile == null
+                        ? RomImage.memory(romByteArray, "memory-rom")
+                        : new RomImage(RomOrigin.directFile(romFile.toPath()), romByteArray),
+                romFile);
+    }
+
+    public Rom(RomImage image) throws IOException {
+        this(image, null);
+    }
+
+    private Rom(RomImage image, File originalFile) throws IOException {
+        this.image = Objects.requireNonNull(image, "image");
+        byte[] romByteArray = image.copyBytesForParser();
         rom = new int[romByteArray.length];
         for (int i = 0; i < romByteArray.length; i++) {
             rom[i] = romByteArray[i] & 0xFF;
@@ -121,7 +187,10 @@ public class Rom {
         this.ramSize = ramSize;
         this.ramBanks = (ramSize + 0x1fff) / 0x2000;
         LOG.debug("ROM banks: {}, RAM banks: {}", romBanks, this.ramBanks);
-        this.romFile = romFile;
+        this.romFile =
+                originalFile != null
+                        ? originalFile
+                        : image.origin().containerPath().map(java.nio.file.Path::toFile).orElse(null);
     }
 
     public int getRomBanks() {
@@ -146,6 +215,14 @@ public class Rom {
 
     public File getFile() {
         return romFile;
+    }
+
+    public RomOrigin getOrigin() {
+        return image.origin();
+    }
+
+    public RomImage getImage() {
+        return image;
     }
 
     public int[] getRom() {
@@ -176,40 +253,429 @@ public class Rom {
         return t.toString();
     }
 
-    private static byte[] loadFile(File file) throws IOException {
+    private static RomImage loadFile(File file) throws IOException {
         String ext = FilenameUtils.getExtension(file.getName());
         if ("7z".equalsIgnoreCase(ext)) {
-            try (SevenZFile sevenZFile = SevenZFile.builder().setFile(file).get()) {
-                SevenZArchiveEntry entry;
-                while ((entry = sevenZFile.getNextEntry()) != null) {
+            validateArchiveContainer(file);
+            try (SevenZFile sevenZFile =
+                    SevenZFile.builder()
+                            .setFile(file)
+                            .setMaxMemoryLimitKiB(MAX_SEVEN_Z_MEMORY_KIB)
+                            .get()) {
+                SevenZArchiveEntry selected = null;
+                String selectedName = null;
+                int candidateCount = 0;
+                int entryCount = 0;
+                long totalSize = 0;
+                for (SevenZArchiveEntry entry : sevenZFile.getEntries()) {
+                    entryCount = checkedEntryCount(entryCount);
+                    totalSize = checkedArchiveSize(totalSize, entry.getSize(), entry.isDirectory());
                     if (!entry.isDirectory() && isRomFile(entry.getName())) {
-                        return IOUtils.toByteArray(sevenZFile.getInputStream(entry));
+                        candidateCount++;
+                        if (selected == null) {
+                            selected = entry;
+                            selectedName = entry.getName();
+                        }
                     }
+                }
+                if (selected != null) {
+                    RomOrigin origin =
+                            RomOrigin.archiveEntry(
+                                    file.toPath(),
+                                    selectedName,
+                                    candidateCount == 1);
+                    byte[] selectedBytes;
+                    try (InputStream input = sevenZFile.getInputStream(selected)) {
+                        selectedBytes = RomImage.readBounded(input, selected.getSize());
+                    }
+                    return new RomImage(origin, selectedBytes);
                 }
             }
             throw new IllegalArgumentException("Can't find ROM file inside the 7z.");
         }
-        try (InputStream is = Files.newInputStream(file.toPath())) {
-            if ("zip".equalsIgnoreCase(ext)) {
-                try (ZipInputStream zis = new ZipInputStream(is)) {
-                    ZipEntry entry;
-                    while ((entry = zis.getNextEntry()) != null) {
-                        if (!entry.isDirectory() && isRomFile(entry.getName())) {
-                            return IOUtils.toByteArray(zis, (int) entry.getSize());
+        if ("zip".equalsIgnoreCase(ext)) {
+            validateArchiveContainer(file);
+            preflightZip(file.toPath());
+            try (ZipFile zip = new ZipFile(file)) {
+                ZipEntry selected = null;
+                int candidateCount = 0;
+                int entryCount = 0;
+                long totalSize = 0;
+                for (var entries = zip.entries(); entries.hasMoreElements(); ) {
+                    ZipEntry entry = entries.nextElement();
+                    entryCount = checkedEntryCount(entryCount);
+                    totalSize = checkedArchiveSize(totalSize, entry.getSize(), entry.isDirectory());
+                    if (!entry.isDirectory() && isRomFile(entry.getName())) {
+                        candidateCount++;
+                        if (selected == null) {
+                            selected = entry;
                         }
-                        zis.closeEntry();
                     }
                 }
-                throw new IllegalArgumentException("Can't find ROM file inside the zip.");
-            } else {
-                return IOUtils.toByteArray(is, (int) file.length());
+                if (selected != null) {
+                    RomOrigin origin =
+                            RomOrigin.archiveEntry(
+                                    file.toPath(),
+                                    selected.getName(),
+                                    candidateCount == 1);
+                    byte[] selectedBytes;
+                    try (InputStream input = zip.getInputStream(selected)) {
+                        selectedBytes = RomImage.readBounded(input, selected.getSize());
+                    }
+                    return new RomImage(origin, selectedBytes);
+                }
+            }
+            throw new IllegalArgumentException("Can't find ROM file inside the zip.");
+        } else {
+            try (InputStream is = Files.newInputStream(file.toPath())) {
+                return new RomImage(
+                        RomOrigin.directFile(file.toPath()),
+                        RomImage.readBounded(is, file.length()));
             }
         }
+    }
+
+    private static void validateArchiveContainer(File file) throws IOException {
+        long size = Files.size(file.toPath());
+        if (size > MAX_ARCHIVE_CONTAINER_BYTES) {
+            throw new IOException(
+                    "Archive exceeds the "
+                            + MAX_ARCHIVE_CONTAINER_BYTES
+                            + "-byte compressed-size safety limit");
+        }
+    }
+
+    /**
+     * Inventories bounded ZIP metadata before {@link ZipFile} can allocate its internal central
+     * directory structures. Both classic and ZIP64 end records are supported. The later ZipFile
+     * pass remains authoritative for decompression and CRC validation.
+     */
+    private static void preflightZip(Path path) throws IOException {
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            ZipDirectoryMetadata metadata = readZipDirectoryMetadata(channel);
+            if (metadata.entryCount() > MAX_ARCHIVE_ENTRIES) {
+                throw tooManyArchiveEntries();
+            }
+            inspectZipCentralDirectory(channel, metadata);
+        }
+    }
+
+    private static ZipDirectoryMetadata readZipDirectoryMetadata(FileChannel channel)
+            throws IOException {
+        long fileSize = channel.size();
+        int tailSize =
+                (int)
+                        Math.min(
+                                fileSize,
+                                (long) ZIP_END_MIN_SIZE + Character.MAX_VALUE);
+        if (tailSize < ZIP_END_MIN_SIZE) {
+            throw invalidZip("end-of-central-directory record is missing");
+        }
+        long tailOffset = fileSize - tailSize;
+        ByteBuffer tail = readFully(channel, tailOffset, tailSize);
+        int endIndex = -1;
+        for (int candidate = tailSize - ZIP_END_MIN_SIZE; candidate >= 0; candidate--) {
+            if (tail.getInt(candidate) == ZIP_END_SIGNATURE
+                    && candidate
+                                    + ZIP_END_MIN_SIZE
+                                    + unsignedShort(tail, candidate + 20)
+                            == tailSize) {
+                endIndex = candidate;
+                break;
+            }
+        }
+        if (endIndex < 0) {
+            throw invalidZip("end-of-central-directory record is missing");
+        }
+
+        int diskNumber = unsignedShort(tail, endIndex + 4);
+        int centralDirectoryDisk = unsignedShort(tail, endIndex + 6);
+        int entriesOnDisk = unsignedShort(tail, endIndex + 8);
+        int entryCount = unsignedShort(tail, endIndex + 10);
+        long centralSize = unsignedInt(tail, endIndex + 12);
+        long centralOffset = unsignedInt(tail, endIndex + 16);
+        long endOffset = tailOffset + endIndex;
+        boolean zip64 =
+                entriesOnDisk == 0xffff
+                        || entryCount == 0xffff
+                        || centralSize == 0xffff_ffffL
+                        || centralOffset == 0xffff_ffffL;
+
+        if (!zip64) {
+            if (diskNumber != 0
+                    || centralDirectoryDisk != 0
+                    || entriesOnDisk != entryCount) {
+                throw invalidZip("multi-disk archives are not supported");
+            }
+            long actualCentralOffset = endOffset - centralSize;
+            long archivePrefix = actualCentralOffset - centralOffset;
+            if (actualCentralOffset < 0 || archivePrefix < 0) {
+                throw invalidZip("central-directory offset is outside the archive");
+            }
+            return checkedZipDirectoryMetadata(
+                    entryCount, actualCentralOffset, centralSize, endOffset);
+        }
+
+        return readZip64DirectoryMetadata(channel, endOffset);
+    }
+
+    private static ZipDirectoryMetadata readZip64DirectoryMetadata(
+            FileChannel channel, long classicEndOffset) throws IOException {
+        long locatorOffset = classicEndOffset - ZIP64_LOCATOR_SIZE;
+        ByteBuffer locator = readFully(channel, locatorOffset, ZIP64_LOCATOR_SIZE);
+        if (locator.getInt(0) != ZIP64_LOCATOR_SIGNATURE) {
+            throw invalidZip("ZIP64 locator is missing");
+        }
+        if (unsignedInt(locator, 4) != 0 || unsignedInt(locator, 16) != 1) {
+            throw invalidZip("multi-disk ZIP64 archives are not supported");
+        }
+        long recordedEndOffset = unsignedLong(locator, 8, "ZIP64 end-record offset");
+
+        Zip64EndRecord endRecord =
+                tryReadZip64EndRecord(channel, recordedEndOffset, locatorOffset);
+        if (endRecord == null) {
+            // A prepended executable changes physical offsets while ZIP offsets remain relative
+            // to the archive start. The overwhelmingly common ZIP64 record has no extensible
+            // sector, so locate that form immediately before its locator.
+            endRecord =
+                    tryReadZip64EndRecord(
+                            channel, locatorOffset - ZIP64_END_MIN_SIZE, locatorOffset);
+        }
+        if (endRecord == null) {
+            throw invalidZip("ZIP64 end-of-central-directory record is invalid");
+        }
+        long archivePrefix = endRecord.actualOffset() - recordedEndOffset;
+        long actualCentralOffset =
+                checkedAdd(
+                        archivePrefix,
+                        endRecord.centralOffset(),
+                        "ZIP64 central-directory offset");
+        return checkedZipDirectoryMetadata(
+                endRecord.entryCount(),
+                actualCentralOffset,
+                endRecord.centralSize(),
+                endRecord.actualOffset());
+    }
+
+    private static Zip64EndRecord tryReadZip64EndRecord(
+            FileChannel channel, long offset, long locatorOffset) throws IOException {
+        if (offset < 0 || offset > channel.size() - ZIP64_END_MIN_SIZE) {
+            return null;
+        }
+        ByteBuffer fixed = readFully(channel, offset, ZIP64_END_MIN_SIZE);
+        if (fixed.getInt(0) != ZIP64_END_SIGNATURE) {
+            return null;
+        }
+        long recordBodySize = unsignedLong(fixed, 4, "ZIP64 end-record size");
+        if (recordBodySize < 44) {
+            return null;
+        }
+        long recordEnd = checkedAdd(offset, 12, "ZIP64 end-record boundary");
+        recordEnd = checkedAdd(recordEnd, recordBodySize, "ZIP64 end-record boundary");
+        if (recordEnd != locatorOffset
+                || unsignedInt(fixed, 16) != 0
+                || unsignedInt(fixed, 20) != 0) {
+            return null;
+        }
+        long entriesOnDisk = unsignedLong(fixed, 24, "ZIP64 entries-on-disk count");
+        long entryCount = unsignedLong(fixed, 32, "ZIP64 entry count");
+        if (entriesOnDisk != entryCount) {
+            throw invalidZip("multi-disk ZIP64 archives are not supported");
+        }
+        return new Zip64EndRecord(
+                offset,
+                entryCount,
+                unsignedLong(fixed, 40, "ZIP64 central-directory size"),
+                unsignedLong(fixed, 48, "ZIP64 central-directory offset"));
+    }
+
+    private static ZipDirectoryMetadata checkedZipDirectoryMetadata(
+            long entryCount, long centralOffset, long centralSize, long boundary)
+            throws IOException {
+        if (entryCount < 0 || centralOffset < 0 || centralSize < 0) {
+            throw invalidZip("central-directory metadata is negative");
+        }
+        long centralEnd =
+                checkedAdd(centralOffset, centralSize, "central-directory boundary");
+        if (centralEnd > boundary) {
+            throw invalidZip("central directory is outside the archive");
+        }
+        return new ZipDirectoryMetadata(entryCount, centralOffset, centralSize);
+    }
+
+    private static void inspectZipCentralDirectory(
+            FileChannel channel, ZipDirectoryMetadata metadata) throws IOException {
+        long position = metadata.centralOffset();
+        long centralEnd =
+                checkedAdd(
+                        metadata.centralOffset(),
+                        metadata.centralSize(),
+                        "central-directory boundary");
+        long totalSize = 0;
+        for (long index = 0; index < metadata.entryCount(); index++) {
+            ByteBuffer header = readFully(channel, position, ZIP_CENTRAL_HEADER_SIZE);
+            if (header.getInt(0) != ZIP_CENTRAL_HEADER_SIGNATURE) {
+                throw invalidZip("central-directory entry signature is invalid");
+            }
+            long uncompressedSize = unsignedInt(header, 24);
+            int fileNameLength = unsignedShort(header, 28);
+            int extraLength = unsignedShort(header, 30);
+            int commentLength = unsignedShort(header, 32);
+            long recordSize =
+                    ZIP_CENTRAL_HEADER_SIZE
+                            + (long) fileNameLength
+                            + extraLength
+                            + commentLength;
+            long nextPosition =
+                    checkedAdd(position, recordSize, "central-directory entry boundary");
+            if (nextPosition > centralEnd) {
+                throw invalidZip("central-directory entry extends beyond its declared size");
+            }
+
+            boolean directory = false;
+            if (fileNameLength > 0) {
+                ByteBuffer lastNameByte =
+                        readFully(
+                                channel,
+                                position + ZIP_CENTRAL_HEADER_SIZE + fileNameLength - 1L,
+                                1);
+                directory = lastNameByte.get(0) == '/';
+            }
+            if (uncompressedSize == 0xffff_ffffL) {
+                ByteBuffer extra =
+                        readFully(
+                                channel,
+                                position + ZIP_CENTRAL_HEADER_SIZE + fileNameLength,
+                                extraLength);
+                uncompressedSize = readZip64UncompressedSize(extra);
+            }
+            totalSize = checkedArchiveSize(totalSize, uncompressedSize, directory);
+            position = nextPosition;
+        }
+
+        if (position < centralEnd) {
+            ByteBuffer signature = readFully(channel, position, 6);
+            if (signature.getInt(0) != ZIP_CENTRAL_DIGITAL_SIGNATURE) {
+                throw invalidZip("central directory contains unexpected trailing metadata");
+            }
+            long nextPosition =
+                    checkedAdd(
+                            position,
+                            6L + unsignedShort(signature, 4),
+                            "central-directory digital-signature boundary");
+            if (nextPosition > centralEnd) {
+                throw invalidZip("central-directory digital signature is truncated");
+            }
+            position = nextPosition;
+        }
+        if (position != centralEnd) {
+            throw invalidZip("central directory contains repeated trailing metadata");
+        }
+    }
+
+    private static long readZip64UncompressedSize(ByteBuffer extra) throws IOException {
+        int position = 0;
+        while (position <= extra.limit() - 4) {
+            int headerId = unsignedShort(extra, position);
+            int dataSize = unsignedShort(extra, position + 2);
+            position += 4;
+            if (dataSize > extra.limit() - position) {
+                throw invalidZip("ZIP extra field is truncated");
+            }
+            if (headerId == 0x0001) {
+                if (dataSize < Long.BYTES) {
+                    throw invalidZip("ZIP64 uncompressed size is missing");
+                }
+                return unsignedLong(extra, position, "ZIP64 uncompressed size");
+            }
+            position += dataSize;
+        }
+        throw invalidZip("ZIP64 uncompressed size is missing");
+    }
+
+    private static ByteBuffer readFully(FileChannel channel, long offset, int size)
+            throws IOException {
+        if (offset < 0 || size < 0 || offset > channel.size() - size) {
+            throw invalidZip("metadata points outside the archive");
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        while (buffer.hasRemaining()) {
+            int read = channel.read(buffer, offset + buffer.position());
+            if (read <= 0) {
+                throw invalidZip("archive metadata is truncated");
+            }
+        }
+        return buffer.flip();
+    }
+
+    private static int unsignedShort(ByteBuffer buffer, int offset) {
+        return Short.toUnsignedInt(buffer.getShort(offset));
+    }
+
+    private static long unsignedInt(ByteBuffer buffer, int offset) {
+        return Integer.toUnsignedLong(buffer.getInt(offset));
+    }
+
+    private static long unsignedLong(ByteBuffer buffer, int offset, String field)
+            throws IOException {
+        long value = buffer.getLong(offset);
+        if (value < 0) {
+            throw invalidZip(field + " exceeds the supported range");
+        }
+        return value;
+    }
+
+    private static long checkedAdd(long left, long right, String field) throws IOException {
+        if (right < 0 || left > Long.MAX_VALUE - right) {
+            throw invalidZip(field + " overflows");
+        }
+        return left + right;
+    }
+
+    private static IOException invalidZip(String detail) {
+        return new IOException("Invalid ZIP archive: " + detail);
+    }
+
+    private static IOException tooManyArchiveEntries() {
+        return new IOException(
+                "Archive exceeds the " + MAX_ARCHIVE_ENTRIES + "-entry safety limit");
+    }
+
+    private static int checkedEntryCount(int priorCount) throws IOException {
+        if (priorCount >= MAX_ARCHIVE_ENTRIES) {
+            throw tooManyArchiveEntries();
+        }
+        return priorCount + 1;
+    }
+
+    static long checkedArchiveSize(long priorSize, long entrySize, boolean directory)
+            throws IOException {
+        if (directory) {
+            return priorSize;
+        }
+        if (entrySize < 0) {
+            throw new IOException("Archive entry has an unknown uncompressed size");
+        }
+        if (entrySize > MAX_ARCHIVE_UNCOMPRESSED_BYTES - priorSize) {
+            throw new IOException(
+                    "Archive exceeds the "
+                            + MAX_ARCHIVE_UNCOMPRESSED_BYTES
+                            + "-byte uncompressed-size safety limit");
+        }
+        return priorSize + entrySize;
     }
 
     private static boolean isRomFile(String name) {
         String ext = FilenameUtils.getExtension(name);
         return Stream.of("gb", "gbc", "rom").anyMatch(e -> e.equalsIgnoreCase(ext));
+    }
+
+    private record ZipDirectoryMetadata(
+            long entryCount, long centralOffset, long centralSize) {
+    }
+
+    private record Zip64EndRecord(
+            long actualOffset, long entryCount, long centralSize, long centralOffset) {
     }
 
     private static int getRomBanks(int id, int romLength) {

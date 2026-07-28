@@ -25,6 +25,7 @@ import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
@@ -414,10 +415,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint,
                      InfraredEndpoint infraredEndpoint, Console console) {
-        this.console = console;
-        if (console != null) {
-            console.setGameboy(this);
-        }
+        attachConsole(console);
 
         joypad.init(eventBus);
         display.init(eventBus);
@@ -439,6 +437,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         eventBus.register(
                 e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent) e).nonCgbGame()),
                 eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent.class);
+    }
+
+    /**
+     * Attaches the optional debugger console after a staged session becomes the live owner.
+     *
+     * <p>Candidate sessions initialize with no console so a failed or not-yet-committed
+     * replacement cannot temporarily steal commands from the running machine.
+     */
+    public void attachConsole(Console console) {
+        this.console = console;
+        if (console != null) {
+            console.setGameboy(this);
+        }
     }
 
     /**
@@ -884,6 +895,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
+     * Captures all cartridge RAM/RTC at the current emulation safe point. The returned I/O phase
+     * is service-free and can run on a persistence worker.
+     */
+    public BatteryFlush prepareCartridgeFlush() {
+        return BatteryFlush.combine(
+                cartridge.prepareBatteryFlush(),
+                slotCartridge == null ? BatteryFlush.none() : slotCartridge.prepareBatteryFlush());
+    }
+
+    /**
      * Held-button state, snapshotted separately from machine state by rollback netplay so a held
      * button survives a rebase (the joypad deliberately keeps it out of component state).
      */
@@ -1064,9 +1085,24 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     @Override
     public void close() {
+        closeResources(true);
+    }
+
+    /**
+     * Closes a session after a successful {@link #prepareCartridgeFlush()} barrier.
+     *
+     * <p>Callers must not use this to bypass a failed or cancelled persistence result.
+     */
+    public void closeAfterCartridgeFlush() {
+        closeResources(false);
+    }
+
+    private void closeResources(boolean flushCartridge) {
         codeBreakerRumble.close();
         infraredPort.close();
-        flushCartridge();
+        if (flushCartridge) {
+            flushCartridge();
+        }
         sgbBus.close();
     }
 

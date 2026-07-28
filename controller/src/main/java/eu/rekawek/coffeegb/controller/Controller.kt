@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.Bios
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import java.io.File
 
 interface Controller : AutoCloseable {
@@ -25,13 +26,59 @@ interface Controller : AutoCloseable {
 
   class EmulationStoppedEvent : Event
 
-  data class LoadRomEvent(val rom: File, val state: MachineState? = null) : Event
+  data class LoadRomEvent(
+      val rom: File,
+      val state: MachineState? = null,
+      val image: RomImage? = null,
+  ) : Event {
+    constructor(
+        image: RomImage,
+        state: MachineState? = null,
+    ) : this(
+        image.origin().containerPath().map { it.toFile() }.orElse(File(image.origin().displayName())),
+        state,
+        image,
+    )
+  }
 
   data class RomLoadingEvent(val rom: File) : Event
 
   data class RomLoadingCancelledEvent(val rom: File) : Event
 
   data class LoadRomFailedEvent(val rom: File, val message: String) : Event
+
+  /**
+   * A ROM replacement is paused at its persistence barrier. The old session remains alive until
+   * the matching retry or cancel command is posted.
+   */
+  data class RomReplacementPersistenceFailedEvent(
+      val requestId: Long,
+      val fileName: String,
+      val message: String,
+      val operation: PersistenceBarrierOperation = PersistenceBarrierOperation.ROM_REPLACEMENT,
+  ) : Event
+
+  data class RetryRomReplacementEvent(val requestId: Long) : Event
+
+  data class CancelRomReplacementEvent(val requestId: Long) : Event
+
+  enum class PersistenceBarrierOperation {
+    ROM_REPLACEMENT,
+    STOP,
+    CLOSE,
+  }
+
+  /**
+   * A synchronous close did not release its session because persistence failed or timed out.
+   * The caller must retain this controller and may invoke [closeWithState] again to retry.
+   */
+  class PersistenceBarrierException(
+      val requestId: Long,
+      val operation: PersistenceBarrierOperation,
+      val fileName: String,
+      message: String,
+      cause: Throwable,
+  ) : IllegalStateException(message, cause)
 
   class PauseEmulationEvent : Event
 

@@ -6,16 +6,19 @@ import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.events.EventBusTeardownTimeoutException
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatPatch
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
-import java.io.File
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
@@ -23,6 +26,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicReference
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -35,6 +39,7 @@ class BasicController private constructor(
     private val loadExecutor: ExecutorService,
     private val snapshotManagerFactory: SnapshotManagerFactory,
     private val rewindManager: RewindManager,
+    private val closeTimeoutMillis: Long,
 ) : Controller, SnapshotSupport {
 
   constructor(
@@ -49,6 +54,7 @@ class BasicController private constructor(
       createLoadExecutor(),
       SnapshotManagerFactory.DEFAULT,
       RewindManager(),
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
   internal constructor(
@@ -64,6 +70,24 @@ class BasicController private constructor(
       createLoadExecutor(),
       SnapshotManagerFactory.DEFAULT,
       RewindManager(),
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+  )
+
+  internal constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      sessionPreparer: SessionPreparer,
+      closeTimeoutMillis: Long,
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      sessionPreparer,
+      createLoadExecutor(),
+      SnapshotManagerFactory.DEFAULT,
+      RewindManager(),
+      closeTimeoutMillis,
   )
 
   internal constructor(
@@ -80,6 +104,7 @@ class BasicController private constructor(
       createLoadExecutor(),
       snapshotManagerFactory,
       RewindManager(),
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
   internal constructor(
@@ -97,6 +122,7 @@ class BasicController private constructor(
       createLoadExecutor(),
       snapshotManagerFactory,
       rewindManager,
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
   private val timingTicker = TimingTicker()
@@ -119,6 +145,24 @@ class BasicController private constructor(
 
   private var loadJob: LoadJob? = null
 
+  private val persistenceExecutor = createPersistenceExecutor()
+
+  private var replacementJob: ReplacementJob? = null
+
+  private var stopJob: StopJob? = null
+
+  private var nextPersistenceRequestId = 1L
+
+  private var closeCapture: BatteryFlush? = null
+
+  private var closeState: Controller.ControllerState? = null
+
+  private var closeRequestId: Long? = null
+
+  private var closePersistenceAttempt: RetainedClosePersistence? = null
+
+  private var closed = false
+
   /** The user's pause state before the current chain of coalesced load requests. */
   private var pauseStateBeforeLoading: Boolean? = null
 
@@ -135,15 +179,22 @@ class BasicController private constructor(
   // GPS Boy uses a Trimble receiver connected to the same link port through a software UART.
   private var gpsReceiverEnabled = false
 
-  private val thread = Thread {
-    while (!doStop) {
-      runFrame()
-    }
-  }
+  private val thread =
+      Thread(
+          {
+            while (!doStop) {
+              runFrame()
+            }
+          },
+          "coffee-gb-controller",
+      )
 
   init {
+    require(closeTimeoutMillis > 0) { "Controller close timeout must be positive" }
     eventQueue.register<AddPatches> { patches.addAll(it.patches) }
     eventQueue.register<Controller.LoadRomEvent> { requestLoad(properties, it) }
+    eventQueue.register<Controller.RetryRomReplacementEvent> { retryPersistence(it.requestId) }
+    eventQueue.register<Controller.CancelRomReplacementEvent> { cancelPersistence(it.requestId) }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
     eventQueue.register<Controller.PauseEmulationEvent> {
@@ -170,14 +221,12 @@ class BasicController private constructor(
       session?.config?.setDisplaySgbBorder(it.borderEnabled)
     }
     eventQueue.register<Controller.ResetEmulationEvent> {
-      session?.config?.rom?.file?.let {
+      session?.config?.rom?.image?.let {
         requestLoad(properties, Controller.LoadRomEvent(it), clearPatches = false)
       }
     }
     eventQueue.register<Controller.StopEmulationEvent> {
-      cancelLoadJob()
-      restorePauseStateAfterLoading()
-      stop()
+      requestStop()
     }
     eventQueue.register<Controller.SetBarcodeBoyEvent> {
       if (barcodeBoyEnabled != it.enabled) {
@@ -216,7 +265,7 @@ class BasicController private constructor(
         val newProfile = Controller.getHardwareProfile(properties.system, config.rom)
         val newBootstrapMode = properties.system.bootstrapMode
         if (newProfile != config.hardwareProfile || newBootstrapMode != config.bootstrapMode) {
-          eventBus.post(Controller.LoadRomEvent(config.rom.file))
+          eventBus.post(Controller.LoadRomEvent(config.rom.image))
         }
       }
     }
@@ -229,10 +278,17 @@ class BasicController private constructor(
   private fun runFrame() {
     eventQueue.dispatch()
     finishPreparedLoad()
+    finishReplacement()
+    finishStop()
 
     // rewinding restores one recorded state and then emulates a single frame from it,
     // so the display and audio play backwards at RewindManager.RECORD_INTERVAL speed
-    val rewound = isRewinding && session?.gameboy?.let { rewindManager.rewindOneStep(it) } == true
+    val rewound =
+        loadJob == null &&
+            replacementJob == null &&
+            stopJob == null &&
+            isRewinding &&
+            session?.gameboy?.let { rewindManager.rewindOneStep(it) } == true
 
     var emulated = false
     val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
@@ -252,7 +308,7 @@ class BasicController private constructor(
       config: Gameboy.GameboyConfiguration,
       prebuiltGameboy: Gameboy? = null,
   ): Session {
-    val sessionBus = eventBus.fork("main")
+    val sessionBus = StagedEventBus(eventBus.fork("main"))
     try {
       return Session(
           config,
@@ -280,22 +336,17 @@ class BasicController private constructor(
       return
     }
 
+    discardStop(restorePause = true)
     if (pauseStateBeforeLoading == null) {
       pauseStateBeforeLoading = isPaused
     }
     cancelLoadJob()
+    discardReplacement(restorePause = false)
 
     // Keep the last completed frame on screen, but stop the old game immediately. Continuing to
     // animate while the window says that another ROM is loading makes it look as though the load
     // request was ignored and also allows the old game to consume input meant for the new one.
     setPaused(true)
-
-    // A fallback preparation for an exotic/RTC cartridge may use the real save file. When
-    // reloading that exact file, flush the old cartridge first so the worker cannot observe stale
-    // RAM. Ordinary cartridges use battery-free boot templates and don't need this extra flush.
-    if (isCurrentRom(event.rom)) {
-      session?.gameboy?.flushCartridge()
-    }
 
     eventBus.post(Controller.RomLoadingEvent(event.rom))
     val task = PreparedLoadTask { sessionPreparer.prepare(properties, event) }
@@ -311,7 +362,7 @@ class BasicController private constructor(
     loadJob = null
 
     try {
-      activatePreparedLoad(job, job.task.take())
+      beginReplacement(job, job.task.take())
     } catch (_: CancellationException) {
       restorePauseStateAfterLoading()
     } catch (e: ExecutionException) {
@@ -321,30 +372,273 @@ class BasicController private constructor(
     }
   }
 
-  private fun activatePreparedLoad(job: LoadJob, prepared: PreparedSession) {
-    var nextGameboy: Gameboy? = null
-    try {
-      // The expensive BIOS run is complete. The old game has remained frozen during preparation;
-      // now flush its save and atomically replace the session.
-      setPaused(true)
-      session?.gameboy?.flushCartridge()
-      nextGameboy = prepared.materialize()
+  private fun beginReplacement(job: LoadJob, prepared: PreparedSession) {
+    setPaused(true)
+    val capture = session?.gameboy?.prepareCartridgeFlush() ?: BatteryFlush.none()
+    val attempt = ReplacementTask(capture, prepared)
+    replacementJob =
+        ReplacementJob(
+            requestId = nextPersistenceRequestId++,
+            event = job.event,
+            clearPatches = job.clearPatches,
+            prepared = prepared,
+            capture = capture,
+            attempt = attempt,
+        )
+    persistenceExecutor.execute(attempt)
+  }
 
-      stop()
-      if (job.clearPatches) {
-        patches.clear()
+  private fun finishReplacement() {
+    val job = replacementJob ?: return
+    val attempt = job.attempt ?: return
+    if (!attempt.isDone) {
+      return
+    }
+
+    val outcome =
+        try {
+          attempt.take()
+        } catch (_: CancellationException) {
+          return
+        } catch (e: Exception) {
+          val cause = e.cause ?: e
+          replacementJob = null
+          job.prepared.discard()
+          reportLoadFailure(job.event, cause)
+          return
+        }
+    job.attempt = null
+
+    if (outcome is ReplacementAttemptResult.PersistenceFailure) {
+      postPersistenceFailure(
+          job.requestId,
+          Controller.PersistenceBarrierOperation.ROM_REPLACEMENT,
+          outcome.result,
+      )
+      return
+    }
+
+    outcome as ReplacementAttemptResult.Ready
+    job.capture.complete(outcome.persistence)
+    replacementJob = null
+    activatePreparedLoad(job, outcome.gameboy)
+  }
+
+  private fun retryPersistence(requestId: Long) {
+    replacementJob?.let { job ->
+      if (job.requestId == requestId && job.attempt == null) {
+        val attempt = ReplacementTask(job.capture, job.prepared)
+        job.attempt = attempt
+        persistenceExecutor.execute(attempt)
       }
-      rewindManager.clear()
+      return
+    }
+    stopJob?.let { job ->
+      if (job.requestId == requestId && job.attempt == null) {
+        val attempt = PersistenceTask(job.capture)
+        job.attempt = attempt
+        persistenceExecutor.execute(attempt)
+      }
+    }
+  }
 
-      session = createSession(prepared.config, nextGameboy)
+  private fun cancelPersistence(requestId: Long) {
+    replacementJob?.let { job ->
+      if (job.requestId == requestId) {
+        discardReplacement(restorePause = true)
+      }
+      return
+    }
+    stopJob?.let { job ->
+      if (job.requestId == requestId) {
+        discardStop(restorePause = true)
+      }
+    }
+  }
+
+  private fun discardReplacement(restorePause: Boolean, notifyCancellation: Boolean = true) {
+    val job = replacementJob ?: return
+    replacementJob = null
+    job.attempt?.cancelAndDiscard()
+    job.prepared.discard()
+    if (notifyCancellation) {
+      eventBus.post(Controller.RomLoadingCancelledEvent(job.event.rom))
+    }
+    if (restorePause) {
+      restorePauseStateAfterLoading()
+    }
+  }
+
+  private fun requestStop() {
+    if (stopJob != null) {
+      return
+    }
+    val pausedBeforeStop = pauseStateBeforeLoading ?: isPaused
+    cancelLoadJob()
+    discardReplacement(restorePause = false)
+    pauseStateBeforeLoading = null
+    val currentSession = session
+    if (currentSession == null) {
+      isPaused = false
+      return
+    }
+
+    setPaused(true)
+    val capture = currentSession.gameboy.prepareCartridgeFlush()
+    val attempt = PersistenceTask(capture)
+    stopJob =
+        StopJob(
+            requestId = nextPersistenceRequestId++,
+            pausedBeforeStop = pausedBeforeStop,
+            capture = capture,
+            attempt = attempt,
+        )
+    persistenceExecutor.execute(attempt)
+  }
+
+  private fun finishStop() {
+    val job = stopJob ?: return
+    val attempt = job.attempt ?: return
+    if (!attempt.isDone) {
+      return
+    }
+    val result =
+        try {
+          attempt.get()
+        } catch (_: CancellationException) {
+          return
+        } catch (failure: Exception) {
+          unexpectedPersistenceFailure(failure)
+        }
+    job.attempt = null
+    if (result is BatteryPersistenceResult.Failure) {
+      postPersistenceFailure(
+          job.requestId,
+          Controller.PersistenceBarrierOperation.STOP,
+          result,
+      )
+      return
+    }
+
+    job.capture.complete(result)
+    stopJob = null
+    stop(afterCartridgeFlush = true)
+    isPaused = false
+  }
+
+  private fun discardStop(restorePause: Boolean) {
+    val job = stopJob ?: return
+    stopJob = null
+    job.attempt?.cancel(true)
+    if (restorePause) {
+      setPaused(job.pausedBeforeStop)
+    }
+  }
+
+  private fun postPersistenceFailure(
+      requestId: Long,
+      operation: Controller.PersistenceBarrierOperation,
+      result: BatteryPersistenceResult.Failure,
+  ) {
+    try {
+      eventBus.post(
+          Controller.RomReplacementPersistenceFailedEvent(
+              requestId,
+              result.fileName(),
+              result.message(),
+              operation,
+          ))
+    } catch (subscriberFailure: RuntimeException) {
+      LOG.warn("Persistence failure subscriber threw an exception", subscriberFailure)
+    }
+  }
+
+  private fun unexpectedPersistenceFailure(failure: Exception): BatteryPersistenceResult.Failure {
+    val cause = failure.cause ?: failure
+    val ioFailure =
+        if (cause is java.io.IOException) {
+          cause
+        } else {
+          java.io.IOException("Unexpected persistence worker failure", cause)
+        }
+    return BatteryPersistenceResult.Failure(
+        BatteryPersistenceResult.FailureKind.WRITE_FAILED,
+        session?.config?.rom?.origin?.displayName() ?: "battery save",
+        "Unable to persist the current session. Changes remain pending and can be retried.",
+        ioFailure,
+    )
+  }
+
+  private fun activatePreparedLoad(job: ReplacementJob, preparedGameboy: Gameboy) {
+    var nextGameboy: Gameboy? = preparedGameboy
+    var nextSession: Session? = null
+    var nextSnapshotManager: SnapshotManager? = null
+    try {
+      // Finish constructing and initializing the candidate before releasing the current session.
+      // A core-startup failure must leave the old game available for resume/cancel semantics.
+      nextSession = createSession(job.prepared.config, nextGameboy)
       nextGameboy = null
-      val pauseNewSession = pauseStateBeforeLoading == true
-      pauseStateBeforeLoading = null
+      nextSnapshotManager = snapshotManagerFactory.create(job.prepared.config)
+    } catch (e: Exception) {
+      try {
+        nextSession?.discardUnstarted()
+      } catch (cleanupFailure: RuntimeException) {
+        e.addSuppressed(cleanupFailure)
+      }
+      try {
+        nextGameboy?.discardUnstarted()
+      } catch (cleanupFailure: RuntimeException) {
+        e.addSuppressed(cleanupFailure)
+      }
+      console?.setGameboy(session?.gameboy)
+      reconnectLinkDevice()
+      reportLoadFailure(job.event, e)
+      return
+    }
+
+    setPaused(true)
+    if (job.clearPatches) {
+      patches.clear()
+    }
+    rewindManager.clear()
+
+    val previousSession = session
+    val committedSession = checkNotNull(nextSession)
+    val pauseNewSession = pauseStateBeforeLoading == true
+
+    // This assignment is the ownership commit. From here on the old session is never resumed:
+    // its bus may need deferred cleanup, but it cannot invalidate the fully staged candidate.
+    session = committedSession
+    snapshotManager = checkNotNull(nextSnapshotManager)
+    nextSession = null
+    nextSnapshotManager = null
+    pauseStateBeforeLoading = null
+
+    previousSession?.let { oldSession ->
+      postSessionEventSafely(oldSession, Controller.EmulationStoppedEvent())
+      try {
+        oldSession.closeAfterCartridgeFlush()
+      } catch (cleanupFailure: RuntimeException) {
+        LOG.warn(
+            "Old session cleanup failed after replacement ownership committed; continuing activation",
+            cleanupFailure,
+        )
+      }
+    }
+
+    try {
+      committedSession.activate()
       start()
       setPaused(pauseNewSession)
-    } catch (e: Exception) {
-      nextGameboy?.discardUnstarted()
-      reportLoadFailure(job.event, e)
+    } catch (activationFailure: RuntimeException) {
+      // Rolling back would reattach an already stopped/closing machine. Keep the committed
+      // candidate retained and paused so the failure is explicit without corrupting ownership.
+      LOG.error("ROM ownership committed but candidate activation failed", activationFailure)
+      setPaused(true)
+      val message =
+          activationFailure.message?.takeIf { it.isNotBlank() }
+              ?: activationFailure.javaClass.simpleName
+      eventBus.post(Controller.LoadRomFailedEvent(job.event.rom, message))
     }
   }
 
@@ -355,24 +649,14 @@ class BasicController private constructor(
     restorePauseStateAfterLoading()
   }
 
-  private fun cancelLoadJob() {
+  private fun cancelLoadJob(notifyCancellation: Boolean = true) {
     val job = loadJob ?: return
     loadJob = null
     job.task.cancelAndDiscard()
-    eventBus.post(Controller.RomLoadingCancelledEvent(job.event.rom))
+    if (notifyCancellation) {
+      eventBus.post(Controller.RomLoadingCancelledEvent(job.event.rom))
+    }
   }
-
-  private fun isCurrentRom(file: File): Boolean {
-    val current = session?.config?.rom?.file ?: return false
-    return canonicalFile(current) == canonicalFile(file)
-  }
-
-  private fun canonicalFile(file: File): File =
-      try {
-        file.canonicalFile
-      } catch (_: Exception) {
-        file.absoluteFile
-      }
 
   private fun setPaused(paused: Boolean) {
     if (isPaused == paused) {
@@ -417,21 +701,48 @@ class BasicController private constructor(
     val session = session ?: return
 
     isPaused = false
-    snapshotManager = snapshotManagerFactory.create(session.config)
+    checkNotNull(snapshotManager) { "Snapshot manager must be staged before session activation" }
 
-    session.eventBus.post(AddPatches(patches))
-    session.eventBus.post(Controller.GameboyTypeEvent(session.config.gameboyType))
-    session.eventBus.post(Controller.HardwareProfileEvent(session.config.hardwareProfile))
-    session.eventBus.post(Controller.SessionPauseSupportEvent(true))
-    session.eventBus.post(Controller.SessionSnapshotSupportEvent(this))
-    session.eventBus.post(Controller.EmulationStartedEvent(session.config.rom.title))
+    postSessionEventSafely(session, AddPatches(patches))
+    postSessionEventSafely(session, Controller.GameboyTypeEvent(session.config.gameboyType))
+    postSessionEventSafely(session, Controller.HardwareProfileEvent(session.config.hardwareProfile))
+    postSessionEventSafely(session, Controller.SessionPauseSupportEvent(true))
+    postSessionEventSafely(session, Controller.SessionSnapshotSupportEvent(this))
+    postSessionEventSafely(session, Controller.EmulationStartedEvent(session.config.rom.title))
   }
 
-  private fun stop() {
+  private fun stop(
+      afterCartridgeFlush: Boolean = false,
+      notifyLifecycle: Boolean = true,
+      closeDeadlineNanos: Long? = null,
+  ) {
     val session = session ?: return
-    session.eventBus.post(Controller.EmulationStoppedEvent())
-    session.close()
+    if (notifyLifecycle) {
+      postSessionEventSafely(session, Controller.EmulationStoppedEvent())
+    }
+    if (afterCartridgeFlush) {
+      if (closeDeadlineNanos == null) {
+        session.closeAfterCartridgeFlush()
+      } else {
+        session.closeAfterCartridgeFlush(
+            remainingCloseNanos(closeDeadlineNanos, "session teardown"),
+            TimeUnit.NANOSECONDS,
+        )
+      }
+    } else {
+      session.close()
+    }
+    console?.setGameboy(null)
     this.session = null
+    snapshotManager = null
+  }
+
+  private fun postSessionEventSafely(session: Session, event: Event) {
+    try {
+      session.eventBus.post(event)
+    } catch (subscriberFailure: RuntimeException) {
+      LOG.warn("Session lifecycle event subscriber failed for {}", event.javaClass.simpleName, subscriberFailure)
+    }
   }
 
   private fun saveSnapshot(slot: Int) {
@@ -453,6 +764,14 @@ class BasicController private constructor(
 
   private fun loadSnapshot(slot: Int) {
     val currentSession = session ?: return
+    if (loadJob != null || replacementJob != null || stopJob != null) {
+      currentSession.eventBus.post(
+          Controller.SnapshotLoadFailedEvent(
+              slot,
+              "A ROM replacement is in progress. Retry the state restore after it is cancelled.",
+          ))
+      return
+    }
     val manager = snapshotManager ?: return
     try {
       if (manager.loadSnapshot(slot, currentSession.gameboy)) {
@@ -477,42 +796,211 @@ class BasicController private constructor(
     closeWithState()
   }
 
+  @Synchronized
   override fun closeWithState(): Controller.ControllerState? {
-    doStop = true
-    thread.join()
-
-    cancelLoadJob()
-    loadExecutor.shutdownNow()
-    try {
-      if (!loadExecutor.awaitTermination(LOAD_EXECUTOR_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
-        LOG.warn("ROM loader did not terminate promptly")
-      }
-    } catch (_: InterruptedException) {
-      Thread.currentThread().interrupt()
-      LOG.warn("Interrupted while waiting for the ROM loader to terminate")
+    if (closed) {
+      return null
     }
-    restorePauseStateAfterLoading()
+    val closeDeadlineNanos =
+        System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(closeTimeoutMillis)
+    doStop = true
+    awaitTimingThread(closeDeadlineNanos)
 
-    val state =
-        session?.let {
-          Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
-        }
+    // Close is a synchronous API: its caller owns retry/cancel presentation. Avoid invoking
+    // arbitrary lifecycle subscribers on this thread while the one overall deadline is running.
+    cancelLoadJob(notifyCancellation = false)
+    discardReplacement(restorePause = false, notifyCancellation = false)
+    discardStop(restorePause = false)
+    pauseStateBeforeLoading = null
+    setPaused(true)
 
-    stop()
-    eventBus.close()
+    if (closeState == null) {
+      closeState =
+          session?.let {
+            Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
+          }
+    }
+    if (closeCapture == null) {
+      closeCapture = session?.gameboy?.prepareCartridgeFlush() ?: BatteryFlush.none()
+    }
+    val capture = checkNotNull(closeCapture)
+    val persistence = persistCloseCapture(capture, closeDeadlineNanos)
+    if (persistence is BatteryPersistenceResult.Failure) {
+      val requestId = closeRequestId ?: nextPersistenceRequestId++
+      closeRequestId = requestId
+      throw Controller.PersistenceBarrierException(
+          requestId,
+          Controller.PersistenceBarrierOperation.CLOSE,
+          persistence.fileName(),
+          persistence.message(),
+          persistence.cause(),
+      )
+    }
+    capture.complete(persistence)
+    val state = closeState
 
+    try {
+      stop(
+          afterCartridgeFlush = true,
+          notifyLifecycle = false,
+          closeDeadlineNanos = closeDeadlineNanos,
+      )
+      isPaused = false
+      shutdownExecutors(closeDeadlineNanos)
+      eventBus.close(
+          remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),
+          TimeUnit.NANOSECONDS,
+      )
+    } catch (failure: EventBusTeardownTimeoutException) {
+      throw closeBarrierFailure(
+          "Controller event subscribers did not stop before the close deadline. " +
+              "The persisted session remains retained and close can be retried.",
+          failure,
+      )
+    }
+
+    closed = true
+    closeCapture = null
+    closeState = null
+    closeRequestId = null
+    closePersistenceAttempt = null
     return state
   }
+
+  private fun awaitTimingThread(closeDeadlineNanos: Long) {
+    if (Thread.currentThread() === thread || !thread.isAlive) {
+      return
+    }
+    val remainingNanos = remainingCloseNanos(closeDeadlineNanos, "controller timing-thread stop")
+    try {
+      thread.join(
+          TimeUnit.NANOSECONDS.toMillis(remainingNanos),
+          (remainingNanos % 1_000_000).toInt(),
+      )
+    } catch (failure: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw closeBarrierFailure(
+          "Interrupted while waiting for the controller timing thread to stop.",
+          failure,
+      )
+    }
+    if (thread.isAlive) {
+      throw closeBarrierFailure(
+          "Controller timing thread did not stop before the close deadline. " +
+              "The running session remains retained and close can be retried.",
+          java.io.IOException("Controller timing-thread stop timed out"),
+      )
+    }
+  }
+
+  private fun persistCloseCapture(
+      capture: BatteryFlush,
+      closeDeadlineNanos: Long,
+  ): BatteryPersistenceResult {
+    val fileName = closeFileName()
+    val attempt =
+        closePersistenceAttempt
+            ?: RetainedClosePersistence(capture).also { closePersistenceAttempt = it }
+    val result =
+        attempt.await(
+            fileName,
+            remainingCloseNanos(closeDeadlineNanos, "battery persistence"),
+            TimeUnit.NANOSECONDS,
+            ::unexpectedPersistenceFailure,
+        )
+    // A completed failure is safe to retry with a new writer. A timeout/interrupted wait retains
+    // the exact in-flight task, so no second writer can race a first task that ignored interrupt.
+    if (result is BatteryPersistenceResult.Failure && attempt.isDone) {
+      closePersistenceAttempt = null
+    }
+    return result
+  }
+
+  private fun shutdownExecutors(closeDeadlineNanos: Long) {
+    loadExecutor.shutdownNow()
+    persistenceExecutor.shutdownNow()
+    try {
+      awaitExecutorTermination(loadExecutor, "ROM loader", closeDeadlineNanos)
+      if (!persistenceExecutor.awaitTermination(
+          remainingCloseNanos(closeDeadlineNanos, "persistence-worker stop"),
+          TimeUnit.NANOSECONDS,
+      )) {
+        throw closeBarrierFailure(
+            "Persistence worker did not stop before the close deadline. Close can be retried.",
+            java.io.IOException("Persistence-worker stop timed out"),
+        )
+      }
+    } catch (failure: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw closeBarrierFailure(
+          "Interrupted while waiting for controller workers to stop.",
+          failure,
+      )
+    }
+  }
+
+  private fun awaitExecutorTermination(
+      executor: ExecutorService,
+      name: String,
+      closeDeadlineNanos: Long,
+  ) {
+    if (!executor.awaitTermination(
+        remainingCloseNanos(closeDeadlineNanos, "$name stop"),
+        TimeUnit.NANOSECONDS,
+    )) {
+      throw closeBarrierFailure(
+          "$name did not stop before the close deadline. Close can be retried.",
+          java.io.IOException("$name stop timed out"),
+      )
+    }
+  }
+
+  private fun remainingCloseNanos(closeDeadlineNanos: Long, stage: String): Long {
+    val remainingNanos = closeDeadlineNanos - System.nanoTime()
+    if (remainingNanos <= 0) {
+      throw closeBarrierFailure(
+          "Controller close timed out during $stage. The session remains retained and close can be retried.",
+          java.io.IOException("Controller close deadline expired during $stage"),
+      )
+    }
+    return remainingNanos
+  }
+
+  private fun closeBarrierFailure(
+      message: String,
+      cause: Throwable,
+  ): Controller.PersistenceBarrierException {
+    val requestId = closeRequestId ?: nextPersistenceRequestId++
+    closeRequestId = requestId
+    return Controller.PersistenceBarrierException(
+        requestId,
+        Controller.PersistenceBarrierOperation.CLOSE,
+        closeFileName(),
+        message,
+        cause,
+    )
+  }
+
+  private fun closeFileName(): String =
+      session?.config?.rom?.origin?.displayName()
+          ?: closeState?.rom?.origin?.displayName()
+          ?: "battery save"
 
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(BasicController::class.java)
 
-    const val LOAD_EXECUTOR_SHUTDOWN_SECONDS = 5L
+    const val CONTROLLER_CLOSE_TIMEOUT_MILLIS = 8_000L
 
     fun createLoadExecutor(): ExecutorService =
         Executors.newSingleThreadExecutor { runnable ->
           Thread(runnable, "coffee-gb-rom-loader").apply { isDaemon = true }
         }
+
+    fun createPersistenceExecutor(): ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+          Thread(runnable, "coffee-gb-persistence").apply { isDaemon = true }
+        }
+
   }
 
   private fun sanitizedPersistenceDetail(error: Throwable): String {
@@ -530,6 +1018,84 @@ class BasicController private constructor(
       val clearPatches: Boolean,
       val task: PreparedLoadTask,
   )
+
+  private data class ReplacementJob(
+      val requestId: Long,
+      val event: Controller.LoadRomEvent,
+      val clearPatches: Boolean,
+      val prepared: PreparedSession,
+      val capture: BatteryFlush,
+      var attempt: ReplacementTask?,
+  )
+
+  private data class StopJob(
+      val requestId: Long,
+      val pausedBeforeStop: Boolean,
+      val capture: BatteryFlush,
+      var attempt: PersistenceTask?,
+  )
+
+  private class PersistenceTask(capture: BatteryFlush) :
+      FutureTask<BatteryPersistenceResult>(Callable { capture.persist() })
+
+  private sealed interface ReplacementAttemptResult {
+
+    data class PersistenceFailure(
+        val result: BatteryPersistenceResult.Failure,
+    ) : ReplacementAttemptResult
+
+    data class Ready(
+        val persistence: BatteryPersistenceResult.Success,
+        val gameboy: Gameboy,
+    ) : ReplacementAttemptResult
+  }
+
+  private class ReplacementTask(
+      capture: BatteryFlush,
+      private val prepared: PreparedSession,
+  ) : FutureTask<ReplacementAttemptResult>(
+          Callable {
+            when (val persistence = capture.persist()) {
+              is BatteryPersistenceResult.Failure ->
+                  ReplacementAttemptResult.PersistenceFailure(persistence)
+              is BatteryPersistenceResult.Success ->
+                  ReplacementAttemptResult.Ready(persistence, prepared.materialize())
+              else -> error("Unknown battery persistence result")
+            }
+          }) {
+
+    private val materialized = AtomicReference<Gameboy>()
+
+    override fun set(value: ReplacementAttemptResult) {
+      if (value is ReplacementAttemptResult.Ready) {
+        materialized.set(value.gameboy)
+      }
+      super.set(value)
+      if (isCancelled) {
+        materialized.getAndSet(null)?.discardUnstarted()
+      }
+    }
+
+    override fun done() {
+      if (isCancelled) {
+        materialized.getAndSet(null)?.discardUnstarted()
+      }
+    }
+
+    fun take(): ReplacementAttemptResult {
+      val value = get()
+      if (value is ReplacementAttemptResult.Ready) {
+        materialized.compareAndSet(value.gameboy, null)
+      }
+      return value
+    }
+
+    fun cancelAndDiscard() {
+      cancel(true)
+      prepared.discard()
+      materialized.getAndSet(null)?.discardUnstarted()
+    }
+  }
 
   /** Owns a prepared fallback machine until the controller takes it, even across cancel races. */
   private class PreparedLoadTask(callable: Callable<PreparedSession>) :
@@ -568,6 +1134,52 @@ class BasicController private constructor(
       }
     }
   }
+}
+
+/**
+ * Owns exactly one close writer across caller-side timeouts. A timed-out task is deliberately not
+ * cancelled or replaced: some filesystems ignore interruption, and overlapping atomic writers
+ * could otherwise publish stale bytes after a retry.
+ */
+internal class RetainedClosePersistence(capture: BatteryFlush) {
+  private val task =
+      FutureTask<BatteryPersistenceResult>(Callable { capture.persist() })
+          .also { future ->
+            Thread(future, "coffee-gb-close-persistence").apply {
+              isDaemon = true
+              start()
+            }
+          }
+
+  val isDone: Boolean
+    get() = task.isDone
+
+  fun await(
+      fileName: String,
+      timeout: Long,
+      unit: TimeUnit,
+      unexpectedFailure: (Exception) -> BatteryPersistenceResult.Failure,
+  ): BatteryPersistenceResult {
+    require(timeout > 0) { "Persistence timeout must be positive" }
+    return try {
+      task.get(timeout, unit)
+    } catch (timeoutFailure: TimeoutException) {
+      timedOut(fileName, timeoutFailure)
+    } catch (interrupted: InterruptedException) {
+      Thread.currentThread().interrupt()
+      timedOut(fileName, interrupted)
+    } catch (failure: Exception) {
+      unexpectedFailure(failure)
+    }
+  }
+
+  private fun timedOut(fileName: String, cause: Exception) =
+      BatteryPersistenceResult.Failure(
+          BatteryPersistenceResult.FailureKind.TIMED_OUT,
+          fileName,
+          "Battery persistence timed out. Changes remain pending and can be retried.",
+          java.io.IOException("Battery persistence timed out", cause),
+      )
 }
 
 internal fun interface SnapshotManagerFactory {

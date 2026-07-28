@@ -11,6 +11,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -22,6 +24,166 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public class FileBatteryTest {
+
+    @Test
+    public void twoPhaseCaptureIsImmutablePersistsOffCaptureThreadAndCommitsLater()
+            throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("barrier.sav");
+            ThreadTrackingWriter persistence = new ThreadTrackingWriter();
+            FileBattery battery = new FileBattery(target.toFile(), 4, persistence);
+            int[] mapperRam = {1, 2, 3, 4};
+            AtomicReference<BatteryFlush> captured = new AtomicReference<>();
+
+            Thread safePoint =
+                    new Thread(
+                            () ->
+                                    captured.set(
+                                            battery.prepareFlush(
+                                                    () -> {
+                                                        battery.saveRam(mapperRam);
+                                                        battery.flush();
+                                                    })),
+                            "test-emulation-safe-point");
+            safePoint.start();
+            safePoint.join(5_000);
+            Arrays.fill(mapperRam, 9);
+
+            ExecutorService worker =
+                    Executors.newSingleThreadExecutor(
+                            runnable -> new Thread(runnable, "test-persistence-worker"));
+            BatteryPersistenceResult result;
+            try {
+                result = worker.submit(captured.get()::persist).get(5, TimeUnit.SECONDS);
+            } finally {
+                worker.shutdownNow();
+            }
+
+            assertTrue(result instanceof BatteryPersistenceResult.Success);
+            assertEquals("test-persistence-worker", persistence.writeThread);
+            assertArrayEquals(new byte[] {1, 2, 3, 4}, Files.readAllBytes(target));
+            assertTrue("I/O success is not committed from the worker", battery.isDirtyForTesting());
+
+            captured.get().complete(result);
+            assertFalse(battery.isDirtyForTesting());
+        });
+    }
+
+    @Test
+    public void typedBarrierFailureRetainsCaptureForRetry() throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("retry.sav");
+            FileBattery battery = new FileBattery(target.toFile(), 4, new FailOnceWriter());
+            BatteryFlush capture =
+                    battery.prepareFlush(
+                            () -> {
+                                battery.saveRam(new int[] {8, 7, 6, 5});
+                                battery.flush();
+                            });
+
+            BatteryPersistenceResult failed = capture.persist();
+
+            assertTrue(failed instanceof BatteryPersistenceResult.Failure);
+            BatteryPersistenceResult.Failure failure =
+                    (BatteryPersistenceResult.Failure) failed;
+            assertEquals(
+                    BatteryPersistenceResult.FailureKind.WRITE_FAILED,
+                    failure.kind());
+            capture.complete(failed);
+            assertTrue(battery.isDirtyForTesting());
+
+            BatteryPersistenceResult retried = capture.persist();
+            assertTrue(retried instanceof BatteryPersistenceResult.Success);
+            capture.complete(retried);
+            assertFalse(battery.isDirtyForTesting());
+            assertArrayEquals(new byte[] {8, 7, 6, 5}, Files.readAllBytes(target));
+        });
+    }
+
+    @Test
+    public void importsLegacySaveOnlyWhenCallerProvesArchiveIsUnambiguous()
+            throws Exception {
+        withDirectory(directory -> {
+            Path legacy = directory.resolve("collection.sav");
+            Files.write(legacy, new byte[] {4, 3, 2, 1});
+
+            Path migrated = directory.resolve("collection--only-123.sav");
+            FileBattery allowed =
+                    new FileBattery(
+                            migrated.toFile(),
+                            legacy.toFile(),
+                            true,
+                            4,
+                            AtomicFileWriter.system());
+            int[] loaded = new int[4];
+            allowed.loadRam(loaded);
+
+            assertArrayEquals(new int[] {4, 3, 2, 1}, loaded);
+            assertArrayEquals(new byte[] {4, 3, 2, 1}, Files.readAllBytes(migrated));
+            assertTrue("legacy fallback remains available to older versions", Files.exists(legacy));
+
+            Path ambiguous = directory.resolve("collection--other-456.sav");
+            FileBattery denied =
+                    new FileBattery(
+                            ambiguous.toFile(),
+                            legacy.toFile(),
+                            false,
+                            4,
+                            AtomicFileWriter.system());
+            int[] unchanged = {9, 9, 9, 9};
+            denied.loadRam(unchanged);
+
+            assertArrayEquals(new int[] {9, 9, 9, 9}, unchanged);
+            assertFalse(Files.exists(ambiguous));
+        });
+    }
+
+    @Test
+    public void failedLegacyImportRemainsRetryable() throws Exception {
+        withDirectory(directory -> {
+            Path legacy = directory.resolve("collection.sav");
+            Path migrated = directory.resolve("collection--only-123.sav");
+            Files.write(legacy, new byte[] {4, 3, 2, 1});
+            FileBattery battery =
+                    new FileBattery(
+                            migrated.toFile(),
+                            legacy.toFile(),
+                            true,
+                            4,
+                            new FailOnceWriter());
+            int[] loaded = {9, 9, 9, 9};
+
+            battery.loadRam(loaded);
+            assertArrayEquals(new int[] {9, 9, 9, 9}, loaded);
+            assertFalse(Files.exists(migrated));
+
+            battery.loadRam(loaded);
+            assertArrayEquals(new int[] {4, 3, 2, 1}, loaded);
+            assertArrayEquals(new byte[] {4, 3, 2, 1}, Files.readAllBytes(migrated));
+        });
+    }
+
+    @Test
+    public void oversizedLegacyImportIsRejectedWithoutCreatingATarget() throws Exception {
+        withDirectory(directory -> {
+            Path legacy = directory.resolve("collection.sav");
+            Path migrated = directory.resolve("collection--only-123.sav");
+            Files.write(legacy, new byte[4 + 11 * Integer.BYTES + 1]);
+            FileBattery battery =
+                    new FileBattery(
+                            migrated.toFile(),
+                            legacy.toFile(),
+                            true,
+                            4,
+                            AtomicFileWriter.system());
+            int[] unchanged = {9, 9, 9, 9};
+
+            battery.loadRam(unchanged);
+
+            assertArrayEquals(new int[] {9, 9, 9, 9}, unchanged);
+            assertFalse(Files.exists(migrated));
+        });
+    }
 
     @Test
     public void failedRamAndRtcFlushRetainsExactPendingBytesAndRetryClearsDirty()
@@ -62,6 +224,30 @@ public class FileBatteryTest {
             assertFalse(battery.isDirtyForTesting());
             assertFalse(battery.isClockPresentForTesting());
             eventBus.close();
+        });
+    }
+
+    @Test
+    public void twelveElementRtcCaptureRetainsLegacyElevenWordFileFormat() throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("huc3.sav");
+            FileBattery battery = new FileBattery(target.toFile(), 4);
+            long[] clock = new long[12];
+            for (int i = 0; i < 11; i++) {
+                clock[i] = i + 1;
+            }
+
+            battery.saveRamWithClock(new int[] {1, 2, 3, 4}, clock);
+            battery.flush();
+
+            byte[] persisted = Files.readAllBytes(target);
+            assertEquals(4 + 11 * Integer.BYTES, persisted.length);
+            ByteBuffer words =
+                    ByteBuffer.wrap(persisted, 4, 11 * Integer.BYTES)
+                            .order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < 11; i++) {
+                assertEquals(i + 1, words.getInt());
+            }
         });
     }
 
@@ -221,6 +407,17 @@ public class FileBatteryTest {
                 fail = false;
                 throw new IOException("injected before write");
             }
+            AtomicFileWriter.system().write(target, intendedBytes);
+        }
+    }
+
+    private static class ThreadTrackingWriter extends AtomicFileWriter {
+
+        private volatile String writeThread;
+
+        @Override
+        public void write(Path target, byte[] intendedBytes) throws IOException {
+            writeThread = Thread.currentThread().getName();
             AtomicFileWriter.system().write(target, intendedBytes);
         }
     }

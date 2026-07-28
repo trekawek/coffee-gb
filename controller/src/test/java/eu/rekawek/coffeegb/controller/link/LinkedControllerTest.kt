@@ -57,6 +57,7 @@ import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
 import org.junit.Test
 import java.io.IOException
 import java.nio.file.Files
@@ -116,6 +117,61 @@ class LinkedControllerTest {
     } finally {
       Files.deleteIfExists(directory.resolve("settings-false.properties"))
       Files.deleteIfExists(directory.resolve("settings-true.properties"))
+      Files.deleteIfExists(battery)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun oversizedAdjacentBatteryIsRejectedBeforeLinkedPayloadRetention() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-battery-limit")
+    val rom = directory.resolve("linked-battery.gb")
+    val battery = directory.resolve("linked-battery.sav")
+    Files.copy(ROM.toPath(), rom)
+    Files.newByteChannel(
+            battery,
+            java.nio.file.StandardOpenOption.WRITE,
+            java.nio.file.StandardOpenOption.CREATE,
+        )
+        .use {
+          it.position(StateLimits.BATTERY.decodedBytes.toLong())
+          it.write(java.nio.ByteBuffer.wrap(byteArrayOf(0)))
+        }
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val loaded = AtomicReference<LinkedController.LocalRomLoadedEvent?>()
+    val failure = AtomicReference<BatteryPersistenceFailedEvent?>()
+    eventBus.register<LinkedController.LocalRomLoadedEvent>(loaded::set)
+    eventBus.register<BatteryPersistenceFailedEvent>(failure::set)
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      val oldState = controller.encodedSessionStates()
+      loaded.set(null)
+
+      eventBus.post(LoadRomEvent(rom.toFile()))
+      controller.runFrame()
+
+      assertNull(loaded.get())
+      assertEncodedStatesEqual(oldState, controller.encodedSessionStates())
+      assertEquals(
+          BatteryPersistenceFailedEvent.Operation.LOAD,
+          assertNotNull(failure.get()).operation,
+      )
+      assertTrue(assertNotNull(failure.get()).message.contains("2097152-byte safety limit"))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      Files.deleteIfExists(directory.resolve("settings.properties"))
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
       Files.deleteIfExists(directory)
