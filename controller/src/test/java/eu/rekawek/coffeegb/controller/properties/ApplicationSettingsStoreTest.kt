@@ -827,6 +827,7 @@ class ApplicationSettingsStoreTest {
               "saves.batteryEnabled" to "false",
               "saves.resumePolicy" to "ASK",
               "saves.rewindEnabled" to "true",
+              "saves.rewindMemoryMiB" to "64",
               "saves.rewindSeconds" to "30",
               "settings.schemaVersion" to "5",
               "sound.enabled" to "false",

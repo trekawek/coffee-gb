@@ -65,6 +65,8 @@ class SwingGui private constructor(
 
   private lateinit var dropFeedback: RomDropFeedback
 
+  private lateinit var stateUxController: StateUxDesktopController
+
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
@@ -83,6 +85,7 @@ class SwingGui private constructor(
           // Only a timely, successful emulator stop makes desktop teardown irreversible. A
           // persistence failure or watchdog timeout retains a quiesced (not closed) ROM service.
           romOpen.close()
+          stateUxController.close()
           console?.stop()
           closeSettings()
         },
@@ -119,6 +122,12 @@ class SwingGui private constructor(
             ),
             DisplayWindowSizingRuntime(emulator::refreshDisplayWindowSizing),
         )
+    stateUxController =
+        StateUxDesktopController(
+            mainWindow,
+            eventBus,
+            emulator::captureDisplayImage,
+        )
 
     lateinit var menu: SwingMenu
     romOpen =
@@ -139,6 +148,9 @@ class SwingGui private constructor(
             romOpen::open,
             ::acceptRomLifecycle,
             ::showPreferences,
+            stateUxController::showBrowser,
+            stateUxController::takeScreenshot,
+            stateUxController::openSaveFolder,
             ::requestClose,
         )
     menu.addMenu()
@@ -279,8 +291,10 @@ class SwingGui private constructor(
     if (!proceed) {
       return
     }
-    if (shutdownCoordinator.request()) {
-      updateLoadingUi("Coffee GB: Saving before quit…", true)
+    stateUxController.prepareClose {
+      if (shutdownCoordinator.request()) {
+        updateLoadingUi("Coffee GB: Saving before quit…", true)
+      }
     }
   }
 
@@ -365,6 +379,7 @@ class SwingGui private constructor(
       emulator.applyDeviceSettings(applied)
       displayController.apply(applied.display, persist = false)
       eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
+      eventBus.post(Controller.UpdatedSavesSettingsEvent(applied.saves))
     }
   }
 

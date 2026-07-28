@@ -61,6 +61,7 @@ internal data class PreferencesEdit(
     val gamepads: Map<Int, ApplicationSettings.GamepadSelection>,
     val gamepadTunings: Map<String, ApplicationSettings.GamepadTuning>,
     val audio: ApplicationSettings.Audio,
+    val saves: ApplicationSettings.Saves? = null,
 ) {
   init {
     require(
@@ -81,6 +82,7 @@ internal data class PreferencesEdit(
               ),
           display = display,
           audio = audio,
+          saves = saves ?: current.saves,
           input =
               current.input.copy(
                   keyboard = keyboard,
@@ -104,6 +106,7 @@ internal class PreferencesPanel private constructor(
     private val directoryChooser: RomDirectoryChooser = SYSTEM_DIRECTORY_CHOOSER,
     gamepadSnapshots: GamepadSnapshotProvider = EMPTY_GAMEPAD_SNAPSHOTS,
     audioDevices: AudioDeviceProvider = SYSTEM_AUDIO_DEVICES,
+    saveDirectoryChooser: SaveDirectoryChooser = SYSTEM_SAVE_DIRECTORY_CHOOSER,
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
 ) : JPanel(BorderLayout(0, 8)) {
   constructor(
@@ -112,12 +115,14 @@ internal class PreferencesPanel private constructor(
       directoryChooser: RomDirectoryChooser = SYSTEM_DIRECTORY_CHOOSER,
       gamepadSnapshots: GamepadSnapshotProvider = EMPTY_GAMEPAD_SNAPSHOTS,
       audioDevices: AudioDeviceProvider = SYSTEM_AUDIO_DEVICES,
+      saveDirectoryChooser: SaveDirectoryChooser = SYSTEM_SAVE_DIRECTORY_CHOOSER,
   ) : this(
       initial,
       defaults,
       directoryChooser,
       gamepadSnapshots,
       audioDevices,
+      saveDirectoryChooser,
       requireEdt(),
   )
 
@@ -146,6 +151,8 @@ internal class PreferencesPanel private constructor(
       GamepadPreferencesEditor(initial.input, defaults.input, gamepadSnapshots)
   internal val audioEditor =
       AudioPreferencesEditor(initial.audio, defaults.audio, audioDevices)
+  internal val savesEditor =
+      SavesPreferencesEditor(initial.saves, defaults.saves, saveDirectoryChooser)
   internal val validationSummary = JLabel(" ")
   internal val tabs = JTabbedPane()
 
@@ -159,6 +166,7 @@ internal class PreferencesPanel private constructor(
     tabs.addTab("Input", JScrollPane(keyboardEditor).apply { border = null })
     tabs.addTab("Gamepads", JScrollPane(gamepadEditor).apply { border = null })
     tabs.addTab("Audio", JScrollPane(audioEditor).apply { border = null })
+    tabs.addTab("Saves", JScrollPane(savesEditor).apply { border = null })
     tabs.addChangeListener {
       if (tabs.selectedIndex != INPUT_TAB) {
         keyboardEditor.cancelCapture()
@@ -183,6 +191,7 @@ internal class PreferencesPanel private constructor(
     keyboardEditor.resetToDefaults()
     gamepadEditor.restoreDefaults()
     audioEditor.restoreDefaults()
+    savesEditor.restoreDefaults()
     clearErrors()
   }
 
@@ -232,6 +241,17 @@ internal class PreferencesPanel private constructor(
               failure.invalidComponent,
           )
         }
+    val saves =
+        try {
+          savesEditor.validatedSaves()
+        } catch (failure: PreferenceEditorValidationException) {
+          validationSummary.text = failure.message ?: "Resolve the saves settings error."
+          tabs.selectedIndex = SAVES_TAB
+          throw PreferencesValidationException(
+              validationSummary.text,
+              failure.invalidComponent,
+          )
+        }
     return PreferencesEdit(
         romDirectory = directory,
         recentFileCapacity = capacity,
@@ -241,6 +261,7 @@ internal class PreferencesPanel private constructor(
         gamepads = gamepad.selections,
         gamepadTunings = gamepad.tunings,
         audio = audio,
+        saves = saves,
     )
   }
 
@@ -456,6 +477,7 @@ internal class PreferencesPanel private constructor(
     const val INPUT_TAB = 2
     const val GAMEPADS_TAB = 3
     const val AUDIO_TAB = 4
+    const val SAVES_TAB = 5
     val ERROR_COLOR = Color(0xB0, 0x00, 0x20)
     val CONFIRMATION_OPTIONS =
         listOf(

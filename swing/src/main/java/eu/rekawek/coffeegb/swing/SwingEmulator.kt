@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.StateImage
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -87,7 +88,9 @@ class SwingEmulator(
     sound.start()
     gamepadThread = Thread(gamepad, "gamepad").apply { isDaemon = true; start() }
 
-    controller = BasicController(eventBus, properties, console).also { it.startController() }
+    controller =
+        BasicController(eventBus, properties, console, DesktopStateExternalActions())
+            .also { it.startController() }
 
     eventBus.register<ConnectionController.ServerGotConnectionEvent> {
       controllerLifecycle.transitionIfActive { startLinkedController(it.mode, it.player) }
@@ -112,7 +115,9 @@ class SwingEmulator(
     eventBus.post(ControllerOwnershipChangingEvent())
     releaseForLifecycleChange()
     val state = controller.closeWithState()
-    controller = BasicController(eventBus, properties, console).also { it.startController() }
+    controller =
+        BasicController(eventBus, properties, console, DesktopStateExternalActions())
+            .also { it.startController() }
     if (state != null) {
       eventBus.post(Controller.LoadRomEvent(state.rom.image, state.state))
     }
@@ -165,6 +170,8 @@ class SwingEmulator(
   fun audioDevices(): List<AudioDeviceSnapshot> = audioDeviceCatalog.snapshot()
 
   fun audioStatus(): AudioOutputStatus = sound.currentStatus()
+
+  fun captureDisplayImage(): StateImage = display.captureStateImage()
 
   private fun releaseForLifecycleChange() {
     joypad.releaseForLifecycleChange()

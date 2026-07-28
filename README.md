@@ -136,23 +136,28 @@ ambiguous or aliased identity.
 | Start / Select | <kbd>Enter</kbd> / <kbd>Shift</kbd> |
 | Pause | <kbd>Space</kbd> |
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
+| Take screenshot | <kbd>F12</kbd> |
 | Rewind | Hold <kbd>Backspace</kbd> |
 | Toggle fullscreen | <kbd>F11</kbd> (disabled if assigned to an emulated button) |
 
-In single-player mode, there are ten save-state slots. Battery saves (`.sav`)
-and save states (`.sn0`&ndash;`.sn9`) are stored next to the ROM. Pause, save
-states, and rewind are disabled during netplay.
+In single-player mode, **Emulation > Manage States…** provides ten stable slots, named states,
+previews, export, and autosave/resume. The original <kbd>F5</kbd>/<kbd>F7</kbd> quick slots and their
+`.sn0`&ndash;`.sn9` files remain supported. Managed states and screenshots are namespaced by exact ROM
+hash in a hidden directory beside the ROM, or below the directory selected in Saves preferences.
+See [managed states, autosave, screenshots, and rewind](docs/state-management.md) for storage,
+fallback, recovery, privacy, and keyboard-access details. Pause, states, and rewind are disabled
+during netplay.
 
 <details>
 <summary>Custom keyboard and game-controller mapping</summary>
 
 Desktop settings are stored in `~/.coffeegb.properties`. **File > Preferences…** configures
 General behavior, aspect-correct integer/fit/1×–4× display scaling, letterboxing, fullscreen,
-four-player keyboard bindings, gamepad assignment/tuning, and audio device/volume/mute/latency
-without manual editing. The resizable display preserves DMG/CGB and SGB-border geometry; fullscreen
-restores and clamps prior window placement across monitor and DPI changes. The complete typed
-schema, validation, rendering fallback, migration, device fallback, and recovery rules are
-documented in the
+four-player keyboard bindings, gamepad assignment/tuning, audio device/volume/mute/latency, and
+Saves policy (directory, battery saves, rewind bounds, autosave, and resume) without manual editing.
+The resizable display preserves DMG/CGB and SGB-border geometry; fullscreen restores and clamps
+prior window placement across monitor and DPI changes. The complete typed schema, validation,
+rendering fallback, migration, device fallback, and recovery rules are documented in the
 [desktop command-line and settings contract](docs/desktop-settings.md). For keyboard mappings, use
 [`KeyEvent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/event/KeyEvent.html)
 constant names:

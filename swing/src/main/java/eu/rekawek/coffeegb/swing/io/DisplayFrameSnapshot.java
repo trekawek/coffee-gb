@@ -52,6 +52,15 @@ final class DisplayFrameSnapshot {
         return image.getRGB(x, y) & 0xffffff;
     }
 
+    int[] copyRgb() {
+        int[] pixels = new int[Math.multiplyExact(width, height)];
+        image.getRGB(0, 0, width, height, pixels, 0, width);
+        for (int i = 0; i < pixels.length; i++) {
+            pixels[i] &= 0x00ffffff;
+        }
+        return pixels;
+    }
+
     void paint(Graphics2D graphics) {
         graphics.drawImage(image, 0, 0, null);
     }

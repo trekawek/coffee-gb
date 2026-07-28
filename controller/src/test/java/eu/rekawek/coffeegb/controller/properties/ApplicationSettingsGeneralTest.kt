@@ -399,10 +399,16 @@ class ApplicationSettingsGeneralTest {
     val collisionValue = "x".repeat(65_536)
     val serialized =
         "${collisionKey.length}:$collisionKey${collisionValue.length}:$collisionValue"
+    val canonicalPropertyCount =
+        ApplicationSettingsCodec.encode(
+                ApplicationSettingsCodec.decode(
+                    mapOf(ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "2")))
+            .size
+    val pluginPropertyCount = 2_048 - canonicalPropertyCount - 1
     val raw =
         buildMap {
           put(ApplicationSettingsCodec.SCHEMA_VERSION_KEY, "2")
-          repeat(2_024) { index -> put("plugin.$index", "value") }
+          repeat(pluginPropertyCount) { index -> put("plugin.$index", "value") }
           serialized.chunked(60_000).forEachIndexed { index, chunk ->
             put(
                 "${ApplicationSettingsCodec.PRESERVED_UNKNOWN_COLLISIONS_PREFIX}$index",
