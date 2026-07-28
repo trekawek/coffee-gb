@@ -7,9 +7,13 @@ import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.event.KeyEvent
+import java.io.IOException
+import java.nio.file.Files
 import java.nio.file.InvalidPathException
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import java.text.ParseException
 import javax.swing.BorderFactory
 import javax.swing.JButton
@@ -22,6 +26,8 @@ import javax.swing.JSpinner
 import javax.swing.JTextField
 import javax.swing.SpinnerNumberModel
 import javax.swing.SwingUtilities
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 internal fun interface SaveDirectoryChooser {
   fun choose(parent: Component, initial: Path?): Path?
@@ -79,15 +85,24 @@ internal class SavesPreferencesEditor private constructor(
           insets = Insets(4, 4, 4, 4)
         }
 
-    val directoryLabel = JLabel("State and screenshot directory:")
+    val directoryLabel = JLabel("Save data directory:")
     directoryLabel.displayedMnemonic = KeyEvent.VK_D
     directoryLabel.labelFor = directoryField
-    directoryField.accessibleContext.accessibleName = "State and screenshot directory"
+    directoryField.accessibleContext.accessibleName = "Save data directory"
     directoryField.toolTipText =
-        "Leave blank to keep each ROM's state data in a hidden .coffee-gb directory beside it."
+        "Stores battery saves, states, thumbnails, and screenshots. Leave blank to keep battery " +
+            "saves beside each ROM and other data in a hidden .coffee-gb directory."
+    directoryField.document.addDocumentListener(
+        object : DocumentListener {
+          override fun insertUpdate(event: DocumentEvent) = clearDirectoryError()
+
+          override fun removeUpdate(event: DocumentEvent) = clearDirectoryError()
+
+          override fun changedUpdate(event: DocumentEvent) = clearDirectoryError()
+        })
     val browse = JButton("Browse…")
     browse.mnemonic = KeyEvent.VK_B
-    browse.accessibleContext.accessibleName = "Browse for state and screenshot directory"
+    browse.accessibleContext.accessibleName = "Browse for save data directory"
     browse.addActionListener {
       val current = runCatching { parseDirectory(directoryField.text) }.getOrNull()
       directoryChooser.choose(this, current)?.let { directoryField.text = it.toString() }
@@ -197,6 +212,11 @@ internal class SavesPreferencesEditor private constructor(
     updateRewindAvailability()
   }
 
+  fun showDirectoryValidationError(message: String) {
+    requireSavesEdt()
+    directoryError.text = message
+  }
+
   private fun previousDirectories(directory: Path?): List<Path> {
     if (samePath(directory, initial.directory)) return initial.previousDirectories
     return (listOfNotNull(initial.directory) + initial.previousDirectories)
@@ -232,6 +252,10 @@ internal class SavesPreferencesEditor private constructor(
   private fun updateRewindAvailability() {
     rewindSeconds.isEnabled = rewindEnabled.isSelected
     rewindMemory.isEnabled = rewindEnabled.isSelected
+  }
+
+  private fun clearDirectoryError() {
+    directoryError.text = " "
   }
 
   private fun addRow(
@@ -305,7 +329,7 @@ internal val SYSTEM_SAVE_DIRECTORY_CHOOSER =
     SaveDirectoryChooser { parent, initial ->
       val chooser =
           RomFileChooser().apply {
-            dialogTitle = "Choose state and screenshot directory"
+            dialogTitle = "Choose save data directory"
             fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
             isAcceptAllFileFilterUsed = false
             initial?.let(::useConfiguredDirectory)
@@ -316,6 +340,78 @@ internal val SYSTEM_SAVE_DIRECTORY_CHOOSER =
         null
       }
     }
+
+internal fun interface SaveDirectoryValidator {
+  /** Returns a field-level error, or null when [directory] is a safe writable directory. */
+  fun validate(directory: Path): String?
+}
+
+internal val SYSTEM_SAVE_DIRECTORY_VALIDATOR =
+    SaveDirectoryValidator { directory ->
+      check(!SwingUtilities.isEventDispatchThread()) {
+        "Save directory filesystem validation must not run on the EDT"
+      }
+      validateSaveDirectory(directory)
+    }
+
+private fun validateSaveDirectory(directory: Path): String? {
+  val normalized = directory.toAbsolutePath().normalize()
+  if (!Files.exists(normalized, LinkOption.NOFOLLOW_LINKS)) {
+    return "Choose an existing save data directory."
+  }
+
+  var cursor = normalized.root
+  if (cursor == null) {
+    return "Enter an absolute save data directory."
+  }
+  for (component in normalized) {
+    cursor = cursor.resolve(component)
+    if (!Files.exists(cursor, LinkOption.NOFOLLOW_LINKS)) {
+      return "Choose an existing save data directory."
+    }
+    if (Files.isSymbolicLink(cursor)) {
+      return "Choose a save data directory that does not use symbolic links."
+    }
+    if (!Files.isDirectory(cursor, LinkOption.NOFOLLOW_LINKS)) {
+      return "The selected save data path is not a directory."
+    }
+  }
+  if (!Files.isWritable(normalized)) {
+    return "The selected save data directory is not writable."
+  }
+
+  var probe: Path? = null
+  var failure: String? = null
+  try {
+    probe =
+        Files.createTempFile(
+            normalized,
+            ".coffeegb-write-check-",
+            ".tmp",
+        )
+    Files.newByteChannel(
+            probe,
+            StandardOpenOption.WRITE,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        .use { channel -> channel.write(java.nio.ByteBuffer.wrap(byteArrayOf(0))) }
+  } catch (_: IOException) {
+    failure = "Coffee GB could not write to the selected save data directory."
+  } catch (_: SecurityException) {
+    failure = "Coffee GB is not allowed to write to the selected save data directory."
+  } finally {
+    probe?.let {
+      try {
+        Files.deleteIfExists(it)
+      } catch (_: IOException) {
+        if (failure == null) {
+          failure = "Coffee GB could not clean up a write check in the save data directory."
+        }
+      }
+    }
+  }
+  return failure
+}
 
 private fun requireSavesEdt() {
   check(SwingUtilities.isEventDispatchThread()) {

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.ExclusiveWriteRecovery
 import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
@@ -1637,6 +1638,20 @@ class BasicController private constructor(
     isRewinding = false
     rewindManager = configuredRewindManager(saves)
     val currentSession = session ?: return
+    val romHashes =
+        checkNotNull(currentRomHashes) {
+          "Active session has no precomputed ROM identity"
+        }
+    val batteryStorage =
+        BatteryStorageResolver.configure(
+            saves,
+            currentSession.config,
+            romHashes,
+        )
+    currentSession.gameboy.setBatteryStorage(
+        batteryStorage.primary,
+        batteryStorage.slot,
+    )
     stateSessionId = nextStateSessionId()
     closeAutosaveCapture = null
     closeAutosaveAttempt = null
@@ -1649,9 +1664,7 @@ class BasicController private constructor(
           val identity =
               StateIdentity.from(
                   currentSession.config,
-                  checkNotNull(currentRomHashes) {
-                    "Active session has no precomputed ROM identity"
-                  },
+                  romHashes,
               )
           val paths = StateStorageResolver.resolve(saves, currentSession.config, identity)
           StateWorkerContext(

@@ -96,7 +96,6 @@ import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
-import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
@@ -2629,15 +2628,21 @@ class LinkedController(
       config: GameboyConfiguration,
       token: LocalOpenToken,
   ): ByteArray? {
+    if (!config.isSupportBatterySave) {
+      return null
+    }
     val saveFile =
-        config.rom.origin
-            .persistencePath(".sav")
-            .map { Cartridge.getSaveName(config.rom) }
-            .orElse(null)
-    return if (config.isSupportBatterySave &&
-        saveFile != null &&
-        Files.exists(saveFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-      readBoundedBattery(saveFile.toPath(), token)
+        config.batteryStorage?.firstReadablePath()?.orElse(null)
+            ?: config.rom.origin
+                .persistencePath(".sav")
+                .map { Cartridge.getSaveName(config.rom).toPath() }
+                .orElse(null)
+    return if (
+        saveFile != null && Files.exists(saveFile, LinkOption.NOFOLLOW_LINKS)
+    ) {
+      readBoundedBattery(saveFile, token) {
+        config.batteryStorage?.ensureReadablePath(saveFile)
+      }
     } else {
       null
     }
@@ -2739,8 +2744,10 @@ class LinkedController(
   private fun readBoundedBattery(
       path: Path,
       token: LocalOpenToken,
+      validatePath: () -> Unit = {},
   ): ByteArray {
     ensureLocalLoadActive(token)
+    validatePath()
     val limit = StateLimits.BATTERY.decodedBytes
     requireRegularBatterySidecar(path)
     return FileChannel.open(

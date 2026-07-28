@@ -144,6 +144,8 @@ In single-player mode, **Emulation > Manage States…** provides ten stable slot
 previews, export, and autosave/resume. The original <kbd>F5</kbd>/<kbd>F7</kbd> quick slots and their
 `.sn0`&ndash;`.sn9` files remain supported. Managed states and screenshots are namespaced by exact ROM
 hash in a hidden directory beside the ROM, or below the directory selected in Saves preferences.
+A selected Saves directory also owns collision-safe battery saves; leaving it blank retains the
+portable `.sav` sidecar behavior.
 See [managed states, autosave, screenshots, and rewind](docs/state-management.md) for storage,
 fallback, recovery, privacy, and keyboard-access details. Pause, states, and rewind are disabled
 during netplay.

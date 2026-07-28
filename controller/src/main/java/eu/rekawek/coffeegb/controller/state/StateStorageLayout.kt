@@ -21,6 +21,8 @@ class StateStorageLayout(gameDirectory: Path) {
 
   val screenshotsDirectory: Path = contained(this.gameDirectory.resolve(SCREENSHOTS_DIRECTORY))
 
+  val batteryFile: Path = contained(this.gameDirectory.resolve(BATTERY_FILE))
+
   init {
     require(this.gameDirectory.fileName != null && this.gameDirectory.parent != null) {
       "Game storage directory must have a name and parent"
@@ -62,6 +64,7 @@ class StateStorageLayout(gameDirectory: Path) {
     const val NAMED_DIRECTORY = "named"
     const val AUTOSAVE_DIRECTORY = "autosave"
     const val SCREENSHOTS_DIRECTORY = "screenshots"
+    const val BATTERY_FILE = "battery.sav"
     const val STATE_FILE = "state.cgbstate"
     const val METADATA_FILE = "metadata.properties"
 

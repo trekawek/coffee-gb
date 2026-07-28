@@ -10,8 +10,15 @@ import java.awt.Container
 import java.awt.event.ActionEvent
 import java.awt.event.KeyEvent
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Paths
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JButton
 import javax.swing.AbstractButton
 import javax.swing.JComponent
@@ -372,6 +379,161 @@ class PreferencesDialogTest {
         assertTrue(panel.validationSummary.text.contains("8 to 512"))
         assertSame(editor, panel.focusOwnerOrInvalidComponent())
       }
+
+  @Test
+  fun `configured save directory is checked off EDT before Apply mutates settings`() {
+    val directory = Files.createTempDirectory("preferences-saves")
+    val validationOffEdt = AtomicBoolean()
+    val completed = CountDownLatch(1)
+    val events = mutableListOf<String>()
+    val validationExecutor = Executors.newSingleThreadExecutor()
+
+    onEdt {
+      val panel =
+          PreferencesPanel(
+              ApplicationSettings(
+                  saves = ApplicationSettings.Saves(directory = directory),
+              ))
+      val actions =
+          PreferencesDialogActions(
+              panel,
+              applyEdit = {
+                assertTrue(SwingUtilities.isEventDispatchThread())
+                events += "apply"
+              },
+              close = {
+                events += "close"
+                completed.countDown()
+              },
+              saveDirectoryValidator =
+                  SaveDirectoryValidator {
+                    validationOffEdt.set(!SwingUtilities.isEventDispatchThread())
+                    null
+                  },
+              validationExecutor = validationExecutor,
+          )
+
+      actions.apply()
+
+      assertTrue(events.isEmpty())
+    }
+
+    assertTrue(completed.await(5, TimeUnit.SECONDS))
+    assertTrue(validationOffEdt.get())
+    assertEquals(listOf("apply", "close"), events)
+    assertTrue(validationExecutor.isShutdown)
+  }
+
+  @Test
+  fun `failed background save validation stays open and selects actionable field error`() {
+    val directory = Files.createTempDirectory("preferences-saves-invalid")
+    val completed = CountDownLatch(1)
+    var applyCount = 0
+    var closeCount = 0
+    lateinit var panel: PreferencesPanel
+
+    onEdt {
+      panel =
+          PreferencesPanel(
+              ApplicationSettings(
+                  saves = ApplicationSettings.Saves(directory = directory),
+              ))
+      val actions =
+          PreferencesDialogActions(
+              panel,
+              applyEdit = { applyCount++ },
+              close = { closeCount++ },
+              saveDirectoryValidator =
+                  SaveDirectoryValidator {
+                    assertFalse(SwingUtilities.isEventDispatchThread())
+                    "The selected save data directory is not writable."
+                  },
+              validationExecutor =
+                  Executor { command ->
+                    Thread(command, "preferences-save-validation-failure-test").start()
+                  },
+              applyingChanged = { applying ->
+                if (!applying) completed.countDown()
+              },
+          )
+      panel.tabs.selectedIndex = 0
+
+      actions.apply()
+    }
+
+    assertTrue(completed.await(5, TimeUnit.SECONDS))
+    onEdt {
+      assertEquals(0, applyCount)
+      assertEquals(0, closeCount)
+      assertEquals("Saves", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+      assertTrue(panel.savesEditor.directoryError.text.contains("not writable"))
+      assertTrue(panel.validationSummary.text.contains("not writable"))
+    }
+  }
+
+  @Test
+  fun `system save validator rejects symbolic link components`() {
+    val directory = Files.createTempDirectory("preferences-saves-symlink")
+    val real = Files.createDirectory(directory.resolve("real"))
+    val linked = directory.resolve("linked")
+    try {
+      Files.createSymbolicLink(linked, real)
+    } catch (_: Exception) {
+      return
+    }
+
+    val error = SYSTEM_SAVE_DIRECTORY_VALIDATOR.validate(linked)
+
+    assertTrue(error.orEmpty().contains("symbolic links"))
+  }
+
+  @Test
+  fun `validation rejection restores Apply state and owned executor closes with dialog`() {
+    val directory = Files.createTempDirectory("preferences-saves-rejected")
+    var applying = false
+    var applyCount = 0
+    var closeCount = 0
+
+    onEdt {
+      val panel =
+          PreferencesPanel(
+              ApplicationSettings(
+                  saves = ApplicationSettings.Saves(directory = directory),
+              ))
+      val rejected =
+          PreferencesDialogActions(
+              panel,
+              applyEdit = { applyCount++ },
+              close = { closeCount++ },
+              validationExecutor =
+                  Executor {
+                    throw RejectedExecutionException("injected saturation")
+                  },
+              applyingChanged = { applying = it },
+          )
+
+      rejected.apply()
+
+      assertFalse(applying)
+      assertEquals(0, applyCount)
+      assertEquals(0, closeCount)
+      assertTrue(panel.savesEditor.directoryError.text.contains("validation is busy"))
+      rejected.cancel()
+    }
+
+    val ownedExecutor = Executors.newSingleThreadExecutor()
+    onEdt {
+      val panel = PreferencesPanel(ApplicationSettings())
+      PreferencesDialogActions(
+              panel,
+              applyEdit = {},
+              close = {},
+              validationExecutor = ownedExecutor,
+          )
+          .cancel()
+    }
+    assertTrue(ownedExecutor.isShutdown)
+  }
 
   @Test
   fun `configured ROM directory disables synchronous shell folder resolution`() =
