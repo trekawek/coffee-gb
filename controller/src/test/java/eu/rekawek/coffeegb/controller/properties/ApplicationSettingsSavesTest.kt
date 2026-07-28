@@ -17,6 +17,7 @@ class ApplicationSettingsSavesTest {
             "${ApplicationSettingsCodec.PREVIOUS_SAVE_DIRECTORY_PREFIX}0" to "/future/old",
             ApplicationSettingsCodec.REWIND_ENABLED_KEY to "false",
             ApplicationSettingsCodec.REWIND_SECONDS_KEY to "120",
+            ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY to "256",
             ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY to "ON_CLOSE_AND_ROM_SWITCH",
             ApplicationSettingsCodec.RESUME_POLICY_KEY to "ALWAYS",
         )
@@ -42,6 +43,7 @@ class ApplicationSettingsSavesTest {
       assertEquals("false", canonical[ApplicationSettingsCodec.BATTERY_SAVES_KEY])
       assertEquals("true", canonical[ApplicationSettingsCodec.REWIND_ENABLED_KEY])
       assertEquals("30", canonical[ApplicationSettingsCodec.REWIND_SECONDS_KEY])
+      assertEquals("64", canonical[ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY])
       assertEquals("DISABLED", canonical[ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY])
       assertEquals("ASK", canonical[ApplicationSettingsCodec.RESUME_POLICY_KEY])
       assertTrue(
@@ -68,6 +70,7 @@ class ApplicationSettingsSavesTest {
                         batterySavesEnabled = false,
                         rewindEnabled = false,
                         rewindSeconds = 120,
+                        rewindMemoryMiB = 256,
                         autosavePolicy =
                             ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
                         resumePolicy = ApplicationSettings.ResumePolicy.ALWAYS,
@@ -90,6 +93,7 @@ class ApplicationSettingsSavesTest {
     assertEquals("false", encoded[ApplicationSettingsCodec.BATTERY_SAVES_KEY])
     assertEquals("false", encoded[ApplicationSettingsCodec.REWIND_ENABLED_KEY])
     assertEquals("120", encoded[ApplicationSettingsCodec.REWIND_SECONDS_KEY])
+    assertEquals("256", encoded[ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY])
     assertEquals(
         "ON_CLOSE_AND_ROM_SWITCH",
         encoded[ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY],
@@ -116,6 +120,7 @@ class ApplicationSettingsSavesTest {
     assertEquals("true", encoded[ApplicationSettingsCodec.BATTERY_SAVES_KEY])
     assertEquals("true", encoded[ApplicationSettingsCodec.REWIND_ENABLED_KEY])
     assertEquals("30", encoded[ApplicationSettingsCodec.REWIND_SECONDS_KEY])
+    assertEquals("64", encoded[ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY])
     assertEquals("DISABLED", encoded[ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY])
     assertEquals("ASK", encoded[ApplicationSettingsCodec.RESUME_POLICY_KEY])
   }
@@ -124,10 +129,17 @@ class ApplicationSettingsSavesTest {
   fun `save model enforces bounded unique history and rewind duration`() {
     ApplicationSettings.Saves(rewindSeconds = ApplicationSettings.MIN_REWIND_SECONDS)
     ApplicationSettings.Saves(rewindSeconds = ApplicationSettings.MAX_REWIND_SECONDS)
+    ApplicationSettings.Saves(rewindMemoryMiB = ApplicationSettings.MIN_REWIND_MEMORY_MIB)
+    ApplicationSettings.Saves(rewindMemoryMiB = ApplicationSettings.MAX_REWIND_MEMORY_MIB)
 
     listOf(4, 121).forEach { invalid ->
       assertFailsWith<IllegalArgumentException> {
         ApplicationSettings.Saves(rewindSeconds = invalid)
+      }
+    }
+    listOf(7, 513).forEach { invalid ->
+      assertFailsWith<IllegalArgumentException> {
+        ApplicationSettings.Saves(rewindMemoryMiB = invalid)
       }
     }
     assertFailsWith<IllegalArgumentException> {
@@ -164,6 +176,9 @@ class ApplicationSettingsSavesTest {
             mapOf(ApplicationSettingsCodec.REWIND_SECONDS_KEY to "4"),
             mapOf(ApplicationSettingsCodec.REWIND_SECONDS_KEY to "121"),
             mapOf(ApplicationSettingsCodec.REWIND_SECONDS_KEY to "thirty"),
+            mapOf(ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY to "7"),
+            mapOf(ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY to "513"),
+            mapOf(ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY to "large"),
             mapOf(ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY to "on_close"),
             mapOf(ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY to "ON_SWITCH"),
             mapOf(ApplicationSettingsCodec.RESUME_POLICY_KEY to "ask"),
@@ -243,6 +258,7 @@ class ApplicationSettingsSavesTest {
               batterySavesEnabled = false,
               rewindEnabled = false,
               rewindSeconds = 75,
+              rewindMemoryMiB = 128,
               autosavePolicy = ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
               resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
           )
@@ -253,6 +269,7 @@ class ApplicationSettingsSavesTest {
       assertFalse(properties.saves.batterySavesEnabled)
       assertFalse(properties.saves.rewindEnabled)
       assertEquals(75, properties.saves.rewindSeconds)
+      assertEquals(128, properties.saves.rewindMemoryMiB)
       assertEquals(saves.autosavePolicy, properties.saves.autosavePolicy)
       assertEquals(saves.resumePolicy, properties.saves.resumePolicy)
     }

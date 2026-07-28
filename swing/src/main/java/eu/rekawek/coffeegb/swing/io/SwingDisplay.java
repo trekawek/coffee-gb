@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.DisplayProperties;
+import eu.rekawek.coffeegb.controller.state.StateImage;
+import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent;
+import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
@@ -104,6 +107,9 @@ public class SwingDisplay extends JPanel implements Runnable {
                 Controller.SnapshotSavedEvent.class, callerId);
         eventBus.register(e -> showNotification("State loaded (slot " + e.getSlot() + ")"),
                 Controller.SnapshotRestoredEvent.class, callerId);
+        eventBus.register(this::onStateOperationCompleted, StateOperationCompletedEvent.class);
+        eventBus.register(e -> showNotification(e.getError().getSummary()),
+                StateOperationFailedEvent.class);
         eventBus.register(e -> showPersistentNotification("Loading…"),
                 Controller.RomLoadingEvent.class);
         eventBus.register(e -> clearPersistentNotification(),
@@ -283,6 +289,12 @@ public class SwingDisplay extends JPanel implements Runnable {
         return scaleMode;
     }
 
+    /** Returns an immutable copy of the last fully published presentation frame. */
+    public StateImage captureStateImage() {
+        DisplayFrameSnapshot frame = displayedFrame.get();
+        return new StateImage(frame.width(), frame.height(), frame.copyRgb());
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         requireEventDispatchThread("Display painting");
@@ -323,6 +335,15 @@ public class SwingDisplay extends JPanel implements Runnable {
         notificationExpiresAt = System.nanoTime()
                 + TimeUnit.MILLISECONDS.toNanos(NOTIFICATION_DURATION_MS);
         repaintNotification(NOTIFICATION_DURATION_MS);
+    }
+
+    private void onStateOperationCompleted(StateOperationCompletedEvent event) {
+        switch (event.getOperation()) {
+            case SAVE, LOAD, RESUME, SCREENSHOT -> showNotification(event.getMessage());
+            default -> {
+                // Browser/folder operations have their own visible desktop affordance.
+            }
+        }
     }
 
     private void showPersistentNotification(String text) {

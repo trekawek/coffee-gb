@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
@@ -62,6 +63,52 @@ class RewindManagerTest {
       assertEquals(0, manager.captureCount)
       assertEquals(0, manager.historySize)
       assertFalse(manager.rewindOneStep(session.gameboy))
+    }
+  }
+
+  @Test
+  fun configuredDurationAndMemoryBudgetBoundRetainedHistory() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val durationManager =
+          RewindManager(
+              durationSeconds = RewindManager.MIN_DURATION_SECONDS,
+              memoryBudgetBytes = Long.MAX_VALUE,
+          )
+      val expectedCapacity =
+          RewindManager.MIN_DURATION_SECONDS * 60 / RewindManager.RECORD_INTERVAL
+      repeat((expectedCapacity + 2) * RewindManager.RECORD_INTERVAL) { frame ->
+        session.gameboy.addressSpace.setByte(TEST_ADDRESS, frame and 0xff)
+        durationManager.record(session.gameboy)
+      }
+      assertEquals(expectedCapacity, durationManager.historySize)
+
+      val budgetManager =
+          RewindManager(
+              durationSeconds = RewindManager.MAX_DURATION_SECONDS,
+              memoryBudgetBytes = RewindManager.MIN_MEMORY_BUDGET_BYTES,
+          )
+      repeat(500) { capture ->
+        repeat(8) { page ->
+          val offset = page * 1024 + capture
+          val value = (capture * 73 + page * 19) and 0xff
+          session.gameboy.addressSpace.setByte(0xc000 + offset, value)
+          session.gameboy.gpu.videoRam0.setByte(0x8000 + offset, value xor 0x5a)
+          session.gameboy.gpu.videoRam1.setByte(0x8000 + offset, value xor 0xa5)
+        }
+        repeat(RewindManager.RECORD_INTERVAL) {
+          budgetManager.record(session.gameboy)
+        }
+      }
+      assertTrue(
+          budgetManager.retainedBytesForTesting() <= RewindManager.MIN_MEMORY_BUDGET_BYTES)
+      assertTrue(budgetManager.budgetEvictionCount > 0)
+    }
+
+    assertFailsWith<IllegalArgumentException> {
+      RewindManager(durationSeconds = RewindManager.MIN_DURATION_SECONDS - 1)
+    }
+    assertFailsWith<IllegalArgumentException> {
+      RewindManager(memoryBudgetBytes = RewindManager.MIN_MEMORY_BUDGET_BYTES - 1)
     }
   }
 

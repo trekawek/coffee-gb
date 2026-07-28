@@ -29,6 +29,7 @@ object ApplicationSettingsCodec {
   const val PREVIOUS_SAVE_DIRECTORY_PREFIX = "saves.previousDirectory."
   const val REWIND_ENABLED_KEY = "saves.rewindEnabled"
   const val REWIND_SECONDS_KEY = "saves.rewindSeconds"
+  const val REWIND_MEMORY_MIB_KEY = "saves.rewindMemoryMiB"
   const val AUTOSAVE_POLICY_KEY = "saves.autosavePolicy"
   const val RESUME_POLICY_KEY = "saves.resumePolicy"
   internal const val PRESERVED_UNKNOWN_COLLISIONS_PREFIX =
@@ -52,6 +53,7 @@ object ApplicationSettingsCodec {
               SAVE_DIRECTORY_KEY,
               REWIND_ENABLED_KEY,
               REWIND_SECONDS_KEY,
+              REWIND_MEMORY_MIB_KEY,
               AUTOSAVE_POLICY_KEY,
               RESUME_POLICY_KEY,
           )
@@ -152,6 +154,7 @@ object ApplicationSettingsCodec {
     }
     known[REWIND_ENABLED_KEY] = settings.saves.rewindEnabled.toString()
     known[REWIND_SECONDS_KEY] = settings.saves.rewindSeconds.toString()
+    known[REWIND_MEMORY_MIB_KEY] = settings.saves.rewindMemoryMiB.toString()
     known[AUTOSAVE_POLICY_KEY] = settings.saves.autosavePolicy.name
     known[RESUME_POLICY_KEY] = settings.saves.resumePolicy.name
 
@@ -371,6 +374,18 @@ object ApplicationSettingsCodec {
                           parseResumePolicy(raw[RESUME_POLICY_KEY])
                         } else {
                           ApplicationSettings.ResumePolicy.ASK
+                        },
+                    rewindMemoryMiB =
+                        if (sourceVersion >= 5) {
+                          parseRangedInt(
+                              raw[REWIND_MEMORY_MIB_KEY],
+                              ApplicationSettings.DEFAULT_REWIND_MEMORY_MIB,
+                              REWIND_MEMORY_MIB_KEY,
+                              ApplicationSettings.MIN_REWIND_MEMORY_MIB,
+                              ApplicationSettings.MAX_REWIND_MEMORY_MIB,
+                          )
+                        } else {
+                          ApplicationSettings.DEFAULT_REWIND_MEMORY_MIB
                         },
                 ),
             advanced =

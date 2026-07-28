@@ -154,6 +154,9 @@ interface Controller : AutoCloseable {
 
   class UpdatedSystemMappingEvent : Event
 
+  /** Applies the validated Saves preference section at the next controller frame boundary. */
+  data class UpdatedSavesSettingsEvent(val saves: ApplicationSettings.Saves) : Event
+
   data class GameboyTypeEvent(val gameboyType: GameboyType) : Event
 
   /** Canonical stable profile identity for diagnostics and future replay metadata. */

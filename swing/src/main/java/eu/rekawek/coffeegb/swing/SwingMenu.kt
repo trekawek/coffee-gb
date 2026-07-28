@@ -30,6 +30,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.BootstrapMode
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.CgbGamesType
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.DmgGamesType
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.FAST_FORWARD
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.NORMAL
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode.SKIP
@@ -87,6 +88,9 @@ internal class SwingMenu(
     private val onOpenRom: (path: java.nio.file.Path, source: RomOpenSource) -> Unit,
     private val acceptRomLifecycle: (Long?) -> Boolean,
     private val onPreferences: () -> Unit,
+    private val onManageStates: () -> Unit,
+    private val onScreenshot: () -> Unit,
+    private val onOpenSaveFolder: () -> Unit,
     private val onQuit: () -> Unit,
 ) {
 
@@ -363,6 +367,37 @@ internal class SwingMenu(
       }
     }
 
+    gameMenu.addSeparator()
+    val manageStates = JMenuItem("Manage States…")
+    manageStates.mnemonic = KeyEvent.VK_M
+    manageStates.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
+    manageStates.addActionListener { onManageStates() }
+    gameMenu.add(manageStates)
+
+    val screenshot = JMenuItem("Take Screenshot")
+    screenshot.mnemonic = KeyEvent.VK_T
+    screenshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F12, 0)
+    screenshot.addActionListener { onScreenshot() }
+    gameMenu.add(screenshot)
+
+    val openSaveFolder = JMenuItem("Open Save Folder")
+    openSaveFolder.mnemonic = KeyEvent.VK_O
+    openSaveFolder.addActionListener { onOpenSaveFolder() }
+    gameMenu.add(openSaveFolder)
+
+    eventBus.register<StateUxSessionEvent> { session ->
+      val localSessionActive = session.available || session.unavailableReason != null
+      SwingUtilities.invokeLater {
+        manageStates.isEnabled = localSessionActive
+        screenshot.isEnabled = localSessionActive
+        openSaveFolder.isEnabled = localSessionActive
+      }
+    }
+    manageStates.isEnabled = false
+    screenshot.isEnabled = false
+    openSaveFolder.isEnabled = false
+
+    gameMenu.addSeparator()
     val resetGame = JMenuItem("Reset")
     resetGame.isEnabled = false
     resetGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_R, KEY_MODIFIER)

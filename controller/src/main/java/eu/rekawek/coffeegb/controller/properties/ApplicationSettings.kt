@@ -383,7 +383,9 @@ data class ApplicationSettings(
     }
   }
 
-  class Saves(
+  class Saves
+  @JvmOverloads
+  constructor(
       val directory: Path? = null,
       previousDirectories: List<Path> = emptyList(),
       val batterySavesEnabled: Boolean = true,
@@ -391,6 +393,7 @@ data class ApplicationSettings(
       val rewindSeconds: Int = DEFAULT_REWIND_SECONDS,
       val autosavePolicy: AutosavePolicy = AutosavePolicy.DISABLED,
       val resumePolicy: ResumePolicy = ResumePolicy.ASK,
+      val rewindMemoryMiB: Int = DEFAULT_REWIND_MEMORY_MIB,
   ) {
     val previousDirectories: List<Path> = immutableListCopy(previousDirectories)
 
@@ -417,6 +420,9 @@ data class ApplicationSettings(
       require(rewindSeconds in MIN_REWIND_SECONDS..MAX_REWIND_SECONDS) {
         "Rewind duration must be between $MIN_REWIND_SECONDS and $MAX_REWIND_SECONDS seconds"
       }
+      require(rewindMemoryMiB in MIN_REWIND_MEMORY_MIB..MAX_REWIND_MEMORY_MIB) {
+        "Rewind memory must be between $MIN_REWIND_MEMORY_MIB and $MAX_REWIND_MEMORY_MIB MiB"
+      }
     }
 
     fun copy(
@@ -427,6 +433,7 @@ data class ApplicationSettings(
         rewindSeconds: Int = this.rewindSeconds,
         autosavePolicy: AutosavePolicy = this.autosavePolicy,
         resumePolicy: ResumePolicy = this.resumePolicy,
+        rewindMemoryMiB: Int = this.rewindMemoryMiB,
     ): Saves =
         Saves(
             directory,
@@ -436,6 +443,7 @@ data class ApplicationSettings(
             rewindSeconds,
             autosavePolicy,
             resumePolicy,
+            rewindMemoryMiB,
         )
 
     override fun equals(other: Any?): Boolean =
@@ -447,7 +455,8 @@ data class ApplicationSettings(
                 rewindEnabled == other.rewindEnabled &&
                 rewindSeconds == other.rewindSeconds &&
                 autosavePolicy == other.autosavePolicy &&
-                resumePolicy == other.resumePolicy)
+                resumePolicy == other.resumePolicy &&
+                rewindMemoryMiB == other.rewindMemoryMiB)
 
     override fun hashCode(): Int {
       var result = directory?.hashCode() ?: 0
@@ -457,6 +466,7 @@ data class ApplicationSettings(
       result = 31 * result + rewindSeconds
       result = 31 * result + autosavePolicy.hashCode()
       result = 31 * result + resumePolicy.hashCode()
+      result = 31 * result + rewindMemoryMiB
       return result
     }
 
@@ -464,7 +474,7 @@ data class ApplicationSettings(
         "Saves(directory=$directory, previousDirectories=$previousDirectories, " +
             "batterySavesEnabled=$batterySavesEnabled, rewindEnabled=$rewindEnabled, " +
             "rewindSeconds=$rewindSeconds, autosavePolicy=$autosavePolicy, " +
-            "resumePolicy=$resumePolicy)"
+            "resumePolicy=$resumePolicy, rewindMemoryMiB=$rewindMemoryMiB)"
   }
 
   enum class AutosavePolicy {
@@ -524,6 +534,9 @@ data class ApplicationSettings(
     const val MIN_REWIND_SECONDS = 5
     const val DEFAULT_REWIND_SECONDS = 30
     const val MAX_REWIND_SECONDS = 120
+    const val MIN_REWIND_MEMORY_MIB = 8
+    const val DEFAULT_REWIND_MEMORY_MIB = 64
+    const val MAX_REWIND_MEMORY_MIB = 512
 
     internal fun isStableAudioOutputId(value: String): Boolean =
         value.matches(STABLE_AUDIO_OUTPUT_ID)

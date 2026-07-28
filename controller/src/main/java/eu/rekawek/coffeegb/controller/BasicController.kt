@@ -3,6 +3,40 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
+import eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateDeleteRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateDiagnosticMetadata
+import eu.rekawek.coffeegb.controller.state.StateEntryKey
+import eu.rekawek.coffeegb.controller.state.StateExportRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateExternalActions
+import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.controller.state.StateIdentity
+import eu.rekawek.coffeegb.controller.state.StateLoadRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateOpenFolderRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateOperation
+import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
+import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent
+import eu.rekawek.coffeegb.controller.state.StateOperationWorker
+import eu.rekawek.coffeegb.controller.state.StatePrepareCloseCompletedEvent
+import eu.rekawek.coffeegb.controller.state.StatePrepareCloseRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateReadResult
+import eu.rekawek.coffeegb.controller.state.StateRecovery
+import eu.rekawek.coffeegb.controller.state.StateRef
+import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent
+import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent
+import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateScreenshotRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateStoragePaths
+import eu.rekawek.coffeegb.controller.state.StateStorageResolver
+import eu.rekawek.coffeegb.controller.state.StateUserError
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
+import eu.rekawek.coffeegb.controller.state.StateWorkerCompletedEvent
+import eu.rekawek.coffeegb.controller.state.StateWorkerContext
+import eu.rekawek.coffeegb.controller.state.StateWorkerPurpose
+import eu.rekawek.coffeegb.controller.state.StateWorkerResult
+import eu.rekawek.coffeegb.controller.state.StateWorkspace
+import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.debug.Console
@@ -27,18 +61,21 @@ import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 class BasicController private constructor(
     parentEventBus: EventBus,
-    properties: EmulatorProperties,
+    private val properties: EmulatorProperties,
     private val console: Console?,
     private val sessionPreparer: SessionPreparer,
     private val loadExecutor: ExecutorService,
     private val snapshotManagerFactory: SnapshotManagerFactory,
-    private val rewindManager: RewindManager,
+    private var rewindManager: RewindManager,
+    private val stateWorkspaceFactory: StateWorkspaceFactory,
+    private val stateWorkerFactory: StateOperationWorkerFactory,
     private val closeTimeoutMillis: Long,
 ) : Controller, SnapshotSupport {
 
@@ -53,7 +90,29 @@ class BasicController private constructor(
       RomSessionPreparer(),
       createLoadExecutor(),
       SnapshotManagerFactory.DEFAULT,
-      RewindManager(),
+      configuredRewindManager(properties),
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory.DEFAULT,
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+  )
+
+  constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      externalActions: StateExternalActions,
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      RomSessionPreparer(),
+      createLoadExecutor(),
+      SnapshotManagerFactory.DEFAULT,
+      configuredRewindManager(properties),
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory {
+        StateOperationWorker(it, externalActions = externalActions)
+      },
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
@@ -69,7 +128,9 @@ class BasicController private constructor(
       sessionPreparer,
       createLoadExecutor(),
       SnapshotManagerFactory.DEFAULT,
-      RewindManager(),
+      configuredRewindManager(properties),
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory.DEFAULT,
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
@@ -86,7 +147,9 @@ class BasicController private constructor(
       sessionPreparer,
       createLoadExecutor(),
       SnapshotManagerFactory.DEFAULT,
-      RewindManager(),
+      configuredRewindManager(properties),
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory.DEFAULT,
       closeTimeoutMillis,
   )
 
@@ -103,7 +166,9 @@ class BasicController private constructor(
       sessionPreparer,
       createLoadExecutor(),
       snapshotManagerFactory,
-      RewindManager(),
+      configuredRewindManager(properties),
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory.DEFAULT,
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
@@ -122,6 +187,30 @@ class BasicController private constructor(
       createLoadExecutor(),
       snapshotManagerFactory,
       rewindManager,
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory.DEFAULT,
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+  )
+
+  internal constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      sessionPreparer: SessionPreparer,
+      snapshotManagerFactory: SnapshotManagerFactory,
+      rewindManager: RewindManager,
+      stateWorkspaceFactory: StateWorkspaceFactory,
+      stateWorkerFactory: StateOperationWorkerFactory,
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      sessionPreparer,
+      createLoadExecutor(),
+      snapshotManagerFactory,
+      rewindManager,
+      stateWorkspaceFactory,
+      stateWorkerFactory,
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
@@ -131,9 +220,29 @@ class BasicController private constructor(
 
   private val eventQueue = EventQueue(eventBus)
 
+  private val stateWorker = stateWorkerFactory.create(eventBus)
+
   private var session: Session? = null
 
   private var snapshotManager: SnapshotManager? = null
+
+  private var stateContext: StateWorkerContext? = null
+
+  private var stateSessionId = 0L
+
+  private val internalStateRequestId = AtomicLong(1L shl 60)
+
+  private val latestStateRequests = mutableMapOf<StateOperation, Long>()
+
+  private val latestSaveRequests = mutableMapOf<StateRef, Long>()
+
+  private var pendingResume: PendingResume? = null
+
+  private var pendingRomSwitch: PendingRomSwitch? = null
+
+  private var pendingCloseRequestId: Long? = null
+
+  private var sessionStartedNanos: Long? = null
 
   @Volatile private var doStop = false
 
@@ -192,12 +301,22 @@ class BasicController private constructor(
   init {
     require(closeTimeoutMillis > 0) { "Controller close timeout must be positive" }
     eventQueue.register<AddPatches> { patches.addAll(it.patches) }
-    eventQueue.register<Controller.LoadRomEvent> { requestLoad(properties, it) }
+    eventQueue.register<Controller.LoadRomEvent> { requestLoadWithAutosave(properties, it) }
     eventQueue.register<Controller.CancelRomOpenEvent> { cancelOpenRequest(it.openRequestId) }
     eventQueue.register<Controller.RetryRomReplacementEvent> { retryPersistence(it.requestId) }
     eventQueue.register<Controller.CancelRomReplacementEvent> { cancelPersistence(it.requestId) }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
     eventQueue.register<Controller.SaveSnapshotEvent> { e -> saveSnapshot(e.slot) }
+    eventQueue.register<StateCatalogRequestEvent> { requestStateCatalog(it) }
+    eventQueue.register<StateSaveRequestEvent> { requestStateSave(it) }
+    eventQueue.register<StateLoadRequestEvent> { requestStateLoad(it) }
+    eventQueue.register<StateDeleteRequestEvent> { requestStateDelete(it) }
+    eventQueue.register<StateExportRequestEvent> { requestStateExport(it) }
+    eventQueue.register<StateScreenshotRequestEvent> { requestScreenshot(it) }
+    eventQueue.register<StateOpenFolderRequestEvent> { requestOpenStateFolder(it) }
+    eventQueue.register<StateResumeDecisionEvent> { applyResumeDecision(it) }
+    eventQueue.register<StatePrepareCloseRequestEvent> { prepareClose(it) }
+    eventQueue.register<StateWorkerCompletedEvent> { finishStateWorkerRequest(it) }
     eventQueue.register<Controller.PauseEmulationEvent> {
       if (pauseStateBeforeLoading != null) {
         pauseStateBeforeLoading = true
@@ -270,6 +389,9 @@ class BasicController private constructor(
         }
       }
     }
+    eventQueue.register<Controller.UpdatedSavesSettingsEvent> {
+      applySavesSettings(it.saves)
+    }
   }
 
   override fun startController() {
@@ -326,6 +448,521 @@ class BasicController private constructor(
       }
       throw e
     }
+  }
+
+  private fun requestStateCatalog(event: StateCatalogRequestEvent) {
+    val context = requireStateContext(event.requestId, StateOperation.CATALOG) ?: return
+    latestStateRequests[StateOperation.CATALOG] = event.requestId
+    stateWorker.catalog(context, event.requestId)
+  }
+
+  private fun requestStateSave(event: StateSaveRequestEvent) {
+    val context = requireStateContext(event.requestId, StateOperation.SAVE) ?: return
+    val currentSession = session ?: return
+    try {
+      val captured = capturePortableState(currentSession)
+      latestSaveRequests[event.ref] = event.requestId
+      stateWorker.save(
+          context,
+          event.requestId,
+          StateWorkerPurpose.MANUAL,
+          event.ref,
+          captured,
+          event.label,
+          currentPlayDurationNanos(),
+          event.thumbnail,
+      )
+    } catch (failure: Throwable) {
+      postStateFailure(
+          event.requestId,
+          StateOperation.SAVE,
+          stateError(
+              "State could not be captured.",
+              failure,
+              "The running game was not changed. Retry at the next frame.",
+          ),
+      )
+    }
+  }
+
+  private fun requestStateLoad(event: StateLoadRequestEvent) {
+    val context = requireStateContext(event.requestId, StateOperation.LOAD) ?: return
+    latestStateRequests[StateOperation.LOAD] = event.requestId
+    stateWorker.load(
+        context,
+        event.requestId,
+        StateWorkerPurpose.MANUAL,
+        event.key,
+    )
+  }
+
+  private fun requestStateDelete(event: StateDeleteRequestEvent) {
+    val context = requireStateContext(event.requestId, StateOperation.DELETE) ?: return
+    latestStateRequests[StateOperation.DELETE] = event.requestId
+    stateWorker.delete(context, event.requestId, event.key)
+  }
+
+  private fun requestStateExport(event: StateExportRequestEvent) {
+    val context = requireStateContext(event.requestId, StateOperation.EXPORT) ?: return
+    latestStateRequests[StateOperation.EXPORT] = event.requestId
+    stateWorker.export(context, event.requestId, event.key, event.destination)
+  }
+
+  private fun requestScreenshot(event: StateScreenshotRequestEvent) {
+    val context = requireStateContext(event.requestId, StateOperation.SCREENSHOT) ?: return
+    latestStateRequests[StateOperation.SCREENSHOT] = event.requestId
+    stateWorker.screenshot(context, event.requestId, event.image)
+  }
+
+  private fun requestOpenStateFolder(event: StateOpenFolderRequestEvent) {
+    val context = requireStateContext(event.requestId, StateOperation.OPEN_FOLDER) ?: return
+    latestStateRequests[StateOperation.OPEN_FOLDER] = event.requestId
+    stateWorker.openFolder(context, event.requestId)
+  }
+
+  private fun prepareClose(event: StatePrepareCloseRequestEvent) {
+    val context = stateContext
+    val currentSession = session
+    if (context == null ||
+        currentSession == null ||
+        properties.saves.autosavePolicy !=
+            eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
+                .ON_CLOSE_AND_ROM_SWITCH) {
+      eventBus.post(
+          StatePrepareCloseCompletedEvent(
+              event.requestId,
+              context?.sessionId ?: stateSessionId,
+              autosaved = false,
+              error = null,
+          ))
+      return
+    }
+    try {
+      pendingCloseRequestId = event.requestId
+      stateWorker.save(
+          context,
+          event.requestId,
+          StateWorkerPurpose.AUTOSAVE_CLOSE,
+          StateRef.Autosave,
+          capturePortableState(currentSession),
+          label = "Autosave",
+          playDurationNanos = currentPlayDurationNanos(),
+          thumbnail = null,
+      )
+    } catch (failure: Throwable) {
+      pendingCloseRequestId = null
+      eventBus.post(
+          StatePrepareCloseCompletedEvent(
+              event.requestId,
+              context.sessionId,
+              autosaved = false,
+              error =
+                  stateError(
+                      "Close autosave could not be captured.",
+                      failure,
+                      "The running game is still active. Retry or explicitly close without saving.",
+                  ),
+          ))
+    }
+  }
+
+  private fun requestLoadWithAutosave(
+      properties: EmulatorProperties,
+      event: Controller.LoadRomEvent,
+  ) {
+    val currentSession = session
+    val context = stateContext
+    val shouldAutosave =
+        currentSession != null &&
+            context != null &&
+            properties.saves.autosavePolicy ==
+                eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
+                    .ON_CLOSE_AND_ROM_SWITCH
+    if (!shouldAutosave) {
+      requestLoad(properties, event)
+      return
+    }
+    val requestId = nextInternalStateRequestId()
+    try {
+      pendingRomSwitch = PendingRomSwitch(requestId, event)
+      stateWorker.save(
+          checkNotNull(context),
+          requestId,
+          StateWorkerPurpose.AUTOSAVE_ROM_SWITCH,
+          StateRef.Autosave,
+          capturePortableState(checkNotNull(currentSession)),
+          label = "Autosave",
+          playDurationNanos = currentPlayDurationNanos(),
+          thumbnail = null,
+      )
+    } catch (failure: Throwable) {
+      pendingRomSwitch = null
+      postStateFailure(
+          requestId,
+          StateOperation.AUTOSAVE,
+          stateError(
+              "ROM switch was cancelled because autosave could not be captured.",
+              failure,
+              "The current game remains active. Retry or disable autosave in Preferences.",
+          ),
+      )
+    }
+  }
+
+  private fun finishStateWorkerRequest(event: StateWorkerCompletedEvent) {
+    val context = stateContext
+    if (context == null ||
+        event.context !== context ||
+        event.context.sessionId != context.sessionId) {
+      return
+    }
+
+    val failure = event.result as? StateWorkerResult.Failure
+    if (failure != null) {
+      finishStateWorkerFailure(event, failure.error)
+      return
+    }
+
+    when (val result = event.result) {
+      is StateWorkerResult.Catalog -> {
+        if (!isLatest(event.operation, event.requestId)) return
+        eventBus.post(
+            StateCatalogReadyEvent(
+                event.requestId,
+                context.sessionId,
+                result.catalog,
+            ))
+      }
+      is StateWorkerResult.Saved -> finishStateSave(event, result)
+      is StateWorkerResult.Loaded -> {
+        if (event.purpose == StateWorkerPurpose.MANUAL) {
+          if (!isLatest(StateOperation.LOAD, event.requestId)) return
+          applyLoadedState(
+              event.requestId,
+              StateOperation.LOAD,
+              result.key,
+              result.result,
+          )
+        }
+      }
+      is StateWorkerResult.Deleted -> {
+        if (!isLatest(StateOperation.DELETE, event.requestId)) return
+        eventBus.post(
+            StateOperationCompletedEvent(
+                event.requestId,
+                context.sessionId,
+                StateOperation.DELETE,
+                result.key.ref,
+                message =
+                    if (result.result.deletedArtifacts == 0) {
+                      "State was already absent."
+                    } else {
+                      "State deleted."
+                    },
+                recoveryMessages = recoveryMessages(result.result.recovery),
+            ))
+      }
+      is StateWorkerResult.Exported -> {
+        if (!isLatest(StateOperation.EXPORT, event.requestId)) return
+        eventBus.post(
+            StateOperationCompletedEvent(
+                event.requestId,
+                context.sessionId,
+                StateOperation.EXPORT,
+                result.key.ref,
+                path = result.result.destination,
+                message = "State exported to ${result.result.destination.fileName}.",
+            ))
+      }
+      is StateWorkerResult.Screenshot -> {
+        if (!isLatest(StateOperation.SCREENSHOT, event.requestId)) return
+        eventBus.post(
+            StateOperationCompletedEvent(
+                event.requestId,
+                context.sessionId,
+                StateOperation.SCREENSHOT,
+                path = result.result.path,
+                message = "Screenshot saved as ${result.result.path.fileName}.",
+            ))
+      }
+      is StateWorkerResult.Folder -> {
+        if (!isLatest(StateOperation.OPEN_FOLDER, event.requestId)) return
+        eventBus.post(
+            StateOperationCompletedEvent(
+                event.requestId,
+                context.sessionId,
+              StateOperation.OPEN_FOLDER,
+              path = result.path,
+              message =
+                  if (result.opened) "Save folder opened."
+                  else "Desktop folder integration is unavailable.",
+              folderOpened = result.opened,
+            ))
+      }
+      is StateWorkerResult.Resume -> finishResumeScan(event, result)
+      is StateWorkerResult.Failure -> error("Handled above")
+    }
+  }
+
+  private fun finishStateSave(
+      event: StateWorkerCompletedEvent,
+      result: StateWorkerResult.Saved,
+  ) {
+    val context = checkNotNull(stateContext)
+    when (event.purpose) {
+      StateWorkerPurpose.MANUAL -> {
+        if (latestSaveRequests[result.ref] != event.requestId) return
+        val warnings =
+            buildList {
+              result.result.state.metadataFailure?.let {
+                add("State metadata was not updated: $it")
+              }
+              result.result.thumbnailFailure?.let {
+                add("State thumbnail was not updated: $it")
+              }
+              addAll(recoveryMessages(result.result.state.recovery))
+              recoveryMessage("thumbnail", result.result.thumbnailRecovery)?.let(::add)
+            }
+        eventBus.post(
+            StateOperationCompletedEvent(
+                event.requestId,
+                context.sessionId,
+                StateOperation.SAVE,
+                result.ref,
+                message =
+                    if (warnings.isEmpty()) "State saved."
+                    else "State saved; optional UI metadata needs attention.",
+                recoveryMessages = warnings,
+            ))
+      }
+      StateWorkerPurpose.AUTOSAVE_ROM_SWITCH -> {
+        val pending = pendingRomSwitch
+        if (pending == null || pending.requestId != event.requestId) return
+        pendingRomSwitch = null
+        requestLoad(properties, pending.event)
+      }
+      StateWorkerPurpose.AUTOSAVE_CLOSE -> {
+        if (pendingCloseRequestId != event.requestId) return
+        pendingCloseRequestId = null
+        eventBus.post(
+            StatePrepareCloseCompletedEvent(
+                event.requestId,
+                context.sessionId,
+                autosaved = true,
+                error = null,
+            ))
+      }
+      StateWorkerPurpose.RESUME_SCAN -> Unit
+    }
+  }
+
+  private fun finishStateWorkerFailure(
+      event: StateWorkerCompletedEvent,
+      error: StateUserError,
+  ) {
+    when (event.purpose) {
+      StateWorkerPurpose.AUTOSAVE_ROM_SWITCH -> {
+        if (pendingRomSwitch?.requestId != event.requestId) return
+        pendingRomSwitch = null
+        postStateFailure(event.requestId, StateOperation.AUTOSAVE, error)
+      }
+      StateWorkerPurpose.AUTOSAVE_CLOSE -> {
+        if (pendingCloseRequestId != event.requestId) return
+        pendingCloseRequestId = null
+        eventBus.post(
+            StatePrepareCloseCompletedEvent(
+                event.requestId,
+                event.context.sessionId,
+                autosaved = false,
+                error = error,
+            ))
+      }
+      StateWorkerPurpose.RESUME_SCAN -> {
+        if (isLatest(StateOperation.RESUME, event.requestId)) {
+          postStateFailure(event.requestId, StateOperation.RESUME, error)
+        }
+      }
+      StateWorkerPurpose.MANUAL -> {
+        val latest =
+            if (event.operation == StateOperation.SAVE) {
+              // A failed manual save result carries no ref. Request IDs are globally unique in
+              // the desktop and any newer save should suppress this stale notification.
+              event.requestId in latestSaveRequests.values
+            } else {
+              isLatest(event.operation, event.requestId)
+            }
+        if (latest) postStateFailure(event.requestId, event.operation, error)
+      }
+    }
+  }
+
+  private fun finishResumeScan(
+      event: StateWorkerCompletedEvent,
+      result: StateWorkerResult.Resume,
+  ) {
+    if (!isLatest(StateOperation.RESUME, event.requestId)) return
+    val located = result.located ?: return
+    when (properties.saves.resumePolicy) {
+      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.NEVER -> Unit
+      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.ALWAYS ->
+          applyLoadedState(event.requestId, StateOperation.RESUME, located.first, located.second)
+      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.ASK -> {
+        pendingResume = PendingResume(event.requestId, located.first, located.second)
+        eventBus.post(
+            StateResumeAvailableEvent(
+                event.requestId,
+                event.context.sessionId,
+                located.first,
+                located.second.metadata?.savedAt,
+                located.second.metadata?.playDurationNanos,
+            ))
+      }
+    }
+  }
+
+  private fun applyResumeDecision(event: StateResumeDecisionEvent) {
+    val pending = pendingResume ?: return
+    if (pending.requestId != event.requestId) return
+    pendingResume = null
+    if (event.accept) {
+      applyLoadedState(
+          event.requestId,
+          StateOperation.RESUME,
+          pending.key,
+          pending.read,
+      )
+    }
+  }
+
+  private fun applyLoadedState(
+      requestId: Long,
+      operation: StateOperation,
+      key: StateEntryKey,
+      read: StateReadResult,
+  ) {
+    val currentSession = session ?: return
+    val context = stateContext ?: return
+    try {
+      StateCodec.applyDecoded(read.state, currentSession.config, currentSession.gameboy)
+      rewindManager.clear()
+      eventBus.post(
+          StateOperationCompletedEvent(
+              requestId,
+              context.sessionId,
+              operation,
+              key.ref,
+              message =
+                  if (operation == StateOperation.RESUME) {
+                    "Autosave resumed."
+                  } else {
+                    "State loaded."
+                  },
+              recoveryMessages = recoveryMessages(read.recovery),
+          ))
+    } catch (failure: Throwable) {
+      postStateFailure(
+          requestId,
+          operation,
+          stateError(
+              "State was rejected before it could replace the running game.",
+              failure,
+              "The active session was preserved. Export or delete the state from the browser.",
+          ),
+      )
+    }
+  }
+
+  private fun requireStateContext(
+      requestId: Long,
+      operation: StateOperation,
+  ): StateWorkerContext? {
+    val context = stateContext
+    if (context == null || session == null) {
+      postStateFailure(
+          requestId,
+          operation,
+          StateUserError(
+              "No local game is available for this state operation.",
+              "State operations require an active standalone emulation session.",
+              "Open a ROM locally and retry.",
+          ),
+      )
+      return null
+    }
+    return context
+  }
+
+  private fun capturePortableState(currentSession: Session): StateFile =
+      StateCodec.capture(
+          currentSession.config,
+          currentSession.gameboy,
+          StateDiagnosticMetadata(
+              BasicController::class.java.`package`?.implementationVersion ?: "development",
+              "desktop",
+          ),
+      )
+
+  private fun currentPlayDurationNanos(): Long? =
+      sessionStartedNanos?.let { started -> (System.nanoTime() - started).coerceAtLeast(0L) }
+
+  private fun nextInternalStateRequestId(): Long = internalStateRequestId.incrementAndGet()
+
+  private fun isLatest(operation: StateOperation, requestId: Long): Boolean =
+      latestStateRequests[operation] == requestId
+
+  private fun postStateFailure(
+      requestId: Long,
+      operation: StateOperation,
+      error: StateUserError,
+  ) {
+    eventBus.post(
+        StateOperationFailedEvent(
+            requestId,
+            stateContext?.sessionId ?: stateSessionId,
+            operation,
+            error,
+        ))
+  }
+
+  private fun stateError(
+      summary: String,
+      failure: Throwable,
+      action: String,
+  ): StateUserError {
+    val detail =
+        generateSequence(failure) { it.cause }
+            .take(8)
+            .joinToString("\n") {
+              val message =
+                  it.message
+                      ?.replace(Regex("[\\u0000-\\u001f\\u007f]+"), " ")
+                      ?.trim()
+                      ?.take(900)
+              "${it.javaClass.simpleName}${message?.let { value -> ": $value" } ?: ""}"
+            }
+            .take(StateUserError.MAX_DETAIL_CHARS)
+    return StateUserError(summary, detail.ifBlank { failure.javaClass.name }, action)
+  }
+
+  private fun recoveryMessages(recovery: StateRecovery): List<String> =
+      listOfNotNull(
+          recoveryMessage("state", recovery.state),
+          recoveryMessage("metadata", recovery.metadata),
+      )
+
+  private fun recoveryMessage(
+      artifact: String,
+      report: eu.rekawek.coffeegb.core.persistence.AtomicFileWriter.RecoveryReport,
+  ): String? {
+    val actions =
+        buildList {
+          if (report.backupRestored()) add("$artifact backup restored")
+          if (report.staleBackupRemoved()) add("stale $artifact backup removed")
+          if (report.staleTemporaryFilesRemoved() > 0) {
+            add("${report.staleTemporaryFilesRemoved()} stale $artifact temporary file(s) removed")
+          }
+        }
+    return actions.takeIf(List<String>::isNotEmpty)?.joinToString(", ")
   }
 
   private fun requestLoad(
@@ -735,6 +1372,30 @@ class BasicController private constructor(
     val session = session ?: return
 
     isPaused = false
+    sessionStartedNanos = System.nanoTime()
+    stateSessionId = nextStateSessionId()
+    var stateUnavailableReason: StateUserError? = null
+    stateContext =
+        try {
+          val paths =
+              StateStorageResolver.resolve(properties.applicationSettings.saves, session.config)
+          StateWorkerContext(
+              stateSessionId,
+              stateWorkspaceFactory.create(paths),
+              StateIdentity.from(session.config),
+              session.config.hardwareProfile.id(),
+          )
+        } catch (failure: Throwable) {
+          LOG.warn("Unable to initialize desktop state storage", failure)
+          stateUnavailableReason =
+              stateError(
+                  "State management is unavailable for this game.",
+                  failure,
+                  "Choose a writable Saves directory in Preferences, then retry.",
+              )
+          null
+        }
+
     postSessionEventSafely(session, AddPatches(patches))
     postSessionEventSafely(session, Controller.GameboyTypeEvent(session.config.gameboyType))
     postSessionEventSafely(session, Controller.HardwareProfileEvent(session.config.hardwareProfile))
@@ -750,6 +1411,64 @@ class BasicController private constructor(
             session.config.rom.origin,
             openRequestId,
         ))
+    val context = stateContext
+    postSessionEventSafely(
+        session,
+        StateUxSessionEvent(
+            stateSessionId,
+            context != null,
+            context?.workspace?.activeGameDirectory(),
+            stateUnavailableReason,
+        ))
+    if (context != null &&
+        properties.saves.resumePolicy !=
+            eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.NEVER) {
+      val requestId = nextInternalStateRequestId()
+      latestStateRequests[StateOperation.RESUME] = requestId
+      stateWorker.scanResume(context, requestId)
+    }
+  }
+
+  private fun applySavesSettings(
+      saves: eu.rekawek.coffeegb.controller.properties.ApplicationSettings.Saves
+  ) {
+    isRewinding = false
+    rewindManager = configuredRewindManager(saves)
+    val currentSession = session ?: return
+    stateSessionId = nextStateSessionId()
+    var stateUnavailableReason: StateUserError? = null
+    stateContext =
+        try {
+          val paths = StateStorageResolver.resolve(saves, currentSession.config)
+          StateWorkerContext(
+              stateSessionId,
+              stateWorkspaceFactory.create(paths),
+              StateIdentity.from(currentSession.config),
+              currentSession.config.hardwareProfile.id(),
+          )
+        } catch (failure: Throwable) {
+          LOG.warn("Unable to reconfigure desktop state storage", failure)
+          stateUnavailableReason =
+              stateError(
+                  "State management could not use the selected directory.",
+                  failure,
+                  "Choose a writable Saves directory in Preferences, then retry.",
+              )
+          null
+        }
+    pendingResume = null
+    pendingRomSwitch = null
+    pendingCloseRequestId = null
+    latestStateRequests.clear()
+    latestSaveRequests.clear()
+    postSessionEventSafely(
+        currentSession,
+        StateUxSessionEvent(
+            stateSessionId,
+            stateContext != null,
+            stateContext?.workspace?.activeGameDirectory(),
+            stateUnavailableReason,
+        ))
   }
 
   private fun stop(
@@ -759,8 +1478,16 @@ class BasicController private constructor(
   ) {
     val session = session ?: return
     if (notifyLifecycle) {
+      postSessionEventSafely(session, StateUxSessionEvent(stateSessionId, false, null))
       postSessionEventSafely(session, Controller.EmulationStoppedEvent())
     }
+    stateContext = null
+    pendingResume = null
+    pendingRomSwitch = null
+    pendingCloseRequestId = null
+    latestStateRequests.clear()
+    latestSaveRequests.clear()
+    sessionStartedNanos = null
     if (afterCartridgeFlush) {
       if (closeDeadlineNanos == null) {
         session.closeAfterCartridgeFlush()
@@ -881,6 +1608,7 @@ class BasicController private constructor(
     val state = closeState
 
     try {
+      stateWorker.close()
       shutdownExecutors(closeDeadlineNanos)
       eventBus.close(
           remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),
@@ -1036,6 +1764,11 @@ class BasicController private constructor(
 
     const val CONTROLLER_CLOSE_TIMEOUT_MILLIS = 8_000L
 
+    val STATE_SESSION_IDS = AtomicLong()
+
+    fun nextStateSessionId(): Long =
+        STATE_SESSION_IDS.updateAndGet { current -> Math.addExact(current, 1L) }
+
     fun createLoadExecutor(): ExecutorService =
         Executors.newSingleThreadExecutor { runnable ->
           Thread(runnable, "coffee-gb-rom-loader").apply { isDaemon = true }
@@ -1142,6 +1875,17 @@ class BasicController private constructor(
     }
   }
 
+  private data class PendingRomSwitch(
+      val requestId: Long,
+      val event: Controller.LoadRomEvent,
+  )
+
+  private data class PendingResume(
+      val requestId: Long,
+      val key: StateEntryKey,
+      val read: StateReadResult,
+  )
+
   /** Owns a prepared fallback machine until the controller takes it, even across cancel races. */
   private class PreparedLoadTask(callable: Callable<PreparedSession>) :
       FutureTask<PreparedSession>(callable) {
@@ -1237,3 +1981,32 @@ internal fun interface SnapshotManagerFactory {
     val DEFAULT = SnapshotManagerFactory(::SnapshotManager)
   }
 }
+
+internal fun interface StateWorkspaceFactory {
+  fun create(paths: StateStoragePaths): StateWorkspace
+
+  companion object {
+    val DEFAULT = StateWorkspaceFactory { StateWorkspace(it) }
+  }
+}
+
+internal fun interface StateOperationWorkerFactory {
+  fun create(eventBus: EventBus): StateOperationWorker
+
+  companion object {
+    val DEFAULT = StateOperationWorkerFactory { StateOperationWorker(it) }
+  }
+}
+
+private fun configuredRewindManager(
+    properties: EmulatorProperties
+): RewindManager = configuredRewindManager(properties.applicationSettings.saves)
+
+private fun configuredRewindManager(
+    saves: eu.rekawek.coffeegb.controller.properties.ApplicationSettings.Saves
+): RewindManager =
+    RewindManager(
+        enabled = saves.rewindEnabled,
+        durationSeconds = saves.rewindSeconds,
+        memoryBudgetBytes = saves.rewindMemoryMiB.toLong() * 1024L * 1024L,
+    )

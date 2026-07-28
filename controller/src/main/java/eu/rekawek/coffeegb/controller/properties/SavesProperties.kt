@@ -20,6 +20,9 @@ class SavesProperties(private val properties: EmulatorProperties) {
   val rewindSeconds: Int
     get() = properties.applicationSettings.saves.rewindSeconds
 
+  val rewindMemoryMiB: Int
+    get() = properties.applicationSettings.saves.rewindMemoryMiB
+
   val autosavePolicy: ApplicationSettings.AutosavePolicy
     get() = properties.applicationSettings.saves.autosavePolicy
 

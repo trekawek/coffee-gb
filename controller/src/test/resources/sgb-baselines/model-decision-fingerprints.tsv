@@ -79,6 +79,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode4.java	1d69e05ce5a3bf
 core/src/main/java/eu/rekawek/coffeegb/core/timer/Timer.java	d992464a2fa04f084a23ca2feb4c8da10b4b3308c4aad6709beb55de79c52612
 swing/src/main/java/eu/rekawek/coffeegb/swing/Main.kt	97a52d7de006b1e62deb2cb54d8884da43f132114d78772480f76a0a26859ffc
 swing/src/main/java/eu/rekawek/coffeegb/swing/RomOpenService.kt	c40e78cd1db775f62cfc6241077e181261267887ab3090a385e98ddad33bf5b7
+swing/src/main/java/eu/rekawek/coffeegb/swing/StateUxDesktopController.kt	d902bbe27aa7b214f62688b17a0e37af732dd9be4228527cf68ab62e7b0e0303
 swing/src/main/java/eu/rekawek/coffeegb/swing/SwingMenu.kt	32ec50f902e7811b4f449f627181e8b8e2a00bf35952d4673cc3f1c0378dcdac
 swing/src/main/java/eu/rekawek/coffeegb/swing/io/AudioSystemSound.java	7203ded3e0288eab371d5fa925e1569c269ca30ed03289752e251512ca71d678
 swing/src/main/java/eu/rekawek/coffeegb/swing/io/SwingDisplay.java	48366395d4336f2f168ce86e1dd1bcb73d97c87f3953998c88f94eeb68e5fa32

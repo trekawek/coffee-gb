@@ -365,7 +365,7 @@ class DevicePreferencesEditorsTest {
       assertEquals("Gamepads", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
       assertTrue(panel.validationSummary.text.contains("multiple players"))
       assertEquals(
-          listOf("General", "Display", "Input", "Gamepads", "Audio"),
+          listOf("General", "Display", "Input", "Gamepads", "Audio", "Saves"),
           (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
       )
       assertEquals("Gamepad preferences", panel.gamepadEditor.accessibleContext.accessibleName)

@@ -127,6 +127,7 @@ class PreferencesDialogTest {
         assertEquals(ApplicationSettings.Input.defaults().gamepads, received?.gamepads)
         assertEquals(ApplicationSettings.Display(), received?.display)
         assertEquals(ApplicationSettings.Audio(), received?.audio)
+        assertEquals(ApplicationSettings.Saves(), received?.saves)
       }
 
   @Test
@@ -194,6 +195,7 @@ class PreferencesDialogTest {
         assertEquals(defaults.input.gamepadTunings, restored.gamepadTunings)
         assertEquals(defaults.display, restored.display)
         assertEquals(defaults.audio, restored.audio)
+        assertEquals(defaults.saves, restored.saves)
         assertEquals(0, applyCount)
         assertEquals(1, closeCount)
       }
@@ -300,9 +302,75 @@ class PreferencesDialogTest {
         assertEquals("Recent files to keep", panel.recentCapacity.accessibleContext.accessibleName)
         assertFalse(panel.tabs.accessibleContext.accessibleName.isNullOrBlank())
         assertEquals(
-            listOf("General", "Display", "Input", "Gamepads", "Audio"),
+            listOf("General", "Display", "Input", "Gamepads", "Audio", "Saves"),
             (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
         )
+      }
+
+  @Test
+  fun `saves editor retains prior roots and validates the complete state policy`() =
+      onEdt {
+        val initialSaves =
+            ApplicationSettings.Saves(
+                directory = Paths.get("/old/root"),
+                previousDirectories = listOf(Paths.get("/older/root")),
+                batterySavesEnabled = false,
+                rewindEnabled = false,
+                rewindSeconds = 45,
+                autosavePolicy =
+                    ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
+                resumePolicy = ApplicationSettings.ResumePolicy.ALWAYS,
+                rewindMemoryMiB = 96,
+            )
+        val panel =
+            PreferencesPanel(
+                ApplicationSettings(saves = initialSaves),
+                saveDirectoryChooser = SaveDirectoryChooser { _, _ -> Paths.get("/new/root") },
+            )
+        panel.savesEditor.directoryField.text = "/new/root"
+        panel.savesEditor.batterySaves.isSelected = true
+        panel.savesEditor.rewindEnabled.isSelected = true
+        panel.savesEditor.rewindSeconds.value = 60
+        panel.savesEditor.rewindMemory.value = 128
+
+        val saves = panel.validatedEdit().saves!!
+
+        assertEquals(Paths.get("/new/root"), saves.directory)
+        assertEquals(
+            listOf(Paths.get("/old/root"), Paths.get("/older/root")),
+            saves.previousDirectories,
+        )
+        assertTrue(saves.batterySavesEnabled)
+        assertTrue(saves.rewindEnabled)
+        assertEquals(60, saves.rewindSeconds)
+        assertEquals(128, saves.rewindMemoryMiB)
+        assertEquals(initialSaves.autosavePolicy, saves.autosavePolicy)
+        assertEquals(initialSaves.resumePolicy, saves.resumePolicy)
+      }
+
+  @Test
+  fun `invalid typed rewind budget selects Saves and keeps settings unapplied`() =
+      onEdt {
+        var applyCount = 0
+        var closeCount = 0
+        val panel = PreferencesPanel(ApplicationSettings())
+        val actions =
+            PreferencesDialogActions(
+                panel,
+                applyEdit = { applyCount++ },
+                close = { closeCount++ },
+            )
+        val editor = (panel.savesEditor.rewindMemory.editor as JSpinner.DefaultEditor).textField
+        panel.tabs.selectedIndex = 0
+        editor.text = "999"
+
+        actions.apply()
+
+        assertEquals(0, applyCount)
+        assertEquals(0, closeCount)
+        assertEquals("Saves", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertTrue(panel.validationSummary.text.contains("8 to 512"))
+        assertSame(editor, panel.focusOwnerOrInvalidComponent())
       }
 
   @Test

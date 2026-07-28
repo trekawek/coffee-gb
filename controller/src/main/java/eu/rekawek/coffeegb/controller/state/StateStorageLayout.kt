@@ -19,6 +19,8 @@ class StateStorageLayout(gameDirectory: Path) {
 
   val autosaveDirectory: Path = contained(statesDirectory.resolve(AUTOSAVE_DIRECTORY))
 
+  val screenshotsDirectory: Path = contained(this.gameDirectory.resolve(SCREENSHOTS_DIRECTORY))
+
   init {
     require(this.gameDirectory.fileName != null && this.gameDirectory.parent != null) {
       "Game storage directory must have a name and parent"
@@ -59,6 +61,7 @@ class StateStorageLayout(gameDirectory: Path) {
     const val SLOTS_DIRECTORY = "slots"
     const val NAMED_DIRECTORY = "named"
     const val AUTOSAVE_DIRECTORY = "autosave"
+    const val SCREENSHOTS_DIRECTORY = "screenshots"
     const val STATE_FILE = "state.cgbstate"
     const val METADATA_FILE = "metadata.properties"
 

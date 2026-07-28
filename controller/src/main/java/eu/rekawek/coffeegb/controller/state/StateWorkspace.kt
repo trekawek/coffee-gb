@@ -1,0 +1,180 @@
+package eu.rekawek.coffeegb.controller.state
+
+import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
+import java.io.IOException
+import java.nio.file.Path
+
+/**
+ * Active state repository plus a bounded set of previous-directory read fallbacks.
+ *
+ * Writes always target source zero. A browser key remembers the exact source so deleting or
+ * exporting a fallback entry cannot accidentally target a same-named active entry.
+ */
+class StateWorkspace(
+    val paths: StateStoragePaths,
+    repositoryFactory: (StateStorageLayout) -> StateRepository = ::StateRepository,
+) {
+  private val repositories =
+      (listOf(paths.layout) + paths.fallbackLayouts)
+          .take(StateEntryKey.MAX_SOURCE_INDEX + 1)
+          .map(repositoryFactory)
+
+  fun catalog(targetIdentity: MachineIdentity): StateBrowserCatalog {
+    val catalogs = repositories.map { repository -> repository.catalog(targetIdentity) }
+    val bySource =
+        catalogs.map { catalog -> catalog.entries.associateBy(StateCatalogEntry::ref) }
+    val rows = ArrayList<StateBrowserEntry>()
+    val recovery = LinkedHashSet<String>()
+
+    for (slot in StateRef.MIN_SLOT..StateRef.MAX_SLOT) {
+      val ref = StateRef.Slot(slot)
+      val located = firstLocated(bySource, ref)
+      rows +=
+          if (located == null) {
+            StateBrowserEntry(StateEntryKey(ref), null, null)
+          } else {
+            browserEntry(located.first, located.second, recovery)
+          }
+    }
+
+    val seenNamed = HashSet<StateRef.Named>()
+    var namedCount = 0
+    for (source in catalogs.indices) {
+      for (entry in catalogs[source].entries) {
+        val ref = entry.ref as? StateRef.Named ?: continue
+        if (!seenNamed.add(ref)) continue
+        if (namedCount == StateRepository.MAX_NAMED_STATES) break
+        rows += browserEntry(source, entry, recovery)
+        namedCount++
+      }
+      if (namedCount == StateRepository.MAX_NAMED_STATES) break
+    }
+
+    val autosave = firstLocated(bySource, StateRef.Autosave)
+    autosave?.let { rows += browserEntry(it.first, it.second, recovery) }
+
+    val errors =
+        catalogs.mapIndexedNotNull { source, catalog ->
+          catalog.namedStatesError?.let {
+            "Source ${source + 1}: ${boundedMessage(it)}"
+          }
+        }
+    return StateBrowserCatalog(
+        rows,
+        namedStatesTruncated =
+            namedCount == StateRepository.MAX_NAMED_STATES ||
+                catalogs.any(StateCatalog::namedStatesTruncated),
+        namedStatesError = errors.takeIf(List<String>::isNotEmpty)?.joinToString("; "),
+        recoveryMessages = recovery,
+    )
+  }
+
+  fun save(
+      ref: StateRef,
+      encodedState: ByteArray,
+      metadata: StateSaveMetadata,
+      thumbnailPng: ByteArray?,
+  ): StateAssetSaveResult =
+      repositories.first().saveWithThumbnail(ref, encodedState, metadata, thumbnailPng)
+
+  fun read(key: StateEntryKey): StateReadResult =
+      repository(key).read(key.ref)
+
+  fun delete(key: StateEntryKey): StateDeleteResult =
+      repository(key).delete(key.ref)
+
+  fun export(key: StateEntryKey, destination: Path): StateExportResult =
+      repository(key).export(key.ref, destination)
+
+  fun firstAutosave(targetIdentity: MachineIdentity): Pair<StateEntryKey, StateReadResult>? {
+    repositories.forEachIndexed { source, repository ->
+      val entry =
+          repository.catalog(targetIdentity).entries
+              .firstOrNull { it.ref == StateRef.Autosave }
+              ?: return@forEachIndexed
+      if (entry.status != StateCatalogStatus.AVAILABLE) return@forEachIndexed
+      return StateEntryKey(StateRef.Autosave, source) to repository.read(StateRef.Autosave)
+    }
+    return null
+  }
+
+  fun activeGameDirectory(): Path = paths.layout.gameDirectory
+
+  private fun browserEntry(
+      source: Int,
+      entry: StateCatalogEntry,
+      recoveryMessages: MutableSet<String>,
+  ): StateBrowserEntry {
+    entry.recovery?.let {
+      recoveryMessage(entry.ref, it)?.let(recoveryMessages::add)
+    }
+    val thumbnail =
+        entry.metadata?.thumbnailSha256?.let { thumbnailSha ->
+          val stateSha = entry.stateSha256 ?: return@let null
+          try {
+            val thumbnailRead =
+                repositories[source].readThumbnail(entry.ref, stateSha, thumbnailSha)
+            recoveryMessage(entry.ref, thumbnailRead.recovery)
+                ?.let(recoveryMessages::add)
+            thumbnailRead.copyBytes()?.let(StatePngCodec::decode)
+          } catch (_: IOException) {
+            null
+          }
+        }
+    return StateBrowserEntry(StateEntryKey(entry.ref, source), entry, thumbnail)
+  }
+
+  private fun firstLocated(
+      bySource: List<Map<StateRef, StateCatalogEntry>>,
+      ref: StateRef,
+  ): Pair<Int, StateCatalogEntry>? {
+    bySource.forEachIndexed { source, entries ->
+      entries[ref]?.let { return source to it }
+    }
+    return null
+  }
+
+  private fun repository(key: StateEntryKey): StateRepository =
+      repositories.getOrNull(key.sourceIndex)
+          ?: throw IOException("State source ${key.sourceIndex} is no longer configured")
+
+  private fun recoveryMessage(ref: StateRef, recovery: StateRecovery): String? {
+    val actions =
+        listOfNotNull(
+            describeRecovery("state", recovery.state),
+            describeRecovery("metadata", recovery.metadata),
+        )
+    return actions.takeIf(List<String>::isNotEmpty)
+        ?.joinToString(
+            prefix = "${ref.storageKey()}: ",
+            separator = "; ",
+        )
+  }
+
+  private fun recoveryMessage(
+      ref: StateRef,
+      recovery: AtomicFileWriter.RecoveryReport,
+  ): String? =
+      describeRecovery("thumbnail", recovery)?.let { "${ref.storageKey()}: $it" }
+
+  private fun describeRecovery(
+      artifact: String,
+      report: AtomicFileWriter.RecoveryReport,
+  ): String? {
+    val actions = ArrayList<String>()
+    if (report.backupRestored()) actions += "$artifact backup restored"
+    if (report.staleBackupRemoved()) actions += "stale $artifact backup removed"
+    if (report.staleTemporaryFilesRemoved() > 0) {
+      actions +=
+          "${report.staleTemporaryFilesRemoved()} stale $artifact temporary file(s) removed"
+    }
+    return actions.takeIf(List<String>::isNotEmpty)?.joinToString(", ")
+  }
+
+  private fun boundedMessage(value: String): String =
+      value.replace(Regex("[\\r\\n\\t]+"), " ").trim().take(MAX_ERROR_CHARS)
+
+  private companion object {
+    const val MAX_ERROR_CHARS = 320
+  }
+}

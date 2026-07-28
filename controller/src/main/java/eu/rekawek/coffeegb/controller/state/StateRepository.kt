@@ -10,6 +10,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -40,17 +41,32 @@ class StateRepository(
       encodedState: ByteArray,
       requestedMetadata: StateSaveMetadata,
   ): StateSaveResult =
+      saveWithThumbnail(ref, encodedState, requestedMetadata, null).state
+
+  /**
+   * Saves a state and its optional deterministic thumbnail without making the image authoritative.
+   * A thumbnail failure still commits a loadable state and metadata without a thumbnail reference.
+   */
+  fun saveWithThumbnail(
+      ref: StateRef,
+      encodedState: ByteArray,
+      requestedMetadata: StateSaveMetadata,
+      thumbnailPng: ByteArray?,
+  ): StateAssetSaveResult =
       if (ref is StateRef.Named) {
-        namedNamespaceLock().withLock { saveLocked(ref, encodedState, requestedMetadata) }
+        namedNamespaceLock().withLock {
+          saveLocked(ref, encodedState, requestedMetadata, thumbnailPng)
+        }
       } else {
-        saveLocked(ref, encodedState, requestedMetadata)
+        saveLocked(ref, encodedState, requestedMetadata, thumbnailPng)
       }
 
   private fun saveLocked(
       ref: StateRef,
       encodedState: ByteArray,
       requestedMetadata: StateSaveMetadata,
-  ): StateSaveResult =
+      thumbnailPng: ByteArray?,
+  ): StateAssetSaveResult =
       lock(ref).withLock {
         if (encodedState.size > StateLimits.PORTABLE_MAX_FILE_BYTES) {
           throw StateDecodeException(
@@ -68,16 +84,30 @@ class StateRepository(
           )
         }
         val hash = StateMetadataCodec.sha256(ownedBytes)
-        val metadata =
-            StateMetadata(
-                ref = ref,
-                label = requestedMetadata.label,
-                savedAt = requestedMetadata.savedAt,
-                playDurationNanos = requestedMetadata.playDurationNanos,
-                stateBytes = ownedBytes.size,
-                stateSha256 = hash,
-                thumbnailSha256 = requestedMetadata.thumbnailSha256,
-            )
+        val ownedThumbnail = thumbnailPng?.clone()
+        val suppliedThumbnailSha256 =
+            ownedThumbnail?.let(StateMetadataCodec::sha256)
+        if (ownedThumbnail != null) {
+          if (ownedThumbnail.size > StatePngCodec.MAX_PNG_BYTES) {
+            throw IOException(
+                "Thumbnail exceeds the ${StatePngCodec.MAX_PNG_BYTES}-byte PNG limit")
+          }
+          val decodedThumbnail = StatePngCodec.decode(ownedThumbnail)
+          require(
+              decodedThumbnail.width == StateImage.THUMBNAIL_WIDTH &&
+                  decodedThumbnail.height == StateImage.THUMBNAIL_HEIGHT) {
+            "State thumbnail must be ${StateImage.THUMBNAIL_WIDTH} x " +
+                StateImage.THUMBNAIL_HEIGHT
+          }
+          if (requestedMetadata.thumbnailSha256 != null &&
+              requestedMetadata.thumbnailSha256 != suppliedThumbnailSha256) {
+            throw IllegalArgumentException(
+                "Requested thumbnail hash does not match the supplied PNG")
+          }
+        } else if (requestedMetadata.thumbnailSha256 != null) {
+          throw IllegalArgumentException(
+              "Thumbnail hash was supplied without thumbnail PNG bytes")
+        }
 
         val statePath = layout.stateFile(ref)
         if (ref is StateRef.Named) {
@@ -87,6 +117,34 @@ class StateRepository(
         val stateRecovery = persistence.recoverWithReport(statePath)
         persistence.write(statePath, ownedBytes)
 
+        var thumbnailCommitted = false
+        var thumbnailFailure: String? = null
+        var thumbnailRecovery = AtomicFileWriter.RecoveryReport.NONE
+        var thumbnailSha256: String? = null
+        if (ownedThumbnail != null) {
+          val computedThumbnailSha = checkNotNull(suppliedThumbnailSha256)
+          val thumbnailPath = layout.thumbnailFile(ref, hash)
+          try {
+            ensureSafeParent(thumbnailPath)
+            thumbnailRecovery = persistence.recoverWithReport(thumbnailPath)
+            persistence.write(thumbnailPath, ownedThumbnail)
+            thumbnailCommitted = true
+            thumbnailSha256 = computedThumbnailSha
+          } catch (failure: IOException) {
+            thumbnailFailure = failure.message ?: failure.javaClass.simpleName
+          }
+        }
+
+        val metadata =
+            StateMetadata(
+                ref = ref,
+                label = requestedMetadata.label,
+                savedAt = requestedMetadata.savedAt,
+                playDurationNanos = requestedMetadata.playDurationNanos,
+                stateBytes = ownedBytes.size,
+                stateSha256 = hash,
+                thumbnailSha256 = thumbnailSha256,
+            )
         val metadataPath = layout.metadataFile(ref)
         var metadataRecovery = AtomicFileWriter.RecoveryReport.NONE
         var metadataFailure: String? = null
@@ -97,13 +155,21 @@ class StateRepository(
         } catch (failure: IOException) {
           metadataFailure = failure.message ?: failure.javaClass.simpleName
         }
-        StateSaveResult(
-            ref,
-            hash,
-            metadata,
-            metadataFailure == null,
-            metadataFailure,
-            StateRecovery(stateRecovery, metadataRecovery),
+        if (metadataFailure == null) {
+          cleanupObsoleteThumbnails(ref, hash.takeIf { thumbnailCommitted })
+        }
+        StateAssetSaveResult(
+            StateSaveResult(
+                ref,
+                hash,
+                metadata,
+                metadataFailure == null,
+                metadataFailure,
+                StateRecovery(stateRecovery, metadataRecovery),
+            ),
+            thumbnailCommitted,
+            thumbnailFailure,
+            thumbnailRecovery,
         )
       }
 
@@ -113,6 +179,105 @@ class StateRepository(
         val raw = readRaw(ref) ?: throw NoSuchFileException(layout.stateFile(ref).toString())
         decodeRaw(raw)
       }
+
+  /**
+   * Reads the exact hash-bound thumbnail referenced by trusted matching metadata. A missing image
+   * is represented by null; a changed or oversized image is rejected instead of displayed.
+   */
+  fun readThumbnail(
+      ref: StateRef,
+      stateSha256: String,
+      thumbnailSha256: String,
+  ): StateThumbnailReadResult =
+      lock(ref).withLock {
+        require(StateStorageLayout.isSha256(stateSha256)) { "Invalid state thumbnail key" }
+        require(StateStorageLayout.isSha256(thumbnailSha256)) {
+          "Invalid expected thumbnail hash"
+        }
+        val read =
+            readOptionalBytes(
+                layout.thumbnailFile(ref, stateSha256),
+                StatePngCodec.MAX_PNG_BYTES,
+            )
+        val bytes = read.bytes
+        if (bytes != null && StateMetadataCodec.sha256(bytes) != thumbnailSha256) {
+          throw IOException("State thumbnail does not match its metadata hash")
+        }
+        StateThumbnailReadResult(bytes, read.recovery)
+      }
+
+  /**
+   * Removes one user-selected state and its bounded sidecars. Recovery runs first so a stale
+   * backup cannot resurrect a state after deletion.
+   */
+  fun delete(ref: StateRef): StateDeleteResult =
+      if (ref is StateRef.Named) {
+        namedNamespaceLock().withLock { deleteLocked(ref) }
+      } else {
+        deleteLocked(ref)
+      }
+
+  private fun deleteLocked(ref: StateRef): StateDeleteResult =
+      lock(ref).withLock {
+        val directory = layout.directory(ref)
+        ensureSafeParent(layout.stateFile(ref))
+        if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
+          return@withLock StateDeleteResult(
+              ref,
+              0,
+              StateRecovery(
+                  AtomicFileWriter.RecoveryReport.NONE,
+                  AtomicFileWriter.RecoveryReport.NONE,
+              ),
+          )
+        }
+        if (Files.isSymbolicLink(directory) ||
+            !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+          throw IOException("State storage entry is not a safe directory")
+        }
+
+        val statePath = layout.stateFile(ref)
+        val metadataPath = layout.metadataFile(ref)
+        val stateRecovery = persistence.recoverWithReport(statePath)
+        val metadataRecovery = persistence.recoverWithReport(metadataPath)
+        var deleted = deleteRegularArtifact(statePath)
+        deleted += deleteRegularArtifact(metadataPath)
+
+        var entries = 0
+        Files.newDirectoryStream(directory).use { stream ->
+          stream.forEach { child ->
+            entries++
+            if (entries > MAX_STATE_DIRECTORY_ENTRIES) {
+              throw IOException(
+                  "State entry contains more than $MAX_STATE_DIRECTORY_ENTRIES artifacts")
+            }
+            if (THUMBNAIL_FILE.matches(child.fileName.toString())) {
+              deleted += deleteRegularArtifact(child)
+            }
+          }
+        }
+        runCatching { Files.deleteIfExists(directory) }
+        StateDeleteResult(
+            ref,
+            deleted,
+            StateRecovery(stateRecovery, metadataRecovery),
+        )
+      }
+
+  /** Exports the authoritative encoded StateFile to a new destination without replacement. */
+  fun export(ref: StateRef, destination: Path): StateExportResult {
+    val raw =
+        lock(ref).withLock {
+          readRaw(ref) ?: throw NoSuchFileException(layout.stateFile(ref).toString())
+        }
+    val normalized =
+        try {
+          ExclusiveFileWriter.write(destination, raw.bytes)
+        } catch (failure: FileAlreadyExistsException) {
+          throw IOException("Export destination already exists: ${destination.fileName}", failure)
+        }
+    return StateExportResult(ref, normalized, StateMetadataCodec.sha256(raw.bytes))
+  }
 
   /**
    * Builds a bounded deterministic catalog. Supplying [targetIdentity] additionally classifies
@@ -429,6 +594,41 @@ class StateRepository(
     }
   }
 
+  private fun cleanupObsoleteThumbnails(ref: StateRef, retainedStateSha256: String?) {
+    val directory = layout.directory(ref)
+    if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS) ||
+        Files.isSymbolicLink(directory)) {
+      return
+    }
+    var entries = 0
+    try {
+      Files.newDirectoryStream(directory).use { stream ->
+        stream.forEach { child ->
+          entries++
+          if (entries > MAX_STATE_DIRECTORY_ENTRIES) {
+            throw IOException(
+                "State entry contains more than $MAX_STATE_DIRECTORY_ENTRIES artifacts")
+          }
+          val match = THUMBNAIL_FILE.matchEntire(child.fileName.toString()) ?: return@forEach
+          if (match.groupValues[1] != retainedStateSha256) {
+            deleteRegularArtifact(child)
+          }
+        }
+      }
+    } catch (_: IOException) {
+      // Cleanup is best effort after both authoritative state and metadata are committed.
+    }
+  }
+
+  private fun deleteRegularArtifact(path: Path): Int {
+    if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return 0
+    if (Files.isSymbolicLink(path) ||
+        !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+      throw IOException("State artifact is not a regular file: ${path.fileName}")
+    }
+    return if (Files.deleteIfExists(path)) 1 else 0
+  }
+
   private fun discoverNamedRefs(): NamedRefs {
     val directory = layout.namedDirectory
     ensureSafeParent(directory.resolve(StateStorageLayout.STATE_FILE))
@@ -521,10 +721,12 @@ class StateRepository(
   companion object {
     const val MAX_NAMED_STATES = 128
     const val MAX_CATALOG_DIRECTORY_ENTRIES = 512
+    const val MAX_STATE_DIRECTORY_ENTRIES = 32
     private const val LOCK_STRIPES = 64
     private const val DEFAULT_BUFFER_BYTES = 8192
     private val REF_LOCKS = Array(LOCK_STRIPES) { ReentrantLock() }
     private val NAMED_NAMESPACE_LOCKS = Array(LOCK_STRIPES) { ReentrantLock() }
+    private val THUMBNAIL_FILE = Regex("thumbnail-([0-9a-f]{64})\\.png")
 
     private fun sharedLock(path: Path, locks: Array<ReentrantLock>): ReentrantLock {
       val normalized = path.toAbsolutePath().normalize()
