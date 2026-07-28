@@ -273,7 +273,37 @@ public final class NativePackageVerifier {
                     "Coffee GB package smoke OK:",
                     "packaged launcher package smoke");
         }
+        if (desktopSmokeEnabled(System.getenv())) {
+            runDesktopSmoke(result, home, nativeCache);
+        }
         System.out.println("Packaged launch smokes passed for " + result.target().id());
+    }
+
+    static boolean desktopSmokeEnabled(Map<String, String> environment) {
+        return "true".equalsIgnoreCase(
+                environment.getOrDefault("COFFEE_GB_DESKTOP_SMOKE", "").strip());
+    }
+
+    private static void runDesktopSmoke(
+            VerificationResult result, Path home, Path nativeCache)
+            throws IOException, InterruptedException {
+        Path desktopHome = Files.createDirectory(home.resolve("desktop-home"));
+        Path marker = home.resolve("desktop-ready.marker");
+        String javaOptions = "-Djava.awt.headless=false -Duser.home=" + desktopHome
+                + " -Dcoffee-gb.native.cache=" + nativeCache;
+        run(
+                List.of(result.launcher().toString()),
+                Map.of(
+                        "_JAVA_OPTIONS", javaOptions,
+                        "COFFEE_GB_DESKTOP_SMOKE_MARKER", marker.toString()));
+        long deadline = System.nanoTime() + SMOKE_TIMEOUT.toNanos();
+        while (!Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS)
+                && System.nanoTime() < deadline) {
+            Thread.sleep(25);
+        }
+        requireRegularFile(marker, "desktop startup smoke marker");
+        String evidence = Files.readString(marker, StandardCharsets.UTF_8);
+        requireOutput(evidence, "Coffee GB desktop ready OK:", "packaged desktop startup");
     }
 
     public static void writeBuildResult(

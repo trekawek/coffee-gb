@@ -21,6 +21,11 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import java.io.IOException
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -275,6 +280,7 @@ class SwingGui private constructor(
     if (initialRom != null) {
       romOpen.open(initialRom.toPath(), RomOpenSource.INITIAL_ARGUMENT)
     }
+    requestDesktopStartupSmokeIfConfigured()
   }
 
   private fun installRomDropTarget() {
@@ -322,6 +328,13 @@ class SwingGui private constructor(
         }
     if (!proceed) {
       return
+    }
+    requestAutomatedClose()
+  }
+
+  private fun requestAutomatedClose() {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Application close must be requested from the Event Dispatch Thread"
     }
     // The coordinator's watchdog owns the entire shutdown, including managed-state autosave.
     // Starting it here prevents a slow state writer from running outside the desktop deadline.
@@ -419,6 +432,40 @@ class SwingGui private constructor(
     properties.close()
   }
 
+  /**
+   * CI's packaged-desktop smoke reaches this point only after the production frame, menu,
+   * renderer, audio/input adapters, controller, and native bootstrap have all been constructed.
+   * Evidence is written off the EDT and the normal bounded shutdown path is then exercised.
+   */
+  private fun requestDesktopStartupSmokeIfConfigured() {
+    val markerText = System.getenv(DESKTOP_SMOKE_MARKER_ENV)?.takeIf(String::isNotBlank) ?: return
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Desktop startup smoke readiness must be observed on the Event Dispatch Thread"
+    }
+    check(mainWindow.isDisplayable && mainWindow.isVisible) {
+      "Desktop startup smoke requires one visible displayable frame"
+    }
+    check(mainWindow.jMenuBar != null && mainWindow.contentPane.componentCount > 0) {
+      "Desktop startup smoke requires the production menu and display content"
+    }
+    val marker =
+        try {
+          Path.of(markerText).toAbsolutePath().normalize()
+        } catch (failure: RuntimeException) {
+          LOG.error("Desktop startup smoke marker is invalid", failure)
+          exitProcess(1)
+        }
+    val evidence =
+        "Coffee GB desktop ready OK: edt=true, visible=true, displayable=true, menu=true\n"
+    writeDesktopStartupEvidence(marker, evidence) { failure ->
+      if (failure != null) {
+        LOG.error("Unable to write desktop startup smoke evidence", failure)
+        exitProcess(1)
+      }
+      SwingUtilities.invokeLater(::requestAutomatedClose)
+    }
+  }
+
   private fun showPreferences() {
     check(SwingUtilities.isEventDispatchThread()) {
       "Preferences must be opened from the Event Dispatch Thread"
@@ -457,6 +504,7 @@ class SwingGui private constructor(
 
   companion object {
     private val LOG = LoggerFactory.getLogger(SwingGui::class.java)
+    private const val DESKTOP_SMOKE_MARKER_ENV = "COFFEE_GB_DESKTOP_SMOKE_MARKER"
 
     fun run(
         debug: Boolean,
@@ -524,6 +572,55 @@ internal fun pausedQuitRetryUi() =
         title = "Coffee GB: Paused; close again to retry saving before quit",
         blocksInput = true,
     )
+
+internal fun writeDesktopStartupEvidence(
+    marker: Path,
+    evidence: String,
+    completed: (Exception?) -> Unit,
+): Thread {
+  require(evidence.isNotBlank()) { "Desktop startup smoke evidence must not be blank" }
+  val worker =
+      Thread(
+          {
+            val failure =
+                runCatching {
+                      val parent =
+                          checkNotNull(marker.parent) {
+                            "Desktop startup smoke marker must have a parent"
+                          }
+                      check(Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) {
+                        "Desktop startup smoke marker parent is not a directory"
+                      }
+                      check(!Files.exists(marker, LinkOption.NOFOLLOW_LINKS)) {
+                        "Desktop startup smoke marker already exists"
+                      }
+                      Files.newByteChannel(
+                              marker,
+                              setOf(
+                                  StandardOpenOption.CREATE_NEW,
+                                  StandardOpenOption.WRITE,
+                                  LinkOption.NOFOLLOW_LINKS,
+                              ),
+                          )
+                          .use { channel ->
+                            val bytes = StandardCharsets.UTF_8.encode(evidence)
+                            while (bytes.hasRemaining()) {
+                              channel.write(bytes)
+                            }
+                          }
+                    }
+                    .exceptionOrNull()
+                    ?.let {
+                      if (it is Exception) it else IllegalStateException(it)
+                    }
+            completed(failure)
+          },
+          "coffee-gb-desktop-smoke-evidence",
+      )
+  worker.isDaemon = false
+  worker.start()
+  return worker
+}
 
 internal fun createSettingsShutdownHook(
     settings: AutoCloseable,

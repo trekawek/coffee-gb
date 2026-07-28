@@ -387,9 +387,13 @@ actual DMG and repeats the checks. Inspection requires:
 - no ROM-like file, signing key/certificate file, developer home path, or secret-shaped text;
 - the complete catalog-validated legal inventory, byte-identical internal Maven SBOM, neutral app
   JAR, target release SBOM, version, result manifest, and exhaustive sorted checksums; and
-- packaged launcher `--version` plus `--package-smoke` from an isolated temporary user/cache root.
+- packaged launcher `--version` plus `--package-smoke` from an isolated temporary user/cache root;
+  and
+- a real production Swing startup (Xvfb on Linux, hosted desktop session elsewhere) that proves a
+  visible frame, menu, display content, off-EDT readiness evidence, and bounded normal shutdown.
 
-The package smoke constructs its reviewable 32 KiB loop ROM in memory. It verifies video and audio
+The headless package smoke constructs its reviewable 32 KiB loop ROM in memory. It verifies video and audio
 events, a live input press/release, and an encode/inspect/mutate/load/re-encode StateFile round
-trip. It neither writes the synthetic ROM nor opens Swing, a device, a user setting, or a battery
-file. See [native package CI](native-package-ci.md) for publication and operator evidence.
+trip. It neither writes the synthetic ROM nor opens a device, user setting, or battery file. The
+separate desktop smoke constructs the production Swing frontend without a ROM. See
+[native package CI](native-package-ci.md) for publication and operator evidence.

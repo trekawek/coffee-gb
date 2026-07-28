@@ -163,7 +163,14 @@ jobs:
         env:
           PACKAGE_TARGET: ${{ matrix.target }}
           PACKAGE_TYPE: ${{ matrix.package_type }}
-        run: ./packaging/package-native.sh "$PACKAGE_TARGET" "$PACKAGE_TYPE"
+          COFFEE_GB_DESKTOP_SMOKE: "true"
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            command -v xvfb-run >/dev/null
+            xvfb-run -a ./packaging/package-native.sh "$PACKAGE_TARGET" "$PACKAGE_TYPE"
+          else
+            ./packaging/package-native.sh "$PACKAGE_TARGET" "$PACKAGE_TYPE"
+          fi
 
       - name: Build, test, inspect, and package
         if: runner.os == 'Windows'
@@ -171,6 +178,7 @@ jobs:
         env:
           PACKAGE_TARGET: ${{ matrix.target }}
           PACKAGE_TYPE: ${{ matrix.package_type }}
+          COFFEE_GB_DESKTOP_SMOKE: "true"
         run: >-
           ./packaging/package-native.ps1
           -Target $env:PACKAGE_TARGET
@@ -182,10 +190,17 @@ jobs:
         env:
           PACKAGE_TARGET: ${{ matrix.target }}
           PACKAGE_TYPE: ${{ matrix.package_type }}
-        run: >-
-          ./packaging/verify-native-package.sh
-          "$PACKAGE_TARGET"
-          "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+          COFFEE_GB_DESKTOP_SMOKE: "true"
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a ./packaging/verify-native-package.sh \
+              "$PACKAGE_TARGET" \
+              "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+          else
+            ./packaging/verify-native-package.sh \
+              "$PACKAGE_TARGET" \
+              "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+          fi
 
       - name: Unpack final installer and repeat strict launch smokes
         if: runner.os == 'Windows'
@@ -193,6 +208,7 @@ jobs:
         env:
           PACKAGE_TARGET: ${{ matrix.target }}
           PACKAGE_TYPE: ${{ matrix.package_type }}
+          COFFEE_GB_DESKTOP_SMOKE: "true"
         run: >-
           ./packaging/verify-native-package.ps1
           -Target $env:PACKAGE_TARGET
@@ -351,10 +367,11 @@ jobs:
 
   publish:
     name: Publish validated tagged packages
-    if: inputs.publish || startsWith(github.ref, 'refs/tags/coffee-gb-')
+    if: inputs.publish
     needs: [resolve-source, release-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: native-release
     permissions:
       contents: write
 

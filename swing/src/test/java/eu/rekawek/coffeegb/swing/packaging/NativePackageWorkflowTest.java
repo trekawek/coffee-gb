@@ -40,6 +40,12 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("persist-credentials: false"));
         assertTrue(packages.contains("verify-native-package.sh"));
         assertTrue(packages.contains("verify-native-package.ps1"));
+        assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
+        assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
+        assertTrue(packages.contains("environment: native-release"));
+        assertTrue(packages.contains("if: inputs.publish"));
+        assertFalse(packages.contains(
+                "inputs.publish || startsWith(github.ref, 'refs/tags/coffee-gb-')"));
         assertTrue(packages.contains("NativeReleaseTool"));
         assertTrue(packages.contains("needs: [resolve-source, package]"));
         assertTrue(packages.contains("source_sha: ${{ steps.source.outputs.source_sha }}"));
