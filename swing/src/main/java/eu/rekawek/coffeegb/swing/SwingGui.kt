@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.sound.Sound
+import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.Insets
@@ -446,7 +447,11 @@ class SwingGui private constructor(
         settingsOverrides: ApplicationSettingsOverrides = ApplicationSettingsOverrides(),
     ) {
       val desktopOpenFiles = DesktopOpenFilesBridge()
-      installDesktopOpenFileHandler(desktopOpenFiles::accept)
+      prepareDesktopLaunch(
+          desktopOpenFiles,
+          ::installDesktopOpenFileHandler,
+          NativeRuntimeBootstrap::bootstrapFromSystem,
+      )
       // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
       // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
       val properties = EmulatorProperties(settingsOverrides)
@@ -463,6 +468,22 @@ class SwingGui private constructor(
       }
     }
   }
+}
+
+/**
+ * Opens the platform delivery gate before native extraction can delay startup.
+ *
+ * Both operations deliberately run on the caller's launcher thread: native bootstrap must finish
+ * before settings construct gamepad backends or the EDT constructs camera UI, while an OS
+ * open-file callback received during bootstrap is retained by [DesktopOpenFilesBridge].
+ */
+internal fun prepareDesktopLaunch(
+    desktopOpenFiles: DesktopOpenFilesBridge,
+    installOpenFileHandler: ((List<java.nio.file.Path>) -> Unit) -> Boolean,
+    nativeBootstrap: () -> Unit,
+) {
+  installOpenFileHandler(desktopOpenFiles::accept)
+  nativeBootstrap()
 }
 
 internal fun shouldApplyRomLifecycleEvent(
