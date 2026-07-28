@@ -75,6 +75,7 @@ import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.filechooser.FileNameExtensionFilter
 
 internal class SwingMenu(
     private val properties: EmulatorProperties,
@@ -82,6 +83,7 @@ internal class SwingMenu(
     private val eventBus: EventBus,
     private val romSessionState: RomSessionState,
     private val displayController: DesktopDisplayController,
+    private val onOpenRom: (path: java.nio.file.Path, source: RomOpenSource) -> Unit,
     private val onPreferences: () -> Unit,
     private val onQuit: () -> Unit,
 ) {
@@ -114,6 +116,8 @@ internal class SwingMenu(
 
   private lateinit var connectToServerItem: JCheckBoxMenuItem
 
+  private lateinit var recentRomsMenu: JMenu
+
   init {
     PersistenceFailureHandler(
         eventBus,
@@ -142,6 +146,7 @@ internal class SwingMenu(
                 ) == 0)
           }
         },
+        handleReplacement = { it.openRequestId == null },
     )
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
     eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
@@ -153,13 +158,15 @@ internal class SwingMenu(
     }
     eventBus.register<LoadRomFailedEvent> {
       pendingRomFileName = null
-      SwingUtilities.invokeLater {
-        JOptionPane.showMessageDialog(
-            window,
-            "Can't open ${it.rom.name}: ${it.message}",
-            "Error",
-            JOptionPane.ERROR_MESSAGE,
-        )
+      if (it.openRequestId == null) {
+        SwingUtilities.invokeLater {
+          JOptionPane.showMessageDialog(
+              window,
+              "Can't open ${it.rom.name}: ${it.message}",
+              "Error",
+              JOptionPane.ERROR_MESSAGE,
+          )
+        }
       }
     }
     eventBus.register<EmulationStoppedEvent> {
@@ -186,13 +193,26 @@ internal class SwingMenu(
 
     val load = JMenuItem("Load ROM")
     load.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_L, KEY_MODIFIER)
+    load.accessibleContext.accessibleDescription =
+        "Open a Game Boy ROM or bounded ZIP archive"
     fileMenu.add(load)
 
-    val recentRomsMenu = JMenu("Recent ROMs")
+    recentRomsMenu = JMenu("Recent ROMs")
     fileMenu.add(recentRomsMenu)
-    updateRecentRoms(recentRomsMenu)
+    updateRecentRoms()
 
     val fc = RomFileChooser()
+    fc.dialogTitle = "Open Game Boy ROM"
+    fc.fileFilter =
+        FileNameExtensionFilter(
+            "Game Boy ROMs and ZIP archives (*.gb, *.gbc, *.rom, *.zip)",
+            "gb",
+            "gbc",
+            "rom",
+            "zip",
+        )
+    fc.isAcceptAllFileFilterUsed = false
+    fc.accessibleContext.accessibleName = "Choose a Game Boy ROM or ZIP archive"
     val systemDefaultRomDirectory = fc.currentDirectory
 
     load.addActionListener {
@@ -201,7 +221,7 @@ internal class SwingMenu(
       val code = fc.showOpenDialog(load)
       if (code == JFileChooser.APPROVE_OPTION) {
         val rom = fc.selectedFile
-        launchRom(recentRomsMenu, rom)
+        launchRom(rom, RomOpenSource.CHOOSER)
       }
     }
 
@@ -210,7 +230,7 @@ internal class SwingMenu(
     preferences.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, KEY_MODIFIER)
     preferences.addActionListener {
       onPreferences()
-      updateRecentRoms(recentRomsMenu)
+      updateRecentRoms()
     }
     fileMenu.add(preferences)
 
@@ -975,53 +995,26 @@ internal class SwingMenu(
     eventBus.register<EmulationStoppedEvent> { item.isEnabled = false }
   }
 
-  private fun updateRecentRoms(recentRomsMenu: JMenu) {
+  internal fun updateRecentRoms() {
     recentRomsMenu.removeAll()
-    for (romPath in properties.recentRoms.getRoms()) {
-      val rom = File(romPath)
+    for (romPath in properties.recentRoms.getPaths()) {
+      val rom = romPath.toFile()
       val item = JMenuItem(rom.name)
-      item.addActionListener { launchRom(recentRomsMenu, rom) }
+      item.putClientProperty("html.disable", true)
+      item.toolTipText = "<html>${escapeMenuHtml(romPath.toString())}</html>"
+      item.accessibleContext.accessibleName = "Open recent ROM ${rom.name}"
+      item.accessibleContext.accessibleDescription = romPath.toString()
+      item.addActionListener { launchRom(rom, RomOpenSource.RECENT) }
       recentRomsMenu.add(item)
     }
+    recentRomsMenu.isEnabled = recentRomsMenu.itemCount > 0
   }
 
-  private fun launchRom(recentRomsMenu: JMenu, rom: File) {
-    if (!confirmRomChange(rom)) {
-      return
-    }
-    properties.recentRoms.addRom(rom.absolutePath)
-    updateRecentRoms(recentRomsMenu)
-    try {
-      eventBus.post(LoadRomEvent(rom))
-    } catch (e: Exception) {
-      e.printStackTrace()
-      JOptionPane.showMessageDialog(
-          window,
-          "Can't open ${rom.name}: ${e.message}",
-          "Error",
-          JOptionPane.ERROR_MESSAGE,
-      )
-    }
-  }
+  private fun launchRom(rom: File, source: RomOpenSource) =
+      onOpenRom(rom.toPath(), source)
 
-  private fun confirmRomChange(rom: File): Boolean {
-    val running = romSessionState.isRunning()
-    return proceedWithRomChange(properties.romChangeConfirmationPolicy, running) {
-      val message =
-          if (running) {
-            "Replace the running game with ${rom.name}?"
-          } else {
-            "Open ${rom.name}?"
-          }
-      JOptionPane.showConfirmDialog(
-          window,
-          message,
-          "Open ROM",
-          JOptionPane.YES_NO_OPTION,
-          JOptionPane.QUESTION_MESSAGE,
-      ) == JOptionPane.YES_OPTION
-    }
-  }
+  private fun escapeMenuHtml(value: String): String =
+      value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
   private fun confirmStopGame(): Boolean =
       proceedWithRomChange(properties.romChangeConfirmationPolicy, isRomRunning = true) {

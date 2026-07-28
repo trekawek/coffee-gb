@@ -1222,6 +1222,93 @@ class BasicControllerTest {
     }
   }
 
+  @Test
+  fun correlatedLoadPublishesRequestIdentityAndIgnoresStaleCancellation() {
+    val eventBus = EventBusImpl()
+    val loading = LinkedBlockingQueue<RomLoadingEvent>()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val cancelled = LinkedBlockingQueue<RomLoadingCancelledEvent>()
+    eventBus.register<RomLoadingEvent> { loading.add(it) }
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<RomLoadingCancelledEvent> { cancelled.add(it) }
+    val rom = namedRom("CORRELATED")
+    val preparing = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val preparer =
+        SessionPreparer { properties, event ->
+          preparing.countDown()
+          release.await()
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          PreparedSession.Ready(config, config.build())
+        }
+    val controller = BasicController(eventBus, EmulatorProperties(), null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, openRequestId = 42))
+      assertTrue(preparing.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(42, loading.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.openRequestId)
+
+      eventBus.post(Controller.CancelRomOpenEvent(41))
+      assertNull(
+          cancelled.poll(250, TimeUnit.MILLISECONDS),
+          "a stale request ID must not cancel the active preparation",
+      )
+      release.countDown()
+
+      val committed = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(42, committed.openRequestId)
+      assertEquals(rom.toPath().toAbsolutePath().normalize(), committed.origin?.containerPath()?.orElseThrow())
+    } finally {
+      release.countDown()
+      controller.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun matchingOpenCancellationPublishesTheSameRequestIdentity() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val cancelled = LinkedBlockingQueue<RomLoadingCancelledEvent>()
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<RomLoadingCancelledEvent> { cancelled.add(it) }
+    val rom = namedRom("CANCEL_ID")
+    val preparing = CountDownLatch(1)
+    val neverRelease = CountDownLatch(1)
+    val preparer =
+        SessionPreparer { _, _ ->
+          preparing.countDown()
+          try {
+            neverRelease.await()
+          } catch (_: InterruptedException) {
+            throw CancellationException("cancelled")
+          }
+          throw AssertionError("cancelled preparation unexpectedly resumed")
+        }
+    val controller = BasicController(eventBus, EmulatorProperties(), null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, openRequestId = 84))
+      assertTrue(preparing.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(Controller.CancelRomOpenEvent(84))
+
+      assertEquals(
+          84,
+          assertNotNull(cancelled.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).openRequestId,
+      )
+      assertNull(started.poll(250, TimeUnit.MILLISECONDS))
+    } finally {
+      controller.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
   private fun namedRom(title: String): File {
     val bytes = ROM.readBytes()
     for (address in 0x0134 until 0x0143) {

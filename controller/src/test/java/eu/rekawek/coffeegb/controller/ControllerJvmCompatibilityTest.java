@@ -20,4 +20,30 @@ public class ControllerJvmCompatibilityTest {
         assertNull(event.getState());
         assertNull(event.getImage());
     }
+
+    @Test
+    public void lifecycleEventsRetainReleasedConstructors() {
+        File rom = new File("compatibility.gb");
+
+        Controller.EmulationStartedEvent started =
+                new Controller.EmulationStartedEvent("COMPATIBILITY");
+        Controller.RomLoadingEvent loading = new Controller.RomLoadingEvent(rom);
+        Controller.RomLoadingCancelledEvent cancelled =
+                new Controller.RomLoadingCancelledEvent(rom);
+        Controller.LoadRomFailedEvent failed =
+                new Controller.LoadRomFailedEvent(rom, "failure");
+        Controller.RomReplacementPersistenceFailedEvent persistence =
+                new Controller.RomReplacementPersistenceFailedEvent(
+                        4,
+                        "compatibility.sav",
+                        "failure",
+                        Controller.PersistenceBarrierOperation.ROM_REPLACEMENT);
+
+        assertEquals("COMPATIBILITY", started.getRomName());
+        assertEquals(rom, loading.getRom());
+        assertEquals(rom, cancelled.getRom());
+        assertEquals("failure", failed.getMessage());
+        assertNull(failed.getOpenRequestId());
+        assertNull(persistence.getOpenRequestId());
+    }
 }

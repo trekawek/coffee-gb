@@ -72,6 +72,21 @@ public class RomSourceSnapshotTest {
     }
 
     @Test
+    public void rejectsOversizedArchiveContainerBeforeParsingIt() throws Exception {
+        File source = temporaryFolder.newFile("huge.zip");
+        try (RandomAccessFile output = new RandomAccessFile(source, "rw")) {
+            output.setLength(Rom.MAX_ARCHIVE_CONTAINER_BYTES + 1);
+        }
+
+        RomSourceException failure =
+                assertThrows(
+                        RomSourceException.class,
+                        () -> RomSourceSnapshot.open(source.toPath()));
+
+        assertEquals(RomSourceException.Reason.CONTAINER_TOO_LARGE, failure.reason());
+    }
+
+    @Test
     public void directSnapshotCopyCanBeCancelledBetweenChunks() throws Exception {
         File source = temporaryFolder.newFile("cancel.gb");
         Files.write(source.toPath(), syntheticRom("CANCEL", 0x61));
@@ -169,6 +184,22 @@ public class RomSourceSnapshotTest {
                 source,
                 new Entry("../escape.txt", new byte[] {1}),
                 new Entry("game.gb", syntheticRom("SAFE", 0x55)));
+
+        RomSourceException failure =
+                assertThrows(
+                        RomSourceException.class,
+                        () -> RomSourceSnapshot.open(source.toPath()));
+
+        assertEquals(RomSourceException.Reason.UNSAFE_ARCHIVE_ENTRY, failure.reason());
+    }
+
+    @Test
+    public void unsafeDirectoryEntryAlsoRejectsTheWholeArchive() throws Exception {
+        File source = temporaryFolder.newFile("unsafe-directory.zip");
+        writeZip(
+                source,
+                new Entry("../escape/", new byte[0]),
+                new Entry("game.gb", syntheticRom("SAFE", 0x56)));
 
         RomSourceException failure =
                 assertThrows(

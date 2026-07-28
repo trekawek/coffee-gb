@@ -14,6 +14,7 @@ import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.sound.Sound
 import java.awt.Cursor
+import java.awt.Color
 import java.awt.Dimension
 import java.awt.Insets
 import java.awt.event.WindowAdapter
@@ -22,8 +23,11 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JFrame
+import javax.swing.BorderFactory
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
+import javax.swing.Timer
+import javax.swing.UIManager
 import kotlin.system.exitProcess
 import org.slf4j.LoggerFactory
 
@@ -43,6 +47,8 @@ class SwingGui private constructor(
 
   private lateinit var displayController: DesktopDisplayController
 
+  private lateinit var romOpen: DesktopRomOpen
+
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
@@ -53,6 +59,7 @@ class SwingGui private constructor(
     DesktopShutdownCoordinator(
         shutdown = {
           emulator.stop()
+          romOpen.close()
           console?.stop()
           closeSettings()
         },
@@ -89,16 +96,27 @@ class SwingGui private constructor(
             DisplayWindowSizingRuntime(emulator::refreshDisplayWindowSizing),
         )
 
-    SwingMenu(
+    lateinit var menu: SwingMenu
+    romOpen =
+        DesktopRomOpen(
+            mainWindow,
+            eventBus,
+            properties,
+            romSessionState,
+            onRecentChanged = { menu.updateRecentRoms() },
+        )
+    menu =
+        SwingMenu(
             properties,
             mainWindow,
             eventBus,
             romSessionState,
             displayController,
+            romOpen::open,
             ::showPreferences,
             ::requestClose,
         )
-        .addMenu()
+    menu.addMenu()
     eventBus.register<RomLoadingEvent> {
       romLoading = true
       updateLoadingUi("Coffee GB: Loading ${it.rom.name}…", true)
@@ -134,6 +152,7 @@ class SwingGui private constructor(
         })
 
     emulator.bind(mainWindow) { !displayController.current().fullscreen }
+    installRomDropTarget()
     mainWindow.pack()
     mainWindow.repaint()
     mainWindow.setLocationRelativeTo(null)
@@ -146,6 +165,12 @@ class SwingGui private constructor(
         )
     mainWindow.isResizable = true
     mainWindow.isVisible = true
+    installDesktopOpenFileHandler { paths ->
+      romOpen.open(
+          paths.map(RomOpenInput::LocalPath),
+          RomOpenSource.DESKTOP_OPEN_FILE,
+      )
+    }
     displayController.applyCurrent()
     properties.consumeLoadWarning()?.let { warning ->
       JOptionPane.showMessageDialog(
@@ -159,8 +184,33 @@ class SwingGui private constructor(
       Thread(console).start()
     }
     if (initialRom != null) {
-      eventBus.post(Controller.LoadRomEvent(initialRom))
+      romOpen.open(initialRom.toPath(), RomOpenSource.INITIAL_ARGUMENT)
     }
+  }
+
+  private fun installRomDropTarget() {
+    val root = mainWindow.rootPane
+    val normalBorder = root.border
+    val highlight =
+        BorderFactory.createLineBorder(
+            UIManager.getColor("Component.focusColor") ?: Color(65, 105, 225),
+            3,
+        )
+    val clearFeedback =
+        Timer(300) { root.border = normalBorder }.apply {
+          isRepeats = false
+        }
+    root.accessibleContext.accessibleDescription =
+        "Drop one Game Boy ROM or ZIP archive here to open it"
+    root.transferHandler =
+        RomDropTransferHandler(
+            submit = { inputs -> romOpen.open(inputs, RomOpenSource.DROP) },
+            feedback = { active ->
+              root.border = if (active) highlight else normalBorder
+              if (active) clearFeedback.restart() else clearFeedback.stop()
+              root.repaint()
+            },
+        )
   }
 
   private fun requestClose() {
