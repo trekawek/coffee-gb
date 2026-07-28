@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.swing.SwingUtilities
@@ -177,10 +178,39 @@ class RomOpenServiceTest {
     fixture.worker.runAll()
     fixture.ui.runAll()
 
-    assertEquals(listOf(first.toAbsolutePath().normalize()), fixture.recents.recorded)
+    assertTrue(
+        fixture.recents.recorded.isEmpty(),
+        "a success callback superseded before its lifecycle worker claims ownership is stale",
+    )
     assertTrue(fixture.updates.all { it.requestId == secondId })
     assertTrue(fixture.updates.none { it is RomOpenUpdate.Opened })
     fixture.close()
+  }
+
+  @Test
+  fun `out of order UI execution cannot regress a request to an older progress stage`() {
+    val eventBus = EventBusImpl(null, "progress-order", false)
+    val worker = QueuedExecutorService()
+    val ui = ReverseQueuedExecutor()
+    val updates = mutableListOf<RomOpenUpdate>()
+    val archive = temporaryFolder.newFile("progress.zip")
+    writeZip(
+        archive,
+        "one.gb" to syntheticRom("ONE", 0x41),
+        "two.gb" to syntheticRom("TWO", 0x42),
+    )
+    val service =
+        RomOpenService(eventBus, FakeRecentStore(), updates::add, worker, ui)
+
+    service.open(RomOpenRequest(archive.toPath(), RomOpenSource.DROP))
+    worker.runAll()
+    ui.runNewestFirst()
+
+    val delivered = updates.filterIsInstance<RomOpenUpdate.Progress>()
+    assertEquals(1, delivered.size)
+    assertEquals(RomOpenStage.AWAITING_ARCHIVE_SELECTION, delivered.single().stage)
+    service.close()
+    eventBus.close()
   }
 
   @Test
@@ -305,6 +335,121 @@ class RomOpenServiceTest {
     eventBus.close()
   }
 
+  @Test
+  fun `close from the EDT posts matching controller cancellation off the EDT`() {
+    val eventBus = EventBusImpl(null, "close-thread-test", false)
+    val source = romFile("close-thread.gb", "CLOSE")
+    val loaded = CountDownLatch(1)
+    val cancelled = CountDownLatch(1)
+    val cancelWasEdt = AtomicBoolean(true)
+    eventBus.register<Controller.LoadRomEvent> { loaded.countDown() }
+    eventBus.register<Controller.CancelRomOpenEvent> {
+      cancelWasEdt.set(SwingUtilities.isEventDispatchThread())
+      cancelled.countDown()
+    }
+    val service =
+        RomOpenService(
+            eventBus,
+            FakeRecentStore(),
+            {},
+            null,
+            Executor { task -> SwingUtilities.invokeLater(task) },
+        )
+
+    service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+    assertTrue(loaded.await(5, TimeUnit.SECONDS))
+    SwingUtilities.invokeAndWait(service::close)
+
+    assertTrue(cancelled.await(2, TimeUnit.SECONDS))
+    assertFalse(cancelWasEdt.get())
+    eventBus.close()
+  }
+
+  @Test
+  fun `close cannot overtake an in flight controller load dispatch`() {
+    val eventBus = EventBusImpl(null, "close-dispatch-order", false)
+    val source = romFile("close-order.gb", "ORDER")
+    val loadEntered = CountDownLatch(1)
+    val releaseLoad = CountDownLatch(1)
+    val cancelObserved = CountDownLatch(1)
+    val order = java.util.concurrent.CopyOnWriteArrayList<String>()
+    eventBus.register<Controller.LoadRomEvent> {
+      loadEntered.countDown()
+      while (releaseLoad.count != 0L) {
+        try {
+          releaseLoad.await()
+        } catch (_: InterruptedException) {
+          // Future.cancel interrupts the service worker. Keep this synthetic subscriber blocked
+          // until the test releases it so cancellation ordering is observable.
+        }
+      }
+      order += "load-returned"
+    }
+    eventBus.register<Controller.CancelRomOpenEvent> {
+      order += "cancel"
+      cancelObserved.countDown()
+    }
+    val service =
+        RomOpenService(
+            eventBus,
+            FakeRecentStore(),
+            {},
+            null,
+            Executor { task -> task.run() },
+        )
+    service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+    assertTrue(loadEntered.await(5, TimeUnit.SECONDS))
+    val closeFailure = AtomicReference<Throwable?>()
+    val closer =
+        Thread {
+          runCatching(service::close).onFailure(closeFailure::set)
+        }
+    closer.start()
+
+    assertFalse(cancelObserved.await(50, TimeUnit.MILLISECONDS))
+    releaseLoad.countDown()
+    closer.join(5_000)
+
+    assertFalse(closer.isAlive)
+    assertEquals(null, closeFailure.get())
+    assertEquals(listOf("load-returned", "cancel"), order)
+    eventBus.close()
+  }
+
+  @Test
+  fun `close removes an archive snapshot waiting for user selection`() {
+    val eventBus = EventBusImpl(null, "close-snapshot-test", false)
+    val archive = temporaryFolder.newFile("close-snapshot.zip")
+    writeZip(
+        archive,
+        "one.gb" to syntheticRom("ONE", 0x51),
+        "two.gb" to syntheticRom("TWO", 0x52),
+    )
+    val awaitingSelection = CountDownLatch(1)
+    val before = temporarySnapshotCount()
+    val service =
+        RomOpenService(
+            eventBus,
+            FakeRecentStore(),
+            {
+              if (it is RomOpenUpdate.Progress &&
+                  it.stage == RomOpenStage.AWAITING_ARCHIVE_SELECTION) {
+                awaitingSelection.countDown()
+              }
+            },
+            null,
+            Executor { task -> task.run() },
+        )
+
+    service.open(RomOpenRequest(archive.toPath(), RomOpenSource.CHOOSER))
+    assertTrue(awaitingSelection.await(5, TimeUnit.SECONDS))
+    assertEquals(before + 1, temporarySnapshotCount())
+    service.close()
+
+    assertEquals(before, temporarySnapshotCount())
+    eventBus.close()
+  }
+
   private fun fixture(): Fixture {
     val eventBus = EventBusImpl(null, "test", false)
     val worker = QueuedExecutorService()
@@ -321,6 +466,14 @@ class RomOpenServiceTest {
       temporaryFolder.newFile(name).toPath().also {
         Files.write(it, syntheticRom(title, title.hashCode()))
       }
+
+  private fun temporarySnapshotCount(): Int =
+      File(System.getProperty("java.io.tmpdir"))
+          .list { _, name ->
+            name.startsWith("coffee-gb-rom-snapshot-") && name.endsWith(".zip")
+          }
+          ?.size
+          ?: 0
 
   private data class Fixture(
       val eventBus: EventBusImpl,
@@ -362,6 +515,20 @@ class RomOpenServiceTest {
     fun runAll() {
       while (tasks.isNotEmpty()) {
         tasks.removeFirst().run()
+      }
+    }
+  }
+
+  private class ReverseQueuedExecutor : Executor {
+    private val tasks = ArrayDeque<Runnable>()
+
+    override fun execute(command: Runnable) {
+      tasks.addLast(command)
+    }
+
+    fun runNewestFirst() {
+      while (tasks.isNotEmpty()) {
+        tasks.removeLast().run()
       }
     }
   }

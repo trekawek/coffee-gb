@@ -10,12 +10,15 @@ import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import java.io.Closeable
 import java.nio.file.Path
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
 import org.slf4j.LoggerFactory
 
@@ -184,13 +187,13 @@ internal constructor(
     }
     eventBus.register<Controller.EmulationStartedEvent> { event ->
       event.openRequestId?.let { id ->
-        val operation = current(id) ?: return@register
-        val path = operation.path ?: return@register
-        val origin = event.origin ?: operation.origin ?: return@register
-        if (!operation.terminal.compareAndSet(false, true)) {
-          return@register
-        }
         submitLifecycle {
+          // The controller event and this disk/preferences work are intentionally separated.
+          // Claim ownership here, at the worker boundary, so a newer open that superseded this
+          // event while it was queued cannot mutate recents.
+          val operation = claimSuccessfulTerminal(id) ?: return@submitLifecycle
+          val path = operation.path ?: return@submitLifecycle
+          val origin = event.origin ?: operation.origin ?: return@submitLifecycle
           try {
             recentStore.recordSuccessfulOpen(path)
           } catch (failure: RuntimeException) {
@@ -228,7 +231,10 @@ internal constructor(
                               RomOpenFailureKind.INTERNAL
                         },
                         "Coffee GB could not start this ROM. The current game was kept open.",
-                        event.technicalDetails,
+                        redactRomOpenTechnicalDetails(
+                            event.technicalDetails,
+                            operation.path,
+                        ),
                     ),
                 ))
           }
@@ -251,18 +257,37 @@ internal constructor(
 
   fun open(request: RomOpenRequest): Long {
     val operation = Operation(nextRequestId.getAndIncrement(), request)
-    synchronized(lock) {
-      check(!closed.get()) { "ROM-open service is closed" }
-      visibleRequestId.set(operation.id)
-      active?.let { prior ->
-        prior.superseded.set(true)
-        prior.cancelled.set(true)
-        prior.future?.cancel(true)
-        executor.execute { cleanupSuperseded(prior) }
+    val prior =
+        synchronized(lock) {
+          check(!closed.get()) { "ROM-open service is closed" }
+          visibleRequestId.set(operation.id)
+          val previous = active
+          previous?.also {
+            it.superseded.set(true)
+            it.cancelled.set(true)
+            it.future?.cancel(true)
+          }
+          active = operation
+          previous
+        }
+    prior?.let { superseded ->
+      try {
+        executor.execute { cleanupSuperseded(superseded) }
+      } catch (failure: RuntimeException) {
+        Thread(
+                { cleanupSuperseded(superseded) },
+                "coffee-gb-rom-open-superseded-cleanup",
+            )
+            .apply {
+              isDaemon = true
+              start()
+            }
+        if (!closed.get()) {
+          throw failure
+        }
       }
-      active = operation
-      operation.future = executor.submit { prepare(operation) }
     }
+    // QUEUED is enqueued before any worker can publish SNAPSHOTTING or later stages.
     publish(
         operation,
         RomOpenUpdate.Progress(
@@ -271,6 +296,11 @@ internal constructor(
             null,
             RomOpenStage.QUEUED,
         ))
+    synchronized(lock) {
+      if (isCurrentLocked(operation)) {
+        operation.future = executor.submit { prepare(operation) }
+      }
+    }
     return operation.id
   }
 
@@ -326,6 +356,12 @@ internal constructor(
 
   fun recentPaths(): List<Path> = recentStore.getPaths()
 
+  internal fun ownsVisibleRequest(requestId: Long): Boolean =
+      !closed.get() && visibleRequestId.get() == requestId
+
+  internal fun hasActiveRequest(): Boolean =
+      synchronized(lock) { active != null && !closed.get() }
+
   override fun close() {
     if (!closed.compareAndSet(false, true)) {
       return
@@ -342,16 +378,73 @@ internal constructor(
           current
         }
     operation?.future?.cancel(true)
-    operation?.let {
-      runCatching { it.snapshot?.close() }
-      if (it.controllerDispatched) {
-        runCatching { eventBus.post(Controller.CancelRomOpenEvent(it.id)) }
-            .onFailure { failure ->
-              LOG.warn("Unable to cancel ROM-open request while closing", failure)
+    val cleanupFailure = AtomicReference<Throwable?>()
+    val cleanup =
+        Thread(
+                {
+                  val failures = mutableListOf<Throwable>()
+                  try {
+                    if (operation?.controllerDispatched == true) {
+                      if (!operation.controllerDispatchComplete.await(
+                          CONTROLLER_DISPATCH_CLOSE_TIMEOUT_MILLIS,
+                          TimeUnit.MILLISECONDS,
+                      )) {
+                        throw IllegalStateException(
+                            "Controller ROM dispatch did not finish within " +
+                                "$CONTROLLER_DISPATCH_CLOSE_TIMEOUT_MILLIS ms")
+                      }
+                      eventBus.post(Controller.CancelRomOpenEvent(operation.id))
+                    }
+                  } catch (failure: Throwable) {
+                    failures += failure
+                  }
+                  try {
+                    ownedExecutor?.let { worker ->
+                      worker.shutdownNow()
+                      if (!worker.awaitTermination(
+                          WORKER_CLOSE_TIMEOUT_MILLIS,
+                          TimeUnit.MILLISECONDS,
+                      )) {
+                        throw IllegalStateException(
+                            "ROM-open worker did not stop within " +
+                                "$WORKER_CLOSE_TIMEOUT_MILLIS ms")
+                      }
+                    }
+                  } catch (failure: Throwable) {
+                    failures += failure
+                  }
+                  try {
+                    operation?.snapshot?.close()
+                    operation?.snapshot = null
+                  } catch (failure: Throwable) {
+                    failures += failure
+                  }
+                  failures.firstOrNull()?.let { primary ->
+                    failures.drop(1).forEach(primary::addSuppressed)
+                    cleanupFailure.set(primary)
+                  }
+                },
+                "coffee-gb-rom-open-close",
+            )
+            .apply {
+              isDaemon = true
+              start()
             }
-      }
+    try {
+      cleanup.join(CLOSE_TIMEOUT_MILLIS)
+    } catch (failure: InterruptedException) {
+      cleanup.interrupt()
+      Thread.currentThread().interrupt()
+      throw IllegalStateException("Interrupted while closing ROM-open service", failure)
     }
-    ownedExecutor?.shutdownNow()
+    if (cleanup.isAlive) {
+      cleanup.interrupt()
+      throw IllegalStateException(
+          "ROM-open cleanup did not finish within $CLOSE_TIMEOUT_MILLIS ms")
+    }
+    cleanupFailure.get()?.let { failure ->
+      throw IllegalStateException("Unable to close ROM-open service cleanly", failure)
+    }
   }
 
   private fun prepare(operation: Operation) {
@@ -460,7 +553,7 @@ internal constructor(
           operation,
           RomOpenFailureKind.INTERNAL,
           "Coffee GB could not inspect this ROM.",
-          technicalDetails(failure),
+          technicalDetails(failure, operation.path),
       )
     } finally {
       cleanupAbandonedSnapshot(operation)
@@ -490,7 +583,7 @@ internal constructor(
           operation,
           RomOpenFailureKind.INVALID_ARCHIVE_SELECTION,
           "The selected archive entry could not be opened.",
-          technicalDetails(failure),
+          technicalDetails(failure, operation.path),
       )
     } finally {
       cleanupAbandonedSnapshot(operation)
@@ -514,12 +607,16 @@ internal constructor(
       }
       operation.controllerDispatched = true
     }
-    eventBus.post(
-        Controller.LoadRomEvent(
-            image,
-            state = null,
-            openRequestId = operation.id,
-        ))
+    try {
+      eventBus.post(
+          Controller.LoadRomEvent(
+              image,
+              state = null,
+              openRequestId = operation.id,
+          ))
+    } finally {
+      operation.controllerDispatchComplete.countDown()
+    }
   }
 
   private fun fail(operation: Operation, failure: RomSourceException) {
@@ -527,7 +624,7 @@ internal constructor(
         operation,
         mapFailure(failure.reason()),
         friendlyMessage(failure),
-        technicalDetails(failure),
+        technicalDetails(failure, operation.path),
     )
   }
 
@@ -573,8 +670,9 @@ internal constructor(
     if (!mayPublish(operation)) {
       return
     }
+    val sequence = operation.nextUpdateSequence.incrementAndGet()
     uiExecutor.execute {
-      if (mayPublish(operation)) {
+      if (mayPublish(operation) && operation.claimDelivery(sequence)) {
         listener(update)
       }
     }
@@ -587,6 +685,22 @@ internal constructor(
 
   private fun current(requestId: Long): Operation? =
       synchronized(lock) { active?.takeIf { it.id == requestId && !it.terminal.get() } }
+
+  private fun claimSuccessfulTerminal(requestId: Long): Operation? =
+      synchronized(lock) {
+        val operation =
+            active?.takeIf {
+              it.id == requestId &&
+                  !it.superseded.get() &&
+                  !it.cancelled.get() &&
+                  !closed.get()
+            } ?: return@synchronized null
+        if (!operation.terminal.compareAndSet(false, true)) {
+          return@synchronized null
+        }
+        active = null
+        operation
+      }
 
   private inline fun withCurrent(requestId: Long, action: (Operation) -> Unit) {
     current(requestId)?.let(action)
@@ -647,10 +761,13 @@ internal constructor(
     @Volatile var snapshot: RomSourceSnapshot? = null
     @Volatile var future: Future<*>? = null
     @Volatile var controllerDispatched = false
+    val controllerDispatchComplete = CountDownLatch(1)
     @Volatile var origin: RomOrigin? = null
     @Volatile var persistenceRequestId: Long? = null
     @Volatile var selectionSubmitted = false
     @Volatile private var lastCopyProgress = 0L
+    val nextUpdateSequence = AtomicLong()
+    private val deliveredUpdateSequence = AtomicLong()
 
     fun shouldPublishCopyProgress(copiedBytes: Long): Boolean {
       if (copiedBytes - lastCopyProgress < COPY_PROGRESS_INTERVAL_BYTES) {
@@ -659,12 +776,27 @@ internal constructor(
       lastCopyProgress = copiedBytes
       return true
     }
+
+    fun claimDelivery(sequence: Long): Boolean {
+      while (true) {
+        val delivered = deliveredUpdateSequence.get()
+        if (sequence <= delivered) {
+          return false
+        }
+        if (deliveredUpdateSequence.compareAndSet(delivered, sequence)) {
+          return true
+        }
+      }
+    }
   }
 
   private companion object {
     val LOG = LoggerFactory.getLogger(RomOpenService::class.java)
     const val NO_VISIBLE_REQUEST = -1L
     const val COPY_PROGRESS_INTERVAL_BYTES = 1024L * 1024L
+    const val CONTROLLER_DISPATCH_CLOSE_TIMEOUT_MILLIS = 1_000L
+    const val WORKER_CLOSE_TIMEOUT_MILLIS = 3_000L
+    const val CLOSE_TIMEOUT_MILLIS = 5_000L
 
     fun mapFailure(reason: RomSourceException.Reason): RomOpenFailureKind =
         when (reason) {
@@ -714,7 +846,7 @@ internal constructor(
               "The archive selection is no longer valid."
         }
 
-    fun technicalDetails(failure: Throwable): String {
+    fun technicalDetails(failure: Throwable, sourcePath: Path?): String {
       val details = mutableListOf<String>()
       var current: Throwable? = failure
       while (current != null && details.size < 6) {
@@ -726,11 +858,37 @@ internal constructor(
                 ?.takeIf(String::isNotEmpty)
         details +=
             if (message == null) current.javaClass.name
-            else "${current.javaClass.name}: $message"
+            else {
+              "${current.javaClass.name}: " +
+                  redactRomOpenTechnicalDetails(message, sourcePath)
+            }
         current = current.cause
       }
       return details.joinToString("\nCaused by: ")
     }
+  }
+}
+
+internal fun redactRomOpenTechnicalDetails(value: String, sourcePath: Path?): String {
+  val directories =
+      buildList {
+            sourcePath
+                ?.toAbsolutePath()
+                ?.normalize()
+                ?.parent
+                ?.toString()
+                ?.takeIf(String::isNotBlank)
+                ?.let(::add)
+            runCatching { Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize() }
+                .getOrNull()
+                ?.toString()
+                ?.takeIf(String::isNotBlank)
+                ?.let(::add)
+          }
+          .distinct()
+          .sortedByDescending(String::length)
+  return directories.fold(value) { redacted, directory ->
+    redacted.replace(directory, "<redacted-directory>")
   }
 }
 
