@@ -204,7 +204,18 @@ class ApplicationSettingsStore(
             }
           }
         }
-        synchronized(lock) { closed = true }
+        synchronized(lock) {
+          // A failed/timed-out close is a retained shutdown attempt. Keep the newest revision
+          // dirty and allow a later close to create a fresh writer after the interrupted one
+          // physically unwinds. Only a fully successful flush makes the store terminal.
+          executor = null
+          if (failure == null) {
+            closed = true
+          } else {
+            if (committedRevision < revision) dirty = true
+            closing = false
+          }
+        }
         failure?.let { lastWriteFailure = it }
         if (interrupted) Thread.currentThread().interrupt()
       }

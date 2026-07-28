@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateDecodeException
 import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.controller.state.StateIdentity
@@ -254,6 +255,11 @@ class Connection(
       event: LinkedController.LocalRomLoadedEvent,
       expectedRoot: StateRootKind,
   ): PreparedRomMessage {
+    val portableState =
+        event.portableState
+            ?: event.portableStateFile?.let {
+              StateCodec.encode(it, StateCompression.DEFLATE)
+            }
     val hardwareProfile =
         try {
           HardwareProfileRegistry.resolve(event.hardwareProfileId)
@@ -265,14 +271,14 @@ class Connection(
           "Profile ${hardwareProfile.id()} netplay is unavailable: protocol v8 negotiates " +
               "StateFile v1, while this profile requires explicit StateFile v2 identity")
     }
-    if (expectedRoot == StateRootKind.SESSION && event.portableState == null) {
+    if (expectedRoot == StateRootKind.SESSION && portableState == null) {
       throw IOException("A running-session checkpoint requires a SESSION StateFile")
     }
     // Validate the small, profile-derived declaration before any StateFile inspection,
     // compression, or message allocation. The peer will repeat the same fail-closed check.
     val outgoingProfileFlags = profileFlags(event)
     val stateDeclaration =
-        event.portableState?.let { validateOutgoingState(it, expectedRoot) }
+        portableState?.let { validateOutgoingState(it, expectedRoot) }
     checkedDecodedMessageSize(
         event.romFile.size,
         event.slotRomFile?.size ?: 0,
@@ -289,7 +295,7 @@ class Connection(
             rom,
             slotRom,
             battery,
-            event.portableState,
+            portableState,
         )
     val buf = ByteBuffer.allocate(messageSize)
     buf.put(ROM)
@@ -305,9 +311,9 @@ class Connection(
     buf.putInt(slotRom?.size ?: 0)
     buf.putInt(event.batteryFile?.size ?: 0)
     buf.putInt(battery?.size ?: 0)
-    buf.putInt(event.portableState?.size ?: 0)
+    buf.putInt(portableState?.size ?: 0)
     heldButtons.forEach { buf.put(it.ordinal.toByte()) }
-    event.portableState?.let(buf::put)
+    portableState?.let(buf::put)
     buf.put(rom)
     slotRom?.let(buf::put)
     battery?.let(buf::put)

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.link
 
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.BasicController
 import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
@@ -50,6 +51,8 @@ import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.events.Event
+import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
@@ -58,8 +61,12 @@ import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.RomImage
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import eu.rekawek.coffeegb.core.memory.cart.RomSourceException
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
+import org.junit.Assume
 import org.junit.Test
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -73,12 +80,15 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class LinkedControllerTest {
@@ -102,12 +112,12 @@ class LinkedControllerTest {
       val controller = LinkedController(eventBus, properties, null).also {
         it.timingTicker.disabled = true
       }
-      val received = AtomicReference<LinkedController.LocalRomLoadedEvent?>()
-      eventBus.register<LinkedController.LocalRomLoadedEvent>(received::set)
+      val received = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+      eventBus.register<LinkedController.LocalRomLoadedEvent> { received.add(it) }
       try {
         eventBus.post(LoadRomEvent(rom.toFile()))
         controller.runFrame()
-        return assertNotNull(received.get())
+        return assertNotNull(received.poll(1, TimeUnit.SECONDS))
       } finally {
         controller.close()
         properties.close()
@@ -182,6 +192,53 @@ class LinkedControllerTest {
       Files.deleteIfExists(directory.resolve("settings.properties"))
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun linkedArchiveMigrationPublishesTheBatteryGenerationLoadedByTheCandidate() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-archive-migration")
+    val container = directory.resolve("collection.zip")
+    Files.createFile(container)
+    val legacySave = directory.resolve("collection.sav")
+    val legacyBytes = ByteArray(0x2000)
+    legacyBytes[0] = 0x5a
+    Files.write(legacySave, legacyBytes)
+    val romBytes = ROM.readBytes()
+    romBytes[0x147] = 0x03 // MBC1 + RAM + battery
+    romBytes[0x149] = 0x02 // 8 KiB RAM
+    val origin = RomOrigin.archiveEntry(container, "game.gb", true)
+    val image = RomImage(origin, romBytes)
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val loaded = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+    eventBus.register<LinkedController.LocalRomLoadedEvent> { loaded.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(image))
+      controller.runFrame()
+
+      val payload = assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
+      assertContentEquals(legacyBytes, assertNotNull(payload.batteryFile))
+      val migrated = origin.persistencePath(".sav").orElseThrow()
+      assertContentEquals(legacyBytes, Files.readAllBytes(migrated))
+      val session = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+      session.gameboy.addressSpace.setByte(0x0000, 0x0a)
+      assertEquals(0x5a, session.gameboy.addressSpace.getByte(0xa000))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      Files.list(directory).use { files ->
+        files.forEach { Files.deleteIfExists(it) }
+      }
       Files.deleteIfExists(directory)
     }
   }
@@ -287,6 +344,16 @@ class LinkedControllerTest {
       eventBus.post(LoadRomEvent(ROM, openRequestId = 52L))
       controller.runFrame()
 
+      assertFalse(
+          lifecycle.contains("started" to 51L),
+          "the superseded request committed during the first manually driven frame",
+      )
+      repeat(10) {
+        if (!lifecycle.contains("started" to 52L)) {
+          controller.runFrame()
+        }
+      }
+
       val expected: List<Pair<String, Long?>> =
           listOf(
               "loading" to 51L,
@@ -299,6 +366,47 @@ class LinkedControllerTest {
           lifecycle,
       )
       assertEquals(1, controller.activeSessionCount())
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun prequeuedMatchingCancellationWinsWithinTheFirstManualFrame() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val lifecycle = mutableListOf<Pair<String, Long?>>()
+    eventBus.register<Controller.RomLoadingEvent> {
+      lifecycle += "loading" to it.openRequestId
+    }
+    eventBus.register<Controller.RomLoadingCancelledEvent> {
+      lifecycle += "cancelled" to it.openRequestId
+    }
+    eventBus.register<Controller.EmulationStartedEvent> {
+      lifecycle += "started" to it.openRequestId
+    }
+
+    try {
+      val requestId = 53L
+      eventBus.post(LoadRomEvent(ROM, openRequestId = requestId))
+      eventBus.post(Controller.CancelRomOpenEvent(requestId))
+
+      controller.runFrame()
+
+      val expected: List<Pair<String, Long?>> =
+          listOf(
+              "loading" to requestId,
+              "cancelled" to requestId,
+          )
+      assertEquals(
+          expected,
+          lifecycle,
+      )
+      assertEquals(0, controller.activeSessionCount())
     } finally {
       controller.close()
       eventBus.close()
@@ -359,6 +467,130 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun linkedCandidateAndOutboundPayloadArePreparedOffTheFrameThread() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val caller = Thread.currentThread()
+    val materializationThread = AtomicReference<Thread>()
+    val payloadThread = AtomicReference<Thread>()
+    val publicationThread = AtomicReference<Thread>()
+    val published = CountDownLatch(1)
+    val defaultMaterialize = controller.materializeLocalSession
+    controller.materializeLocalSession = { prepared, frame, links ->
+      materializationThread.set(Thread.currentThread())
+      defaultMaterialize(prepared, frame, links)
+    }
+    controller.localPayloadProbe = { payloadThread.set(Thread.currentThread()) }
+    eventBus.register<LinkedController.LocalRomLoadedEvent> {
+      publicationThread.set(Thread.currentThread())
+      published.countDown()
+    }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM, openRequestId = 75L))
+      controller.runFrame()
+
+      assertTrue(published.await(1, TimeUnit.SECONDS))
+      assertEquals("coffee-gb-linked-rom-loader", materializationThread.get().name)
+      assertEquals("coffee-gb-linked-rom-loader", payloadThread.get().name)
+      assertTrue(materializationThread.get() !== caller)
+      assertTrue(payloadThread.get() !== caller)
+      assertTrue(publicationThread.get() !== caller)
+      assertTrue(publicationThread.get() !== materializationThread.get())
+      assertEquals(1, controller.activeSessionCount())
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun discardedWorkerCandidatesReleaseExactlyOneOwnedMainEventBus() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    val failures = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
+    val cancelled = LinkedBlockingQueue<Controller.RomLoadingCancelledEvent>()
+    val enteredPayload = CountDownLatch(1)
+    val releasePayload = CountDownLatch(1)
+    eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+    eventBus.register<Controller.LoadRomFailedEvent> { failures.add(it) }
+    eventBus.register<Controller.RomLoadingCancelledEvent> { cancelled.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+      assertEquals(1, linkedSessionEventBusChildren(controller))
+
+      val discardedAfterFailure = AtomicInteger()
+      controller.localCandidateDiscardProbe = { discardedAfterFailure.incrementAndGet() }
+      controller.localPayloadProbe = { throw IOException("injected packaging failure") }
+      eventBus.post(LoadRomEvent(ROM, openRequestId = 76L))
+      controller.runFrame()
+
+      assertEquals(76L, assertNotNull(failures.poll(1, TimeUnit.SECONDS)).openRequestId)
+      assertEquals(1, discardedAfterFailure.get())
+      assertEquals(1, linkedSessionEventBusChildren(controller))
+      assertTrue(oldSession === privateList(controller, "sessions")[0])
+
+      val discardedAfterCancel = AtomicInteger()
+      controller.localCandidateDiscardProbe = { discardedAfterCancel.incrementAndGet() }
+      controller.localPayloadProbe = {
+        enteredPayload.countDown()
+        while (releasePayload.count != 0L) {
+          try {
+            releasePayload.await()
+          } catch (_: InterruptedException) {
+            // Model package work that notices cancellation only at the next explicit safe point.
+          }
+        }
+      }
+      controller.startController()
+      eventBus.post(LoadRomEvent(ROM, openRequestId = 77L))
+      assertTrue(enteredPayload.await(1, TimeUnit.SECONDS))
+      assertEquals(2, linkedSessionEventBusChildren(controller))
+      eventBus.post(Controller.CancelRomOpenEvent(77L))
+      assertEquals(
+          77L,
+          assertNotNull(cancelled.poll(1, TimeUnit.SECONDS)).openRequestId,
+      )
+      releasePayload.countDown()
+      awaitCondition("cancelled candidate event bus did not close") {
+        discardedAfterCancel.get() == 1 && linkedSessionEventBusChildren(controller) == 1
+      }
+      assertTrue(oldSession === privateList(controller, "sessions")[0])
+
+      controller.localCandidateDiscardProbe = null
+      controller.localPayloadProbe = null
+      repeat(3) { index ->
+        val requestId = 78L + index
+        eventBus.post(LoadRomEvent(ROM, openRequestId = requestId))
+        assertEquals(
+            requestId,
+            assertNotNull(started.poll(2, TimeUnit.SECONDS)).openRequestId,
+        )
+        awaitCondition("replacement event bus child accumulated") {
+          linkedSessionEventBusChildren(controller) == 1
+        }
+      }
+    } finally {
+      releasePayload.countDown()
+      controller.localPayloadProbe = null
+      controller.localCandidateDiscardProbe = null
+      controller.closeWithState()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun explicitLocalStopPublishesStoppedBeforeTheSessionIsReleased() {
     val eventBus = EventBusImpl()
     val controller =
@@ -382,6 +614,361 @@ class LinkedControllerTest {
       assertNull(stopped.poll(100, TimeUnit.MILLISECONDS), "an empty slot must not stop twice")
     } finally {
       controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun stopResetAndNetworkMutationWaitForPhysicalPersistenceDrain() {
+    listOf(false, true).forEach { reset ->
+      val eventBus = EventBusImpl()
+      val controller =
+          LinkedController(eventBus, EmulatorProperties(), null).also {
+            it.timingTicker.disabled = true
+          }
+      val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+      val stopped = LinkedBlockingQueue<Controller.EmulationStoppedEvent>()
+      val cancelled = LinkedBlockingQueue<Controller.RomLoadingCancelledEvent>()
+      val writerEntered = CountDownLatch(1)
+      val releaseWriter = CountDownLatch(1)
+      eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+      eventBus.register<Controller.EmulationStoppedEvent> { stopped.add(it) }
+      eventBus.register<Controller.RomLoadingCancelledEvent> { cancelled.add(it) }
+
+      try {
+        eventBus.post(LoadRomEvent(ROM))
+        controller.runFrame()
+        assertNotNull(started.poll(1, TimeUnit.SECONDS))
+        val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+        controller.persistLocalBatteryCapture = {
+          writerEntered.countDown()
+          while (releaseWriter.count != 0L) {
+            try {
+              releaseWriter.await()
+            } catch (_: InterruptedException) {
+              // Model a filesystem writer that does not return merely because Future was cancelled.
+            }
+          }
+          BatteryPersistenceResult.Success(1)
+        }
+
+        controller.startController()
+        val requestId = if (reset) 102L else 101L
+        eventBus.post(LoadRomEvent(ROM, openRequestId = requestId))
+        assertTrue(writerEntered.await(1, TimeUnit.SECONDS))
+        eventBus.post(
+            PeerLoadedGameEvent(
+                ROM_BYTES,
+                null,
+                null,
+                GAMEBOY_TYPE,
+                BOOTSTRAP_MODE,
+                controller.currentFrame(),
+                player = 1,
+            ))
+        if (reset) {
+          eventBus.post(Controller.ResetEmulationEvent())
+        } else {
+          eventBus.post(Controller.StopEmulationEvent())
+        }
+
+        assertEquals(
+            requestId,
+            assertNotNull(cancelled.poll(1, TimeUnit.SECONDS)).openRequestId,
+        )
+        assertTrue(oldSession === privateList(controller, "sessions")[0])
+        assertNull(privateList(controller, "sessions")[1])
+        assertEquals(1, controller.activeSessionCount())
+        assertNull(
+            stopped.poll(100, TimeUnit.MILLISECONDS),
+            "stop/reset crossed the physical writer barrier",
+        )
+
+        releaseWriter.countDown()
+        if (reset) {
+          awaitCondition("reset or queued peer mutation did not resume after drain") {
+            val sessions = privateList(controller, "sessions")
+            sessions[0] != null && sessions[0] !== oldSession && sessions[1] != null
+          }
+          assertEquals(2, controller.activeSessionCount())
+        } else {
+          assertNotNull(stopped.poll(2, TimeUnit.SECONDS))
+          awaitCondition("stop or queued peer mutation did not resume after drain") {
+            val sessions = privateList(controller, "sessions")
+            sessions[0] == null && sessions[1] != null
+          }
+          assertEquals(1, controller.activeSessionCount())
+        }
+      } finally {
+        releaseWriter.countDown()
+        controller.closeWithState()
+        eventBus.close()
+      }
+    }
+  }
+
+  @Test
+  fun linkedStopAndResetRetainTheLiveSessionAcrossRetryableWorkerFailure() {
+    listOf(
+            Controller.StopEmulationEvent() to Controller.PersistenceBarrierOperation.STOP,
+            Controller.ResetEmulationEvent() to Controller.PersistenceBarrierOperation.RESET,
+        )
+        .forEach { (command, operation) ->
+          val eventBus = EventBusImpl()
+          val controller =
+              LinkedController(eventBus, EmulatorProperties(), null).also {
+                it.timingTicker.disabled = true
+              }
+          val failures =
+              LinkedBlockingQueue<Controller.RomReplacementPersistenceFailedEvent>()
+          val stopped = LinkedBlockingQueue<Controller.EmulationStoppedEvent>()
+          val attempts = AtomicInteger()
+          val writerThreads = mutableListOf<String>()
+          val materializationThread = AtomicReference<String>()
+          eventBus.register<Controller.RomReplacementPersistenceFailedEvent> {
+            failures.add(it)
+          }
+          eventBus.register<Controller.EmulationStoppedEvent> { stopped.add(it) }
+
+          try {
+            eventBus.post(LoadRomEvent(ROM))
+            controller.runFrame()
+            val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+            controller.persistLocalBatteryCapture = {
+              synchronized(writerThreads) { writerThreads += Thread.currentThread().name }
+              if (attempts.incrementAndGet() == 1) {
+                BatteryPersistenceResult.Failure(
+                    BatteryPersistenceResult.FailureKind.WRITE_FAILED,
+                    "cpu_instrs.sav",
+                    "injected command failure",
+                    IOException("disk full"),
+                )
+              } else {
+                BatteryPersistenceResult.Success(1)
+              }
+            }
+            val defaultMaterialize = controller.materializeLocalSession
+            controller.materializeLocalSession = { prepared, frame, links ->
+              materializationThread.set(Thread.currentThread().name)
+              defaultMaterialize(prepared, frame, links)
+            }
+
+            eventBus.post(command)
+            controller.runFrame()
+
+            val failure = assertNotNull(failures.poll(1, TimeUnit.SECONDS))
+            assertEquals(operation, failure.operation)
+            assertTrue(oldSession === privateList(controller, "sessions")[0])
+            assertNull(stopped.poll(100, TimeUnit.MILLISECONDS))
+
+            eventBus.post(Controller.RetryRomReplacementEvent(failure.requestId))
+            controller.runFrame()
+
+            assertEquals(2, attempts.get())
+            assertTrue(
+                synchronized(writerThreads) {
+                  writerThreads.all { it == "coffee-gb-linked-rom-loader" }
+                })
+            if (operation == Controller.PersistenceBarrierOperation.STOP) {
+              assertNotNull(stopped.poll(1, TimeUnit.SECONDS))
+              assertNull(privateList(controller, "sessions")[0])
+              assertNull(materializationThread.get())
+            } else {
+              assertTrue(oldSession !== privateList(controller, "sessions")[0])
+              assertEquals("coffee-gb-linked-rom-loader", materializationThread.get())
+            }
+          } finally {
+            controller.close()
+            eventBus.close()
+          }
+        }
+  }
+
+  @Test
+  fun queuedReplacementImmediatelyCancelsBlockedWriterWithoutOverlappingIt() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    val cancelled = LinkedBlockingQueue<Controller.RomLoadingCancelledEvent>()
+    val firstEntered = CountDownLatch(1)
+    val releaseFirst = CountDownLatch(1)
+    val secondEntered = CountDownLatch(1)
+    val attempts = AtomicInteger()
+    val activeWriters = AtomicInteger()
+    val maxActiveWriters = AtomicInteger()
+    eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+    eventBus.register<Controller.RomLoadingCancelledEvent> { cancelled.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      controller.persistLocalBatteryCapture = {
+        val attempt = attempts.incrementAndGet()
+        val active = activeWriters.incrementAndGet()
+        maxActiveWriters.updateAndGet { previous -> maxOf(previous, active) }
+        try {
+          if (attempt == 1) {
+            firstEntered.countDown()
+            while (releaseFirst.count != 0L) {
+              try {
+                releaseFirst.await()
+              } catch (_: InterruptedException) {
+                // Deliberately remain inside the first physical writer after cancellation.
+              }
+            }
+          } else {
+            secondEntered.countDown()
+          }
+          BatteryPersistenceResult.Success(attempt)
+        } finally {
+          activeWriters.decrementAndGet()
+        }
+      }
+
+      controller.startController()
+      eventBus.post(LoadRomEvent(ROM, openRequestId = 111L))
+      assertTrue(firstEntered.await(1, TimeUnit.SECONDS))
+      // The later load is both an immediate supersession intent and an ordered state mutation.
+      // It must cancel request 111 while staying behind that writer's physical drain.
+      eventBus.post(LoadRomEvent(ROM, openRequestId = 112L))
+      assertEquals(
+          111L,
+          assertNotNull(cancelled.poll(1, TimeUnit.SECONDS)).openRequestId,
+      )
+
+      assertFalse(
+          secondEntered.await(150, TimeUnit.MILLISECONDS),
+          "a newer replacement writer overtook the cancelled physical writer",
+      )
+      assertEquals(1, maxActiveWriters.get())
+
+      releaseFirst.countDown()
+      assertTrue(secondEntered.await(2, TimeUnit.SECONDS))
+      assertEquals(
+          112L,
+          assertNotNull(started.poll(2, TimeUnit.SECONDS)).openRequestId,
+      )
+      assertEquals(1, maxActiveWriters.get())
+      assertEquals(2, attempts.get())
+    } finally {
+      releaseFirst.countDown()
+      controller.closeWithState()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun linkedCloseDeadlineBoundsBlockedTimingThreadAndAllowsRetry() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            closeTimeoutMillis = 75,
+        ).also { it.timingTicker.disabled = true }
+    val probeEntered = CountDownLatch(1)
+    val releaseProbe = CountDownLatch(1)
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      controller.timingFrameProbe = {
+        probeEntered.countDown()
+        while (releaseProbe.count != 0L) {
+          try {
+            releaseProbe.await()
+          } catch (_: InterruptedException) {
+            // Model core/platform work that does not cooperate with interruption.
+          }
+        }
+      }
+      controller.startController()
+      assertTrue(probeEntered.await(1, TimeUnit.SECONDS))
+
+      val closeStarted = System.nanoTime()
+      val failure =
+          assertFailsWith<Controller.PersistenceBarrierException> {
+            controller.closeWithState()
+          }
+      val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStarted)
+
+      assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
+      assertTrue(elapsedMillis < 1_000, "linked close took ${elapsedMillis}ms")
+
+      releaseProbe.countDown()
+      assertNotNull(controller.closeWithState())
+    } finally {
+      releaseProbe.countDown()
+      runCatching { controller.close() }
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun linkedOrdinaryCloseRetainsOneWriterAcrossTimeoutAndRetry() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            closeTimeoutMillis = 125,
+        ).also { it.timingTicker.disabled = true }
+    val writerEntered = CountDownLatch(1)
+    val releaseWriter = CountDownLatch(1)
+    val writerStarts = AtomicInteger()
+    val activeWriters = AtomicInteger()
+    val maxActiveWriters = AtomicInteger()
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      controller.persistLocalCloseCapture = {
+        writerStarts.incrementAndGet()
+        val active = activeWriters.incrementAndGet()
+        maxActiveWriters.updateAndGet { previous -> maxOf(previous, active) }
+        writerEntered.countDown()
+        try {
+          while (releaseWriter.count != 0L) {
+            try {
+              releaseWriter.await()
+            } catch (_: InterruptedException) {
+              // Some filesystem calls ignore interruption; retain this exact task across retry.
+            }
+          }
+          BatteryPersistenceResult.Success(1)
+        } finally {
+          activeWriters.decrementAndGet()
+        }
+      }
+
+      val first =
+          assertFailsWith<Controller.PersistenceBarrierException> {
+            controller.close()
+          }
+      assertTrue(writerEntered.await(1, TimeUnit.SECONDS))
+      val second =
+          assertFailsWith<Controller.PersistenceBarrierException> {
+            controller.closeWithState()
+          }
+
+      assertEquals(first.requestId, second.requestId)
+      assertEquals(Controller.PersistenceBarrierOperation.CLOSE, first.operation)
+      assertEquals(1, writerStarts.get())
+      assertEquals(1, maxActiveWriters.get())
+
+      releaseWriter.countDown()
+      assertNotNull(controller.closeWithState())
+      assertEquals(1, writerStarts.get())
+      assertEquals(1, maxActiveWriters.get())
+    } finally {
+      releaseWriter.countDown()
+      runCatching { controller.close() }
       eventBus.close()
     }
   }
@@ -771,6 +1358,268 @@ class LinkedControllerTest {
           assertNotNull(started.poll(1, TimeUnit.SECONDS)).openRequestId,
       )
       assertTrue(oldSession !== privateList(controller, "sessions")[0])
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun linkedBatterySidecarSymlinkIsRejectedWithoutPayloadOrSessionCommit() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-battery-symlink")
+    val rom = directory.resolve("linked-secret.gb")
+    val battery = directory.resolve("linked-secret.sav")
+    val secret = directory.resolve("unrelated-private-key")
+    val romBytes = ROM.readBytes()
+    romBytes[0x147] = 0x03 // MBC1 + RAM + battery
+    romBytes[0x149] = 0x02 // 8 KiB RAM
+    Files.write(rom, romBytes)
+    Files.write(secret, ByteArray(32) { 0x5a })
+    try {
+      Files.createSymbolicLink(battery, secret)
+    } catch (unsupported: UnsupportedOperationException) {
+      Files.deleteIfExists(secret)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+      Assume.assumeNoException("symbolic links are unsupported", unsupported)
+    } catch (unsupported: IOException) {
+      Files.deleteIfExists(secret)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+      Assume.assumeNoException("symbolic links are unavailable", unsupported)
+    }
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val loaded = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+    val failures = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
+    eventBus.register<LinkedController.LocalRomLoadedEvent> { loaded.add(it) }
+    eventBus.register<Controller.LoadRomFailedEvent> { failures.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
+      val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+
+      eventBus.post(LoadRomEvent(rom.toFile(), openRequestId = 119L))
+      controller.runFrame()
+
+      val failure = assertNotNull(failures.poll(1, TimeUnit.SECONDS))
+      assertEquals(119L, failure.openRequestId)
+      assertTrue(failure.message.contains("regular non-symbolic file"))
+      assertNull(loaded.poll(100, TimeUnit.MILLISECONDS))
+      assertTrue(oldSession === privateList(controller, "sessions")[0])
+      assertEquals(1, controller.activeSessionCount())
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      Files.deleteIfExists(directory.resolve("settings.properties"))
+      Files.deleteIfExists(battery)
+      Files.deleteIfExists(secret)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun configuredDatelSlotRejectsSevenZBeforeLegacyArchiveParsing() {
+    val directory = Files.createTempDirectory("coffee-gb-datel-slot-seven-z")
+    val slot = directory.resolve("private-slot.7z")
+    val settings = directory.resolve("settings.properties")
+    Files.write(slot, byteArrayOf(0x37, 0x7a, 0xbc.toByte(), 0xaf.toByte()))
+    Files.writeString(
+        settings,
+        "schema.version=4\n${EmulatorProperties.Key.DatelSlotRom.propertyName}=$slot\n",
+    )
+    val properties = EmulatorProperties(settingsPath = settings)
+    try {
+      val failure =
+          assertFailsWith<RomSourceException> {
+            Controller.createGameboyConfig(
+                properties,
+                Rom(StateCodecTestSupport.datelRom()),
+            )
+          }
+      assertEquals(RomSourceException.Reason.UNSUPPORTED_SEVEN_Z, failure.reason())
+    } finally {
+      properties.close()
+      Files.deleteIfExists(slot)
+      Files.deleteIfExists(settings)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun configuredDatelSlotStillLoadsFromSafeZipSnapshot() {
+    val directory = Files.createTempDirectory("coffee-gb-datel-slot-zip")
+    val slot = directory.resolve("slot.zip")
+    val settings = directory.resolve("settings.properties")
+    val slotBytes = Files.readAllBytes(ROM.toPath())
+    ZipOutputStream(Files.newOutputStream(slot)).use { output ->
+      output.putNextEntry(ZipEntry("slot.gb"))
+      output.write(slotBytes)
+      output.closeEntry()
+    }
+    Files.writeString(
+        settings,
+        "schema.version=4\n${EmulatorProperties.Key.DatelSlotRom.propertyName}=$slot\n",
+    )
+    val properties = EmulatorProperties(settingsPath = settings)
+    try {
+      val configuration =
+          Controller.createGameboyConfig(
+              properties,
+              Rom(StateCodecTestSupport.datelRom()),
+          )
+      assertContentEquals(slotBytes, assertNotNull(configuration.slotRom).image.bytes())
+    } finally {
+      properties.close()
+      Files.deleteIfExists(slot)
+      Files.deleteIfExists(settings)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun linkedRomPublicationCannotBeOvertakenByLaterPeerRuntimeTraffic() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val asyncDispatcherEntered = CountDownLatch(1)
+    val releaseAsyncDispatcher = CountDownLatch(1)
+    val observed = LinkedBlockingQueue<String>()
+    eventBus.register<BlockedLinkedAsyncEvent> {
+      asyncDispatcherEntered.countDown()
+      releaseAsyncDispatcher.await()
+    }
+    eventBus.register<LinkedController.LocalRomLoadedEvent> { observed.add("rom") }
+    eventBus.register<ValidatedPeerStateEvent> { observed.add("runtime") }
+
+    try {
+      linkedControllerEventBus(controller).postAsync(BlockedLinkedAsyncEvent())
+      assertTrue(asyncDispatcherEntered.await(1, TimeUnit.SECONDS))
+
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertEquals(1, controller.activeSessionCount())
+
+      eventBus.post(
+          PeerLoadedGameEvent(
+              ROM_BYTES,
+              null,
+              null,
+              GAMEBOY_TYPE,
+              BOOTSTRAP_MODE,
+              controller.currentFrame(),
+              player = 1,
+          ))
+      controller.runFrame()
+      assertEquals(2, controller.activeSessionCount())
+      assertNull(
+          observed.poll(100, TimeUnit.MILLISECONDS),
+          "runtime traffic must use the same blocked FIFO lane as ROM publication",
+      )
+
+      releaseAsyncDispatcher.countDown()
+      assertEquals("rom", observed.poll(1, TimeUnit.SECONDS))
+      assertEquals("runtime", observed.poll(1, TimeUnit.SECONDS))
+    } finally {
+      releaseAsyncDispatcher.countDown()
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun peerAndLocalCommandsPreserveOneIngressOrderAcrossTheirQueues() {
+    fun activePeersAtReplacementBarrier(peerFirst: Boolean): Int {
+      val eventBus = EventBusImpl()
+      val controller =
+          LinkedController(eventBus, EmulatorProperties(), null).also {
+            it.timingTicker.disabled = true
+          }
+      return try {
+        eventBus.post(LoadRomEvent(ROM))
+        controller.runFrame()
+        val activeAtBarrier = AtomicInteger(-1)
+        controller.persistLocalBatteryCapture = {
+          activeAtBarrier.set(controller.activeSessionCount())
+          BatteryPersistenceResult.Success(1)
+        }
+        val peer =
+            PeerLoadedGameEvent(
+                ROM_BYTES,
+                null,
+                null,
+                GAMEBOY_TYPE,
+                BOOTSTRAP_MODE,
+                controller.currentFrame(),
+                player = 1,
+            )
+        val local = LoadRomEvent(ROM, openRequestId = if (peerFirst) 141L else 142L)
+        if (peerFirst) {
+          eventBus.post(peer)
+          eventBus.post(local)
+        } else {
+          eventBus.post(local)
+          eventBus.post(peer)
+        }
+
+        controller.runFrame()
+        assertEquals(2, controller.activeSessionCount())
+        activeAtBarrier.get()
+      } finally {
+        controller.close()
+        eventBus.close()
+      }
+    }
+
+    assertEquals(2, activePeersAtReplacementBarrier(peerFirst = true))
+    assertEquals(1, activePeersAtReplacementBarrier(peerFirst = false))
+  }
+
+  @Test
+  fun initialAsyncCandidateCommitsTheExactSerialAndInfraredTopologyUsedByPeers() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      eventBus.post(
+          PeerLoadedGameEvent(
+              ROM_BYTES,
+              null,
+              null,
+              GAMEBOY_TYPE,
+              BOOTSTRAP_MODE,
+              controller.currentFrame(),
+              player = 1,
+          ))
+      controller.runFrame()
+
+      val sessions = privateList(controller, "sessions").map { it as Session? }
+      val committedLinks =
+          LinkedController::class.java.getDeclaredField("links").let { field ->
+            field.isAccessible = true
+            field.get(controller) as StateHistory.Links
+          }
+      for (player in 0..1) {
+        val session = assertNotNull(sessions[player])
+        assertSame(committedLinks.serial[player], session.serialEndpoint)
+        assertSame(committedLinks.infrared[player], session.infraredEndpoint)
+      }
     } finally {
       controller.close()
       eventBus.close()
@@ -1609,6 +2458,67 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun unsupportedProfileCanReturnToBasicControllerFromParentDispatcherWithoutSelfClose() {
+    val profile = HardwareProfileRegistry.SGB
+    val seedBus = EventBusImpl()
+    val seedConfig =
+        Gameboy.GameboyConfiguration(Rom(ROM))
+            .setHardwareProfile(profile)
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setSupportBatterySave(false)
+    val seedSession = Session(seedConfig, seedBus, null)
+    val seedState = DetachedStateAdapter.capture(seedSession.gameboy)
+    seedSession.close()
+    seedBus.close()
+
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties(profile)
+    val linked =
+        LinkedController(
+            eventBus,
+            properties,
+            null,
+            LinkMode.NORMAL,
+            localPlayer = 0,
+        ).also { it.timingTicker.disabled = true }
+    val replacement = AtomicReference<BasicController?>()
+    val transitionFailure = AtomicReference<Throwable?>()
+    val transitionReturned = CountDownLatch(1)
+    val basicStarted = CountDownLatch(1)
+    eventBus.register<Controller.EmulationStartedEvent> { basicStarted.countDown() }
+    eventBus.register<StopServerEvent> {
+      try {
+        val retained = assertNotNull(linked.closeWithState())
+        val basic =
+            BasicController(eventBus, properties, null).also {
+              replacement.set(it)
+              it.startController()
+            }
+        eventBus.post(LoadRomEvent(retained.rom.image, retained.state))
+      } catch (failure: Throwable) {
+        transitionFailure.set(failure)
+      } finally {
+        transitionReturned.countDown()
+      }
+    }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM, seedState))
+      linked.runFrame()
+
+      assertTrue(transitionReturned.await(3, TimeUnit.SECONDS))
+      assertNull(transitionFailure.get())
+      assertTrue(basicStarted.await(3, TimeUnit.SECONDS))
+      assertNotNull(replacement.get())
+    } finally {
+      replacement.get()?.close()
+      runCatching { linked.close() }
+      properties.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun fourPlayerHostRunsImmediatelyWithEmptyAdapterPorts() {
     val eventBus = EventBusImpl()
     val sut =
@@ -1673,7 +2583,7 @@ class LinkedControllerTest {
     assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
     assertTrue(
         checkpoint.states.all {
-          it.portableState?.copyOfRange(0, 4)?.contentEquals("CGBS".toByteArray()) == true
+          it.portableStateFile?.root is SessionStateRoot
         })
 
     val clientBus = EventBusImpl()
@@ -2268,7 +3178,8 @@ class LinkedControllerTest {
       }
     }
     eventBus.post(peerState(sut.currentFrame(), offender))
-    repeat(12) {
+    repeat(24) {
+      eventBus.drainAsyncEvents()
       if (failures.isEmpty()) sut.runFrame()
     }
 
@@ -2306,7 +3217,8 @@ class LinkedControllerTest {
       }
     }
     eventBus.post(peerState(sut.currentFrame(), offender))
-    repeat(12) {
+    repeat(24) {
+      eventBus.drainAsyncEvents()
       if (failures.isEmpty()) sut.runFrame()
     }
 
@@ -2371,7 +3283,13 @@ class LinkedControllerTest {
     }
     eventBus.post(SessionCheckpointEvent(0, emptyList(), offender))
     repeat(20) {
-      if (failures.isEmpty()) sut.runFrame()
+      if (failures.isEmpty()) {
+        sut.runFrame()
+        // Accepted peer lifecycle notifications deliberately share the asynchronous publication
+        // FIFO with ROM payloads. Wait for the listener to enqueue the next streaming checkpoint
+        // before advancing the controller-owned work budget again.
+        eventBus.drainAsyncEvents()
+      }
     }
 
     assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
@@ -2532,6 +3450,32 @@ class LinkedControllerTest {
     assertTrue(sut.releasedInputSourceAssignments().filterNotNull().all { it })
     assertTrue(sut.stateHistory.getHead().frame > previousFrame)
     eventBus.close()
+  }
+
+  @Test
+  fun firstLinkedBootTemplateCannotSampleHeldDesktopInput() {
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties()
+    val physicalP1 = properties.playerInputSource.openSource(0)
+    physicalP1.update(setOf(Button.A, Button.START))
+    val controller =
+        LinkedController(eventBus, properties, null).also {
+          it.timingTicker.disabled = true
+        }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+
+      assertTrue(
+          controller.mainEffectivePressedButtons().isEmpty(),
+          "linked cache-miss boot preparation must use RELEASED before constructing its template",
+      )
+      assertTrue(controller.releasedInputSourceAssignments().filterNotNull().all { it })
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
   }
 
   @Test
@@ -3135,6 +4079,34 @@ class LinkedControllerTest {
           (field.get(controller) as List<Any?>).toList()
         }
 
+    fun linkedControllerEventBus(controller: LinkedController): EventBus =
+        LinkedController::class.java.getDeclaredField("eventBus").let { field ->
+          field.isAccessible = true
+          field.get(controller) as EventBus
+        }
+
+    fun linkedSessionEventBusChildren(controller: LinkedController): Int {
+      val linkedBus = linkedControllerEventBus(controller)
+      return EventBusImpl::class.java.getDeclaredField("children").let { field ->
+        field.isAccessible = true
+        (field.get(linkedBus) as Collection<*>).size
+      }
+    }
+
+    fun awaitCondition(
+        message: String,
+        timeoutMillis: Long = 2_000,
+        condition: () -> Boolean,
+    ) {
+      val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+      while (!condition()) {
+        if (System.nanoTime() >= deadline) {
+          throw AssertionError(message)
+        }
+        Thread.yield()
+      }
+    }
+
     fun privateByteArrays(controller: LinkedController, name: String): List<ByteArray?> =
         privateList(controller, name).map { (it as ByteArray?)?.clone() }
 
@@ -3223,7 +4195,8 @@ class LinkedControllerTest {
               PeerLoadedGameEvent(
                   rom = state.romFile,
                   battery = state.batteryFile,
-                  portableState = state.portableState?.let(StateCodec::decode),
+                  portableState =
+                      state.portableStateFile ?: state.portableState?.let(StateCodec::decode),
                   gameboyType = state.gameboyType,
                   bootstrapMode = state.bootstrapMode,
                   frame = state.frame,
@@ -3264,5 +4237,7 @@ class LinkedControllerTest {
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
           "%02x".format(it.toInt() and 0xff)
         }
+
+    private class BlockedLinkedAsyncEvent : Event
   }
 }

@@ -61,7 +61,7 @@ class RomOpenServiceTest {
   }
 
   @Test
-  fun `committed controller start wins cancellation queued before lifecycle claim`() {
+  fun `committed controller start synchronously wins a later cancellation`() {
     val fixture = fixture()
     val source = romFile("committed-before-cancel.gb", "COMMITTED")
     val controllerCancellations = mutableListOf<Long>()
@@ -73,8 +73,8 @@ class RomOpenServiceTest {
     fixture.worker.runAll()
     val load = fixture.loads.single()
 
-    // Queue the correlated ownership acknowledgement, then request cancellation before its
-    // lifecycle worker runs. The acknowledgement was posted first and therefore owns the result.
+    // The correlated ownership acknowledgement claims the operation synchronously. Preference
+    // work may still be queued, but a later cancellation can no longer target committed state.
     fixture.eventBus.post(
         Controller.EmulationStartedEvent(
             "COMMITTED",
@@ -88,11 +88,68 @@ class RomOpenServiceTest {
     assertEquals(listOf(source.toAbsolutePath().normalize()), fixture.recents.recorded)
     assertEquals(requestId, assertIs<RomOpenUpdate.Opened>(fixture.updates.last()).requestId)
     assertTrue(fixture.updates.none { it is RomOpenUpdate.Cancelled })
-    assertEquals(
-        listOf(requestId),
-        controllerCancellations,
-        "the already-queued cancellation is harmless once the controller committed",
-    )
+    assertTrue(controllerCancellations.isEmpty())
+    fixture.close()
+  }
+
+  @Test
+  fun `basic and linked controller transitions abandon each uncommitted open generation`() {
+    val fixture = fixture()
+    val cancellations = mutableListOf<Long>()
+    fixture.eventBus.register<Controller.CancelRomOpenEvent> {
+      cancellations += it.openRequestId
+    }
+
+    listOf("basic-to-linked", "linked-to-basic").forEach { direction ->
+      val source = romFile("$direction.gb", direction.uppercase())
+      val requestId =
+          fixture.service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+      fixture.worker.runAll()
+      assertTrue(fixture.service.hasActiveRequest())
+
+      fixture.eventBus.post(ControllerOwnershipChangingEvent())
+
+      assertFalse(fixture.service.hasActiveRequest())
+      assertEquals(requestId, cancellations.last())
+      fixture.eventBus.post(
+          Controller.EmulationStartedEvent(
+              direction,
+              fixture.loads.last().image!!.origin(),
+              requestId,
+          ))
+      fixture.worker.runAll()
+      fixture.ui.runAll()
+      assertTrue(fixture.recents.recorded.none { it == source.toAbsolutePath().normalize() })
+      assertTrue(fixture.updates.none { it.requestId == requestId && it is RomOpenUpdate.Opened })
+    }
+    fixture.close()
+  }
+
+  @Test
+  fun `controller transition cannot abandon a success already committed by controller`() {
+    val fixture = fixture()
+    val source = romFile("committed-before-transition.gb", "COMMITTED")
+    val cancellations = mutableListOf<Long>()
+    fixture.eventBus.register<Controller.CancelRomOpenEvent> {
+      cancellations += it.openRequestId
+    }
+    val requestId =
+        fixture.service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+    fixture.worker.runAll()
+
+    fixture.eventBus.post(
+        Controller.EmulationStartedEvent(
+            "COMMITTED",
+            fixture.loads.single().image!!.origin(),
+            requestId,
+        ))
+    assertFalse(fixture.service.hasActiveRequest())
+    fixture.eventBus.post(ControllerOwnershipChangingEvent())
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertEquals(listOf(source.toAbsolutePath().normalize()), fixture.recents.recorded)
+    assertTrue(cancellations.isEmpty())
     fixture.close()
   }
 
@@ -142,6 +199,40 @@ class RomOpenServiceTest {
     assertEquals(RomOpenFailureKind.UNSUPPORTED_TYPE, failed.failure.kind)
     assertTrue(fixture.loads.isEmpty())
     assertTrue(fixture.recents.recorded.isEmpty())
+    fixture.close()
+  }
+
+  @Test
+  fun `controller startup details redact unrelated absolute paths`() {
+    val fixture = fixture()
+    val source = romFile("redacted-controller-path.gb", "REDACT")
+    val requestId =
+        fixture.service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+    fixture.worker.runAll()
+    val unrelated =
+        Path.of(System.getProperty("user.home"))
+            .resolve("private-slot-roms")
+            .resolve("secret-datel.gbc")
+            .toAbsolutePath()
+            .normalize()
+
+    fixture.eventBus.post(
+        Controller.LoadRomFailedEvent(
+            source.toFile(),
+            "slot ROM failed",
+            requestId,
+            technicalDetails =
+                "Unable to load $unrelated and /opt/Secret Folder/slot.gbc",
+        ))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    val details =
+        assertIs<RomOpenUpdate.Failed>(fixture.updates.last()).failure.technicalDetails
+    assertFalse(details.contains(System.getProperty("user.home")))
+    assertFalse(details.contains("Secret Folder"))
+    assertFalse(details.contains("slot.gbc"))
+    assertTrue(details.contains("<redacted-"))
     fixture.close()
   }
 
@@ -251,7 +342,7 @@ class RomOpenServiceTest {
   }
 
   @Test
-  fun `queued callbacks from a completed older request cannot overwrite a newer request`() {
+  fun `queued success callback cannot overwrite a newer request but still records committed recent`() {
     val fixture = fixture()
     val first = romFile("first.gb", "FIRST")
     val second = romFile("second.gb", "SECOND")
@@ -268,10 +359,7 @@ class RomOpenServiceTest {
     fixture.worker.runAll()
     fixture.ui.runAll()
 
-    assertTrue(
-        fixture.recents.recorded.isEmpty(),
-        "a success callback superseded before its lifecycle worker claims ownership is stale",
-    )
+    assertEquals(listOf(first.toAbsolutePath().normalize()), fixture.recents.recorded)
     assertTrue(fixture.updates.all { it.requestId == secondId })
     assertTrue(fixture.updates.none { it is RomOpenUpdate.Opened })
     fixture.close()

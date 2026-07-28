@@ -1189,9 +1189,10 @@ class BasicController private constructor(
 internal class RetainedClosePersistence(
     capture: BatteryFlush,
     persistenceExecutor: ExecutorService,
+    persist: (BatteryFlush) -> BatteryPersistenceResult = BatteryFlush::persist,
 ) {
   private val task =
-      FutureTask<BatteryPersistenceResult>(Callable { capture.persist() }).also {
+      FutureTask<BatteryPersistenceResult>(Callable { persist(capture) }).also {
         // Replacement, stop, and close persistence share one ordered writer. A cancelled task can
         // remain inside filesystem code after ignoring interrupt; queueing close behind it keeps
         // an older generation from publishing after the final close capture.

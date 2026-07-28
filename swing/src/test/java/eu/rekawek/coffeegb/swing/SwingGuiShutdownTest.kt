@@ -18,6 +18,24 @@ import org.junit.Test
 
 class SwingGuiShutdownTest {
   @Test
+  fun `desktop watchdog exceeds every sequential component deadline plus scheduling margin`() {
+    val sequentialComponentBudget =
+        ROM_OPEN_QUIESCE_SHUTDOWN_BUDGET_MILLIS +
+            CONTROLLER_SHUTDOWN_BUDGET_MILLIS +
+            GAMEPAD_SHUTDOWN_BUDGET_MILLIS +
+            AUDIO_SHUTDOWN_BUDGET_MILLIS +
+            ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS +
+            SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS
+
+    assertEquals(DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS, sequentialComponentBudget)
+    assertEquals(
+        sequentialComponentBudget + DESKTOP_SHUTDOWN_SCHEDULING_MARGIN_MILLIS,
+        DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
+    )
+    assertTrue(DESKTOP_SHUTDOWN_TIMEOUT_MILLIS > sequentialComponentBudget)
+  }
+
+  @Test
   fun `managed ROM lifecycle ignores stale IDs and uncorrelated old-session stops`() {
     val visibleId = 12L
 
@@ -324,6 +342,57 @@ class SwingGuiShutdownTest {
 
     assertEquals(0, commits.get(), "late success must not make ROM callbacks irreversible")
     assertEquals(0, completions.get(), "late success must not dispose the retained window")
+  }
+
+  @Test
+  fun `watchdog can time out a blocked commit and reject its late success`() {
+    val commitEntered = CountDownLatch(1)
+    val releaseCommit = CountDownLatch(1)
+    val commitReturned = CountDownLatch(1)
+    val timeoutObserved = CountDownLatch(1)
+    val timeouts = AtomicInteger()
+    val failures = AtomicInteger()
+    val completions = AtomicInteger()
+    val coordinator =
+        DesktopShutdownCoordinator(
+            shutdown = {},
+            commit = {
+              commitEntered.countDown()
+              while (releaseCommit.count != 0L) {
+                try {
+                  releaseCommit.await()
+                } catch (_: InterruptedException) {
+                  // Model a close implementation whose filesystem operation ignores interrupt.
+                }
+              }
+              commitReturned.countDown()
+            },
+            timeoutMillis = 25,
+            onPersistenceFailure = { _, _, _ ->
+              throw AssertionError("unexpected persistence failure")
+            },
+            onFailure = { failures.incrementAndGet() },
+            onTimeout = {
+              timeouts.incrementAndGet()
+              timeoutObserved.countDown()
+            },
+            onSuccess = { completions.incrementAndGet() },
+        )
+
+    assertTrue(coordinator.request())
+    assertTrue(commitEntered.await(2, TimeUnit.SECONDS))
+    assertTrue(timeoutObserved.await(2, TimeUnit.SECONDS))
+    assertEquals(1, timeouts.get())
+    assertEquals(0, failures.get())
+    assertEquals(0, completions.get())
+
+    releaseCommit.countDown()
+    assertTrue(commitReturned.await(2, TimeUnit.SECONDS))
+    Thread.sleep(50)
+
+    assertEquals(1, timeouts.get())
+    assertEquals(0, failures.get())
+    assertEquals(0, completions.get(), "late commit must not dispose or exit")
   }
 
   @Test

@@ -36,6 +36,7 @@ internal class PersistenceFailureHandler(
             Controller.PersistenceBarrierOperation.ROM_REPLACEMENT ->
                 "Unable to switch games"
             Controller.PersistenceBarrierOperation.STOP -> "Unable to stop game"
+            Controller.PersistenceBarrierOperation.RESET -> "Unable to reset game"
             Controller.PersistenceBarrierOperation.CLOSE -> "Unable to close game"
       }
       if (it.operation == Controller.PersistenceBarrierOperation.CLOSE) {

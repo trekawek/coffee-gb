@@ -138,6 +138,28 @@ class EventQueueTest {
   }
 
   @Test
+  fun matchingControlCanBypassHeadWithoutReorderingOrLeakingQueueBudget() {
+    val bus = EventBusImpl()
+    val received = mutableListOf<Long>()
+    val queue = EventQueue(bus, maxEvents = 3, maxBytes = 3, eventWeight = { 1 })
+    queue.register<WeightedEvent> { received += it.bytes }
+    try {
+      bus.post(WeightedEvent(1))
+      bus.post(WeightedEvent(2))
+      bus.post(WeightedEvent(3))
+
+      assertEquals(true, queue.dispatchFirstMatching { (it as WeightedEvent).bytes == 2L })
+      assertEquals(listOf(2L), received)
+      bus.post(WeightedEvent(4))
+      queue.dispatch()
+
+      assertEquals(listOf(2L, 1L, 3L, 4L), received)
+    } finally {
+      bus.close()
+    }
+  }
+
+  @Test
   fun sourceBudgetsUseConnectionIdentityAndDiscardDoesNotPoisonReplacement() {
     val bus = EventBusImpl()
     val received = mutableListOf<WeightedEvent>()

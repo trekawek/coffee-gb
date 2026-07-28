@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.Bios
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import java.io.File
@@ -107,6 +108,7 @@ interface Controller : AutoCloseable {
   enum class PersistenceBarrierOperation {
     ROM_REPLACEMENT,
     STOP,
+    RESET,
     CLOSE,
   }
 
@@ -204,7 +206,19 @@ interface Controller : AutoCloseable {
         properties.applicationSettings.advanced.datelSlotRom?.let { path ->
           val file = path.toFile()
           if (file.isFile) {
-            config.setSlotRom(Rom(file))
+            RomSourceSnapshot.open(path).use { source ->
+              val image =
+                  if (source.isArchive) {
+                    val candidate =
+                        source.candidates().firstOrNull()
+                            ?: throw IllegalArgumentException(
+                                "Configured Datel slot archive contains no ROM")
+                    source.load(candidate.token())
+                  } else {
+                    source.loadSingle()
+                  }
+              config.setSlotRom(Rom(image))
+            }
           }
         }
       }
