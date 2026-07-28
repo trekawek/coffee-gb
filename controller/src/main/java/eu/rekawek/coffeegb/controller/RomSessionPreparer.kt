@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.Gameboy.BootState
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateRomHashes
@@ -37,6 +38,8 @@ internal class RomSessionPreparer(
             .setBootCancellation { Thread.currentThread().isInterrupted }
     ensureActive()
     val romHashes = StateIdentity.hashes(config)
+    ensureActive()
+    BatteryStorageResolver.configure(properties.applicationSettings.saves, config, romHashes)
     ensureActive()
 
     event.state?.let { return PreparedSession.FromDetachedState(config, it, romHashes) }

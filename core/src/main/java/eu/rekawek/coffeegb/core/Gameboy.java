@@ -26,6 +26,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush;
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
@@ -231,13 +232,21 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
                     configuration.rtcTimeSource, clockSpec);
         } else {
-            cartridge = new Cartridge(configuration.rom, configuration.supportBatterySave,
-                    configuration.rtcTimeSource, clockSpec);
+            cartridge = new Cartridge(
+                    configuration.rom,
+                    configuration.supportBatterySave,
+                    configuration.batteryStorage,
+                    configuration.rtcTimeSource,
+                    clockSpec);
         }
         if (configuration.slotRom != null && cartridge.getDatel() != null) {
             // the game cartridge in the Action Replay's pass-through slot
-            slotCartridge = new Cartridge(configuration.slotRom, configuration.supportBatterySave,
-                    configuration.rtcTimeSource, clockSpec);
+            slotCartridge = new Cartridge(
+                    configuration.slotRom,
+                    configuration.supportBatterySave,
+                    configuration.slotBatteryStorage,
+                    configuration.rtcTimeSource,
+                    clockSpec);
             cartridge.getDatel().setSlotCartridge(slotCartridge.getMemoryController(),
                     configuration.slotRom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB);
         } else {
@@ -904,6 +913,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 slotCartridge == null ? BatteryFlush.none() : slotCartridge.prepareBatteryFlush());
     }
 
+    /** Changes only future file-backed battery writes; no filesystem work runs on this thread. */
+    public void setBatteryStorage(BatteryStorage primary, BatteryStorage slot) {
+        if (primary != null) {
+            cartridge.setBatteryStorage(primary);
+        }
+        if (slot != null && slotCartridge != null) {
+            slotCartridge.setBatteryStorage(slot);
+        }
+    }
+
     /**
      * Held-button state, snapshotted separately from machine state by rollback netplay so a held
      * button survives a rebase (the joypad deliberately keeps it out of component state).
@@ -1192,6 +1211,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         private boolean supportBatterySave = true;
 
+        private BatteryStorage batteryStorage;
+
+        private BatteryStorage slotBatteryStorage;
+
         private boolean displaySgbBorder = true;
 
         private boolean mealybugDmgBlob;
@@ -1340,6 +1363,22 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return supportBatterySave;
         }
 
+        public GameboyConfiguration setBatteryStorage(
+                BatteryStorage batteryStorage,
+                BatteryStorage slotBatteryStorage) {
+            this.batteryStorage = batteryStorage;
+            this.slotBatteryStorage = slotBatteryStorage;
+            return this;
+        }
+
+        public BatteryStorage getBatteryStorage() {
+            return batteryStorage;
+        }
+
+        public BatteryStorage getSlotBatteryStorage() {
+            return slotBatteryStorage;
+        }
+
         public GameboyConfiguration setBootCancellation(BooleanSupplier bootCancellation) {
             this.bootCancellation = bootCancellation == null ? () -> false : bootCancellation;
             return this;
@@ -1403,6 +1442,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             copy.slotRom = slotRom;
             copy.batteryData = batteryData;
             copy.supportBatterySave = supportBatterySave;
+            copy.batteryStorage = batteryStorage;
+            copy.slotBatteryStorage = slotBatteryStorage;
             copy.displaySgbBorder = displaySgbBorder;
             copy.mealybugDmgBlob = mealybugDmgBlob;
             copy.codeBreakerRumble = codeBreakerRumble;

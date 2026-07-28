@@ -1732,6 +1732,57 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun symbolicLinkBatteryIsRejectedBeforeLinkedPayloadRead() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-battery-link")
+    val rom = directory.resolve("linked-battery.gb")
+    val outside = directory.resolve("outside.sav")
+    val battery = directory.resolve("linked-battery.sav")
+    Files.copy(ROM.toPath(), rom)
+    Files.write(outside, byteArrayOf(1, 2, 3, 4))
+    try {
+      Files.createSymbolicLink(battery, outside.fileName)
+    } catch (_: Exception) {
+      Files.deleteIfExists(outside)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+      return
+    }
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    val loaded = AtomicReference<LinkedController.LocalRomLoadedEvent?>()
+    val failure = AtomicReference<BatteryPersistenceFailedEvent?>()
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    eventBus.register<LinkedController.LocalRomLoadedEvent>(loaded::set)
+    eventBus.register<BatteryPersistenceFailedEvent>(failure::set)
+
+    try {
+      eventBus.post(LoadRomEvent(rom.toFile()))
+      controller.runFrame()
+
+      assertNull(loaded.get())
+      assertEquals(
+          BatteryPersistenceFailedEvent.Operation.LOAD,
+          assertNotNull(failure.get()).operation,
+      )
+      assertContentEquals(byteArrayOf(1, 2, 3, 4), Files.readAllBytes(outside))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      Files.deleteIfExists(directory.resolve("settings.properties"))
+      Files.deleteIfExists(battery)
+      Files.deleteIfExists(outside)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
   fun v9RollbackDiagnosticsObserveSafePointReplayWithoutChangingState() {
     val (_, controller) = configuredController(LinkMode.NORMAL, 2)
     val target = controller.createV9Target()

@@ -22,6 +22,13 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.text.ParseException
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
 import javax.swing.JButton
@@ -286,6 +293,14 @@ internal class PreferencesPanel private constructor(
         } else {
           "Preferences could not be applied: $detail"
         }
+  }
+
+  internal fun showSaveDirectoryFailure(message: String) {
+    requireEdt()
+    savesEditor.showDirectoryValidationError(message)
+    validationSummary.text = message
+    tabs.selectedIndex = SAVES_TAB
+    savesEditor.directoryField.requestFocusInWindow()
   }
 
   private fun createGeneralPanel(): JPanel {
@@ -560,7 +575,16 @@ internal object PreferencesDialog {
     val cancelButton = JButton("Cancel")
     val restoreButton = JButton("Restore Defaults")
 
-    val actions = PreferencesDialogActions(panel, applyEdit, dialog::dispose)
+    val actions =
+        PreferencesDialogActions(
+            panel,
+            applyEdit,
+            dialog::dispose,
+            applyingChanged = { applying ->
+              applyButton.isEnabled = !applying
+              restoreButton.isEnabled = !applying
+            },
+        )
 
     applyButton.accessibleContext.accessibleName = "Apply preferences"
     cancelButton.accessibleContext.accessibleName = "Cancel preferences"
@@ -596,8 +620,20 @@ internal class PreferencesDialogActions(
     private val panel: PreferencesPanel,
     private val applyEdit: (PreferencesEdit) -> Unit,
     private val close: () -> Unit,
+    private val saveDirectoryValidator: SaveDirectoryValidator = SYSTEM_SAVE_DIRECTORY_VALIDATOR,
+    private val validationExecutor: Executor = createSaveDirectoryValidationExecutor(),
+    private val closeValidationExecutor: () -> Unit = {
+      (validationExecutor as? ExecutorService)?.shutdownNow()
+    },
+    private val uiExecutor: ((() -> Unit) -> Unit) = { SwingUtilities.invokeLater(it) },
+    private val applyingChanged: (Boolean) -> Unit = {},
 ) {
+  private var validationPending = false
+  private var closed = false
+  private var validationGeneration = 0L
+
   fun apply() {
+    if (validationPending || closed) return
     val edit =
         try {
           panel.validatedEdit()
@@ -605,6 +641,44 @@ internal class PreferencesDialogActions(
           failure.invalidComponent.requestFocusInWindow()
           return
         }
+    val directory = edit.saves?.directory
+    if (directory == null) {
+      finishApply(edit)
+      return
+    }
+
+    validationPending = true
+    applyingChanged(true)
+    val generation = ++validationGeneration
+    try {
+      validationExecutor.execute {
+        val error =
+            try {
+              saveDirectoryValidator.validate(directory)
+            } catch (failure: RuntimeException) {
+              "Coffee GB could not validate the save data directory " +
+                  "(${failure.javaClass.simpleName})."
+            }
+        uiExecutor {
+          if (closed || generation != validationGeneration) return@uiExecutor
+          validationPending = false
+          applyingChanged(false)
+          if (error != null) {
+            panel.showSaveDirectoryFailure(error)
+          } else {
+            finishApply(edit)
+          }
+        }
+      }
+    } catch (_: RejectedExecutionException) {
+      validationPending = false
+      applyingChanged(false)
+      panel.showSaveDirectoryFailure(
+          "Save directory validation is busy. Wait a moment, then apply again.")
+    }
+  }
+
+  private fun finishApply(edit: PreferencesEdit) {
     try {
       applyEdit(edit)
     } catch (failure: RuntimeException) {
@@ -612,16 +686,48 @@ internal class PreferencesDialogActions(
       return
     }
     panel.stopBackgroundWork()
+    closeValidationExecutor()
+    closed = true
     close()
   }
 
   fun cancel() {
+    if (closed) return
+    closed = true
+    validationGeneration++
+    validationPending = false
+    applyingChanged(false)
     panel.stopBackgroundWork()
+    closeValidationExecutor()
     close()
   }
 
-  fun restoreDefaults() = panel.restoreDefaults()
+  fun restoreDefaults() {
+    if (!validationPending && !closed) {
+      panel.restoreDefaults()
+    }
+  }
 }
+
+private val SAVE_DIRECTORY_VALIDATION_THREAD_ID = AtomicLong()
+
+private fun createSaveDirectoryValidationExecutor(): Executor =
+    ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(1),
+        { command ->
+          Thread(
+                  command,
+                  "coffee-gb-save-directory-check-" +
+                      SAVE_DIRECTORY_VALIDATION_THREAD_ID.incrementAndGet(),
+              )
+              .apply { isDaemon = true }
+        },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
 
 internal fun configurePreferencesRootPane(
     rootPane: JRootPane,

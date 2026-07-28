@@ -50,17 +50,25 @@ When a directory is selected in **File > Preferences… > Saves**, the root beco
 ```
 
 ROM titles and filenames are never used as path components. The exact ROM hash prevents two files
-with the same display name from sharing states.
+with the same display name from sharing save data. The configured directory must already exist,
+must be writable, and must not contain symbolic-link path components. Coffee GB checks those
+properties on a background worker before Apply changes either runtime or persisted settings.
 
 Each game root contains:
 
 ```text
+battery.sav
 states/
   slots/0..9/
   named/<UUID>/
   autosave/
 screenshots/
 ```
+
+`battery.sav` is used when a Saves directory is configured, including a distinct hash namespace for
+an Action Replay/Datel pass-through slot ROM. With a blank Saves directory, battery saves retain the
+portable-JAR-compatible `<ROM name>.sav` sidecar destination; states and screenshots continue to use
+the hidden `.coffee-gb` game root shown above.
 
 Every state directory has an authoritative `state.cgbstate`. Optional `metadata.properties` and a
 hash-bound `thumbnail-<state SHA-256>.png` are sidecars; missing or damaged sidecars never make an
@@ -74,11 +82,18 @@ Existing filesystem components are checked without following the final component
 access. A symlinked configured/game root or descendant is rejected rather than allowing state writes
 to escape the selected path.
 
-Changing the configured directory does not strand existing states. The default root and the most
-recent previous configured roots remain read-only browser fallbacks, bounded to four fallback
-sources in total. New states, autosaves, screenshots, and recovery writes always go to the active
-root. Deleting or exporting a fallback entry acts only on the source identified by that browser
-row.
+Changing the configured directory does not strand existing data. The most recent previous
+configured roots are persisted in settings and remain read-only fallbacks after restart. Settings
+retain at most four previous roots, and a battery storage plan accepts at most eight ordered import
+candidates. Managed state browsing also checks the default root. Battery loading checks those
+previous roots, the default root, the original `.sav` sidecar, and an old archive-wide sidecar only
+when the archive scan proved that migration unambiguous. The first valid battery is imported
+atomically into the active destination without deleting its source, so an older portable Coffee GB
+remains usable. Unsafe symlink/non-file fallback entries are rejected. An unsafe parent component
+also prevents Preferences Apply and blocks a managed load or write rather than substituting a
+sibling path. New states, autosaves, screenshots, battery writes, and recovery writes always go to
+the active destination. Deleting or exporting a fallback state acts only on the source identified
+by that browser row.
 
 Use **Emulation > Open Save Folder** to open the active game root. If the desktop cannot open it,
 Coffee GB displays the full selectable path instead.

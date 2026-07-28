@@ -34,9 +34,7 @@ object StateStorageResolver {
           "Desktop state storage requires a file-backed ROM"
         }
     val romIdentity = identity.primaryRom.hex()
-    val defaultRoot =
-        requireNotNull(romFile.toPath().toAbsolutePath().normalize().parent)
-            .resolve(DEFAULT_DIRECTORY)
+    val defaultRoot = defaultRoot(romFile.toPath())
     val activeRoot = normalizeRoot(saves.directory ?: defaultRoot)
     val layout = StateStorageLayout(gameDirectory(activeRoot, romIdentity))
     val fallbacks =
@@ -55,7 +53,10 @@ object StateStorageResolver {
     )
   }
 
-  private fun normalizeRoot(path: Path): Path {
+  internal fun defaultRoot(romPath: Path): Path =
+      requireNotNull(romPath.toAbsolutePath().normalize().parent).resolve(DEFAULT_DIRECTORY)
+
+  internal fun normalizeRoot(path: Path): Path {
     val normalized = path.toAbsolutePath().normalize()
     require(normalized.fileName != null && normalized.parent != null) {
       "Save root must have a name and parent"
@@ -63,7 +64,7 @@ object StateStorageResolver {
     return normalized
   }
 
-  private fun gameDirectory(root: Path, romSha256: String): Path =
+  internal fun gameDirectory(root: Path, romSha256: String): Path =
       root.resolve(GAMES_DIRECTORY).resolve(romSha256).toAbsolutePath().normalize().also {
         require(it.startsWith(root)) { "Resolved game directory escapes the save root" }
       }

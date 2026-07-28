@@ -9,7 +9,9 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -21,6 +23,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class FileBatteryTest {
@@ -354,6 +357,285 @@ public class FileBatteryTest {
         });
     }
 
+    @Test
+    public void managedTargetImportsFirstSafeFallbackWithoutDeletingIt() throws Exception {
+        withDirectory(directory -> {
+            Path activeRoot = Files.createDirectory(directory.resolve("active"));
+            Path previousRoot = Files.createDirectory(directory.resolve("previous"));
+            Path identity = Path.of("games", "a".repeat(64), "battery.sav");
+            Path target = activeRoot.resolve(identity);
+            Path fallback = previousRoot.resolve(identity);
+            Files.createDirectories(fallback.getParent());
+            Files.write(fallback, new byte[] {4, 3, 2, 1});
+            BatteryStorage storage =
+                    new BatteryStorage(
+                            BatteryStorage.Source.managed(target, activeRoot),
+                            List.of(BatteryStorage.Source.managed(fallback, previousRoot)));
+            FileBattery battery = new FileBattery(storage, 4);
+            int[] loaded = new int[4];
+
+            battery.loadRam(loaded);
+
+            assertArrayEquals(new int[] {4, 3, 2, 1}, loaded);
+            assertArrayEquals(new byte[] {4, 3, 2, 1}, Files.readAllBytes(target));
+            assertArrayEquals(new byte[] {4, 3, 2, 1}, Files.readAllBytes(fallback));
+        });
+    }
+
+    @Test
+    public void managedTargetRefusesSymlinkTraversalWithoutWritingOutsideRoot() throws Exception {
+        withDirectory(directory -> {
+            Path activeRoot = Files.createDirectory(directory.resolve("active"));
+            Path outside = Files.createDirectory(directory.resolve("outside"));
+            Path games = Files.createDirectory(activeRoot.resolve("games"));
+            Path linkedIdentity = games.resolve("b".repeat(64));
+            try {
+                Files.createSymbolicLink(linkedIdentity, outside);
+            } catch (IOException | UnsupportedOperationException unsupported) {
+                return;
+            }
+            Path target = linkedIdentity.resolve("battery.sav");
+            FileBattery battery =
+                    new FileBattery(
+                            new BatteryStorage(
+                                    BatteryStorage.Source.managed(target, activeRoot),
+                                    List.of()),
+                            4);
+            battery.saveRam(new int[] {1, 2, 3, 4});
+            BatteryFlush flush = battery.prepareFlush(() -> {});
+
+            BatteryPersistenceResult result = flush.persist();
+
+            assertTrue(result instanceof BatteryPersistenceResult.Failure);
+            assertFalse(Files.exists(outside.resolve("battery.sav")));
+            assertTrue(battery.isDirtyForTesting());
+        });
+    }
+
+    @Test
+    public void directTargetRefusesSymbolicLinkParentWithoutWritingThroughIt() throws Exception {
+        withDirectory(directory -> {
+            Path outside = Files.createDirectory(directory.resolve("outside"));
+            Path linkedParent = directory.resolve("linked-parent");
+            try {
+                Files.createSymbolicLink(linkedParent, outside);
+            } catch (IOException | UnsupportedOperationException unsupported) {
+                return;
+            }
+            Path target = linkedParent.resolve("battery.sav");
+            FileBattery battery =
+                    new FileBattery(
+                            BatteryStorage.direct(target),
+                            4,
+                            AtomicFileWriter.system());
+            battery.saveRam(new int[] {1, 2, 3, 4});
+
+            BatteryPersistenceResult result = battery.prepareFlush(() -> {}).persist();
+
+            assertTrue(result instanceof BatteryPersistenceResult.Failure);
+            assertFalse(Files.exists(outside.resolve("battery.sav")));
+            assertTrue(battery.isDirtyForTesting());
+        });
+    }
+
+    @Test
+    public void directTargetRefusesHigherAncestorLinkWithoutWritingThroughIt() throws Exception {
+        withDirectory(directory -> {
+            Path outside = Files.createDirectory(directory.resolve("outside"));
+            Path realParent = Files.createDirectory(outside.resolve("real-parent"));
+            Path linkedAncestor = directory.resolve("linked-ancestor");
+            try {
+                Files.createSymbolicLink(linkedAncestor, outside);
+            } catch (IOException | UnsupportedOperationException unsupported) {
+                return;
+            }
+            Path target = linkedAncestor.resolve(realParent.getFileName()).resolve("battery.sav");
+            FileBattery battery =
+                    new FileBattery(
+                            BatteryStorage.direct(target),
+                            4,
+                            AtomicFileWriter.system());
+            battery.saveRam(new int[] {4, 3, 2, 1});
+
+            BatteryPersistenceResult result = battery.prepareFlush(() -> {}).persist();
+
+            assertTrue(result instanceof BatteryPersistenceResult.Failure);
+            assertFalse(Files.exists(realParent.resolve("battery.sav")));
+            assertTrue(battery.isDirtyForTesting());
+        });
+    }
+
+    @Test
+    public void batteryImportListIsBoundedAndReconfigurationRetainsCapturedDestination()
+            throws Exception {
+        withDirectory(directory -> {
+            List<BatteryStorage.Source> excessive = new ArrayList<>();
+            for (int i = 0; i <= BatteryStorage.MAX_IMPORT_SOURCES; i++) {
+                excessive.add(BatteryStorage.Source.direct(directory.resolve("old-" + i + ".sav")));
+            }
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            new BatteryStorage(
+                                    BatteryStorage.Source.direct(directory.resolve("target.sav")),
+                                    excessive));
+
+            Path first = directory.resolve("first.sav");
+            Path second = directory.resolve("second.sav");
+            FileBattery battery =
+                    new FileBattery(BatteryStorage.direct(first), 4, AtomicFileWriter.system());
+            battery.saveRam(new int[] {9, 8, 7, 6});
+            BatteryFlush captured = battery.prepareFlush(() -> {});
+            battery.setStorage(BatteryStorage.direct(second));
+
+            BatteryPersistenceResult firstResult = captured.persist();
+            captured.complete(firstResult);
+
+            assertArrayEquals(new byte[] {9, 8, 7, 6}, Files.readAllBytes(first));
+            assertFalse(Files.exists(second));
+            assertTrue(battery.isDirtyForTesting());
+
+            BatteryFlush redirected =
+                    battery.prepareFlush(() -> battery.saveRam(new int[] {9, 8, 7, 6}));
+            BatteryPersistenceResult redirectedResult = redirected.persist();
+            redirected.complete(redirectedResult);
+            assertArrayEquals(new byte[] {9, 8, 7, 6}, Files.readAllBytes(second));
+            assertFalse(battery.isDirtyForTesting());
+        });
+    }
+
+    @Test
+    public void failedCapturedFlushReportsItsOldTargetAfterStorageIsRetargeted()
+            throws Exception {
+        withDirectory(directory -> {
+            Path oldTarget = directory.resolve("old-target.sav");
+            Path newTarget = directory.resolve("new-target.sav");
+            BlockingFailingWriter persistence = new BlockingFailingWriter();
+            FileBattery battery =
+                    new FileBattery(
+                            BatteryStorage.direct(oldTarget),
+                            4,
+                            persistence);
+            EventBusImpl eventBus = new EventBusImpl();
+            LinkedBlockingQueue<BatteryPersistenceFailedEvent> failures =
+                    new LinkedBlockingQueue<>();
+            eventBus.register(failures::add, BatteryPersistenceFailedEvent.class);
+            battery.init(eventBus);
+            battery.saveRam(new int[] {1, 2, 3, 4});
+            Thread oldFlush = new Thread(battery::flush, "old-battery-flush");
+            try {
+                oldFlush.start();
+                assertTrue(persistence.entered.await(5, TimeUnit.SECONDS));
+                battery.setStorage(BatteryStorage.direct(newTarget));
+                persistence.release.countDown();
+                oldFlush.join(5_000);
+
+                assertFalse(oldFlush.isAlive());
+                BatteryPersistenceFailedEvent failure = failures.poll(2, TimeUnit.SECONDS);
+                assertNotNull(failure);
+                assertEquals(BatteryPersistenceFailedEvent.Operation.SAVE, failure.operation());
+                assertEquals(oldTarget.getFileName().toString(), failure.fileName());
+                assertTrue(failure.message().contains(oldTarget.getFileName().toString()));
+                assertFalse(failure.message().contains(newTarget.getFileName().toString()));
+                assertFalse(Files.exists(oldTarget));
+                assertFalse(Files.exists(newTarget));
+                assertTrue(battery.isDirtyForTesting());
+            } finally {
+                persistence.release.countDown();
+                oldFlush.join(5_000);
+                eventBus.close();
+            }
+        });
+    }
+
+    @Test
+    public void fallbackRejectsAncestorSymlinkAndNeverImportsOutsideBytes() throws Exception {
+        withDirectory(directory -> {
+            Path active = Files.createDirectory(directory.resolve("active"));
+            Path outside = Files.createDirectory(directory.resolve("outside"));
+            Path linked = directory.resolve("linked");
+            try {
+                Files.createSymbolicLink(linked, outside);
+            } catch (IOException | UnsupportedOperationException unsupported) {
+                return;
+            }
+            Path fallback = linked.resolve("legacy.sav");
+            Files.write(outside.resolve("legacy.sav"), new byte[] {6, 6, 6, 6});
+            Path target = active.resolve("battery.sav");
+            FileBattery battery =
+                    new FileBattery(
+                            BatteryStorage.direct(target, List.of(fallback)),
+                            4,
+                            AtomicFileWriter.system());
+            int[] unchanged = {9, 9, 9, 9};
+
+            battery.loadRam(unchanged);
+
+            assertArrayEquals(new int[] {9, 9, 9, 9}, unchanged);
+            assertFalse(Files.exists(target));
+            assertArrayEquals(
+                    new byte[] {6, 6, 6, 6},
+                    Files.readAllBytes(outside.resolve("legacy.sav")));
+        });
+    }
+
+    @Test
+    public void recoveryReaderCannotSubstituteAnUnapprovedSibling() throws Exception {
+        withDirectory(directory -> {
+            Path active = Files.createDirectory(directory.resolve("active"));
+            Path previous = Files.createDirectory(directory.resolve("previous"));
+            Path target = active.resolve("battery.sav");
+            Path fallback = previous.resolve("battery.sav");
+            Path attacker = previous.resolve("other.sav");
+            Files.write(fallback, new byte[] {1, 2, 3, 4});
+            Files.write(attacker, new byte[] {8, 8, 8, 8});
+            BatteryStorage storage =
+                    new BatteryStorage(
+                            BatteryStorage.Source.managed(target, active),
+                            List.of(BatteryStorage.Source.managed(fallback, previous)));
+            FileBattery battery =
+                    new FileBattery(
+                            storage,
+                            4,
+                            new SubstitutingRecoveryWriter(fallback, attacker));
+            int[] unchanged = {7, 7, 7, 7};
+
+            battery.loadRam(unchanged);
+
+            assertArrayEquals(new int[] {7, 7, 7, 7}, unchanged);
+            assertFalse(Files.exists(target));
+        });
+    }
+
+    @Test
+    public void recoveredFallbackIsRevalidatedAndImportedFromItsExactDeclaredPath()
+            throws Exception {
+        withDirectory(directory -> {
+            Path active = Files.createDirectory(directory.resolve("active"));
+            Path previous = Files.createDirectory(directory.resolve("previous"));
+            Path target = active.resolve("battery.sav");
+            Path fallback = previous.resolve("battery.sav");
+            BatteryStorage storage =
+                    new BatteryStorage(
+                            BatteryStorage.Source.managed(target, active),
+                            List.of(BatteryStorage.Source.managed(fallback, previous)));
+            FileBattery battery =
+                    new FileBattery(
+                            storage,
+                            4,
+                            new RecoveringFallbackWriter(
+                                    fallback,
+                                    new byte[] {5, 4, 3, 2}));
+            int[] loaded = new int[4];
+
+            battery.loadRam(loaded);
+
+            assertArrayEquals(new int[] {5, 4, 3, 2}, loaded);
+            assertArrayEquals(new byte[] {5, 4, 3, 2}, Files.readAllBytes(target));
+            assertArrayEquals(new byte[] {5, 4, 3, 2}, Files.readAllBytes(fallback));
+        });
+    }
+
     private static byte[] expectedBytes(int[] ram, long[] clock) {
         ByteBuffer bytes =
                 ByteBuffer.allocate(ram.length + clock.length * Integer.BYTES)
@@ -380,8 +662,8 @@ public class FileBatteryTest {
         try {
             test.run(directory);
         } finally {
-            try (var files = Files.list(directory)) {
-                files.forEach(path -> {
+            try (var files = Files.walk(directory)) {
+                files.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
                     try {
                         Files.deleteIfExists(path);
                     } catch (IOException e) {
@@ -389,7 +671,6 @@ public class FileBatteryTest {
                     }
                 });
             }
-            Files.deleteIfExists(directory);
         }
     }
 
@@ -457,6 +738,26 @@ public class FileBatteryTest {
         }
     }
 
+    private static class BlockingFailingWriter extends AtomicFileWriter {
+        private final CountDownLatch entered = new CountDownLatch(1);
+
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public void write(Path target, byte[] intendedBytes) throws IOException {
+            entered.countDown();
+            try {
+                if (!release.await(5, TimeUnit.SECONDS)) {
+                    throw new IOException("test timed out");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("test interrupted", e);
+            }
+            throw new IOException("injected captured-target failure");
+        }
+    }
+
     private static class TrackingWriter extends AtomicFileWriter {
         private int reads;
 
@@ -471,6 +772,55 @@ public class FileBatteryTest {
         @Override
         public <T> T read(Path target, PathReader<T> reader) throws IOException {
             throw new IOException("injected recovery failure");
+        }
+    }
+
+    private static class SubstitutingRecoveryWriter extends AtomicFileWriter {
+        private final Path expected;
+
+        private final Path substituted;
+
+        private SubstitutingRecoveryWriter(Path expected, Path substituted) {
+            this.expected = expected;
+            this.substituted = substituted;
+        }
+
+        @Override
+        public <T> T read(Path target, PathReader<T> reader) throws IOException {
+            if (target.toAbsolutePath().normalize().equals(expected.toAbsolutePath().normalize())) {
+                return reader.read(substituted);
+            }
+            return AtomicFileWriter.system().read(target, reader);
+        }
+    }
+
+    private static class RecoveringFallbackWriter extends AtomicFileWriter {
+        private final Path recovered;
+
+        private final byte[] bytes;
+
+        private RecoveringFallbackWriter(Path recovered, byte[] bytes) {
+            this.recovered = recovered.toAbsolutePath().normalize();
+            this.bytes = bytes;
+        }
+
+        @Override
+        public boolean exists(Path target) throws IOException {
+            Path normalized = target.toAbsolutePath().normalize();
+            if (normalized.equals(recovered) && !Files.exists(normalized)) {
+                Files.write(normalized, bytes);
+            }
+            return AtomicFileWriter.system().exists(normalized);
+        }
+
+        @Override
+        public <T> T read(Path target, PathReader<T> reader) throws IOException {
+            return AtomicFileWriter.system().read(target, reader);
+        }
+
+        @Override
+        public void write(Path target, byte[] intendedBytes) throws IOException {
+            AtomicFileWriter.system().write(target, intendedBytes);
         }
     }
 }
