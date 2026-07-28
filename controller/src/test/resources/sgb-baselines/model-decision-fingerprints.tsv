@@ -7,7 +7,7 @@ controller/src/main/java/eu/rekawek/coffeegb/controller/RomSessionPreparer.kt	b5
 controller/src/main/java/eu/rekawek/coffeegb/controller/StateTypeRegistry.kt	d1bbcea3556d7406fcecb64282cab5ae73a8be0c5b8e7623e7d2bbd8e660d791
 controller/src/main/java/eu/rekawek/coffeegb/controller/TimingTicker.kt	6329897c8cb86887a5df84523af17379071c889d86af8837f75eb2bc6706a2f1
 controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedClockPolicy.kt	a3a75fdc9e05a5a908fd0ffc8e35f043091f8c7e906e736f43455fd0876ce82d
-controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt	25ad7b58895f62698361986ba0f5670a70a08585e0d7f32854e839a0d5bf386a
+controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt	250c09ba0052dc2b942a98518a9b8457264a0c556654b386e2075aec3b509ae4
 controller/src/main/java/eu/rekawek/coffeegb/controller/link/StateHistory.kt	c849427da71f8a59766caf2099d84c595e0e2b382cde0dfa9ca3f3165daec77e
 controller/src/main/java/eu/rekawek/coffeegb/controller/network/Connection.kt	0c47d1ca52d492155c4e114103630e61a91078208efbeb12a883734067ffeead
 controller/src/main/java/eu/rekawek/coffeegb/controller/network/v9/ProtocolV9Manifest.kt	28f0d2e973caa33fb70a3e8d3c2e1f4d099d6b305297441aa7fc2f9b25d49034
@@ -60,6 +60,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/memory/OamEchoRam.java	be80f590f7b90
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/Cartridge.java	bca6b42a58c2aa054d0ba2c839aa40140e3ee7f5c4edcaba3d0173376c202347
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/CartridgeProperties.java	08e6b97ef115d4a6a1f56347442172cdd1b56d073fdb2d238b32bf95f0b7fc54
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/Rom.java	e9d582677dee455dc05525376632f88e4d84546ddd905a40299143215b012f54
+core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/RomSourceSnapshot.java	7c7d05db92b60ffff6491425bbaac16122907ef5a899e7a33b77667a0417bf7c
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/rtc/RealTimeClock.java	d97c51b0bf8c9534165f0fdf0d1c9388694344a003d9e8333d957b92591d7701
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/Mbc3.java	755b14ef7e72f13e41e9a14b109f32c864db41094e3b3c4026c69b01d83fe1d5
 core/src/main/java/eu/rekawek/coffeegb/core/serial/FourPlayerAdapter.java	2f7c16b71d42db149e960a85870631a89a155016cf1b37a6a38a5dae98efa9b4
@@ -76,7 +77,8 @@ core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode2.java	a30c1619d1b944
 core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode3.java	93e6fdea4e5509e52ef22273aa24132313f91be9e0da566a95b2682b490218f1
 core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode4.java	1d69e05ce5a3bf864d7305f0ad6c0398d286219d96b9de698ae94593f218c7ba
 core/src/main/java/eu/rekawek/coffeegb/core/timer/Timer.java	d992464a2fa04f084a23ca2feb4c8da10b4b3308c4aad6709beb55de79c52612
-swing/src/main/java/eu/rekawek/coffeegb/swing/Main.kt	cf143068cfee5f7ea424dce97994ea9b1c083faf9b5f89a8a8469618f86aa655
-swing/src/main/java/eu/rekawek/coffeegb/swing/SwingMenu.kt	3af830c526ec5806c11691fc51a6d149cc9d0fafb9e2374ae3b27ea342f8c8c7
+swing/src/main/java/eu/rekawek/coffeegb/swing/Main.kt	97a52d7de006b1e62deb2cb54d8884da43f132114d78772480f76a0a26859ffc
+swing/src/main/java/eu/rekawek/coffeegb/swing/RomOpenService.kt	c40e78cd1db775f62cfc6241077e181261267887ab3090a385e98ddad33bf5b7
+swing/src/main/java/eu/rekawek/coffeegb/swing/SwingMenu.kt	32ec50f902e7811b4f449f627181e8b8e2a00bf35952d4673cc3f1c0378dcdac
 swing/src/main/java/eu/rekawek/coffeegb/swing/io/AudioSystemSound.java	7203ded3e0288eab371d5fa925e1569c269ca30ed03289752e251512ca71d678
 swing/src/main/java/eu/rekawek/coffeegb/swing/io/SwingDisplay.java	48366395d4336f2f168ce86e1dd1bcb73d97c87f3953998c88f94eeb68e5fa32
