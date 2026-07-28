@@ -60,15 +60,21 @@ function Invoke-Msi {
         [Parameter(Mandatory = $true)]
         [string] $Log
     )
-    & msiexec.exe `
-        $Action `
-        $Installers[0].FullName `
-        /qn `
-        /norestart `
-        "/L*V" `
-        $Log
-    if ($LASTEXITCODE -notin @(0, 3010)) {
-        throw "MSI $Action failed with exit code $LASTEXITCODE; see $Log"
+    $MsiArguments = @(
+        $Action,
+        "`"$($Installers[0].FullName)`"",
+        "/qn",
+        "/norestart",
+        "/L*V",
+        "`"$Log`""
+    )
+    $Msi = Start-Process `
+        -FilePath "msiexec.exe" `
+        -ArgumentList $MsiArguments `
+        -Wait `
+        -PassThru
+    if ($Msi.ExitCode -notin @(0, 3010)) {
+        throw "MSI $Action failed with exit code $($Msi.ExitCode); see $Log"
     }
 }
 

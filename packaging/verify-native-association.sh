@@ -112,10 +112,10 @@ case "$target" in
     for command in \
       dpkg \
       dpkg-query \
+      gio \
       mimetype \
       update-mime-database \
       xdg-mime \
-      xdg-open \
       dbus-run-session \
       xvfb-run \
       sudo; do
@@ -224,7 +224,7 @@ case "$target" in
         marker=$2
         shutdown_marker=$3
         launcher=$4
-        xdg-open "$fixture"
+        gio open "$fixture"
         deadline=$((SECONDS + 60))
         while [[ $SECONDS -lt $deadline ]]; do
           if [[ -f "$marker" ]] &&
@@ -301,7 +301,9 @@ case "$target" in
     installed_app="$applications/Coffee GB.app"
     mkdir -p "$mount_point" "$applications"
     app_pid=
+    application_log=
     cleanup_macos() {
+      local exit_status=$?
       if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
         kill -TERM "$app_pid" 2>/dev/null || true
         local deadline=$((SECONDS + 10))
@@ -316,22 +318,39 @@ case "$target" in
       "$lsregister" -u "$installed_app" >/dev/null 2>&1 || true
       # A failed attach can still leave a device mounted at this dedicated path.
       hdiutil detach "$mount_point" >/dev/null 2>&1 || true
+      if (( exit_status != 0 )) &&
+          [[ -n "$application_log" && -f "$application_log" ]]; then
+        {
+          echo "Installed macOS application log after association failure (last 64 KiB):"
+          tail -c 65536 "$application_log" || true
+        } >&2 || true
+      fi
     }
     trap cleanup_macos EXIT
 
-    printf 'Y\n' | hdiutil attach \
+    hdiutil attach \
       -nobrowse \
       -readonly \
       -mountpoint "$mount_point" \
       "${installers[0]}" \
-      >/dev/null
+      >/dev/null \
+      <<<Y || {
+        echo "Could not mount the licensed macOS installer." >&2
+        exit 2
+      }
     source_apps=("$mount_point"/*.app)
     (( ${#source_apps[@]} == 1 )) || {
       echo "Expected exactly one application bundle in the DMG." >&2
       exit 2
     }
-    ditto "${source_apps[0]}" "$installed_app"
-    hdiutil detach "$mount_point" >/dev/null
+    ditto "${source_apps[0]}" "$installed_app" || {
+      echo "Could not copy the application from the mounted DMG." >&2
+      exit 2
+    }
+    hdiutil detach "$mount_point" >/dev/null || {
+      echo "Could not detach the mounted DMG after copying the application." >&2
+      exit 2
+    }
 
     if [[ ${COFFEE_GB_RELEASE_SIGNING:-} == true ]]; then
       codesign --verify --deep --strict --verbose=2 "$installed_app"
@@ -344,13 +363,42 @@ case "$target" in
     fi
 
     info="$installed_app/Contents/Info.plist"
-    [[ $(plutil -extract CFBundleIdentifier raw -o - "$info") == eu.rekawek.coffeegb ]]
-    documents=$(plutil -extract CFBundleDocumentTypes json -o - "$info")
-    for extension in gb gbc rom; do
-      grep -F "\"$extension\"" <<<"$documents" >/dev/null
+    bundle_id=$(plutil -extract CFBundleIdentifier raw -o - "$info") || {
+      echo "Could not read CFBundleIdentifier from the installed application." >&2
+      exit 2
+    }
+    [[ "$bundle_id" == eu.rekawek.coffeegb ]] || {
+      echo "Installed application has bundle identifier '$bundle_id'; expected eu.rekawek.coffeegb." >&2
+      exit 2
+    }
+    documents=$(plutil -extract CFBundleDocumentTypes json -o - "$info") || {
+      echo "Could not read CFBundleDocumentTypes from the installed application." >&2
+      exit 2
+    }
+    for content_type in eu.rekawek.coffeegb.gb eu.rekawek.coffeegb.gbc; do
+      grep -F "\"$content_type\"" <<<"$documents" >/dev/null || {
+        echo "CFBundleDocumentTypes does not advertise $content_type." >&2
+        exit 2
+      }
     done
-    "$lsregister" -f "$installed_app"
-    open -Ra "$installed_app"
+    exported_types=$(plutil -extract UTExportedTypeDeclarations json -o - "$info") || {
+      echo "Could not read UTExportedTypeDeclarations from the installed application." >&2
+      exit 2
+    }
+    for extension in gb gbc rom; do
+      grep -F "\"$extension\"" <<<"$exported_types" >/dev/null || {
+        echo "UTExportedTypeDeclarations does not advertise .$extension." >&2
+        exit 2
+      }
+    done
+    "$lsregister" -f "$installed_app" || {
+      echo "Could not register the installed application with Launch Services." >&2
+      exit 2
+    }
+    open -Ra "$installed_app" || {
+      echo "Launch Services could not resolve the installed application." >&2
+      exit 2
+    }
 
     for extension in "${extensions[@]}"; do
       fixture="$smoke_root/Coffee GB association smoke.$extension"
@@ -360,22 +408,40 @@ case "$target" in
       export COFFEE_GB_ASSOCIATION_SMOKE_MARKER="$marker"
       export COFFEE_GB_ASSOCIATION_SMOKE_ROM="$fixture"
       export COFFEE_GB_DESKTOP_SMOKE_MARKER="$ready_marker"
+      application_log="$smoke_root/application-$extension.log"
       "$installed_app/Contents/MacOS/Coffee GB" \
-        >"$smoke_root/application-$extension.log" \
+        >"$application_log" \
         2>&1 &
       app_pid=$!
       await_file "$ready_marker" "installed macOS .$extension desktop readiness"
-      kill -0 "$app_pid"
+      kill -0 "$app_pid" 2>/dev/null || {
+        echo "The installed macOS .$extension application exited before association dispatch." >&2
+        exit 2
+      }
 
       # Do not select Coffee GB explicitly here: Launch Services must choose the registered
       # default handler for each supported extension.
-      open "$fixture"
+      open "$fixture" || {
+        echo "Launch Services could not open the .$extension fixture." >&2
+        exit 2
+      }
       await_evidence "$marker" "default-handler macOS .$extension association result"
-      assert_evidence "$marker" "$fixture" DESKTOP_OPEN_FILE
+      assert_evidence "$marker" "$fixture" DESKTOP_OPEN_FILE || {
+        echo "Installed macOS .$extension association evidence was incomplete:" >&2
+        sed -n '1,$p' "$marker" >&2
+        exit 2
+      }
       pid=$(evidence_pid "$marker")
-      [[ "$pid" == "$app_pid" ]]
+      [[ "$pid" == "$app_pid" ]] || {
+        echo "macOS .$extension association evidence came from PID $pid; expected $app_pid." >&2
+        exit 2
+      }
       await_evidence "$shutdown_marker" "normal macOS .$extension association shutdown"
-      assert_shutdown_evidence "$shutdown_marker" "$pid"
+      assert_shutdown_evidence "$shutdown_marker" "$pid" || {
+        echo "Installed macOS .$extension shutdown evidence was incomplete:" >&2
+        sed -n '1,$p' "$shutdown_marker" >&2
+        exit 2
+      }
 
       deadline=$((SECONDS + 60))
       while kill -0 "$app_pid" 2>/dev/null && [[ $SECONDS -lt $deadline ]]; do
@@ -385,13 +451,24 @@ case "$target" in
         echo "The macOS .$extension application did not complete bounded shutdown." >&2
         exit 2
       fi
-      wait "$app_pid"
+      wait "$app_pid" || {
+        exit_status=$?
+        echo "The installed macOS .$extension application exited with status $exit_status." >&2
+        exit 2
+      }
       app_pid=
+      application_log=
     done
 
-    "$lsregister" -u "$installed_app"
+    "$lsregister" -u "$installed_app" || {
+      echo "Could not unregister the installed application from Launch Services." >&2
+      exit 2
+    }
     rm -rf -- "$installed_app"
-    [[ ! -e "$installed_app" ]]
+    [[ ! -e "$installed_app" ]] || {
+      echo "The installed macOS application remained after cleanup." >&2
+      exit 2
+    }
     trap - EXIT
     ;;
 

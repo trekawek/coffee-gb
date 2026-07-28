@@ -65,8 +65,12 @@ public class NativePackagingScriptTest {
             assertFalse(contents.contains("Invoke-WebRequest"));
             assertFalse(contents.contains("wget "));
         }
-        assertTrue(verifyPs.contains("& msiexec.exe"));
-        assertFalse(verifyPs.contains("Start-Process"));
+        assertTrue(verifyPs.contains("Start-Process"));
+        assertTrue(verifyPs.contains("-FilePath \"msiexec.exe\""));
+        assertTrue(verifyPs.contains("-Wait"));
+        assertTrue(verifyPs.contains("-PassThru"));
+        assertTrue(verifyPs.contains("$Msi.ExitCode"));
+        assertFalse(verifyPs.contains("& msiexec.exe"));
 
         String associationSh = Files.readString(associationShell);
         String associationPs = Files.readString(associationPowerShell);
@@ -84,7 +88,8 @@ public class NativePackagingScriptTest {
             assertFalse(contents.contains("Invoke-WebRequest"));
             assertFalse(contents.contains("wget "));
         }
-        assertTrue(associationSh.contains("xdg-open"));
+        assertTrue(associationSh.contains("gio open \"$fixture\""));
+        assertFalse(associationSh.contains("xdg-open \"$fixture\""));
         assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
         assertTrue(associationSh.contains("DESKTOP_OPEN_FILE"));
         assertTrue(associationSh.contains("dpkg --remove coffee-gb"));
@@ -98,6 +103,11 @@ public class NativePackagingScriptTest {
         assertTrue(associationSh.contains(
                 "com.apple.security.cs.disable-library-validation"));
         assertTrue(associationPs.contains("Start-Process -FilePath $Fixture"));
+        assertTrue(associationPs.contains("-FilePath \"msiexec.exe\""));
+        assertTrue(associationPs.contains("-ArgumentList $MsiArguments"));
+        assertTrue(associationPs.contains("-Wait"));
+        assertTrue(associationPs.contains("-PassThru"));
+        assertTrue(associationPs.contains("$Msi.ExitCode"));
         assertTrue(associationPs.contains("Registry::HKEY_CLASSES_ROOT"));
         assertTrue(associationPs.contains("Invoke-Msi -Action \"/x\""));
         assertTrue(associationPs.contains("Get-Process -Id $AssociationPid"));

@@ -33,12 +33,21 @@ if ($Installers.Count -ne 1) {
 
 New-Item -ItemType Directory -Path $Extracted | Out-Null
 $Log = Join-Path $BuildRoot "msi-administrative-extract.log"
-& msiexec.exe `
-    /a $Installers[0].FullName `
-    /qn "TARGETDIR=$Extracted" `
-    "/L*V" $Log
-if ($LASTEXITCODE -ne 0) {
-    throw "MSI administrative extraction failed with exit code $LASTEXITCODE; see $Log"
+$MsiArguments = @(
+    "/a",
+    "`"$($Installers[0].FullName)`"",
+    "/qn",
+    "TARGETDIR=`"$Extracted`"",
+    "/L*V",
+    "`"$Log`""
+)
+$Msi = Start-Process `
+    -FilePath "msiexec.exe" `
+    -ArgumentList $MsiArguments `
+    -Wait `
+    -PassThru
+if ($Msi.ExitCode -ne 0) {
+    throw "MSI administrative extraction failed with exit code $($Msi.ExitCode); see $Log"
 }
 
 $Arguments = @(

@@ -73,12 +73,16 @@ else
     hdiutil detach "$extraction" >/dev/null 2>&1 || true
   }
   trap cleanup_mount EXIT
-  printf 'Y\n' | hdiutil attach \
+  hdiutil attach \
     -nobrowse \
     -readonly \
     -mountpoint "$extraction" \
     "${installers[0]}" \
-    >/dev/null
+    >/dev/null \
+    <<<Y || {
+      echo "Could not mount the licensed macOS installer." >&2
+      exit 2
+    }
 fi
 
 java \

@@ -161,8 +161,9 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl shared-mime-info xdg-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl libglib2.0-bin shared-mime-info xdg-utils
           command -v desktop-file-validate >/dev/null
+          command -v gio >/dev/null
           command -v mimetype >/dev/null
           command -v update-mime-database >/dev/null
           command -v xdg-desktop-menu >/dev/null
@@ -478,8 +479,9 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl shared-mime-info xdg-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl libglib2.0-bin shared-mime-info xdg-utils
           command -v desktop-file-validate >/dev/null
+          command -v gio >/dev/null
           command -v mimetype >/dev/null
           command -v update-mime-database >/dev/null
           command -v xdg-desktop-menu >/dev/null
