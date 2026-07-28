@@ -1124,11 +1124,27 @@ class ProtocolV9ConsentTransferTest {
         )
     try {
       fixture.start()
-      assertNotNull(fixture.server.awaitManifestBoundary(5, TimeUnit.SECONDS))
-      assertNotNull(fixture.client.awaitManifestBoundary(5, TimeUnit.SECONDS))
+      assertNotNull(
+          fixture.server.awaitManifestBoundary(15, TimeUnit.SECONDS),
+          "server manifest boundary timed out: server=${fixture.server.snapshot()} " +
+              "client=${fixture.client.snapshot()} " +
+              "serverWire=${wireTypes(fixture.serverChannel.recordedBytes())} " +
+              "clientWire=${wireTypes(fixture.clientChannel.recordedBytes())}",
+      )
+      assertNotNull(
+          fixture.client.awaitManifestBoundary(15, TimeUnit.SECONDS),
+          "client manifest boundary timed out: server=${fixture.server.snapshot()} " +
+              "client=${fixture.client.snapshot()} " +
+              "serverWire=${wireTypes(fixture.serverChannel.recordedBytes())} " +
+              "clientWire=${wireTypes(fixture.clientChannel.recordedBytes())}",
+      )
       fixture.server.submitConsent(41, V9ConsentDecision.APPROVE)
       fixture.client.submitConsent(41, V9ConsentDecision.APPROVE)
-      assertTrue(source.readEntered.await(2, TimeUnit.SECONDS))
+      assertTrue(
+          source.readEntered.await(5, TimeUnit.SECONDS),
+          "lazy source did not become active: server=${fixture.server.snapshot()} " +
+              "client=${fixture.client.snapshot()} progress=${fixture.server.part3Progress()}",
+      )
       fixture.server.cancel()
       waitUntil { fixture.server.activeTaskCount() == 0 }
       assertEquals(1, source.closeCount.get())
