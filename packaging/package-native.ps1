@@ -18,9 +18,19 @@ $MavenCommand = if ($env:COFFEE_GB_MAVEN_COMMAND) {
     "mvn"
 }
 
-& $MavenCommand -B --no-transfer-progress -f $PomFile -pl swing -am clean verify
-if ($LASTEXITCODE -ne 0) {
-    throw "Maven package failed with exit code $LASTEXITCODE"
+$MavenTemp = Join-Path `
+    ([System.IO.Path]::GetTempPath()) `
+    ("coffee-gb-maven-" + [System.Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $MavenTemp -ErrorAction Stop | Out-Null
+$MavenTemp = (Resolve-Path -LiteralPath $MavenTemp -ErrorAction Stop).ProviderPath
+try {
+    & $MavenCommand -B --no-transfer-progress -f $PomFile -pl swing -am clean verify `
+        "-Dcoffee-gb.test.tmpdir=$MavenTemp"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Maven package failed with exit code $LASTEXITCODE"
+    }
+} finally {
+    Remove-Item -LiteralPath $MavenTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $AppJars = @(Get-ChildItem `

@@ -34,6 +34,7 @@
         <skipTests>false</skipTests>
         <skip.unit.tests>${skipTests}</skip.unit.tests>
         <integration.test.threadCount>2</integration.test.threadCount>
+        <coffee-gb.test.tmpdir>${java.io.tmpdir}</coffee-gb.test.tmpdir>
     </properties>
     <build>
         <pluginManagement>
@@ -106,7 +107,10 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>-Xmx4096m</argLine>
+                    <!-- java.nio caches java.io.tmpdir during JVM startup. Keep it on the
+                         fork command line so native-package builds can supply a physically
+                         resolved temporary directory before any test class initializes. -->
+                    <argLine>-Xmx4096m -Djava.io.tmpdir="${coffee-gb.test.tmpdir}"</argLine>
                     <systemPropertyVariables>
                         <integration.test.threadCount>${integration.test.threadCount}</integration.test.threadCount>
                         <!-- Desktop settings tests and controller fixtures must never inspect or

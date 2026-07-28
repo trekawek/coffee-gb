@@ -52,6 +52,10 @@ public class NativePackageWorkflowTest {
                 "Install package and open the synthetic ROM through the OS association"));
         assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
+        assertTrue(packages.contains("desktop-file-utils"));
+        assertTrue(packages.contains("command -v desktop-file-validate"));
+        assertTrue(packages.indexOf("desktop-file-utils")
+                != packages.lastIndexOf("desktop-file-utils"));
         assertTrue(packages.contains("environment: native-release"));
         assertTrue(packages.contains("inputs.release_signing"));
         assertFalse(packages.contains(

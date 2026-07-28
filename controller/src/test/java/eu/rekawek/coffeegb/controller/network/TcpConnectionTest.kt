@@ -672,14 +672,18 @@ class TcpConnectionTest {
         output.flush()
       }
       assertNotNull(received.poll(5, TimeUnit.SECONDS), "host did not receive hostile input")
-      host.runFrame()
-
-      val dropped =
-          assertNotNull(
-              disconnected.poll(5, TimeUnit.SECONDS),
-              "controller rejection did not release the blocked socket",
-          )
-      assertEquals(1, dropped.player)
+      var dropped: ConnectionController.ServerPlayerDisconnectedEvent? = null
+      val rejectionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+      while (dropped == null && System.nanoTime() < rejectionDeadline) {
+        // The root-bus probe above can run before the same synchronous post reaches the linked
+        // controller's child queue. Keep advancing the controller within the existing bound so
+        // the test observes that delivery ordering instead of racing it once.
+        host.runFrame()
+        dropped = disconnected.poll(10, TimeUnit.MILLISECONDS)
+      }
+      val disconnectedPlayer =
+          assertNotNull(dropped, "controller rejection did not release the blocked socket")
+      assertEquals(1, disconnectedPlayer.player)
 
       serverBus.post(
           LinkedController.LocalButtonStateEvent(
