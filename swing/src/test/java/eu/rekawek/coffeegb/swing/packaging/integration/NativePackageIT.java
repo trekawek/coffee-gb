@@ -115,9 +115,21 @@ public class NativePackageIT {
             assertReleaseInventory(result);
             assertNoForbiddenStageContent(result, app);
             assertTrue(Files.size(result.icon()) > 5_000);
-            assertTrue(
-                    Files.readString(result.association())
-                            .contains("icon=input/coffee-gb." + result.target().iconSuffix()));
+            assertEquals(2, result.associationFiles().size());
+            for (Path association : result.associationFiles()) {
+                assertTrue(
+                        Files.readString(association)
+                                .contains("icon=input/coffee-gb."
+                                        + result.target().iconSuffix()));
+            }
+            String gameBoyAssociation = Files.readString(result.associationFiles().get(0));
+            assertTrue(gameBoyAssociation.contains("extension=gb,rom\n"));
+            assertTrue(gameBoyAssociation.contains("mime-type=application/x-gameboy-rom\n"));
+            String gameBoyColorAssociation =
+                    Files.readString(result.associationFiles().get(1));
+            assertTrue(gameBoyColorAssociation.contains("extension=gbc\n"));
+            assertTrue(gameBoyColorAssociation
+                    .contains("mime-type=application/x-gameboy-color-rom\n"));
             assertEquals(
                     "arguments=--debug\nwin-console=true\n",
                     Files.readString(result.windowsConsoleLauncher()));

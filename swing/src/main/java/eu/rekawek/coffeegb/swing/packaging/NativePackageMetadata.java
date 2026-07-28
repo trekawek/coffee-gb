@@ -33,6 +33,9 @@ public final class NativePackageMetadata {
             "a3d9752e-bbb8-4c51-9b4e-60cff9f55ec8";
     static final String GAME_BOY_COLOR_ROM_EXTENSION = "gb" + "c";
     static final String SUPER_GAME_BOY_ROM_EXTENSION = "s" + "gb";
+    public static final String GAME_BOY_ROM_MIME_TYPE = "application/x-gameboy-rom";
+    public static final String GAME_BOY_COLOR_ROM_MIME_TYPE =
+            "application/x-gameboy-color-rom";
     public static final List<String> ROM_EXTENSIONS =
             List.of("gb", GAME_BOY_COLOR_ROM_EXTENSION, "rom");
 

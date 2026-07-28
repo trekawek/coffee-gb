@@ -109,7 +109,16 @@ case "$target" in
       echo "Expected exactly one DEB installer, found ${#installers[@]}." >&2
       exit 2
     }
-    for command in dpkg dpkg-query xdg-mime xdg-open dbus-run-session xvfb-run sudo; do
+    for command in \
+      dpkg \
+      dpkg-query \
+      mimetype \
+      update-mime-database \
+      xdg-mime \
+      xdg-open \
+      dbus-run-session \
+      xvfb-run \
+      sudo; do
       command -v "$command" >/dev/null || {
         echo "$command is required for the installed Linux association smoke." >&2
         exit 2
@@ -120,17 +129,23 @@ case "$target" in
       exit 2
     fi
 
-    installed=false
+    install_attempted=false
     cleanup_linux() {
+      local exit_status=$?
       pkill -TERM -f '^/opt/coffee-gb/bin/Coffee GB' 2>/dev/null || true
-      if [[ "$installed" == true ]]; then
-        sudo dpkg --remove coffee-gb >/dev/null 2>&1 || true
+      if [[ "$install_attempted" == true ]]; then
+        if ! sudo dpkg --remove coffee-gb >/dev/null 2>&1; then
+          echo "Failed to remove coffee-gb while cleaning up the Linux association smoke." >&2
+          (( exit_status != 0 )) || exit_status=1
+        fi
       fi
+      trap - EXIT
+      exit "$exit_status"
     }
     trap cleanup_linux EXIT
 
+    install_attempted=true
     sudo dpkg --install "${installers[0]}"
-    installed=true
     [[ $(dpkg-query -W -f='${db:Status-Status}' coffee-gb) == installed ]]
     launcher="/opt/coffee-gb/bin/Coffee GB"
     [[ -x "$launcher" ]]
@@ -155,18 +170,45 @@ case "$target" in
     }
     [[ -f "${desktop_files[0]}" && ! -L "${desktop_files[0]}" ]]
     desktop_id=${desktop_files[0]##*/}
-    grep -Fx 'MimeType=application/x-gameboy-rom' "${desktop_files[0]}" >/dev/null
-    grep -Fx 'Exec="/opt/coffee-gb/bin/Coffee GB" %f' "${desktop_files[0]}" >/dev/null
+    desktop_mimes=$(sed -n 's/^MimeType=//p' "${desktop_files[0]}")
+    for mime_type in application/x-gameboy-rom application/x-gameboy-color-rom; do
+      [[ ";$desktop_mimes;" == *";$mime_type;"* ]] || {
+        echo "Installed desktop entry does not advertise $mime_type." >&2
+        exit 2
+      }
+    done
+    grep -Fx 'Exec="/opt/coffee-gb/bin/Coffee GB" %f' "${desktop_files[0]}" >/dev/null || {
+      echo "Installed desktop entry does not launch Coffee GB with one file argument." >&2
+      exit 2
+    }
     for extension in "${extensions[@]}"; do
       fixture="$smoke_root/Coffee GB association smoke.$extension"
-      [[ $(xdg-mime query filetype "$fixture") == application/x-gameboy-rom ]]
+      expected_mime=application/x-gameboy-rom
+      [[ "$extension" != gbc ]] || expected_mime=application/x-gameboy-color-rom
+      actual_mime=$(xdg-mime query filetype "$fixture") || {
+        echo "Could not query the installed .$extension MIME type." >&2
+        exit 2
+      }
+      [[ "$actual_mime" == "$expected_mime" ]] || {
+        echo "Installed .$extension MIME type is $actual_mime, expected $expected_mime." >&2
+        exit 2
+      }
     done
 
     export XDG_CONFIG_HOME="$smoke_root/xdg-config"
     export XDG_DATA_HOME="$smoke_root/xdg-data"
     mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
-    xdg-mime default "$desktop_id" application/x-gameboy-rom
-    [[ $(xdg-mime query default application/x-gameboy-rom) == "$desktop_id" ]]
+    for mime_type in application/x-gameboy-rom application/x-gameboy-color-rom; do
+      xdg-mime default "$desktop_id" "$mime_type"
+      actual_default=$(xdg-mime query default "$mime_type") || {
+        echo "Could not query the default handler for $mime_type." >&2
+        exit 2
+      }
+      [[ "$actual_default" == "$desktop_id" ]] || {
+        echo "Default handler for $mime_type is $actual_default, expected $desktop_id." >&2
+        exit 2
+      }
+    done
 
     for extension in "${extensions[@]}"; do
       fixture="$smoke_root/Coffee GB association smoke.$extension"
@@ -213,11 +255,20 @@ case "$target" in
       assert_evidence "$marker" "$fixture" INITIAL_ARGUMENT
       pid=$(evidence_pid "$marker")
       assert_shutdown_evidence "$shutdown_marker" "$pid"
-      [[ $(xdg-mime query default application/x-gameboy-rom) == "$desktop_id" ]]
+      expected_mime=application/x-gameboy-rom
+      [[ "$extension" != gbc ]] || expected_mime=application/x-gameboy-color-rom
+      actual_default=$(xdg-mime query default "$expected_mime") || {
+        echo "Could not re-query the default handler for $expected_mime after opening .$extension." >&2
+        exit 2
+      }
+      [[ "$actual_default" == "$desktop_id" ]] || {
+        echo "Opening .$extension changed the default handler for $expected_mime to $actual_default." >&2
+        exit 2
+      }
     done
 
     sudo dpkg --remove coffee-gb
-    installed=false
+    install_attempted=false
     if dpkg-query -W -f='${db:Status-Status}' coffee-gb 2>/dev/null | grep -qx installed; then
       echo "The Linux package remained installed after removal." >&2
       exit 2
@@ -249,25 +300,31 @@ case "$target" in
     applications="$smoke_root/Applications"
     installed_app="$applications/Coffee GB.app"
     mkdir -p "$mount_point" "$applications"
-    mounted=false
     app_pid=
     cleanup_macos() {
       if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
         kill -TERM "$app_pid" 2>/dev/null || true
+        local deadline=$((SECONDS + 10))
+        while kill -0 "$app_pid" 2>/dev/null && [[ $SECONDS -lt $deadline ]]; do
+          sleep 0.1
+        done
+        if kill -0 "$app_pid" 2>/dev/null; then
+          kill -KILL "$app_pid" 2>/dev/null || true
+        fi
+        wait "$app_pid" 2>/dev/null || true
       fi
       "$lsregister" -u "$installed_app" >/dev/null 2>&1 || true
-      if [[ "$mounted" == true ]]; then
-        hdiutil detach "$mount_point" >/dev/null 2>&1 || true
-      fi
+      # A failed attach can still leave a device mounted at this dedicated path.
+      hdiutil detach "$mount_point" >/dev/null 2>&1 || true
     }
     trap cleanup_macos EXIT
 
-    hdiutil attach "${installers[0]}" \
-      -mountpoint "$mount_point" \
+    printf 'Y\n' | hdiutil attach \
       -nobrowse \
       -readonly \
+      -mountpoint "$mount_point" \
+      "${installers[0]}" \
       >/dev/null
-    mounted=true
     source_apps=("$mount_point"/*.app)
     (( ${#source_apps[@]} == 1 )) || {
       echo "Expected exactly one application bundle in the DMG." >&2
@@ -275,7 +332,6 @@ case "$target" in
     }
     ditto "${source_apps[0]}" "$installed_app"
     hdiutil detach "$mount_point" >/dev/null
-    mounted=false
 
     if [[ ${COFFEE_GB_RELEASE_SIGNING:-} == true ]]; then
       codesign --verify --deep --strict --verbose=2 "$installed_app"

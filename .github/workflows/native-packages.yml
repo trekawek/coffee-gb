@@ -161,8 +161,10 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus xdg-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl shared-mime-info xdg-utils
           command -v desktop-file-validate >/dev/null
+          command -v mimetype >/dev/null
+          command -v update-mime-database >/dev/null
           command -v xdg-desktop-menu >/dev/null
           test -d /etc/xdg/menus
           test -d /usr/share/desktop-directories
@@ -476,8 +478,10 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus xdg-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl shared-mime-info xdg-utils
           command -v desktop-file-validate >/dev/null
+          command -v mimetype >/dev/null
+          command -v update-mime-database >/dev/null
           command -v xdg-desktop-menu >/dev/null
           test -d /etc/xdg/menus
           test -d /usr/share/desktop-directories

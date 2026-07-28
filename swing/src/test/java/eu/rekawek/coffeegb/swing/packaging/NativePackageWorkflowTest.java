@@ -15,14 +15,15 @@ public class NativePackageWorkflowTest {
     public void workflowLocksEveryTargetToHostVerificationAndBoundedArtifacts()
             throws Exception {
         Path workflows = Path.of("../.github/workflows").toAbsolutePath().normalize();
-        String packages = Files.readString(workflows.resolve("native-packages.yml"));
-        String release = Files.readString(workflows.resolve("maven-release.yml"));
-        String maven = Files.readString(workflows.resolve("maven.yml"));
+        String packages = normalizedText(workflows.resolve("native-packages.yml"));
+        String release = normalizedText(workflows.resolve("maven-release.yml"));
+        String maven = normalizedText(workflows.resolve("maven.yml"));
         Path packaging = Path.of("../packaging").toAbsolutePath().normalize();
         String associationSh =
-                Files.readString(packaging.resolve("verify-native-association.sh"));
+                normalizedText(packaging.resolve("verify-native-association.sh"));
         String associationPs1 =
-                Files.readString(packaging.resolve("verify-native-association.ps1"));
+                normalizedText(packaging.resolve("verify-native-association.ps1"));
+        String packageSh = normalizedText(packaging.resolve("verify-native-package.sh"));
 
         for (String target :
                 new String[] {
@@ -55,8 +56,11 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
         assertEquals(2, occurrences(packages,
                 "sudo apt-get install --yes --no-install-recommends "
-                        + "desktop-file-utils gnome-menus xdg-utils"));
+                        + "desktop-file-utils gnome-menus libfile-mimeinfo-perl "
+                        + "shared-mime-info xdg-utils"));
         assertEquals(2, occurrences(packages, "command -v desktop-file-validate"));
+        assertEquals(2, occurrences(packages, "command -v mimetype"));
+        assertEquals(2, occurrences(packages, "command -v update-mime-database"));
         assertEquals(2, occurrences(packages, "command -v xdg-desktop-menu"));
         assertEquals(2, occurrences(packages, "test -d /etc/xdg/menus"));
         assertEquals(2, occurrences(packages, "test -d /usr/share/desktop-directories"));
@@ -101,6 +105,10 @@ public class NativePackageWorkflowTest {
         assertTrue(associationSh.contains("codesign --verify --deep --strict"));
         assertTrue(associationSh.contains(
                 "com.apple.security.cs.disable-library-validation"));
+        assertLicensedDmgAttach(associationSh, "\"$mount_point\"");
+        assertLicensedDmgAttach(packageSh, "\"$extraction\"");
+        assertFalse(associationSh.contains("-acceptlicense"));
+        assertFalse(packageSh.contains("-acceptlicense"));
 
         assertTrue(release.contains("uses: ./.github/workflows/native-packages.yml"));
         assertTrue(release.contains("checkout_ref: ${{ needs.prepare.outputs.tag_ref }}"));
@@ -171,5 +179,22 @@ public class NativePackageWorkflowTest {
             offset += needle.length();
         }
         return count;
+    }
+
+    private static String normalizedText(Path path) throws Exception {
+        return Files.readString(path).replace("\r\n", "\n").replace('\r', '\n');
+    }
+
+    private static void assertLicensedDmgAttach(String script, String mountPoint) {
+        int start = script.indexOf("printf 'Y\\n' | hdiutil attach");
+        assertTrue("Missing licensed DMG attach command", start >= 0);
+        int end = script.indexOf(">/dev/null", start);
+        assertTrue("Licensed DMG attach command has no bounded block", end > start);
+        String command = script.substring(start, end);
+        assertTrue(command.contains("-nobrowse"));
+        assertTrue(command.contains("-readonly"));
+        assertTrue(command.contains("-mountpoint " + mountPoint));
+        assertTrue(command.lastIndexOf("\"${installers[0]}\"")
+                > command.indexOf("-mountpoint " + mountPoint));
     }
 }
