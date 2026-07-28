@@ -270,13 +270,18 @@ class StateRepository(
         lock(ref).withLock {
           readRaw(ref) ?: throw NoSuchFileException(layout.stateFile(ref).toString())
         }
-    val normalized =
+    val written =
         try {
           ExclusiveFileWriter.write(destination, raw.bytes)
         } catch (failure: FileAlreadyExistsException) {
           throw IOException("Export destination already exists: ${destination.fileName}", failure)
         }
-    return StateExportResult(ref, normalized, StateMetadataCodec.sha256(raw.bytes))
+    return StateExportResult(
+        ref,
+        written.path,
+        StateMetadataCodec.sha256(raw.bytes),
+        written.recovery,
+    )
   }
 
   /**
@@ -338,7 +343,7 @@ class StateRepository(
               return@withLock StateCatalogEntry(
                   ref,
                   StateCatalogStatus.IO_ERROR,
-                  failure.message ?: failure.javaClass.simpleName,
+                  diagnostic(failure.message ?: failure.javaClass.simpleName),
                   null,
                   null,
                   null,
@@ -386,7 +391,7 @@ class StateRepository(
           StateCatalogEntry(
               ref,
               StateCatalogStatus.IO_ERROR,
-              failure.message ?: failure.javaClass.simpleName,
+              diagnostic(failure.message ?: failure.javaClass.simpleName),
               null,
               StateMetadataCodec.sha256(raw.bytes),
               null,
@@ -404,7 +409,7 @@ class StateRepository(
     val hash = StateMetadataCodec.sha256(raw.bytes)
     val metadataRead = readMetadata(raw.ref, raw.bytes.size, hash)
     val status = catalogStatus(failure.reason)
-    val detail = "${failure.reason}: ${failure.message ?: "StateFile is invalid"}"
+    val detail = diagnostic("${failure.reason}: ${failure.message ?: "StateFile is invalid"}")
     val compatibility =
         if (status == StateCatalogStatus.INCOMPATIBLE) {
           StateCompatibilityResult(
@@ -466,7 +471,7 @@ class StateRepository(
               null,
               StateMetadataWarning(
                   StateMetadataWarningReason.UNREADABLE,
-                  failure.message ?: failure.javaClass.simpleName,
+                  diagnostic(failure.message ?: failure.javaClass.simpleName),
               ),
               AtomicFileWriter.RecoveryReport.NONE,
           )
@@ -480,7 +485,7 @@ class StateRepository(
               null,
               StateMetadataWarning(
                   StateMetadataWarningReason.CORRUPT,
-                  failure.message ?: "State metadata is malformed",
+                  diagnostic(failure.message ?: "State metadata is malformed"),
               ),
               read.recovery,
           )
@@ -662,19 +667,16 @@ class StateRepository(
     return NamedRefs(refs, entries)
   }
 
-  /**
-   * Refuses symlinked or non-directory components created below the configured game root. The game
-   * root itself is user-selected and therefore acts as the trust boundary.
-   */
+  /** Refuses traversal through symlinked or non-directory components, including the game root. */
   private fun ensureSafeParent(target: Path) {
     val normalized = target.toAbsolutePath().normalize()
     require(normalized.startsWith(layout.gameDirectory)) {
       "State repository target escapes the configured game directory"
     }
     val parent = requireNotNull(normalized.parent)
-    var cursor = layout.gameDirectory
-    layout.gameDirectory.relativize(parent).forEach { component ->
-      cursor = cursor.resolve(component)
+    var cursor = parent.root
+    parent.forEach { component ->
+      cursor = if (cursor == null) component else cursor.resolve(component)
       if (Files.exists(cursor, LinkOption.NOFOLLOW_LINKS) &&
           (Files.isSymbolicLink(cursor) ||
               !Files.isDirectory(cursor, LinkOption.NOFOLLOW_LINKS))) {
@@ -683,6 +685,9 @@ class StateRepository(
       }
     }
   }
+
+  private fun diagnostic(value: String): String =
+      StateDiagnosticRedactor.redact(value, listOf(layout.gameDirectory), MAX_DIAGNOSTIC_CHARS)
 
   private fun lock(ref: StateRef): ReentrantLock =
       sharedLock(layout.stateFile(ref), REF_LOCKS)
@@ -722,6 +727,7 @@ class StateRepository(
     const val MAX_NAMED_STATES = 128
     const val MAX_CATALOG_DIRECTORY_ENTRIES = 512
     const val MAX_STATE_DIRECTORY_ENTRIES = 32
+    private const val MAX_DIAGNOSTIC_CHARS = 512
     private const val LOCK_STRIPES = 64
     private const val DEFAULT_BUFFER_BYTES = 8192
     private val REF_LOCKS = Array(LOCK_STRIPES) { ReentrantLock() }

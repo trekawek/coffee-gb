@@ -7,8 +7,10 @@ import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateDiagnosticMetadata
 import eu.rekawek.coffeegb.controller.state.StateEntryKey
 import eu.rekawek.coffeegb.controller.state.StateFileInspection
+import eu.rekawek.coffeegb.controller.state.StateMetadata
 import eu.rekawek.coffeegb.controller.state.StateRef
 import eu.rekawek.coffeegb.controller.state.StateRootKind
+import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -95,5 +97,56 @@ class StateBrowserModelTest {
 
     assertEquals("v2 / 1.7.15", model.getValueAt(0, 5))
     assertTrue(model.details(entry).contains("Core: 1.7.15; build: desktop"))
+  }
+
+  @Test
+  fun hostileTimestampAndDiagnosticsAreBoundedBeforeTableProjection() {
+    val ref = StateRef.Slot(3)
+    val hostile = "build\u0000\n" + "x".repeat(10_000)
+    val inspection =
+        StateFileInspection(
+            formatVersion = 2,
+            rootKind = StateRootKind.MACHINE,
+            compression = StateCompression.NONE,
+            encodedPayloadLength = 1,
+            decodedPayloadLength = 1,
+            checksumValid = true,
+            identities = emptyList(),
+            sections = emptyList(),
+            diagnostics = StateDiagnosticMetadata(hostile, hostile),
+        )
+    val metadata =
+        StateMetadata(
+            ref,
+            null,
+            Instant.MAX,
+            null,
+            1,
+            "0".repeat(64),
+            null,
+        )
+    val entry =
+        StateBrowserEntry(
+            StateEntryKey(ref),
+            StateCatalogEntry(
+                ref,
+                StateCatalogStatus.AVAILABLE,
+                hostile,
+                inspection,
+                "0".repeat(64),
+                metadata,
+                null,
+                null,
+                null,
+            ),
+            null,
+        )
+    val model = StateBrowserTableModel().also { it.entries = listOf(entry) }
+
+    assertTrue(model.getValueAt(0, 1).toString().length <= 80)
+    assertTrue(model.getValueAt(0, 5).toString().length <= 170)
+    val details = model.details(entry)
+    assertFalse(details.contains('\u0000'))
+    assertTrue(details.length < 1_500)
   }
 }

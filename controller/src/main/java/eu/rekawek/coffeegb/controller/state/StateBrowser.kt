@@ -59,4 +59,5 @@ class StateBrowserCatalog(
 data class StateScreenshotResult(
     val path: Path,
     val pngBytes: Int,
+    val recovery: ExclusiveWriteRecovery = ExclusiveWriteRecovery.NONE,
 )

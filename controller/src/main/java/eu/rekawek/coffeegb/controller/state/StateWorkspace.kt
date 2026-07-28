@@ -100,6 +100,13 @@ class StateWorkspace(
 
   fun activeGameDirectory(): Path = paths.layout.gameDirectory
 
+  internal fun sensitivePaths(): List<Path> =
+      buildList {
+        add(paths.layout.gameDirectory)
+        add(paths.screenshotsDirectory)
+        paths.fallbackLayouts.forEach { add(it.gameDirectory) }
+      }
+
   private fun browserEntry(
       source: Int,
       entry: StateCatalogEntry,
@@ -172,7 +179,7 @@ class StateWorkspace(
   }
 
   private fun boundedMessage(value: String): String =
-      value.replace(Regex("[\\r\\n\\t]+"), " ").trim().take(MAX_ERROR_CHARS)
+      StateDiagnosticRedactor.redact(value, sensitivePaths(), MAX_ERROR_CHARS)
 
   private companion object {
     const val MAX_ERROR_CHARS = 320

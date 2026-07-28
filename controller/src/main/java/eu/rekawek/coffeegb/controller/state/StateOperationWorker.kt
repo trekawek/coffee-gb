@@ -7,8 +7,9 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.time.Clock
+import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import org.slf4j.LoggerFactory
 
@@ -75,10 +76,12 @@ internal data class StateWorkerCompletedEvent(
  */
 internal class StateOperationWorker(
     private val eventBus: EventBus,
-    private val executor: ExecutorService = createExecutor(),
+    executor: ExecutorService? = null,
     private val clock: Clock = Clock.systemUTC(),
     private val externalActions: StateExternalActions = StateExternalActions.UNSUPPORTED,
 ) : AutoCloseable {
+  private val scheduler: StateTaskScheduler =
+      executor?.let(::ExecutorStateTaskScheduler) ?: BoundedPriorityStateTaskScheduler()
 
   fun catalog(context: StateWorkerContext, requestId: Long) =
       submit(context, requestId, StateOperation.CATALOG, StateWorkerPurpose.MANUAL) {
@@ -180,41 +183,74 @@ internal class StateOperationWorker(
       purpose: StateWorkerPurpose,
       task: () -> StateWorkerResult,
   ) {
-    executor.execute {
-      val result =
-          try {
-            task()
-          } catch (failure: Throwable) {
-            if (failure is InterruptedException) {
-              Thread.currentThread().interrupt()
-            }
-            LOG.warn("State worker {} request {} failed", operation, requestId, failure)
-            StateWorkerResult.Failure(userError(operation, failure))
-          }
-      eventBus.post(
-          StateWorkerCompletedEvent(
-              context,
-              requestId,
-              operation,
-              purpose,
-              result,
-          ))
+    val work =
+        StateQueuedWork(
+            context = context,
+            requestId = requestId,
+            operation = operation,
+            purpose = purpose,
+        ) {
+          val result =
+              try {
+                task()
+              } catch (failure: Throwable) {
+                if (failure is InterruptedException) {
+                  Thread.currentThread().interrupt()
+                }
+                LOG.warn("State worker {} request {} failed", operation, requestId, failure)
+                StateWorkerResult.Failure(userError(context, operation, failure))
+              }
+          postCompletion(context, requestId, operation, purpose, result)
+        }
+    val admission = scheduler.submit(work)
+    admission.displaced.forEach {
+      postAdmissionFailure(it, "A newer equivalent state request replaced this queued request.")
+    }
+    if (!admission.accepted) {
+      postAdmissionFailure(
+          work,
+          "The bounded state queue is full or is shutting down. Wait for current work and retry.",
+      )
     }
   }
 
   override fun close() {
-    executor.shutdown()
-    try {
-      if (!executor.awaitTermination(SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
-        executor.shutdownNow()
-      }
-    } catch (_: InterruptedException) {
-      executor.shutdownNow()
-      Thread.currentThread().interrupt()
+    val abandoned = scheduler.closeAndAwait()
+    abandoned.forEach {
+      postAdmissionFailure(it, "The queued state request was cancelled during worker shutdown.")
     }
   }
 
-  private fun userError(operation: StateOperation, failure: Throwable): StateUserError {
+  private fun postAdmissionFailure(work: StateQueuedWork, detail: String) {
+    postCompletion(
+        work.context,
+        work.requestId,
+        work.operation,
+        work.purpose,
+        StateWorkerResult.Failure(
+            StateUserError(
+                "State request could not be queued.",
+                detail,
+                "Wait for current state work to finish, then retry.",
+            )),
+    )
+  }
+
+  private fun postCompletion(
+      context: StateWorkerContext,
+      requestId: Long,
+      operation: StateOperation,
+      purpose: StateWorkerPurpose,
+      result: StateWorkerResult,
+  ) {
+    eventBus.post(StateWorkerCompletedEvent(context, requestId, operation, purpose, result))
+  }
+
+  private fun userError(
+      context: StateWorkerContext,
+      operation: StateOperation,
+      failure: Throwable,
+  ): StateUserError {
     val summary =
         when (operation) {
           StateOperation.CATALOG -> "State list could not be refreshed."
@@ -229,12 +265,15 @@ internal class StateOperationWorker(
     val messages = generateSequence(failure) { it.cause }
         .take(MAX_CAUSE_DEPTH)
         .map { throwable ->
-          val message =
-              throwable.message
-                  ?.replace(Regex("[\\u0000-\\u001f\\u007f]+"), " ")
-                  ?.trim()
-                  ?.take(MAX_CAUSE_MESSAGE_CHARS)
-                  ?.takeIf(String::isNotEmpty)
+          val message = throwable.message
+              ?.let {
+                StateDiagnosticRedactor.redact(
+                    it,
+                    context.workspace.sensitivePaths(),
+                    MAX_CAUSE_MESSAGE_CHARS,
+                )
+              }
+              ?.takeIf(String::isNotEmpty)
           "${throwable.javaClass.simpleName}${message?.let { ": $it" } ?: ""}"
         }
         .joinToString("\n")
@@ -274,13 +313,189 @@ internal class StateOperationWorker(
 
   companion object {
     private val LOG = LoggerFactory.getLogger(StateOperationWorker::class.java)
-    private const val SHUTDOWN_SECONDS = 5L
     private const val MAX_CAUSE_DEPTH = 8
     private const val MAX_CAUSE_MESSAGE_CHARS = 900
-
-    private fun createExecutor(): ExecutorService =
-        Executors.newSingleThreadExecutor { runnable ->
-          Thread(runnable, "coffee-gb-state-worker").apply { isDaemon = true }
-        }
   }
 }
+
+private data class StateQueuedWork(
+    val context: StateWorkerContext,
+    val requestId: Long,
+    val operation: StateOperation,
+    val purpose: StateWorkerPurpose,
+    val action: () -> Unit,
+) : Runnable {
+  val priority: Int
+    get() =
+        when (purpose) {
+          StateWorkerPurpose.AUTOSAVE_CLOSE -> 0
+          StateWorkerPurpose.AUTOSAVE_ROM_SWITCH -> 1
+          StateWorkerPurpose.MANUAL, StateWorkerPurpose.RESUME_SCAN -> 2
+        }
+
+  val coalescingKey: Pair<Long, StateOperation>?
+    get() =
+        when (operation) {
+          StateOperation.CATALOG, StateOperation.SCREENSHOT, StateOperation.RESUME ->
+            context.sessionId to operation
+          else -> null
+        }
+
+  override fun run() = action()
+}
+
+private data class StateTaskAdmission(
+    val accepted: Boolean,
+    val displaced: List<StateQueuedWork> = emptyList(),
+)
+
+private interface StateTaskScheduler {
+  fun submit(work: StateQueuedWork): StateTaskAdmission
+
+  /** Returns queued work that could not be completed before shutdown. */
+  fun closeAndAwait(): List<StateQueuedWork>
+}
+
+/** Adapter retained for deterministic controller tests that inject their own executor. */
+private class ExecutorStateTaskScheduler(
+    private val executor: ExecutorService,
+) : StateTaskScheduler {
+  override fun submit(work: StateQueuedWork): StateTaskAdmission =
+      try {
+        executor.execute(work)
+        StateTaskAdmission(true)
+      } catch (_: RejectedExecutionException) {
+        StateTaskAdmission(false)
+      }
+
+  override fun closeAndAwait(): List<StateQueuedWork> {
+    executor.shutdown()
+    var interrupted = false
+    try {
+      if (!executor.awaitTermination(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+        executor.shutdownNow()
+        if (!executor.awaitTermination(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+          throw IllegalStateException("Injected state worker executor did not terminate")
+        }
+      }
+    } catch (_: InterruptedException) {
+      interrupted = true
+      executor.shutdownNow()
+      try {
+        if (!executor.awaitTermination(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+          throw IllegalStateException("Injected state worker executor did not terminate")
+        }
+      } catch (_: InterruptedException) {
+        interrupted = true
+        throw IllegalStateException("Interrupted while awaiting state worker termination")
+      }
+    } finally {
+      if (interrupted) Thread.currentThread().interrupt()
+    }
+    return emptyList()
+  }
+}
+
+/**
+ * Single-thread state scheduler with a hard queue bound. Close and ROM-switch autosaves jump ahead
+ * of queued manual work, while repeatable refresh/screenshot/resume requests are coalesced.
+ */
+private class BoundedPriorityStateTaskScheduler(
+    private val capacity: Int = MAX_QUEUED_STATE_TASKS,
+) : StateTaskScheduler {
+  private val monitor = Object()
+  private val queues = Array(3) { ArrayDeque<StateQueuedWork>() }
+  private var accepting = true
+  private var stoppingImmediately = false
+  private val worker =
+      Thread(::runWorker, "coffee-gb-state-worker").apply {
+        isDaemon = true
+        start()
+      }
+
+  override fun submit(work: StateQueuedWork): StateTaskAdmission =
+      synchronized(monitor) {
+        if (!accepting) return@synchronized StateTaskAdmission(false)
+
+        val displaced = mutableListOf<StateQueuedWork>()
+        work.coalescingKey?.let { key ->
+          queues.forEach { queue ->
+            val iterator = queue.iterator()
+            while (iterator.hasNext()) {
+              val queued = iterator.next()
+              if (queued.coalescingKey == key) {
+                iterator.remove()
+                displaced += queued
+              }
+            }
+          }
+        }
+
+        if (queuedCount() >= capacity && work.priority < ORDINARY_PRIORITY) {
+          val ordinary = queues[ORDINARY_PRIORITY]
+          if (ordinary.isNotEmpty()) displaced += ordinary.removeFirst()
+        }
+        if (queuedCount() >= capacity) {
+          return@synchronized StateTaskAdmission(false, displaced)
+        }
+        queues[work.priority].addLast(work)
+        monitor.notifyAll()
+        StateTaskAdmission(true, displaced)
+      }
+
+  override fun closeAndAwait(): List<StateQueuedWork> {
+    synchronized(monitor) {
+      accepting = false
+      monitor.notifyAll()
+    }
+    var interrupted = false
+    try {
+      worker.join(TimeUnit.SECONDS.toMillis(WORKER_SHUTDOWN_SECONDS))
+    } catch (_: InterruptedException) {
+      interrupted = true
+    }
+    if (worker.isAlive) {
+      synchronized(monitor) {
+        stoppingImmediately = true
+        monitor.notifyAll()
+      }
+      worker.interrupt()
+      try {
+        worker.join(TimeUnit.SECONDS.toMillis(WORKER_SHUTDOWN_SECONDS))
+      } catch (_: InterruptedException) {
+        interrupted = true
+      }
+    }
+    if (interrupted) Thread.currentThread().interrupt()
+    if (worker.isAlive) {
+      throw IllegalStateException("State worker did not terminate after interruption")
+    }
+    return synchronized(monitor) {
+      queues.flatMap { queue -> queue.toList().also { queue.clear() } }
+    }
+  }
+
+  private fun runWorker() {
+    while (true) {
+      val work =
+          synchronized(monitor) {
+            while (!stoppingImmediately && accepting && queuedCount() == 0) {
+              try {
+                monitor.wait()
+              } catch (_: InterruptedException) {
+                if (stoppingImmediately) return
+              }
+            }
+            if (stoppingImmediately || (!accepting && queuedCount() == 0)) return
+            queues.firstNotNullOfOrNull { it.pollFirst() }
+          }
+      work?.run()
+    }
+  }
+
+  private fun queuedCount(): Int = queues.sumOf(ArrayDeque<StateQueuedWork>::size)
+}
+
+private const val MAX_QUEUED_STATE_TASKS = 32
+private const val ORDINARY_PRIORITY = 2
+private const val WORKER_SHUTDOWN_SECONDS = 5L
