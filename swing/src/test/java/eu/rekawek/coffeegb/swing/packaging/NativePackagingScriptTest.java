@@ -98,7 +98,9 @@ public class NativePackagingScriptTest {
         assertTrue(failureBlock.contains("see $Log"));
 
         String associationSh = Files.readString(associationShell);
-        String associationPs = Files.readString(associationPowerShell);
+        String associationPs = Files.readString(associationPowerShell)
+                .replace("\r\n", "\n")
+                .replace('\r', '\n');
         for (String contents : new String[] {associationSh, associationPs}) {
             assertTrue(contents.contains("PackageAssociationFixture"));
             assertTrue(contents.contains("COFFEE_GB_ASSOCIATION_SMOKE_MARKER"));
