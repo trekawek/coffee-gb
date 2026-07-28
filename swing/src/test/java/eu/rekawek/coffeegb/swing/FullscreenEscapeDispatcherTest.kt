@@ -1,0 +1,257 @@
+package eu.rekawek.coffeegb.swing
+
+import java.awt.KeyEventDispatcher
+import java.awt.event.KeyEvent
+import java.util.concurrent.FutureTask
+import javax.swing.JPanel
+import javax.swing.SwingUtilities
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import org.junit.Test
+
+class FullscreenEscapeDispatcherTest {
+
+  @Test
+  fun `install close and reinstall are idempotent`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val lifecycle = RecordingLifecycleRegistry()
+        val dispatcher = dispatcher(registry, lifecycleRegistry = lifecycle)
+
+        dispatcher.install()
+        dispatcher.install()
+        assertEquals(1, registry.addCount)
+        assertEquals(1, registry.dispatchers.size)
+        assertEquals(1, lifecycle.addCount)
+
+        dispatcher.close()
+        dispatcher.close()
+        assertEquals(1, registry.removeCount)
+        assertTrue(registry.dispatchers.isEmpty())
+        assertEquals(1, lifecycle.removeCount)
+
+        dispatcher.install()
+        assertEquals(2, registry.addCount)
+        assertEquals(1, registry.dispatchers.size)
+        assertEquals(2, lifecycle.addCount)
+        dispatcher.close()
+        assertEquals(2, registry.removeCount)
+        assertEquals(2, lifecycle.removeCount)
+      }
+
+  @Test
+  fun `main-window fullscreen escape exits once and consumes the complete key sequence`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val mainComponent = JPanel()
+        var fullscreen = true
+        var exitCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isFullscreen = { fullscreen },
+                exitFullscreen = {
+                  exitCount++
+                  fullscreen = false
+                },
+            )
+        dispatcher.install()
+
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertEquals(1, exitCount)
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertEquals(1, exitCount)
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        assertEquals(1, exitCount)
+
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        assertEquals(1, exitCount)
+        dispatcher.close()
+      }
+
+  @Test
+  fun `lost release during fullscreen peer transition cannot latch the next escape`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val lifecycle = RecordingLifecycleRegistry()
+        val mainComponent = JPanel()
+        var fullscreen = true
+        var exitCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isFullscreen = { fullscreen },
+                exitFullscreen = {
+                  exitCount++
+                  fullscreen = false
+                },
+                lifecycleRegistry = lifecycle,
+            )
+        dispatcher.install()
+
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertEquals(1, exitCount)
+
+        // Disposing the fullscreen native peer can lose KEY_RELEASED on Windows. Window
+        // deactivation/closure resets the capture before the replacement peer accepts input.
+        lifecycle.transition()
+        fullscreen = true
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertEquals(2, exitCount)
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        dispatcher.close()
+      }
+
+  @Test
+  fun `windowed dialog and non-escape keys pass through`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val mainComponent = JPanel()
+        val dialogComponent = JPanel()
+        var fullscreen = false
+        var exitCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isFullscreen = { fullscreen },
+                exitFullscreen = { exitCount++ },
+            )
+        dispatcher.install()
+
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        fullscreen = true
+        assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_F11)))
+        assertEquals(0, exitCount)
+        dispatcher.close()
+      }
+
+  @Test
+  fun `dialog release clears a captured main-window sequence without consuming the dialog key`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val mainComponent = JPanel()
+        val dialogComponent = JPanel()
+        var fullscreen = true
+        var exitCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isFullscreen = { fullscreen },
+                exitFullscreen = {
+                  exitCount++
+                  fullscreen = false
+                },
+            )
+        dispatcher.install()
+
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        fullscreen = true
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertEquals(2, exitCount)
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        dispatcher.close()
+      }
+
+  @Test
+  fun `closing dispatcher before settings teardown rejects later fullscreen escape`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val mainComponent = JPanel()
+        var exitCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isFullscreen = { true },
+                exitFullscreen = { exitCount++ },
+            )
+        dispatcher.install()
+
+        dispatcher.close()
+
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertEquals(0, exitCount)
+      }
+
+  private fun dispatcher(
+      registry: RecordingRegistry,
+      belongsToMainWindow: (java.awt.Component?) -> Boolean = { true },
+      isFullscreen: () -> Boolean = { false },
+      exitFullscreen: () -> Unit = {},
+      lifecycleRegistry: EscapeSequenceLifecycleRegistry = EscapeSequenceLifecycleRegistry.NOOP,
+  ) =
+      FullscreenEscapeDispatcher(
+          registry,
+          belongsToMainWindow,
+          isFullscreen,
+          exitFullscreen,
+          lifecycleRegistry,
+      )
+
+  private fun key(
+      component: JPanel,
+      id: Int,
+      keyCode: Int,
+  ): KeyEvent =
+      KeyEvent(
+          component,
+          id,
+          1L,
+          0,
+          keyCode,
+          KeyEvent.CHAR_UNDEFINED,
+      )
+
+  private class RecordingRegistry : KeyEventDispatcherRegistry {
+    val dispatchers = linkedSetOf<KeyEventDispatcher>()
+    var addCount = 0
+    var removeCount = 0
+
+    override fun add(dispatcher: KeyEventDispatcher) {
+      addCount++
+      dispatchers += dispatcher
+    }
+
+    override fun remove(dispatcher: KeyEventDispatcher) {
+      removeCount++
+      dispatchers -= dispatcher
+    }
+
+    fun dispatch(event: KeyEvent): Boolean = dispatchers.any { it.dispatchKeyEvent(event) }
+  }
+
+  private class RecordingLifecycleRegistry : EscapeSequenceLifecycleRegistry {
+    private var reset: (() -> Unit)? = null
+    var addCount = 0
+    var removeCount = 0
+
+    override fun add(reset: () -> Unit) {
+      addCount++
+      this.reset = reset
+    }
+
+    override fun remove(reset: () -> Unit) {
+      removeCount++
+      if (this.reset === reset) this.reset = null
+    }
+
+    fun transition() = checkNotNull(reset).invoke()
+  }
+
+  private fun <T> onEdt(action: () -> T): T {
+    val task = FutureTask(action)
+    SwingUtilities.invokeAndWait(task)
+    return task.get()
+  }
+}

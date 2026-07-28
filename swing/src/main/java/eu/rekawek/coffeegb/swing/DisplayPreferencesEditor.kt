@@ -31,13 +31,6 @@ internal class DisplayPreferencesEditor private constructor(
       defaults: ApplicationSettings.Display = ApplicationSettings.Display(),
   ) : this(initial, defaults, requireEdt())
 
-  internal data class ScalingModeOption(
-      val mode: ApplicationSettings.DisplayScalingMode,
-      val label: String,
-  ) {
-    override fun toString(): String = label
-  }
-
   internal data class ScaleOption(
       val scale: Int,
   ) {
@@ -50,20 +43,19 @@ internal class DisplayPreferencesEditor private constructor(
     override fun toString(): String = "${rotation.degrees}°"
   }
 
-  internal val scalingMode =
-      JComboBox(SCALING_MODES.toTypedArray()).apply {
-        selectedItem = SCALING_MODES.first { it.mode == initial.scalingMode }
-        accessibleContext.accessibleName = "Display scaling mode"
-        accessibleContext.accessibleDescription =
-            "Choose integer fit, aspect fit, or a fixed explicit scale."
-      }
+  private val initialScalingMode = initial.scalingMode
+  private val initialExplicitScale = initial.explicitScale
+
   internal val explicitScale =
       JComboBox(SCALES.toTypedArray()).apply {
-        selectedItem = SCALES.first { it.scale == initial.explicitScale }
-        accessibleContext.accessibleName = "Explicit display scale"
+        selectedItem = scaleOption(initial.explicitScale)
+        accessibleContext.accessibleName = "Window scale"
         accessibleContext.accessibleDescription =
-            "Choose a fixed display scale from one times through four times."
+            "Resize the window to one, two, or four times. The picture still fits the window when resized."
       }
+  internal var windowScaleCommandRequested = false
+    private set
+
   internal val letterboxColor =
       JTextField(formatColor(initial.letterboxColor), 8).apply {
         accessibleContext.accessibleName = "Letterbox color"
@@ -119,14 +111,11 @@ internal class DisplayPreferencesEditor private constructor(
   init {
     getAccessibleContext().accessibleName = "Display preferences"
     getAccessibleContext().accessibleDescription =
-        "Configure scaling, letterboxing, fullscreen, rotation, and display filters."
+        "Configure window size, letterboxing, fullscreen, rotation, and display filters."
     border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
+    explicitScale.addActionListener { windowScaleCommandRequested = true }
     createRows()
 
-    scalingMode.addActionListener {
-      requireEdt()
-      updateExplicitScaleEnabled()
-    }
     letterboxColor.document.addDocumentListener(
         object : DocumentListener {
           override fun insertUpdate(event: DocumentEvent) = updateColorPreview()
@@ -135,7 +124,6 @@ internal class DisplayPreferencesEditor private constructor(
 
           override fun changedUpdate(event: DocumentEvent) = updateColorPreview()
         })
-    updateExplicitScaleEnabled()
   }
 
   internal fun validatedDisplay(): ApplicationSettings.Display {
@@ -147,9 +135,17 @@ internal class DisplayPreferencesEditor private constructor(
               throw PreferenceEditorValidationException(COLOR_ERROR, letterboxColor)
             }
     letterboxColorError.text = " "
+    val scaleCommand = windowScaleCommandRequested
     return ApplicationSettings.Display(
-        scalingMode = (scalingMode.selectedItem as ScalingModeOption).mode,
-        explicitScale = (explicitScale.selectedItem as ScaleOption).scale,
+        // The scale is a window-size command, not a rendering cap. The viewport always preserves
+        // aspect ratio and fits whatever size the user gives the resizable window. Preserve legacy
+        // persisted values until the user explicitly chooses one of the available commands.
+        scalingMode =
+            if (scaleCommand) ApplicationSettings.DisplayScalingMode.EXPLICIT
+            else initialScalingMode,
+        explicitScale =
+            if (scaleCommand) (explicitScale.selectedItem as ScaleOption).scale
+            else initialExplicitScale,
         letterboxColor = parsedColor,
         fullscreen = fullscreen.isSelected,
         grayscale = grayscale.isSelected,
@@ -162,8 +158,8 @@ internal class DisplayPreferencesEditor private constructor(
 
   internal fun restoreDefaults() {
     requireEdt()
-    scalingMode.selectedItem = SCALING_MODES.first { it.mode == defaults.scalingMode }
-    explicitScale.selectedItem = SCALES.first { it.scale == defaults.explicitScale }
+    explicitScale.selectedItem = scaleOption(defaults.explicitScale)
+    windowScaleCommandRequested = true
     letterboxColor.text = formatColor(defaults.letterboxColor)
     fullscreen.isSelected = defaults.fullscreen
     rotation.selectedItem = ROTATIONS.first { it.rotation == defaults.rotation }
@@ -172,7 +168,6 @@ internal class DisplayPreferencesEditor private constructor(
     colorCorrection.isSelected = defaults.colorCorrection
     showSgbBorder.isSelected = defaults.showSgbBorder
     letterboxColorError.text = " "
-    updateExplicitScaleEnabled()
     updateColorPreview()
   }
 
@@ -184,15 +179,10 @@ internal class DisplayPreferencesEditor private constructor(
           insets = Insets(4, 4, 4, 4)
         }
 
-    val scalingLabel = JLabel("Scaling mode:")
-    scalingLabel.displayedMnemonic = KeyEvent.VK_S
-    scalingLabel.labelFor = scalingMode
-    addRow(constraints, 0, scalingLabel, scalingMode)
-
-    val explicitScaleLabel = JLabel("Explicit scale:")
-    explicitScaleLabel.displayedMnemonic = KeyEvent.VK_X
+    val explicitScaleLabel = JLabel("Window scale:")
+    explicitScaleLabel.displayedMnemonic = KeyEvent.VK_W
     explicitScaleLabel.labelFor = explicitScale
-    addRow(constraints, 1, explicitScaleLabel, explicitScale)
+    addRow(constraints, 0, explicitScaleLabel, explicitScale)
 
     val letterboxLabel = JLabel("Letterbox color:")
     letterboxLabel.displayedMnemonic = KeyEvent.VK_L
@@ -200,34 +190,34 @@ internal class DisplayPreferencesEditor private constructor(
     val colorRow = JPanel(BorderLayout(8, 0))
     colorRow.add(letterboxColor, BorderLayout.CENTER)
     colorRow.add(letterboxPreview, BorderLayout.LINE_END)
-    addRow(constraints, 2, letterboxLabel, colorRow)
+    addRow(constraints, 1, letterboxLabel, colorRow)
 
     constraints.gridx = 1
-    constraints.gridy = 3
+    constraints.gridy = 2
     constraints.weightx = 1.0
     add(letterboxColorError, constraints)
 
     constraints.gridx = 1
-    constraints.gridy = 4
+    constraints.gridy = 3
     add(fullscreen, constraints)
 
     val rotationLabel = JLabel("Rotation:")
     rotationLabel.displayedMnemonic = KeyEvent.VK_R
     rotationLabel.labelFor = rotation
-    addRow(constraints, 5, rotationLabel, rotation)
+    addRow(constraints, 4, rotationLabel, rotation)
 
     constraints.gridx = 1
-    constraints.gridy = 6
+    constraints.gridy = 5
     add(grayscale, constraints)
-    constraints.gridy = 7
+    constraints.gridy = 6
     add(blending, constraints)
-    constraints.gridy = 8
+    constraints.gridy = 7
     add(colorCorrection, constraints)
-    constraints.gridy = 9
+    constraints.gridy = 8
     add(showSgbBorder, constraints)
 
     constraints.gridx = 0
-    constraints.gridy = 10
+    constraints.gridy = 9
     constraints.gridwidth = 2
     constraints.weightx = 1.0
     constraints.weighty = 1.0
@@ -255,12 +245,6 @@ internal class DisplayPreferencesEditor private constructor(
     add(field, constraints)
   }
 
-  private fun updateExplicitScaleEnabled() {
-    explicitScale.isEnabled =
-        (scalingMode.selectedItem as? ScalingModeOption)?.mode ==
-            ApplicationSettings.DisplayScalingMode.EXPLICIT
-  }
-
   private fun updateColorPreview() {
     requireEdt()
     val parsed = parseColor(letterboxColor.text)
@@ -275,26 +259,11 @@ internal class DisplayPreferencesEditor private constructor(
   private companion object {
     const val COLOR_ERROR = "Enter a color in #RRGGBB form."
     val ERROR_COLOR = Color(0xB0, 0x00, 0x20)
-    val SCALING_MODES =
-        listOf(
-            ScalingModeOption(
-                ApplicationSettings.DisplayScalingMode.INTEGER_FIT,
-                "Integer fit",
-            ),
-            ScalingModeOption(
-                ApplicationSettings.DisplayScalingMode.ASPECT_FIT,
-                "Fit preserving aspect ratio",
-            ),
-            ScalingModeOption(
-                ApplicationSettings.DisplayScalingMode.EXPLICIT,
-                "Explicit scale",
-            ),
-        )
-    val SCALES =
-        (ApplicationSettings.MIN_EXPLICIT_DISPLAY_SCALE..
-                ApplicationSettings.MAX_EXPLICIT_DISPLAY_SCALE)
-            .map(::ScaleOption)
+    val SCALES = listOf(1, 2, 4).map(::ScaleOption)
     val ROTATIONS = ApplicationSettings.Rotation.entries.map(::RotationOption)
+
+    fun scaleOption(scale: Int): ScaleOption =
+        SCALES.minBy { kotlin.math.abs(it.scale - scale) }
 
     fun formatColor(rgb: Int): String = "#%06X".format(Locale.ROOT, rgb)
 

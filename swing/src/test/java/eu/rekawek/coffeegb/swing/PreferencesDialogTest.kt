@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.GamepadSelection
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.RomChangeConfirmationPolicy
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.joypad.Button
 import java.awt.Component
 import java.awt.Container
@@ -69,6 +70,12 @@ class PreferencesDialogTest {
             audio = ApplicationSettings.Audio(enabled = false),
             input = currentInput,
             saves = ApplicationSettings.Saves(batterySavesEnabled = false),
+            advanced =
+                ApplicationSettings.Advanced(
+                    bootstrapMode = BootstrapMode.FAST_FORWARD,
+                    datelSlotRom = Paths.get("datel-hidden.gb"),
+                    fullChangerCharacter = "7",
+                ),
         )
     val edit =
         PreferencesEdit(
@@ -93,6 +100,10 @@ class PreferencesDialogTest {
                     volume = 25,
                     latency = ApplicationSettings.AudioLatency.SAFE,
                 ),
+            advanced =
+                current.advanced.copy(
+                    bootstrapMode = BootstrapMode.NORMAL,
+                ),
         )
 
     val updated = edit.applyTo(current)
@@ -107,7 +118,45 @@ class PreferencesDialogTest {
     assertEquals(edit.display, updated.display)
     assertEquals(edit.audio, updated.audio)
     assertEquals(current.saves, updated.saves)
-    assertEquals(current.advanced, updated.advanced)
+    assertEquals(edit.advanced, updated.advanced)
+  }
+
+  @Test
+  fun `system edit preserves hidden advanced settings changed after dialog opened`() {
+    val dialogSnapshot =
+        ApplicationSettings.Advanced(
+            bootstrapMode = BootstrapMode.SKIP,
+            datelSlotRom = Paths.get("stale-datel-slot.gb"),
+            fullChangerCharacter = "STALE",
+        )
+    val latest =
+        ApplicationSettings(
+            advanced =
+                dialogSnapshot.copy(
+                    datelSlotRom = Paths.get("latest-datel-slot.gb"),
+                    fullChangerCharacter = "LATEST",
+                ))
+    val edit =
+        PreferencesEdit(
+            romDirectory = null,
+            recentFileCapacity = ApplicationSettings.DEFAULT_RECENT_FILE_CAPACITY,
+            confirmationPolicy = RomChangeConfirmationPolicy.WHEN_RUNNING,
+            display = latest.display,
+            keyboard = latest.input.keyboard,
+            gamepads = latest.input.gamepads,
+            gamepadTunings = latest.input.gamepadTunings,
+            audio = latest.audio,
+            advanced = dialogSnapshot.copy(bootstrapMode = BootstrapMode.NORMAL),
+        )
+
+    val updated = edit.applyTo(latest)
+
+    assertEquals(BootstrapMode.NORMAL, updated.advanced.bootstrapMode)
+    assertEquals(latest.advanced.datelSlotRom, updated.advanced.datelSlotRom)
+    assertEquals(
+        latest.advanced.fullChangerCharacter,
+        updated.advanced.fullChangerCharacter,
+    )
   }
 
   @Test
@@ -135,6 +184,49 @@ class PreferencesDialogTest {
         assertEquals(ApplicationSettings.Display(), received?.display)
         assertEquals(ApplicationSettings.Audio(), received?.audio)
         assertEquals(ApplicationSettings.Saves(), received?.saves)
+        assertEquals(ApplicationSettings.Advanced(), received?.advanced)
+        assertFalse(checkNotNull(received).forceWindowSize)
+      }
+
+  @Test
+  fun `choosing a display scale propagates one window-size command through the edit`() =
+      onEdt {
+        val panel = PreferencesPanel(ApplicationSettings())
+        panel.displayEditor.explicitScale.selectedIndex = 2
+
+        val edit = panel.validatedEdit()
+
+        assertEquals(4, edit.display.explicitScale)
+        assertTrue(edit.forceWindowSize)
+      }
+
+  @Test
+  fun `no-op apply preserves legacy display settings without requesting window sizing`() =
+      onEdt {
+        for (mode in
+            listOf(
+                ApplicationSettings.DisplayScalingMode.INTEGER_FIT,
+                ApplicationSettings.DisplayScalingMode.ASPECT_FIT,
+            )) {
+          val initialDisplay =
+              ApplicationSettings.Display(
+                  scalingMode = mode,
+                  explicitScale = 3,
+              )
+          var received: PreferencesEdit? = null
+          val panel = PreferencesPanel(ApplicationSettings(display = initialDisplay))
+          val actions =
+              PreferencesDialogActions(
+                  panel,
+                  applyEdit = { received = it },
+                  close = {},
+              )
+
+          actions.apply()
+
+          assertEquals(initialDisplay, checkNotNull(received).display)
+          assertFalse(checkNotNull(received).forceWindowSize)
+        }
       }
 
   @Test
@@ -176,6 +268,10 @@ class PreferencesDialogTest {
                                     ApplicationSettings.GamepadTuning(
                                         invertMovementY = true)),
                     ),
+                advanced =
+                    defaults.advanced.copy(
+                        bootstrapMode = BootstrapMode.NORMAL,
+                    ),
             )
         var applyCount = 0
         var closeCount = 0
@@ -203,6 +299,7 @@ class PreferencesDialogTest {
         assertEquals(defaults.display, restored.display)
         assertEquals(defaults.audio, restored.audio)
         assertEquals(defaults.saves, restored.saves)
+        assertEquals(defaults.advanced, restored.advanced)
         assertEquals(0, applyCount)
         assertEquals(1, closeCount)
       }
@@ -309,7 +406,7 @@ class PreferencesDialogTest {
         assertEquals("Recent files to keep", panel.recentCapacity.accessibleContext.accessibleName)
         assertFalse(panel.tabs.accessibleContext.accessibleName.isNullOrBlank())
         assertEquals(
-            listOf("General", "Display", "Input", "Gamepads", "Audio", "Saves"),
+            listOf("General", "System", "Display", "Input", "Gamepads", "Audio", "Saves"),
             (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
         )
       }
@@ -671,7 +768,7 @@ class PreferencesDialogTest {
   fun `leaving the Input tab cancels keyboard capture`() =
       onEdt {
         val panel = PreferencesPanel(ApplicationSettings())
-        panel.tabs.selectedIndex = 2
+        panel.tabs.selectedIndex = 3
         val capture =
             descendants(panel.keyboardEditor)
                 .filterIsInstance<AbstractButton>()

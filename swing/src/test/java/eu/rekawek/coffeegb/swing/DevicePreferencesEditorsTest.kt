@@ -265,6 +265,12 @@ class DevicePreferencesEditorsTest {
       )
       assertEquals("Audio output device", editor.output.accessibleContext.accessibleName)
       assertEquals("Master volume", editor.volume.accessibleContext.accessibleName)
+      assertEquals(0, editor.volume.minimum)
+      assertEquals(100, editor.volume.maximum)
+      assertEquals(25, editor.volume.majorTickSpacing)
+      assertEquals(5, editor.volume.minorTickSpacing)
+      assertTrue(editor.volume.paintTicks)
+      assertTrue(editor.volume.paintLabels)
       assertEquals("Audio latency preset", editor.latency.accessibleContext.accessibleName)
     }
   }
@@ -365,7 +371,7 @@ class DevicePreferencesEditorsTest {
       assertEquals("Gamepads", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
       assertTrue(panel.validationSummary.text.contains("multiple players"))
       assertEquals(
-          listOf("General", "Display", "Input", "Gamepads", "Audio", "Saves"),
+          listOf("General", "System", "Display", "Input", "Gamepads", "Audio", "Saves"),
           (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
       )
       assertEquals("Gamepad preferences", panel.gamepadEditor.accessibleContext.accessibleName)

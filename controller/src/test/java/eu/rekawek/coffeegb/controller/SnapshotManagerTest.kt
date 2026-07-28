@@ -377,6 +377,52 @@ class SnapshotManagerTest {
   }
 
   @Test
+  fun readOnlyCompatibilityLoadNeverRewritesLegacySidecarEvenWhenMigrationIsEnabled() {
+    withDefaultMachine { rom, configuration, gameboy ->
+      val file = snapshotFile(rom, 0)
+      val original = LEGACY_FIXTURES.last().readBytes()
+      file.writeBytes(original)
+      val manager =
+          SnapshotManager(
+              configuration,
+              LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS,
+          )
+
+      val snapshot = assertNotNull(manager.readSnapshotReadOnly(0))
+      manager.applySnapshotReadOnly(snapshot, gameboy)
+
+      assertContentEquals(original, file.readBytes())
+      assertTrue(LegacySnapshotImporter.hasJavaSerializationHeader(file.readBytes()))
+    }
+  }
+
+  @Test
+  fun readOnlyCompatibilityReadNeverRecoversOrCleansInterruptedTransactionArtifacts() {
+    withDefaultMachine { rom, configuration, _ ->
+      val target = snapshotFile(rom, 0).toPath().toAbsolutePath().normalize()
+      val original = LEGACY_FIXTURES.last().readBytes()
+      val backup = recoveryBackup(target)
+      val temporary = recoveryTemporary(target)
+      Files.write(target, original)
+      Files.write(backup, original)
+      Files.write(temporary, byteArrayOf(7, 8, 9))
+      val manager = SnapshotManager(configuration)
+
+      assertNotNull(manager.readSnapshotReadOnly(0))
+
+      assertContentEquals(original, Files.readAllBytes(target))
+      assertContentEquals(original, Files.readAllBytes(backup))
+      assertContentEquals(byteArrayOf(7, 8, 9), Files.readAllBytes(temporary))
+
+      Files.delete(target)
+      assertNull(manager.readSnapshotReadOnly(0))
+      assertFalse(Files.exists(target))
+      assertContentEquals(original, Files.readAllBytes(backup))
+      assertContentEquals(byteArrayOf(7, 8, 9), Files.readAllBytes(temporary))
+    }
+  }
+
+  @Test
   fun failedBestEffortLegacyRewriteLeavesACompleteLegacyOrPortableFile() {
     withDefaultMachine { rom, configuration, gameboy ->
       val file = snapshotFile(rom, 0)
@@ -684,6 +730,12 @@ class SnapshotManagerTest {
             .digest(target.fileName.toString().toByteArray(Charsets.UTF_8))
     val id = digest.copyOf(16).joinToString("") { "%02x".format(it.toInt() and 0xff) }
     return target.parent.resolve(".coffeegb-$id.backup")
+  }
+
+  private fun recoveryTemporary(target: Path): Path {
+    val backupName = recoveryBackup(target).fileName.toString()
+    val id = backupName.removePrefix(".coffeegb-").removeSuffix(".backup")
+    return target.parent.resolve(".coffeegb-$id.tmp-interrupted.part")
   }
 
   private fun recordComponent(record: Any, name: String): Any? =

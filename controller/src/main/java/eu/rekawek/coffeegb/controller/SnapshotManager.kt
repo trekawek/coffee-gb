@@ -6,14 +6,19 @@ import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateDecodeException
 import eu.rekawek.coffeegb.controller.state.StateDecodeReason
+import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import org.slf4j.LoggerFactory
 
 /** The two unambiguous local snapshot prefixes admitted by [SnapshotManager]. */
@@ -71,6 +76,24 @@ internal data class SnapshotFileBytes(
     val format: SnapshotFileFormat,
     val bytes: ByteArray,
 )
+
+/** Fully read and decoded historical sidecar whose live-machine apply remains frame-boundary owned. */
+internal sealed interface CompatibilitySnapshot {
+  val format: SnapshotFileFormat
+
+  data class Portable(
+      val state: StateFile,
+      val sourceIdentity: MachineIdentity?,
+  ) : CompatibilitySnapshot {
+    override val format = SnapshotFileFormat.PORTABLE
+  }
+
+  data class Legacy(
+      val state: Memento<Gameboy>,
+  ) : CompatibilitySnapshot {
+    override val format = SnapshotFileFormat.LEGACY_JAVA
+  }
+}
 
 internal class SnapshotReadException(
     val format: SnapshotFileFormat?,
@@ -209,7 +232,9 @@ internal object SnapshotFileReader {
 }
 
 /**
- * Local slot persistence used only from BasicController's emulation-thread frame boundary.
+ * Local slot persistence. Ordinary snapshot commands remain frame-boundary owned; the managed-slot
+ * compatibility path reads and decodes a sidecar on the state worker, then applies its detached
+ * result at a later emulation-thread frame boundary.
  *
  * New saves are portable machine-root StateFiles. Legacy Java input is admitted only by the exact
  * historical header and strict local allowlisted reader.
@@ -258,7 +283,127 @@ class SnapshotManager private constructor(
     persistence.write(snapshotFile.toPath(), bytes)
   }
 
-  fun loadSnapshot(slot: Int, gameboy: Gameboy): Boolean {
+  fun loadSnapshot(slot: Int, gameboy: Gameboy): Boolean =
+      loadSnapshot(slot, gameboy, legacyMigrationPolicy)
+
+  /**
+   * Reads and decodes a compatibility sidecar without recovery, cleanup, migration, or live-machine
+   * access. This method is called only by the state worker after every managed source was empty.
+   */
+  internal fun readSnapshotReadOnly(slot: Int): CompatibilitySnapshot? {
+    val target = StateIdentity.from(configuration)
+    val snapshot =
+        try {
+          getSnapshotPaths(slot).firstNotNullOfOrNull(::readSnapshotFileReadOnly)
+        } catch (failure: SnapshotReadException) {
+          throw loadFailure(
+              failure.format,
+              null,
+              target,
+              null,
+              failure.message ?: "Snapshot file could not be read",
+              failure,
+          )
+        } catch (failure: IOException) {
+          throw loadFailure(
+              null,
+              null,
+              target,
+              null,
+              "Snapshot read failed",
+              failure,
+          )
+        }
+        ?: return null
+
+    return when (snapshot.format) {
+      SnapshotFileFormat.PORTABLE -> {
+        val source = inspectMachineIdentity(snapshot.bytes)
+        try {
+          CompatibilitySnapshot.Portable(StateCodec.decode(snapshot.bytes), source)
+        } catch (failure: StateDecodeException) {
+          throw loadFailure(
+              SnapshotFileFormat.PORTABLE,
+              failure.reason,
+              target,
+              source,
+              failure.message ?: "Portable snapshot is invalid or incompatible",
+              failure,
+          )
+        }
+      }
+      SnapshotFileFormat.LEGACY_JAVA ->
+          try {
+            CompatibilitySnapshot.Legacy(
+                LegacySnapshotImporter.importGameboyState(snapshot.bytes))
+          } catch (failure: Exception) {
+            throw loadFailure(
+                SnapshotFileFormat.LEGACY_JAVA,
+                null,
+                target,
+                null,
+                failure.message ?: "Legacy snapshot is invalid or unsupported",
+                failure,
+            )
+          }
+    }
+  }
+
+  /** Applies a worker-decoded compatibility sidecar at the controller's frame boundary. */
+  internal fun applySnapshotReadOnly(snapshot: CompatibilitySnapshot, gameboy: Gameboy) {
+    val target = StateIdentity.from(configuration)
+    when (snapshot) {
+      is CompatibilitySnapshot.Portable ->
+          try {
+            StateCodec.applyDecoded(snapshot.state, configuration, gameboy)
+          } catch (failure: StateDecodeException) {
+            throw loadFailure(
+                snapshot.format,
+                failure.reason,
+                target,
+                snapshot.sourceIdentity,
+                failure.message ?: "Portable snapshot is invalid or incompatible",
+                failure,
+            )
+          }
+      is CompatibilitySnapshot.Legacy ->
+          try {
+            DetachedStateAdapter.applyLegacyState(gameboy, snapshot.state, legacyApplyProbe)
+          } catch (failure: Exception) {
+            throw loadFailure(
+                snapshot.format,
+                null,
+                target,
+                null,
+                failure.message ?: "Legacy snapshot is incompatible with the target",
+                failure,
+            )
+          }
+    }
+  }
+
+  private fun readSnapshotFileReadOnly(path: Path): SnapshotFileBytes? {
+    return try {
+      Files.newInputStream(
+              path,
+              StandardOpenOption.READ,
+              LinkOption.NOFOLLOW_LINKS,
+          )
+          .use { SnapshotFileReader.read(it, readLimits) }
+    } catch (_: NoSuchFileException) {
+      null
+    } catch (failure: SnapshotReadException) {
+      throw failure
+    } catch (failure: IOException) {
+      throw SnapshotReadException(null, "Snapshot file could not be read", failure)
+    }
+  }
+
+  private fun loadSnapshot(
+      slot: Int,
+      gameboy: Gameboy,
+      migrationPolicy: LegacySnapshotMigrationPolicy,
+  ): Boolean {
     val target = StateIdentity.from(configuration)
     var snapshotFile: File? = null
     val snapshot =
@@ -298,7 +443,13 @@ class SnapshotManager private constructor(
     when (snapshot.format) {
       SnapshotFileFormat.PORTABLE -> loadPortable(snapshot.bytes, target, gameboy)
       SnapshotFileFormat.LEGACY_JAVA ->
-          loadLegacy(requireNotNull(snapshotFile), snapshot.bytes, target, gameboy)
+          loadLegacy(
+              requireNotNull(snapshotFile),
+              snapshot.bytes,
+              target,
+              gameboy,
+              migrationPolicy,
+          )
     }
     return true
   }
@@ -328,6 +479,7 @@ class SnapshotManager private constructor(
       bytes: ByteArray,
       target: MachineIdentity,
       gameboy: Gameboy,
+      migrationPolicy: LegacySnapshotMigrationPolicy,
   ) {
     val legacyState =
         try {
@@ -355,7 +507,7 @@ class SnapshotManager private constructor(
       )
     }
 
-    if (legacyMigrationPolicy == LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS) {
+    if (migrationPolicy == LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS) {
       val portable =
           StateCodec.encode(
               StateCodec.capture(configuration, gameboy),

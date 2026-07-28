@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateDeleteRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateEntryKey
 import eu.rekawek.coffeegb.controller.state.StateImage
+import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateLoadRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
@@ -33,9 +34,11 @@ import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -586,10 +589,10 @@ class BasicControllerStateUxTest {
       assertTrue(firstValidState.isNotEmpty())
 
       eventBus.post(
-          StateLoadRequestEvent(
+          StateLoadRefRequestEvent(
               11,
               stateSession.sessionId,
-              StateEntryKey(StateRef.Slot(2)),
+              StateRef.Slot(2),
           ))
       stateExecutor.runNext()
       assertEquals(
@@ -598,10 +601,21 @@ class BasicControllerStateUxTest {
       )
 
       eventBus.post(StateCatalogRequestEvent(20, stateSession.sessionId))
+      eventBus.post(
+          StateLoadRefRequestEvent(
+              22,
+              stateSession.sessionId,
+              StateRef.Slot(2),
+          ))
       eventBus.post(StateCatalogRequestEvent(21, stateSession.sessionId))
-      stateExecutor.awaitQueued(2)
+      stateExecutor.awaitQueued(3)
       stateExecutor.runNext()
       stateExecutor.runNext()
+      stateExecutor.runNext()
+      val independentLoad = assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(22, independentLoad.requestId)
+      assertEquals(StateOperation.LOAD, independentLoad.operation)
+      assertEquals(StateRef.Slot(2), independentLoad.ref)
       assertEquals(21, assertNotNull(catalogs.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).requestId)
       assertNull(catalogs.poll(250, TimeUnit.MILLISECONDS), "stale catalog result must be ignored")
 
@@ -641,6 +655,181 @@ class BasicControllerStateUxTest {
           "a corrupt state must be rejected without replacing the active session",
       )
     } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun managedQuickLoadUsesLegacySidecarOnlyWhenEveryManagedSourceIsEmpty() {
+    val directory = Files.createTempDirectory("controller-quick-load-legacy")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    val legacySaved = LinkedBlockingQueue<Controller.SnapshotSavedEvent>()
+    val legacyRestored = LinkedBlockingQueue<Controller.SnapshotRestoredEvent>()
+    val completed = LinkedBlockingQueue<StateOperationCompletedEvent>()
+    val failed = LinkedBlockingQueue<StateOperationFailedEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<StateUxSessionEvent>(sessions::add)
+    eventBus.register<Controller.SnapshotSavedEvent>(legacySaved::add)
+    eventBus.register<Controller.SnapshotRestoredEvent>(legacyRestored::add)
+    eventBus.register<StateOperationCompletedEvent>(completed::add)
+    eventBus.register<StateOperationFailedEvent>(failed::add)
+    val stateExecutor = ManualExecutorService()
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory.DEFAULT,
+            StateOperationWorkerFactory { bus ->
+              StateOperationWorker(bus, executor = stateExecutor)
+            },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val stateSession = assertNotNull(sessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val slot = StateRef.Slot(6)
+      val managedState =
+          assertNotNull(stateSession.gameDirectory)
+              .resolve("states")
+              .resolve("slots")
+              .resolve(slot.index.toString())
+              .resolve("state.cgbstate")
+
+      eventBus.post(Controller.SaveSnapshotEvent(slot.index))
+      assertEquals(
+          slot.index,
+          assertNotNull(legacySaved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot,
+      )
+      val legacySidecar = directory.resolve("game.sn${slot.index}")
+      val legacyBytes = Files.readAllBytes(legacySidecar)
+      assertFalse(Files.exists(managedState))
+
+      eventBus.post(StateLoadRefRequestEvent(100, stateSession.sessionId, slot))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val legacyLoad = assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(100, legacyLoad.requestId)
+      assertEquals(StateOperation.LOAD, legacyLoad.operation)
+      assertEquals(slot, legacyLoad.ref)
+      assertTrue(legacyLoad.message.contains("Legacy state loaded"))
+      assertNull(
+          legacyRestored.poll(250, TimeUnit.MILLISECONDS),
+          "the compatibility path must report through managed-state completion events",
+      )
+      assertContentEquals(legacyBytes, Files.readAllBytes(legacySidecar))
+
+      Files.createDirectories(managedState.parent)
+      Files.write(managedState, byteArrayOf(1, 2, 3, 4))
+      eventBus.post(StateLoadRefRequestEvent(101, stateSession.sessionId, slot))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val corruptManaged = assertNotNull(failed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(101, corruptManaged.requestId)
+      assertEquals(StateOperation.LOAD, corruptManaged.operation)
+      assertNull(
+          completed.poll(250, TimeUnit.MILLISECONDS),
+          "a present corrupt managed slot must not fall through to the legacy sidecar",
+      )
+      assertContentEquals(legacyBytes, Files.readAllBytes(legacySidecar))
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun compatibilitySidecarIsImportedOnStateWorkerAndAppliedAtControllerFrameBoundary() {
+    val directory = Files.createTempDirectory("controller-quick-load-threading")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val sidecar = directory.resolve("game.sn4")
+    val sidecarBytes =
+        Paths.get(
+                "src/test/resources/legacy",
+                "coffee-gb-1.7.14-cpu-instrs.sn",
+            )
+            .toFile()
+            .readBytes()
+    Files.write(sidecar, sidecarBytes)
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    val completed = LinkedBlockingQueue<StateOperationCompletedEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<StateUxSessionEvent>(sessions::add)
+    eventBus.register<StateOperationCompletedEvent>(completed::add)
+    val importThread = AtomicReference<Thread?>()
+    val applyThread = AtomicReference<Thread?>()
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory { configuration ->
+              SnapshotManager.testing(
+                  configuration,
+                  LegacySnapshotMigrationPolicy.PRESERVE,
+                  legacyApplyProbe = { applyThread.compareAndSet(null, Thread.currentThread()) },
+              )
+            },
+            RewindManager(enabled = false),
+            StateWorkspaceFactory.DEFAULT,
+            StateOperationWorkerFactory.DEFAULT,
+        )
+
+    LegacySnapshotImporter.importObserver = {
+      importThread.compareAndSet(null, Thread.currentThread())
+    }
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val stateSession = assertNotNull(sessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      eventBus.post(StateLoadRefRequestEvent(200, stateSession.sessionId, StateRef.Slot(4)))
+
+      val loaded = assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(200, loaded.requestId)
+      assertEquals("coffee-gb-state-worker", assertNotNull(importThread.get()).name)
+      assertEquals("coffee-gb-controller", assertNotNull(applyThread.get()).name)
+      assertTrue(importThread.get() !== applyThread.get())
+      assertContentEquals(sidecarBytes, Files.readAllBytes(sidecar))
+    } finally {
+      LegacySnapshotImporter.importObserver = null
       controller.close()
       eventBus.close()
       properties.close()

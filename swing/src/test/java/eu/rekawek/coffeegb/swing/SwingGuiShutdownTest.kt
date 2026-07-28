@@ -166,9 +166,9 @@ class SwingGuiShutdownTest {
   }
 
   @Test
-  fun `windowed explicit mode tracks full rotated or SGB content while fit and fullscreen do not`() {
+  fun `every display mode retains the native minimum while the viewport fits the window`() {
     assertEquals(
-        Dimension(960, 1_024),
+        Dimension(160, 144),
         minimumDisplayContentSize(
             DisplayScaleMode.EXPLICIT_4X,
             Dimension(960, 1_024),
@@ -176,10 +176,18 @@ class SwingGuiShutdownTest {
         ),
     )
     assertEquals(
-        Dimension(160, 160),
+        Dimension(160, 144),
         minimumDisplayContentSize(
             DisplayScaleMode.EXPLICIT_1X,
             Dimension(144, 160),
+            windowed = true,
+        ),
+    )
+    assertEquals(
+        Dimension(160, 144),
+        minimumDisplayContentSize(
+            DisplayScaleMode.INTEGER_FIT,
+            Dimension(800, 720),
             windowed = true,
         ),
     )
@@ -202,9 +210,11 @@ class SwingGuiShutdownTest {
   }
 
   @Test
-  fun `fullscreen SGB growth packs on exit only when restored content is too small`() {
+  fun `fullscreen exit preserves manual size unless a size change or command requests packing`() {
     val sgbFourTimes = Dimension(1_024, 896)
-    assertTrue(
+    // A manually resized two-times window must survive a fullscreen round trip even though the
+    // last scale command was four-times.
+    assertFalse(
         shouldPackExplicitWindow(
             DisplayScaleMode.EXPLICIT_4X,
             sgbFourTimes,
@@ -225,12 +235,30 @@ class SwingGuiShutdownTest {
             currentContentSize = Dimension(1_200, 1_000),
             windowed = true,
         ))
+    assertTrue(
+        shouldPackExplicitWindow(
+            DisplayScaleMode.EXPLICIT_4X,
+            sgbFourTimes,
+            currentContentSize = Dimension(320, 288),
+            windowed = true,
+            preferredSizeChangedWhileFullscreen = true,
+        ))
+    assertTrue(
+        shouldPackExplicitWindow(
+            DisplayScaleMode.EXPLICIT_4X,
+            sgbFourTimes,
+            currentContentSize = Dimension(1_200, 1_000),
+            windowed = true,
+            forceRequested = true,
+        ))
     assertFalse(
         shouldPackExplicitWindow(
             DisplayScaleMode.EXPLICIT_4X,
             sgbFourTimes,
             currentContentSize = Dimension(320, 288),
             windowed = false,
+            forceRequested = true,
+            preferredSizeChangedWhileFullscreen = true,
         ))
     assertFalse(
         shouldPackExplicitWindow(
@@ -238,6 +266,8 @@ class SwingGuiShutdownTest {
             sgbFourTimes,
             currentContentSize = Dimension(320, 288),
             windowed = true,
+            forceRequested = true,
+            preferredSizeChangedWhileFullscreen = true,
         ))
   }
 

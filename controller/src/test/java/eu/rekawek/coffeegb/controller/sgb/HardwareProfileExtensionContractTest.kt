@@ -58,13 +58,16 @@ class HardwareProfileExtensionContractTest {
     assertEquals(expected, marker)
 
     val cli = Files.readString(root.resolve("swing/src/main/java/eu/rekawek/coffeegb/swing/Main.kt"))
-    val menu = Files.readString(root.resolve("swing/src/main/java/eu/rekawek/coffeegb/swing/SwingMenu.kt"))
+    val systemPreferences =
+        Files.readString(
+            root.resolve(
+                "swing/src/main/java/eu/rekawek/coffeegb/swing/SystemPreferencesEditor.kt"))
     val settingsCodec =
         Files.readString(
             root.resolve(
                 "controller/src/main/java/eu/rekawek/coffeegb/controller/properties/ApplicationSettingsCodec.kt"))
     assertTrue(cli.contains("HardwareProfileRegistry.supportedIds()"))
-    assertTrue(menu.contains("HardwareProfileRegistry.supportedProfiles()"))
+    assertTrue(systemPreferences.contains("HardwareProfileRegistry.supportedProfiles()"))
     assertTrue(settingsCodec.contains("HardwareProfileRegistry.resolveSetting("))
   }
 

@@ -1,13 +1,13 @@
 # Managed states, autosave, screenshots, and rewind
 
-Coffee GB's desktop state browser complements the original quick-slot shortcuts with named states,
-previews, autosave/resume, export, and recovery reporting. All disk access is performed away from
-the Swing event-dispatch and emulation threads. Capturing and applying a machine state still happens
-at a frame boundary on the emulation thread.
+Coffee GB's desktop state browser extends the same ten slots used by the quick-save shortcuts with
+named states, previews, autosave/resume, export, and recovery reporting. All disk access is performed
+away from the Swing event-dispatch and emulation threads. Capturing and applying a machine state
+still happens at a frame boundary on the emulation thread.
 
 ## Using the state browser
 
-Open **Emulation > Manage States…** while a local game is running. The browser always shows ten
+Open **Game > Manage States…** while a local game is running. The browser always shows ten
 stable numbered slots, including empty ones, followed by named states and the autosave when present.
 Each row reports its source, status, and reason when it cannot be loaded. A bounded thumbnail is
 shown when one was committed with the state.
@@ -33,9 +33,13 @@ closes the worker, and only then writes the exact terminal autosave directly. A 
 delete therefore cannot run after the terminal autosave. The whole sequence shares the desktop
 close deadline.
 
-The original <kbd>F5</kbd>/<kbd>F7</kbd> quick save/load shortcuts and their `.sn0`-`.sn9` files
-remain supported for compatibility. They are separate from the managed browser's stable slots.
-Managed states use the portable `StateFile` format described below.
+The Game menu's selected slot, <kbd>F5</kbd>/<kbd>F7</kbd> quick save/load commands, and the ten rows in
+Manage States are one set of managed slots. Quick load resolves the exact active or fallback source
+shown by the browser. If every managed source for the selected slot is empty, quick load checks the
+historical `.sn0`-`.sn9` sidecar as a read-only compatibility fallback. A present corrupt or
+incompatible managed state remains authoritative and is reported instead of silently loading an
+older sidecar. Legacy sidecars are never deleted, rewritten, or overwritten by this path; new
+desktop quick saves use the managed portable `StateFile` layout described below.
 
 ## Storage layout and directory changes
 
@@ -102,7 +106,7 @@ sibling path. New states, autosaves, screenshots, battery writes, and recovery w
 the active destination. Deleting or exporting a fallback state acts only on the source identified
 by that browser row.
 
-Use **Emulation > Open Save Folder** to open the active game root. If the desktop cannot open it,
+Use **Game > Open Save Folder** to open the active game root. If the desktop cannot open it,
 Coffee GB displays the full selectable path instead.
 
 ## Autosave and resume
@@ -132,9 +136,9 @@ next local ROM.
 
 ## Screenshots and privacy
 
-Press <kbd>F12</kbd> or choose **Emulation > Take Screenshot**. Screenshots use the complete
-currently displayed frame, including an SGB border, and are written to the active game's
-`screenshots/` directory as:
+Press <kbd>F12</kbd> or choose **Screen > Take Screenshot**. Screenshots use the complete currently
+displayed frame, including an SGB border, and are written to the active game's `screenshots/`
+directory as:
 
 ```text
 coffee-gb-YYYYMMDD-HHmmss-SSS.png
@@ -142,7 +146,9 @@ coffee-gb-YYYYMMDD-HHmmss-SSS-1.png
 ```
 
 The suffix increases on a same-millisecond or existing-name collision; existing files are never
-overwritten. PNG dimensions and metadata are bounded before decoding. Embedded metadata is limited
+overwritten. After saving, Coffee GB shows the selectable absolute path and an **Open** button that
+uses the operating system's default opener without blocking the Swing event thread. PNG dimensions
+and metadata are bounded before decoding. Embedded metadata is limited
 to UTC capture time, hardware-profile ID, and `Coffee GB` as the software name. It deliberately
 contains no ROM title, filename, path, or hash.
 

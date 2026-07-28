@@ -108,22 +108,24 @@ gamepad tuning profiles are retained.
 ## Preferences
 
 Open **File → Preferences…** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd>) to change the
-default ROM directory, recent-file capacity, ROM-change confirmation policy, display behavior, and
-keyboard controls without editing the properties file. The Display tab exposes scaling,
-letterboxing, fullscreen, rotation, DMG grayscale, frame blending, CGB color correction, and the
-Super Game Boy border. The Input tab shows all eight current bindings for Players 1–4. Choose
-**Capture** and press a key, or use the explicit **Dialog key…** action for Enter or Escape. Tab
-remains reserved for focus navigation and Backspace remains reserved for Rewind.
-Conflicting bindings identify the existing assignment and are not applied; each row also supports
-Clear and Reset. The Gamepads tab lists up to four logical assignments without calling SDL on the
-EDT. It keeps an unavailable configured controller visible, prevents duplicate explicit or
-automatic assignments, and exposes independent movement/tilt dead zones and X/Y inversion for each
-stable device. A mapping change releases all held input and waits for a neutral physical sample
-before accepting new presses.
+default ROM directory, recent-file capacity, ROM-change confirmation policy, system profile,
+display behavior, and keyboard controls without editing the properties file. The System tab owns
+the DMG/CGB hardware-profile and bootstrap choices formerly exposed as a top-level menu. The Display
+tab exposes 1×/2×/4× window sizing, letterboxing, fullscreen, rotation, DMG grayscale, frame
+blending, CGB color correction, and the Super Game Boy border. The Input tab arranges all eight
+bindings for each of Players 1–4 like a Game Boy pad. Choose **Capture** and press a key, including
+Enter or Escape. Tab remains reserved for focus navigation and Backspace remains reserved for
+Rewind. Assigning an occupied key swaps the two bindings (or moves it when the destination was
+unassigned); one **Reset keyboard defaults** action restores the complete keyboard layout. The
+Gamepads tab lists up to four logical assignments without calling SDL on the EDT. It keeps an
+unavailable configured controller visible, prevents duplicate explicit or automatic assignments,
+and exposes independent movement/tilt dead zones and X/Y inversion for each stable device. A
+mapping change releases all held input and waits for a neutral physical sample before accepting new
+presses.
 
 The Audio tab enumerates Java Sound outputs on a cancellable background worker. It supports system
-default or an explicit descriptor-hashed output, software master volume, mute, and LOW/BALANCED/SAFE
-bounded-latency presets. If an explicit output disappears, playback retains the configured ID,
+default or an explicit descriptor-hashed output, a 0–100 master-volume slider, mute, and
+LOW/BALANCED/SAFE bounded-latency presets. If an explicit output disappears, playback retains the configured ID,
 falls back to System Default, records a diagnostic, and stays silent without blocking emulation if
 no output can be opened. While fallback remains active, Coffee GB periodically returns to the
 configured output after it reappears. Device, volume, mute, and latency changes do not reset emulated
@@ -142,31 +144,30 @@ cannot retain or mutate an emulator-owned pixel buffer. DMG/CGB frames use their
 geometry; an enabled SGB border uses its native 256×224 geometry. Rotation is included before
 viewport fitting, and both axes always use the same scale.
 
-- **Integer fit** chooses the largest whole-number scale that fits. During a transient layout
-  smaller than one native frame it temporarily uses uniform aspect fit so the image is not clipped.
-- **Fit preserving aspect ratio** uses the largest uniform fractional scale that fits.
-- **Explicit 1×–4×** keeps that exact pixel scale and recenters the image. Choosing an explicit
-  scale or changing native DMG/SGB geometry repacks the window while it is windowed, and the
-  window minimum tracks the complete rotated source size. If a physical screen or native window
-  manager cannot honor that minimum, the renderer uniformly fits as a safe no-crop fallback.
+The renderer always uses the largest uniform scale that fits the available component, so resizing
+never crops the image or distorts its aspect ratio. The 1×, 2×, and 4× commands are convenient
+window-size commands: choosing one repacks the window to that native-size multiple while windowed.
+Afterward the window remains freely resizable and the renderer continues to fit its complete frame.
+Persisted 3×, integer-fit, and aspect-fit settings remain readable for compatibility, use the same
+always-fit renderer immediately, and normalize to the nearest exposed window size when edited.
 
 Unused space is letterboxed or pillarboxed with the configured RGB color. The viewport uses
 half-open geometry and conservative paint bounds, so odd device-pixel margins put the extra pixel
 on the right or bottom without stretching or cropping the final source pixel.
 
-The main window is resizable and has a base 160×144 minimum content area; windowed explicit modes
-raise that minimum as described above. **Screen → Fullscreen** enters borderless fullscreen;
-<kbd>F11</kbd> is its accelerator unless F11 is assigned to an emulated button, in which case the
-accelerator is automatically disabled and the menu command remains available. Menu radio items,
-Preferences, persisted settings, and the live renderer are synchronized through one EDT-owned
-coordinator.
+The main window is resizable and has a base 160×144 minimum content area. **Screen → Fullscreen**
+enters borderless fullscreen; <kbd>F11</kbd> is its accelerator unless F11 is assigned to an emulated
+button, in which case the accelerator is automatically disabled and the menu command remains
+available. <kbd>Escape</kbd> always leaves fullscreen when the main game window owns focus, while
+remaining available to windowed emulation and dialogs. Menu radio items, Preferences, persisted
+settings, and the live renderer are synchronized through one EDT-owned coordinator.
 
 Entering fullscreen remembers window placement relative to the monitor's stable AWT device ID and
 current scale transform. Exiting converts through the latest per-monitor transform and clamps the
 window to the current usable work area. If that monitor disappears, Coffee GB selects the nearest
-remaining monitor deterministically. The windowed explicit-size minimum is lowered before entry so
-it cannot constrain the monitor bounds, then recomputed after exit; the restored bounds are
-preserved unless they are too small for a display-size change made while fullscreen. While
+remaining monitor deterministically. The window minimum is lowered before entry so it cannot
+constrain the monitor bounds, then restored after exit; restored bounds are preserved unless they
+are too small for a display-size change made while fullscreen. While
 fullscreen, move/resize notifications plus a fullscreen-only one-second monitor refresh recover
 from monitor removal, work-area changes, and per-monitor DPI changes without retaining stale
 `GraphicsDevice` instances.

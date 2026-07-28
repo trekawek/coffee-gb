@@ -82,20 +82,10 @@ public final class DisplayViewport {
         double fitScale = Math.min(
                 componentWidth / (double) rotatedWidth,
                 componentHeight / (double) rotatedHeight);
-        double scale;
-        if (mode == DisplayScaleMode.INTEGER_FIT) {
-            double integerScale = Math.floor(fitScale);
-            // A transient layout can make the component smaller than one emulated frame. Keep
-            // the complete image visible instead of choosing the only fitting integer (zero).
-            scale = integerScale >= 1 ? integerScale : fitScale;
-        } else if (mode == DisplayScaleMode.ASPECT_FIT) {
-            scale = fitScale;
-        } else {
-            // Windowed explicit modes are protected by a matching top-level minimum size. Keep a
-            // uniform fit fallback here for smaller physical screens, transient native layout
-            // constraints, and fullscreen: exact scale must never turn into clipped source pixels.
-            scale = Math.min(mode.explicitScale(), fitScale);
-        }
+        // Every persisted mode now shares one rendering invariant. Legacy fit values remain
+        // readable, while explicit values choose only a convenient top-level window size; none of
+        // them cap or quantize the picture drawn inside a resized component.
+        double scale = fitScale;
 
         double width = rotatedWidth * scale;
         double height = rotatedHeight * scale;
@@ -130,7 +120,12 @@ public final class DisplayViewport {
     }
 
     private static int centeredOrigin(int available, double content) {
-        return (int) Math.floor((available - content) / 2.0);
+        double origin = (available - content) / 2.0;
+        double nearestInteger = Math.rint(origin);
+        if (Math.abs(origin - nearestInteger) < INTEGER_EPSILON) {
+            return (int) nearestInteger;
+        }
+        return (int) Math.floor(origin);
     }
 
     private static boolean swapsAxes(int rotation) {
