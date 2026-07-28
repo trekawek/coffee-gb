@@ -10,9 +10,13 @@ import eu.rekawek.coffeegb.controller.state.StateFileInspection
 import eu.rekawek.coffeegb.controller.state.StateMetadata
 import eu.rekawek.coffeegb.controller.state.StateRef
 import eu.rekawek.coffeegb.controller.state.StateRootKind
+import java.awt.event.MouseEvent
 import java.time.Instant
+import javax.swing.JLabel
+import javax.swing.plaf.basic.BasicHTML
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -148,5 +152,65 @@ class StateBrowserModelTest {
     val details = model.details(entry)
     assertFalse(details.contains('\u0000'))
     assertTrue(details.length < 1_500)
+  }
+
+  @Test
+  fun hostileHtmlStateTextIsRenderedLiterallyInTableTooltipAndStatus() {
+    val hostile = "<html><img src='file:/private/secret.png'>state"
+    val ref = StateRef.Slot(2)
+    val metadata =
+        StateMetadata(
+            ref,
+            hostile,
+            Instant.parse("2026-07-28T02:03:04Z"),
+            null,
+            1,
+            "0".repeat(64),
+            null,
+        )
+    val entry =
+        StateBrowserEntry(
+            StateEntryKey(ref),
+            StateCatalogEntry(
+                ref,
+                StateCatalogStatus.CORRUPT,
+                hostile,
+                null,
+                "0".repeat(64),
+                metadata,
+                null,
+                null,
+                null,
+            ),
+            null,
+        )
+    val model = StateBrowserTableModel().also { it.entries = listOf(entry) }
+    val table = StateBrowserTable(model).also { it.setSize(800, 100) }
+
+    val rendered = table.prepareRenderer(table.getCellRenderer(0, 0), 0, 0) as JLabel
+    assertEquals(hostile, rendered.text)
+    assertTrue(rendered.getClientProperty("html.disable") == true)
+    assertNull(rendered.getClientProperty(BasicHTML.propertyKey))
+
+    val mouse =
+        MouseEvent(
+            table,
+            MouseEvent.MOUSE_MOVED,
+            0,
+            0,
+            1,
+            1,
+            0,
+            false,
+        )
+    assertEquals(hostile, table.getToolTipText(mouse))
+    val tooltip = table.createToolTip().also { it.tipText = hostile }
+    assertTrue(tooltip.getClientProperty("html.disable") == true)
+    assertNull(tooltip.getClientProperty(BasicHTML.propertyKey))
+
+    val status = literalSwingLabel(hostile)
+    assertEquals(hostile, status.text)
+    assertTrue(status.getClientProperty("html.disable") == true)
+    assertNull(status.getClientProperty(BasicHTML.propertyKey))
   }
 }

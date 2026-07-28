@@ -228,6 +228,94 @@ class StateRepositoryTest {
   }
 
   @Test
+  fun `repeated metadata failures discard thumbnails and keep state manageable`() {
+    val fixture = machineFixture()
+    val layout =
+        StateStorageLayout(Files.createTempDirectory("state-repository-thumbnail-failures"))
+    val ref = StateRef.Slot(6)
+    val repository =
+        StateRepository(layout, SelectiveFailureWriter(failMetadata = true))
+    val thumbnail =
+        StatePngCodec.encode(
+            StateImage(2, 1, intArrayOf(0x112233, 0xaabbcc)).thumbnail())
+    var lastBytes = fixture.plain
+
+    repeat(40) { index ->
+      lastBytes =
+          StateCodec.encode(
+              StateFile(
+                  fixture.file.identities,
+                  fixture.file.root,
+                  StateDiagnosticMetadata("test-core", "metadata-failure-$index"),
+                  fixture.file.formatVersion,
+              ),
+              StateCompression.DEFLATE,
+          )
+      val result =
+          repository.saveWithThumbnail(
+              ref,
+              lastBytes,
+              StateSaveMetadata("attempt $index", SAVE_TIME.plusSeconds(index.toLong())),
+              thumbnail,
+          )
+
+      assertFalse(result.state.metadataCommitted)
+      assertFalse(result.thumbnailCommitted)
+    }
+
+    val artifacts =
+        Files.list(layout.directory(ref)).use { stream ->
+          stream.iterator().asSequence().map { it.fileName.toString() }.toList()
+        }
+    assertTrue(artifacts.size <= 2)
+    assertFalse(artifacts.any { it.startsWith("thumbnail-") })
+
+    val readable = StateRepository(layout).read(ref)
+    assertEquals(StateMetadataCodec.sha256(lastBytes), readable.stateSha256)
+    assertNull(readable.metadata)
+    assertEquals(
+        StateCatalogStatus.AVAILABLE,
+        StateRepository(layout).catalog().entries.single { it.ref == ref }.status,
+    )
+
+    assertTrue(StateRepository(layout).delete(ref).deletedArtifacts >= 1)
+    assertFalse(Files.exists(layout.directory(ref)))
+  }
+
+  @Test
+  fun `optional asset failures redact inside and outside paths`() {
+    val fixture = machineFixture()
+    val layout =
+        StateStorageLayout(
+            Files.createTempDirectory("state repository private root ").resolve("User Saves"))
+    val ref = StateRef.Slot(5)
+    val thumbnail =
+        StatePngCodec.encode(
+            StateImage(2, 1, intArrayOf(0x112233, 0xaabbcc)).thumbnail())
+
+    val result =
+        StateRepository(layout, OptionalAssetPathFailureWriter())
+            .saveWithThumbnail(
+                ref,
+                fixture.plain,
+                StateSaveMetadata("redacted", SAVE_TIME),
+                thumbnail,
+            )
+
+    val failures =
+        listOf(
+            assertNotNull(result.thumbnailFailure),
+            assertNotNull(result.state.metadataFailure),
+        )
+    failures.forEach { failure ->
+      assertTrue(failure.contains("<path>"))
+      assertFalse(failure.contains(layout.gameDirectory.toString()))
+      assertFalse(failure.contains("Private Preview"))
+      assertFalse(failure.contains("Outside Account"))
+    }
+  }
+
+  @Test
   fun `injected state write failure keeps the last valid state and metadata`() {
     val fixture = machineFixture()
     val layout = StateStorageLayout(Files.createTempDirectory("state-repository-failure"))
@@ -660,6 +748,21 @@ class StateRepositoryTest {
         throw IOException("injected metadata read-only failure")
       }
       AtomicFileWriter.system().write(target, intendedBytes)
+    }
+  }
+
+  private class OptionalAssetPathFailureWriter : AtomicFileWriter() {
+    override fun write(target: Path, intendedBytes: ByteArray) {
+      when {
+        target.fileName.toString() == StateStorageLayout.METADATA_FILE ->
+            throw IOException(
+                "metadata denied at /private/Outside Account/state metadata.properties")
+        target.fileName.toString().startsWith("thumbnail-") ->
+            throw IOException(
+                "thumbnail denied at " +
+                    target.parent.resolve("Private Preview").resolve(target.fileName))
+        else -> AtomicFileWriter.system().write(target, intendedBytes)
+      }
     }
   }
 

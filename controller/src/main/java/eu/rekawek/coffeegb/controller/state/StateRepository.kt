@@ -121,7 +121,15 @@ class StateRepository(
         var thumbnailFailure: String? = null
         var thumbnailRecovery = AtomicFileWriter.RecoveryReport.NONE
         var thumbnailSha256: String? = null
-        if (ownedThumbnail != null) {
+        val preWriteCleanupFailure =
+            ownedThumbnail?.let { cleanupObsoleteThumbnails(ref, retainedStateSha256 = null) }
+        if (preWriteCleanupFailure != null) {
+          thumbnailFailure =
+              diagnostic(
+                  "State thumbnail cleanup failed: " +
+                      (preWriteCleanupFailure.message
+                          ?: preWriteCleanupFailure.javaClass.simpleName))
+        } else if (ownedThumbnail != null) {
           val computedThumbnailSha = checkNotNull(suppliedThumbnailSha256)
           val thumbnailPath = layout.thumbnailFile(ref, hash)
           try {
@@ -131,7 +139,8 @@ class StateRepository(
             thumbnailCommitted = true
             thumbnailSha256 = computedThumbnailSha
           } catch (failure: IOException) {
-            thumbnailFailure = failure.message ?: failure.javaClass.simpleName
+            thumbnailFailure =
+                diagnostic(failure.message ?: failure.javaClass.simpleName)
           }
         }
 
@@ -153,10 +162,26 @@ class StateRepository(
           metadataRecovery = persistence.recoverWithReport(metadataPath)
           persistence.write(metadataPath, StateMetadataCodec.encode(metadata))
         } catch (failure: IOException) {
-          metadataFailure = failure.message ?: failure.javaClass.simpleName
+          metadataFailure =
+              diagnostic(failure.message ?: failure.javaClass.simpleName)
         }
-        if (metadataFailure == null) {
-          cleanupObsoleteThumbnails(ref, hash.takeIf { thumbnailCommitted })
+        val retainedThumbnail =
+            hash.takeIf { metadataFailure == null && thumbnailCommitted }
+        val postWriteCleanupFailure =
+            cleanupObsoleteThumbnails(ref, retainedThumbnail)
+        if (postWriteCleanupFailure != null) {
+          val cleanupDiagnostic =
+              diagnostic(
+                  "State thumbnail cleanup failed: " +
+                      (postWriteCleanupFailure.message
+                          ?: postWriteCleanupFailure.javaClass.simpleName))
+          thumbnailFailure =
+              thumbnailFailure?.let { diagnostic("$it; $cleanupDiagnostic") }
+                  ?: cleanupDiagnostic
+        }
+        if (metadataFailure != null) {
+          // An unreferenced image is not a committed asset, even when its physical write succeeded.
+          thumbnailCommitted = false
         }
         StateAssetSaveResult(
             StateSaveResult(
@@ -599,29 +624,42 @@ class StateRepository(
     }
   }
 
-  private fun cleanupObsoleteThumbnails(ref: StateRef, retainedStateSha256: String?) {
+  /**
+   * Removes unreferenced thumbnail assets without letting optional cleanup invalidate a committed
+   * state. Callers inspect the returned failure and stop adding thumbnails when the bounded
+   * directory cannot first be cleaned.
+   */
+  private fun cleanupObsoleteThumbnails(
+      ref: StateRef,
+      retainedStateSha256: String?,
+  ): IOException? {
     val directory = layout.directory(ref)
     if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS) ||
         Files.isSymbolicLink(directory)) {
-      return
+      return null
     }
-    var entries = 0
-    try {
+    return try {
+      val children = ArrayList<Path>()
       Files.newDirectoryStream(directory).use { stream ->
         stream.forEach { child ->
-          entries++
-          if (entries > MAX_STATE_DIRECTORY_ENTRIES) {
+          children.add(child)
+          if (children.size > MAX_STATE_DIRECTORY_ENTRIES) {
             throw IOException(
                 "State entry contains more than $MAX_STATE_DIRECTORY_ENTRIES artifacts")
           }
-          val match = THUMBNAIL_FILE.matchEntire(child.fileName.toString()) ?: return@forEach
-          if (match.groupValues[1] != retainedStateSha256) {
-            deleteRegularArtifact(child)
-          }
         }
       }
-    } catch (_: IOException) {
-      // Cleanup is best effort after both authoritative state and metadata are committed.
+      children.forEach { child ->
+        val match = THUMBNAIL_FILE.matchEntire(child.fileName.toString()) ?: return@forEach
+        if (match.groupValues[1] != retainedStateSha256) {
+          deleteRegularArtifact(child)
+        }
+      }
+      null
+    } catch (failure: DirectoryIteratorException) {
+      failure.cause ?: IOException("Unable to enumerate state thumbnails", failure)
+    } catch (failure: IOException) {
+      failure
     }
   }
 

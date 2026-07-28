@@ -62,12 +62,15 @@ import javax.swing.JSplitPane
 import javax.swing.JTable
 import javax.swing.JTextArea
 import javax.swing.JTextField
+import javax.swing.JToolTip
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.filechooser.FileNameExtensionFilter
 import javax.swing.table.AbstractTableModel
+import javax.swing.table.DefaultTableCellRenderer
+import javax.swing.plaf.basic.BasicHTML
 
 /**
  * EDT-only desktop orchestration for state events.
@@ -316,7 +319,7 @@ internal class StateBrowserDialog(
   private val table = StateBrowserTable(model)
   private val preview = JLabel("No preview", SwingConstants.CENTER)
   private val detail = JTextArea(4, 48)
-  private val status = JLabel(" ")
+  private val status = literalSwingLabel(" ")
   private val save = JButton("Save")
   private val load = JButton("Load")
   private val named = JButton("New Named…")
@@ -808,13 +811,40 @@ internal class StateBrowserTableModel : AbstractTableModel() {
   }
 }
 
-private class StateBrowserTable(model: StateBrowserTableModel) : JTable(model) {
+internal class StateBrowserTable(model: StateBrowserTableModel) : JTable(model) {
+  init {
+    setDefaultRenderer(Any::class.java, LiteralStateTableCellRenderer())
+  }
+
   override fun getToolTipText(event: MouseEvent): String? {
     val point: Point = event.point
     val row = rowAtPoint(point)
     if (row < 0) return null
     return (model as StateBrowserTableModel).entryAt(row).disabledReason
   }
+
+  override fun createToolTip(): JToolTip =
+      JToolTip().also {
+        it.component = this
+        disableSwingHtml(it)
+      }
+}
+
+private class LiteralStateTableCellRenderer : DefaultTableCellRenderer() {
+  init {
+    disableSwingHtml(this)
+  }
+}
+
+internal fun literalSwingLabel(text: String): JLabel =
+    JLabel().also {
+      disableSwingHtml(it)
+      it.text = text
+    }
+
+private fun disableSwingHtml(component: JComponent) {
+  component.putClientProperty("html.disable", true)
+  component.putClientProperty(BasicHTML.propertyKey, null)
 }
 
 private fun toBufferedImage(image: StateImage): BufferedImage =

@@ -39,5 +39,5 @@ internal object StateDiagnosticRedactor {
   private val WINDOWS_ABSOLUTE_PATH =
       Regex("""(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\)[^\r\n\t,;]*""")
   private val UNIX_ABSOLUTE_PATH =
-      Regex("""(?<![A-Za-z0-9.])/(?:[^/\s:,;]+/)*[^/\s:,;]*""")
+      Regex("""(?<![A-Za-z0-9.])/[^\r\n\t,;:]*""")
 }
