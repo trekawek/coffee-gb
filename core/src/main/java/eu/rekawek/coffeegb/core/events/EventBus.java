@@ -21,7 +21,8 @@ public interface EventBus extends AutoCloseable {
     /**
      * Stops this bus and all descendants within one shared deadline.
      *
-     * @throws EventBusTeardownTimeoutException if an asynchronous subscriber has not returned
+     * @throws EventBusTeardownTimeoutException if an asynchronous or synchronous subscriber has
+     *     not returned, or if close is invoked reentrantly from a subscriber
      */
     default void close(long timeout, TimeUnit unit) {
         close();

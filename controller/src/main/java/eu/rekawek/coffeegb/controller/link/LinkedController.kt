@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.controller.Input
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
+import eu.rekawek.coffeegb.controller.stagedEventBus
 import eu.rekawek.coffeegb.controller.state.ApplyStage
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
@@ -671,14 +672,39 @@ class LinkedController(
       }
       val checkpoint = isFourPlayerHost()
       if (checkpoint) reconcileHistory()
-      previousSession?.closeAfterCartridgeFlush()
-      sessions[localPlayer] = null
       // Protocol v8 owns linked P1 at frame boundaries and cannot represent local SGB P2-P4.
       // Never allow an asynchronous platform source into any linked machine.
       e.config.setPlayerInputSource(PlayerInputSource.RELEASED)
+      val candidate =
+          try {
+            createInitializedSession(localPlayer, e.config, frame, e.snapshot, staged = true)
+          } catch (failure: Throwable) {
+            val message =
+                failure.message?.takeIf { it.isNotBlank() }
+                    ?: failure.javaClass.simpleName
+            LOG.warn("Unable to initialize replacement linked session", failure)
+            eventBus.post(Controller.LoadRomFailedEvent(e.romFile, message))
+            return@register
+          }
+
+      // This pair is the replacement ownership commit. Only now may host lifecycle subscribers
+      // release input, rumble and UI state for the old machine. A preparation or persistence
+      // failure above leaves the previous session owned and emits no false stopped signal.
+      sessions[localPlayer] = candidate
       configs[localPlayer] = e.config
-      initSession(localPlayer, frame, e.snapshot)
       rejectedLocalState = null
+      previousSession?.let { previous ->
+        eventBus.post(Controller.EmulationStoppedEvent())
+        try {
+          previous.closeAfterCartridgeFlush()
+        } catch (cleanupFailure: RuntimeException) {
+          LOG.warn(
+              "Old linked session cleanup failed after replacement ownership committed",
+              cleanupFailure,
+          )
+        }
+      }
+      candidate.activate()
       eventBus.post(Controller.GameboyTypeEvent(e.config.gameboyType))
       eventBus.post(Controller.HardwareProfileEvent(e.config.hardwareProfile))
       eventBus.post(Controller.SessionPauseSupportEvent(false))
@@ -691,7 +717,12 @@ class LinkedController(
     eventQueue.register<StopEmulationEvent> {
       val checkpoint = isFourPlayerHost()
       if (checkpoint) reconcileHistory()
-      sessions[localPlayer]?.close()
+      sessions[localPlayer]?.let { localSession ->
+        // Match BasicController's explicit stop boundary: publish while the old session bus is
+        // still routable, then release the core and commit the empty local slot.
+        eventBus.post(Controller.EmulationStoppedEvent())
+        localSession.close()
+      }
       sessions[localPlayer] = null
       if (checkpoint) {
         commitHostCheckpoint()
@@ -924,6 +955,7 @@ class LinkedController(
     }
 
     eventBus.register<LoadRomEvent> {
+      eventBus.post(Controller.RomLoadingEvent(it.rom))
       val rom = it.image?.let { image -> Rom(image) } ?: Rom(it.rom)
       val config = createGameboyConfig(properties, rom)
       if (!StateProfilePolicy.protocolV8Representable(config.hardwareProfile)) {
@@ -1044,40 +1076,67 @@ class LinkedController(
       state: MachineState?,
   ) {
     val config = configs[player] ?: return
-    val sessionEventBus = EventBusImpl(null, null, false)
-    if (player == localPlayer) {
-      funnel(
-          sessionEventBus,
-          eventBus.fork("main"),
-          setOf(
-              Display.DmgFrameReadyEvent::class,
-              Display.GbcFrameReadyEvent::class,
-              SgbDisplay.SgbFrameReadyEvent::class,
-              Sound.SoundSampleEvent::class,
-              RumbleEvent::class,
-              Joypad.JoypadPressEvent::class,
-          ),
-      )
-    }
-    val session =
-        Session(
-            if (state != null) config.forRestore() else config,
-            sessionEventBus,
-            if (player == localPlayer) console else null,
-            links.serial[player],
-            links.infrared[player],
-        )
-    if (state != null) {
-      DetachedStateAdapter.apply(session.gameboy, state)
-    }
+    sessions[player] = createInitializedSession(player, config, sessionFrame, state)
+  }
 
-    var current = sessionFrame
-    while (current < frame) {
-      stateHistory.setPlayerState(player, current, session.captureDetachedState(), session.heldButtons)
-      repeat(session.gameboy.clockSpec.controllerTicksPerFrame()) { session.gameboy.tick() }
-      current++
+  private fun createInitializedSession(
+      player: Int,
+      config: GameboyConfiguration,
+      sessionFrame: Long,
+      state: MachineState?,
+      staged: Boolean = false,
+  ): Session {
+    val sessionEventBusDelegate = EventBusImpl(null, null, false)
+    val sessionEventBus =
+        if (staged) stagedEventBus(sessionEventBusDelegate) else sessionEventBusDelegate
+    var session: Session? = null
+    try {
+      if (player == localPlayer) {
+        funnel(
+            sessionEventBus,
+            eventBus.fork("main"),
+            setOf(
+                Display.DmgFrameReadyEvent::class,
+                Display.GbcFrameReadyEvent::class,
+                SgbDisplay.SgbFrameReadyEvent::class,
+                Sound.SoundSampleEvent::class,
+                RumbleEvent::class,
+                Joypad.JoypadPressEvent::class,
+            ),
+        )
+      }
+      session =
+          Session(
+              if (state != null) config.forRestore() else config,
+              sessionEventBus,
+              if (player == localPlayer) console else null,
+              links.serial[player],
+              links.infrared[player],
+          )
+      if (state != null) {
+        DetachedStateAdapter.apply(session.gameboy, state)
+      }
+
+      var current = sessionFrame
+      while (current < frame) {
+        stateHistory.setPlayerState(
+            player,
+            current,
+            session.captureDetachedState(),
+            session.heldButtons,
+        )
+        repeat(session.gameboy.clockSpec.controllerTicksPerFrame()) { session.gameboy.tick() }
+        current++
+      }
+      return session
+    } catch (failure: Throwable) {
+      try {
+        session?.close() ?: sessionEventBus.close()
+      } catch (cleanupFailure: Throwable) {
+        failure.addSuppressed(cleanupFailure)
+      }
+      throw failure
     }
-    sessions[player] = session
   }
 
   private fun loadPeerState(
