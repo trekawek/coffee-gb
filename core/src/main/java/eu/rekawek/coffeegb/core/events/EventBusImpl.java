@@ -24,9 +24,12 @@ public class EventBusImpl implements EventBus {
     private final long closeTimeoutMillis;
     private final Thread asyncThread;
     private final CountDownLatch stoppedSignal = new CountDownLatch(1);
+    private final ThreadLocal<Integer> synchronousDispatchDepth =
+            ThreadLocal.withInitial(() -> 0);
 
     private volatile boolean doStop;
     private volatile boolean stopped;
+    private int activeSynchronousDispatches;
 
     private final BlockingDeque<Event> asyncEvents = new LinkedBlockingDeque<>();
 
@@ -64,10 +67,12 @@ public class EventBusImpl implements EventBus {
     @Override
     public <E extends Event> void register(
             Subscriber<E> subscriber, Class<E> eventType, String callerFilter) {
-        if (doStop || stopped) {
-            throw new IllegalStateException("This EventBus is no longer active.");
+        synchronized (lifecycleLock) {
+            if (doStop || stopped) {
+                throw new IllegalStateException("This EventBus is no longer active.");
+            }
+            registrations.add(new Registration(subscriber, eventType, callerFilter));
         }
-        registrations.add(new Registration(subscriber, eventType, callerFilter));
     }
 
     @Override
@@ -79,10 +84,14 @@ public class EventBusImpl implements EventBus {
     public <E extends Event> void post(E event) {
         // A child retains its parent reference after removal so a bounded close can be retried.
         // Never let that retained route turn a post-close cleanup signal into a sibling event.
-        if (doStop || stopped) {
+        if (!enterSynchronousDispatch()) {
             return;
         }
-        getRoot().postToDescendants(event, callerId);
+        try {
+            getRoot().postToDescendants(event, callerId);
+        } finally {
+            leaveSynchronousDispatch();
+        }
     }
 
     @Override
@@ -90,10 +99,12 @@ public class EventBusImpl implements EventBus {
         if (!asyncEventsEnabled) {
             throw new IllegalStateException("Async events are disabled");
         }
-        if (doStop || stopped) {
-            throw new IllegalStateException("This EventBus is no longer active.");
+        synchronized (lifecycleLock) {
+            if (doStop || stopped) {
+                throw new IllegalStateException("This EventBus is no longer active.");
+            }
+            asyncEvents.addLast(event);
         }
-        asyncEvents.addLast(event);
     }
 
     private EventBusImpl getRoot() {
@@ -105,18 +116,32 @@ public class EventBusImpl implements EventBus {
     }
 
     private <E extends Event> void postToDescendants(E event, String callerId) {
-        doPost(event, callerId);
-        // all children
-        for (EventBusImpl c : children) {
-            c.postToDescendants(event, callerId);
+        if (!enterSynchronousDispatch()) {
+            return;
+        }
+        try {
+            doPost(event, callerId);
+            // Keep this bus accounted for through the complete owned subtree. A close that gates
+            // the parent therefore cannot return while an already-entered child subscriber is
+            // still running.
+            for (EventBusImpl c : children) {
+                if (doStop || stopped) {
+                    return;
+                }
+                c.postToDescendants(event, callerId);
+            }
+        } finally {
+            leaveSynchronousDispatch();
         }
     }
 
     private <E extends Event> void doPost(E event, String callerId) {
-        if (doStop || stopped) {
-            return;
-        }
         for (Registration r : registrations) {
+            // A close requested by an earlier (possibly nested) subscriber owns the boundary.
+            // Let that subscriber return, but do not begin another callback after the gate.
+            if (doStop || stopped) {
+                return;
+            }
             if (!r.eventType.isInstance(event)) {
                 continue;
             }
@@ -125,6 +150,33 @@ public class EventBusImpl implements EventBus {
             }
             //noinspection unchecked
             ((Subscriber<E>) r.subscriber).onEvent(event);
+        }
+    }
+
+    private boolean enterSynchronousDispatch() {
+        synchronized (lifecycleLock) {
+            if (doStop || stopped) {
+                return false;
+            }
+            activeSynchronousDispatches++;
+            synchronousDispatchDepth.set(synchronousDispatchDepth.get() + 1);
+            return true;
+        }
+    }
+
+    private void leaveSynchronousDispatch() {
+        synchronized (lifecycleLock) {
+            int depth = synchronousDispatchDepth.get();
+            if (depth <= 0 || activeSynchronousDispatches <= 0) {
+                throw new IllegalStateException("Unbalanced event-bus dispatch accounting");
+            }
+            if (depth == 1) {
+                synchronousDispatchDepth.remove();
+            } else {
+                synchronousDispatchDepth.set(depth - 1);
+            }
+            activeSynchronousDispatches--;
+            lifecycleLock.notifyAll();
         }
     }
 
@@ -183,11 +235,15 @@ public class EventBusImpl implements EventBus {
         }
 
         if (asyncThread == null) {
+            awaitSynchronousDispatches(deadlineNanos);
             stopped = true;
             stoppedSignal.countDown();
         } else if (!stopped) {
             asyncThread.interrupt();
             awaitWorker(deadlineNanos);
+        }
+        if (asyncThread != null) {
+            awaitSynchronousDispatches(deadlineNanos);
         }
 
         if (parent != null) {
@@ -198,15 +254,16 @@ public class EventBusImpl implements EventBus {
     private void awaitWorker(long deadlineNanos) {
         if (Thread.currentThread() == asyncThread) {
             throw new EventBusTeardownTimeoutException(
-                    "An event bus cannot synchronously close from its own asynchronous worker");
+                    "An event bus cannot synchronously close from its own event dispatch; "
+                            + "close can be retried after the subscriber returns");
         }
         long remainingNanos = deadlineNanos - System.nanoTime();
         if (remainingNanos <= 0) {
-            throw closeTimeout();
+            throw closeTimeout("asynchronous worker");
         }
         try {
             if (!stoppedSignal.await(remainingNanos, TimeUnit.NANOSECONDS)) {
-                throw closeTimeout();
+                throw closeTimeout("asynchronous worker");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -215,10 +272,33 @@ public class EventBusImpl implements EventBus {
         }
     }
 
-    private EventBusTeardownTimeoutException closeTimeout() {
+    private void awaitSynchronousDispatches(long deadlineNanos) {
+        synchronized (lifecycleLock) {
+            if (synchronousDispatchDepth.get() > 0) {
+                throw new EventBusTeardownTimeoutException(
+                        "An event bus cannot synchronously close from its own event dispatch; "
+                                + "close can be retried after the subscriber returns");
+            }
+            while (activeSynchronousDispatches != 0) {
+                long remainingNanos = deadlineNanos - System.nanoTime();
+                if (remainingNanos <= 0) {
+                    throw closeTimeout("synchronous subscribers");
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(lifecycleLock, remainingNanos);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new EventBusTeardownTimeoutException(
+                            "Interrupted while waiting for synchronous event subscribers to stop");
+                }
+            }
+        }
+    }
+
+    private EventBusTeardownTimeoutException closeTimeout(String activity) {
         String identity = callerId == null ? "root" : callerId;
         return new EventBusTeardownTimeoutException(
-                "Timed out while stopping the " + identity + " event-bus worker");
+                "Timed out while stopping " + identity + " event-bus " + activity);
     }
 
     private static String eventThreadName(String callerId) {

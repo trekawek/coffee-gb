@@ -49,6 +49,7 @@ import eu.rekawek.coffeegb.controller.network.v9.V9ValidatedCheckpoint
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
@@ -186,6 +187,73 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun successfulLocalReplacementPublishesLoadingStoppedThenStartedToRootSubscribers() {
+    val eventBus = EventBusImpl()
+    val console = TrackingConsole()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), console).also {
+          it.timingTicker.disabled = true
+        }
+    val lifecycle = mutableListOf<String>()
+    eventBus.register<Controller.RomLoadingEvent> { lifecycle += "loading" }
+    eventBus.register<Controller.EmulationStoppedEvent> { lifecycle += "stopped" }
+    eventBus.register<Controller.EmulationStartedEvent> { lifecycle += "started" }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertEquals(listOf("loading", "started"), lifecycle)
+      val oldGameboy = assertNotNull(console.attachedGameboy)
+      lifecycle.clear()
+
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+
+      assertEquals(
+          listOf("loading", "stopped", "started"),
+          lifecycle,
+          "the old linked owner must stop only after replacement commit",
+      )
+      assertNotNull(console.attachedGameboy)
+      assertTrue(
+          console.attachedGameboy !== oldGameboy,
+          "old-session cleanup must not detach the committed staged candidate",
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun explicitLocalStopPublishesStoppedBeforeTheSessionIsReleased() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val stopped = LinkedBlockingQueue<Controller.EmulationStoppedEvent>()
+    eventBus.register<Controller.EmulationStoppedEvent> { stopped.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+
+      eventBus.post(Controller.StopEmulationEvent())
+      controller.runFrame()
+
+      assertNotNull(stopped.poll(1, TimeUnit.SECONDS))
+      assertNull(privateList(controller, "sessions")[0])
+      eventBus.post(Controller.StopEmulationEvent())
+      controller.runFrame()
+      assertNull(stopped.poll(100, TimeUnit.MILLISECONDS), "an empty slot must not stop twice")
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun failedSafePointBatteryPublishRetainsOldLinkedOwnershipAndLifecycle() {
     val eventBus = EventBusImpl()
     val controller =
@@ -193,21 +261,27 @@ class LinkedControllerTest {
           it.timingTicker.disabled = true
         }
     val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    val stopped = LinkedBlockingQueue<Controller.EmulationStoppedEvent>()
+    val loading = LinkedBlockingQueue<Controller.RomLoadingEvent>()
     val loaded = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
     val loadFailures = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
     val batteryFailures = LinkedBlockingQueue<BatteryPersistenceFailedEvent>()
     eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+    eventBus.register<Controller.EmulationStoppedEvent> { stopped.add(it) }
+    eventBus.register<Controller.RomLoadingEvent> { loading.add(it) }
     eventBus.register<LinkedController.LocalRomLoadedEvent> { loaded.add(it) }
     eventBus.register<Controller.LoadRomFailedEvent> { loadFailures.add(it) }
     eventBus.register<BatteryPersistenceFailedEvent> { batteryFailures.add(it) }
 
     try {
       eventBus.post(LoadRomEvent(ROM))
+      assertNotNull(loading.poll(1, TimeUnit.SECONDS))
       controller.runFrame()
       assertNotNull(started.poll(1, TimeUnit.SECONDS))
       assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
       val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
       val oldConfig = assertNotNull(privateList(controller, "configs")[0])
+      stopped.clear()
       controller.persistLocalBatteryCapture = {
         BatteryPersistenceResult.Failure(
             BatteryPersistenceResult.FailureKind.WRITE_FAILED,
@@ -218,6 +292,7 @@ class LinkedControllerTest {
       }
 
       eventBus.post(LoadRomEvent(ROM))
+      assertNotNull(loading.poll(1, TimeUnit.SECONDS))
       controller.runFrame()
 
       assertNotNull(loadFailures.poll(1, TimeUnit.SECONDS))
@@ -226,6 +301,7 @@ class LinkedControllerTest {
           assertNotNull(batteryFailures.poll(1, TimeUnit.SECONDS)).operation,
       )
       assertNull(started.poll(100, TimeUnit.MILLISECONDS))
+      assertNull(stopped.poll(100, TimeUnit.MILLISECONDS))
       assertNull(loaded.poll(100, TimeUnit.MILLISECONDS))
       assertTrue(oldSession === privateList(controller, "sessions")[0])
       assertTrue(oldConfig === privateList(controller, "configs")[0])
@@ -2498,6 +2574,14 @@ class LinkedControllerTest {
       assertEquals(before, sut.captureDetachedState())
     }
     eventBus.close()
+  }
+
+  private class TrackingConsole : Console() {
+    @Volatile var attachedGameboy: Gameboy? = null
+
+    override fun setGameboy(gameboy: Gameboy?) {
+      attachedGameboy = gameboy
+    }
   }
 
   private companion object {

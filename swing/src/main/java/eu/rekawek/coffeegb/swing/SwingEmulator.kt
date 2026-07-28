@@ -27,7 +27,6 @@ import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
 import java.awt.Dimension
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -60,9 +59,7 @@ class SwingEmulator(
 
   private var boundPanel: JPanel? = null
 
-  private val stopping = AtomicBoolean()
-
-  private val stopped = AtomicBoolean()
+  private val controllerLifecycle = ControllerLifecycleGate()
 
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
@@ -89,25 +86,19 @@ class SwingEmulator(
     controller = BasicController(eventBus, properties, console).also { it.startController() }
 
     eventBus.register<ConnectionController.ServerGotConnectionEvent> {
-      startLinkedController(it.mode, it.player)
+      controllerLifecycle.transitionIfActive { startLinkedController(it.mode, it.player) }
     }
     eventBus.register<ConnectionController.ClientConnectedToServerEvent> {
-      startLinkedController(it.mode, it.player)
+      controllerLifecycle.transitionIfActive { startLinkedController(it.mode, it.player) }
     }
     eventBus.register<ConnectionController.ServerLostConnectionEvent> {
-      if (!stopping.get()) {
-        startBasicController()
-      }
+      controllerLifecycle.transitionIfActive(::startBasicController)
     }
     eventBus.register<ConnectionController.StopServerEvent> {
-      if (!stopping.get()) {
-        startBasicController()
-      }
+      controllerLifecycle.transitionIfActive(::startBasicController)
     }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      if (!stopping.get()) {
-        startBasicController()
-      }
+      controllerLifecycle.transitionIfActive(::startBasicController)
     }
     eventBus.register<Controller.RomLoadingEvent> { releaseForLifecycleChange() }
     eventBus.register<Controller.EmulationStoppedEvent> { releaseForLifecycleChange() }
@@ -132,32 +123,26 @@ class SwingEmulator(
     }
   }
 
-  @Synchronized
   fun stop() {
-    if (stopped.get()) {
-      return
-    }
-    // Gate disconnect callbacks before close so they cannot replace the controller halfway
-    // through its persistence transaction. Host inputs and rumble are released before the core
-    // can close its bus; a failed close clears the gate while BasicController retains the paused
-    // capture and the same peripheral owners for a later retry.
-    stopping.set(true)
-    try {
-      closeControllerAfterLifecycleRelease(::releaseForLifecycleChange, controller::close)
-    } catch (failure: Exception) {
-      stopping.set(false)
-      throw failure
-    }
-    eventBus.post(ConnectionController.StopServerEvent())
-    eventBus.post(ConnectionController.StopClientEvent())
-    joypad.stop()
-    tiltInput.stop()
-    gamepad.stop()
-    gamepadThread.interrupt()
-    gamepadThread.join(1000)
-    sound.stopThread()
-    display.stop()
-    stopped.set(true)
+    controllerLifecycle.stop(
+        releaseControllerOwnership = {
+          // Host inputs and rumble are released before the core can close its bus. A persistence
+          // failure retains both the paused controller and this shutdown gate for an explicit
+          // stop retry; network callbacks must not replace a controller that has begun teardown.
+          closeControllerAfterLifecycleRelease(::releaseForLifecycleChange, controller::close)
+        },
+        finishTeardown = {
+          eventBus.post(ConnectionController.StopServerEvent())
+          eventBus.post(ConnectionController.StopClientEvent())
+          joypad.stop()
+          tiltInput.stop()
+          gamepad.stop()
+          gamepadThread.interrupt()
+          gamepadThread.join(1000)
+          sound.stopThread()
+          display.stop()
+        },
+    )
   }
 
   fun applyKeyboardMapping(mapping: ControllerProperties.PlayerMapping) {
@@ -342,6 +327,54 @@ internal fun closeControllerAfterLifecycleRelease(
 ) {
   release()
   close()
+}
+
+/**
+ * Serializes every controller ownership transition with application shutdown. The lifecycle flags
+ * are read and changed only while holding [lock], so a network callback cannot pass a stale
+ * pre-stop check and install a controller after teardown has started.
+ */
+internal class ControllerLifecycleGate {
+  private val lock = Any()
+  private var stopping = false
+  private var controllerOwnershipReleased = false
+  private var stopped = false
+
+  fun transitionIfActive(transition: () -> Unit): Boolean =
+      synchronized(lock) {
+        if (stopping || stopped) {
+          return@synchronized false
+        }
+        transition()
+        true
+      }
+
+  fun stop(
+      releaseControllerOwnership: () -> Unit,
+      finishTeardown: () -> Unit,
+  ): Boolean =
+      synchronized(lock) {
+        if (stopped) {
+          return@synchronized false
+        }
+        stopping = true
+        if (!controllerOwnershipReleased) {
+          try {
+            releaseControllerOwnership()
+            controllerOwnershipReleased = true
+          } catch (failure: Exception) {
+            // A persistence barrier retains the original controller for stop retry, while an
+            // event-bus timeout may have partially gated its descendants. Neither state is safe
+            // for a network callback to replace, so stopping intentionally remains true.
+            throw failure
+          }
+        }
+        // Peripheral teardown may also be retried, but controller ownership is never released
+        // twice after the first successful close.
+        finishTeardown()
+        stopped = true
+        true
+      }
 }
 
 internal fun ApplicationSettings.toGamepadConfiguration(): GamepadConfiguration =

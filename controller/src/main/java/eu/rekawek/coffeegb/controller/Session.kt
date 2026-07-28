@@ -172,3 +172,6 @@ class Session(
     val LOG = LoggerFactory.getLogger(Session::class.java)
   }
 }
+
+/** Module-private bridge that lets controller subpackages stage a candidate without exposing it. */
+internal fun stagedEventBus(delegate: EventBus): EventBus = StagedEventBus(delegate)
