@@ -678,12 +678,12 @@ class LinkedController(
       val candidate =
           try {
             createInitializedSession(localPlayer, e.config, frame, e.snapshot, staged = true)
-          } catch (failure: Throwable) {
+          } catch (failure: Exception) {
             val message =
                 failure.message?.takeIf { it.isNotBlank() }
                     ?: failure.javaClass.simpleName
             LOG.warn("Unable to initialize replacement linked session", failure)
-            eventBus.post(Controller.LoadRomFailedEvent(e.romFile, message))
+            postHostEventSafely(Controller.LoadRomFailedEvent(e.romFile, message))
             return@register
           }
 
@@ -694,7 +694,7 @@ class LinkedController(
       configs[localPlayer] = e.config
       rejectedLocalState = null
       previousSession?.let { previous ->
-        eventBus.post(Controller.EmulationStoppedEvent())
+        postHostEventSafely(Controller.EmulationStoppedEvent())
         try {
           previous.closeAfterCartridgeFlush()
         } catch (cleanupFailure: RuntimeException) {
@@ -705,11 +705,11 @@ class LinkedController(
         }
       }
       candidate.activate()
-      eventBus.post(Controller.GameboyTypeEvent(e.config.gameboyType))
-      eventBus.post(Controller.HardwareProfileEvent(e.config.hardwareProfile))
-      eventBus.post(Controller.SessionPauseSupportEvent(false))
-      eventBus.post(Controller.SessionSnapshotSupportEvent(null))
-      eventBus.post(Controller.EmulationStartedEvent(e.config.rom.title))
+      postHostEventSafely(Controller.GameboyTypeEvent(e.config.gameboyType))
+      postHostEventSafely(Controller.HardwareProfileEvent(e.config.hardwareProfile))
+      postHostEventSafely(Controller.SessionPauseSupportEvent(false))
+      postHostEventSafely(Controller.SessionSnapshotSupportEvent(null))
+      postHostEventSafely(Controller.EmulationStartedEvent(e.config.rom.title))
       sendLocalRom(includeState = e.snapshot != null, batteryBuffer = refreshedBattery)
       if (checkpoint) commitHostCheckpoint()
     }
@@ -720,7 +720,7 @@ class LinkedController(
       sessions[localPlayer]?.let { localSession ->
         // Match BasicController's explicit stop boundary: publish while the old session bus is
         // still routable, then release the core and commit the empty local slot.
-        eventBus.post(Controller.EmulationStoppedEvent())
+        postHostEventSafely(Controller.EmulationStoppedEvent())
         localSession.close()
       }
       sessions[localPlayer] = null
@@ -955,19 +955,27 @@ class LinkedController(
     }
 
     eventBus.register<LoadRomEvent> {
-      eventBus.post(Controller.RomLoadingEvent(it.rom))
-      val rom = it.image?.let { image -> Rom(image) } ?: Rom(it.rom)
-      val config = createGameboyConfig(properties, rom)
+      postHostEventSafely(Controller.RomLoadingEvent(it.rom))
+      val prepared =
+          try {
+            val rom = it.image?.let { image -> Rom(image) } ?: Rom(it.rom)
+            createGameboyConfig(properties, rom)
+          } catch (failure: Exception) {
+            reportLocalLoadFailure(it.rom, failure)
+            return@register
+          }
+      val config = prepared
       if (!StateProfilePolicy.protocolV8Representable(config.hardwareProfile)) {
         // Protocol v8 is permanently StateFile-v1-only. Its SGB RTC phase has the released legacy
         // meaning, and its coarse DMG identity can never mean MGB. Reject profiles that require v2
         // before a linked Gameboy is built or any live session/config/topology state changes, and
         // retain the incoming Basic state so transport shutdown can return to the pre-link machine.
         rejectedLocalState =
-            it.state?.let { state -> Controller.ControllerState(state, rom) }
+            it.state?.let { state -> Controller.ControllerState(state, config.rom) }
         val message =
             "Profile ${config.hardwareProfile.id()} netplay is unavailable: protocol v8 " +
                 "negotiates StateFile v1, while this profile requires explicit StateFile v2 identity"
+        postHostEventSafely(Controller.LoadRomFailedEvent(it.rom, message))
         if (localPlayer == 0) {
           eventBus.post(ServerProtocolErrorEvent(localPlayer, message))
           eventBus.postAsync(StopServerEvent())
@@ -1131,7 +1139,9 @@ class LinkedController(
       return session
     } catch (failure: Throwable) {
       try {
-        session?.close() ?: sessionEventBus.close()
+        // A candidate never owned the live cartridge generation. Discard it without flushing so
+        // a failed state restore cannot rewrite the user's adjacent battery sidecar.
+        session?.discardUnstarted() ?: sessionEventBus.close()
       } catch (cleanupFailure: Throwable) {
         failure.addSuppressed(cleanupFailure)
       }
@@ -1700,13 +1710,36 @@ class LinkedController(
             .orElse(config.rom.origin.displayName())
     val message = failure.message ?: "Unable to read battery save"
     LOG.warn("Unable to read bounded linked battery payload from {}", fileName, failure)
-    eventBus.post(
+    postHostEventSafely(
         BatteryPersistenceFailedEvent(
             BatteryPersistenceFailedEvent.Operation.LOAD,
             fileName,
             message,
         ))
-    eventBus.post(Controller.LoadRomFailedEvent(romFile, message))
+    postHostEventSafely(Controller.LoadRomFailedEvent(romFile, message))
+  }
+
+  private fun reportLocalLoadFailure(
+      romFile: java.io.File,
+      failure: Exception,
+  ) {
+    val message =
+        failure.message?.takeIf { it.isNotBlank() }
+            ?: "Unable to prepare ${romFile.name.ifBlank { "ROM" }}"
+    LOG.warn("Unable to prepare linked ROM {}", romFile, failure)
+    postHostEventSafely(Controller.LoadRomFailedEvent(romFile, message))
+  }
+
+  private fun postHostEventSafely(event: Event) {
+    try {
+      eventBus.post(event)
+    } catch (subscriberFailure: RuntimeException) {
+      LOG.warn(
+          "Linked controller host event subscriber failed for {}",
+          event.javaClass.simpleName,
+          subscriberFailure,
+      )
+    }
   }
 
   private fun reportLocalBatteryPersistenceFailure(
@@ -1718,13 +1751,13 @@ class LinkedController(
         failure.fileName(),
         failure.cause(),
     )
-    eventBus.post(
+    postHostEventSafely(
         BatteryPersistenceFailedEvent(
             BatteryPersistenceFailedEvent.Operation.SAVE,
             failure.fileName(),
             failure.message(),
         ))
-    eventBus.post(Controller.LoadRomFailedEvent(romFile, failure.message()))
+    postHostEventSafely(Controller.LoadRomFailedEvent(romFile, failure.message()))
   }
 
   private fun readBoundedBattery(path: Path): ByteArray {

@@ -254,6 +254,188 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun throwingStoppedSubscriberCannotInterruptCommittedReplacementOrLaterLoads() {
+    val eventBus = EventBusImpl()
+    val console = TrackingConsole()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), console).also {
+          it.timingTicker.disabled = true
+        }
+    val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    val thrownStops = AtomicInteger()
+    eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      val originalSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+
+      eventBus.register<Controller.EmulationStoppedEvent> {
+        thrownStops.incrementAndGet()
+        throw IllegalStateException("injected stopped subscriber failure")
+      }
+
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      val firstReplacement = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+      assertTrue(firstReplacement !== originalSession)
+      assertNotNull(console.attachedGameboy)
+
+      // The committed candidate and controller thread remain usable after the subscriber failure.
+      controller.runFrame()
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      assertTrue(privateList(controller, "sessions")[0] !== firstReplacement)
+      assertEquals(2, thrownStops.get())
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun throwingStoppedSubscriberCannotInterruptExplicitStopOrLaterLoad() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    val thrownStops = AtomicInteger()
+    eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      eventBus.register<Controller.EmulationStoppedEvent> {
+        thrownStops.incrementAndGet()
+        throw IllegalStateException("injected stopped subscriber failure")
+      }
+
+      eventBus.post(Controller.StopEmulationEvent())
+      controller.runFrame()
+
+      assertEquals(1, thrownStops.get())
+      assertNull(privateList(controller, "sessions")[0])
+      controller.runFrame()
+
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      assertNotNull(privateList(controller, "sessions")[0])
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun failedCandidateStateRestoreDoesNotRewriteAdjacentBatterySidecar() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-candidate-discard")
+    val rom = directory.resolve("candidate.gb")
+    val battery = directory.resolve("candidate.sav")
+    val romBytes = ROM.readBytes()
+    romBytes[0x147] = 0x10 // MBC3 + timer + RAM + battery
+    romBytes[0x149] = 0x03 // 32 KiB RAM
+    Files.write(rom, romBytes)
+    val originalBattery = byteArrayOf(0x12, 0x34, 0x56, 0x78)
+    Files.write(battery, originalBattery)
+
+    val seedBus = EventBusImpl()
+    val seedConfig =
+        Gameboy.GameboyConfiguration(Rom(ROM))
+            .setHardwareProfile(HardwareProfileRegistry.SGB)
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setSupportBatterySave(false)
+    val seedSession = Session(seedConfig, seedBus, null)
+    val incompatibleState = DetachedStateAdapter.capture(seedSession.gameboy)
+    seedSession.close()
+    seedBus.close()
+
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val failures = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
+    val stopped = LinkedBlockingQueue<Controller.EmulationStoppedEvent>()
+    eventBus.register<Controller.LoadRomFailedEvent> { failures.add(it) }
+    eventBus.register<Controller.EmulationStoppedEvent> { stopped.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(rom.toFile(), incompatibleState))
+      controller.runFrame()
+
+      assertNotNull(failures.poll(1, TimeUnit.SECONDS))
+      assertNull(stopped.poll(100, TimeUnit.MILLISECONDS))
+      assertEquals(0, controller.activeSessionCount())
+      assertContentEquals(originalBattery, Files.readAllBytes(battery))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      Files.deleteIfExists(directory.resolve("settings.properties"))
+      Files.deleteIfExists(battery)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun synchronousRomPreparationFailureReportsLoadFailureAndKeepsOldSessionRunning() {
+    val invalidRom = Files.createTempFile("coffee-gb-linked-invalid", ".gb")
+    Files.write(invalidRom, byteArrayOf(0))
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val loading = LinkedBlockingQueue<Controller.RomLoadingEvent>()
+    val failures = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
+    val stopped = LinkedBlockingQueue<Controller.EmulationStoppedEvent>()
+    val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    eventBus.register<Controller.RomLoadingEvent> { loading.add(it) }
+    eventBus.register<Controller.LoadRomFailedEvent> { failures.add(it) }
+    eventBus.register<Controller.EmulationStoppedEvent> { stopped.add(it) }
+    eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      loading.clear()
+      val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+
+      eventBus.post(LoadRomEvent(invalidRom.toFile()))
+
+      assertEquals(invalidRom.toFile(), assertNotNull(loading.poll(1, TimeUnit.SECONDS)).rom)
+      assertEquals(invalidRom.toFile(), assertNotNull(failures.poll(1, TimeUnit.SECONDS)).rom)
+      assertNull(stopped.poll(100, TimeUnit.MILLISECONDS))
+      assertTrue(oldSession === privateList(controller, "sessions")[0])
+
+      // A synchronous parse/configuration error must not poison the frame loop or next load.
+      controller.runFrame()
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      assertTrue(oldSession !== privateList(controller, "sessions")[0])
+    } finally {
+      controller.close()
+      eventBus.close()
+      Files.deleteIfExists(invalidRom)
+    }
+  }
+
+  @Test
   fun failedSafePointBatteryPublishRetainsOldLinkedOwnershipAndLifecycle() {
     val eventBus = EventBusImpl()
     val controller =
