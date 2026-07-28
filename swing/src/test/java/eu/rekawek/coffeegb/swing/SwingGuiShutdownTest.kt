@@ -87,6 +87,7 @@ class SwingGuiShutdownTest {
             CONTROLLER_SHUTDOWN_BUDGET_MILLIS +
             GAMEPAD_SHUTDOWN_BUDGET_MILLIS +
             AUDIO_SHUTDOWN_BUDGET_MILLIS +
+            CAMERA_SHUTDOWN_BUDGET_MILLIS +
             ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS +
             SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS
 
@@ -480,6 +481,104 @@ class SwingGuiShutdownTest {
     assertTrue(failures.await(2, TimeUnit.SECONDS))
     assertEquals(0, commits.get())
     assertEquals(0, completions.get())
+  }
+
+  @Test
+  fun `camera commit waits for successful emulator stop and a failed close can be retried`() {
+    val attempts = AtomicInteger()
+    val cameraCloses = AtomicInteger()
+    val failures = CountDownLatch(1)
+    val completed = CountDownLatch(1)
+    val coordinator =
+        DesktopShutdownCoordinator(
+            shutdown = {
+              if (attempts.incrementAndGet() == 1) {
+                throw IOException("injected emulator stop failure")
+              }
+            },
+            commit = { cameraCloses.incrementAndGet() },
+            timeoutMillis = 2_000,
+            onPersistenceFailure = { _, _, _ ->
+              throw AssertionError("generic failure was classified as persistence")
+            },
+            onFailure = { failures.countDown() },
+            onTimeout = { throw AssertionError("shutdown timed out") },
+            onSuccess = { completed.countDown() },
+        )
+
+    assertTrue(coordinator.request())
+    assertTrue(failures.await(2, TimeUnit.SECONDS))
+    assertEquals(0, cameraCloses.get(), "a failed emulator stop must retain camera ownership")
+
+    assertTrue(coordinator.request())
+    assertTrue(completed.await(2, TimeUnit.SECONDS))
+    assertEquals(1, cameraCloses.get())
+    assertFalse(coordinator.request(), "successful close must reject double invocation")
+    assertEquals(1, cameraCloses.get())
+  }
+
+  @Test
+  fun `JVM participant skips camera after stop failure but still attempts independent cleanup`() {
+    val cameraCloses = AtomicInteger()
+    val laterCleanup = AtomicInteger()
+
+    assertFailsWith<IOException> {
+      runDesktopJvmShutdownSteps(
+          {
+            stopEmulatorBeforeCamera(
+                stopEmulator = { throw IOException("injected emulator stop failure") },
+                cameraAfterStop = { cameraCloses.incrementAndGet() },
+            )
+          },
+          { laterCleanup.incrementAndGet() },
+      )
+    }
+
+    assertEquals(0, cameraCloses.get())
+    assertEquals(1, laterCleanup.get())
+  }
+
+  @Test
+  fun `early JVM shutdown safely has no camera participant`() {
+    val emulatorStops = AtomicInteger()
+
+    stopEmulatorBeforeCamera(
+        stopEmulator = { emulatorStops.incrementAndGet() },
+        cameraAfterStop = null,
+    )
+
+    assertEquals(1, emulatorStops.get())
+  }
+
+  @Test
+  fun `JVM camera wait is bounded and hook double invocation is idempotent`() {
+    val cameraCloses = AtomicInteger()
+    val failures = AtomicInteger()
+    val camera =
+        BoundedCameraShutdown(
+            close = { cameraCloses.incrementAndGet() },
+            awaitTermination = { _, _ -> false },
+            edtOwnership = { false },
+        )
+    val coordinator =
+        DesktopJvmShutdownCoordinator(
+            fallback = { throw AssertionError("participant should replace fallback") },
+            timeoutMillis = 2_000,
+            onFailure = { failures.incrementAndGet() },
+        )
+    coordinator.installParticipant {
+      runDesktopJvmShutdownSteps(
+          {
+            // Emulator stop succeeded; only now may camera ownership become irreversible.
+            camera.closeAndAwait(25)
+          })
+    }
+
+    coordinator.createHook().run()
+    coordinator.createHook().run()
+
+    assertEquals(1, cameraCloses.get())
+    assertEquals(1, failures.get())
   }
 
   @Test

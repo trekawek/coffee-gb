@@ -35,6 +35,7 @@ internal const val ROM_OPEN_QUIESCE_SHUTDOWN_BUDGET_MILLIS = 5_000L
 internal const val CONTROLLER_SHUTDOWN_BUDGET_MILLIS = 8_000L
 internal const val GAMEPAD_SHUTDOWN_BUDGET_MILLIS = 1_000L
 internal const val AUDIO_SHUTDOWN_BUDGET_MILLIS = 2_250L
+internal const val CAMERA_SHUTDOWN_BUDGET_MILLIS = 1_000L
 internal const val ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS = 5_000L
 internal const val SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS = 5_000L
 internal const val DESKTOP_SHUTDOWN_SCHEDULING_MARGIN_MILLIS = 8_750L
@@ -43,6 +44,7 @@ internal const val DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS =
         CONTROLLER_SHUTDOWN_BUDGET_MILLIS +
         GAMEPAD_SHUTDOWN_BUDGET_MILLIS +
         AUDIO_SHUTDOWN_BUDGET_MILLIS +
+        CAMERA_SHUTDOWN_BUDGET_MILLIS +
         ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS +
         SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS
 internal const val DESKTOP_SHUTDOWN_TIMEOUT_MILLIS =
@@ -91,6 +93,7 @@ class SwingGui private constructor(
         commit = {
           // Only a timely, successful emulator stop makes desktop teardown irreversible. A
           // persistence failure or watchdog timeout retains a quiesced (not closed) ROM service.
+          menu.closeCameraAfterSuccessfulStop(CAMERA_SHUTDOWN_BUDGET_MILLIS)
           romOpen.close()
           stateUxController.close()
           console?.stop()
@@ -148,7 +151,21 @@ class SwingGui private constructor(
     jvmShutdown.installParticipant {
       runDesktopJvmShutdownSteps(
           romOpen::quiesce,
-          emulator::stop,
+          {
+            // Keep this a single step: runDesktopJvmShutdownSteps attempts later independent
+            // cleanup after a failure, but camera ownership must survive a failed emulator stop.
+            stopEmulatorBeforeCamera(
+                emulator::stop,
+                if (::menu.isInitialized) {
+                  {
+                    menu.closeCameraAfterSuccessfulStop(
+                        CAMERA_SHUTDOWN_BUDGET_MILLIS)
+                  }
+                } else {
+                  null
+                },
+            )
+          },
           romOpen::close,
           properties::close,
       )
@@ -537,6 +554,14 @@ internal fun runDesktopJvmShutdownSteps(vararg steps: () -> Unit) {
     }
   }
   failure?.let { throw it }
+}
+
+internal fun stopEmulatorBeforeCamera(
+    stopEmulator: () -> Unit,
+    cameraAfterStop: (() -> Unit)?,
+) {
+  stopEmulator()
+  cameraAfterStop?.invoke()
 }
 
 /**
