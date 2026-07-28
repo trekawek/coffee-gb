@@ -102,6 +102,9 @@ public class NativePackageIT {
             assertTrue(
                     Files.readString(result.association())
                             .contains("icon=input/coffee-gb." + result.target().iconSuffix()));
+            assertEquals(
+                    "arguments=--debug\nwin-console=true\n",
+                    Files.readString(result.windowsConsoleLauncher()));
             if (target == NativeTarget.LINUX_X86_64) {
                 String desktopTemplate = Files.readString(
                         result.jpackageResources().resolve("Coffee GB.desktop"));

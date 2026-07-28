@@ -147,14 +147,18 @@ public final class NativePackageTool {
             if (!Files.isRegularFile(launcher, LinkOption.NOFOLLOW_LINKS)) {
                 throw new IOException("jpackage app-image launcher is missing: " + launcher);
             }
-            ProcessResult launched = runCapturedResult(List.of(launcher.toString(), "--version"));
+            Path commandLauncher = plan.expectedCommandLauncher(destination, targetMetadata);
+            if (!Files.isRegularFile(commandLauncher, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException(
+                        "jpackage command launcher is missing: " + commandLauncher);
+            }
+            ProcessResult launched =
+                    runCapturedResult(List.of(commandLauncher.toString(), "--version"));
             if (launched.exitCode != 0) {
                 throw new IOException(
                         "Packaged launcher --version failed with exit " + launched.exitCode);
             }
-            if (!launched.output.isBlank()) {
-                verifyVersionOutput(launched.output, stage.appVersion());
-            }
+            verifyVersionOutput(launched.output, stage.appVersion());
             primaryArtifact = destination.resolve(
                     targetMetadata.hostOs() == NativePackageMetadata.HostOs.MACOS
                             ? NativePackageMetadata.APPLICATION_NAME + ".app"

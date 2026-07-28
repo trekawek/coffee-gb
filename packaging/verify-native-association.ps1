@@ -32,17 +32,23 @@ if ($Installers.Count -ne 1) {
     throw "Expected exactly one MSI installer, found $($Installers.Count)"
 }
 
-$Fixture = Join-Path $SmokeRoot "Coffee GB association smoke.gb"
-$Marker = Join-Path $SmokeRoot "association-opened.marker"
-& java `
-    -cp $AppJars[0].FullName `
-    "eu.rekawek.coffeegb.swing.PackageAssociationFixture" `
-    $Fixture
-if ($LASTEXITCODE -ne 0) {
-    throw "Association fixture generation failed with exit code $LASTEXITCODE"
-}
-if ((Get-Item -LiteralPath $Fixture).Length -ne 32768) {
-    throw "Generated association fixture has the wrong size"
+$Fixtures = @(".gb", ".gbc", ".rom") | ForEach-Object {
+    $Fixture = Join-Path $SmokeRoot "Coffee GB association smoke$_"
+    & java `
+        -cp $AppJars[0].FullName `
+        "eu.rekawek.coffeegb.swing.PackageAssociationFixture" `
+        $Fixture
+    if ($LASTEXITCODE -ne 0) {
+        throw "$_ association fixture generation failed with exit code $LASTEXITCODE"
+    }
+    if ((Get-Item -LiteralPath $Fixture).Length -ne 32768) {
+        throw "Generated $_ association fixture has the wrong size"
+    }
+    [PSCustomObject]@{
+        Extension = $_
+        Path = $Fixture
+        Marker = Join-Path $SmokeRoot "association-opened-$($_.Substring(1)).marker"
+    }
 }
 
 function Invoke-Msi {
@@ -123,6 +129,12 @@ try {
     if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
         throw "Registered Coffee GB launcher does not exist: $Launcher"
     }
+    $ConsoleLauncher = Join-Path `
+        (Split-Path -Parent $Launcher) `
+        "Coffee GB Console.exe"
+    if (-not (Test-Path -LiteralPath $ConsoleLauncher -PathType Leaf)) {
+        throw "Installed Coffee GB console launcher does not exist: $ConsoleLauncher"
+    }
 
     $StartMenu = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Coffee GB"
     if (-not (Get-ChildItem -LiteralPath $StartMenu -Filter "*.lnk" -File)) {
@@ -130,41 +142,49 @@ try {
     }
 
     $env:_JAVA_OPTIONS = "-Djava.awt.headless=false -Duser.home=$($HomeRoot.FullName) -Dcoffee-gb.native.cache=$($NativeCache.FullName)"
-    $env:COFFEE_GB_ASSOCIATION_SMOKE_MARKER = $Marker
-    Start-Process -FilePath $Fixture
+    foreach ($Fixture in $Fixtures) {
+        $env:COFFEE_GB_ASSOCIATION_SMOKE_MARKER = $Fixture.Marker
+        # Start-Process delegates to ShellExecute for a document path. This must select the
+        # installed default handler; invoking Coffee GB.exe directly would not prove association.
+        Start-Process -FilePath $Fixture.Path
 
-    $Deadline = [DateTime]::UtcNow.AddSeconds(60)
-    while (-not (Test-Path -LiteralPath $Marker -PathType Leaf) -and
-           [DateTime]::UtcNow -lt $Deadline) {
-        Start-Sleep -Milliseconds 100
-    }
-    if (-not (Test-Path -LiteralPath $Marker -PathType Leaf)) {
-        throw "Timed out waiting for the installed Windows association result"
-    }
-    $Evidence = Get-Content -LiteralPath $Marker
-    foreach ($Expected in @(
-        "Coffee GB association open OK",
-        "source=INITIAL_ARGUMENT",
-        "rom=$Fixture",
-        "title=COFFEE-CI-SMOKE"
-    )) {
-        if ($Evidence -cnotcontains $Expected) {
-            throw "Association evidence is missing '$Expected': $($Evidence -join '; ')"
+        $Deadline = [DateTime]::UtcNow.AddSeconds(60)
+        while (-not (Test-Path -LiteralPath $Fixture.Marker -PathType Leaf) -and
+               [DateTime]::UtcNow -lt $Deadline) {
+            Start-Sleep -Milliseconds 100
         }
-    }
+        if (-not (Test-Path -LiteralPath $Fixture.Marker -PathType Leaf)) {
+            throw "Timed out waiting for the installed Windows $($Fixture.Extension) association result"
+        }
+        $Evidence = Get-Content -LiteralPath $Fixture.Marker
+        foreach ($Expected in @(
+            "Coffee GB association open OK",
+            "source=INITIAL_ARGUMENT",
+            "rom=$($Fixture.Path)",
+            "title=COFFEE-CI-SMOKE"
+        )) {
+            if ($Evidence -cnotcontains $Expected) {
+                throw "Association evidence is missing '$Expected': $($Evidence -join '; ')"
+            }
+        }
 
-    $Deadline = [DateTime]::UtcNow.AddSeconds(60)
-    while ((Get-CoffeeGbProcesses).Count -gt 0 -and [DateTime]::UtcNow -lt $Deadline) {
-        Start-Sleep -Milliseconds 100
-    }
-    if ((Get-CoffeeGbProcesses).Count -gt 0) {
-        throw "The Windows application did not complete bounded shutdown"
+        $Deadline = [DateTime]::UtcNow.AddSeconds(60)
+        while ((Get-CoffeeGbProcesses).Count -gt 0 -and
+               [DateTime]::UtcNow -lt $Deadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        if ((Get-CoffeeGbProcesses).Count -gt 0) {
+            throw "The Windows $($Fixture.Extension) application did not complete bounded shutdown"
+        }
     }
 
     Invoke-Msi -Action "/x" -Log (Join-Path $SmokeRoot "uninstall.log")
     $Installed = $false
     if (Test-Path -LiteralPath $Launcher) {
         throw "The Windows launcher remained after MSI uninstall: $Launcher"
+    }
+    if (Test-Path -LiteralPath $ConsoleLauncher) {
+        throw "The Windows console launcher remained after MSI uninstall: $ConsoleLauncher"
     }
     foreach ($Association in $Associations) {
         $Key = "Registry::HKEY_CLASSES_ROOT\$($Association.Extension)"

@@ -20,6 +20,7 @@ import java.util.regex.Pattern;
 public final class NativePackageMetadata {
 
     public static final String APPLICATION_NAME = "Coffee GB";
+    public static final String WINDOWS_CONSOLE_LAUNCHER_NAME = "Coffee GB Console";
     public static final String APPLICATION_ID = "eu.rekawek.coffeegb";
     public static final String MAIN_CLASS = "eu.rekawek.coffeegb.swing.MainKt";
     public static final String VENDOR = "Coffee GB contributors";

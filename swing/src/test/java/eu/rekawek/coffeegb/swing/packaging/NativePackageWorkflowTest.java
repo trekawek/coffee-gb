@@ -17,6 +17,11 @@ public class NativePackageWorkflowTest {
         String packages = Files.readString(workflows.resolve("native-packages.yml"));
         String release = Files.readString(workflows.resolve("maven-release.yml"));
         String maven = Files.readString(workflows.resolve("maven.yml"));
+        Path packaging = Path.of("../packaging").toAbsolutePath().normalize();
+        String associationSh =
+                Files.readString(packaging.resolve("verify-native-association.sh"));
+        String associationPs1 =
+                Files.readString(packaging.resolve("verify-native-association.ps1"));
 
         for (String target :
                 new String[] {
@@ -73,6 +78,14 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("name: native-release-bundle"));
         assertFalse(packages.contains("gh release"));
         assertFalse(packages.contains("contents: write"));
+        for (String extension : new String[] {"gb", "gbc", "rom"}) {
+            assertTrue(associationSh.contains(extension));
+            assertTrue(associationPs1.contains("." + extension));
+        }
+        assertTrue(associationSh.contains("open \"$fixture\""));
+        assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
+        assertTrue(associationPs1.contains("Start-Process -FilePath $Fixture.Path"));
+        assertTrue(associationPs1.contains("Coffee GB Console.exe"));
 
         assertTrue(release.contains("uses: ./.github/workflows/native-packages.yml"));
         assertTrue(release.contains("checkout_ref: ${{ needs.prepare.outputs.tag_ref }}"));
