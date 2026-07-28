@@ -55,7 +55,6 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.ButtonGroup
 import javax.swing.DefaultListCellRenderer
@@ -109,6 +108,8 @@ internal class SwingMenu(
       }
 
   private lateinit var cameraController: CameraPeripheralController<WebcamCameraSource>
+
+  private lateinit var cameraShutdown: BoundedCameraShutdown
 
   private var currentRomFileName: String? = null
 
@@ -210,18 +211,11 @@ internal class SwingMenu(
     window.jMenuBar = menuBar
   }
 
-  fun close() {
-    check(SwingUtilities.isEventDispatchThread()) {
-      "Menu peripherals must be closed from the Event Dispatch Thread"
-    }
-    if (::cameraController.isInitialized) {
-      cameraController.close()
+  fun closeCameraAfterSuccessfulStop(timeoutMillis: Long) {
+    if (::cameraShutdown.isInitialized) {
+      cameraShutdown.closeAndAwait(timeoutMillis)
     }
   }
-
-  fun awaitCameraShutdown(timeoutMillis: Long): Boolean =
-      !::cameraController.isInitialized ||
-          cameraController.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS)
 
   private fun createFileMenu(): JMenu {
     val fileMenu = JMenu("File")
@@ -713,6 +707,11 @@ internal class SwingMenu(
                 )
               }
             },
+        )
+    cameraShutdown =
+        BoundedCameraShutdown(
+            cameraController::close,
+            cameraController::awaitTermination,
         )
     camera.addActionListener {
       cameraController.requestEnabled(camera.state)

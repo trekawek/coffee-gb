@@ -2,11 +2,13 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.memory.cart.type.CameraSource
 import java.io.Closeable
+import java.io.IOException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
 import org.slf4j.LoggerFactory
 
@@ -216,7 +218,6 @@ internal class CameraPeripheralController<T : CameraSource>(
       synchronized(stateLock) { !closed && desired && operation == expectedOperation }
 
   override fun close() {
-    requireEdt()
     val source: T?
     synchronized(stateLock) {
       if (closed) return
@@ -228,9 +229,19 @@ internal class CameraPeripheralController<T : CameraSource>(
       source = active
       active = null
     }
-    publisher(null)
-    source?.let(::closeAsync)
-    executor.shutdown()
+    try {
+      if (edtOwnership()) {
+        publisher(null)
+      } else {
+        uiDispatcher { publisher(null) }
+      }
+    } finally {
+      try {
+        source?.let(::closeAsync)
+      } finally {
+        executor.shutdown()
+      }
+    }
   }
 
   fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean {
@@ -244,5 +255,46 @@ internal class CameraPeripheralController<T : CameraSource>(
 
   companion object {
     private val LOG = LoggerFactory.getLogger(CameraPeripheralController::class.java)
+  }
+}
+
+/**
+ * Starts one non-blocking camera close and bounds every wait against the caller's remaining
+ * shutdown allocation. A timeout keeps the close claimed so a retry only awaits the same worker.
+ */
+internal class BoundedCameraShutdown(
+    private val close: () -> Unit,
+    private val awaitTermination: (Long, TimeUnit) -> Boolean,
+    private val nanoTime: () -> Long = System::nanoTime,
+    private val edtOwnership: () -> Boolean = SwingUtilities::isEventDispatchThread,
+) {
+  private val closeRequested = AtomicBoolean()
+
+  @Throws(IOException::class)
+  fun closeAndAwait(timeoutMillis: Long) {
+    require(timeoutMillis > 0) { "Camera shutdown timeout must be positive" }
+    check(!edtOwnership()) { "camera worker must not be awaited on the EDT" }
+    val budgetNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    val started = nanoTime()
+    if (closeRequested.compareAndSet(false, true)) {
+      try {
+        close()
+      } catch (failure: Exception) {
+        closeRequested.set(false)
+        throw failure
+      }
+    }
+    val elapsed = (nanoTime() - started).coerceAtLeast(0)
+    val remaining = budgetNanos - elapsed
+    val completed =
+        try {
+          remaining > 0 && awaitTermination(remaining, TimeUnit.NANOSECONDS)
+        } catch (interrupted: InterruptedException) {
+          Thread.currentThread().interrupt()
+          throw IOException("Camera shutdown was interrupted", interrupted)
+        }
+    if (!completed) {
+      throw IOException("Camera shutdown exceeded $timeoutMillis ms")
+    }
   }
 }

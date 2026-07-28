@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.memory.cart.type.CameraSource
 import java.awt.image.BufferedImage
+import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -220,6 +221,81 @@ class CameraPeripheralControllerTest {
     assertEquals(listOf(CameraPeripheralUiState.Opening), states)
     assertFalse(publications.contains(source))
     assertEquals(null, publications.last())
+  }
+
+  @Test
+  fun `lifecycle close is safe off EDT and remains idempotent`() {
+    val source = TestSource()
+    val enabled = CountDownLatch(1)
+    val detached = CountDownLatch(1)
+    val closes = AtomicInteger()
+    val controller =
+        CameraPeripheralController(
+            opener = { source },
+            sourceCloser = { closes.incrementAndGet() },
+            publisher = {
+              assertTrue(SwingUtilities.isEventDispatchThread())
+              if (it == null) detached.countDown()
+            },
+            stateConsumer = {
+              assertTrue(SwingUtilities.isEventDispatchThread())
+              if (it == CameraPeripheralUiState.Enabled) enabled.countDown()
+            },
+        )
+
+    onEdt { controller.requestEnabled(true) }
+    assertTrue(enabled.await(3, TimeUnit.SECONDS))
+    controller.close()
+    controller.close()
+
+    assertTrue(controller.awaitTermination(3, TimeUnit.SECONDS))
+    assertTrue(detached.await(3, TimeUnit.SECONDS))
+    assertEquals(1, closes.get())
+  }
+
+  @Test
+  fun `bounded lifecycle timeout retries the same close and double success stays idempotent`() {
+    val closes = AtomicInteger()
+    val awaits = AtomicInteger()
+    val shutdown =
+        BoundedCameraShutdown(
+            close = { closes.incrementAndGet() },
+            awaitTermination = { timeout, unit ->
+              assertTrue(timeout > 0)
+              assertEquals(TimeUnit.NANOSECONDS, unit)
+              awaits.incrementAndGet() > 1
+            },
+            edtOwnership = { false },
+        )
+
+    val timeout =
+        assertFailsWith<IOException> { shutdown.closeAndAwait(25) }
+    assertTrue(timeout.message!!.contains("exceeded"))
+    shutdown.closeAndAwait(25)
+    shutdown.closeAndAwait(25)
+
+    assertEquals(1, closes.get())
+    assertEquals(3, awaits.get())
+  }
+
+  @Test
+  fun `bounded lifecycle resets its claim when starting close fails`() {
+    val closes = AtomicInteger()
+    val shutdown =
+        BoundedCameraShutdown(
+            close = {
+              if (closes.incrementAndGet() == 1) {
+                throw IOException("injected close failure")
+              }
+            },
+            awaitTermination = { _, _ -> true },
+            edtOwnership = { false },
+        )
+
+    assertFailsWith<IOException> { shutdown.closeAndAwait(25) }
+    shutdown.closeAndAwait(25)
+
+    assertEquals(2, closes.get())
   }
 
   private class TestSource : CameraSource {
