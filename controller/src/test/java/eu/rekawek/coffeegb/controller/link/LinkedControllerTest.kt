@@ -25,7 +25,9 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerProtoco
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsCodec
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsStore
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.ApplyStage
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
@@ -1580,9 +1582,14 @@ class LinkedControllerTest {
     val slot = directory.resolve("private-slot.7z")
     val settings = directory.resolve("settings.properties")
     Files.write(slot, byteArrayOf(0x37, 0x7a, 0xbc.toByte(), 0xaf.toByte()))
-    Files.writeString(
+    Files.write(
         settings,
-        "schema.version=4\n${EmulatorProperties.Key.DatelSlotRom.propertyName}=$slot\n",
+        ApplicationSettingsStore.encodeProperties(
+            mapOf(
+                ApplicationSettingsCodec.SCHEMA_VERSION_KEY to
+                    ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+                EmulatorProperties.Key.DatelSlotRom.propertyName to slot.toString(),
+            )),
     )
     val properties = EmulatorProperties(settingsPath = settings)
     try {
@@ -1613,9 +1620,14 @@ class LinkedControllerTest {
       output.write(slotBytes)
       output.closeEntry()
     }
-    Files.writeString(
+    Files.write(
         settings,
-        "schema.version=4\n${EmulatorProperties.Key.DatelSlotRom.propertyName}=$slot\n",
+        ApplicationSettingsStore.encodeProperties(
+            mapOf(
+                ApplicationSettingsCodec.SCHEMA_VERSION_KEY to
+                    ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+                EmulatorProperties.Key.DatelSlotRom.propertyName to slot.toString(),
+            )),
     )
     val properties = EmulatorProperties(settingsPath = settings)
     try {

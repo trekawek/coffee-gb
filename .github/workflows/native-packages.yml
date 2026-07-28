@@ -161,8 +161,11 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus xdg-utils
           command -v desktop-file-validate >/dev/null
+          command -v xdg-desktop-menu >/dev/null
+          test -d /etc/xdg/menus
+          test -d /usr/share/desktop-directories
 
       - name: Build, test, inspect, and package
         if: runner.os != 'Windows'
@@ -473,8 +476,11 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus xdg-utils
           command -v desktop-file-validate >/dev/null
+          command -v xdg-desktop-menu >/dev/null
+          test -d /etc/xdg/menus
+          test -d /usr/share/desktop-directories
 
       - name: Import isolated Linux signing key
         if: runner.os == 'Linux'

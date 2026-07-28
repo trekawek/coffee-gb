@@ -19,15 +19,26 @@ internal class RomFileChooser : JFileChooser() {
     currentDirectory = SyntacticDirectoryFile(path.toAbsolutePath().normalize().toString())
   }
 
-  override fun isTraversable(file: File): Boolean =
-      if (file is SyntacticDirectoryFile) true else super.isTraversable(file)
+  override fun isTraversable(file: File?): Boolean =
+      when (file) {
+        is SyntacticDirectoryFile -> true
+        null -> false
+        else -> super.isTraversable(file)
+      }
 
-  override fun getName(file: File): String =
-      if (file is SyntacticDirectoryFile) file.name.ifEmpty { file.path } else super.getName(file)
+  override fun getName(file: File?): String? =
+      when (file) {
+        is SyntacticDirectoryFile -> file.name.ifEmpty { file.path }
+        null -> null
+        else -> super.getName(file)
+      }
 
-  override fun getIcon(file: File): Icon? =
-      if (file is SyntacticDirectoryFile) UIManager.getIcon("FileView.directoryIcon")
-      else super.getIcon(file)
+  override fun getIcon(file: File?): Icon? =
+      when (file) {
+        is SyntacticDirectoryFile -> UIManager.getIcon("FileView.directoryIcon")
+        null -> null
+        else -> super.getIcon(file)
+      }
 
   private class SyntacticDirectoryFile(path: String) : File(path) {
     override fun exists(): Boolean = true

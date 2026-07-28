@@ -625,6 +625,10 @@ class PreferencesDialogTest {
         val chooser = RomFileChooser()
         val configured = Paths.get("stale/network/roms")
 
+        // macOS asks JFileChooser about its initially null directory during construction.
+        assertFalse(chooser.isTraversable(null))
+        assertEquals(null, chooser.getName(null))
+        assertEquals(null, chooser.getIcon(null))
         chooser.useConfiguredDirectory(configured)
 
         assertEquals(false, chooser.getClientProperty("FileChooser.useShellFolder"))
@@ -639,7 +643,7 @@ class PreferencesDialogTest {
         )
         generateSequence(chooser.currentDirectory, File::getParentFile).forEach { directory ->
           assertFalse(directory.canWrite())
-          assertFalse(chooser.getName(directory).isBlank())
+          assertFalse(chooser.getName(directory).orEmpty().isBlank())
           assertEquals(
               UIManager.getIcon("FileView.directoryIcon"),
               chooser.getIcon(directory),

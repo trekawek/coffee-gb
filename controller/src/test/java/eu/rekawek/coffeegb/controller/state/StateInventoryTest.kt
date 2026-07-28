@@ -47,7 +47,9 @@ class StateInventoryTest {
                           "DetachedStateAdapter.capture(" in source ||
                           "MachineSnapshot.capture(" in source
                     }
-                    .map { repository.relativize(it).toString() }
+                    .map { path ->
+                      repository.relativize(path).joinToString("/") { it.toString() }
+                    }
                     .toList()
               }
             }
@@ -62,6 +64,7 @@ class StateInventoryTest {
             .sorted()
 
     assertEquals(99, discovered.size)
+    assertTrue(discovered.all { '\\' !in it })
     assertEquals(discovered, documented)
   }
 

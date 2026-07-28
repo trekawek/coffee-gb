@@ -5,6 +5,7 @@ import org.junit.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -52,10 +53,13 @@ public class NativePackageWorkflowTest {
                 "Install package and open the synthetic ROM through the OS association"));
         assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
-        assertTrue(packages.contains("desktop-file-utils"));
-        assertTrue(packages.contains("command -v desktop-file-validate"));
-        assertTrue(packages.indexOf("desktop-file-utils")
-                != packages.lastIndexOf("desktop-file-utils"));
+        assertEquals(2, occurrences(packages,
+                "sudo apt-get install --yes --no-install-recommends "
+                        + "desktop-file-utils gnome-menus xdg-utils"));
+        assertEquals(2, occurrences(packages, "command -v desktop-file-validate"));
+        assertEquals(2, occurrences(packages, "command -v xdg-desktop-menu"));
+        assertEquals(2, occurrences(packages, "test -d /etc/xdg/menus"));
+        assertEquals(2, occurrences(packages, "test -d /usr/share/desktop-directories"));
         assertTrue(packages.contains("environment: native-release"));
         assertTrue(packages.contains("inputs.release_signing"));
         assertFalse(packages.contains(
@@ -157,5 +161,15 @@ public class NativePackageWorkflowTest {
                 "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"));
         assertTrue(maven.contains(
                 "actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95"));
+    }
+
+    private static int occurrences(String value, String needle) {
+        int count = 0;
+        int offset = 0;
+        while ((offset = value.indexOf(needle, offset)) >= 0) {
+            count++;
+            offset += needle.length();
+        }
+        return count;
     }
 }

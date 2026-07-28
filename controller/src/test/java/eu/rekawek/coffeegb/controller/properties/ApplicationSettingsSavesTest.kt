@@ -81,13 +81,16 @@ class ApplicationSettingsSavesTest {
 
     val encoded = ApplicationSettingsCodec.encode(document)
     assertEquals("5", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
-    assertEquals("/new/é", encoded[ApplicationSettingsCodec.SAVE_DIRECTORY_KEY])
     assertEquals(
-        "/old/一",
+        Path.of("/new/é").toString(),
+        encoded[ApplicationSettingsCodec.SAVE_DIRECTORY_KEY],
+    )
+    assertEquals(
+        Path.of("/old/一").toString(),
         encoded["${ApplicationSettingsCodec.PREVIOUS_SAVE_DIRECTORY_PREFIX}0"],
     )
     assertEquals(
-        "/old/two",
+        Path.of("/old/two").toString(),
         encoded["${ApplicationSettingsCodec.PREVIOUS_SAVE_DIRECTORY_PREFIX}1"],
     )
     assertEquals("false", encoded[ApplicationSettingsCodec.BATTERY_SAVES_KEY])
