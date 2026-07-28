@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.Bios
 import eu.rekawek.coffeegb.swing.SwingGui.Companion.run
+import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap
 import java.io.File
 import java.io.PrintStream
 import kotlin.system.exitProcess
@@ -32,6 +33,9 @@ private sealed class CliCommand {
 fun main(args: Array<String>) {
   val exitCode =
       runCli(args, System.out, System.err, applicationVersion()) { request ->
+        // Help/version never perform package I/O. A real launch resolves native resources on this
+        // caller thread before Swing or the emulation timing thread exists.
+        NativeRuntimeBootstrap.bootstrapFromSystem()
         run(request.debug, request.initialRom, request.settingsOverrides)
       }
   if (exitCode != SUCCESS) {

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 https://maven.apache.org/xsd/assembly-2.2.0.xsd">
+    <id>app</id>
+    <formats>
+        <format>jar</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    <fileSets>
+        <fileSet>
+            <!-- Use compiled project output directly so this descriptor can never ingest
+                 the universal fat JAR that replaces Maven's main artifact later. -->
+            <directory>${project.build.outputDirectory}</directory>
+            <outputDirectory>/</outputDirectory>
+        </fileSet>
+    </fileSets>
+    <dependencySets>
+        <dependencySet>
+            <useProjectArtifact>false</useProjectArtifact>
+            <scope>runtime</scope>
+            <unpack>true</unpack>
+            <unpackOptions>
+                <!-- The app artifact is the target-neutral input to jlink/jpackage.
+                     Native code is supplied only by an explicit locked target bundle. -->
+                <excludes>
+                    <exclude>**/*.dll</exclude>
+                    <exclude>**/*.dylib</exclude>
+                    <exclude>**/*.jnilib</exclude>
+                    <exclude>**/*.so</exclude>
+                    <exclude>**/*.so.*</exclude>
+                    <exclude>**/*.a</exclude>
+                    <exclude>**/*.bundle</exclude>
+                    <exclude>**/*.node</exclude>
+                </excludes>
+            </unpackOptions>
+        </dependencySet>
+    </dependencySets>
+</assembly>

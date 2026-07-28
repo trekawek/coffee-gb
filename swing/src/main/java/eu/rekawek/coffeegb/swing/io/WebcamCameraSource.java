@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.core.memory.cart.type.CameraSource;
+import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap;
 import nu.pattern.OpenCV;
 import org.opencv.core.Mat;
 import org.opencv.videoio.VideoCapture;
@@ -9,6 +10,8 @@ import org.slf4j.LoggerFactory;
 
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferByte;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * A live {@link CameraSource} for the Game Boy (Pocket) Camera, backed by a real webcam
@@ -52,7 +55,17 @@ public class WebcamCameraSource implements CameraSource, AutoCloseable {
     public static synchronized WebcamCameraSource open() {
         try {
             if (!nativeLoaded) {
-                OpenCV.loadLocally();
+                String packaged =
+                        System.getProperty(NativeRuntimeBootstrap.OPENCV_LIBRARY_PROPERTY, "");
+                if (!packaged.isBlank()) {
+                    Path library = Path.of(packaged).toAbsolutePath().normalize();
+                    if (!Files.isRegularFile(library)) {
+                        throw new IllegalStateException("Packaged OpenCV library is missing");
+                    }
+                    System.load(library.toString());
+                } else {
+                    OpenCV.loadLocally();
+                }
                 nativeLoaded = true;
             }
             VideoCapture capture = new VideoCapture(0);

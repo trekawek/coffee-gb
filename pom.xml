@@ -28,6 +28,8 @@
     </scm>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Release preparation updates this value; archive plugins use it for reproducible bytes. -->
+        <project.build.outputTimestamp>2026-07-28T00:00:00Z</project.build.outputTimestamp>
         <kotlin.version>2.4.0</kotlin.version>
         <skipTests>false</skipTests>
         <skip.unit.tests>${skipTests}</skip.unit.tests>
@@ -83,6 +85,11 @@
                     <!-- Enforce both Java 16 syntax and its API surface when CI runs on a newer JDK. -->
                     <release>16</release>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

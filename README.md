@@ -378,12 +378,21 @@ cd coffee-gb
 mvn clean package
 ```
 
-The executable fat JAR is created in `swing/target/`. On a development snapshot,
-run it with:
+The executable universal fat JAR is created in `swing/target/`. It retains the
+portable-JAR behavior and all dependency-provided native libraries. On a
+development snapshot, run it with:
 
 ```bash
 java -jar swing/target/coffee-gb-*-SNAPSHOT.jar
 ```
+
+The same Maven build also attaches `coffee-gb-VERSION-app.jar`. That smaller artifact contains the
+same application and dependency classes but deliberately contains no platform-native binaries; it
+is the authoritative input for target-specific `jlink`/`jpackage` work, not a replacement download
+for the universal JAR. `mvn verify` checks both inventories and launches `--version` from both
+artifacts. See the [native packaging foundation](docs/native-packaging.md) for the locked target
+allowlists, external native-source contract, cache safety, macOS SDL limitation, and dependency
+update procedure.
 
 ## Kudos
 
