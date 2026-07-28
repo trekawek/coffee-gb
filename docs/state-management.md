@@ -21,9 +21,15 @@ The browser is modeless and keyboard-accessible:
 - <kbd>Escape</kbd> closes the browser.
 
 Saving, loading, deleting, exporting, and refreshing show completion or failure in both the browser
-and the emulator display. Errors include a selectable, copyable diagnostic. A corrupt or
+and the emulator display. Errors include a selectable, copyable diagnostic with host paths redacted
+and hostile text bounded before display. A corrupt or
 incompatible state remains visible with loading disabled, so it can still be inspected, exported,
 or deleted from the exact source in which it was found.
+
+State disk work uses one bounded worker queue. Repeated refresh, resume-scan, and screenshot requests
+are coalesced, queue saturation is reported as a normal operation failure, and ROM-switch/close
+autosaves run ahead of queued manual work. Shutdown first drains the queue and then interrupts and
+fully awaits the worker if the drain deadline expires.
 
 The original <kbd>F5</kbd>/<kbd>F7</kbd> quick save/load shortcuts and their `.sn0`-`.sn9` files
 remain supported for compatibility. They are separate from the managed browser's stable slots.
@@ -60,7 +66,13 @@ Every state directory has an authoritative `state.cgbstate`. Optional `metadata.
 hash-bound `thumbnail-<state SHA-256>.png` are sidecars; missing or damaged sidecars never make an
 otherwise valid state unloadable. Saves use temporary files, durable flushes, and collision-safe
 renames. Recovery scans clean abandoned temporary/backup files and report what was recovered.
-Exports never replace an existing destination.
+Exports and screenshots use target-associated temporary files; a bounded recovery scan removes
+abandoned files belonging to that exact target and reports the cleanup. Exports never replace an
+existing destination.
+
+Existing filesystem components are checked without following the final component before repository
+access. A symlinked configured/game root or descendant is rejected rather than allowing state writes
+to escape the selected path.
 
 Changing the configured directory does not strand existing states. The default root and the most
 recent previous configured roots remain read-only browser fallbacks, bounded to four fallback

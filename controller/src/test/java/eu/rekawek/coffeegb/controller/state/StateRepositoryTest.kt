@@ -276,6 +276,30 @@ class StateRepositoryTest {
   }
 
   @Test
+  fun `export reports target-associated crash temporary cleanup`() {
+    val fixture = machineFixture()
+    val layout = StateStorageLayout(Files.createTempDirectory("state-export-recovery"))
+    val repository = StateRepository(layout)
+    val ref = StateRef.Slot(5)
+    repository.save(ref, fixture.plain, StateSaveMetadata(savedAt = SAVE_TIME))
+    val destination =
+        Files.createTempDirectory("state-export-destination").resolve("portable.cgbstate")
+    val stale =
+        Files.createTempFile(
+            destination.parent,
+            ExclusiveFileWriter.temporaryPrefix(destination),
+            ".part",
+        )
+
+    val exported = repository.export(ref, destination)
+
+    assertEquals(destination, exported.destination)
+    assertEquals(1, exported.recovery.staleTemporaryFilesRemoved)
+    assertFalse(Files.exists(stale))
+    assertContentEquals(fixture.plain, Files.readAllBytes(destination))
+  }
+
+  @Test
   fun `rapid repeated saves remain state metadata consistent and artifact free`() {
     val fixture = machineFixture()
     val layout = StateStorageLayout(Files.createTempDirectory("state-repository-rapid"))
@@ -458,6 +482,28 @@ class StateRepositoryTest {
     assertFailsWith<IOException> {
       repository.save(symlinkRef, fixture.plain, StateSaveMetadata(savedAt = SAVE_TIME))
     }
+  }
+
+  @Test
+  fun `repository rejects a symlinked game root before writing outside it`() {
+    val fixture = machineFixture()
+    val parent = Files.createTempDirectory("state-repository-root-link")
+    val outside = Files.createTempDirectory("state-repository-root-outside")
+    val linkedRoot = parent.resolve("linked-game")
+    try {
+      Files.createSymbolicLink(linkedRoot, outside)
+    } catch (_: UnsupportedOperationException) {
+      return
+    } catch (_: IOException) {
+      return
+    }
+
+    val layout = StateStorageLayout(linkedRoot)
+    assertFailsWith<IOException> {
+      StateRepository(layout)
+          .save(StateRef.Slot(0), fixture.plain, StateSaveMetadata(savedAt = SAVE_TIME))
+    }
+    assertFalse(Files.exists(outside.resolve(StateStorageLayout.STATES_DIRECTORY)))
   }
 
   @Test

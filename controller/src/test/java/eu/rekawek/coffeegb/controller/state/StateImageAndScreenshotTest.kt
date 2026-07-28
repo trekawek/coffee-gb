@@ -86,4 +86,42 @@ class StateImageAndScreenshotTest {
     assertFalse(rawText.contains("secret-game.gb"))
     assertFalse(rawText.contains("/private/roms"))
   }
+
+  @Test
+  fun `screenshot removes and reports only target-associated stale temporary files`() {
+    val directory = Files.createTempDirectory("state-screenshot-recovery")
+    val instant = Instant.parse("2026-07-28T03:04:05.006Z")
+    val target = directory.resolve("coffee-gb-20260728-030405-006.png")
+    val owned =
+        Files.createTempFile(
+            directory,
+            ExclusiveFileWriter.temporaryPrefix(target),
+            ".part",
+        )
+    val unrelated = Files.createTempFile(directory, ".coffeegb-new-unrelated-", ".part")
+
+    val result =
+        StateScreenshotStore(directory, Clock.fixed(instant, ZoneOffset.UTC))
+            .save(StateImage(1, 1, intArrayOf(0)), "dmg")
+
+    assertEquals(1, result.recovery.staleTemporaryFilesRemoved)
+    assertFalse(Files.exists(owned))
+    assertTrue(Files.exists(unrelated))
+  }
+
+  @Test
+  fun `exclusive stale temporary scan is bounded before cleanup`() {
+    val directory = Files.createTempDirectory("state-screenshot-recovery-bound")
+    val target = directory.resolve("capture.png")
+    val stale =
+        (0..ExclusiveFileWriter.MAX_STALE_TEMPORARY_FILES).map {
+          Files.createTempFile(directory, ExclusiveFileWriter.temporaryPrefix(target), ".part")
+        }
+
+    assertFailsWith<IOException> {
+      ExclusiveFileWriter.write(target, byteArrayOf(1))
+    }
+    assertTrue(stale.all(Files::exists))
+    assertFalse(Files.exists(target))
+  }
 }

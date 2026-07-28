@@ -77,6 +77,7 @@ data class StateExportResult(
     val ref: StateRef,
     val destination: Path,
     val stateSha256: String,
+    val recovery: ExclusiveWriteRecovery = ExclusiveWriteRecovery.NONE,
 )
 
 class StateRepositoryCapacityException(message: String) : IOException(message)

@@ -3,10 +3,12 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.ExclusiveWriteRecovery
 import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
 import eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateDeleteRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateDiagnosticMetadata
+import eu.rekawek.coffeegb.controller.state.StateDiagnosticRedactor
 import eu.rekawek.coffeegb.controller.state.StateEntryKey
 import eu.rekawek.coffeegb.controller.state.StateExportRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateExternalActions
@@ -672,6 +674,7 @@ class BasicController private constructor(
                 result.key.ref,
                 path = result.result.destination,
                 message = "State exported to ${result.result.destination.fileName}.",
+                recoveryMessages = recoveryMessages(result.result.recovery, "export"),
             ))
       }
       is StateWorkerResult.Screenshot -> {
@@ -683,6 +686,7 @@ class BasicController private constructor(
                 StateOperation.SCREENSHOT,
                 path = result.result.path,
                 message = "Screenshot saved as ${result.result.path.fileName}.",
+                recoveryMessages = recoveryMessages(result.result.recovery, "screenshot"),
             ))
       }
       is StateWorkerResult.Folder -> {
@@ -934,10 +938,13 @@ class BasicController private constructor(
             .take(8)
             .joinToString("\n") {
               val message =
-                  it.message
-                      ?.replace(Regex("[\\u0000-\\u001f\\u007f]+"), " ")
-                      ?.trim()
-                      ?.take(900)
+                  it.message?.let { value ->
+                    StateDiagnosticRedactor.redact(
+                        value,
+                        stateContext?.workspace?.sensitivePaths().orEmpty(),
+                        900,
+                    )
+                  }
               "${it.javaClass.simpleName}${message?.let { value -> ": $value" } ?: ""}"
             }
             .take(StateUserError.MAX_DETAIL_CHARS)
@@ -949,6 +956,17 @@ class BasicController private constructor(
           recoveryMessage("state", recovery.state),
           recoveryMessage("metadata", recovery.metadata),
       )
+
+  private fun recoveryMessages(
+      recovery: ExclusiveWriteRecovery,
+      artifact: String,
+  ): List<String> =
+      if (recovery.staleTemporaryFilesRemoved > 0) {
+        listOf(
+            "${recovery.staleTemporaryFilesRemoved} stale $artifact temporary file(s) removed")
+      } else {
+        emptyList()
+      }
 
   private fun recoveryMessage(
       artifact: String,

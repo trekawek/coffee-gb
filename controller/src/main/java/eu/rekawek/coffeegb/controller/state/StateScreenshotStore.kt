@@ -28,14 +28,14 @@ class StateScreenshotStore(
                 "Software" to "Coffee GB",
             ),
         )
-    val path =
+    val written =
         ExclusiveFileWriter.collisionSafe(
             directory,
             "coffee-gb-$stamp",
             "png",
             png,
         )
-    return StateScreenshotResult(path, png.size)
+    return StateScreenshotResult(written.path, png.size, written.recovery)
   }
 
   private companion object {

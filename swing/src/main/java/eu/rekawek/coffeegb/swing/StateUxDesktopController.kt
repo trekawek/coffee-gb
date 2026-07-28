@@ -38,7 +38,9 @@ import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
 import java.nio.file.Path
 import java.time.Duration
+import java.time.Instant
 import java.time.ZoneId
+import java.time.DateTimeException
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -145,7 +147,7 @@ internal class StateUxDesktopController(
         if (!isCurrent(event.sessionId)) return@onEdt
         val saved =
             event.savedAt?.let {
-              RESUME_TIME_FORMAT.format(it)
+              formatStateTimestamp(it, RESUME_TIME_FORMAT)
             } ?: "an unknown time"
         val duration =
             event.playDurationNanos?.let(::formatDuration)?.let { " after $it of play" }.orEmpty()
@@ -716,7 +718,7 @@ internal class StateBrowserTableModel : AbstractTableModel() {
     val catalog = entry.catalogEntry
     return when (column) {
       0 -> name(entry)
-      1 -> catalog?.metadata?.savedAt?.let(TIME_FORMAT::format) ?: "—"
+      1 -> catalog?.metadata?.savedAt?.let { formatStateTimestamp(it, TIME_FORMAT) } ?: "—"
       2 -> catalog?.metadata?.playDurationNanos?.let(::formatDuration) ?: "—"
       3 ->
           catalog?.inspection?.identities?.firstOrNull()?.identity?.profile?.canonicalProfileId
@@ -731,7 +733,7 @@ internal class StateBrowserTableModel : AbstractTableModel() {
               append(inspection.formatVersion)
               inspection.diagnostics?.coreVersion?.let {
                 append(" / ")
-                append(it)
+                append(boundedStateUiText(it, MAX_DIAGNOSTIC_CHARS))
               }
             }
           } ?: "—"
@@ -761,17 +763,25 @@ internal class StateBrowserTableModel : AbstractTableModel() {
           add("Reference: ${entry.ref.storageKey()}")
           add("Source: ${if (entry.key.sourceIndex == 0) "active directory" else "previous directory ${entry.key.sourceIndex}"}")
           add("Status: ${catalog.status.name.lowercase()}")
-          catalog.detail?.let { add("Reason: $it") }
-          catalog.metadata?.savedAt?.let { add("Saved: ${TIME_FORMAT.format(it)}") }
+          catalog.detail?.let {
+            add("Reason: ${boundedStateUiText(it, MAX_DETAIL_CHARS)}")
+          }
+          catalog.metadata?.savedAt?.let {
+            add("Saved: ${formatStateTimestamp(it, TIME_FORMAT)}")
+          }
           catalog.metadata?.playDurationNanos?.let { add("Play time: ${formatDuration(it)}") }
           catalog.inspection?.let {
             add("Format: ${it.formatVersion}; ${it.compression.name.lowercase()}")
             it.diagnostics?.let { diagnostics ->
-              add("Core: ${diagnostics.coreVersion}; build: ${diagnostics.buildId}")
+              add(
+                  "Core: ${boundedStateUiText(diagnostics.coreVersion, MAX_DIAGNOSTIC_CHARS)}; " +
+                      "build: ${boundedStateUiText(diagnostics.buildId, MAX_DIAGNOSTIC_CHARS)}")
             }
             add("Decoded payload: ${it.decodedPayloadLength} bytes")
           }
-          catalog.metadataWarning?.let { add("Metadata warning: ${it.message}") }
+          catalog.metadataWarning?.let {
+            add("Metadata warning: ${boundedStateUiText(it.message, MAX_DETAIL_CHARS)}")
+          }
         }
         .joinToString("\n")
   }
@@ -788,6 +798,8 @@ internal class StateBrowserTableModel : AbstractTableModel() {
         arrayOf("State", "Saved", "Play time", "Profile", "ROM", "Format / core", "Status", "Source")
     val TIME_FORMAT: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
+    const val MAX_DIAGNOSTIC_CHARS = 160
+    const val MAX_DETAIL_CHARS = 512
   }
 }
 
@@ -812,6 +824,27 @@ private fun formatDuration(nanos: Long): String {
   val seconds = duration.minusHours(hours).minusMinutes(minutes).seconds
   return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
   else "%d:%02d".format(minutes, seconds)
+}
+
+internal fun formatStateTimestamp(
+    instant: Instant,
+    formatter: DateTimeFormatter,
+): String =
+    try {
+      boundedStateUiText(formatter.format(instant), 80)
+    } catch (_: DateTimeException) {
+      boundedStateUiText(instant.toString(), 80)
+    } catch (_: ArithmeticException) {
+      boundedStateUiText(instant.toString(), 80)
+    }
+
+internal fun boundedStateUiText(value: String, maximumChars: Int): String {
+  require(maximumChars > 0)
+  return value
+      .replace(Regex("[\\u0000-\\u001f\\u007f]+"), " ")
+      .replace(Regex(" {2,}"), " ")
+      .trim()
+      .let { if (it.length <= maximumChars) it else it.take(maximumChars - 1) + "…" }
 }
 
 private fun showStateError(parent: Component, error: StateUserError) {
