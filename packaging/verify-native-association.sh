@@ -31,21 +31,20 @@ app_jars=("$repository_root"/swing/target/coffee-gb-*-app.jar)
   exit 2
 }
 
-fixture="$smoke_root/Coffee GB association smoke.gb"
-marker="$smoke_root/association-opened.marker"
-ready_marker="$smoke_root/desktop-ready.marker"
-java \
-  -cp "${app_jars[0]}" \
-  eu.rekawek.coffeegb.swing.PackageAssociationFixture \
-  "$fixture"
-[[ -f "$fixture" && $(wc -c < "$fixture") -eq 32768 ]] || {
-  echo "Generated association fixture is missing or has the wrong size." >&2
-  exit 2
-}
+extensions=(gb gbc rom)
+for extension in "${extensions[@]}"; do
+  fixture="$smoke_root/Coffee GB association smoke.$extension"
+  java \
+    -cp "${app_jars[0]}" \
+    eu.rekawek.coffeegb.swing.PackageAssociationFixture \
+    "$fixture"
+  [[ -f "$fixture" && $(wc -c < "$fixture") -eq 32768 ]] || {
+    echo "Generated .$extension association fixture is missing or has the wrong size." >&2
+    exit 2
+  }
+done
 
 export _JAVA_OPTIONS="-Djava.awt.headless=false -Duser.home=$smoke_root/home -Dcoffee-gb.native.cache=$smoke_root/native-cache"
-export COFFEE_GB_ASSOCIATION_SMOKE_MARKER="$marker"
-
 await_file() {
   local path=$1
   local description=$2
@@ -60,7 +59,9 @@ await_file() {
 }
 
 assert_evidence() {
-  local expected_source=$1
+  local marker=$1
+  local fixture=$2
+  local expected_source=$3
   grep -Fx "Coffee GB association open OK" "$marker" >/dev/null
   grep -Fx "source=$expected_source" "$marker" >/dev/null
   grep -Fx "rom=$fixture" "$marker" >/dev/null
@@ -114,7 +115,10 @@ case "$target" in
     desktop_id=${desktop_files[0]##*/}
     grep -Fx 'MimeType=application/x-gameboy-rom' "${desktop_files[0]}" >/dev/null
     grep -Fx 'Exec="/opt/coffee-gb/bin/Coffee GB" %f' "${desktop_files[0]}" >/dev/null
-    [[ $(xdg-mime query filetype "$fixture") == application/x-gameboy-rom ]]
+    for extension in "${extensions[@]}"; do
+      fixture="$smoke_root/Coffee GB association smoke.$extension"
+      [[ $(xdg-mime query filetype "$fixture") == application/x-gameboy-rom ]]
+    done
 
     export XDG_CONFIG_HOME="$smoke_root/xdg-config"
     export XDG_DATA_HOME="$smoke_root/xdg-data"
@@ -122,9 +126,15 @@ case "$target" in
     xdg-mime default "$desktop_id" application/x-gameboy-rom
     [[ $(xdg-mime query default application/x-gameboy-rom) == "$desktop_id" ]]
 
-    dbus-run-session -- xvfb-run -a xdg-open "$fixture"
-    await_file "$marker" "installed Linux association result"
-    assert_evidence INITIAL_ARGUMENT
+    for extension in "${extensions[@]}"; do
+      fixture="$smoke_root/Coffee GB association smoke.$extension"
+      marker="$smoke_root/association-opened-$extension.marker"
+      export COFFEE_GB_ASSOCIATION_SMOKE_MARKER="$marker"
+      dbus-run-session -- xvfb-run -a xdg-open "$fixture"
+      await_file "$marker" "installed Linux .$extension association result"
+      assert_evidence "$marker" "$fixture" INITIAL_ARGUMENT
+      [[ $(xdg-mime query default application/x-gameboy-rom) == "$desktop_id" ]]
+    done
 
     sudo dpkg --remove coffee-gb
     installed=false
@@ -196,28 +206,36 @@ case "$target" in
     "$lsregister" -f "$installed_app"
     open -Ra "$installed_app"
 
-    export COFFEE_GB_DESKTOP_SMOKE_MARKER="$ready_marker"
-    "$installed_app/Contents/MacOS/Coffee GB" \
-      >"$smoke_root/application.log" \
-      2>&1 &
-    app_pid=$!
-    await_file "$ready_marker" "installed macOS desktop readiness"
-    kill -0 "$app_pid"
+    for extension in "${extensions[@]}"; do
+      fixture="$smoke_root/Coffee GB association smoke.$extension"
+      marker="$smoke_root/association-opened-$extension.marker"
+      ready_marker="$smoke_root/desktop-ready-$extension.marker"
+      export COFFEE_GB_ASSOCIATION_SMOKE_MARKER="$marker"
+      export COFFEE_GB_DESKTOP_SMOKE_MARKER="$ready_marker"
+      "$installed_app/Contents/MacOS/Coffee GB" \
+        >"$smoke_root/application-$extension.log" \
+        2>&1 &
+      app_pid=$!
+      await_file "$ready_marker" "installed macOS .$extension desktop readiness"
+      kill -0 "$app_pid"
 
-    open -b eu.rekawek.coffeegb "$fixture"
-    await_file "$marker" "existing-instance macOS association result"
-    assert_evidence DESKTOP_OPEN_FILE
+      # Do not select Coffee GB explicitly here: Launch Services must choose the registered
+      # default handler for each supported extension.
+      open "$fixture"
+      await_file "$marker" "default-handler macOS .$extension association result"
+      assert_evidence "$marker" "$fixture" DESKTOP_OPEN_FILE
 
-    deadline=$((SECONDS + 60))
-    while kill -0 "$app_pid" 2>/dev/null && [[ $SECONDS -lt $deadline ]]; do
-      sleep 0.1
+      deadline=$((SECONDS + 60))
+      while kill -0 "$app_pid" 2>/dev/null && [[ $SECONDS -lt $deadline ]]; do
+        sleep 0.1
+      done
+      if kill -0 "$app_pid" 2>/dev/null; then
+        echo "The macOS .$extension application did not complete bounded shutdown." >&2
+        exit 2
+      fi
+      wait "$app_pid"
+      app_pid=
     done
-    if kill -0 "$app_pid" 2>/dev/null; then
-      echo "The macOS application did not complete bounded shutdown." >&2
-      exit 2
-    fi
-    wait "$app_pid"
-    app_pid=
 
     "$lsregister" -u "$installed_app"
     rm -rf -- "$installed_app"

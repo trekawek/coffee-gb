@@ -130,6 +130,14 @@ public final class NativePackagePlan {
         }
 
         addPlatformOptions(command, stage.target(), packageType);
+        if (stage.target().hostOs() == NativePackageMetadata.HostOs.WINDOWS) {
+            add(
+                    command,
+                    "--add-launcher",
+                    NativePackageMetadata.WINDOWS_CONSOLE_LAUNCHER_NAME
+                            + "="
+                            + stage.windowsConsoleLauncher());
+        }
         command.addAll(List.copyOf(releaseSigningOptions));
         return List.copyOf(command);
     }
@@ -150,6 +158,16 @@ public final class NativePackagePlan {
                     .resolve("MacOS")
                     .resolve(NativePackageMetadata.APPLICATION_NAME);
         };
+    }
+
+    public Path expectedCommandLauncher(
+            Path destination, NativePackageMetadata.Target target) {
+        if (target.hostOs() != NativePackageMetadata.HostOs.WINDOWS) {
+            return expectedAppImageLauncher(destination, target);
+        }
+        return destination
+                .resolve(NativePackageMetadata.APPLICATION_NAME)
+                .resolve(NativePackageMetadata.WINDOWS_CONSOLE_LAUNCHER_NAME + ".exe");
     }
 
     private static void addPlatformOptions(

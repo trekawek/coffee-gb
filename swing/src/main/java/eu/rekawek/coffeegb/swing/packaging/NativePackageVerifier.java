@@ -176,9 +176,14 @@ public final class NativePackageVerifier {
             case MACOS -> applicationRoot.resolve("MacOS")
                     .resolve(NativePackageMetadata.APPLICATION_NAME);
         };
+        Path commandLauncher = target.hostOs() == NativePackageMetadata.HostOs.WINDOWS
+                ? applicationRoot.resolve(
+                        NativePackageMetadata.WINDOWS_CONSOLE_LAUNCHER_NAME + ".exe")
+                : launcher;
         Path runtimeJava = runtime.resolve("bin").resolve(
                 target.hostOs() == NativePackageMetadata.HostOs.WINDOWS ? "java.exe" : "java");
         requireRegularFile(launcher, "packaged launcher");
+        requireRegularFile(commandLauncher, "packaged command launcher");
         requireRegularFile(runtimeJava, "packaged runtime java");
         requireRegularFile(runtime.resolve("lib").resolve("modules"), "packaged runtime modules");
 
@@ -226,7 +231,8 @@ public final class NativePackageVerifier {
                 appDirectory,
                 runtime,
                 runtimeJava,
-                launcher);
+                launcher,
+                commandLauncher);
     }
 
     public static void runSmokes(VerificationResult result, Path smokeHome)
@@ -264,25 +270,22 @@ public final class NativePackageVerifier {
         String javaOptions = "-Djava.awt.headless=true -Duser.home=" + home
                 + " -Dcoffee-gb.native.cache=" + nativeCache;
         String launcherVersion = run(
-                List.of(result.launcher().toString(), "--version"),
+                List.of(result.commandLauncher().toString(), "--version"),
                 Map.of("_JAVA_OPTIONS", javaOptions));
-        if (result.target() != NativeTarget.WINDOWS_X86_64) {
-            requireOutput(
-                    launcherVersion,
-                    "Coffee GB " + result.appVersion(),
-                    "packaged launcher --version");
-        }
+        requireOutput(
+                launcherVersion,
+                "Coffee GB " + result.appVersion(),
+                "packaged launcher --version");
         String launcherSmoke = run(
-                List.of(result.launcher().toString(), "--package-smoke"),
+                List.of(result.commandLauncher().toString(), "--package-smoke"),
                 Map.of("_JAVA_OPTIONS", javaOptions));
-        if (result.target() != NativeTarget.WINDOWS_X86_64) {
-            requireOutput(
-                    launcherSmoke,
-                    "Coffee GB package smoke OK:",
-                    "packaged launcher package smoke");
-        }
+        requireOutput(
+                launcherSmoke,
+                "Coffee GB package smoke OK:",
+                "packaged launcher package smoke");
         if (desktopSmokeEnabled(System.getenv())) {
-            runDesktopSmoke(result, home, nativeCache);
+            runDesktopSmoke(result, home, nativeCache, false);
+            runDesktopSmoke(result, home, nativeCache, true);
         }
         System.out.println("Packaged launch smokes passed for " + result.target().id());
     }
@@ -293,14 +296,26 @@ public final class NativePackageVerifier {
     }
 
     private static void runDesktopSmoke(
-            VerificationResult result, Path home, Path nativeCache)
+            VerificationResult result, Path home, Path nativeCache, boolean debug)
             throws IOException, InterruptedException {
-        Path desktopHome = Files.createDirectory(home.resolve("desktop-home"));
-        Path marker = home.resolve("desktop-ready.marker");
+        String suffix = debug ? "debug" : "normal";
+        Path desktopHome = Files.createDirectory(home.resolve(suffix + "-desktop-home"));
+        Path marker = home.resolve(suffix + "-desktop-ready.marker");
         String javaOptions = "-Djava.awt.headless=false -Duser.home=" + desktopHome
                 + " -Dcoffee-gb.native.cache=" + nativeCache;
+        List<String> command = new ArrayList<>();
+        if (debug && result.target() == NativeTarget.WINDOWS_X86_64) {
+            // The secondary Windows launcher defaults to --debug and has a real console. Passing
+            // no argument proves that installed launcher configuration as well as startup.
+            command.add(result.commandLauncher().toString());
+        } else {
+            command.add(result.launcher().toString());
+            if (debug) {
+                command.add("--debug");
+            }
+        }
         run(
-                List.of(result.launcher().toString()),
+                command,
                 Map.of(
                         "_JAVA_OPTIONS", javaOptions,
                         "COFFEE_GB_DESKTOP_SMOKE_MARKER", marker.toString()));
@@ -311,7 +326,10 @@ public final class NativePackageVerifier {
         }
         requireRegularFile(marker, "desktop startup smoke marker");
         String evidence = Files.readString(marker, StandardCharsets.UTF_8);
-        requireOutput(evidence, "Coffee GB desktop ready OK:", "packaged desktop startup");
+        requireOutput(
+                evidence,
+                "Coffee GB desktop ready OK:",
+                debug ? "packaged debug-console startup" : "packaged desktop startup");
     }
 
     public static void writeBuildResult(
@@ -972,7 +990,8 @@ public final class NativePackageVerifier {
             Path appDirectory,
             Path runtime,
             Path runtimeJava,
-            Path launcher) {
+            Path launcher,
+            Path commandLauncher) {
     }
 
     private static final class Arguments {

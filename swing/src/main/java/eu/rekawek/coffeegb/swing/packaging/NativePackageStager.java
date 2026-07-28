@@ -80,6 +80,7 @@ public final class NativePackageStager {
         Path stage = createFreshDirectory(request.output());
         Path input = Files.createDirectory(stage.resolve("input"));
         Path associations = Files.createDirectory(stage.resolve("associations"));
+        Path launchers = Files.createDirectory(stage.resolve("launchers"));
         Path jpackageResources = Files.createDirectory(stage.resolve("jpackage-resources"));
         Path nativeSource = Files.createDirectory(input.resolve("native-source"));
         Path legal = Files.createDirectory(input.resolve("legal"));
@@ -116,6 +117,11 @@ public final class NativePackageStager {
                         + "extension=" + String.join(",", NativePackageMetadata.ROM_EXTENSIONS) + "\n"
                         + "icon=input/" + icon.getFileName() + "\n"
                         + "mime-type=application/x-gameboy-rom\n");
+        Path windowsConsoleLauncher = launchers.resolve("windows-console.properties");
+        writeUtf8(
+                windowsConsoleLauncher,
+                "arguments=--debug\n"
+                        + "win-console=true\n");
 
         Map<String, String> inventory = new TreeMap<>();
         inventory.put("schema", "1");
@@ -158,6 +164,7 @@ public final class NativePackageStager {
                 stagedNativeSbom,
                 icon,
                 association,
+                windowsConsoleLauncher,
                 inventoryFile,
                 checksums,
                 appVersion,
@@ -500,6 +507,7 @@ public final class NativePackageStager {
             Path nativeSbom,
             Path icon,
             Path association,
+            Path windowsConsoleLauncher,
             Path inventory,
             Path checksums,
             String appVersion,

@@ -87,6 +87,14 @@ public class NativePackagePlanTest {
                         value.contains("TOKEN")
                                 || value.contains("PASSWORD")
                                 || value.contains("SECRET")));
+                if (nativeTarget == NativeTarget.WINDOWS_X86_64) {
+                    assertOption(
+                            command,
+                            "--add-launcher",
+                            "Coffee GB Console=/stage/launchers/windows-console.properties");
+                } else {
+                    assertFalse(command.contains("--add-launcher"));
+                }
 
                 if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
                     assertFalse(command.contains("--file-associations"));
@@ -167,6 +175,7 @@ public class NativePackagePlanTest {
                 root.resolve("input/coffee-gb-native-sbom.cdx.json"),
                 root.resolve("input/coffee-gb." + target.iconSuffix()),
                 root.resolve("associations/game-boy-rom.properties"),
+                root.resolve("launchers/windows-console.properties"),
                 root.resolve("input/package-manifest.properties"),
                 root.resolve("STAGE-SHA256SUMS"),
                 "1.7.15-SNAPSHOT",
