@@ -91,13 +91,13 @@ public final class RomSourceSnapshot implements Closeable {
                     "7z archives are not opened because their metadata allocation cannot be "
                             + "bounded before parsing; extract the ROM or use ZIP");
         }
+        validateSourceFile(normalized);
         boolean zip = "zip".equals(extension);
         if (!zip && !isRomExtension(extension)) {
             throw new RomSourceException(
                     RomSourceException.Reason.UNSUPPORTED_TYPE,
                     "Supported ROM inputs are .gb, .gbc, .rom, and .zip");
         }
-        validateSourceFile(normalized);
         checkCancelled(cancelled);
 
         if (!zip) {
@@ -251,6 +251,11 @@ public final class RomSourceSnapshot implements Closeable {
                     RomSourceException.Reason.INVALID_ARCHIVE,
                     "The selected ZIP entry is corrupt",
                     e);
+        } catch (IOException e) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.INVALID_ARCHIVE,
+                    "The selected ZIP entry is corrupt or unreadable",
+                    e);
         }
     }
 
@@ -259,10 +264,15 @@ public final class RomSourceSnapshot implements Closeable {
         if (closed) {
             return;
         }
-        closed = true;
         if (zipSnapshot != null) {
-            Files.deleteIfExists(zipSnapshot);
+            try {
+                Files.deleteIfExists(zipSnapshot);
+            } catch (IOException failure) {
+                zipSnapshot.toFile().deleteOnExit();
+                throw failure;
+            }
         }
+        closed = true;
     }
 
     private synchronized void ensureOpen() {
@@ -405,6 +415,7 @@ public final class RomSourceSnapshot implements Closeable {
         Map<String, Integer> occurrences = new HashMap<>();
         int entryCount = 0;
         int extensionCandidates = 0;
+        int oversizedRomCandidates = 0;
         long totalSize = 0;
         try (ZipFile zip = new ZipFile(snapshot.toFile())) {
             Enumeration<? extends ZipEntry> entries = zip.entries();
@@ -419,9 +430,9 @@ public final class RomSourceSnapshot implements Closeable {
                                     + Rom.MAX_ARCHIVE_ENTRIES
                                     + "-entry safety limit");
                 }
+                // Constructing an origin validates exact entry spelling without extracting it.
+                RomOrigin.archiveEntry(sourcePath, entry.getName());
                 if (!entry.isDirectory()) {
-                    // Constructing an origin validates exact entry spelling without extracting it.
-                    RomOrigin.archiveEntry(sourcePath, entry.getName());
                     if (entry.getCompressedSize() < 0 || entry.getSize() < 0) {
                         throw new IOException("Archive entry has an unknown declared size");
                     }
@@ -430,8 +441,9 @@ public final class RomSourceSnapshot implements Closeable {
                 int occurrence = occurrences.merge(entry.getName(), 1, Integer::sum) - 1;
                 if (!entry.isDirectory() && isRomEntry(entry.getName())) {
                     extensionCandidates++;
-                    if (entry.getSize() >= RomHeaderInspector.HEADER_LENGTH
-                            && entry.getSize() <= RomImage.MAX_ROM_BYTES) {
+                    if (entry.getSize() > RomImage.MAX_ROM_BYTES) {
+                        oversizedRomCandidates++;
+                    } else if (entry.getSize() >= RomHeaderInspector.HEADER_LENGTH) {
                         try (InputStream input = zip.getInputStream(entry)) {
                             RomHeaderInspector.Header header = RomHeaderInspector.inspect(input);
                             if (header.hasCartridgeShape()) {
@@ -455,6 +467,9 @@ public final class RomSourceSnapshot implements Closeable {
                     "The ZIP archive contains no .gb, .gbc, or .rom entries");
         }
         if (candidates.isEmpty()) {
+            if (oversizedRomCandidates > 0) {
+                throw romTooLarge(RomImage.MAX_ROM_BYTES + 1L);
+            }
             throw new RomSourceException(
                     RomSourceException.Reason.INVALID_HEADER,
                     "No ROM entry in the ZIP contains a recognizable cartridge header");
@@ -522,6 +537,7 @@ public final class RomSourceSnapshot implements Closeable {
             Files.deleteIfExists(snapshot);
         } catch (IOException cleanupFailure) {
             failure.addSuppressed(cleanupFailure);
+            snapshot.toFile().deleteOnExit();
         }
     }
 

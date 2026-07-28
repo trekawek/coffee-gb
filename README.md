@@ -48,9 +48,20 @@ with status 2 before Swing starts. Use `--` to end option parsing when a ROM pat
 java -jar coffee-gb-VERSION.jar -- -homebrew.gb
 ```
 
-ROMs are not included. Coffee GB accepts `.gb`, `.gbc`, and `.rom` files, as
-well as ZIP and 7z archives containing a ROM. On macOS, game-controller support
-also requires SDL2 (`brew install sdl2`); keyboard input works without it.
+ROMs are not included. Coffee GB accepts `.gb`, `.gbc`, and `.rom` files and
+bounded ZIP archives containing those formats. You can also drop one local file
+on the emulator window; macOS Finder open-file events use the same opening flow.
+If a ZIP contains several valid ROMs, Coffee GB asks which exact entry to open.
+7z files are deliberately rejected because their metadata allocation cannot be
+bounded before parsing—extract the ROM or create a ZIP instead. Recent ROMs are
+recorded only after a game starts successfully.
+
+Opening is cancellable and runs away from the Swing event thread. Coffee GB
+snapshots the selected bytes before parsing them, rejects remote URLs, multiple
+dropped files, unsafe ZIP paths, and archives outside its size/count limits, and
+keeps the current game running if preparation or save-before-switch fails. On
+macOS, game-controller support also requires SDL2 (`brew install sdl2`);
+keyboard input works without it.
 
 For netplay, one player chooses **Link > Start server** and the other chooses
 **Link > Connect to server**.
@@ -208,7 +219,8 @@ local SGB controller slots, so every linked machine masks the live four-slot des
 - **Hardware-focused accuracy:** a cycle-stepped CPU and high-accuracy PPU, APU,
   timer, DMA, serial, and infrared behavior.
 - **Everyday play:** battery-backed saves, ten save-state slots, pause/reset,
-  hold-to-rewind, recent ROMs, and ZIP/7z archive loading.
+  hold-to-rewind, success-only recent ROMs, drag-and-drop, and bounded ZIP
+  archive loading.
 - **Rollback netplay:** TCP multiplayer for link-cable games, with local rollback
   hiding normal network latency and synchronized infrared communication.
 - **Broad cartridge support:** MBC1/1M, MBC2, MBC3 with RTC and MBC30, MBC5,

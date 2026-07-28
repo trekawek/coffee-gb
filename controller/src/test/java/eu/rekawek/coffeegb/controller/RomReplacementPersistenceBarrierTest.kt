@@ -35,11 +35,16 @@ class RomReplacementPersistenceBarrierTest {
       fixture.start()
       Files.createDirectory(fixture.oldSave)
 
-      fixture.eventBus.post(LoadRomEvent(fixture.nextRom.toFile()))
+      fixture.eventBus.post(
+          LoadRomEvent(
+              rom = fixture.nextRom.toFile(),
+              openRequestId = 73,
+          ))
 
       val observed = assertNotNull(fixture.failures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertEquals("coffee-gb-controller", observed.threadName)
       assertEquals("old.sav", observed.event.fileName)
+      assertEquals(73, observed.event.openRequestId)
       assertNull(
           fixture.stopped.poll(300, TimeUnit.MILLISECONDS),
           "the old session must not close after a failed persistence barrier",
@@ -63,7 +68,9 @@ class RomReplacementPersistenceBarrierTest {
       assertNotNull(fixture.stopped.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertEquals(
           "NEXT_GAME",
-          assertNotNull(fixture.started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).romName,
+          assertNotNull(fixture.started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).also {
+            assertEquals(73, it.openRequestId)
+          }.romName,
       )
       assertTrue(Files.isRegularFile(fixture.oldSave))
     }

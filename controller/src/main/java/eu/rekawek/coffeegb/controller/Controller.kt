@@ -14,6 +14,7 @@ import eu.rekawek.coffeegb.core.memory.Bios
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.RomImage
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import java.io.File
 
 interface Controller : AutoCloseable {
@@ -22,7 +23,13 @@ interface Controller : AutoCloseable {
 
   fun closeWithState(): ControllerState?
 
-  class EmulationStartedEvent(val romName: String) : Event
+  data class EmulationStartedEvent
+  @JvmOverloads
+  constructor(
+      val romName: String,
+      val origin: RomOrigin? = null,
+      val openRequestId: Long? = null,
+  ) : Event
 
   class EmulationStoppedEvent : Event
 
@@ -32,32 +39,65 @@ interface Controller : AutoCloseable {
       val rom: File,
       val state: MachineState? = null,
       val image: RomImage? = null,
+      val openRequestId: Long? = null,
   ) : Event {
     constructor(
         image: RomImage,
         state: MachineState? = null,
+        openRequestId: Long? = null,
     ) : this(
         image.origin().containerPath().map { it.toFile() }.orElse(File(image.origin().displayName())),
         state,
         image,
+        openRequestId,
     )
   }
 
-  data class RomLoadingEvent(val rom: File) : Event
+  data class RomLoadingEvent
+  @JvmOverloads
+  constructor(
+      val rom: File,
+      val openRequestId: Long? = null,
+  ) : Event
 
-  data class RomLoadingCancelledEvent(val rom: File) : Event
+  data class RomLoadingCancelledEvent
+  @JvmOverloads
+  constructor(
+      val rom: File,
+      val openRequestId: Long? = null,
+  ) : Event
 
-  data class LoadRomFailedEvent(val rom: File, val message: String) : Event
+  data class LoadRomFailedEvent
+  @JvmOverloads
+  constructor(
+      val rom: File,
+      val message: String,
+      val openRequestId: Long? = null,
+      val kind: RomLoadFailureKind = RomLoadFailureKind.CORE_STARTUP,
+      val technicalDetails: String = message,
+  ) : Event
+
+  enum class RomLoadFailureKind {
+    CORE_STARTUP,
+    PERSISTENCE,
+    INTERNAL,
+  }
+
+  /** Cancels only the matching user-facing open request; stale cancellation is a no-op. */
+  data class CancelRomOpenEvent(val openRequestId: Long) : Event
 
   /**
    * A ROM replacement is paused at its persistence barrier. The old session remains alive until
    * the matching retry or cancel command is posted.
    */
-  data class RomReplacementPersistenceFailedEvent(
+  data class RomReplacementPersistenceFailedEvent
+  @JvmOverloads
+  constructor(
       val requestId: Long,
       val fileName: String,
       val message: String,
       val operation: PersistenceBarrierOperation = PersistenceBarrierOperation.ROM_REPLACEMENT,
+      val openRequestId: Long? = null,
   ) : Event
 
   data class RetryRomReplacementEvent(val requestId: Long) : Event

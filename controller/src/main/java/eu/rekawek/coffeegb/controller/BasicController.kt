@@ -193,6 +193,7 @@ class BasicController private constructor(
     require(closeTimeoutMillis > 0) { "Controller close timeout must be positive" }
     eventQueue.register<AddPatches> { patches.addAll(it.patches) }
     eventQueue.register<Controller.LoadRomEvent> { requestLoad(properties, it) }
+    eventQueue.register<Controller.CancelRomOpenEvent> { cancelOpenRequest(it.openRequestId) }
     eventQueue.register<Controller.RetryRomReplacementEvent> { retryPersistence(it.requestId) }
     eventQueue.register<Controller.CancelRomReplacementEvent> { cancelPersistence(it.requestId) }
     eventQueue.register<Controller.RestoreSnapshotEvent> { e -> loadSnapshot(e.slot) }
@@ -348,7 +349,7 @@ class BasicController private constructor(
     // request was ignored and also allows the old game to consume input meant for the new one.
     setPaused(true)
 
-    eventBus.post(Controller.RomLoadingEvent(event.rom))
+    eventBus.post(Controller.RomLoadingEvent(event.rom, event.openRequestId))
     val task = PreparedLoadTask { sessionPreparer.prepare(properties, event) }
     loadJob = LoadJob(event, clearPatches, task)
     loadExecutor.execute(task)
@@ -462,7 +463,8 @@ class BasicController private constructor(
     job.attempt?.cancelAndDiscard()
     job.prepared.discard()
     if (notifyCancellation) {
-      eventBus.post(Controller.RomLoadingCancelledEvent(job.event.rom))
+      eventBus.post(
+          Controller.RomLoadingCancelledEvent(job.event.rom, job.event.openRequestId))
     }
     if (restorePause) {
       restorePauseStateAfterLoading()
@@ -547,6 +549,7 @@ class BasicController private constructor(
               result.fileName(),
               result.message(),
               operation,
+              replacementJob?.event?.openRequestId,
           ))
     } catch (subscriberFailure: RuntimeException) {
       LOG.warn("Persistence failure subscriber threw an exception", subscriberFailure)
@@ -633,7 +636,7 @@ class BasicController private constructor(
 
     try {
       committedSession.activate()
-      start()
+      start(job.event.openRequestId)
       setPaused(pauseNewSession)
     } catch (activationFailure: RuntimeException) {
       // Rolling back would reattach an already stopped/closing machine. Keep the committed
@@ -643,14 +646,28 @@ class BasicController private constructor(
       val message =
           activationFailure.message?.takeIf { it.isNotBlank() }
               ?: activationFailure.javaClass.simpleName
-      eventBus.post(Controller.LoadRomFailedEvent(job.event.rom, message))
+      eventBus.post(
+          Controller.LoadRomFailedEvent(
+              job.event.rom,
+              message,
+              job.event.openRequestId,
+              Controller.RomLoadFailureKind.CORE_STARTUP,
+              sanitizedPersistenceDetail(activationFailure),
+          ))
     }
   }
 
   private fun reportLoadFailure(event: Controller.LoadRomEvent, error: Throwable) {
     LOG.error("Can't load ROM ${event.rom}", error)
     val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
-    eventBus.post(Controller.LoadRomFailedEvent(event.rom, message))
+    eventBus.post(
+        Controller.LoadRomFailedEvent(
+            event.rom,
+            message,
+            event.openRequestId,
+            Controller.RomLoadFailureKind.CORE_STARTUP,
+            sanitizedPersistenceDetail(error),
+        ))
     restorePauseStateAfterLoading()
   }
 
@@ -659,7 +676,19 @@ class BasicController private constructor(
     loadJob = null
     job.task.cancelAndDiscard()
     if (notifyCancellation) {
-      eventBus.post(Controller.RomLoadingCancelledEvent(job.event.rom))
+      eventBus.post(
+          Controller.RomLoadingCancelledEvent(job.event.rom, job.event.openRequestId))
+    }
+  }
+
+  private fun cancelOpenRequest(openRequestId: Long) {
+    loadJob?.takeIf { it.event.openRequestId == openRequestId }?.let {
+      cancelLoadJob()
+      restorePauseStateAfterLoading()
+      return
+    }
+    replacementJob?.takeIf { it.event.openRequestId == openRequestId }?.let {
+      discardReplacement(restorePause = true)
     }
   }
 
@@ -702,7 +731,7 @@ class BasicController private constructor(
     session.setSerialEndpoint(createLinkDevice(session.eventBus, session.config.clockSpec))
   }
 
-  private fun start() {
+  private fun start(openRequestId: Long? = null) {
     val session = session ?: return
 
     isPaused = false
@@ -714,7 +743,13 @@ class BasicController private constructor(
         session,
         Controller.SessionSnapshotSupportEvent(if (snapshotManager == null) null else this),
     )
-    postSessionEventSafely(session, Controller.EmulationStartedEvent(session.config.rom.title))
+    postSessionEventSafely(
+        session,
+        Controller.EmulationStartedEvent(
+            session.config.rom.title,
+            session.config.rom.origin,
+            openRequestId,
+        ))
   }
 
   private fun stop(

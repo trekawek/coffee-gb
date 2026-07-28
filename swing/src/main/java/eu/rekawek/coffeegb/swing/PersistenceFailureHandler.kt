@@ -12,6 +12,8 @@ internal class PersistenceFailureHandler(
     showError: (title: String, message: String) -> Unit,
     requestRetryOrCancel:
         ((title: String, message: String, decide: (retry: Boolean) -> Unit) -> Unit)? = null,
+    handleReplacement:
+        (Controller.RomReplacementPersistenceFailedEvent) -> Boolean = { true },
 ) {
   init {
     eventBus.register<Controller.SnapshotSaveFailedEvent> {
@@ -26,6 +28,9 @@ internal class PersistenceFailureHandler(
       showError("Battery $action error", it.message)
     }
     eventBus.register<Controller.RomReplacementPersistenceFailedEvent> {
+      if (!handleReplacement(it)) {
+        return@register
+      }
       val title =
           when (it.operation) {
             Controller.PersistenceBarrierOperation.ROM_REPLACEMENT ->

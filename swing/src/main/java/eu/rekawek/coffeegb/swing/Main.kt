@@ -219,6 +219,8 @@ internal fun printUsage(stream: PrintStream) {
   stream.println("  -h  --help                     Display this help and exit")
   stream.println("      --version                  Display version and exit")
   stream.println("      --                         Treat the remaining argument as the ROM file")
+  stream.println()
+  stream.println("ROM_FILE must be a local .gb, .gbc, .rom, or bounded .zip file.")
 }
 
 private object VersionMarker

@@ -85,4 +85,33 @@ class PersistenceFailureHandlerTest {
     assertTrue(decisions.isEmpty())
     eventBus.close()
   }
+
+  @Test
+  fun serviceManagedReplacementFailureCanBypassTheLegacyModalHandler() {
+    val eventBus = EventBusImpl()
+    val shown = mutableListOf<String>()
+    PersistenceFailureHandler(
+        eventBus,
+        showError = { _, message -> shown += message },
+        requestRetryOrCancel = { _, message, _ -> shown += message },
+        handleReplacement = { it.openRequestId == null },
+    )
+
+    eventBus.post(
+        Controller.RomReplacementPersistenceFailedEvent(
+            20,
+            "old.sav",
+            "service managed",
+            openRequestId = 44,
+        ))
+    eventBus.post(
+        Controller.RomReplacementPersistenceFailedEvent(
+            21,
+            "old.sav",
+            "legacy",
+        ))
+
+    assertEquals(listOf("legacy"), shown)
+    eventBus.close()
+  }
 }
