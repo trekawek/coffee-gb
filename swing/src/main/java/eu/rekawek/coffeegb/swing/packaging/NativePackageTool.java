@@ -172,10 +172,48 @@ public final class NativePackageTool {
                 runInherited(command);
             }
         }
-        ReleaseMetadata releaseMetadata = finalizeReleaseMetadata(stage, destination);
+        Path packagedPayload = packageType == NativePackageMetadata.PackageType.APP_IMAGE
+                ? primaryArtifact
+                : temporary.resolve("images");
+        NativePackageVerifier.VerificationResult verification =
+                NativePackageVerifier.verify(new NativePackageVerifier.VerificationRequest(
+                        target,
+                        packageType,
+                        packagedPayload,
+                        stage.appJar(),
+                        stage.sbom()));
+        NativePackageVerifier.runSmokes(
+                verification, buildRoot.resolve("package-smoke-home"));
+
+        Path releaseSbom = destination.resolve(
+                NativePackageMetadata.releaseSbomFileName(stage.appVersion()));
+        Files.copy(stage.sbom(), releaseSbom, StandardCopyOption.COPY_ATTRIBUTES);
+        Path releaseNativeSbom = destination.resolve(
+                NativePackageMetadata.releaseNativeSbomFileName(
+                        stage.appVersion(), stage.target().nativeTarget()));
+        Files.copy(
+                stage.nativeSbom(),
+                releaseNativeSbom,
+                StandardCopyOption.COPY_ATTRIBUTES);
+        NativeComponentInventory.verifyNativeSbom(
+                releaseNativeSbom,
+                stage.target().nativeTarget(),
+                stage.appVersion());
+        NativePackageVerifier.writeBuildResult(
+                destination,
+                target,
+                packageType,
+                stage.appVersion(),
+                primaryArtifact,
+                releaseSbom,
+                signing != null);
+        Path checksumFile = destination.resolve("SHA256SUMS");
+        writeChecksums(destination, checksumFile);
+        NativePackageVerifier.verifyDistribution(
+                destination, target, packageType, stage.appVersion());
         System.out.println(
                 "Built " + target.id() + " " + packageType.id() + " at " + primaryArtifact);
-        System.out.println("Checksums: " + releaseMetadata.checksums());
+        System.out.println("Checksums: " + checksumFile);
     }
 
     /**

@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.Bios
 import eu.rekawek.coffeegb.swing.SwingGui.Companion.run
+import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap
 import java.io.File
 import java.io.PrintStream
 import kotlin.system.exitProcess
@@ -27,12 +28,27 @@ private sealed class CliCommand {
   object Help : CliCommand()
 
   object Version : CliCommand()
+
+  object PackageSmoke : CliCommand()
 }
 
 fun main(args: Array<String>) {
   val exitCode =
-      runCli(args, System.out, System.err, applicationVersion()) { request ->
-        // Help/version never enter the desktop launch boundary, so they perform no package I/O.
+      runCli(
+          args,
+          System.out,
+          System.err,
+          applicationVersion(),
+          packageSmoke = {
+            // Exercise the package-native handoff before constructing the synthetic machine.
+            // The smoke itself is intentionally headless and never reads a user ROM.
+            NativeRuntimeBootstrap.bootstrapFromSystem()
+            PackageRuntimeSmoke.run()
+          },
+      ) { request ->
+        // Help/version never perform package I/O. A real launch resolves native resources on this
+        // caller thread before Swing or the emulation timing thread exists.
+        NativeRuntimeBootstrap.bootstrapFromSystem()
         run(request.debug, request.initialRom, request.settingsOverrides)
       }
   if (exitCode != SUCCESS) {
@@ -49,6 +65,7 @@ internal fun runCli(
     stdout: PrintStream,
     stderr: PrintStream,
     version: String,
+    packageSmoke: () -> PackageRuntimeSmoke.Result = { PackageRuntimeSmoke.run() },
     launcher: (CliLaunchRequest) -> Unit,
 ): Int {
   val command =
@@ -73,6 +90,15 @@ internal fun runCli(
       stdout.println("Coffee GB $version")
       SUCCESS
     }
+    CliCommand.PackageSmoke -> {
+      val result = packageSmoke()
+      stdout.println(
+          "Coffee GB package smoke OK: " +
+              "ticks=${result.ticks}, video=${result.videoFrames}, " +
+              "audio=${result.audioBuffers}, state=${result.stateBytes}",
+      )
+      SUCCESS
+    }
   }
 }
 
@@ -80,6 +106,7 @@ private fun parseCli(args: Array<String>): CliCommand {
   var parseOptions = true
   var help = false
   var version = false
+  var packageSmoke = false
   var debug = false
   var forceDmg = false
   var forceCgb = false
@@ -124,6 +151,10 @@ private fun parseCli(args: Array<String>): CliCommand {
         if (version) repeatedOption("--version")
         version = true
       }
+      "--package-smoke" -> {
+        if (packageSmoke) repeatedOption("--package-smoke")
+        packageSmoke = true
+      }
       "--debug" -> {
         if (debug) repeatedOption("--debug")
         debug = true
@@ -152,14 +183,24 @@ private fun parseCli(args: Array<String>): CliCommand {
   if (positional.size > 1) {
     cliError("Expected at most one ROM file, received ${positional.size}")
   }
-  if (help && version) {
-    cliError("--help and --version cannot be used together")
+  if (listOf(help, version, packageSmoke).count { it } > 1) {
+    cliError("--help, --version, and --package-smoke cannot be used together")
   }
   if (forceDmg && forceCgb) {
     cliError("--force-dmg and --force-cgb cannot be used together")
   }
   if (profileId != null && (forceDmg || forceCgb)) {
     cliError("--profile conflicts with --force-dmg/--force-cgb")
+  }
+  if (packageSmoke &&
+      (debug ||
+          forceDmg ||
+          forceCgb ||
+          useBootstrap ||
+          disableBatterySaves ||
+          profileId != null ||
+          positional.isNotEmpty())) {
+    cliError("--package-smoke cannot be combined with launch options or a ROM file")
   }
 
   val profileOverride =
@@ -176,6 +217,9 @@ private fun parseCli(args: Array<String>): CliCommand {
   }
   if (version) {
     return CliCommand.Version
+  }
+  if (packageSmoke) {
+    return CliCommand.PackageSmoke
   }
 
   return CliCommand.Launch(
@@ -219,6 +263,7 @@ internal fun printUsage(stream: PrintStream) {
   stream.println("      --debug                    Enable debug console")
   stream.println("  -h  --help                     Display this help and exit")
   stream.println("      --version                  Display version and exit")
+  stream.println("      --package-smoke            Run the no-ROM headless package self-test")
   stream.println("      --                         Treat the remaining argument as the ROM file")
   stream.println()
   stream.println("ROM_FILE must be a local .gb, .gbc, .rom, or bounded .zip file.")

@@ -18,7 +18,7 @@ $MavenCommand = if ($env:COFFEE_GB_MAVEN_COMMAND) {
     "mvn"
 }
 
-& $MavenCommand -B -f $PomFile -pl swing -am clean package
+& $MavenCommand -B --no-transfer-progress -f $PomFile -pl swing -am clean verify
 if ($LASTEXITCODE -ne 0) {
     throw "Maven package failed with exit code $LASTEXITCODE"
 }

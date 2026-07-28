@@ -15,10 +15,13 @@ public class NativePackagingScriptTest {
         Path packaging = Path.of("../packaging").toAbsolutePath().normalize();
         Path shell = packaging.resolve("package-native.sh");
         Path powerShell = packaging.resolve("package-native.ps1");
+        Path verifyShell = packaging.resolve("verify-native-package.sh");
+        Path verifyPowerShell = packaging.resolve("verify-native-package.ps1");
         String sh = Files.readString(shell);
         String ps = Files.readString(powerShell);
 
         assertTrue(Files.isExecutable(shell));
+        assertTrue(Files.isExecutable(verifyShell));
         for (String contents : new String[] {sh, ps}) {
             assertTrue(contents.contains("-app.jar"));
             assertTrue(contents.contains("-sbom.cdx.json"));
@@ -32,10 +35,23 @@ public class NativePackagingScriptTest {
             assertFalse(contents.contains("wget "));
             assertFalse(contents.contains("git clone"));
         }
-        assertTrue(sh.contains("-pl swing -am clean package"));
-        assertTrue(ps.contains("-pl swing -am clean package"));
+        assertTrue(sh.contains("-pl swing -am clean verify"));
+        assertTrue(ps.contains("-pl swing -am clean verify"));
         assertTrue(sh.contains("COFFEE_GB_MAVEN_COMMAND:-mvn"));
         assertTrue(ps.contains("COFFEE_GB_MAVEN_COMMAND"));
         assertFalse(sh.contains("/opt/maven"));
+
+        for (String contents :
+                new String[] {
+                    Files.readString(verifyShell), Files.readString(verifyPowerShell)
+                }) {
+            assertTrue(contents.contains("NativePackageVerifier"));
+            assertTrue(contents.contains("--run-smoke"));
+            assertTrue(contents.contains("--source-app-jar"));
+            assertTrue(contents.contains("--source-sbom"));
+            assertFalse(contents.contains("curl "));
+            assertFalse(contents.contains("Invoke-WebRequest"));
+            assertFalse(contents.contains("wget "));
+        }
     }
 }

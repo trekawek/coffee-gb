@@ -34,7 +34,7 @@ elif ! command -v "$maven_command" >/dev/null 2>&1; then
   exit 2
 fi
 
-"$maven_command" -B -f "$pom_file" -pl swing -am clean package
+"$maven_command" -B --no-transfer-progress -f "$pom_file" -pl swing -am clean verify
 
 shopt -s nullglob
 app_jars=("$repository_root"/swing/target/coffee-gb-*-app.jar)
