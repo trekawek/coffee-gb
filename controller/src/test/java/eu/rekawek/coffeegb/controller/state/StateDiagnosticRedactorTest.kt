@@ -23,4 +23,21 @@ class StateDiagnosticRedactorTest {
     assertTrue(redacted.contains("<path>"))
     assertTrue(redacted.length <= 240)
   }
+
+  @Test
+  fun `redacts complete inside and outside unix paths containing spaces`() {
+    val root = Paths.get("/private/User Data/Coffee GB Saves")
+    val input =
+        "inside $root/Account One/state.cgbstate; " +
+            "outside /var/private/Other Account/secret state.cgbstate, retry"
+
+    val redacted = StateDiagnosticRedactor.redact(input, listOf(root))
+
+    assertFalse(redacted.contains(root.toString()))
+    assertFalse(redacted.contains("Account One"))
+    assertFalse(redacted.contains("Other Account"))
+    assertFalse(redacted.contains("secret state.cgbstate"))
+    assertTrue(redacted.contains("<path>"))
+    assertTrue(redacted.endsWith("retry"))
+  }
 }
