@@ -809,9 +809,11 @@ internal constructor(
             active?.takeIf {
               it.id == requestId &&
                   !it.superseded.get() &&
-                  !it.cancelled.get() &&
                   !closed.get()
             } ?: return@synchronized null
+        // EmulationStarted is the controller's ownership-commit acknowledgement. A cancellation
+        // requested before this lifecycle worker ran can no longer roll that commit back; claim
+        // success and let the already-queued controller cancellation become a stale no-op.
         if (!operation.terminal.compareAndSet(false, true)) {
           return@synchronized null
         }
