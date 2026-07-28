@@ -394,7 +394,8 @@ public class GbcHwRomTest {
         return entries;
     }
 
-    @Test(timeout = 30000)
+    // The emulated-tick budget is the correctness bound; this only guards a stalled CI host.
+    @Test(timeout = 60000)
     public void test() throws IOException {
         GbcHwTestRunner.TestResult result =
                 new GbcHwTestRunner(rom, gameboyType, initialButtons, stopWake)

@@ -72,6 +72,46 @@ public class NativePackageVerifierTest {
     }
 
     @Test
+    public void packagedRuntimeLayoutUsesTheNestedMacRuntimeHome() throws Exception {
+        Path runtimeBundle = temporaryFolder.newFolder("mac-runtime").toPath();
+        Path runtimeHome = runtimeBundle.resolve("Contents").resolve("Home");
+        Path java = writeSyntheticRuntime(runtimeHome, "java");
+
+        NativePackageVerifier.RuntimeLayout layout =
+                NativePackageVerifier.requireRuntimeLayout(
+                        runtimeBundle, NativeTarget.MACOS_AARCH64);
+
+        assertEquals(runtimeHome, layout.home());
+        assertEquals(java, layout.javaExecutable());
+
+        Path flatRuntime = temporaryFolder.newFolder("flat-mac-runtime").toPath();
+        writeSyntheticRuntime(flatRuntime, "java");
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.requireRuntimeLayout(
+                        flatRuntime, NativeTarget.MACOS_X86_64));
+    }
+
+    @Test
+    public void packagedRuntimeLayoutRemainsFlatOnLinuxAndWindows() throws Exception {
+        Path linuxRuntime = temporaryFolder.newFolder("linux-runtime").toPath();
+        Path linuxJava = writeSyntheticRuntime(linuxRuntime, "java");
+        NativePackageVerifier.RuntimeLayout linuxLayout =
+                NativePackageVerifier.requireRuntimeLayout(
+                        linuxRuntime, NativeTarget.LINUX_X86_64);
+        assertEquals(linuxRuntime, linuxLayout.home());
+        assertEquals(linuxJava, linuxLayout.javaExecutable());
+
+        Path windowsRuntime = temporaryFolder.newFolder("windows-runtime").toPath();
+        Path windowsJava = writeSyntheticRuntime(windowsRuntime, "java.exe");
+        NativePackageVerifier.RuntimeLayout windowsLayout =
+                NativePackageVerifier.requireRuntimeLayout(
+                        windowsRuntime, NativeTarget.WINDOWS_X86_64);
+        assertEquals(windowsRuntime, windowsLayout.home());
+        assertEquals(windowsJava, windowsLayout.javaExecutable());
+    }
+
+    @Test
     public void distributionResultAndExactChecksumCoverageRoundTrip() throws Exception {
         Path dist = temporaryFolder.newFolder("dist").toPath();
         Path installer = Files.writeString(
@@ -535,6 +575,16 @@ public class NativePackageVerifierTest {
         Files.createDirectories(runtime.resolve("lib"));
         Files.write(runtime.resolve("lib/modules"), new byte[] {1});
         return new PayloadLayout(payload, appDirectory, runtime);
+    }
+
+    private static Path writeSyntheticRuntime(Path home, String javaName) throws Exception {
+        Path java = Files.write(
+                Files.createDirectories(home.resolve("bin")).resolve(javaName),
+                new byte[] {1});
+        Files.write(
+                Files.createDirectories(home.resolve("lib")).resolve("modules"),
+                new byte[] {1});
+        return java;
     }
 
     private static void writeArchive(Path output, Map<String, byte[]> entries) throws Exception {

@@ -135,17 +135,25 @@ case "$target" in
     launcher="/opt/coffee-gb/bin/Coffee GB"
     [[ -x "$launcher" ]]
 
-    mapfile -t desktop_files < <(
-      find /usr/share/applications \
-        -maxdepth 1 \
-        -type f \
-        -name 'coffee-gb-*.desktop' \
-        -print
-    )
+    desktop_roots=(/usr/local/share/applications /usr/share/applications)
+    desktop_files=()
+    for desktop_root in "${desktop_roots[@]}"; do
+      [[ -d "$desktop_root" && ! -L "$desktop_root" ]] || continue
+      while IFS= read -r -d '' desktop_file; do
+        desktop_files+=("$desktop_file")
+      done < <(
+        find "$desktop_root" \
+          -maxdepth 1 \
+          -type f \
+          -name 'coffee-gb-*.desktop' \
+          -print0
+      )
+    done
     (( ${#desktop_files[@]} == 1 )) || {
       echo "Expected exactly one installed Coffee GB desktop entry." >&2
       exit 2
     }
+    [[ -f "${desktop_files[0]}" && ! -L "${desktop_files[0]}" ]]
     desktop_id=${desktop_files[0]##*/}
     grep -Fx 'MimeType=application/x-gameboy-rom' "${desktop_files[0]}" >/dev/null
     grep -Fx 'Exec="/opt/coffee-gb/bin/Coffee GB" %f' "${desktop_files[0]}" >/dev/null

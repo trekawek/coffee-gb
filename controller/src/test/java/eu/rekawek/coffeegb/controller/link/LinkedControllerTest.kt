@@ -496,10 +496,9 @@ class LinkedControllerTest {
           lifecycle.contains("started" to 51L),
           "the superseded request committed during the first manually driven frame",
       )
-      repeat(10) {
-        if (!lifecycle.contains("started" to 52L)) {
-          controller.runFrame()
-        }
+      awaitCondition("the replacement linked open did not start", timeoutMillis = 5_000) {
+        if (!lifecycle.contains("started" to 52L)) controller.runFrame()
+        lifecycle.contains("started" to 52L)
       }
 
       val expected: List<Pair<String, Long?>> =
