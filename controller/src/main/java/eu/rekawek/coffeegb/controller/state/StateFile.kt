@@ -249,6 +249,7 @@ data class StateFileInspection(
     val checksumValid: Boolean,
     val identities: List<StateIdentityEntry>,
     val sections: List<StateSectionInspection>,
+    val diagnostics: StateDiagnosticMetadata?,
 ) {
   fun render(): String = buildString {
     appendLine("magic=CGBS format=$formatVersion root=${rootKind.name}")
@@ -264,11 +265,33 @@ data class StateFileInspection(
                 "profile=${identity.profile.canonicalProfileId} details=${identity.profile}")
       }
     }
+    diagnostics?.let {
+      appendLine("core=${it.coreVersion} build=${it.buildId}")
+    }
     sections.forEach {
       appendLine(
           "section=${it.id} version=${it.version} required=${it.required} length=${it.encodedLength}")
     }
   }
+}
+
+/** Pure, pre-mutation compatibility classification for a decoded detached StateFile. */
+enum class StateCompatibilityStatus {
+  COMPATIBLE,
+  ROOT_MISMATCH,
+  ROM_MISMATCH,
+  SLOT_ROM_MISMATCH,
+  HARDWARE_PROFILE_MISMATCH,
+  INCOMPATIBLE,
+}
+
+data class StateCompatibilityResult(
+    val status: StateCompatibilityStatus,
+    val reason: StateDecodeReason?,
+    val detail: String?,
+) {
+  val isCompatible: Boolean
+    get() = status == StateCompatibilityStatus.COMPATIBLE
 }
 
 /** ROM/profile identity helpers shared by capture and pre-apply validation. */

@@ -162,6 +162,7 @@ object StateCodec {
         checksumValid = true,
         java.util.Collections.unmodifiableList(ArrayList(identities)),
         java.util.Collections.unmodifiableList(ArrayList(sections.inspections)),
+        sections.diagnostics,
     )
   }
 
@@ -235,6 +236,42 @@ object StateCodec {
     validateTargetIdentities(file.identities, targetIdentities)
   }
 
+  /**
+   * Classifies an already-decoded detached file against an expected target without touching live
+   * emulator state.
+   */
+  fun classifyCompatibility(
+      file: StateFile,
+      expectedRoot: StateRootKind,
+      targetIdentities: List<StateIdentityEntry>,
+  ): StateCompatibilityResult =
+      try {
+        validateForTarget(file, expectedRoot, targetIdentities)
+        StateCompatibilityResult(StateCompatibilityStatus.COMPATIBLE, null, null)
+      } catch (failure: StateDecodeException) {
+        val status =
+            when (failure.reason) {
+              StateDecodeReason.TARGET_STATE_MISMATCH -> StateCompatibilityStatus.ROOT_MISMATCH
+              StateDecodeReason.ROM_MISMATCH -> StateCompatibilityStatus.ROM_MISMATCH
+              StateDecodeReason.SLOT_ROM_MISMATCH -> StateCompatibilityStatus.SLOT_ROM_MISMATCH
+              StateDecodeReason.HARDWARE_PROFILE_MISMATCH ->
+                  StateCompatibilityStatus.HARDWARE_PROFILE_MISMATCH
+              else -> StateCompatibilityStatus.INCOMPATIBLE
+            }
+        StateCompatibilityResult(status, failure.reason, failure.message)
+      }
+
+  /** Convenience classifier for a standalone machine target. */
+  fun classifyCompatibility(
+      file: StateFile,
+      configuration: Gameboy.GameboyConfiguration,
+  ): StateCompatibilityResult =
+      classifyCompatibility(
+          file,
+          StateRootKind.MACHINE,
+          listOf(StateIdentityEntry(0, StateIdentity.from(configuration))),
+      )
+
   fun decodeAndApply(
       bytes: ByteArray,
       configuration: Gameboy.GameboyConfiguration,
@@ -249,7 +286,24 @@ object StateCodec {
       gameboy: Gameboy,
       probe: ((ApplyStage) -> Unit)?,
   ) {
-    val file = decode(bytes)
+    applyDecoded(decode(bytes), configuration, gameboy, probe)
+  }
+
+  /** Applies a fully decoded detached machine StateFile after target compatibility validation. */
+  fun applyDecoded(
+      file: StateFile,
+      configuration: Gameboy.GameboyConfiguration,
+      gameboy: Gameboy,
+  ) {
+    applyDecoded(file, configuration, gameboy, null)
+  }
+
+  internal fun applyDecoded(
+      file: StateFile,
+      configuration: Gameboy.GameboyConfiguration,
+      gameboy: Gameboy,
+      probe: ((ApplyStage) -> Unit)?,
+  ) {
     val root =
         file.root as? MachineStateRoot
             ?: targetMismatch("StateFile root ${file.root.kind} is not a machine")
