@@ -256,7 +256,10 @@ class ApplicationSettingsGeneralTest {
     val decoded = ApplicationSettingsCodec.decode(encoded)
 
     assertEquals("/plugin/legacy-value", encoded["rom.recent.10"])
-    assertEquals("/roms/10.gb", encoded["${ApplicationSettingsCodec.RECENT_ROM_PREFIX}10"])
+    assertEquals(
+        activeRecent[10].toString(),
+        encoded["${ApplicationSettingsCodec.RECENT_ROM_PREFIX}10"],
+    )
     assertEquals(activeRecent, decoded.settings.general.recentRoms)
     assertEquals("/plugin/legacy-value", decoded.unknownProperties["rom.recent.10"])
   }
@@ -435,7 +438,9 @@ class ApplicationSettingsGeneralTest {
       properties.recentFileCapacity = 5
       assertEquals(5, properties.recentFileCapacity)
       assertEquals(
-          listOf("/roms/11.gb", "/roms/10.gb", "/roms/9.gb", "/roms/8.gb", "/roms/7.gb"),
+          (11 downTo 7).map {
+            Path.of("/roms/$it.gb").toAbsolutePath().normalize().toString()
+          },
           properties.recentRoms.getRoms(),
       )
 
