@@ -19,6 +19,7 @@ import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent
 import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateScreenshotRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateSkipCloseAutosaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateUserError
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -252,7 +253,11 @@ internal class StateUxDesktopController(
         )
     when (choice) {
       0 -> prepareClose(pending.onPrepared)
-      1 -> pending.onPrepared()
+      1 -> {
+        val requestId = nextRequestId()
+        pendingClose = PendingClose(requestId, pending.onPrepared)
+        eventBus.post(StateSkipCloseAutosaveRequestEvent(requestId, event.sessionId))
+      }
     }
   }
 
