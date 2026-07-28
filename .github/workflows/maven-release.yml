@@ -11,6 +11,11 @@ on:
         description: Next development version (for example, 1.7.6-SNAPSHOT)
         required: true
         type: string
+      sign_native_packages:
+        description: Sign/notarize every native target with protected release credentials
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -20,21 +25,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release ${{ inputs.release_version }}
+  prepare:
+    name: Prepare ${{ inputs.release_version }}
     if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: maven-central
+    outputs:
+      source_sha: ${{ steps.release-source.outputs.source_sha }}
+      tag_ref: ${{ steps.release-source.outputs.tag_ref }}
 
     steps:
       - name: Check out the default branch
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Set up Java and Maven Central credentials
-        uses: actions/setup-java@v5
+      - name: Set up Java and release-signing credentials
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: '21'
@@ -87,12 +95,10 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare and perform the Maven release
+      - name: Prepare the release commits and exact tag without publishing
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
           DEVELOPMENT_VERSION: ${{ inputs.development_version }}
-          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: >-
           mvn --batch-mode --no-transfer-progress
@@ -100,35 +106,180 @@ jobs:
           "-DdevelopmentVersion=${DEVELOPMENT_VERSION}"
           "-Dtag=coffee-gb-${RELEASE_VERSION}"
           "-Darguments=-Dmaven.javadoc.skip=true --no-transfer-progress"
-          release:clean release:prepare release:perform
+          release:clean release:prepare
 
-      - name: Create GitHub release
+      - name: Resolve the immutable prepared release source
+        id: release-source
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          tag="coffee-gb-${RELEASE_VERSION}"
+          tag_ref="refs/tags/$tag"
+          git fetch --no-tags origin "$tag_ref"
+          source_sha=$(git rev-parse 'FETCH_HEAD^{commit}')
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Prepared release tag did not resolve to a full commit ID" >&2
+            exit 1
+          fi
+          tagged_version=$(git show "$source_sha:pom.xml" |
+            sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p' |
+            head -1)
+          if [[ "$tagged_version" != "$RELEASE_VERSION" ]]; then
+            echo "Prepared tag contains Maven version $tagged_version" >&2
+            exit 1
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "tag_ref=$tag_ref" >> "$GITHUB_OUTPUT"
+
+  native-packages:
+    name: Validate complete native package matrix
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-packages.yml
+    with:
+      checkout_ref: ${{ needs.prepare.outputs.tag_ref }}
+      release_version: ${{ inputs.release_version }}
+      release_signing: ${{ inputs.sign_native_packages }}
+    secrets: inherit
+
+  publish-maven:
+    name: Publish Maven artifacts after native validation
+    needs: [prepare, native-packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: maven-central
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out the exact validated release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Java and Maven Central credentials
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_TOKEN
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Recheck the immutable release tag
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          TAG_REF: ${{ needs.prepare.outputs.tag_ref }}
+        run: |
+          if [[ "$TAG_REF" != "refs/tags/coffee-gb-${RELEASE_VERSION}" ||
+                "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Maven publication source does not match the validated release tag" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$TAG_REF"
+          if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Release tag moved after native validation" >&2
+            exit 1
+          fi
+
+      - name: Check Maven publication secrets
+        shell: bash
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          missing=()
+          [[ -n "$MAVEN_CENTRAL_USERNAME" ]] || missing+=(MAVEN_CENTRAL_USERNAME)
+          [[ -n "$MAVEN_CENTRAL_TOKEN" ]] || missing+=(MAVEN_CENTRAL_TOKEN)
+          [[ -n "$MAVEN_GPG_PRIVATE_KEY" ]] || missing+=(MAVEN_GPG_PRIVATE_KEY)
+          [[ -n "$MAVEN_GPG_PASSPHRASE" ]] || missing+=(MAVEN_GPG_PASSPHRASE)
+          if (( ${#missing[@]} )); then
+            printf 'Missing publication secret: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+      - name: Publish the validated tag to Maven Central
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: >-
+          mvn --batch-mode --no-transfer-progress
+          -P release
+          -Dmaven.javadoc.skip=true
+          deploy
+
+  publish-github:
+    name: Publish GitHub release after Maven publication
+    needs: [prepare, native-packages, publish-maven]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: native-release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the complete validated native release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-release-bundle
+          path: native-release
+
+      - name: Verify provenance and publish the complete GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          TAG_REF: ${{ needs.prepare.outputs.tag_ref }}
         run: |
           tag="coffee-gb-${RELEASE_VERSION}"
-          asset="target/checkout/swing/target/coffee-gb-${RELEASE_VERSION}.jar"
-
-          if [[ ! -f "$asset" ]]; then
-            echo "Expected release asset not found: $asset" >&2
+          if [[ "$TAG_REF" != "refs/tags/$tag" ||
+                "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "GitHub publication source does not match the validated release tag" >&2
             exit 1
           fi
-
-          gh release create "$tag" "$asset" \
+          git fetch --no-tags origin "$TAG_REF"
+          if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Release tag moved after Maven publication" >&2
+            exit 1
+          fi
+          if ! grep -qx "app.version=$RELEASE_VERSION" \
+              native-release/NATIVE-PACKAGE-MATRIX.properties ||
+             ! grep -qx "source.commit=$SOURCE_SHA" \
+              native-release/NATIVE-PACKAGE-MATRIX.properties; then
+            echo "Release bundle provenance does not match the validated source" >&2
+            exit 1
+          fi
+          (
+            cd native-release
+            sha256sum --check SHA256SUMS
+          )
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "coffee-gb ${RELEASE_VERSION}"
+          fi
+          gh release upload "$tag" native-release/* \
             --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --generate-notes \
-            --title "coffee-gb ${RELEASE_VERSION}"
-
-  native-packages:
-    name: Build and publish native packages
-    needs: release
-    permissions:
-      contents: write
-    uses: ./.github/workflows/native-packages.yml
-    with:
-      checkout_ref: refs/tags/coffee-gb-${{ inputs.release_version }}
-      publish: true
-      release_version: ${{ inputs.release_version }}
+            --clobber

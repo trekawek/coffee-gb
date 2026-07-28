@@ -16,6 +16,7 @@ public class NativePackageWorkflowTest {
         Path workflows = Path.of("../.github/workflows").toAbsolutePath().normalize();
         String packages = Files.readString(workflows.resolve("native-packages.yml"));
         String release = Files.readString(workflows.resolve("maven-release.yml"));
+        String maven = Files.readString(workflows.resolve("maven.yml"));
 
         for (String target :
                 new String[] {
@@ -47,9 +48,10 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
         assertTrue(packages.contains("environment: native-release"));
-        assertTrue(packages.contains("if: inputs.publish"));
+        assertTrue(packages.contains("inputs.release_signing"));
         assertFalse(packages.contains(
-                "inputs.publish || startsWith(github.ref, 'refs/tags/coffee-gb-')"));
+                "startsWith(github.ref, 'refs/tags/coffee-gb-')"));
+        assertFalse(packages.contains("tags: [ \"coffee-gb-*\" ]"));
         assertTrue(packages.contains("NativeReleaseTool"));
         assertTrue(packages.contains("needs: [resolve-source, package]"));
         assertTrue(packages.contains("source_sha: ${{ steps.source.outputs.source_sha }}"));
@@ -62,12 +64,47 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("retention-days: 7"));
         assertTrue(packages.contains("retention-days: 14"));
         assertTrue(packages.contains("permissions:\n  contents: read"));
-        assertFalse(packages.contains("${{ secrets."));
-        assertFalse(packages.contains("--release-sign"));
+        assertTrue(packages.contains(
+                "!startsWith(github.event_name, 'pull_request')"));
+        assertTrue(packages.contains("--release-sign"));
+        assertTrue(packages.contains("NATIVE_LINUX_GPG_PRIVATE_KEY"));
+        assertTrue(packages.contains("NATIVE_WINDOWS_CERTIFICATE_PFX_BASE64"));
+        assertTrue(packages.contains("NATIVE_MACOS_CERTIFICATE_P12_BASE64"));
+        assertTrue(packages.contains("name: native-release-bundle"));
+        assertFalse(packages.contains("gh release"));
+        assertFalse(packages.contains("contents: write"));
 
         assertTrue(release.contains("uses: ./.github/workflows/native-packages.yml"));
+        assertTrue(release.contains("checkout_ref: ${{ needs.prepare.outputs.tag_ref }}"));
+        assertTrue(release.contains("release:clean release:prepare"));
+        assertFalse(release.contains("release:perform"));
+        assertTrue(release.contains("needs: [prepare, native-packages]"));
+        assertTrue(release.contains("Publish Maven artifacts after native validation"));
+        assertTrue(release.contains("Publish GitHub release after Maven publication"));
         assertTrue(release.contains(
-                "checkout_ref: refs/tags/coffee-gb-${{ inputs.release_version }}"));
-        assertTrue(release.contains("publish: true"));
+                "needs: [prepare, native-packages, publish-maven]"));
+        assertTrue(release.contains("environment: native-release"));
+        assertTrue(release.contains("name: native-release-bundle"));
+        assertTrue(release.indexOf("release:clean release:prepare")
+                < release.indexOf("uses: ./.github/workflows/native-packages.yml"));
+        assertTrue(release.indexOf("uses: ./.github/workflows/native-packages.yml")
+                < release.indexOf("Publish the validated tag to Maven Central"));
+        assertTrue(release.indexOf("Publish the validated tag to Maven Central")
+                < release.indexOf("gh release create"));
+
+        for (String workflow : new String[] {packages, release, maven}) {
+            assertFalse(workflow.contains("actions/checkout@v"));
+            assertFalse(workflow.contains("actions/setup-java@v"));
+            assertFalse(workflow.contains("actions/upload-artifact@v"));
+            assertFalse(workflow.contains("actions/download-artifact@v"));
+        }
+        assertTrue(packages.contains(
+                "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"));
+        assertTrue(packages.contains(
+                "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"));
+        assertTrue(release.contains(
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"));
+        assertTrue(maven.contains(
+                "actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95"));
     }
 }

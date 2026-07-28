@@ -5,7 +5,6 @@ on:
     branches: [ "master" ]
   push:
     branches: [ "master" ]
-    tags: [ "coffee-gb-*" ]
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -14,8 +13,8 @@ on:
         required: false
         default: ""
         type: string
-      publish:
-        description: Publish the complete validated matrix to the matching GitHub release
+      release_signing:
+        description: Rebuild, sign, and verify all targets after the unsigned matrix passes
         required: false
         default: false
         type: boolean
@@ -30,7 +29,7 @@ permissions:
 
 concurrency:
   group: native-packages-${{ inputs.checkout_ref || github.ref }}
-  cancel-in-progress: ${{ !inputs.publish }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
 jobs:
   resolve-source:
@@ -43,7 +42,7 @@ jobs:
 
     steps:
       - name: Check out requested source for resolution
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.checkout_ref || github.ref }}
           fetch-depth: 0
@@ -54,11 +53,11 @@ jobs:
         shell: bash
         env:
           REQUESTED_REF: ${{ inputs.checkout_ref }}
-          PUBLISH: ${{ inputs.publish }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           candidate=${REQUESTED_REF:-$GITHUB_REF}
           tag_ref=
-          if [[ "$PUBLISH" == true || "$candidate" == refs/tags/coffee-gb-* ]]; then
+          if [[ -n "$RELEASE_VERSION" || "$candidate" == refs/tags/coffee-gb-* ]]; then
             if [[ ! "$candidate" =~ ^refs/tags/coffee-gb-[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
               echo "Release packaging requires a fully qualified refs/tags/coffee-gb-VERSION ref" >&2
               exit 1
@@ -105,7 +104,7 @@ jobs:
 
     steps:
       - name: Check out the exact package source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-source.outputs.source_sha }}
           persist-credentials: false
@@ -121,7 +120,7 @@ jobs:
           fi
 
       - name: Set up target-architecture JDK 21 and safe Maven cache
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: "21"
@@ -279,7 +278,7 @@ jobs:
           Copy-Item -Path "$BuildRoot/dist/*" -Destination $PackageRoot
 
       - name: Upload target installer, checksum, SBOM, and result manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-${{ matrix.target }}
           path: swing/target/native-ci-upload-${{ matrix.target }}
@@ -295,7 +294,7 @@ jobs:
 
     steps:
       - name: Check out Maven version metadata
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-source.outputs.source_sha }}
           persist-credentials: false
@@ -319,7 +318,7 @@ jobs:
           fi
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: "21"
@@ -327,7 +326,7 @@ jobs:
           cache-dependency-path: "**/pom.xml"
 
       - name: Download every required target
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: native-*
           path: downloaded-native
@@ -377,9 +376,21 @@ jobs:
             --output native-release \
             --version "$version" \
             --source-commit "$SOURCE_SHA"
+          grep -qx "source.commit=$SOURCE_SHA" \
+            native-release/NATIVE-PACKAGE-MATRIX.properties
 
-      - name: Upload complete release bundle
-        uses: actions/upload-artifact@v4
+      - name: Upload validated unsigned release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-unsigned-release-bundle
+          path: native-release
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Promote unsigned bundle when signing was not requested
+        if: ${{ !inputs.release_signing }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-release-bundle
           path: native-release
@@ -387,73 +398,405 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-  publish:
-    name: Publish validated tagged packages
-    if: inputs.publish
+  sign-package:
+    name: Sign and reverify ${{ matrix.target }}
+    if: >-
+      inputs.release_signing &&
+      !startsWith(github.event_name, 'pull_request') &&
+      inputs.release_version != ''
     needs: [resolve-source, release-gate]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 90
     environment: native-release
-    permissions:
-      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86-64
+            package_type: deb
+            runner: ubuntu-24.04
+          - target: windows-x86-64
+            package_type: msi
+            runner: windows-2025
+          - target: macos-x86-64
+            package_type: dmg
+            runner: macos-15-intel
+          - target: macos-aarch64
+            package_type: dmg
+            runner: macos-15
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
-      - name: Check out the immutable release source
-        uses: actions/checkout@v4
+      - name: Check out the exact validated release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-source.outputs.source_sha }}
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: Download complete release bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: native-release-bundle
-          path: native-release
-
-      - name: Publish only an exact non-SNAPSHOT release tag
+      - name: Prove signed checkout and release tag provenance
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          REQUESTED_VERSION: ${{ inputs.release_version }}
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
           TAG_REF: ${{ needs.resolve-source.outputs.tag_ref }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
-          if [[ ! "$TAG_REF" =~ ^refs/tags/(coffee-gb-([0-9A-Za-z][0-9A-Za-z._-]*))$ ]]; then
-            echo "Native publication requires an exact fully qualified release tag" >&2
-            exit 1
-          fi
-          tag=${BASH_REMATCH[1]}
-          version=${BASH_REMATCH[2]}
-          if [[ "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
-            echo "Publication checkout does not equal resolved source commit" >&2
+          expected_tag="refs/tags/coffee-gb-${RELEASE_VERSION}"
+          if [[ "$TAG_REF" != "$expected_tag" ||
+                "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Signing source is not the exact validated release tag" >&2
             exit 1
           fi
           git fetch --no-tags origin "$TAG_REF"
           if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
-            echo "Release tag moved after package source resolution; refusing publication" >&2
+            echo "Release tag moved before signing" >&2
             exit 1
           fi
-          if ! grep -qx "source.commit=$SOURCE_SHA" \
-              native-release/NATIVE-PACKAGE-MATRIX.properties; then
-            echo "Release bundle is not bound to the resolved source commit" >&2
+
+      - name: Set up target-architecture JDK 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: "**/pom.xml"
+
+      - name: Import isolated Linux signing key
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.NATIVE_LINUX_GPG_PRIVATE_KEY }}
+          SIGNING_KEY_ID: ${{ secrets.NATIVE_LINUX_GPG_KEY_ID }}
+        run: |
+          [[ -n "$SIGNING_KEY" && -n "$SIGNING_KEY_ID" ]] || {
+            echo "Linux release signing secrets are not configured" >&2
+            exit 1
+          }
+          signing_home="$RUNNER_TEMP/coffee-gb-gnupg"
+          mkdir -m 700 "$signing_home"
+          export GNUPGHOME="$signing_home"
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          gpg --batch --list-secret-keys "$SIGNING_KEY_ID" >/dev/null
+          {
+            echo "GNUPGHOME=$signing_home"
+            echo "COFFEE_GB_LINUX_GPG_KEY_ID=$SIGNING_KEY_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Import isolated Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.NATIVE_WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.NATIVE_WINDOWS_CERTIFICATE_PASSWORD }}
+          TIMESTAMP_URL: ${{ secrets.NATIVE_WINDOWS_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:TIMESTAMP_URL)) {
+            throw "Windows release signing secrets are not configured"
+          }
+          if (-not $env:TIMESTAMP_URL.StartsWith("https://")) {
+            throw "The Windows timestamp URL must use HTTPS"
+          }
+          $Pfx = Join-Path $env:RUNNER_TEMP "coffee-gb-release.pfx"
+          [IO.File]::WriteAllBytes(
+              $Pfx,
+              [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+          try {
+            $Password = ConvertTo-SecureString `
+              $env:CERTIFICATE_PASSWORD `
+              -AsPlainText `
+              -Force
+            $Certificate = Import-PfxCertificate `
+              -FilePath $Pfx `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $Password `
+              -Exportable:$false
+          } finally {
+            Remove-Item -LiteralPath $Pfx -Force -ErrorAction SilentlyContinue
+          }
+          if (-not $Certificate -or
+              $Certificate.Thumbprint -notmatch '^[0-9A-Fa-f]{40}$') {
+            throw "The Windows signing certificate has no valid SHA-1 thumbprint"
+          }
+          if (-not (Get-Command signtool.exe -ErrorAction SilentlyContinue)) {
+            throw "signtool.exe is unavailable"
+          }
+          "COFFEE_GB_WINDOWS_CERTIFICATE_SHA1=$($Certificate.Thumbprint)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "COFFEE_GB_WINDOWS_TIMESTAMP_URL=$env:TIMESTAMP_URL" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Import isolated macOS signing and notarization credentials
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.NATIVE_MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.NATIVE_MACOS_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.NATIVE_MACOS_SIGNING_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.NATIVE_MACOS_NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NATIVE_MACOS_NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NATIVE_MACOS_NOTARY_PASSWORD }}
+        run: |
+          for variable in \
+              CERTIFICATE_BASE64 \
+              CERTIFICATE_PASSWORD \
+              SIGNING_IDENTITY \
+              NOTARY_APPLE_ID \
+              NOTARY_TEAM_ID \
+              NOTARY_PASSWORD; do
+            [[ -n "${!variable}" ]] || {
+              echo "macOS release signing secret $variable is not configured" >&2
+              exit 1
+            }
+          done
+          keychain="$RUNNER_TEMP/coffee-gb-release.keychain-db"
+          certificate="$RUNNER_TEMP/coffee-gb-release.p12"
+          keychain_password=$(openssl rand -hex 32)
+          printf '%s' "$CERTIFICATE_BASE64" |
+            openssl base64 -d -A -out "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" \
+            -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T "$JAVA_HOME/bin/jpackage"
+          rm -f -- "$certificate"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain"
+          security list-keychains -d user -s "$keychain"
+          xcrun notarytool store-credentials coffee-gb-release \
+            --apple-id "$NOTARY_APPLE_ID" \
+            --team-id "$NOTARY_TEAM_ID" \
+            --password "$NOTARY_PASSWORD" \
+            --keychain "$keychain"
+          {
+            echo "COFFEE_GB_MAC_SIGNING_KEY_USER_NAME=$SIGNING_IDENTITY"
+            echo "COFFEE_GB_MAC_SIGNING_KEYCHAIN=$keychain"
+            echo "COFFEE_GB_MAC_NOTARY_KEYCHAIN_PROFILE=coffee-gb-release"
+            echo "COFFEE_GB_MAC_NOTARY_KEYCHAIN=$keychain"
+          } >> "$GITHUB_ENV"
+
+      - name: Rebuild, sign, verify, and smoke the release package
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+          COFFEE_GB_DESKTOP_SMOKE: "true"
+          COFFEE_GB_RELEASE_SIGNING: "true"
+          COFFEE_GB_RELEASE_VERSION: ${{ inputs.release_version }}
+          COFFEE_GB_RELEASE_TAG: coffee-gb-${{ inputs.release_version }}
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a ./packaging/package-native.sh \
+              "$PACKAGE_TARGET" \
+              "$PACKAGE_TYPE" \
+              --release-sign
+            xvfb-run -a ./packaging/verify-native-package.sh \
+              "$PACKAGE_TARGET" \
+              "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+          else
+            ./packaging/package-native.sh \
+              "$PACKAGE_TARGET" \
+              "$PACKAGE_TYPE" \
+              --release-sign
+            ./packaging/verify-native-package.sh \
+              "$PACKAGE_TARGET" \
+              "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+          fi
+          ./packaging/verify-native-association.sh \
+            "$PACKAGE_TARGET" \
+            "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+
+      - name: Rebuild, sign, verify, and smoke the release package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+          COFFEE_GB_DESKTOP_SMOKE: "true"
+          COFFEE_GB_RELEASE_SIGNING: "true"
+          COFFEE_GB_RELEASE_VERSION: ${{ inputs.release_version }}
+          COFFEE_GB_RELEASE_TAG: coffee-gb-${{ inputs.release_version }}
+        run: |
+          ./packaging/package-native.ps1 `
+            -Target $env:PACKAGE_TARGET `
+            -Type $env:PACKAGE_TYPE `
+            -ReleaseSign
+          ./packaging/verify-native-package.ps1 `
+            -Target $env:PACKAGE_TARGET `
+            -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
+          ./packaging/verify-native-association.ps1 `
+            -Target $env:PACKAGE_TARGET `
+            -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
+
+      - name: Prepare bounded signed target artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: |
+          build_root="swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+          upload_root="swing/target/native-signed-upload-${PACKAGE_TARGET}"
+          mkdir -p "$upload_root/package"
+          cp "$build_root"/dist/* "$upload_root/package"/
+          if [[ "$PACKAGE_TARGET" == linux-x86-64 ]]; then
+            shopt -s nullglob
+            portable=(swing/target/coffee-gb-*.jar)
+            filtered=()
+            for candidate in "${portable[@]}"; do
+              [[ "$candidate" == *-app.jar ]] || filtered+=("$candidate")
+            done
+            if (( ${#filtered[@]} != 1 )); then
+              echo "Expected exactly one portable Maven JAR, found ${#filtered[@]}" >&2
+              exit 1
+            fi
+            mkdir "$upload_root/portable"
+            cp "${filtered[0]}" "$upload_root/portable/"
+          fi
+
+      - name: Prepare bounded signed target artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: |
+          $BuildRoot = "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
+          $UploadRoot = "swing/target/native-signed-upload-$env:PACKAGE_TARGET"
+          $PackageRoot = New-Item `
+            -ItemType Directory `
+            -Path (Join-Path $UploadRoot "package")
+          Copy-Item -Path "$BuildRoot/dist/*" -Destination $PackageRoot
+
+      - name: Upload verified signed target
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-signed-${{ matrix.target }}
+          path: swing/target/native-signed-upload-${{ matrix.target }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Remove isolated release credentials
+        if: always()
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS && -n "${COFFEE_GB_MAC_SIGNING_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$COFFEE_GB_MAC_SIGNING_KEYCHAIN" || true
+          elif [[ "$RUNNER_OS" == Linux && -n "${GNUPGHOME:-}" ]]; then
+            find "$GNUPGHOME" -type f -delete
+            find "$GNUPGHOME" -depth -type d -empty -delete
+          fi
+
+      - name: Remove isolated Windows release certificate
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:COFFEE_GB_WINDOWS_CERTIFICATE_SHA1) {
+            Remove-Item `
+              -LiteralPath "Cert:\CurrentUser\My\$env:COFFEE_GB_WINDOWS_CERTIFICATE_SHA1" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+  signed-release-gate:
+    name: Gate complete signed native package matrix
+    if: >-
+      inputs.release_signing &&
+      !startsWith(github.event_name, 'pull_request') &&
+      inputs.release_version != ''
+    needs: [resolve-source, sign-package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out signed release metadata
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Recheck immutable signed release source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          TAG_REF: ${{ needs.resolve-source.outputs.tag_ref }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          if [[ "$TAG_REF" != "refs/tags/coffee-gb-${RELEASE_VERSION}" ||
+                "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Signed release gate source mismatch" >&2
             exit 1
           fi
-          if [[ "$version" == *-SNAPSHOT ]]; then
-            echo "Snapshot native packages cannot be published" >&2
+          git fetch --no-tags origin "$TAG_REF"
+          if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Release tag moved after signing" >&2
             exit 1
           fi
-          if [[ -n "$REQUESTED_VERSION" && "$version" != "$REQUESTED_VERSION" ]]; then
-            echo "Tag version $version does not match requested $REQUESTED_VERSION" >&2
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: "**/pom.xml"
+
+      - name: Download every verified signed target
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: native-signed-*
+          path: downloaded-native
+
+      - name: Assemble and verify signed release-level artifacts
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          version=$(mvn -B --no-transfer-progress help:evaluate \
+            -Dexpression=project.version \
+            -DforceStdout \
+            -q)
+          if [[ "$version" != "$RELEASE_VERSION" || "$version" == *-SNAPSHOT ]]; then
+            echo "Signed package Maven version $version does not match $RELEASE_VERSION" >&2
             exit 1
           fi
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
-              --generate-notes \
-              --title "coffee-gb ${version}"
+          mapfile -t portable < <(
+            find downloaded-native -type f -name "coffee-gb-${version}.jar" -print
+          )
+          if (( ${#portable[@]} != 1 )); then
+            echo "Expected exactly one signed-matrix portable JAR, found ${#portable[@]}" >&2
+            exit 1
           fi
-          gh release upload "$tag" native-release/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --clobber
+          java \
+            -cp "${portable[0]}" \
+            eu.rekawek.coffeegb.swing.packaging.NativeReleaseTool \
+            assemble \
+            --input downloaded-native \
+            --portable-jar "${portable[0]}" \
+            --output native-release \
+            --version "$version" \
+            --source-commit "$SOURCE_SHA"
+          grep -qx "source.commit=$SOURCE_SHA" \
+            native-release/NATIVE-PACKAGE-MATRIX.properties
+          if grep -q '=unsigned$' native-release/NATIVE-PACKAGE-MATRIX.properties; then
+            echo "Signed release matrix still contains an unsigned target" >&2
+            exit 1
+          fi
+
+      - name: Upload complete verified signed release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-release-bundle
+          path: native-release
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

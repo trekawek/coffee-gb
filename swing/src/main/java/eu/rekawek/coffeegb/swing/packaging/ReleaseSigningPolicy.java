@@ -116,14 +116,7 @@ public final class ReleaseSigningPolicy {
         Objects.requireNonNull(artifact, "artifact");
         return switch (target.hostOs()) {
             case MACOS -> List.of(
-                    List.of(
-                            "xcrun",
-                            "notarytool",
-                            "submit",
-                            artifact.toString(),
-                            "--keychain-profile",
-                            environment.get("COFFEE_GB_MAC_NOTARY_KEYCHAIN_PROFILE"),
-                            "--wait"),
+                    macNotaryCommand(artifact),
                     List.of("xcrun", "stapler", "staple", artifact.toString()));
             case WINDOWS -> List.of(List.of(
                     "signtool",
@@ -147,6 +140,23 @@ public final class ReleaseSigningPolicy {
                     environment.get("COFFEE_GB_LINUX_GPG_KEY_ID"),
                     artifact.toString()));
         };
+    }
+
+    private List<String> macNotaryCommand(Path artifact) {
+        List<String> command = new ArrayList<>(List.of(
+                "xcrun",
+                "notarytool",
+                "submit",
+                artifact.toString(),
+                "--keychain-profile",
+                environment.get("COFFEE_GB_MAC_NOTARY_KEYCHAIN_PROFILE")));
+        String keychain = environment.get("COFFEE_GB_MAC_NOTARY_KEYCHAIN");
+        if (nonBlank(keychain)) {
+            command.add("--keychain");
+            command.add(keychain);
+        }
+        command.add("--wait");
+        return List.copyOf(command);
     }
 
     /**
