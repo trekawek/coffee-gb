@@ -157,11 +157,14 @@ internal class DesktopRomOpen(
       RomOpenStage.AWAITING_ARCHIVE_SELECTION -> {
         progress.close(update.requestId)
         val selected = chooseArchiveCandidate(owner, update.candidates)
-        if (selected == null) {
-          service.cancel(update.requestId)
-        } else {
-          progress.show(update.requestId, "Opening ${selected.displayName()}…")
-          service.selectArchive(update.requestId, selected.token())
+        applyArchiveSelectionIfCurrent(
+            update.requestId,
+            selected,
+            service::ownsVisibleRequest,
+            service::cancel,
+        ) { candidate ->
+          progress.show(update.requestId, "Opening ${candidate.displayName()}…")
+          service.selectArchive(update.requestId, candidate.token())
         }
       }
       RomOpenStage.AWAITING_PERSISTENCE_DECISION ->
@@ -212,6 +215,28 @@ internal class DesktopRomOpen(
       RomOpenStage.AWAITING_PERSISTENCE_DECISION -> error("Handled separately")
     }
   }
+}
+
+/**
+ * A modal archive chooser runs a nested EDT event loop. Revalidate ownership after it returns
+ * because another desktop-open request may have superseded this one while the dialog was open.
+ */
+internal fun <T> applyArchiveSelectionIfCurrent(
+    requestId: Long,
+    selected: T?,
+    ownsVisibleRequest: (Long) -> Boolean,
+    cancel: (Long) -> Unit,
+    accept: (T) -> Unit,
+): Boolean {
+  if (!ownsVisibleRequest(requestId)) {
+    return false
+  }
+  if (selected == null) {
+    cancel(requestId)
+  } else {
+    accept(selected)
+  }
+  return true
 }
 
 internal class RomOpenProgressDialog(

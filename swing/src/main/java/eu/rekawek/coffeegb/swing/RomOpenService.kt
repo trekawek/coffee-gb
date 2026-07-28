@@ -195,13 +195,19 @@ internal constructor(
     }
     eventBus.register<Controller.EmulationStartedEvent> { event ->
       event.openRequestId?.let { id ->
+        // EmulationStarted is the controller's synchronous ownership-commit acknowledgement.
+        // Claim it before queueing preferences work so a controller transition cannot abandon an
+        // already-committed open merely because the single disk worker is busy.
+        val operation = claimSuccessfulTerminal(id) ?: return@register
+        val path = operation.path
+        val origin = event.origin ?: operation.origin
         submitLifecycle {
           // The controller event and this disk/preferences work are intentionally separated.
-          // Claim ownership here, at the worker boundary, so a newer open that superseded this
-          // event while it was queued cannot mutate recents.
-          val operation = claimSuccessfulTerminal(id) ?: return@submitLifecycle
-          val path = operation.path ?: return@submitLifecycle
-          val origin = event.origin ?: operation.origin ?: return@submitLifecycle
+          if (path == null || origin == null) {
+            LOG.error("Committed ROM-open request {} is missing its source identity", id)
+            cleanupAbandonedSnapshot(operation)
+            return@submitLifecycle
+          }
           try {
             recentStore.recordSuccessfulOpen(path)
           } catch (failure: RuntimeException) {
@@ -218,6 +224,9 @@ internal constructor(
               ))
         }
       }
+    }
+    eventBus.register<ControllerOwnershipChangingEvent> {
+      abandonForControllerTransition()
     }
     eventBus.register<Controller.LoadRomFailedEvent> { event ->
       event.openRequestId?.let { id ->
@@ -398,6 +407,28 @@ internal constructor(
 
   internal fun hasActiveRequest(): Boolean =
       synchronized(lock) { active != null && !closed.get() }
+
+  /**
+   * Synchronously detaches an uncommitted request before Swing replaces the controller that owns
+   * its correlated lifecycle events. Disk cleanup remains off the transition callback.
+   */
+  internal fun abandonForControllerTransition() {
+    visibleRequestId.set(NO_VISIBLE_REQUEST)
+    val operation =
+        synchronized(lock) {
+          val current = active ?: return@synchronized null
+          current.superseded.set(true)
+          current.cancelled.set(true)
+          current.terminal.set(true)
+          active = null
+          current
+        } ?: return
+    operation.future?.cancel(true)
+    if (operation.controllerDispatched) {
+      eventBus.post(Controller.CancelRomOpenEvent(operation.id))
+    }
+    submitLifecycle { cleanupAbandonedSnapshot(operation) }
+  }
 
   /**
    * Reversibly prevents new controller dispatches and drains cancellation/temporary-file cleanup.
@@ -1045,11 +1076,28 @@ internal fun redactRomOpenTechnicalDetails(value: String, sourcePath: Path?): St
                 ?.toString()
                 ?.takeIf(String::isNotBlank)
                 ?.let(::add)
+            runCatching { Path.of(System.getProperty("user.home")).toAbsolutePath().normalize() }
+                .getOrNull()
+                ?.toString()
+                ?.takeIf(String::isNotBlank)
+                ?.let(::add)
           }
           .distinct()
           .sortedByDescending(String::length)
-  return directories.fold(withoutRemoteUrls) { redacted, directory ->
+  val withoutKnownDirectories = directories.fold(withoutRemoteUrls) { redacted, directory ->
     redacted.replace(directory, "<redacted-directory>")
+  }
+  // Controller/plugin failures can mention a Datel slot ROM, recovery file, or other absolute
+  // path unrelated to the selected ROM. A path may contain unquoted spaces, so redact from the
+  // first Unix, UNC, or drive root through the end of that diagnostic line. Losing a harmless
+  // suffix is preferable to exposing the remainder of a private path.
+  val absolutePathStart =
+      Regex(
+          """(?<!<redacted-directory>)(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|[/\\]{2}|/)""")
+  return withoutKnownDirectories.lineSequence().joinToString("\n") { line ->
+    absolutePathStart.find(line)?.let { match ->
+      line.substring(0, match.range.first) + "<redacted-path>"
+    } ?: line
   }
 }
 

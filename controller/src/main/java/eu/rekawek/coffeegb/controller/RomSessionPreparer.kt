@@ -23,6 +23,7 @@ internal fun interface SessionPreparer {
 /** Performs the CPU-heavy BIOS handoff away from the real-time controller thread. */
 internal class RomSessionPreparer(
     internal val bootStateCache: BootStateCache = BootStateCache(),
+    private val configure: (Gameboy.GameboyConfiguration) -> Unit = {},
 ) : SessionPreparer {
 
   override fun prepare(properties: EmulatorProperties, event: LoadRomEvent): PreparedSession {
@@ -30,6 +31,7 @@ internal class RomSessionPreparer(
     val rom = event.image?.let(::Rom) ?: Rom(event.rom)
     val config =
         Controller.createGameboyConfig(properties, rom)
+            .also(configure)
             .setBootCancellation { Thread.currentThread().isInterrupted }
     ensureActive()
 

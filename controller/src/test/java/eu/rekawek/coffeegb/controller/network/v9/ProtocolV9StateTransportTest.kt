@@ -11,7 +11,6 @@ import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.StateHistory
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
-import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
@@ -2749,10 +2748,7 @@ class ProtocolV9StateTransportTest {
   }
 
   private fun dispatchOnly(controller: LinkedController) {
-    LinkedController::class.java.getDeclaredField("eventQueue").also { field ->
-      field.isAccessible = true
-      (field.get(controller) as EventQueue).dispatch()
-    }
+    controller.processPendingWorkAtSafePoint()
   }
 
   private fun awaitCapture(target: V9LinkedControllerTarget) {

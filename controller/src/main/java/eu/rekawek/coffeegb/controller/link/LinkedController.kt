@@ -8,6 +8,9 @@ import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.UpdatedSystemMappingEvent
 import eu.rekawek.coffeegb.controller.Input
+import eu.rekawek.coffeegb.controller.PreparedSession
+import eu.rekawek.coffeegb.controller.RetainedClosePersistence
+import eu.rekawek.coffeegb.controller.RomSessionPreparer
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
@@ -28,9 +31,10 @@ import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.StateApplyException
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCompression
+import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.events.EventQueue
-import eu.rekawek.coffeegb.controller.events.funnel
+import eu.rekawek.coffeegb.controller.events.owningFunnel
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
@@ -82,6 +86,7 @@ import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.events.EventBusTeardownTimeoutException
 import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
@@ -98,11 +103,14 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEven
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
-import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.IdentityHashMap
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
@@ -114,6 +122,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 import org.slf4j.Logger
@@ -121,14 +132,18 @@ import org.slf4j.LoggerFactory
 
 /** Runs every Game Boy in a netplay session locally and rolls them back as remote input arrives. */
 class LinkedController(
-    parentEventBus: EventBus,
+    private val parentEventBus: EventBus,
     private val properties: EmulatorProperties,
     private val console: Console?,
     private val mode: LinkMode = LinkMode.NORMAL,
     private val localPlayer: Int = 0,
+    private val closeTimeoutMillis: Long = CONTROLLER_CLOSE_TIMEOUT_MILLIS,
 ) : Controller {
 
   private val eventBus = parentEventBus.fork("session")
+
+  /** One ingress sequence preserves arrival order across the control and peer event queues. */
+  private val incomingEventSequence = AtomicLong()
 
   private val eventQueue =
       EventQueue(
@@ -140,6 +155,24 @@ class LinkedController(
           StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_EVENTS,
           StateLimits.NETPLAY_EVENT_QUEUE_SOURCE_BYTES,
           StateLimits.NETPLAY_EVENT_DISPATCH_EVENTS,
+          incomingEventSequence::getAndIncrement,
+      )
+
+  /**
+   * Frame-owned open/control commands that remain dispatchable while [eventQueue] and every linked
+   * machine are frozen. Stop/reset can cancel work here, but their session mutation waits until the
+   * persistence worker has physically unwound.
+   */
+  private val localOpenEventQueue =
+      EventQueue(
+          eventBus,
+          maxEvents = LOCAL_OPEN_QUEUE_EVENTS,
+          maxBytes = LOCAL_OPEN_QUEUE_BYTES,
+          eventWeight = { LOCAL_OPEN_EVENT_WEIGHT },
+          maxSourceEvents = LOCAL_OPEN_QUEUE_EVENTS,
+          maxSourceBytes = LOCAL_OPEN_QUEUE_BYTES,
+          maxDispatchEvents = LOCAL_OPEN_QUEUE_EVENTS,
+          eventOrder = incomingEventSequence::getAndIncrement,
       )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
@@ -149,10 +182,36 @@ class LinkedController(
       BatteryFlush::persist
 
   @VisibleForTesting
-  internal var prepareLocalRom: (LoadRomEvent) -> GameboyConfiguration = { event ->
-    val rom = event.image?.let(::Rom) ?: Rom(event.rom)
-    createGameboyConfig(properties, rom)
+  internal var persistLocalCloseCapture: (BatteryFlush) -> BatteryPersistenceResult =
+      BatteryFlush::persist
+
+  private val localSessionPreparer =
+      RomSessionPreparer(configure = { it.setPlayerInputSource(PlayerInputSource.RELEASED) })
+
+  @VisibleForTesting
+  internal var prepareLocalRom: (LoadRomEvent) -> PreparedSession = { event ->
+    localSessionPreparer.prepare(properties, event)
   }
+
+  @VisibleForTesting
+  internal var materializeLocalSession:
+      (PreparedSession, Long, StateHistory.Links) -> Session =
+      { prepared, sessionFrame, candidateLinks ->
+        val gameboy = prepared.materialize()
+        createInitializedSession(
+            localPlayer,
+            prepared.config,
+            sessionFrame,
+            state = null,
+            staged = true,
+            prebuiltGameboy = gameboy,
+            sessionLinks = candidateLinks,
+        )
+      }
+
+  @VisibleForTesting internal var localPayloadProbe: (() -> Unit)? = null
+
+  @VisibleForTesting internal var localCandidateDiscardProbe: ((Session) -> Unit)? = null
 
   private val localLoadExecutor: ExecutorService =
       Executors.newSingleThreadExecutor { runnable ->
@@ -168,6 +227,25 @@ class LinkedController(
   private var nextLocalPersistenceRequestId = 1L
 
   private val localLoadExecutorClosed = AtomicBoolean()
+
+  /** Includes a cancelled callable until its body actually returns, not merely Future.isDone. */
+  private val localWorkerTasks = AtomicInteger()
+
+  /** Stop/reset waits here after cancelling an open until its physical worker has drained. */
+  private var pendingLocalSessionCommand: LocalSessionCommand? = null
+
+  /** Retryable persistence/materialization transaction for a local stop or reset. */
+  private var localSessionCommandJob: LocalSessionCommandJob? = null
+
+  private var closeCapture: BatteryFlush? = null
+
+  private var closeState: Controller.ControllerState? = null
+
+  private var closeRequestId: Long? = null
+
+  private var closePersistenceAttempt: RetainedClosePersistence? = null
+
+  private var closed = false
 
   private val sessions = MutableList<Session?>(mode.playerCount) { null }
 
@@ -652,6 +730,8 @@ class LinkedController(
   @VisibleForTesting internal var lastDispatchReplayFrames = 0L
     private set
 
+  @VisibleForTesting internal var timingFrameProbe: (() -> Unit)? = null
+
   private var currentInput: Input? = null
 
   private var lastInput: Input? = null
@@ -673,41 +753,16 @@ class LinkedController(
   init {
     require(localPlayer in 0 until mode.playerCount)
 
-    eventQueue.register<LoadedLocalConfigEvent> { e ->
+    localOpenEventQueue.register<LoadedLocalConfigEvent> { e ->
       beginLocalReplacement(e)
     }
 
-    eventQueue.register<StopEmulationEvent> {
-      cancelAllLocalOpens(notifyCancellation = true)
-      val checkpoint = isFourPlayerHost()
-      if (checkpoint) reconcileHistory()
-      sessions[localPlayer]?.let { localSession ->
-        // Match BasicController's explicit stop boundary: publish while the old session bus is
-        // still routable, then release the core and commit the empty local slot.
-        postHostEventSafely(Controller.EmulationStoppedEvent())
-        localSession.close()
-      }
-      sessions[localPlayer] = null
-      if (checkpoint) {
-        commitHostCheckpoint()
-      } else {
-        eventBus.postAsync(RequestStopEvent(frame, localPlayer))
-      }
+    localOpenEventQueue.register<StopEmulationEvent> {
+      requestLocalSessionCommand(LocalSessionCommand.STOP)
     }
 
-    eventQueue.register<ResetEmulationEvent> {
-      cancelAllLocalOpens(notifyCancellation = true)
-      reconcileHistory()
-      sessions[localPlayer]?.close()
-      sessions[localPlayer] = null
-      initSession(localPlayer, frame, null)
-      if (isFourPlayerHost()) {
-        commitHostCheckpoint()
-      } else {
-        commitStateBoundary(NetplayRollbackReason.RESET)
-        if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditPending = true
-      }
-      eventBus.postAsync(RequestResetEvent(frame, localPlayer))
+    localOpenEventQueue.register<ResetEmulationEvent> {
+      requestLocalSessionCommand(LocalSessionCommand.RESET)
     }
 
     eventQueue.register<PeerLoadedGameEvent> { e ->
@@ -715,7 +770,7 @@ class LinkedController(
       if (!consumeReplayWork(validated.frame, validated.source)) return@register
       val checkpoint = isFourPlayerHost()
       if (!loadPeerState(validated, reconcileBeforeCommit = checkpoint)) return@register
-      eventBus.post(ValidatedPeerStateEvent(validated))
+      eventBus.postAsync(ValidatedPeerStateEvent(validated))
       if (checkpoint) {
         // The new physical port is now attached at this frame. Publish one checkpoint containing
         // every active console plus the shared adapter so old and new clients resume together.
@@ -738,7 +793,7 @@ class LinkedController(
         }
         if (!applyPeerCheckpoint(e)) return@register
         initialStateSynchronized = true
-        eventBus.post(ValidatedPeerCheckpointEvent(e))
+        eventBus.postAsync(ValidatedPeerCheckpointEvent(e))
       }
     }
 
@@ -833,7 +888,7 @@ class LinkedController(
           e.player in sessions.indices &&
           validateRuntimeFrame(e.frame, e.source)) {
         stateHistory.addSecondaryInput(e.player, e.frame, e.input)
-        eventBus.post(ValidatedPeerButtonStateEvent(e))
+        eventBus.postAsync(ValidatedPeerButtonStateEvent(e))
       }
     }
 
@@ -853,7 +908,7 @@ class LinkedController(
           commitStateBoundary(NetplayRollbackReason.RESET)
           if (mode == LinkMode.FOUR_PLAYER_ADAPTER) grantCheckpointCredit(e.source)
         }
-        eventBus.post(ValidatedPeerResetEvent(e))
+        eventBus.postAsync(ValidatedPeerResetEvent(e))
       }
     }
 
@@ -874,7 +929,7 @@ class LinkedController(
         } else {
           commitStateBoundary(NetplayRollbackReason.TOPOLOGY_CHANGE)
         }
-        eventBus.post(ValidatedPeerStopEvent(e))
+        eventBus.postAsync(ValidatedPeerStopEvent(e))
       }
     }
 
@@ -919,15 +974,19 @@ class LinkedController(
           )
     }
 
-    eventQueue.register<LoadRomEvent>(::requestLocalLoad)
-    eventQueue.register<Controller.CancelRomOpenEvent> {
+    localOpenEventQueue.register<LoadRomEvent>(::requestLocalLoad)
+    localOpenEventQueue.register<Controller.CancelRomOpenEvent> {
       cancelLocalOpenRequest(it.openRequestId)
     }
-    eventQueue.register<Controller.RetryRomReplacementEvent> {
-      retryLocalReplacement(it.requestId)
+    localOpenEventQueue.register<Controller.RetryRomReplacementEvent> {
+      if (!retryLocalSessionCommand(it.requestId)) {
+        retryLocalReplacement(it.requestId)
+      }
     }
-    eventQueue.register<Controller.CancelRomReplacementEvent> {
-      cancelLocalReplacement(it.requestId)
+    localOpenEventQueue.register<Controller.CancelRomReplacementEvent> {
+      if (!cancelLocalSessionCommand(it.requestId)) {
+        cancelLocalReplacement(it.requestId)
+      }
     }
 
     eventBus.register<UpdatedSystemMappingEvent> {
@@ -953,24 +1012,14 @@ class LinkedController(
   }
 
   fun runFrame() {
-    while (true) {
-      peerWorkBySource.remove(disconnectedSources.poll() ?: break)
-    }
-    lastDispatchReplayFrames = 0
-    eventQueue.dispatch()
-    if (isManuallyDriven()) {
-      awaitLocalLoadForManualDrive()
-    }
-    finishPreparedLocalLoad()
-    if (isManuallyDriven()) {
-      awaitLocalReplacementForManualDrive()
-    }
-    finishLocalReplacement()
+    timingFrameProbe?.invoke()
+    processPendingWorkAtSafePoint()
 
-    // Local preparation and battery persistence are deliberately owned by a worker. Hold the
-    // linked machines at their last completed frame until that worker either commits, fails, or is
-    // cancelled; file I/O must never leak back onto the deterministic timing thread.
-    if (hasPendingLocalOpen()) {
+    // Local preparation and battery persistence are deliberately owned by a worker. Hold every
+    // linked machine and its queued topology/rollback commands at the last completed frame until
+    // that worker commits, fails, or physically unwinds after cancellation. This keeps the
+    // immutable battery capture as the final old-session generation and prevents a second writer.
+    if (hasPendingLocalWork()) {
       if (!timingTicker.disabled) {
         Thread.sleep(1)
       }
@@ -1025,23 +1074,68 @@ class LinkedController(
     workProgressFrame++
   }
 
+  /**
+   * Applies everything admitted at the current linked safe point without advancing any machine.
+   * Network boundary code and its tests use the same operation when a capture or lifecycle
+   * transition must complete at an exact frame.
+   */
+  internal fun processPendingWorkAtSafePoint() {
+    while (true) {
+      peerWorkBySource.remove(disconnectedSources.poll() ?: break)
+    }
+    lastDispatchReplayFrames = 0
+    if (hasPendingLocalWork()) {
+      cancelPendingWorkSupersededByQueuedCommand()
+      dispatchUrgentLocalCommands()
+    } else {
+      dispatchOrderedIngress()
+    }
+    // Ordered dispatch may just have established a worker while another already-queued local
+    // command supersedes it. Observe that intent before a manually driven frame waits for (and
+    // could otherwise commit) the first worker.
+    if (hasPendingLocalWork()) {
+      cancelPendingWorkSupersededByQueuedCommand()
+      dispatchUrgentLocalCommands()
+    }
+    if (isManuallyDriven()) {
+      awaitLocalLoadForManualDrive()
+    }
+    finishPreparedLocalLoad()
+    if (isManuallyDriven()) {
+      awaitLocalReplacementForManualDrive()
+    }
+    finishLocalReplacement()
+    finishPendingLocalSessionCommand()
+    if (isManuallyDriven()) {
+      awaitLocalSessionCommandForManualDrive()
+    }
+    finishLocalSessionCommand()
+    if (!hasPendingLocalWork()) {
+      dispatchOrderedIngress()
+    }
+  }
+
   private fun requestLocalLoad(event: LoadRomEvent) {
     if (doStop || localLoadExecutorClosed.get()) {
       return
     }
+    // This event was ordered after any pending stop/reset in the frame-owned queue.
+    pendingLocalSessionCommand = null
+    cancelCurrentLocalSessionCommand()
     val token = LocalOpenToken(event)
     val task =
-        FutureTask(
+        LocalPreparationTask(
             Callable {
               ensureLocalLoadActive(token)
-              val config = prepareLocalRom(event)
+              val prepared = prepareLocalRom(event)
               ensureLocalLoadActive(token)
-              if (StateProfilePolicy.protocolV8Representable(config.hardwareProfile)) {
-                LocalLoadPreparation.Accepted(config)
+              if (StateProfilePolicy.protocolV8Representable(prepared.config.hardwareProfile)) {
+                LocalLoadPreparation.Accepted(prepared)
               } else {
+                prepared.discard()
                 LocalLoadPreparation.Rejected(
-                    config,
-                    "Profile ${config.hardwareProfile.id()} netplay is unavailable: protocol v8 " +
+                    prepared.config,
+                    "Profile ${prepared.config.hardwareProfile.id()} netplay is unavailable: protocol v8 " +
                         "negotiates StateFile v1, while this profile requires explicit " +
                         "StateFile v2 identity",
                 )
@@ -1062,7 +1156,7 @@ class LinkedController(
     previous.second?.let { cancelLocalReplacement(it, notifyCancellation = true) }
     postHostEventSafely(Controller.RomLoadingEvent(event.rom, event.openRequestId))
     try {
-      localLoadExecutor.execute(task)
+      executeLocalTask(task)
     } catch (failure: RuntimeException) {
       finishLocalLoadFailure(token, failure)
     }
@@ -1075,7 +1169,7 @@ class LinkedController(
     }
     val prepared =
         try {
-          job.task.get()
+          job.task.take()
         } catch (_: CancellationException) {
           return
         } catch (failure: ExecutionException) {
@@ -1086,19 +1180,23 @@ class LinkedController(
           return
         }
     if (!isCurrentLocalLoad(job)) {
+      if (prepared is LocalLoadPreparation.Accepted) {
+        prepared.prepared.discard()
+      }
       return
     }
     when (prepared) {
       is LocalLoadPreparation.Accepted ->
           beginLocalReplacement(
               LoadedLocalConfigEvent(
-                  config = prepared.config,
+                  config = prepared.prepared.config,
                   snapshot = job.token.event.state,
                   battery = null,
                   romFile = job.token.event.rom,
                   openRequestId = job.token.event.openRequestId,
               ),
               job,
+              prepared.prepared,
           )
       is LocalLoadPreparation.Rejected -> rejectLocalProfile(job, prepared)
     }
@@ -1125,17 +1223,23 @@ class LinkedController(
         ))
     if (localPlayer == 0) {
       eventBus.post(ServerProtocolErrorEvent(localPlayer, rejected.message))
-      eventBus.postAsync(StopServerEvent())
+      parentEventBus.postAsync(StopServerEvent())
     } else {
       eventBus.post(ClientProtocolErrorEvent(rejected.message))
-      eventBus.postAsync(StopClientEvent())
+      parentEventBus.postAsync(StopClientEvent())
     }
   }
 
   private fun beginLocalReplacement(
       event: LoadedLocalConfigEvent,
       preparedJob: LocalLoadJob? = null,
+      transferredPrepared: PreparedSession? = null,
   ) {
+    if (preparedJob == null) {
+      // Direct prepared-config events are load commands and supersede an earlier queued stop/reset.
+      pendingLocalSessionCommand = null
+      cancelCurrentLocalSessionCommand()
+    }
     val token =
         preparedJob?.token
             ?: LocalOpenToken(
@@ -1152,12 +1256,26 @@ class LinkedController(
       requireCompatibleLinkedClock(
           configs.toMutableList().also { it[localPlayer] = event.config })
     } catch (failure: Exception) {
+      transferredPrepared?.discard()
       finishLocalLoadFailure(token, failure, preparedJob)
       return
     }
 
+    // Protocol v8 owns linked P1 at frame boundaries and cannot represent local SGB P2-P4.
+    // Apply this before materialization: Joypad captures the configured source in its constructor.
+    event.config.setPlayerInputSource(PlayerInputSource.RELEASED)
     val previousSession = sessions[localPlayer]
     val capture = previousSession?.gameboy?.prepareCartridgeFlush()
+    val candidateLinks =
+        if (sessions.all { it == null }) {
+          StateHistory.createLinks(mode, event.config.clockSpec)
+        } else {
+          links
+        }
+    val prepared =
+        transferredPrepared
+            ?: event.snapshot?.let { PreparedSession.FromDetachedState(event.config, it) }
+            ?: PreparedSession.Deferred(event.config)
     val replacement =
         LocalReplacementJob(
             requestId = nextLocalPersistenceRequestId++,
@@ -1165,6 +1283,8 @@ class LinkedController(
             event = event,
             previousSession = previousSession,
             capture = capture,
+            prepared = prepared,
+            candidateLinks = candidateLinks,
         )
     replacement.attempt = createLocalReplacementTask(replacement)
     val installed =
@@ -1184,7 +1304,8 @@ class LinkedController(
           }
         }
     if (!installed) {
-      replacement.attempt?.cancel(true)
+      replacement.attempt?.cancelAndDiscard()
+      replacement.prepared.discard()
       return
     }
     submitLocalReplacementAttempt(replacement)
@@ -1192,8 +1313,8 @@ class LinkedController(
 
   private fun createLocalReplacementTask(
       replacement: LocalReplacementJob,
-  ): FutureTask<LocalReplacementResult> =
-      FutureTask(
+  ): LocalReplacementTask =
+      LocalReplacementTask(
           Callable {
             ensureLocalLoadActive(replacement.token)
             val persistence =
@@ -1203,27 +1324,67 @@ class LinkedController(
             if (persistence is BatteryPersistenceResult.Failure) {
               LocalReplacementResult.PersistenceFailure(persistence)
             } else {
-              val battery =
-                  replacement.event.battery
-                      ?: readLocalBattery(replacement.event.config, replacement.token)
-              ensureLocalLoadActive(replacement.token)
-              LocalReplacementResult.Ready(
-                  persistence as BatteryPersistenceResult.Success,
-                  battery,
-              )
+              var candidate: Session? = null
+              try {
+                validateLocalBatterySidecars(replacement.event.config, replacement.token)
+                val stagedCandidate =
+                    materializeLocalSession(
+                        replacement.prepared,
+                        frame,
+                        replacement.candidateLinks,
+                    )
+                candidate = stagedCandidate
+                ensureLocalLoadActive(replacement.token)
+                // Materialization owns legacy-sidecar migration and atomic-backup recovery. Read
+                // the target afterwards so the peer receives the same recovered generation.
+                val battery =
+                    replacement.event.battery
+                        ?: readLocalBattery(replacement.event.config, replacement.token)
+                ensureLocalLoadActive(replacement.token)
+                val outbound =
+                    prepareLocalRomPayload(
+                        stagedCandidate,
+                        replacement.event.config,
+                        includeState = replacement.event.snapshot != null,
+                        batteryBuffer = battery,
+                        payloadFrame = frame,
+                    )
+                ensureLocalLoadActive(replacement.token)
+                val ready =
+                    LocalReplacementResult.Ready(
+                        persistence as BatteryPersistenceResult.Success,
+                        battery,
+                        stagedCandidate,
+                        outbound,
+                    )
+                candidate = null
+                ready
+              } finally {
+                candidate?.let(::discardWorkerCandidate)
+              }
             }
           })
+
+  private fun discardWorkerCandidate(candidate: Session) {
+    try {
+      localCandidateDiscardProbe?.invoke(candidate)
+    } finally {
+      candidate.discardUnstarted()
+    }
+  }
 
   private fun submitLocalReplacementAttempt(replacement: LocalReplacementJob) {
     val attempt = replacement.attempt ?: return
     try {
-      localLoadExecutor.execute(attempt)
+      executeLocalTask(attempt)
     } catch (failure: RuntimeException) {
       synchronized(localLoadLock) {
         if (localReplacementJob === replacement) {
           localReplacementJob = null
         }
       }
+      attempt.cancelAndDiscard()
+      replacement.prepared.discard()
       finishLocalLoadFailure(replacement.token, failure)
     }
   }
@@ -1236,10 +1397,11 @@ class LinkedController(
     }
     val result =
         try {
-          attempt.get()
+          attempt.take()
         } catch (_: CancellationException) {
           return
         } catch (failure: ExecutionException) {
+          replacement.prepared.discard()
           val cause = failure.cause ?: failure
           if (cause is IOException) {
             if (finishLocalToken(replacement.token)) {
@@ -1255,11 +1417,15 @@ class LinkedController(
           }
           return
         } catch (failure: Exception) {
+          replacement.prepared.discard()
           finishLocalLoadFailure(replacement.token, failure)
           return
         }
 
     if (!isCurrentLocalReplacement(replacement)) {
+      if (result is LocalReplacementResult.Ready) {
+        discardWorkerCandidate(result.candidate)
+      }
       return
     }
     when (result) {
@@ -1284,27 +1450,9 @@ class LinkedController(
     }
     replacement.capture?.complete(ready.persistence)
 
-    if (sessions.all { it == null }) {
-      links = StateHistory.createLinks(mode, replacement.event.config.clockSpec)
-    }
     val checkpoint = isFourPlayerHost()
     if (checkpoint) reconcileHistory()
-    // Protocol v8 owns linked P1 at frame boundaries and cannot represent local SGB P2-P4.
-    replacement.event.config.setPlayerInputSource(PlayerInputSource.RELEASED)
-    val candidate =
-        try {
-          createInitializedSession(
-              localPlayer,
-              replacement.event.config,
-              frame,
-              replacement.event.snapshot,
-              staged = true,
-          )
-        } catch (failure: Exception) {
-          LOG.warn("Unable to initialize replacement linked session", failure)
-          finishLocalLoadFailure(replacement.token, failure)
-          return
-        }
+    val candidate = ready.candidate
 
     var previousOwnershipChanged = false
     val committed =
@@ -1320,6 +1468,7 @@ class LinkedController(
             false
           } else {
             localReplacementJob = null
+            links = replacement.candidateLinks
             sessions[localPlayer] = candidate
             configs[localPlayer] = replacement.event.config
             rejectedLocalState = null
@@ -1378,10 +1527,7 @@ class LinkedController(
             replacement.event.config.rom.origin,
             replacement.token.event.openRequestId,
         ))
-    sendLocalRom(
-        includeState = replacement.event.snapshot != null,
-        batteryBuffer = ready.battery,
-    )
+    publishPreparedLocalRom(ready.outbound)
     if (checkpoint) commitHostCheckpoint()
   }
 
@@ -1447,8 +1593,9 @@ class LinkedController(
       notifyCancellation: Boolean,
   ) {
     replacement.token.cancelled.set(true)
-    replacement.attempt?.cancel(true)
+    replacement.attempt?.cancelAndDiscard()
     replacement.attempt = null
+    replacement.prepared.discard()
     finishLocalCancellation(replacement.token, notifyCancellation)
   }
 
@@ -1519,7 +1666,304 @@ class LinkedController(
       }
 
   private fun hasPendingLocalOpen(): Boolean =
-      synchronized(localLoadLock) { localLoadJob != null || localReplacementJob != null }
+      synchronized(localLoadLock) {
+        localLoadJob != null ||
+            localReplacementJob != null ||
+            localWorkerTasks.get() != 0
+      }
+
+  private fun hasPendingLocalWork(): Boolean =
+      hasPendingLocalOpen() ||
+          pendingLocalSessionCommand != null ||
+          localSessionCommandJob != null
+
+  private fun dispatchOrderedIngress() {
+    var remaining =
+        StateLimits.NETPLAY_EVENT_DISPATCH_EVENTS + LOCAL_OPEN_QUEUE_EVENTS
+    while (remaining-- > 0 && !hasPendingLocalWork()) {
+      val localOrder = localOpenEventQueue.nextOrder()
+      val peerOrder = eventQueue.nextOrder()
+      when {
+        localOrder == null && peerOrder == null -> return
+        peerOrder == null || (localOrder != null && localOrder <= peerOrder) ->
+          localOpenEventQueue.dispatchOne()
+        else -> eventQueue.dispatchOne()
+      }
+    }
+  }
+
+  /**
+   * Cancellation/retry may unblock an already-established persistence barrier. State-changing
+   * Load/Stop/Reset commands remain behind every earlier peer event in the shared ingress order.
+   */
+  private fun dispatchUrgentLocalCommands() {
+    while (
+        localOpenEventQueue.dispatchFirstMatching {
+          it is Controller.CancelRomOpenEvent ||
+              it is Controller.RetryRomReplacementEvent ||
+              it is Controller.CancelRomReplacementEvent
+        }) {
+      // A decision for an established worker barrier is deliberately not head-of-line blocked by
+      // an ordinary state command. Removing it leaves every other event in its original order.
+    }
+  }
+
+  /**
+   * A later local state command is also an immediate supersession intent. Cancel the current
+   * physical attempt now, but leave that command queued so its actual topology/session mutation
+   * still observes the one ingress order shared with peer traffic.
+   */
+  private fun cancelPendingWorkSupersededByQueuedCommand() {
+    val superseded =
+        localOpenEventQueue.anyEvent {
+          it is LoadRomEvent ||
+              it is StopEmulationEvent ||
+              it is ResetEmulationEvent ||
+              it is LoadedLocalConfigEvent
+        }
+    if (!superseded) {
+      return
+    }
+    pendingLocalSessionCommand = null
+    cancelAllLocalOpens(notifyCancellation = true)
+    cancelCurrentLocalSessionCommand()
+  }
+
+  private fun executeLocalTask(task: FutureTask<*>) {
+    localLoadExecutor.execute {
+      localWorkerTasks.incrementAndGet()
+      try {
+        task.run()
+      } finally {
+        localWorkerTasks.decrementAndGet()
+      }
+    }
+  }
+
+  private fun requestLocalSessionCommand(command: LocalSessionCommand) {
+    cancelAllLocalOpens(notifyCancellation = true)
+    cancelCurrentLocalSessionCommand()
+    pendingLocalSessionCommand = command
+  }
+
+  private fun finishPendingLocalSessionCommand() {
+    val command = pendingLocalSessionCommand ?: return
+    if (hasPendingLocalOpen() || localSessionCommandJob != null) {
+      return
+    }
+    pendingLocalSessionCommand = null
+    startLocalSessionCommand(command)
+  }
+
+  private fun startLocalSessionCommand(command: LocalSessionCommand) {
+    val previous = sessions[localPlayer]
+    val config = configs[localPlayer]
+    if (command == LocalSessionCommand.RESET && config == null) {
+      return
+    }
+    val capture = previous?.gameboy?.prepareCartridgeFlush() ?: BatteryFlush.none()
+    val prepared = config?.let { PreparedSession.Deferred(it) }
+    val job =
+        LocalSessionCommandJob(
+            requestId = nextLocalPersistenceRequestId++,
+            command = command,
+            previousSession = previous,
+            capture = capture,
+            prepared = prepared,
+            candidateLinks = links,
+            sessionFrame = frame,
+        )
+    job.attempt = createLocalSessionCommandTask(job)
+    localSessionCommandJob = job
+    submitLocalSessionCommandAttempt(job)
+  }
+
+  private fun createLocalSessionCommandTask(
+      job: LocalSessionCommandJob,
+  ): LocalSessionCommandTask =
+      LocalSessionCommandTask(
+          Callable {
+            val persistence = persistLocalBatteryCapture(job.capture)
+            if (persistence is BatteryPersistenceResult.Failure) {
+              LocalSessionCommandResult.Failure(persistence)
+            } else if (job.command == LocalSessionCommand.STOP) {
+              LocalSessionCommandResult.Ready(
+                  persistence as BatteryPersistenceResult.Success,
+                  candidate = null,
+              )
+            } else {
+              var candidate: Session? = null
+              try {
+                val prepared = checkNotNull(job.prepared)
+                validateLocalBatterySidecars(prepared.config, null)
+                val stagedCandidate =
+                    materializeLocalSession(
+                        prepared,
+                        job.sessionFrame,
+                        job.candidateLinks,
+                    )
+                candidate = stagedCandidate
+                val ready =
+                    LocalSessionCommandResult.Ready(
+                        persistence as BatteryPersistenceResult.Success,
+                        stagedCandidate,
+                    )
+                candidate = null
+                ready
+              } finally {
+                candidate?.let(::discardWorkerCandidate)
+              }
+            }
+          })
+
+  private fun submitLocalSessionCommandAttempt(job: LocalSessionCommandJob) {
+    val attempt = job.attempt ?: return
+    try {
+      executeLocalTask(attempt)
+    } catch (failure: RuntimeException) {
+      if (localSessionCommandJob === job) {
+        localSessionCommandJob = null
+      }
+      attempt.cancelAndDiscard()
+      job.prepared?.discard()
+      reportLocalSessionCommandFailure(job, unexpectedPersistenceFailure(failure))
+    }
+  }
+
+  private fun finishLocalSessionCommand() {
+    val job = localSessionCommandJob ?: return
+    val attempt = job.attempt ?: return
+    if (!attempt.isDone) {
+      return
+    }
+    val result =
+        try {
+          attempt.take()
+        } catch (_: CancellationException) {
+          return
+        } catch (failure: Exception) {
+          LocalSessionCommandResult.Failure(unexpectedPersistenceFailure(failure))
+        }
+    if (localSessionCommandJob !== job) {
+      if (result is LocalSessionCommandResult.Ready) {
+        result.candidate?.let(::discardWorkerCandidate)
+      }
+      return
+    }
+    job.attempt = null
+    if (result is LocalSessionCommandResult.Failure) {
+      reportLocalSessionCommandFailure(job, result.failure)
+      return
+    }
+    result as LocalSessionCommandResult.Ready
+    if (sessions[localPlayer] !== job.previousSession) {
+      localSessionCommandJob = null
+      result.candidate?.let(::discardWorkerCandidate)
+      job.prepared?.discard()
+      return
+    }
+
+    job.capture.complete(result.persistence)
+    when (job.command) {
+      LocalSessionCommand.STOP -> commitLocalStop(job)
+      LocalSessionCommand.RESET ->
+          commitLocalReset(job, checkNotNull(result.candidate))
+    }
+  }
+
+  private fun commitLocalStop(job: LocalSessionCommandJob) {
+    val checkpoint = isFourPlayerHost()
+    if (checkpoint) reconcileHistory()
+    localSessionCommandJob = null
+    job.previousSession?.let { localSession ->
+      // Match BasicController's explicit stop boundary: publish while the old session bus is
+      // still routable, then release the core and commit the empty local slot.
+      postHostEventSafely(Controller.EmulationStoppedEvent())
+      localSession.closeAfterCartridgeFlush()
+    }
+    sessions[localPlayer] = null
+    if (checkpoint) {
+      commitHostCheckpoint()
+    } else {
+      eventBus.postAsync(RequestStopEvent(frame, localPlayer))
+    }
+  }
+
+  private fun commitLocalReset(job: LocalSessionCommandJob, candidate: Session) {
+    reconcileHistory()
+    localSessionCommandJob = null
+    sessions[localPlayer] = candidate
+    job.previousSession?.closeAfterCartridgeFlush()
+    candidate.activate()
+    if (isFourPlayerHost()) {
+      commitHostCheckpoint()
+    } else {
+      commitStateBoundary(NetplayRollbackReason.RESET)
+      if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditPending = true
+    }
+    eventBus.postAsync(RequestResetEvent(frame, localPlayer))
+  }
+
+  private fun retryLocalSessionCommand(requestId: Long): Boolean {
+    val job = localSessionCommandJob?.takeIf { it.requestId == requestId } ?: return false
+    if (job.attempt == null) {
+      job.attempt = createLocalSessionCommandTask(job)
+      submitLocalSessionCommandAttempt(job)
+    }
+    return true
+  }
+
+  private fun cancelLocalSessionCommand(requestId: Long): Boolean {
+    val job = localSessionCommandJob?.takeIf { it.requestId == requestId } ?: return false
+    localSessionCommandJob = null
+    job.attempt?.cancelAndDiscard()
+    job.attempt = null
+    job.prepared?.discard()
+    return true
+  }
+
+  private fun cancelCurrentLocalSessionCommand() {
+    val job = localSessionCommandJob ?: return
+    localSessionCommandJob = null
+    job.attempt?.cancelAndDiscard()
+    job.attempt = null
+    job.prepared?.discard()
+  }
+
+  private fun reportLocalSessionCommandFailure(
+      job: LocalSessionCommandJob,
+      failure: BatteryPersistenceResult.Failure,
+  ) {
+    postHostEventSafely(
+        Controller.RomReplacementPersistenceFailedEvent(
+            job.requestId,
+            failure.fileName(),
+            failure.message(),
+            if (job.command == LocalSessionCommand.STOP) {
+              Controller.PersistenceBarrierOperation.STOP
+            } else {
+              Controller.PersistenceBarrierOperation.RESET
+            },
+        ))
+  }
+
+  private fun unexpectedPersistenceFailure(
+      failure: Exception,
+  ): BatteryPersistenceResult.Failure {
+    val cause = failure.cause ?: failure
+    val ioFailure =
+        if (cause is IOException) {
+          cause
+        } else {
+          IOException("Unexpected linked persistence worker failure", cause)
+        }
+    return BatteryPersistenceResult.Failure(
+        BatteryPersistenceResult.FailureKind.WRITE_FAILED,
+        configs[localPlayer]?.rom?.origin?.displayName() ?: "battery save",
+        "Unable to persist the current linked session. Changes remain pending and can be retried.",
+        ioFailure,
+    )
+  }
 
   private fun isManuallyDriven(): Boolean =
       !thread.isAlive && Thread.currentThread() !== thread
@@ -1534,11 +1978,16 @@ class LinkedController(
     runCatching { task.get() }
   }
 
-  private fun ensureLocalLoadActive(token: LocalOpenToken) {
+  private fun awaitLocalSessionCommandForManualDrive() {
+    val task = localSessionCommandJob?.attempt ?: return
+    runCatching { task.get() }
+  }
+
+  private fun ensureLocalLoadActive(token: LocalOpenToken?) {
     if (Thread.currentThread().isInterrupted ||
         doStop ||
-        token.cancelled.get() ||
-        token.terminal.get()) {
+        token?.cancelled?.get() == true ||
+        token?.terminal?.get() == true) {
       throw CancellationException("Linked ROM preparation cancelled")
     }
   }
@@ -1558,34 +2007,25 @@ class LinkedController(
       sessionFrame: Long,
       state: MachineState?,
       staged: Boolean = false,
+      prebuiltGameboy: Gameboy? = null,
+      sessionLinks: StateHistory.Links = links,
   ): Session {
-    val sessionEventBusDelegate = EventBusImpl(null, null, false)
+    val sessionEventBusDelegate = createSessionEventBus(player)
     val sessionEventBus =
         if (staged) stagedEventBus(sessionEventBusDelegate) else sessionEventBusDelegate
     var session: Session? = null
+    var ownedGameboy = prebuiltGameboy
     try {
-      if (player == localPlayer) {
-        funnel(
-            sessionEventBus,
-            eventBus.fork("main"),
-            setOf(
-                Display.DmgFrameReadyEvent::class,
-                Display.GbcFrameReadyEvent::class,
-                SgbDisplay.SgbFrameReadyEvent::class,
-                Sound.SoundSampleEvent::class,
-                RumbleEvent::class,
-                Joypad.JoypadPressEvent::class,
-            ),
-        )
-      }
       session =
           Session(
               if (state != null) config.forRestore() else config,
               sessionEventBus,
               if (player == localPlayer) console else null,
-              links.serial[player],
-              links.infrared[player],
+              sessionLinks.serial[player],
+              sessionLinks.infrared[player],
+              ownedGameboy,
           )
+      ownedGameboy = null
       if (state != null) {
         DetachedStateAdapter.apply(session.gameboy, state)
       }
@@ -1606,7 +2046,12 @@ class LinkedController(
       try {
         // A candidate never owned the live cartridge generation. Discard it without flushing so
         // a failed state restore cannot rewrite the user's adjacent battery sidecar.
-        session?.discardUnstarted() ?: sessionEventBus.close()
+        if (session != null) {
+          session.discardUnstarted()
+        } else {
+          ownedGameboy?.discardUnstarted()
+          sessionEventBus.close()
+        }
       } catch (cleanupFailure: Throwable) {
         failure.addSuppressed(cleanupFailure)
       }
@@ -1851,10 +2296,15 @@ class LinkedController(
           )
           .setPlayerInputSource(PlayerInputSource.RELEASED)
 
-  private fun createSessionEventBus(player: Int): EventBusImpl =
-      EventBusImpl(null, null, false).also { sessionEventBus ->
-        if (player == localPlayer) {
-          funnel(
+  private fun createSessionEventBus(player: Int): EventBus =
+      EventBusImpl(null, null, false).let { sessionEventBus ->
+        if (player != localPlayer) {
+          sessionEventBus
+        } else {
+          // Machine input stays isolated from the shared tree; otherwise frame-owned input posted
+          // into the session feeds back into LinkedController's command queue. The returned owner
+          // closes both this isolated bus and the exact shared output fork.
+          owningFunnel(
               sessionEventBus,
               eventBus.fork("main"),
               setOf(
@@ -1957,7 +2407,7 @@ class LinkedController(
               value.player,
           )
       stateHistory.addSecondaryInput(value.player, value.frame, translated.input)
-      eventBus.post(ValidatedPeerButtonStateEvent(translated))
+      eventBus.postAsync(ValidatedPeerButtonStateEvent(translated))
       event.completion.complete(null)
     } catch (_: Exception) {
       event.completion.complete(V9ErrorCode.INTERNAL_ERROR)
@@ -1999,7 +2449,7 @@ class LinkedController(
       commitStateBoundary(NetplayRollbackReason.RESET)
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER) localCheckpointCreditPending = true
     }
-    eventBus.post(ValidatedPeerResetEvent(ReceivedRemoteResetEvent(value.frame, value.player)))
+    eventBus.postAsync(ValidatedPeerResetEvent(ReceivedRemoteResetEvent(value.frame, value.player)))
   }
 
   private fun applyV9Stop(value: V9RuntimeControl) {
@@ -2010,7 +2460,7 @@ class LinkedController(
     v9RemoteButtons[value.player] = null
     if (isFourPlayerHost()) commitHostCheckpoint()
     else commitStateBoundary(NetplayRollbackReason.TOPOLOGY_CHANGE)
-    eventBus.post(ValidatedPeerStopEvent(ReceivedRemoteStopEvent(value.frame, value.player)))
+    eventBus.postAsync(ValidatedPeerStopEvent(ReceivedRemoteStopEvent(value.frame, value.player)))
   }
 
   private fun syncV9RemoteButtons() {
@@ -2111,17 +2561,20 @@ class LinkedController(
         false
       }
 
-  private fun sendLocalRom(
+  /**
+   * Clones and encodes the complete immutable outbound generation on the loader worker. The frame
+   * is frozen while this runs, so the candidate state and battery bytes describe one exact commit.
+   */
+  private fun prepareLocalRomPayload(
+      session: Session,
+      config: GameboyConfiguration,
       includeState: Boolean,
       batteryBuffer: ByteArray?,
-  ) {
-    val config = configs[localPlayer] ?: return
-    val session = sessions[localPlayer] ?: return
+      payloadFrame: Long,
+  ): PreparedLocalRomPayload {
+    localPayloadProbe?.invoke()
     val romBuffer = config.rom.image.bytes()
     val slotRomBuffer = config.slotRom?.image?.bytes()
-    romBuffers[localPlayer] = romBuffer
-    slotRomBuffers[localPlayer] = slotRomBuffer
-    batteryBuffers[localPlayer] = batteryBuffer
     val portableState =
         if (includeState) {
           StateCodec.encode(
@@ -2131,8 +2584,10 @@ class LinkedController(
         } else {
           null
         }
-
-    eventBus.post(
+    return PreparedLocalRomPayload(
+        romBuffer,
+        slotRomBuffer,
+        batteryBuffer,
         LocalRomLoadedEvent(
             romFile = romBuffer,
             slotRomFile = slotRomBuffer,
@@ -2140,14 +2595,23 @@ class LinkedController(
             portableState = portableState,
             gameboyType = config.gameboyType,
             bootstrapMode = config.bootstrapMode,
-            frame = frame,
+            frame = payloadFrame,
             cgb0Revision = config.isCgb0Revision,
             hardwareProfileId = config.hardwareProfile.id(),
             mealybugDmgBlob = config.isMealybugDmgBlob,
             codeBreakerRumble = config.isCodeBreakerRumble,
             displaySgbBorder = config.isDisplaySgbBorder,
             player = localPlayer,
-        ))
+        ),
+    )
+  }
+
+  /** Commits retained payload ownership, then leaves connection validation/compression to async. */
+  private fun publishPreparedLocalRom(payload: PreparedLocalRomPayload) {
+    romBuffers[localPlayer] = payload.rom
+    slotRomBuffers[localPlayer] = payload.slotRom
+    batteryBuffers[localPlayer] = payload.battery
+    eventBus.postAsync(payload.event)
   }
 
   private fun readLocalBattery(
@@ -2159,7 +2623,9 @@ class LinkedController(
             .persistencePath(".sav")
             .map { Cartridge.getSaveName(config.rom) }
             .orElse(null)
-    return if (config.isSupportBatterySave && saveFile?.exists() == true) {
+    return if (config.isSupportBatterySave &&
+        saveFile != null &&
+        Files.exists(saveFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
       readBoundedBattery(saveFile.toPath(), token)
     } else {
       null
@@ -2265,36 +2731,88 @@ class LinkedController(
   ): ByteArray {
     ensureLocalLoadActive(token)
     val limit = StateLimits.BATTERY.decodedBytes
-    val declaredSize = Files.size(path)
-    if (declaredSize > limit) {
-      throw IOException("Battery file exceeds the $limit-byte safety limit")
-    }
-    val initialSize = minOf(declaredSize.coerceAtLeast(0), 32L * 1024).toInt()
-    return Files.newInputStream(path).use { input ->
-      val output = ByteArrayOutputStream(initialSize)
-      val buffer = ByteArray(32 * 1024)
-      var total = 0
-      while (true) {
-        ensureLocalLoadActive(token)
-        val read = input.read(buffer)
-        if (read < 0) break
-        if (read == 0) {
-          val value = input.read()
-          if (value < 0) break
-          if (total == limit) {
+    requireRegularBatterySidecar(path)
+    return FileChannel.open(
+            path,
+            StandardOpenOption.READ,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        .use { channel ->
+          val declaredSize = channel.size()
+          if (declaredSize > limit) {
             throw IOException("Battery file exceeds the $limit-byte safety limit")
           }
-          output.write(value)
-          total++
-        } else {
-          if (read > limit - total) {
+          val output = ByteArray(declaredSize.toInt())
+          val buffer = ByteBuffer.wrap(output)
+          var zeroReads = 0
+          while (buffer.hasRemaining()) {
+            ensureLocalLoadActive(token)
+            val read = channel.read(buffer)
+            if (read < 0) {
+              return@use output.copyOf(buffer.position())
+            }
+            if (read == 0) {
+              if (++zeroReads > 1_024) {
+                throw IOException("Battery file made no read progress")
+              }
+            } else {
+              zeroReads = 0
+            }
+          }
+          // Detect growth through the same no-follow handle without allocating past the bound.
+          val overflow = ByteBuffer.allocate(1)
+          ensureLocalLoadActive(token)
+          if (channel.read(overflow) >= 0) {
             throw IOException("Battery file exceeds the $limit-byte safety limit")
           }
-          output.write(buffer, 0, read)
-          total += read
+          output
         }
-      }
-      output.toByteArray()
+  }
+
+  private fun validateLocalBatterySidecars(
+      config: GameboyConfiguration,
+      token: LocalOpenToken?,
+  ) {
+    if (!config.isSupportBatterySave) {
+      return
+    }
+    sequenceOf(config.rom, config.slotRom)
+        .filterNotNull()
+        .flatMap { rom ->
+          sequenceOf(
+              rom.origin.persistencePath(".sav").orElse(null),
+              rom.origin.legacyArchivePersistencePath(".sav").orElse(null),
+          )
+        }
+        .filterNotNull()
+        .forEach { path ->
+          ensureLocalLoadActive(token)
+          if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            requireRegularBatterySidecar(path)
+          }
+        }
+  }
+
+  private fun requireRegularBatterySidecar(path: Path) {
+    if (Files.isSymbolicLink(path) ||
+        !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+      throw IOException(
+          "Battery sidecar ${path.fileName} must be a regular non-symbolic file")
+    }
+    try {
+      FileChannel.open(
+              path,
+              StandardOpenOption.READ,
+              LinkOption.NOFOLLOW_LINKS,
+          )
+          .use { channel ->
+            if (channel.size() > StateLimits.BATTERY.decodedBytes) {
+              throw IOException(
+                  "Battery file exceeds the ${StateLimits.BATTERY.decodedBytes}-byte safety limit")
+            }
+          }
+    } catch (failure: UnsupportedOperationException) {
+      throw IOException("Battery sidecar cannot be opened without following links", failure)
     }
   }
 
@@ -2308,11 +2826,7 @@ class LinkedController(
               romFile = romBuffer,
               slotRomFile = slotRomBuffers[player],
               batteryFile = batteryBuffers[player],
-              portableState =
-                  StateCodec.encode(
-                      StateCodec.capture(session),
-                      StateCompression.DEFLATE,
-                  ),
+              portableState = null,
               gameboyType = config.gameboyType,
               bootstrapMode = config.bootstrapMode,
               frame = frame,
@@ -2323,9 +2837,11 @@ class LinkedController(
               displaySgbBorder = config.isDisplaySgbBorder,
               player = player,
               heldButtons = session.heldButtons,
+              portableStateFile = StateCodec.capture(session),
           )
         }
-    eventBus.post(SessionStateReadyEvent(frame, states))
+    // Encoding and per-connection validation/compression are package work, not frame work.
+    eventBus.postAsync(SessionStateReadyEvent(frame, states))
   }
 
   private fun isFourPlayerHost(): Boolean =
@@ -2387,7 +2903,7 @@ class LinkedController(
   }
 
   override fun close() {
-    shutdownLocalLoadExecutor()
+    closeWithState()
   }
 
   private fun eventWeight(event: Event): Long =
@@ -2424,48 +2940,207 @@ class LinkedController(
         }
   }
 
+  @Synchronized
   override fun closeWithState(): Controller.ControllerState? {
+    if (closed) {
+      return null
+    }
+    val closeDeadlineNanos =
+        System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(closeTimeoutMillis)
     doStop = true
-    shutdownLocalLoadExecutor()
-    thread.join()
+    awaitTimingThread(closeDeadlineNanos)
 
-    val localSession = sessions[localPlayer]
-    val state =
-        localSession?.let {
-          Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
-        } ?: rejectedLocalState
+    // The close caller owns retry presentation. Cancel without lifecycle callbacks, retain the
+    // exact current machine generation, and queue its writer behind any cancelled worker body.
+    cancelAllLocalOpens(notifyCancellation = false)
+    pendingLocalSessionCommand = null
+    cancelCurrentLocalSessionCommand()
+    if (closeState == null) {
+      closeState =
+          sessions[localPlayer]?.let {
+            Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
+          } ?: rejectedLocalState
+    }
+    if (closeCapture == null) {
+      closeCapture =
+          sessions[localPlayer]?.gameboy?.prepareCartridgeFlush() ?: BatteryFlush.none()
+    }
+    val capture = checkNotNull(closeCapture)
+    val persistence = persistCloseCapture(capture, closeDeadlineNanos)
+    if (persistence is BatteryPersistenceResult.Failure) {
+      val requestId = closeRequestId ?: nextLocalPersistenceRequestId++
+      closeRequestId = requestId
+      throw Controller.PersistenceBarrierException(
+          requestId,
+          Controller.PersistenceBarrierOperation.CLOSE,
+          persistence.fileName(),
+          persistence.message(),
+          persistence.cause(),
+      )
+    }
+    capture.complete(persistence)
+    val state = closeState
 
-    localSession?.eventBus?.post(Controller.EmulationStoppedEvent())
-    sessions.forEach { it?.close() }
+    try {
+      shutdownLocalLoadExecutor(closeDeadlineNanos)
+      eventBus.close(
+          remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),
+          TimeUnit.NANOSECONDS,
+      )
+      // Only a persisted generation with no live loader/subscriber may release machines.
+      sessions.forEach { session ->
+        session?.closeAfterCartridgeFlush(
+            remainingCloseNanos(closeDeadlineNanos, "linked session teardown"),
+            TimeUnit.NANOSECONDS,
+        )
+      }
+    } catch (failure: EventBusTeardownTimeoutException) {
+      throw closeBarrierFailure(
+          "Linked session subscribers did not stop before the close deadline. " +
+              "The persisted machines remain retained and close can be retried.",
+          failure,
+      )
+    }
+
     rollbackMetrics.close()
-    eventBus.close()
-
+    closed = true
+    closeCapture = null
+    closeState = null
+    closeRequestId = null
+    closePersistenceAttempt = null
     return state
   }
 
-  private fun shutdownLocalLoadExecutor() {
-    if (!localLoadExecutorClosed.compareAndSet(false, true)) {
+  private fun awaitTimingThread(closeDeadlineNanos: Long) {
+    if (Thread.currentThread() === thread || !thread.isAlive) {
       return
     }
-    cancelAllLocalOpens(notifyCancellation = false)
-    localLoadExecutor.shutdownNow()
+    val remainingNanos =
+        remainingCloseNanos(closeDeadlineNanos, "linked controller timing-thread stop")
+    try {
+      thread.join(
+          TimeUnit.NANOSECONDS.toMillis(remainingNanos),
+          (remainingNanos % 1_000_000).toInt(),
+      )
+    } catch (failure: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw closeBarrierFailure(
+          "Interrupted while waiting for the linked timing thread to stop.",
+          failure,
+      )
+    }
+    if (thread.isAlive) {
+      throw closeBarrierFailure(
+          "Linked timing thread did not stop before the close deadline. " +
+              "The running session remains retained and close can be retried.",
+          IOException("Linked timing-thread stop timed out"),
+      )
+    }
+  }
+
+  private fun persistCloseCapture(
+      capture: BatteryFlush,
+      closeDeadlineNanos: Long,
+  ): BatteryPersistenceResult {
+    val fileName = closeFileName()
+    val attempt =
+        closePersistenceAttempt
+            ?: RetainedClosePersistence(
+                    capture,
+                    localLoadExecutor,
+                    persistLocalCloseCapture,
+                )
+                .also { closePersistenceAttempt = it }
+    val result =
+        attempt.await(
+            fileName,
+            remainingCloseNanos(closeDeadlineNanos, "linked battery persistence"),
+            TimeUnit.NANOSECONDS,
+            ::unexpectedClosePersistenceFailure,
+        )
+    // Completed failures may safely create a fresh retry. Timeouts retain the exact queued/running
+    // task so an interrupt-ignoring filesystem writer can never overlap a newer generation.
+    if (result is BatteryPersistenceResult.Failure && attempt.isDone) {
+      closePersistenceAttempt = null
+    }
+    return result
+  }
+
+  private fun shutdownLocalLoadExecutor(closeDeadlineNanos: Long) {
+    if (localLoadExecutorClosed.compareAndSet(false, true)) {
+      localLoadExecutor.shutdownNow()
+    }
     if (Thread.currentThread().name == "coffee-gb-linked-rom-loader") {
-      return
+      throw closeBarrierFailure(
+          "The linked ROM loader cannot synchronously close itself.",
+          IOException("Linked ROM loader attempted reentrant close"),
+      )
     }
     try {
       if (!localLoadExecutor.awaitTermination(
-          LOCAL_LOAD_CLOSE_TIMEOUT_MILLIS,
-          TimeUnit.MILLISECONDS,
+          remainingCloseNanos(closeDeadlineNanos, "linked ROM-loader stop"),
+          TimeUnit.NANOSECONDS,
       )) {
-        LOG.warn(
-            "Linked ROM loader did not stop within {} ms",
-            LOCAL_LOAD_CLOSE_TIMEOUT_MILLIS,
+        throw closeBarrierFailure(
+            "Linked ROM loader did not stop before the close deadline. Close can be retried.",
+            IOException("Linked ROM-loader stop timed out"),
         )
       }
-    } catch (_: InterruptedException) {
+    } catch (failure: InterruptedException) {
       Thread.currentThread().interrupt()
+      throw closeBarrierFailure(
+          "Interrupted while waiting for the linked ROM loader to stop.",
+          failure,
+      )
     }
   }
+
+  private fun remainingCloseNanos(closeDeadlineNanos: Long, stage: String): Long {
+    val remainingNanos = closeDeadlineNanos - System.nanoTime()
+    if (remainingNanos <= 0) {
+      throw closeBarrierFailure(
+          "Linked controller close timed out during $stage. " +
+              "The session remains retained and close can be retried.",
+          IOException("Linked controller close deadline expired during $stage"),
+      )
+    }
+    return remainingNanos
+  }
+
+  private fun unexpectedClosePersistenceFailure(
+      failure: Exception,
+  ): BatteryPersistenceResult.Failure {
+    val cause = failure.cause ?: failure
+    val ioFailure =
+        if (cause is IOException) cause
+        else IOException("Unexpected linked persistence worker failure", cause)
+    return BatteryPersistenceResult.Failure(
+        BatteryPersistenceResult.FailureKind.WRITE_FAILED,
+        closeFileName(),
+        "Unable to persist the linked session. Changes remain pending and can be retried.",
+        ioFailure,
+    )
+  }
+
+  private fun closeBarrierFailure(
+      message: String,
+      cause: Throwable,
+  ): Controller.PersistenceBarrierException {
+    val requestId = closeRequestId ?: nextLocalPersistenceRequestId++
+    closeRequestId = requestId
+    return Controller.PersistenceBarrierException(
+        requestId,
+        Controller.PersistenceBarrierOperation.CLOSE,
+        closeFileName(),
+        message,
+        cause,
+    )
+  }
+
+  private fun closeFileName(): String =
+      sessions[localPlayer]?.config?.rom?.origin?.displayName()
+          ?: closeState?.rom?.origin?.displayName()
+          ?: "battery save"
 
   data class LocalRomLoadedEvent(
       val romFile: ByteArray,
@@ -2488,6 +3163,7 @@ class LinkedController(
       val mealybugDmgBlob: Boolean = false,
       val codeBreakerRumble: Boolean = false,
       val displaySgbBorder: Boolean = false,
+      internal val portableStateFile: StateFile? = null,
   ) : Event
 
   data class SessionStateReadyEvent(val frame: Long, val states: List<LocalRomLoadedEvent>) : Event
@@ -2522,14 +3198,43 @@ class LinkedController(
     val terminal = AtomicBoolean()
   }
 
+  private enum class LocalSessionCommand {
+    STOP,
+    RESET,
+  }
+
+  private class LocalSessionCommandJob(
+      val requestId: Long,
+      val command: LocalSessionCommand,
+      val previousSession: Session?,
+      val capture: BatteryFlush,
+      val prepared: PreparedSession?,
+      val candidateLinks: StateHistory.Links,
+      val sessionFrame: Long,
+  ) {
+    @Volatile var attempt: LocalSessionCommandTask? = null
+  }
+
+  private sealed interface LocalSessionCommandResult {
+
+    data class Failure(
+        val failure: BatteryPersistenceResult.Failure,
+    ) : LocalSessionCommandResult
+
+    data class Ready(
+        val persistence: BatteryPersistenceResult.Success,
+        val candidate: Session?,
+    ) : LocalSessionCommandResult
+  }
+
   private data class LocalLoadJob(
       val token: LocalOpenToken,
-      val task: FutureTask<LocalLoadPreparation>,
+      val task: LocalPreparationTask,
   )
 
   private sealed interface LocalLoadPreparation {
 
-    data class Accepted(val config: GameboyConfiguration) : LocalLoadPreparation
+    data class Accepted(val prepared: PreparedSession) : LocalLoadPreparation
 
     data class Rejected(
         val config: GameboyConfiguration,
@@ -2543,8 +3248,10 @@ class LinkedController(
       val event: LoadedLocalConfigEvent,
       val previousSession: Session?,
       val capture: BatteryFlush?,
+      val prepared: PreparedSession,
+      val candidateLinks: StateHistory.Links,
   ) {
-    @Volatile var attempt: FutureTask<LocalReplacementResult>? = null
+    @Volatile var attempt: LocalReplacementTask? = null
   }
 
   private sealed interface LocalReplacementResult {
@@ -2556,7 +3263,119 @@ class LinkedController(
     data class Ready(
         val persistence: BatteryPersistenceResult.Success,
         val battery: ByteArray?,
+        val candidate: Session,
+        val outbound: PreparedLocalRomPayload,
     ) : LocalReplacementResult
+  }
+
+  private data class PreparedLocalRomPayload(
+      val rom: ByteArray,
+      val slotRom: ByteArray?,
+      val battery: ByteArray?,
+      val event: LocalRomLoadedEvent,
+  )
+
+  /** Retains/discards prepared machines correctly across FutureTask cancellation races. */
+  private class LocalPreparationTask(callable: Callable<LocalLoadPreparation>) :
+      FutureTask<LocalLoadPreparation>(callable) {
+
+    private val prepared = AtomicReference<PreparedSession>()
+
+    override fun set(value: LocalLoadPreparation) {
+      if (value is LocalLoadPreparation.Accepted) {
+        prepared.set(value.prepared)
+      }
+      super.set(value)
+      if (isCancelled) {
+        prepared.getAndSet(null)?.discard()
+      }
+    }
+
+    override fun done() {
+      if (isCancelled) {
+        prepared.getAndSet(null)?.discard()
+      }
+    }
+
+    fun take(): LocalLoadPreparation {
+      val value = get()
+      if (value is LocalLoadPreparation.Accepted) {
+        prepared.compareAndSet(value.prepared, null)
+      }
+      return value
+    }
+  }
+
+  /** Owns a worker-materialized candidate until the timing thread commits or discards it. */
+  private class LocalReplacementTask(callable: Callable<LocalReplacementResult>) :
+      FutureTask<LocalReplacementResult>(callable) {
+
+    private val candidate = AtomicReference<Session>()
+
+    override fun set(value: LocalReplacementResult) {
+      if (value is LocalReplacementResult.Ready) {
+        candidate.set(value.candidate)
+      }
+      super.set(value)
+      if (isCancelled) {
+        candidate.getAndSet(null)?.discardUnstarted()
+      }
+    }
+
+    override fun done() {
+      if (isCancelled) {
+        candidate.getAndSet(null)?.discardUnstarted()
+      }
+    }
+
+    fun take(): LocalReplacementResult {
+      val value = get()
+      if (value is LocalReplacementResult.Ready) {
+        candidate.compareAndSet(value.candidate, null)
+      }
+      return value
+    }
+
+    fun cancelAndDiscard() {
+      cancel(true)
+      candidate.getAndSet(null)?.discardUnstarted()
+    }
+  }
+
+  /** Retains a reset candidate across the worker/timing ownership handoff. */
+  private class LocalSessionCommandTask(callable: Callable<LocalSessionCommandResult>) :
+      FutureTask<LocalSessionCommandResult>(callable) {
+
+    private val candidate = AtomicReference<Session>()
+
+    override fun set(value: LocalSessionCommandResult) {
+      if (value is LocalSessionCommandResult.Ready) {
+        value.candidate?.let(candidate::set)
+      }
+      super.set(value)
+      if (isCancelled) {
+        candidate.getAndSet(null)?.discardUnstarted()
+      }
+    }
+
+    override fun done() {
+      if (isCancelled) {
+        candidate.getAndSet(null)?.discardUnstarted()
+      }
+    }
+
+    fun take(): LocalSessionCommandResult {
+      val value = get()
+      if (value is LocalSessionCommandResult.Ready) {
+        value.candidate?.let { candidate.compareAndSet(it, null) }
+      }
+      return value
+    }
+
+    fun cancelAndDiscard() {
+      cancel(true)
+      candidate.getAndSet(null)?.discardUnstarted()
+    }
   }
 
   private data class V9CheckpointPrepareEvent(
@@ -2628,7 +3447,10 @@ class LinkedController(
 
   private companion object {
     const val CANONICAL_PLAYER_SLOTS = 4
-    const val LOCAL_LOAD_CLOSE_TIMEOUT_MILLIS = 3_000L
+    const val LOCAL_OPEN_QUEUE_EVENTS = 64
+    const val LOCAL_OPEN_QUEUE_BYTES = 4_096L
+    const val LOCAL_OPEN_EVENT_WEIGHT = 64L
+    const val CONTROLLER_CLOSE_TIMEOUT_MILLIS = 8_000L
     val LOG: Logger = LoggerFactory.getLogger(LinkedController::class.java)
 
     fun v9Buttons(mask: Int): Set<Button> = buildSet {

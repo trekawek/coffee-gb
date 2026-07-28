@@ -651,12 +651,13 @@ class ApplicationSettingsStoreTest {
   }
 
   @Test
-  fun `close times out and interrupts a writer that never releases`() {
+  fun `timed out close remains retryable and later persists the newest settings`() {
     val directory = Files.createTempDirectory("coffee-gb-settings-close-timeout")
-    val writer = NeverReleasedWriter()
+    val path = directory.resolve("settings.properties")
+    val writer = InterruptOnceWriter()
     val store =
         ApplicationSettingsStore(
-            directory.resolve("settings.properties"),
+            path,
             writer,
             debounceMillis = 0,
             closeTimeoutMillis = 100,
@@ -671,9 +672,15 @@ class ApplicationSettingsStoreTest {
     assertTrue(failure.message!!.contains("Unable to close"))
     assertTrue(elapsedMillis < 2_000, "close took $elapsedMillis ms")
     assertTrue(writer.interrupted.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-    assertFailsWith<IllegalStateException> {
-      store.update(store.current())
-    }
+
+    store.update(
+        store.current().withSettings {
+          copy(display = display.copy(explicitScale = 3))
+        })
+    store.close()
+
+    assertEquals(3, readDocument(path).settings.display.scale)
+    assertEquals(2, writer.writes.get())
   }
 
   @Test
@@ -900,19 +907,23 @@ class ApplicationSettingsStoreTest {
     }
   }
 
-  private class NeverReleasedWriter : AtomicFileWriter() {
+  private class InterruptOnceWriter : AtomicFileWriter() {
+    val writes = AtomicInteger()
     val started = CountDownLatch(1)
     val interrupted = CountDownLatch(1)
 
     override fun write(target: Path, intendedBytes: ByteArray) {
-      started.countDown()
-      try {
-        CountDownLatch(1).await()
-      } catch (caught: InterruptedException) {
-        interrupted.countDown()
-        Thread.currentThread().interrupt()
-        throw IOException("injected never-released settings writer was interrupted", caught)
+      if (writes.incrementAndGet() == 1) {
+        started.countDown()
+        try {
+          CountDownLatch(1).await()
+        } catch (caught: InterruptedException) {
+          interrupted.countDown()
+          Thread.currentThread().interrupt()
+          throw IOException("injected first settings writer was interrupted", caught)
+        }
       }
+      AtomicFileWriter.system().write(target, intendedBytes)
     }
   }
 

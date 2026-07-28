@@ -35,8 +35,10 @@ class Session(
   internal var serialEndpoint: SerialEndpoint = serialEndpoint
     private set
 
+  internal val infraredEndpoint: InfraredEndpoint = infraredEndpoint
+
   init {
-    gameboy.init(eventBus, serialEndpoint, infraredEndpoint, if (staged) null else console)
+    gameboy.init(eventBus, serialEndpoint, this.infraredEndpoint, if (staged) null else console)
   }
 
   /**

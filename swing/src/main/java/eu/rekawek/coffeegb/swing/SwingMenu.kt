@@ -53,6 +53,8 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.ButtonGroup
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
@@ -88,11 +90,18 @@ internal class SwingMenu(
     private val onQuit: () -> Unit,
 ) {
 
-  private var stateSlot = 0
+  @Volatile private var stateSlot = 0
 
-  private var snapshotSupport: SnapshotSupport? = null
+  @Volatile private var snapshotSupport: SnapshotSupport? = null
 
   private var pauseSupport: Boolean = false
+
+  private val snapshotAvailabilityGeneration = AtomicLong()
+
+  private val snapshotAvailabilityExecutor =
+      Executors.newSingleThreadExecutor { task ->
+        Thread(task, "coffee-gb-snapshot-menu").apply { isDaemon = true }
+      }
 
   private var webcamSource: WebcamCameraSource? = null
 
@@ -146,28 +155,29 @@ internal class SwingMenu(
         },
         handleReplacement = { it.openRequestId == null },
     )
-    eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
-    eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
-    eventBus.register<EmulationStartedEvent> {
-      if (!acceptRomLifecycle(it.openRequestId)) {
-        return@register
-      }
-      currentRomFileName =
-          it.origin
-              ?.displayName()
-              ?.let { name -> name.substringBeforeLast('.', name) }
-              ?: currentRomFileName
-      currentRomTitle = it.romName
+    eventBus.register<SessionSnapshotSupportEvent> { event ->
+      snapshotAvailabilityGeneration.incrementAndGet()
+      dispatchSwingMutation { snapshotSupport = event.snapshotSupport }
     }
-    eventBus.register<LoadRomFailedEvent> {
-      if (!acceptRomLifecycle(it.openRequestId)) {
-        return@register
+    eventBus.register<Controller.SessionPauseSupportEvent> { event ->
+      dispatchSwingMutation { pauseSupport = event.enabled }
+    }
+    eventBus.register<EmulationStartedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
+        currentRomFileName =
+            event.origin
+                ?.displayName()
+                ?.let { name -> name.substringBeforeLast('.', name) }
+                ?: currentRomFileName
+        currentRomTitle = event.romName
       }
-      if (it.openRequestId == null) {
-        SwingUtilities.invokeLater {
+    }
+    eventBus.register<LoadRomFailedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
+        if (event.openRequestId == null) {
           JOptionPane.showMessageDialog(
               window,
-              "Can't open ${it.rom.name}: ${it.message}",
+              "Can't open ${event.rom.name}: ${event.message}",
               "Error",
               JOptionPane.ERROR_MESSAGE,
           )
@@ -175,11 +185,10 @@ internal class SwingMenu(
       }
     }
     eventBus.register<EmulationStoppedEvent> {
-      if (!acceptRomLifecycle(null)) {
-        return@register
+      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
+        currentRomFileName = null
+        currentRomTitle = null
       }
-      currentRomFileName = null
-      currentRomTitle = null
     }
   }
 
@@ -266,15 +275,14 @@ internal class SwingMenu(
         eventBus.post(ResumeEmulationEvent())
       }
     }
-    eventBus.register<EmulationStartedEvent> {
-      if (!acceptRomLifecycle(it.openRequestId)) {
-        return@register
+    eventBus.register<EmulationStartedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
+        pauseGame.isEnabled = pauseSupport
+        pauseGame.state = false
       }
-      pauseGame.isEnabled = pauseSupport
-      pauseGame.state = false
     }
     eventBus.register<EmulationStoppedEvent> {
-      if (acceptRomLifecycle(null)) {
+      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
         pauseGame.isEnabled = false
       }
     }
@@ -287,28 +295,31 @@ internal class SwingMenu(
     saveSnapshot.addActionListener {
       eventBus.post(SaveSnapshotEvent(stateSlot))
     }
-    eventBus.register<SnapshotSavedEvent> {
-      if (it.slot == stateSlot) {
-        loadSnapshot.isEnabled = true
+    eventBus.register<SnapshotSavedEvent> { event ->
+      snapshotAvailabilityGeneration.incrementAndGet()
+      dispatchSwingMutation {
+        if (event.slot == stateSlot) {
+          loadSnapshot.isEnabled = true
+        }
       }
     }
-    eventBus.register<SnapshotLoadFailedEvent> {
-      SwingUtilities.invokeLater {
+    eventBus.register<SnapshotLoadFailedEvent> { event ->
+      dispatchSwingMutation {
         JOptionPane.showMessageDialog(
             window,
-            it.message,
+            event.message,
             "Unable to load state",
             JOptionPane.ERROR_MESSAGE,
         )
       }
     }
-    eventBus.register<EmulationStartedEvent> {
-      if (acceptRomLifecycle(it.openRequestId)) {
+    eventBus.register<EmulationStartedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
         saveSnapshot.isEnabled = snapshotSupport != null
       }
     }
     eventBus.register<EmulationStoppedEvent> {
-      if (acceptRomLifecycle(null)) {
+      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
         saveSnapshot.isEnabled = false
       }
     }
@@ -318,13 +329,12 @@ internal class SwingMenu(
     loadSnapshot.addActionListener { eventBus.post(Controller.RestoreSnapshotEvent(stateSlot)) }
     loadSnapshot.isEnabled = false
 
-    eventBus.register<EmulationStartedEvent> {
-      if (acceptRomLifecycle(it.openRequestId)) {
-        loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(stateSlot) == true
-      }
+    eventBus.register<EmulationStartedEvent> { event ->
+      refreshSnapshotAvailability(loadSnapshot, event.openRequestId)
     }
     eventBus.register<EmulationStoppedEvent> {
-      if (acceptRomLifecycle(null)) {
+      snapshotAvailabilityGeneration.incrementAndGet()
+      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
         loadSnapshot.isEnabled = false
       }
     }
@@ -336,19 +346,19 @@ internal class SwingMenu(
       slotItem.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_0 + i, KEY_MODIFIER)
       slotItem.addActionListener {
         stateSlot = i
-        loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(i) == true
+        refreshSnapshotAvailability(loadSnapshot, null)
         uncheckAllBut(slotMenu, slotItem)
       }
       slotMenu.add(slotItem)
     }
     slotMenu.isEnabled = false
-    eventBus.register<EmulationStartedEvent> {
-      if (acceptRomLifecycle(it.openRequestId)) {
+    eventBus.register<EmulationStartedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
         slotMenu.isEnabled = snapshotSupport != null
       }
     }
     eventBus.register<EmulationStoppedEvent> {
-      if (acceptRomLifecycle(null)) {
+      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
         slotMenu.isEnabled = false
       }
     }
@@ -878,7 +888,7 @@ internal class SwingMenu(
       properties.setProperty(EmulatorProperties.Key.SoundEnabled, enabled.toString())
     }
     eventBus.register<Sound.SoundEnabledEvent> {
-      SwingUtilities.invokeLater { mute.state = !it.enabled() }
+      dispatchSwingMutation { mute.state = !it.enabled() }
     }
     return audioMenu
   }
@@ -949,14 +959,18 @@ internal class SwingMenu(
 
     eventBus.register<ConnectionController.ClientHandshakeCompletedEvent> {
       val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
-      setStatus("Waiting as Player ${it.player + 1} ($mode)", false)
+      dispatchSwingMutation {
+        setStatus("Waiting as Player ${it.player + 1} ($mode)", false)
+      }
     }
     eventBus.register<ClientConnectedToServerEvent> {
       val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
-      setStatus("Connected as Player ${it.player + 1} ($mode)", true)
+      dispatchSwingMutation {
+        setStatus("Connected as Player ${it.player + 1} ($mode)", true)
+      }
     }
     eventBus.register<ConnectionController.ClientConnectionRejectedEvent> {
-      SwingUtilities.invokeLater {
+      dispatchSwingMutation {
         JOptionPane.showMessageDialog(
             window,
             it.message,
@@ -966,7 +980,7 @@ internal class SwingMenu(
       }
     }
     eventBus.register<ConnectionController.ClientProtocolErrorEvent> {
-      SwingUtilities.invokeLater {
+      dispatchSwingMutation {
         JOptionPane.showMessageDialog(
             window,
             it.message,
@@ -976,7 +990,7 @@ internal class SwingMenu(
       }
     }
     eventBus.register<ConnectionController.ServerProtocolErrorEvent> {
-      SwingUtilities.invokeLater {
+      dispatchSwingMutation {
         JOptionPane.showMessageDialog(
             window,
             "Player ${it.player + 1}: ${it.message}",
@@ -986,38 +1000,50 @@ internal class SwingMenu(
       }
     }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      setStatus("Disconnected", false)
-      connectToServer.state = false
+      dispatchSwingMutation {
+        setStatus("Disconnected", false)
+        connectToServer.state = false
+      }
     }
     eventBus.register<ServerStartedEvent> {
-      connectToServer.isEnabled = false
-      if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-        setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
-      } else {
-        setStatus("Waiting for players (0/${it.mode.playerCount - 1})", false)
+      dispatchSwingMutation {
+        connectToServer.isEnabled = false
+        if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+          setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
+        } else {
+          setStatus("Waiting for players (0/${it.mode.playerCount - 1})", false)
+        }
       }
     }
     eventBus.register<ServerStoppedEvent> {
-      startServer.state = false
-      connectToServer.isEnabled = true
-      setStatus("Disconnected", false)
+      dispatchSwingMutation {
+        startServer.state = false
+        connectToServer.isEnabled = true
+        setStatus("Disconnected", false)
+      }
     }
     eventBus.register<ConnectionController.ServerPlayerCountEvent> {
-      if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-        setStatus(
-            "Active as Player 1 (four-player adapter; ${it.connected + 1}/4 players)", true)
-      } else if (it.connected < it.required) {
-        setStatus("Waiting for players (${it.connected}/${it.required})", false)
+      dispatchSwingMutation {
+        if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+          setStatus(
+              "Active as Player 1 (four-player adapter; ${it.connected + 1}/4 players)", true)
+        } else if (it.connected < it.required) {
+          setStatus("Waiting for players (${it.connected}/${it.required})", false)
+        }
       }
     }
     eventBus.register<ServerGotConnectionEvent> {
-      if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-        setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
-      } else {
-        setStatus("Connected as Player 1 (normal link)", true)
+      dispatchSwingMutation {
+        if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+          setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
+        } else {
+          setStatus("Connected as Player 1 (normal link)", true)
+        }
       }
     }
-    eventBus.register<ServerLostConnectionEvent> { setStatus("Disconnected", false) }
+    eventBus.register<ServerLostConnectionEvent> {
+      dispatchSwingMutation { setStatus("Disconnected", false) }
+    }
     return linkMenu
   }
 
@@ -1028,14 +1054,35 @@ internal class SwingMenu(
   }
 
   private fun enableWhenEmulationActive(item: JMenuItem) {
-    eventBus.register<EmulationStartedEvent> {
-      if (acceptRomLifecycle(it.openRequestId)) {
+    eventBus.register<EmulationStartedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
         item.isEnabled = true
       }
     }
     eventBus.register<EmulationStoppedEvent> {
-      if (acceptRomLifecycle(null)) {
+      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
         item.isEnabled = false
+      }
+    }
+  }
+
+  private fun refreshSnapshotAvailability(item: JMenuItem, openRequestId: Long?) {
+    dispatchAcceptedRomLifecycle(openRequestId, acceptRomLifecycle) {
+      val support = snapshotSupport
+      val slot = stateSlot
+      val generation = snapshotAvailabilityGeneration.incrementAndGet()
+      item.isEnabled = false
+      snapshotAvailabilityExecutor.execute {
+        val available =
+            runCatching { support?.snapshotAvailable(slot) == true }
+                .getOrElse { false }
+        dispatchAcceptedRomLifecycle(openRequestId, acceptRomLifecycle) {
+          if (snapshotAvailabilityGeneration.get() == generation &&
+              snapshotSupport === support &&
+              stateSlot == slot) {
+            item.isEnabled = available
+          }
+        }
       }
     }
   }
@@ -1309,11 +1356,7 @@ internal fun createScreenMenu(
     showSgbBorder.state = display.showSgbBorder
   }
   eventBus.register<DisplaySettingsChangedEvent> { event ->
-    if (SwingUtilities.isEventDispatchThread()) {
-      synchronize(event.display)
-    } else {
-      SwingUtilities.invokeLater { synchronize(event.display) }
-    }
+    dispatchSwingMutation { synchronize(event.display) }
   }
 
   return screenMenu

@@ -16,6 +16,7 @@ class EventQueue(
     private val maxSourceEvents: Int = maxEvents,
     private val maxSourceBytes: Long = maxBytes,
     private val maxDispatchEvents: Int = maxEvents,
+    private val eventOrder: (() -> Long)? = null,
 ) {
 
   private val queue = ArrayDeque<WeightedEvent>()
@@ -40,26 +41,64 @@ class EventQueue(
   fun dispatch() {
     val dispatchEvents = synchronized(queue) { minOf(queue.size, maxDispatchEvents) }
     repeat(dispatchEvents) {
-      val e =
-          synchronized(queue) {
-            val weighted = queue.pollFirst() ?: return
-            val budget = checkNotNull(queuedBySource[weighted.source])
-            budget.events--
-            budget.bytes -= weighted.weight
-            queuedEvents--
-            queuedBytes -= weighted.weight
-            if (budget.events == 0) queuedBySource.remove(weighted.source)
-            weighted.event
-          }
-      for (r in registrations) {
-        if (r.eventType.isInstance(e)) {
-          // Use a safe cast and a cast-then-call pattern to ensure type safety.
-          @Suppress("UNCHECKED_CAST") val registration = r as Registration<Event>
-          registration.subscriber.onEvent(e)
+      if (!dispatchOne()) return
+    }
+  }
+
+  fun dispatchOne(): Boolean {
+    val event =
+        synchronized(queue) {
+          val weighted = queue.pollFirst() ?: return false
+          releaseBudgetLocked(weighted)
+          weighted.event
         }
+    dispatch(event)
+    return true
+  }
+
+  /**
+   * Dispatches the first matching control event without reordering the events that remain queued.
+   *
+   * This is reserved for decisions that unblock/cancel an already-frozen worker. Ordinary state
+   * mutation continues to use [dispatchOne] and therefore preserves queue order.
+   */
+  fun dispatchFirstMatching(predicate: (Event) -> Boolean): Boolean {
+    val event =
+        synchronized(queue) {
+          val iterator = queue.iterator()
+          var selected: WeightedEvent? = null
+          while (iterator.hasNext()) {
+            val candidate = iterator.next()
+            if (predicate(candidate.event)) {
+              iterator.remove()
+              releaseBudgetLocked(candidate)
+              selected = candidate
+              break
+            }
+          }
+          selected?.event
+        } ?: return false
+    dispatch(event)
+    return true
+  }
+
+  fun anyEvent(predicate: (Event) -> Boolean): Boolean =
+      synchronized(queue) { queue.any { predicate(it.event) } }
+
+  private fun dispatch(event: Event) {
+    for (registrationValue in registrations) {
+      if (registrationValue.eventType.isInstance(event)) {
+        // Use a safe cast and a cast-then-call pattern to ensure type safety.
+        @Suppress("UNCHECKED_CAST")
+        val registration = registrationValue as Registration<Event>
+        registration.subscriber.onEvent(event)
       }
     }
   }
+
+  fun nextOrder(): Long? = synchronized(queue) { queue.peekFirst()?.order }
+
+  fun nextEvent(): Event? = synchronized(queue) { queue.peekFirst()?.event }
 
   fun discardSource(source: Any) {
     synchronized(queue) { discardSourceLocked(source) }
@@ -79,7 +118,7 @@ class EventQueue(
         if (budget.events == 0) queuedBySource.remove(source)
         throw EventQueueFullException(source, maxEvents, maxBytes, true)
       }
-      queue.addLast(WeightedEvent(event, weight, source))
+      queue.addLast(WeightedEvent(event, weight, source, eventOrder?.invoke() ?: 0L))
       budget.events++
       budget.bytes += weight
       queuedEvents++
@@ -100,6 +139,15 @@ class EventQueue(
     queuedBySource.remove(source)
   }
 
+  private fun releaseBudgetLocked(weighted: WeightedEvent) {
+    val budget = checkNotNull(queuedBySource[weighted.source])
+    budget.events--
+    budget.bytes -= weighted.weight
+    queuedEvents--
+    queuedBytes -= weighted.weight
+    if (budget.events == 0) queuedBySource.remove(weighted.source)
+  }
+
   internal class EventQueueFullException(
       val source: Any,
       maxEvents: Int,
@@ -112,7 +160,12 @@ class EventQueue(
         "Event source exceeds $maxEvents queued events or $maxBytes bytes"
       })
 
-  private data class WeightedEvent(val event: Event, val weight: Long, val source: Any)
+  private data class WeightedEvent(
+      val event: Event,
+      val weight: Long,
+      val source: Any,
+      val order: Long,
+  )
 
   private data class SourceBudget(var events: Int = 0, var bytes: Long = 0)
 

@@ -27,6 +27,23 @@ import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 import org.slf4j.LoggerFactory
 
+internal const val ROM_OPEN_QUIESCE_SHUTDOWN_BUDGET_MILLIS = 5_000L
+internal const val CONTROLLER_SHUTDOWN_BUDGET_MILLIS = 8_000L
+internal const val GAMEPAD_SHUTDOWN_BUDGET_MILLIS = 1_000L
+internal const val AUDIO_SHUTDOWN_BUDGET_MILLIS = 2_250L
+internal const val ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS = 5_000L
+internal const val SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS = 5_000L
+internal const val DESKTOP_SHUTDOWN_SCHEDULING_MARGIN_MILLIS = 8_750L
+internal const val DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS =
+    ROM_OPEN_QUIESCE_SHUTDOWN_BUDGET_MILLIS +
+        CONTROLLER_SHUTDOWN_BUDGET_MILLIS +
+        GAMEPAD_SHUTDOWN_BUDGET_MILLIS +
+        AUDIO_SHUTDOWN_BUDGET_MILLIS +
+        ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS +
+        SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS
+internal const val DESKTOP_SHUTDOWN_TIMEOUT_MILLIS =
+    DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS + DESKTOP_SHUTDOWN_SCHEDULING_MARGIN_MILLIS
+
 class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
@@ -125,50 +142,49 @@ class SwingGui private constructor(
             ::requestClose,
         )
     menu.addMenu()
-    eventBus.register<RomLoadingEvent> {
-      if (!acceptRomLifecycle(it.openRequestId)) {
-        return@register
+    eventBus.register<RomLoadingEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
+        romLoading = true
+        romLoadingRequestId = event.openRequestId
+        updateLoadingUi("Coffee GB: Loading ${event.rom.name}…", true)
       }
-      romLoading = true
-      romLoadingRequestId = it.openRequestId
-      updateLoadingUi("Coffee GB: Loading ${it.rom.name}…", true)
     }
-    eventBus.register<EmulationStartedEvent> {
-      if (!acceptRomLifecycle(it.openRequestId)) {
-        return@register
+    eventBus.register<EmulationStartedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
+        activeWindowTitle = "Coffee GB: ${event.romName}"
+        romLoading = false
+        romLoadingRequestId = null
+        romSessionState.markStarted()
+        updateLoadingUi(activeWindowTitle, false)
       }
-      activeWindowTitle = "Coffee GB: ${it.romName}"
-      romLoading = false
-      romLoadingRequestId = null
-      romSessionState.markStarted()
-      updateLoadingUi(activeWindowTitle, false)
     }
-    eventBus.register<LoadRomFailedEvent> {
-      if (!acceptRomLifecycle(it.openRequestId) ||
-          !matchesLoadingRequest(it.openRequestId)) {
-        return@register
+    eventBus.register<LoadRomFailedEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
+        if (matchesLoadingRequest(event.openRequestId)) {
+          romLoading = false
+          romLoadingRequestId = null
+          updateLoadingUi(activeWindowTitle, false)
+        }
       }
-      romLoading = false
-      romLoadingRequestId = null
-      updateLoadingUi(activeWindowTitle, false)
     }
-    eventBus.register<RomLoadingCancelledEvent> {
-      if (!acceptRomLifecycle(it.openRequestId) ||
-          !matchesLoadingRequest(it.openRequestId)) {
-        return@register
+    eventBus.register<RomLoadingCancelledEvent> { event ->
+      dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
+        if (matchesLoadingRequest(event.openRequestId)) {
+          romLoading = false
+          romLoadingRequestId = null
+          updateLoadingUi(activeWindowTitle, false)
+        }
       }
-      romLoading = false
-      romLoadingRequestId = null
-      updateLoadingUi(activeWindowTitle, false)
     }
     eventBus.register<EmulationStoppedEvent> {
-      if (romOpen.hasActiveRequest()) {
-        return@register
-      }
-      activeWindowTitle = "Coffee GB"
-      romSessionState.markStopped()
-      if (!romLoading) {
-        updateLoadingUi(activeWindowTitle, false)
+      dispatchAcceptedRomLifecycle(null, ::acceptRomLifecycle) {
+        if (!romOpen.hasActiveRequest()) {
+          activeWindowTitle = "Coffee GB"
+          romSessionState.markStopped()
+          if (!romLoading) {
+            updateLoadingUi(activeWindowTitle, false)
+          }
+        }
       }
     }
     desktopOpenFiles.attach(initialRom?.toPath()) { paths ->
@@ -327,24 +343,10 @@ class SwingGui private constructor(
   }
 
   private fun closeSettings() {
-    try {
-      properties.close()
-    } catch (failure: IllegalStateException) {
-      runCatching {
-        SwingUtilities.invokeAndWait {
-          JOptionPane.showMessageDialog(
-              mainWindow,
-              "Coffee GB could not save the latest settings. " +
-                  "The previous complete settings file was preserved.\n\n" +
-                  (failure.cause?.message
-                      ?: failure.message
-                      ?: failure.javaClass.simpleName),
-              "Settings save failed",
-              JOptionPane.ERROR_MESSAGE,
-          )
-        }
-      }
-    }
+    // Let the coordinator retain the window and accept a later close retry. The settings store
+    // keeps its latest dirty revision open after a timeout/failure, so swallowing this exception
+    // here would turn an otherwise recoverable flush into silent data loss at process exit.
+    properties.close()
   }
 
   private fun showPreferences() {
@@ -367,7 +369,7 @@ class SwingGui private constructor(
   }
 
   private fun updateLoadingUi(title: String, loading: Boolean) {
-    SwingUtilities.invokeLater {
+    dispatchSwingMutation {
       mainWindow.title = title
       val cursor =
           Cursor.getPredefinedCursor(if (loading) Cursor.WAIT_CURSOR else Cursor.DEFAULT_CURSOR)
@@ -384,7 +386,6 @@ class SwingGui private constructor(
 
   companion object {
     private val LOG = LoggerFactory.getLogger(SwingGui::class.java)
-    private const val DESKTOP_SHUTDOWN_TIMEOUT_MILLIS = 15_000L
 
     fun run(
         debug: Boolean,
@@ -486,7 +487,7 @@ internal class DesktopShutdownCoordinator(
           finishSuccess(attempt)
         }
     launchDesktopShutdownWatchdog(worker, timeoutMillis) {
-      if (attempt.terminal.compareAndSet(false, true)) {
+      if (attempt.timeOut()) {
         onTimeout()
       }
     }
@@ -497,7 +498,7 @@ internal class DesktopShutdownCoordinator(
       attempt: ShutdownAttempt,
       failure: Controller.PersistenceBarrierException,
   ) {
-    if (!attempt.terminal.compareAndSet(false, true)) {
+    if (!attempt.finishActive()) {
       activeAttempt.compareAndSet(attempt, null)
       return
     }
@@ -511,7 +512,7 @@ internal class DesktopShutdownCoordinator(
   }
 
   private fun finishFailure(attempt: ShutdownAttempt, failure: Exception) {
-    if (attempt.terminal.compareAndSet(false, true)) {
+    if (attempt.finishActive()) {
       activeAttempt.compareAndSet(attempt, null)
       onFailure(failure)
     } else {
@@ -520,14 +521,20 @@ internal class DesktopShutdownCoordinator(
   }
 
   private fun finishSuccess(attempt: ShutdownAttempt) {
-    if (attempt.terminal.compareAndSet(false, true)) {
-      try {
-        commit()
-      } catch (failure: Exception) {
-        activeAttempt.compareAndSet(attempt, null)
+    if (!attempt.beginCommit()) {
+      activeAttempt.compareAndSet(attempt, null)
+      return
+    }
+    try {
+      commit()
+    } catch (failure: Exception) {
+      if (attempt.finishCommit()) {
         onFailure(failure)
-        return
       }
+      activeAttempt.compareAndSet(attempt, null)
+      return
+    }
+    if (attempt.finishCommit()) {
       completed.set(true)
       activeAttempt.compareAndSet(attempt, null)
       onSuccess()
@@ -547,7 +554,31 @@ internal class DesktopShutdownCoordinator(
   }
 
   private class ShutdownAttempt {
-    val terminal = AtomicBoolean()
+    private val state = AtomicReference(State.ACTIVE)
+
+    fun beginCommit(): Boolean = state.compareAndSet(State.ACTIVE, State.COMMITTING)
+
+    fun finishActive(): Boolean = state.compareAndSet(State.ACTIVE, State.TERMINAL)
+
+    fun finishCommit(): Boolean = state.compareAndSet(State.COMMITTING, State.TERMINAL)
+
+    fun timeOut(): Boolean {
+      while (true) {
+        when (val current = state.get()) {
+          State.ACTIVE,
+          State.COMMITTING -> if (state.compareAndSet(current, State.TIMED_OUT)) return true
+          State.TIMED_OUT,
+          State.TERMINAL -> return false
+        }
+      }
+    }
+
+    private enum class State {
+      ACTIVE,
+      COMMITTING,
+      TIMED_OUT,
+      TERMINAL,
+    }
   }
 }
 

@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.swing.io.AudioDeviceCatalog
 import eu.rekawek.coffeegb.swing.io.AudioDeviceSnapshot
@@ -31,6 +32,9 @@ import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
+
+/** Synchronous boundary emitted before an old controller is closed and replaced. */
+internal class ControllerOwnershipChangingEvent : Event
 
 class SwingEmulator(
     private val eventBus: EventBus,
@@ -105,6 +109,7 @@ class SwingEmulator(
   }
 
   private fun startBasicController() {
+    eventBus.post(ControllerOwnershipChangingEvent())
     releaseForLifecycleChange()
     val state = controller.closeWithState()
     controller = BasicController(eventBus, properties, console).also { it.startController() }
@@ -114,6 +119,7 @@ class SwingEmulator(
   }
 
   private fun startLinkedController(mode: LinkMode, player: Int) {
+    eventBus.post(ControllerOwnershipChangingEvent())
     releaseForLifecycleChange()
     val state = controller.closeWithState()
     controller =
