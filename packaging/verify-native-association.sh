@@ -58,6 +58,22 @@ await_file() {
   }
 }
 
+await_evidence() {
+  local path=$1
+  local description=$2
+  local deadline=$((SECONDS + 60))
+  local pid_count=0
+  while [[ $SECONDS -lt $deadline ]]; do
+    if [[ -f "$path" ]]; then
+      pid_count=$(grep -Ec '^pid=[1-9][0-9]*$' "$path" || true)
+      (( pid_count == 1 )) && return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for complete $description: $path" >&2
+  return 1
+}
+
 assert_evidence() {
   local marker=$1
   local fixture=$2
@@ -65,7 +81,25 @@ assert_evidence() {
   grep -Fx "Coffee GB association open OK" "$marker" >/dev/null
   grep -Fx "source=$expected_source" "$marker" >/dev/null
   grep -Fx "rom=$fixture" "$marker" >/dev/null
+  grep -Fx "origin=$fixture" "$marker" >/dev/null
   grep -Fx "title=COFFEE-CI-SMOKE" "$marker" >/dev/null
+  local pid_count
+  pid_count=$(grep -Ec '^pid=[1-9][0-9]*$' "$marker" || true)
+  (( pid_count == 1 )) || {
+    echo "Association evidence has no unique process ID: $marker" >&2
+    return 1
+  }
+}
+
+evidence_pid() {
+  sed -nE 's/^pid=([1-9][0-9]*)$/\1/p' "$1"
+}
+
+assert_shutdown_evidence() {
+  local marker=$1
+  local expected_pid=$2
+  grep -Fx "Coffee GB association shutdown OK" "$marker" >/dev/null
+  grep -Fx "pid=$expected_pid" "$marker" >/dev/null
 }
 
 case "$target" in
@@ -129,10 +163,48 @@ case "$target" in
     for extension in "${extensions[@]}"; do
       fixture="$smoke_root/Coffee GB association smoke.$extension"
       marker="$smoke_root/association-opened-$extension.marker"
+      shutdown_marker="$marker.shutdown"
       export COFFEE_GB_ASSOCIATION_SMOKE_MARKER="$marker"
-      dbus-run-session -- xvfb-run -a xdg-open "$fixture"
-      await_file "$marker" "installed Linux .$extension association result"
+      export COFFEE_GB_ASSOCIATION_SMOKE_ROM="$fixture"
+      # Keep the private desktop session alive until the exact process that reported the
+      # correlated Opened update has committed normal shutdown and exited.
+      dbus-run-session -- xvfb-run -a bash -c '
+        set -euo pipefail
+        fixture=$1
+        marker=$2
+        shutdown_marker=$3
+        launcher=$4
+        xdg-open "$fixture"
+        deadline=$((SECONDS + 60))
+        while [[ $SECONDS -lt $deadline ]]; do
+          if [[ -f "$marker" ]] &&
+              [[ $(grep -Ec "^pid=[1-9][0-9]*$" "$marker" || true) -eq 1 ]]; then
+            break
+          fi
+          sleep 0.1
+        done
+        [[ $(grep -Ec "^pid=[1-9][0-9]*$" "$marker" || true) -eq 1 ]]
+        pid=$(sed -nE "s/^pid=([1-9][0-9]*)$/\\1/p" "$marker")
+        [[ "$pid" =~ ^[1-9][0-9]*$ ]]
+        if actual_exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null); then
+          [[ "$actual_exe" == "$launcher" ]]
+        fi
+        while [[ $SECONDS -lt $deadline ]]; do
+          if [[ -f "$shutdown_marker" ]] &&
+              [[ $(grep -Ec "^pid=[1-9][0-9]*$" "$shutdown_marker" || true) -eq 1 ]]; then
+            break
+          fi
+          sleep 0.1
+        done
+        [[ $(grep -Ec "^pid=[1-9][0-9]*$" "$shutdown_marker" || true) -eq 1 ]]
+        grep -Fx "Coffee GB association shutdown OK" "$shutdown_marker" >/dev/null
+        grep -Fx "pid=$pid" "$shutdown_marker" >/dev/null
+        while kill -0 "$pid" 2>/dev/null && [[ $SECONDS -lt $deadline ]]; do sleep 0.1; done
+        ! kill -0 "$pid" 2>/dev/null
+      ' association-smoke "$fixture" "$marker" "$shutdown_marker" "$launcher"
       assert_evidence "$marker" "$fixture" INITIAL_ARGUMENT
+      pid=$(evidence_pid "$marker")
+      assert_shutdown_evidence "$shutdown_marker" "$pid"
       [[ $(xdg-mime query default application/x-gameboy-rom) == "$desktop_id" ]]
     done
 
@@ -220,7 +292,9 @@ case "$target" in
       fixture="$smoke_root/Coffee GB association smoke.$extension"
       marker="$smoke_root/association-opened-$extension.marker"
       ready_marker="$smoke_root/desktop-ready-$extension.marker"
+      shutdown_marker="$marker.shutdown"
       export COFFEE_GB_ASSOCIATION_SMOKE_MARKER="$marker"
+      export COFFEE_GB_ASSOCIATION_SMOKE_ROM="$fixture"
       export COFFEE_GB_DESKTOP_SMOKE_MARKER="$ready_marker"
       "$installed_app/Contents/MacOS/Coffee GB" \
         >"$smoke_root/application-$extension.log" \
@@ -232,8 +306,12 @@ case "$target" in
       # Do not select Coffee GB explicitly here: Launch Services must choose the registered
       # default handler for each supported extension.
       open "$fixture"
-      await_file "$marker" "default-handler macOS .$extension association result"
+      await_evidence "$marker" "default-handler macOS .$extension association result"
       assert_evidence "$marker" "$fixture" DESKTOP_OPEN_FILE
+      pid=$(evidence_pid "$marker")
+      [[ "$pid" == "$app_pid" ]]
+      await_evidence "$shutdown_marker" "normal macOS .$extension association shutdown"
+      assert_shutdown_evidence "$shutdown_marker" "$pid"
 
       deadline=$((SECONDS + 60))
       while kill -0 "$app_pid" 2>/dev/null && [[ $SECONDS -lt $deadline ]]; do

@@ -61,6 +61,7 @@ class SwingGui private constructor(
     private val properties: EmulatorProperties,
     private val desktopOpenFiles: DesktopOpenFilesBridge,
     private val jvmShutdown: DesktopJvmShutdownCoordinator,
+    associationSmokeConfiguration: AssociationSmokeConfiguration?,
 ) {
 
   private val eventBus: EventBus
@@ -89,6 +90,20 @@ class SwingGui private constructor(
 
   private val romSessionState = RomSessionState()
 
+  private val associationSmoke =
+      associationSmokeConfiguration?.let { configuration ->
+        AssociationSmokeLifecycle(
+            configuration,
+            completed = {
+              SwingUtilities.invokeLater(::requestAutomatedClose)
+            },
+            failed = { failure ->
+              LOG.error("Unable to write association smoke evidence", failure)
+              exitProcess(1)
+            },
+        )
+      }
+
   private val shutdownCoordinator by lazy {
     DesktopShutdownCoordinator(
         shutdown = {
@@ -110,12 +125,8 @@ class SwingGui private constructor(
         onFailure = ::showCloseFailure,
         onTimeout = ::showCloseTimeout,
         onSuccess = {
-          SwingUtilities.invokeLater {
-            dropFeedback.close()
-            displayController.close()
-            mainWindow.dispose()
-            exitProcess(0)
-          }
+          associationSmoke?.recordNormalShutdown(::finishSuccessfulShutdown)
+              ?: finishSuccessfulShutdown()
         },
     )
   }
@@ -152,6 +163,7 @@ class SwingGui private constructor(
             properties,
             romSessionState,
             onRecentChanged = { menu.updateRecentRoms() },
+            onUpdate = { update -> associationSmoke?.observe(update) },
         )
     jvmShutdown.installParticipant {
       runDesktopJvmShutdownSteps(
@@ -343,6 +355,15 @@ class SwingGui private constructor(
     }
   }
 
+  private fun finishSuccessfulShutdown() {
+    SwingUtilities.invokeLater {
+      dropFeedback.close()
+      displayController.close()
+      mainWindow.dispose()
+      exitProcess(0)
+    }
+  }
+
   private fun showClosePersistenceFailure(
       failure: Controller.PersistenceBarrierException,
       retry: () -> Unit,
@@ -462,7 +483,10 @@ class SwingGui private constructor(
         LOG.error("Unable to write desktop startup smoke evidence", failure)
         exitProcess(1)
       }
-      SwingUtilities.invokeLater(::requestAutomatedClose)
+      dispatchDesktopStartupSmokeClose(
+          associationSmokeConfigured = associationSmoke != null,
+          requestClose = ::requestAutomatedClose,
+      )
     }
   }
 
@@ -511,6 +535,8 @@ class SwingGui private constructor(
         initialRom: File?,
         settingsOverrides: ApplicationSettingsOverrides = ApplicationSettingsOverrides(),
     ) {
+      val associationSmokeConfiguration =
+          associationSmokeConfiguration(System.getenv(), System.getProperty("os.name", ""))
       val desktopOpenFiles = DesktopOpenFilesBridge()
       prepareDesktopLaunch(
           desktopOpenFiles,
@@ -529,7 +555,15 @@ class SwingGui private constructor(
           }
       Runtime.getRuntime().addShutdownHook(jvmShutdown.createHook())
       SwingUtilities.invokeLater {
-        SwingGui(debug, initialRom, properties, desktopOpenFiles, jvmShutdown).startGui()
+        SwingGui(
+                debug,
+                initialRom,
+                properties,
+                desktopOpenFiles,
+                jvmShutdown,
+                associationSmokeConfiguration,
+            )
+            .startGui()
       }
     }
   }
@@ -572,6 +606,15 @@ internal fun pausedQuitRetryUi() =
         title = "Coffee GB: Paused; close again to retry saving before quit",
         blocksInput = true,
     )
+
+internal fun dispatchDesktopStartupSmokeClose(
+    associationSmokeConfigured: Boolean,
+    requestClose: () -> Unit,
+) {
+  if (!associationSmokeConfigured) {
+    SwingUtilities.invokeLater(requestClose)
+  }
+}
 
 internal fun writeDesktopStartupEvidence(
     marker: Path,

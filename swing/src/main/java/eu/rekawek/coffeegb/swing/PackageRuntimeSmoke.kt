@@ -29,9 +29,13 @@ object PackageRuntimeSmoke {
       val videoFrames: Int,
       val audioBuffers: Int,
       val stateBytes: Int,
+      val nativeTarget: String,
   )
 
-  fun run(): Result {
+  fun run(nativeTarget: String = "portable"): Result {
+    require(nativeTarget == "portable" || nativeTarget.isNotBlank()) {
+      "Package smoke native target evidence must not be blank"
+    }
     val pressed =
         PlayerInputSnapshot.of(
             listOf(setOf(Button.A), emptySet(), emptySet(), emptySet()),
@@ -92,7 +96,7 @@ object PackageRuntimeSmoke {
               StateCompression.DEFLATE,
           )
       check(state.contentEquals(restored)) { "Synthetic StateFile restore did not round-trip" }
-      return Result(ticks, videoFrames, audioBuffers, state.size)
+      return Result(ticks, videoFrames, audioBuffers, state.size, nativeTarget)
     } finally {
       gameboy.close()
       bus.close()

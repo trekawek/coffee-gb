@@ -48,6 +48,7 @@ $Fixtures = @(".gb", ".gbc", ".rom") | ForEach-Object {
         Extension = $_
         Path = $Fixture
         Marker = Join-Path $SmokeRoot "association-opened-$($_.Substring(1)).marker"
+        ShutdownMarker = Join-Path $SmokeRoot "association-opened-$($_.Substring(1)).marker.shutdown"
     }
 }
 
@@ -173,37 +174,87 @@ try {
     $env:_JAVA_OPTIONS = "-Djava.awt.headless=false -Duser.home=$($HomeRoot.FullName) -Dcoffee-gb.native.cache=$($NativeCache.FullName)"
     foreach ($Fixture in $Fixtures) {
         $env:COFFEE_GB_ASSOCIATION_SMOKE_MARKER = $Fixture.Marker
+        $env:COFFEE_GB_ASSOCIATION_SMOKE_ROM = $Fixture.Path
         # Start-Process delegates to ShellExecute for a document path. This must select the
         # installed default handler; invoking Coffee GB.exe directly would not prove association.
         Start-Process -FilePath $Fixture.Path
 
         $Deadline = [DateTime]::UtcNow.AddSeconds(60)
-        while (-not (Test-Path -LiteralPath $Fixture.Marker -PathType Leaf) -and
-               [DateTime]::UtcNow -lt $Deadline) {
+        $Evidence = @()
+        $PidEvidence = @()
+        while ($PidEvidence.Count -ne 1 -and [DateTime]::UtcNow -lt $Deadline) {
+            if (Test-Path -LiteralPath $Fixture.Marker -PathType Leaf) {
+                $Evidence = @(Get-Content -LiteralPath $Fixture.Marker -ErrorAction SilentlyContinue)
+                $PidEvidence = @(
+                    $Evidence | Where-Object { $_ -cmatch '^pid=[1-9][0-9]*$' }
+                )
+            }
             Start-Sleep -Milliseconds 100
         }
-        if (-not (Test-Path -LiteralPath $Fixture.Marker -PathType Leaf)) {
-            throw "Timed out waiting for the installed Windows $($Fixture.Extension) association result"
+        if ($PidEvidence.Count -ne 1) {
+            throw "Timed out waiting for complete installed Windows $($Fixture.Extension) association evidence"
         }
-        $Evidence = Get-Content -LiteralPath $Fixture.Marker
         foreach ($Expected in @(
             "Coffee GB association open OK",
             "source=INITIAL_ARGUMENT",
             "rom=$($Fixture.Path)",
+            "origin=$($Fixture.Path)",
             "title=COFFEE-CI-SMOKE"
         )) {
             if ($Evidence -cnotcontains $Expected) {
                 throw "Association evidence is missing '$Expected': $($Evidence -join '; ')"
             }
         }
+        [long] $AssociationPid = $PidEvidence[0].Substring(4)
+        $AssociationProcess = Get-Process -Id $AssociationPid -ErrorAction SilentlyContinue
+        if ($AssociationProcess) {
+            try {
+                if ($AssociationProcess.Path -ne $Launcher) {
+                    throw "Association evidence belongs to another process: $($AssociationProcess.Path)"
+                }
+            } finally {
+                $AssociationProcess.Dispose()
+            }
+        }
 
         $Deadline = [DateTime]::UtcNow.AddSeconds(60)
-        while ((Get-CoffeeGbProcesses).Count -gt 0 -and
+        $ShutdownEvidence = @()
+        $ShutdownPidEvidence = @()
+        while ($ShutdownPidEvidence.Count -ne 1 -and
+               [DateTime]::UtcNow -lt $Deadline) {
+            if (Test-Path -LiteralPath $Fixture.ShutdownMarker -PathType Leaf) {
+                $ShutdownEvidence = @(
+                    Get-Content `
+                        -LiteralPath $Fixture.ShutdownMarker `
+                        -ErrorAction SilentlyContinue
+                )
+                $ShutdownPidEvidence = @(
+                    $ShutdownEvidence | Where-Object { $_ -cmatch '^pid=[1-9][0-9]*$' }
+                )
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if ($ShutdownPidEvidence.Count -ne 1) {
+            throw "Timed out waiting for complete normal Windows $($Fixture.Extension) shutdown evidence"
+        }
+        foreach ($Expected in @(
+            "Coffee GB association shutdown OK",
+            "pid=$AssociationPid"
+        )) {
+            if ($ShutdownEvidence -cnotcontains $Expected) {
+                throw "Shutdown evidence is missing '$Expected': $($ShutdownEvidence -join '; ')"
+            }
+        }
+
+        while ((Get-Process -Id $AssociationPid -ErrorAction SilentlyContinue) -and
                [DateTime]::UtcNow -lt $Deadline) {
             Start-Sleep -Milliseconds 100
         }
+        if (Get-Process -Id $AssociationPid -ErrorAction SilentlyContinue) {
+            throw "The exact Windows $($Fixture.Extension) association process did not exit"
+        }
         if ((Get-CoffeeGbProcesses).Count -gt 0) {
-            throw "The Windows $($Fixture.Extension) application did not complete bounded shutdown"
+            throw "Another Coffee GB process remained before the next association fixture"
         }
     }
 

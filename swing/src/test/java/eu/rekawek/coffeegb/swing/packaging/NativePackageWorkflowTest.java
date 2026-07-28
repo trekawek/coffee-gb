@@ -111,6 +111,33 @@ public class NativePackageWorkflowTest {
                 < release.indexOf("Publish the validated tag to Maven Central"));
         assertTrue(release.indexOf("Publish the validated tag to Maven Central")
                 < release.indexOf("gh release create"));
+        assertTrue(release.contains("gh release create \"$tag\""));
+        assertTrue(release.contains("--draft"));
+        assertTrue(release.contains("gh release delete-asset"));
+        assertTrue(release.contains("gh release upload \"$tag\" \"${release_paths[@]}\""));
+        assertTrue(release.contains("GitHub release asset names differ"));
+        assertTrue(release.contains("cmp --silent"));
+        assertTrue(release.contains("--draft=false"));
+        assertTrue(release.contains("--json isDraft,isPrerelease"));
+        assertTrue(release.contains("--prerelease=false"));
+        assertTrue(release.contains("Existing public GitHub release is unexpectedly a prerelease"));
+        assertTrue(release.contains("Existing public GitHub release already matches"));
+        assertTrue(release.contains("## Native package signing evidence"));
+        assertTrue(release.contains("## Known platform limitations"));
+        assertTrue(release.contains(
+                "game controllers require a compatible system SDL2 installation; keyboard input "
+                        + "and emulation remain usable without it"));
+        assertTrue(release.contains("--jq '.body | @base64'"));
+        assertTrue(release.contains("base64 --decode"));
+        assertTrue(release.contains("--json name"));
+        assertTrue(release.contains("cmp --silent \"$release_notes\""));
+        assertTrue(release.contains("GitHub release title differs"));
+        assertTrue(release.contains("GitHub release notes differ from the exact"));
+        assertTrue(release.contains("releases/generate-notes"));
+        assertTrue(release.contains("target\\\\.${target}\\\\.signing="));
+        assertTrue(release.contains("--notes-file \"$release_notes\""));
+        assertTrue(release.contains("--title \"coffee-gb ${RELEASE_VERSION}\""));
+        assertFalse(release.contains("--clobber"));
 
         for (String workflow : new String[] {packages, release, maven}) {
             assertFalse(workflow.contains("actions/checkout@v"));

@@ -34,8 +34,13 @@ object PackageAssociationFixture {
 
   internal fun write(output: Path) {
     val target = output.toAbsolutePath().normalize()
-    require(target.fileName.toString().endsWith(".gb", ignoreCase = true)) {
-      "Association fixture must use the .gb extension"
+    val extension =
+        target.fileName
+            ?.toString()
+            ?.substringAfterLast('.', missingDelimiterValue = "")
+            ?.lowercase()
+    require(extension in setOf("gb", "gbc", "rom")) {
+      "Association fixture must use the .gb, .gbc, or .rom extension"
     }
     val parent = requireNotNull(target.parent) { "Association fixture requires a parent directory" }
     val root = requireNotNull(parent.root) { "Association fixture requires an absolute root" }

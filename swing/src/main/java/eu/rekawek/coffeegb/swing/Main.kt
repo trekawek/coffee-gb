@@ -42,13 +42,17 @@ fun main(args: Array<String>) {
           packageSmoke = {
             // Exercise the package-native handoff before constructing the synthetic machine.
             // The smoke itself is intentionally headless and never reads a user ROM.
-            NativeRuntimeBootstrap.bootstrapFromSystem()
-            PackageRuntimeSmoke.run()
+            val selection = NativeRuntimeBootstrap.bootstrapFromSystem()
+            val nativeTarget =
+                NativeRuntimeBootstrap.requirePackageSmokeSelection(
+                    selection,
+                    System.getProperty(NativeRuntimeBootstrap.TARGET_PROPERTY),
+                )
+            PackageRuntimeSmoke.run(nativeTarget)
           },
       ) { request ->
-        // Help/version never perform package I/O. A real launch resolves native resources on this
-        // caller thread before Swing or the emulation timing thread exists.
-        NativeRuntimeBootstrap.bootstrapFromSystem()
+        // SwingGui installs the macOS open-file handler before resolving package natives so an
+        // early Finder event cannot be lost during bootstrap.
         run(request.debug, request.initialRom, request.settingsOverrides)
       }
   if (exitCode != SUCCESS) {
@@ -95,7 +99,8 @@ internal fun runCli(
       stdout.println(
           "Coffee GB package smoke OK: " +
               "ticks=${result.ticks}, video=${result.videoFrames}, " +
-              "audio=${result.audioBuffers}, state=${result.stateBytes}",
+              "audio=${result.audioBuffers}, state=${result.stateBytes}, " +
+              "native-target=${result.nativeTarget}",
       )
       SUCCESS
     }

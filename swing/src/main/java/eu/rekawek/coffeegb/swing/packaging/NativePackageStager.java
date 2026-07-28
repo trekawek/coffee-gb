@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing.packaging;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -43,7 +44,9 @@ import java.util.zip.ZipOutputStream;
  */
 public final class NativePackageStager {
 
-    private static final long MAX_APP_JAR_BYTES = 256L * 1024L * 1024L;
+    static final long MAX_APP_JAR_BYTES = 256L * 1024L * 1024L;
+    static final int MAX_APP_JAR_ENTRIES = 50_000;
+    static final long MAX_MANIFEST_BYTES = 1024L * 1024L;
     private static final long MAX_SBOM_BYTES = 16L * 1024L * 1024L;
     private static final long MAX_LEGAL_FILE_BYTES = 2L * 1024L * 1024L;
     private static final FileTime DETERMINISTIC_TIME =
@@ -181,10 +184,14 @@ public final class NativePackageStager {
     }
 
     static String jarVersion(Path jar, String description) throws IOException {
+        BoundedZipPreflight.verify(
+                jar, MAX_APP_JAR_BYTES, MAX_APP_JAR_ENTRIES, description);
         try (JarFile file = new JarFile(jar.toFile(), false)) {
-            Manifest manifest = file.getManifest();
-            if (manifest == null) {
-                throw new IOException(description + " has no manifest");
+            JarEntry manifestEntry = requireCanonicalManifest(file.entries(), description);
+            Manifest manifest;
+            try (InputStream input = file.getInputStream(manifestEntry)) {
+                manifest = parseManifest(
+                        input, manifestEntry.getSize(), description + " manifest");
             }
             Attributes attributes = manifest.getMainAttributes();
             String version = attributes.getValue("Implementation-Version");
@@ -201,7 +208,42 @@ public final class NativePackageStager {
         }
     }
 
+    static JarEntry requireCanonicalManifest(
+            Enumeration<JarEntry> entries, String description) throws IOException {
+        JarEntry manifest = null;
+        int manifestCount = 0;
+        while (entries.hasMoreElements()) {
+            JarEntry entry = entries.nextElement();
+            if (JarFile.MANIFEST_NAME.equalsIgnoreCase(entry.getName())) {
+                manifestCount++;
+                manifest = entry;
+            }
+        }
+        if (manifestCount != 1
+                || manifest == null
+                || manifest.isDirectory()
+                || !JarFile.MANIFEST_NAME.equals(manifest.getName())) {
+            throw new IOException(
+                    description + " must contain exactly one canonical " + JarFile.MANIFEST_NAME);
+        }
+        return manifest;
+    }
+
+    static Manifest parseManifest(
+            InputStream input, long declaredSize, String description) throws IOException {
+        byte[] contents = BoundedArchiveEntry.readExact(
+                input, declaredSize, MAX_MANIFEST_BYTES, description);
+        try (ByteArrayInputStream bounded = new ByteArrayInputStream(contents)) {
+            return new Manifest(bounded);
+        }
+    }
+
     static void verifyNeutralAppJar(Path appJar) throws IOException {
+        BoundedZipPreflight.verify(
+                appJar,
+                MAX_APP_JAR_BYTES,
+                MAX_APP_JAR_ENTRIES,
+                "Neutral app JAR");
         try (JarFile jar = new JarFile(appJar.toFile(), false)) {
             Enumeration<JarEntry> entries = jar.entries();
             while (entries.hasMoreElements()) {
@@ -255,6 +297,11 @@ public final class NativePackageStager {
                                 + expected.resourcePath());
             }
         }
+        BoundedZipPreflight.verify(
+                sourceJar,
+                MAX_APP_JAR_BYTES,
+                MAX_APP_JAR_ENTRIES,
+                "Native source JAR");
         try (JarFile jar = new JarFile(sourceJar.toFile(), false)) {
             Enumeration<JarEntry> jarEntries = jar.entries();
             while (jarEntries.hasMoreElements()) {
