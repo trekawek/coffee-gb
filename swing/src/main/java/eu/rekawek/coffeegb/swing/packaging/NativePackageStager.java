@@ -118,13 +118,25 @@ public final class NativePackageStager {
         PackageIconWriter.write(target, icon);
         writeLockedNativeArchive(request.nativeSourceJar(), nativeManifest, nativeSource);
 
-        Path association = associations.resolve("game-boy-rom.properties");
+        Path gameBoyAssociation = associations.resolve("game-boy-rom.properties");
         writeUtf8(
-                association,
+                gameBoyAssociation,
                 "description=Game Boy ROM\n"
-                        + "extension=" + String.join(",", NativePackageMetadata.ROM_EXTENSIONS) + "\n"
+                        + "extension=gb,rom\n"
                         + "icon=input/" + icon.getFileName() + "\n"
-                        + "mime-type=application/x-gameboy-rom\n");
+                        + "mime-type=" + NativePackageMetadata.GAME_BOY_ROM_MIME_TYPE + "\n");
+        Path gameBoyColorAssociation =
+                associations.resolve("game-boy-color-rom.properties");
+        writeUtf8(
+                gameBoyColorAssociation,
+                "description=Game Boy Color ROM\n"
+                        + "extension=" + NativePackageMetadata.GAME_BOY_COLOR_ROM_EXTENSION + "\n"
+                        + "icon=input/" + icon.getFileName() + "\n"
+                        + "mime-type="
+                        + NativePackageMetadata.GAME_BOY_COLOR_ROM_MIME_TYPE
+                        + "\n");
+        List<Path> associationFiles =
+                List.of(gameBoyAssociation, gameBoyColorAssociation);
         Path windowsConsoleLauncher = launchers.resolve("windows-console.properties");
         writeUtf8(
                 windowsConsoleLauncher,
@@ -174,7 +186,7 @@ public final class NativePackageStager {
                 stagedNativeSbom,
                 icon,
                 nativeSource,
-                association,
+                associationFiles,
                 windowsConsoleLauncher,
                 inventoryFile,
                 checksums,
@@ -598,13 +610,17 @@ public final class NativePackageStager {
             Path nativeSbom,
             Path icon,
             Path nativeSource,
-            Path association,
+            List<Path> associationFiles,
             Path windowsConsoleLauncher,
             Path inventory,
             Path checksums,
             String appVersion,
             NativePackageMetadata.Target target,
             NativeBundleManifest nativeManifest) {
+
+        public StageResult {
+            associationFiles = List.copyOf(associationFiles);
+        }
     }
 
     private record OptionalPath(Path path) {

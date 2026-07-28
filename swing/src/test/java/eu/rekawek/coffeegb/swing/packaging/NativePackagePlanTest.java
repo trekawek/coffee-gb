@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing.packaging;
 import org.junit.Test;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -19,7 +20,12 @@ public class NativePackagePlanTest {
         Path javaHome = Path.of("/jdk");
         Path app = Path.of("/stage/input/coffee-gb.jar");
         List<String> jdeps = plan.jdepsCommand(javaHome, app);
-        assertTrue(jdeps.get(0).endsWith("/jdk/bin/jdeps"));
+        String jdepsExecutable = System.getProperty("os.name", "").startsWith("Windows")
+                ? "jdeps.exe"
+                : "jdeps";
+        assertEquals(
+                javaHome.resolve("bin").resolve(jdepsExecutable).toString(),
+                jdeps.get(0));
         assertTrue(jdeps.contains("--print-module-deps"));
         assertEquals(app.toString(), jdeps.get(jdeps.size() - 1));
 
@@ -63,9 +69,10 @@ public class NativePackagePlanTest {
         for (NativeTarget nativeTarget : NativeTarget.values()) {
             NativePackageMetadata.Target target = NativePackageMetadata.target(nativeTarget);
             for (NativePackageMetadata.PackageType packageType : target.packageTypes()) {
+                NativePackageStager.StageResult staged = stage(nativeTarget);
                 List<String> command = plan.jpackageCommand(
                         Path.of("/jdk"),
-                        stage(nativeTarget),
+                        staged,
                         Path.of("/runtime"),
                         Path.of("/dist"),
                         Path.of("/temp"),
@@ -76,7 +83,7 @@ public class NativePackagePlanTest {
                 assertOption(command, "--description", NativePackageMetadata.DESCRIPTION);
                 assertOption(command, "--app-version", "1.7.15");
                 assertOption(command, "--main-class", NativePackageMetadata.MAIN_CLASS);
-                assertOption(command, "--resource-dir", "/stage/jpackage-resources");
+                assertOption(command, "--resource-dir", staged.jpackageResources().toString());
                 assertOption(
                         command,
                         "--java-options",
@@ -92,28 +99,37 @@ public class NativePackagePlanTest {
                     assertOption(
                             command,
                             "--add-launcher",
-                            "Coffee GB Console=/stage/launchers/windows-console.properties");
+                            NativePackageMetadata.WINDOWS_CONSOLE_LAUNCHER_NAME
+                                    + "="
+                                    + staged.windowsConsoleLauncher());
                 } else {
                     assertFalse(command.contains("--add-launcher"));
                 }
 
                 if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
                     if (target.hostOs() == NativePackageMetadata.HostOs.MACOS) {
-                        assertOption(
+                        assertOptions(
                                 command,
                                 "--file-associations",
-                                "/stage/associations/game-boy-rom.properties");
+                                staged.associationFiles().stream()
+                                        .map(Path::toString)
+                                        .toList());
                     } else {
                         assertFalse(command.contains("--file-associations"));
                     }
                     assertFalse(command.contains("--license-file"));
                 } else {
-                    assertOption(
+                    assertOptions(
                             command,
                             "--file-associations",
-                            "/stage/associations/game-boy-rom.properties");
+                            staged.associationFiles().stream()
+                                    .map(Path::toString)
+                                    .toList());
                     assertOption(command, "--about-url", NativePackageMetadata.SOURCE_URL);
-                    assertOption(command, "--license-file", "/stage/input/legal/LICENSE.txt");
+                    assertOption(
+                            command,
+                            "--license-file",
+                            staged.input().resolve("legal/LICENSE.txt").toString());
                 }
             }
         }
@@ -150,22 +166,29 @@ public class NativePackagePlanTest {
         for (NativeTarget nativeTarget : NativeTarget.values()) {
             NativePackageMetadata.Target target = NativePackageMetadata.target(nativeTarget);
             NativePackageMetadata.PackageType packageType = target.defaultPackageType();
+            NativePackageStager.StageResult staged = stage(nativeTarget);
+            Path appImage = Path.of("/signed-app-image");
             List<String> command = plan.jpackageInstallerFromAppImageCommand(
                     Path.of("/jdk"),
-                    stage(nativeTarget),
-                    Path.of("/signed-app-image"),
+                    staged,
+                    appImage,
                     Path.of("/dist"),
                     Path.of("/temp"),
                     packageType);
 
-            assertOption(command, "--app-image", "/signed-app-image");
+            assertOption(command, "--app-image", appImage.toString());
             assertOption(command, "--type", packageType.id());
             assertOption(command, "--app-version", "1.7.15");
-            assertOption(
+            assertOptions(
                     command,
                     "--file-associations",
-                    "/stage/associations/game-boy-rom.properties");
-            assertOption(command, "--license-file", "/stage/input/legal/LICENSE.txt");
+                    staged.associationFiles().stream()
+                            .map(Path::toString)
+                            .toList());
+            assertOption(
+                    command,
+                    "--license-file",
+                    staged.input().resolve("legal/LICENSE.txt").toString());
             assertFalse(command.contains("--input"));
             assertFalse(command.contains("--runtime-image"));
             assertFalse(command.contains("--main-jar"));
@@ -222,7 +245,9 @@ public class NativePackagePlanTest {
                 root.resolve("input/coffee-gb-native-sbom.cdx.json"),
                 root.resolve("input/coffee-gb." + target.iconSuffix()),
                 root.resolve("input/native-source.zip"),
-                root.resolve("associations/game-boy-rom.properties"),
+                List.of(
+                        root.resolve("associations/game-boy-rom.properties"),
+                        root.resolve("associations/game-boy-color-rom.properties")),
                 root.resolve("launchers/windows-console.properties"),
                 root.resolve("input/package-manifest.properties"),
                 root.resolve("STAGE-SHA256SUMS"),
@@ -236,5 +261,17 @@ public class NativePackagePlanTest {
         assertTrue("Missing option " + option + " in " + command, position >= 0);
         assertTrue("Missing value for " + option, position + 1 < command.size());
         assertEquals(expected, command.get(position + 1));
+    }
+
+    private static void assertOptions(
+            List<String> command, String option, List<String> expected) {
+        List<String> actual = new ArrayList<>();
+        for (int position = 0; position < command.size(); position++) {
+            if (option.equals(command.get(position))) {
+                assertTrue("Missing value for " + option, position + 1 < command.size());
+                actual.add(command.get(position + 1));
+            }
+        }
+        assertEquals(expected, actual);
     }
 }

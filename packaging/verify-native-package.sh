@@ -67,19 +67,18 @@ else
     echo "hdiutil is required to mount the macOS package." >&2
     exit 2
   }
-  mounted=false
   cleanup_mount() {
-    if [[ "$mounted" == true ]]; then
-      hdiutil detach "$extraction" >/dev/null
-    fi
+    # A failed attach can still leave a device mounted. This is a dedicated empty
+    # mount point, so an unconditional best-effort detach is safe on every exit.
+    hdiutil detach "$extraction" >/dev/null 2>&1 || true
   }
   trap cleanup_mount EXIT
-  hdiutil attach "${installers[0]}" \
-    -mountpoint "$extraction" \
+  printf 'Y\n' | hdiutil attach \
     -nobrowse \
     -readonly \
+    -mountpoint "$extraction" \
+    "${installers[0]}" \
     >/dev/null
-  mounted=true
 fi
 
 java \

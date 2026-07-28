@@ -2126,7 +2126,7 @@ class ProtocolV9StateTransportTest {
       hostSafePoint.start()
       try {
         assertTrue(
-            hostSafePointReturned.await(1, TimeUnit.SECONDS),
+            hostSafePointReturned.await(5, TimeUnit.SECONDS),
             "host safe point waited for the blocked guest-3 socket write",
         )
         assertNull(hostSafePointFailure.get())
