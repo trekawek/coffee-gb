@@ -38,7 +38,7 @@ object PackageRuntimeSmoke {
         )
     val input = AtomicReference(pressed)
     val configuration =
-        Gameboy.GameboyConfiguration(Rom(syntheticRom()))
+        Gameboy.GameboyConfiguration(Rom(syntheticPackageRom()))
             .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
             .setSupportBatterySave(false)
             .setPlayerInputSource { input.get() }
@@ -99,24 +99,29 @@ object PackageRuntimeSmoke {
     }
   }
 
-  private fun syntheticRom(): ByteArray =
-      ByteArray(0x8000).also { bytes ->
-        // Infinite JR loop at the cartridge entry point. Header fields select a plain 32 KiB
-        // DMG ROM-only cartridge. The title and checksum make provenance and validation explicit.
-        bytes[0x100] = 0x18
-        bytes[0x101] = 0xfe.toByte()
-        "COFFEE-CI-SMOKE".forEachIndexed { index, character ->
-          bytes[0x134 + index] = character.code.toByte()
-        }
-        bytes[0x143] = 0
-        bytes[0x146] = 0
-        bytes[0x147] = 0
-        bytes[0x148] = 0
-        bytes[0x149] = 0
-        var checksum = 0
-        for (address in 0x134..0x14c) {
-          checksum = (checksum - (bytes[address].toInt() and 0xff) - 1) and 0xff
-        }
-        bytes[0x14d] = checksum.toByte()
-      }
 }
+
+/**
+ * Reviewable, redistributable ROM bytes shared by the in-process runtime smoke and the installed
+ * file-association smoke. The fixture contains no third-party game code or assets.
+ */
+internal fun syntheticPackageRom(): ByteArray =
+    ByteArray(0x8000).also { bytes ->
+      // Infinite JR loop at the cartridge entry point. Header fields select a plain 32 KiB
+      // DMG ROM-only cartridge. The title and checksum make provenance and validation explicit.
+      bytes[0x100] = 0x18
+      bytes[0x101] = 0xfe.toByte()
+      "COFFEE-CI-SMOKE".forEachIndexed { index, character ->
+        bytes[0x134 + index] = character.code.toByte()
+      }
+      bytes[0x143] = 0
+      bytes[0x146] = 0
+      bytes[0x147] = 0
+      bytes[0x148] = 0
+      bytes[0x149] = 0
+      var checksum = 0
+      for (address in 0x134..0x14c) {
+        checksum = (checksum - (bytes[address].toInt() and 0xff) - 1) and 0xff
+      }
+      bytes[0x14d] = checksum.toByte()
+    }

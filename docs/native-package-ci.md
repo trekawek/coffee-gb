@@ -29,7 +29,10 @@ then:
    exact native/JDK/module/installer evidence, and exhaustive `SHA256SUMS`;
 5. unpacks or mounts the final installer and repeats strict inspection and both launch smokes from
    an isolated temporary home; and
-6. uploads only the installer, SBOM, checksums, result manifest, and (once, from Linux) the
+6. installs the DEB/MSI or copies and registers the DMG application, generates a bounded `.gb`
+   fixture, opens it through the host shell's registered association, requires correlated
+   unified-ROM-service evidence, and verifies package removal or Launch Services cleanup; and
+7. uploads only the installer, SBOM, checksums, result manifest, and (once, from Linux) the
    unchanged portable Maven JAR.
 
 `--package-smoke` is deliberately headless and device-free. Its ROM is generated in memory from
@@ -43,6 +46,14 @@ visible, displayable `JFrame` contains the production menu and display, writes e
 evidence off the EDT, and completes the normal bounded shutdown path. A synthetic core-only smoke
 cannot satisfy this gate.
 
+The association gate uses `xdg-open` under Xvfb and a private desktop configuration on Linux,
+Windows ShellExecute after inspecting all three registered extension ProgIDs, and macOS Launch
+Services after copying the application to an isolated Applications directory. The macOS test
+opens the ROM into an already-running instance and therefore requires `DESKTOP_OPEN_FILE`, while
+Linux and Windows require the launcher's `INITIAL_ARGUMENT` source. All targets wait for an
+`Opened` result from the shared service, compare its normalized path and cartridge title, exercise
+bounded shutdown, and then prove the installed launcher/registration was removed.
+
 The content verifier bounds traversal and rejects symlinks in application input, a second runtime,
 foreign or altered target natives, ROM-like files, signing-store exports, private-key/token-shaped
 text, developer home paths, missing notices, version drift, altered SBOMs, duplicate or stale
@@ -50,8 +61,9 @@ checksums, and unlisted files.
 
 Maven's repository cache is keyed only by `pom.xml` inputs. CI never caches build output,
 `~/.coffee-gb`, package smoke homes, settings, ROM directories, batteries, states, device data, or
-native extraction caches. Per-target artifacts have seven-day retention; the complete gated bundle
-has fourteen-day retention.
+native extraction caches. The generated association ROM remains only in non-uploaded `target/`
+smoke output. Per-target artifacts have seven-day retention; the complete gated bundle has
+fourteen-day retention.
 
 ## Tagged publication
 

@@ -17,12 +17,15 @@ public class NativePackagingScriptTest {
         Path powerShell = packaging.resolve("package-native.ps1");
         Path verifyShell = packaging.resolve("verify-native-package.sh");
         Path verifyPowerShell = packaging.resolve("verify-native-package.ps1");
+        Path associationShell = packaging.resolve("verify-native-association.sh");
+        Path associationPowerShell = packaging.resolve("verify-native-association.ps1");
         String sh = Files.readString(shell);
         String ps = Files.readString(powerShell);
         String verifyPs = Files.readString(verifyPowerShell);
 
         assertTrue(Files.isExecutable(shell));
         assertTrue(Files.isExecutable(verifyShell));
+        assertTrue(Files.isExecutable(associationShell));
         for (String contents : new String[] {sh, ps}) {
             assertTrue(contents.contains("-app.jar"));
             assertTrue(contents.contains("-sbom.cdx.json"));
@@ -57,5 +60,26 @@ public class NativePackagingScriptTest {
         }
         assertTrue(verifyPs.contains("& msiexec.exe"));
         assertFalse(verifyPs.contains("Start-Process"));
+
+        String associationSh = Files.readString(associationShell);
+        String associationPs = Files.readString(associationPowerShell);
+        for (String contents : new String[] {associationSh, associationPs}) {
+            assertTrue(contents.contains("PackageAssociationFixture"));
+            assertTrue(contents.contains("COFFEE_GB_ASSOCIATION_SMOKE_MARKER"));
+            assertTrue(contents.contains("association-opened.marker"));
+            assertTrue(contents.contains("INITIAL_ARGUMENT"));
+            assertTrue(contents.contains("Coffee GB association open OK"));
+            assertFalse(contents.contains("curl "));
+            assertFalse(contents.contains("Invoke-WebRequest"));
+            assertFalse(contents.contains("wget "));
+        }
+        assertTrue(associationSh.contains("xdg-open"));
+        assertTrue(associationSh.contains("open -b eu.rekawek.coffeegb"));
+        assertTrue(associationSh.contains("DESKTOP_OPEN_FILE"));
+        assertTrue(associationSh.contains("dpkg --remove coffee-gb"));
+        assertTrue(associationSh.contains("lsregister"));
+        assertTrue(associationPs.contains("Start-Process -FilePath $Fixture"));
+        assertTrue(associationPs.contains("Registry::HKEY_CLASSES_ROOT"));
+        assertTrue(associationPs.contains("Invoke-Msi -Action \"/x\""));
     }
 }
