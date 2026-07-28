@@ -164,7 +164,9 @@ public final class NativePackageVerifier {
         if (container == null) {
             throw new IOException("Packaged app directory has no container");
         }
-        Path runtime = container.resolve("runtime");
+        RuntimeLayout runtimeLayout = requireRuntimeLayout(
+                container.resolve("runtime"), request.target());
+        Path runtime = runtimeLayout.home();
         Path applicationRoot = switch (target.hostOs()) {
             case LINUX -> {
                 Path parent = container.getParent();
@@ -187,12 +189,9 @@ public final class NativePackageVerifier {
                 ? applicationRoot.resolve(
                         NativePackageMetadata.WINDOWS_CONSOLE_LAUNCHER_NAME + ".exe")
                 : launcher;
-        Path runtimeJava = runtime.resolve("bin").resolve(
-                target.hostOs() == NativePackageMetadata.HostOs.WINDOWS ? "java.exe" : "java");
+        Path runtimeJava = runtimeLayout.javaExecutable();
         requireRegularFile(launcher, "packaged launcher");
         requireRegularFile(commandLauncher, "packaged command launcher");
-        requireRegularFile(runtimeJava, "packaged runtime java");
-        requireRegularFile(runtime.resolve("lib").resolve("modules"), "packaged runtime modules");
 
         verifyPayloadPolicy(payloadPaths, root, appDirectory, runtime, request.target());
 
@@ -1641,6 +1640,20 @@ public final class NativePackageVerifier {
         }
     }
 
+    static RuntimeLayout requireRuntimeLayout(Path runtimeBundle, NativeTarget target)
+            throws IOException {
+        NativePackageMetadata.HostOs hostOs = NativePackageMetadata.target(target).hostOs();
+        Path home = switch (hostOs) {
+            case MACOS -> runtimeBundle.resolve("Contents").resolve("Home");
+            case LINUX, WINDOWS -> runtimeBundle;
+        };
+        Path javaExecutable = home.resolve("bin").resolve(
+                hostOs == NativePackageMetadata.HostOs.WINDOWS ? "java.exe" : "java");
+        requireRegularFile(javaExecutable, "packaged runtime java");
+        requireRegularFile(home.resolve("lib").resolve("modules"), "packaged runtime modules");
+        return new RuntimeLayout(home, javaExecutable);
+    }
+
     private static boolean endsWith(String value, Set<String> suffixes) {
         return suffixes.stream().anyMatch(value::endsWith);
     }
@@ -1665,6 +1678,9 @@ public final class NativePackageVerifier {
             Objects.requireNonNull(sourceSbom, "sourceSbom");
             Objects.requireNonNull(sourceLegal, "sourceLegal");
         }
+    }
+
+    record RuntimeLayout(Path home, Path javaExecutable) {
     }
 
     public record VerificationResult(

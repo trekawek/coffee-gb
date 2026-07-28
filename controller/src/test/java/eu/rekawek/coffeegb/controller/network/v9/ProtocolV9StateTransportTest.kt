@@ -4,7 +4,6 @@ import eu.rekawek.coffeegb.controller.state.RomIdentity
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Session
-import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.link.V9LinkedControllerTarget
 import eu.rekawek.coffeegb.controller.link.LinkMode
@@ -1129,20 +1128,20 @@ class ProtocolV9StateTransportTest {
       source.controller.runFrame()
       val resyncFrame = source.controller.currentFrame()
       val expectedSessionHash = sessionHash(source.controller, 0)
+      assertEquals(resyncFrame - 1, recipient.controller.currentFrame())
       serverConnection.sendCheckpoint(V9CheckpointKind.SESSION, 0, resyncFrame)
       pumpSafePoints(listOf(source.controller, recipient.controller)) {
-        sessionHash(recipient.controller, 0).contentEquals(expectedSessionHash)
+        recipient.controller.currentFrame() == resyncFrame &&
+            sessionHash(recipient.controller, 0).contentEquals(expectedSessionHash)
       }
-      repeat(StateLimits.NETPLAY_ROLLBACK_FRAMES.toInt() + 2) {
-        source.controller.runFrame()
+      assertEquals(V9LifecycleState.ACTIVE, serverConnection.snapshot().state)
+      assertEquals(V9LifecycleState.ACTIVE, client.snapshot().state)
+      val beforeRejectedInput = recipient.controller.captureDetachedState()
+      serverConnection.sendInput(V9InputState(resyncFrame - 1, 0, 0, 1))
+      pumpSafePoints(listOf(recipient.controller)) {
+        client.snapshot().failure?.reason == V9ErrorCode.SEQUENCE_ERROR
       }
-      val staleFrame = assertNotNull(source.controller.stateHistory.oldestFrame()) - 1
-      val beforeRejectedInput = source.controller.captureDetachedState()
-      client.sendInput(V9InputState(staleFrame, 1, 0, 2))
-      pumpSafePoints(listOf(source.controller)) {
-        serverConnection.snapshot().failure?.reason == V9ErrorCode.SEQUENCE_ERROR
-      }
-      assertEquals(beforeRejectedInput, source.controller.captureDetachedState())
+      assertEquals(beforeRejectedInput, recipient.controller.captureDetachedState())
       assertEquals(0, sourceTarget.pendingCaptureCount())
       assertEquals(0, recipientTarget.pendingCaptureCount())
     } finally {

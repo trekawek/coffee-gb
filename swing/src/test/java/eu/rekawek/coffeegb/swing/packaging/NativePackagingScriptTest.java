@@ -88,6 +88,10 @@ public class NativePackagingScriptTest {
         assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
         assertTrue(associationSh.contains("DESKTOP_OPEN_FILE"));
         assertTrue(associationSh.contains("dpkg --remove coffee-gb"));
+        assertTrue(associationSh.contains("/usr/local/share/applications"));
+        assertTrue(associationSh.contains("/usr/share/applications"));
+        assertTrue(associationSh.contains("-print0"));
+        assertTrue(associationSh.contains("! -L \"${desktop_files[0]}\""));
         assertTrue(associationSh.contains("! kill -0 \"$pid\""));
         assertTrue(associationSh.contains("lsregister"));
         assertTrue(associationSh.contains("codesign --verify --deep --strict"));
