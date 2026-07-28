@@ -61,6 +61,42 @@ class RomOpenServiceTest {
   }
 
   @Test
+  fun `committed controller start wins cancellation queued before lifecycle claim`() {
+    val fixture = fixture()
+    val source = romFile("committed-before-cancel.gb", "COMMITTED")
+    val controllerCancellations = mutableListOf<Long>()
+    fixture.eventBus.register<Controller.CancelRomOpenEvent> {
+      controllerCancellations += it.openRequestId
+    }
+
+    val requestId = fixture.service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+    fixture.worker.runAll()
+    val load = fixture.loads.single()
+
+    // Queue the correlated ownership acknowledgement, then request cancellation before its
+    // lifecycle worker runs. The acknowledgement was posted first and therefore owns the result.
+    fixture.eventBus.post(
+        Controller.EmulationStartedEvent(
+            "COMMITTED",
+            load.image!!.origin(),
+            requestId,
+        ))
+    fixture.service.cancel(requestId)
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertEquals(listOf(source.toAbsolutePath().normalize()), fixture.recents.recorded)
+    assertEquals(requestId, assertIs<RomOpenUpdate.Opened>(fixture.updates.last()).requestId)
+    assertTrue(fixture.updates.none { it is RomOpenUpdate.Cancelled })
+    assertEquals(
+        listOf(requestId),
+        controllerCancellations,
+        "the already-queued cancellation is harmless once the controller committed",
+    )
+    fixture.close()
+  }
+
+  @Test
   fun `typed preparation failure never reaches controller or recents`() {
     val fixture = fixture()
     val source = temporaryFolder.newFile("notes.txt").toPath()
