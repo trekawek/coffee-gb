@@ -171,8 +171,16 @@ object StateCodec {
       gameboy: Gameboy,
       diagnostics: StateDiagnosticMetadata? = null,
   ): StateFile =
+      capture(configuration, gameboy, StateIdentity.from(configuration), diagnostics)
+
+  internal fun capture(
+      configuration: Gameboy.GameboyConfiguration,
+      gameboy: Gameboy,
+      identity: MachineIdentity,
+      diagnostics: StateDiagnosticMetadata? = null,
+  ): StateFile =
       StateFile(
-          listOf(StateIdentityEntry(0, StateIdentity.from(configuration))),
+          listOf(StateIdentityEntry(0, identity)),
           MachineStateRoot(DetachedStateAdapter.capture(gameboy)),
           diagnostics,
       )
@@ -295,7 +303,16 @@ object StateCodec {
       configuration: Gameboy.GameboyConfiguration,
       gameboy: Gameboy,
   ) {
-    applyDecoded(file, configuration, gameboy, null)
+    applyDecoded(file, configuration, gameboy, StateIdentity.from(configuration), null)
+  }
+
+  internal fun applyDecoded(
+      file: StateFile,
+      configuration: Gameboy.GameboyConfiguration,
+      gameboy: Gameboy,
+      identity: MachineIdentity,
+  ) {
+    applyDecoded(file, configuration, gameboy, identity, null)
   }
 
   internal fun applyDecoded(
@@ -304,12 +321,22 @@ object StateCodec {
       gameboy: Gameboy,
       probe: ((ApplyStage) -> Unit)?,
   ) {
+    applyDecoded(file, configuration, gameboy, StateIdentity.from(configuration), probe)
+  }
+
+  private fun applyDecoded(
+      file: StateFile,
+      configuration: Gameboy.GameboyConfiguration,
+      gameboy: Gameboy,
+      identity: MachineIdentity,
+      probe: ((ApplyStage) -> Unit)?,
+  ) {
     val root =
         file.root as? MachineStateRoot
             ?: targetMismatch("StateFile root ${file.root.kind} is not a machine")
     validateTargetIdentities(
         file.identities,
-        listOf(StateIdentityEntry(0, StateIdentity.from(configuration))),
+        listOf(StateIdentityEntry(0, identity)),
     )
     val compatibleRoot = preparePortableRootForApply(file) as MachineStateRoot
     try {

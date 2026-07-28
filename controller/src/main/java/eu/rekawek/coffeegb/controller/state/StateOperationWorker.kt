@@ -215,7 +215,12 @@ internal class StateOperationWorker(
   }
 
   override fun close() {
-    val abandoned = scheduler.closeAndAwait()
+    close(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)
+  }
+
+  fun close(timeout: Long, unit: TimeUnit) {
+    require(timeout > 0) { "State worker close timeout must be positive" }
+    val abandoned = scheduler.closeAndAwait(timeout, unit)
     abandoned.forEach {
       postAdmissionFailure(it, "The queued state request was cancelled during worker shutdown.")
     }
@@ -353,7 +358,7 @@ private interface StateTaskScheduler {
   fun submit(work: StateQueuedWork): StateTaskAdmission
 
   /** Returns queued work that could not be completed before shutdown. */
-  fun closeAndAwait(): List<StateQueuedWork>
+  fun closeAndAwait(timeout: Long, unit: TimeUnit): List<StateQueuedWork>
 }
 
 /** Adapter retained for deterministic controller tests that inject their own executor. */
@@ -368,13 +373,14 @@ private class ExecutorStateTaskScheduler(
         StateTaskAdmission(false)
       }
 
-  override fun closeAndAwait(): List<StateQueuedWork> {
+  override fun closeAndAwait(timeout: Long, unit: TimeUnit): List<StateQueuedWork> {
+    val deadlineNanos = closeDeadline(timeout, unit)
     executor.shutdown()
     var interrupted = false
     try {
-      if (!executor.awaitTermination(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+      if (!executor.awaitTermination(remainingNanos(deadlineNanos), TimeUnit.NANOSECONDS)) {
         executor.shutdownNow()
-        if (!executor.awaitTermination(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+        if (!executor.awaitTermination(remainingNanos(deadlineNanos), TimeUnit.NANOSECONDS)) {
           throw IllegalStateException("Injected state worker executor did not terminate")
         }
       }
@@ -382,7 +388,7 @@ private class ExecutorStateTaskScheduler(
       interrupted = true
       executor.shutdownNow()
       try {
-        if (!executor.awaitTermination(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+        if (!executor.awaitTermination(remainingNanos(deadlineNanos), TimeUnit.NANOSECONDS)) {
           throw IllegalStateException("Injected state worker executor did not terminate")
         }
       } catch (_: InterruptedException) {
@@ -443,14 +449,15 @@ private class BoundedPriorityStateTaskScheduler(
         StateTaskAdmission(true, displaced)
       }
 
-  override fun closeAndAwait(): List<StateQueuedWork> {
+  override fun closeAndAwait(timeout: Long, unit: TimeUnit): List<StateQueuedWork> {
+    val deadlineNanos = closeDeadline(timeout, unit)
     synchronized(monitor) {
       accepting = false
       monitor.notifyAll()
     }
     var interrupted = false
     try {
-      worker.join(TimeUnit.SECONDS.toMillis(WORKER_SHUTDOWN_SECONDS))
+      joinUntil(worker, deadlineNanos)
     } catch (_: InterruptedException) {
       interrupted = true
     }
@@ -461,7 +468,7 @@ private class BoundedPriorityStateTaskScheduler(
       }
       worker.interrupt()
       try {
-        worker.join(TimeUnit.SECONDS.toMillis(WORKER_SHUTDOWN_SECONDS))
+        joinUntil(worker, deadlineNanos)
       } catch (_: InterruptedException) {
         interrupted = true
       }
@@ -499,3 +506,21 @@ private class BoundedPriorityStateTaskScheduler(
 private const val MAX_QUEUED_STATE_TASKS = 32
 private const val ORDINARY_PRIORITY = 2
 private const val WORKER_SHUTDOWN_SECONDS = 5L
+
+private fun closeDeadline(timeout: Long, unit: TimeUnit): Long {
+  val timeoutNanos = unit.toNanos(timeout).coerceAtLeast(1)
+  val now = System.nanoTime()
+  return if (Long.MAX_VALUE - now < timeoutNanos) Long.MAX_VALUE else now + timeoutNanos
+}
+
+private fun remainingNanos(deadlineNanos: Long): Long =
+    (deadlineNanos - System.nanoTime()).coerceAtLeast(1)
+
+@Throws(InterruptedException::class)
+private fun joinUntil(thread: Thread, deadlineNanos: Long) {
+  val remaining = remainingNanos(deadlineNanos)
+  thread.join(
+      TimeUnit.NANOSECONDS.toMillis(remaining),
+      (remaining % 1_000_000).toInt(),
+  )
+}

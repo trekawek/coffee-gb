@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.MachineState
+import eu.rekawek.coffeegb.controller.state.StateIdentity
+import eu.rekawek.coffeegb.controller.state.StateRomHashes
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Mapper
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeType
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -34,17 +36,19 @@ internal class RomSessionPreparer(
             .also(configure)
             .setBootCancellation { Thread.currentThread().isInterrupted }
     ensureActive()
+    val romHashes = StateIdentity.hashes(config)
+    ensureActive()
 
-    event.state?.let { return PreparedSession.FromDetachedState(config, it) }
+    event.state?.let { return PreparedSession.FromDetachedState(config, it, romHashes) }
 
     bootStateCache.getOrCreate(config)?.let {
-      return PreparedSession.FromBootState(config, it)
+      return PreparedSession.FromBootState(config, it, romHashes)
     }
 
     // Exotic/RTC cartridges cannot use a battery-free boot template. Defer their real machine
     // construction until after the outgoing session's persistence barrier, when the worker can
     // load the just-committed RAM/RTC bytes without touching the controller timing thread.
-    return PreparedSession.Deferred(config)
+    return PreparedSession.Deferred(config, romHashes)
   }
 
   private fun ensureActive() {
@@ -151,7 +155,10 @@ internal class BootStateCache(private val capacity: Int = DEFAULT_CAPACITY) {
   }
 }
 
-internal sealed class PreparedSession(open val config: GameboyConfiguration) {
+internal sealed class PreparedSession(
+    open val config: GameboyConfiguration,
+    open val romHashes: StateRomHashes,
+) {
 
   abstract fun materialize(): Gameboy
 
@@ -160,27 +167,31 @@ internal sealed class PreparedSession(open val config: GameboyConfiguration) {
   data class FromBootState(
       override val config: GameboyConfiguration,
       val bootState: BootState,
-  ) : PreparedSession(config) {
+      override val romHashes: StateRomHashes = StateIdentity.hashes(config),
+  ) : PreparedSession(config, romHashes) {
     override fun materialize(): Gameboy = materializeRestored { it.restoreBootState(bootState) }
   }
 
   data class FromDetachedState(
       override val config: GameboyConfiguration,
       val state: MachineState,
-  ) : PreparedSession(config) {
+      override val romHashes: StateRomHashes = StateIdentity.hashes(config),
+  ) : PreparedSession(config, romHashes) {
     override fun materialize(): Gameboy = materializeRestored { DetachedStateAdapter.apply(it, state) }
   }
 
   data class Deferred(
       override val config: GameboyConfiguration,
-  ) : PreparedSession(config) {
+      override val romHashes: StateRomHashes = StateIdentity.hashes(config),
+  ) : PreparedSession(config, romHashes) {
     override fun materialize(): Gameboy = config.build()
   }
 
   class Ready(
       override val config: GameboyConfiguration,
       gameboy: Gameboy,
-  ) : PreparedSession(config) {
+      override val romHashes: StateRomHashes = StateIdentity.hashes(config),
+  ) : PreparedSession(config, romHashes) {
     private val owned = java.util.concurrent.atomic.AtomicReference(gameboy)
 
     override fun materialize(): Gameboy =

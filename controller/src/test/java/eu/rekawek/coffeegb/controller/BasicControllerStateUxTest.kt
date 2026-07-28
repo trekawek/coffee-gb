@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
+import eu.rekawek.coffeegb.controller.Controller.RomLoadingCancelledEvent
+import eu.rekawek.coffeegb.controller.Controller.RomReplacementPersistenceFailedEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
@@ -37,6 +39,103 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerStateUxTest {
+
+  @Test
+  fun romSwitchAutosaveUsesCorrelatedRetryAndCancelBarrier() {
+    val directory = Files.createTempDirectory("controller-autosave-switch")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        directory = directory.resolve("saves"),
+                        autosavePolicy =
+                            ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val persistenceFailures =
+        LinkedBlockingQueue<RomReplacementPersistenceFailedEvent>()
+    val cancelled = LinkedBlockingQueue<RomLoadingCancelledEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<RomReplacementPersistenceFailedEvent>(persistenceFailures::add)
+    eventBus.register<RomLoadingCancelledEvent>(cancelled::add)
+    eventBus.register<GbcFrameReadyEvent>(frames::add)
+
+    val stateExecutor = ManualExecutorService()
+    val persistence = ToggleFailWriter()
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory { paths -> workspace(paths, persistence) },
+            StateOperationWorkerFactory { bus ->
+              StateOperationWorker(bus, executor = stateExecutor)
+            },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      persistence.fail = true
+      eventBus.post(Controller.LoadRomEvent(rom, openRequestId = 100))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val retryable =
+          assertNotNull(persistenceFailures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(100, retryable.openRequestId)
+      assertEquals(
+          Controller.PersistenceBarrierOperation.ROM_REPLACEMENT,
+          retryable.operation,
+      )
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "failed autosave must retain and resume the active game",
+      )
+
+      persistence.fail = false
+      eventBus.post(Controller.RetryRomReplacementEvent(retryable.requestId))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val reopened = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(100, reopened.openRequestId)
+
+      persistence.fail = true
+      eventBus.post(Controller.LoadRomEvent(rom, openRequestId = 101))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val cancellable =
+          assertNotNull(persistenceFailures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(101, cancellable.openRequestId)
+      eventBus.post(Controller.CancelRomReplacementEvent(cancellable.requestId))
+      assertEquals(
+          101,
+          assertNotNull(cancelled.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).openRequestId,
+      )
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "cancelled autosave barrier must retain the active game",
+      )
+    } finally {
+      persistence.fail = false
+      controller.close()
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
 
   @Test
   fun workerResultsApplyAtFramesSuppressStaleRequestsAndPreserveSessionOnFailure() {

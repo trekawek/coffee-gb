@@ -8,11 +8,52 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class StateOperationWorkerTest {
+  @Test
+  fun `close uses one caller deadline and remains retryable when work ignores interruption`() {
+    val bus = EventBusImpl(null, null, false)
+    val started = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val worker =
+        StateOperationWorker(
+            bus,
+            externalActions =
+                StateExternalActions {
+                  started.countDown()
+                  while (release.count > 0) {
+                    try {
+                      release.await()
+                    } catch (_: InterruptedException) {
+                      // Simulate a filesystem or desktop integration call that ignores interrupt.
+                    }
+                  }
+                  false
+                },
+        )
+    try {
+      worker.openFolder(context("deadline-worker"), 1)
+      assertTrue(started.await(5, TimeUnit.SECONDS))
+      val startedAt = System.nanoTime()
+      assertFailsWith<IllegalStateException> {
+        worker.close(40, TimeUnit.MILLISECONDS)
+      }
+      assertTrue(
+          System.nanoTime() - startedAt < TimeUnit.SECONDS.toNanos(2),
+          "state-worker close must not add a second fixed timeout",
+      )
+      release.countDown()
+      worker.close(5, TimeUnit.SECONDS)
+    } finally {
+      release.countDown()
+      bus.close()
+    }
+  }
+
   @Test
   fun `production worker bounds queued requests and reports every rejection`() {
     val bus = EventBusImpl(null, null, false)
