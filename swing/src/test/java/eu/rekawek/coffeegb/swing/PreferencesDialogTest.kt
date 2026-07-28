@@ -315,6 +315,43 @@ class PreferencesDialogTest {
       }
 
   @Test
+  fun `battery save checkbox explicitly describes its next-game scope`() =
+      onEdt {
+        val checkbox = PreferencesPanel(ApplicationSettings()).savesEditor.batterySaves
+
+        assertEquals(
+            "Enable battery saves for the next opened game",
+            checkbox.text,
+        )
+        assertEquals(
+            "Enable battery saves for the next opened game",
+            checkbox.accessibleContext.accessibleName,
+        )
+        assertTrue(checkbox.toolTipText.contains("current game"))
+        assertEquals(
+            checkbox.toolTipText,
+            checkbox.accessibleContext.accessibleDescription,
+        )
+      }
+
+  @Test
+  fun `historical filesystem roots are not retained by the saves editor`() {
+    val filesystemRoot =
+        Paths.get("").toAbsolutePath().root
+            ?: throw AssertionError("Default filesystem has no root")
+    val safeHistory = Paths.get("/safe/history")
+
+    assertEquals(
+        listOf(safeHistory),
+        retainedPreviousSaveDirectories(
+            directory = Paths.get("/new/root"),
+            initialDirectory = filesystemRoot,
+            initialPreviousDirectories = listOf(filesystemRoot, safeHistory),
+        ),
+    )
+  }
+
+  @Test
   fun `saves editor retains prior roots and validates the complete state policy`() =
       onEdt {
         val initialSaves =
@@ -378,6 +415,41 @@ class PreferencesDialogTest {
         assertEquals("Saves", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
         assertTrue(panel.validationSummary.text.contains("8 to 512"))
         assertSame(editor, panel.focusOwnerOrInvalidComponent())
+      }
+
+  @Test
+  fun `filesystem root save directory is rejected before background validation`() =
+      onEdt {
+        val filesystemRoot =
+            Paths.get("").toAbsolutePath().root
+                ?: throw AssertionError("Default filesystem has no root")
+        var validationCount = 0
+        var applyCount = 0
+        val panel = PreferencesPanel(ApplicationSettings())
+        val actions =
+            PreferencesDialogActions(
+                panel,
+                applyEdit = { applyCount++ },
+                close = {},
+                saveDirectoryValidator =
+                    SaveDirectoryValidator {
+                      validationCount++
+                      null
+                    },
+            )
+        panel.tabs.selectedIndex = 0
+        panel.savesEditor.directoryField.text = filesystemRoot.toString()
+
+        actions.apply()
+
+        assertEquals(0, applyCount)
+        assertEquals(0, validationCount)
+        assertEquals("Saves", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertTrue(panel.savesEditor.directoryError.text.contains("below the filesystem root"))
+        assertSame(
+            panel.savesEditor.directoryField,
+            panel.focusOwnerOrInvalidComponent(),
+        )
       }
 
   @Test

@@ -333,7 +333,9 @@ object ApplicationSettingsCodec {
                 ApplicationSettings.Saves(
                     directory =
                         if (sourceVersion >= 5) {
-                          raw[SAVE_DIRECTORY_KEY]?.let(::parsePath)
+                          raw[SAVE_DIRECTORY_KEY]?.let {
+                            parseSaveDirectory(it, SAVE_DIRECTORY_KEY)
+                          }
                         } else {
                           null
                         },
@@ -555,7 +557,7 @@ object ApplicationSettingsCodec {
                   suffix != index.toString()) {
                 null
               } else {
-                index to parsePath(value)
+                index to parseSaveDirectory(value, key)
               }
             }
             .sortedBy(Pair<Int, Path>::first)
@@ -654,6 +656,13 @@ object ApplicationSettingsCodec {
         Path.of(value)
       } catch (failure: RuntimeException) {
         throw IllegalArgumentException("Invalid settings path: $value", failure)
+      }
+
+  private fun parseSaveDirectory(value: String, key: String): Path =
+      parsePath(value).also {
+        require(ApplicationSettings.Saves.isStructurallySafeDirectory(it)) {
+          "Invalid $key: save directory must be below the filesystem root"
+        }
       }
 
   private fun parseProfile(value: String?): ApplicationSettings.ProfileSelection {

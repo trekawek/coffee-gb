@@ -127,6 +127,9 @@ class ApplicationSettingsSavesTest {
 
   @Test
   fun `save model enforces bounded unique history and rewind duration`() {
+    val filesystemRoot =
+        Path.of("").toAbsolutePath().root
+            ?: throw AssertionError("Default filesystem has no root")
     ApplicationSettings.Saves(rewindSeconds = ApplicationSettings.MIN_REWIND_SECONDS)
     ApplicationSettings.Saves(rewindSeconds = ApplicationSettings.MAX_REWIND_SECONDS)
     ApplicationSettings.Saves(rewindMemoryMiB = ApplicationSettings.MIN_REWIND_MEMORY_MIB)
@@ -165,11 +168,20 @@ class ApplicationSettingsSavesTest {
     assertFailsWith<IllegalArgumentException> {
       ApplicationSettings.Saves(directory = Path.of(""))
     }
+    assertFailsWith<IllegalArgumentException> {
+      ApplicationSettings.Saves(directory = filesystemRoot)
+    }
+    assertFailsWith<IllegalArgumentException> {
+      ApplicationSettings.Saves(previousDirectories = listOf(filesystemRoot))
+    }
   }
 
   @Test
   fun `schema five rejects malformed policies ranges paths and indexed history`() {
     val schema = mapOf(ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "5")
+    val filesystemRoot =
+        Path.of("").toAbsolutePath().root
+            ?: throw AssertionError("Default filesystem has no root")
     val invalid =
         listOf(
             mapOf(ApplicationSettingsCodec.REWIND_ENABLED_KEY to "yes"),
@@ -185,6 +197,10 @@ class ApplicationSettingsSavesTest {
             mapOf(ApplicationSettingsCodec.RESUME_POLICY_KEY to "SOMETIMES"),
             mapOf(ApplicationSettingsCodec.SAVE_DIRECTORY_KEY to "bad\u0000path"),
             mapOf(ApplicationSettingsCodec.SAVE_DIRECTORY_KEY to ""),
+            mapOf(ApplicationSettingsCodec.SAVE_DIRECTORY_KEY to filesystemRoot.toString()),
+            mapOf(
+                "${ApplicationSettingsCodec.PREVIOUS_SAVE_DIRECTORY_PREFIX}0" to
+                    filesystemRoot.toString()),
             mapOf("${ApplicationSettingsCodec.PREVIOUS_SAVE_DIRECTORY_PREFIX}1" to "/old/one"),
             mapOf(
                 ApplicationSettingsCodec.SAVE_DIRECTORY_KEY to "/same",

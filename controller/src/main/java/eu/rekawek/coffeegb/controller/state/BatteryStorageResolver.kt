@@ -27,16 +27,26 @@ object BatteryStorageResolver {
       configuration: Gameboy.GameboyConfiguration,
       hashes: StateRomHashes,
   ): ResolvedBatteryStorage {
-    val resolved =
-        ResolvedBatteryStorage(
-            storage(saves, configuration.rom, hashes.primaryRom),
-            configuration.slotRom?.let { slot ->
-              hashes.slotRom?.let { storage(saves, slot, it) }
-            },
-        )
+    val resolved = resolve(saves, configuration, hashes)
     configuration.setBatteryStorage(resolved.primary, resolved.slot)
     return resolved
   }
+
+  /**
+   * Resolves both destinations without mutating [configuration]. Live settings updates use this
+   * form so a rejected path cannot partially replace the active session's previous destination.
+   */
+  fun resolve(
+      saves: ApplicationSettings.Saves,
+      configuration: Gameboy.GameboyConfiguration,
+      hashes: StateRomHashes,
+  ): ResolvedBatteryStorage =
+      ResolvedBatteryStorage(
+          storage(saves, configuration.rom, hashes.primaryRom),
+          configuration.slotRom?.let { slot ->
+            hashes.slotRom?.let { storage(saves, slot, it) }
+          },
+      )
 
   fun storage(
       saves: ApplicationSettings.Saves,
