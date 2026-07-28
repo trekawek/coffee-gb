@@ -14,7 +14,6 @@ import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.sound.Sound
 import java.awt.Cursor
-import java.awt.Color
 import java.awt.Dimension
 import java.awt.Insets
 import java.awt.event.WindowAdapter
@@ -23,11 +22,8 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JFrame
-import javax.swing.BorderFactory
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
-import javax.swing.Timer
-import javax.swing.UIManager
 import kotlin.system.exitProcess
 import org.slf4j.LoggerFactory
 
@@ -35,6 +31,7 @@ class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
     private val properties: EmulatorProperties,
+    private val desktopOpenFiles: DesktopOpenFilesBridge,
 ) {
 
   private val eventBus: EventBus
@@ -49,17 +46,21 @@ class SwingGui private constructor(
 
   private lateinit var romOpen: DesktopRomOpen
 
+  private lateinit var dropFeedback: RomDropFeedback
+
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
+
+  private var romLoadingRequestId: Long? = null
 
   private val romSessionState = RomSessionState()
 
   private val shutdownCoordinator by lazy {
     DesktopShutdownCoordinator(
         shutdown = {
-          emulator.stop()
           romOpen.close()
+          emulator.stop()
           console?.stop()
           closeSettings()
         },
@@ -69,6 +70,7 @@ class SwingGui private constructor(
         onTimeout = ::showCloseTimeout,
         onSuccess = {
           SwingUtilities.invokeLater {
+            dropFeedback.close()
             displayController.close()
             mainWindow.dispose()
             exitProcess(0)
@@ -113,34 +115,62 @@ class SwingGui private constructor(
             romSessionState,
             displayController,
             romOpen::open,
+            ::acceptRomLifecycle,
             ::showPreferences,
             ::requestClose,
         )
     menu.addMenu()
     eventBus.register<RomLoadingEvent> {
+      if (!acceptRomLifecycle(it.openRequestId)) {
+        return@register
+      }
       romLoading = true
+      romLoadingRequestId = it.openRequestId
       updateLoadingUi("Coffee GB: Loading ${it.rom.name}…", true)
     }
     eventBus.register<EmulationStartedEvent> {
+      if (!acceptRomLifecycle(it.openRequestId)) {
+        return@register
+      }
       activeWindowTitle = "Coffee GB: ${it.romName}"
       romLoading = false
+      romLoadingRequestId = null
       romSessionState.markStarted()
       updateLoadingUi(activeWindowTitle, false)
     }
     eventBus.register<LoadRomFailedEvent> {
+      if (!acceptRomLifecycle(it.openRequestId) ||
+          !matchesLoadingRequest(it.openRequestId)) {
+        return@register
+      }
       romLoading = false
+      romLoadingRequestId = null
       updateLoadingUi(activeWindowTitle, false)
     }
     eventBus.register<RomLoadingCancelledEvent> {
+      if (!acceptRomLifecycle(it.openRequestId) ||
+          !matchesLoadingRequest(it.openRequestId)) {
+        return@register
+      }
       romLoading = false
+      romLoadingRequestId = null
       updateLoadingUi(activeWindowTitle, false)
     }
     eventBus.register<EmulationStoppedEvent> {
+      if (romOpen.hasActiveRequest()) {
+        return@register
+      }
       activeWindowTitle = "Coffee GB"
       romSessionState.markStopped()
       if (!romLoading) {
         updateLoadingUi(activeWindowTitle, false)
       }
+    }
+    desktopOpenFiles.attach(initialRom?.toPath()) { paths ->
+      romOpen.open(
+          paths.map(RomOpenInput::LocalPath),
+          RomOpenSource.DESKTOP_OPEN_FILE,
+      )
     }
 
     mainWindow.defaultCloseOperation = JFrame.DO_NOTHING_ON_CLOSE
@@ -165,12 +195,6 @@ class SwingGui private constructor(
         )
     mainWindow.isResizable = true
     mainWindow.isVisible = true
-    installDesktopOpenFileHandler { paths ->
-      romOpen.open(
-          paths.map(RomOpenInput::LocalPath),
-          RomOpenSource.DESKTOP_OPEN_FILE,
-      )
-    }
     displayController.applyCurrent()
     properties.consumeLoadWarning()?.let { warning ->
       JOptionPane.showMessageDialog(
@@ -190,28 +214,27 @@ class SwingGui private constructor(
 
   private fun installRomDropTarget() {
     val root = mainWindow.rootPane
-    val normalBorder = root.border
-    val highlight =
-        BorderFactory.createLineBorder(
-            UIManager.getColor("Component.focusColor") ?: Color(65, 105, 225),
-            3,
-        )
-    val clearFeedback =
-        Timer(300) { root.border = normalBorder }.apply {
-          isRepeats = false
-        }
-    root.accessibleContext.accessibleDescription =
-        "Drop one Game Boy ROM or ZIP archive here to open it"
+    dropFeedback = RomDropFeedback(root)
     root.transferHandler =
         RomDropTransferHandler(
             submit = { inputs -> romOpen.open(inputs, RomOpenSource.DROP) },
-            feedback = { active ->
-              root.border = if (active) highlight else normalBorder
-              if (active) clearFeedback.restart() else clearFeedback.stop()
-              root.repaint()
-            },
+            feedback = dropFeedback::update,
         )
   }
+
+  private fun acceptRomLifecycle(openRequestId: Long?): Boolean =
+      shouldApplyRomLifecycleEvent(
+          openRequestId,
+          romOpen.hasActiveRequest(),
+          romOpen::ownsVisibleRequest,
+      )
+
+  private fun matchesLoadingRequest(openRequestId: Long?): Boolean =
+      if (openRequestId == null) {
+        romLoading && romLoadingRequestId == null
+      } else {
+        romLoading && romLoadingRequestId == openRequestId
+      }
 
   private fun requestClose() {
     check(SwingUtilities.isEventDispatchThread()) {
@@ -362,6 +385,8 @@ class SwingGui private constructor(
         initialRom: File?,
         settingsOverrides: ApplicationSettingsOverrides = ApplicationSettingsOverrides(),
     ) {
+      val desktopOpenFiles = DesktopOpenFilesBridge()
+      installDesktopOpenFileHandler(desktopOpenFiles::accept)
       // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
       // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
       val properties = EmulatorProperties(settingsOverrides)
@@ -369,10 +394,23 @@ class SwingGui private constructor(
           createSettingsShutdownHook(properties) { failure ->
             LOG.error("Unable to close application settings during JVM shutdown", failure)
           })
-      SwingUtilities.invokeLater { SwingGui(debug, initialRom, properties).startGui() }
+      SwingUtilities.invokeLater {
+        SwingGui(debug, initialRom, properties, desktopOpenFiles).startGui()
+      }
     }
   }
 }
+
+internal fun shouldApplyRomLifecycleEvent(
+    openRequestId: Long?,
+    managedOpenActive: Boolean,
+    ownsVisibleRequest: (Long) -> Boolean,
+): Boolean =
+    if (openRequestId == null) {
+      !managedOpenActive
+    } else {
+      ownsVisibleRequest(openRequestId)
+    }
 
 internal data class DesktopLoadingUiState(
     val title: String,

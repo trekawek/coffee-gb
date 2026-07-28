@@ -15,6 +15,8 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -26,6 +28,7 @@ import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongConsumer;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
@@ -127,7 +130,7 @@ public final class RomSourceSnapshot implements Closeable {
 
         Path temporary = null;
         try {
-            temporary = Files.createTempFile("coffee-gb-rom-snapshot-", ".zip");
+            temporary = createPrivateTemporarySnapshot();
             copyContainer(normalized, temporary, cancelled, copiedBytes);
             checkCancelled(cancelled);
             Rom.preflightZip(temporary);
@@ -180,7 +183,7 @@ public final class RomSourceSnapshot implements Closeable {
         return candidates;
     }
 
-    public RomImage loadSingle() throws IOException {
+    public synchronized RomImage loadSingle() throws IOException {
         if (directImage != null) {
             ensureOpen();
             return directImage;
@@ -193,11 +196,12 @@ public final class RomSourceSnapshot implements Closeable {
         return load(candidates.get(0).token(), () -> false);
     }
 
-    public RomImage load(long candidateToken) throws IOException {
+    public synchronized RomImage load(long candidateToken) throws IOException {
         return load(candidateToken, () -> false);
     }
 
-    public RomImage load(long candidateToken, BooleanSupplier cancelled) throws IOException {
+    public synchronized RomImage load(
+            long candidateToken, BooleanSupplier cancelled) throws IOException {
         Objects.requireNonNull(cancelled, "cancelled");
         ensureOpen();
         if (directImage != null) {
@@ -228,6 +232,7 @@ public final class RomSourceSnapshot implements Closeable {
                 try (InputStream input = zip.getInputStream(entry)) {
                     bytes = readRomBytes(input, entry.getSize(), cancelled, ignored -> {});
                 }
+                verifyEntryCrc(entry, bytes);
                 checkCancelled(cancelled);
                 RomOrigin origin =
                         RomOrigin.archiveEntry(
@@ -264,6 +269,9 @@ public final class RomSourceSnapshot implements Closeable {
         if (closed) {
             return;
         }
+        // A failed unlink must not leave a usable object whose backing bytes may be retried after
+        // ownership was released. The delete-on-exit fallback is cleanup only, never a reopen.
+        closed = true;
         if (zipSnapshot != null) {
             try {
                 Files.deleteIfExists(zipSnapshot);
@@ -272,7 +280,6 @@ public final class RomSourceSnapshot implements Closeable {
                 throw failure;
             }
         }
-        closed = true;
     }
 
     private synchronized void ensureOpen() {
@@ -294,6 +301,20 @@ public final class RomSourceSnapshot implements Closeable {
             throw new RomSourceException(
                     RomSourceException.Reason.NOT_A_FILE,
                     "The selected path is not a regular file");
+        }
+    }
+
+    private static Path createPrivateTemporarySnapshot() throws IOException {
+        FileAttribute<?> permissions =
+                PosixFilePermissions.asFileAttribute(
+                        PosixFilePermissions.fromString("rw-------"));
+        try {
+            return Files.createTempFile("coffee-gb-rom-snapshot-", ".zip", permissions);
+        } catch (UnsupportedOperationException e) {
+            // Non-POSIX providers (notably Windows) do not accept a POSIX creation attribute.
+            // Their createTempFile implementation still creates a new unpredictable path owned
+            // by the current process account.
+            return Files.createTempFile("coffee-gb-rom-snapshot-", ".zip");
         }
     }
 
@@ -509,6 +530,23 @@ public final class RomSourceSnapshot implements Closeable {
         return new RomSourceException(
                 RomSourceException.Reason.INVALID_SELECTION,
                 "The archive selection is stale or invalid");
+    }
+
+    private static void verifyEntryCrc(ZipEntry entry, byte[] bytes)
+            throws RomSourceException {
+        long expected = entry.getCrc();
+        if (expected < 0) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.INVALID_ARCHIVE,
+                    "The selected ZIP entry has no CRC metadata");
+        }
+        CRC32 crc = new CRC32();
+        crc.update(bytes);
+        if (crc.getValue() != expected) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.INVALID_ARCHIVE,
+                    "The selected ZIP entry failed its CRC integrity check");
+        }
     }
 
     private static RomSourceException.Reason classifyArchiveFailure(IOException failure) {

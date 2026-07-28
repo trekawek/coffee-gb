@@ -18,6 +18,22 @@ import org.junit.Test
 
 class SwingGuiShutdownTest {
   @Test
+  fun `managed ROM lifecycle ignores stale IDs and uncorrelated old-session stops`() {
+    val visibleId = 12L
+
+    assertTrue(shouldApplyRomLifecycleEvent(visibleId, true) { it == visibleId })
+    assertFalse(shouldApplyRomLifecycleEvent(11L, true) { it == visibleId })
+    assertFalse(
+        shouldApplyRomLifecycleEvent(null, true) { it == visibleId },
+        "the old session's uncorrelated stop must not clear a managed replacement",
+    )
+    assertTrue(
+        shouldApplyRomLifecycleEvent(null, false) { it == visibleId },
+        "reset, profile restart, and ordinary stop events remain supported",
+    )
+  }
+
+  @Test
   fun `minimum frame size includes content chrome and menu without display assumptions`() {
     assertEquals(
         Dimension(172, 181),

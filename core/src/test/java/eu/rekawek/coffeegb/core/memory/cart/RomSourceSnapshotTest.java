@@ -10,16 +10,23 @@ import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -223,6 +230,130 @@ public class RomSourceSnapshotTest {
         assertEquals(before, temporarySnapshotCount());
     }
 
+    @Test
+    public void selectedEntryMustMatchItsDeclaredCrc() throws Exception {
+        File source = temporaryFolder.newFile("crc.zip");
+        byte[] rom = syntheticRom("CRC-TEST-UNIQUE", 0x67);
+        writeStoredZip(source, new Entry("game.gb", rom));
+
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            Path snapshotPath = temporarySnapshotPath(snapshot);
+            byte[] archive = Files.readAllBytes(snapshotPath);
+            int titleOffset =
+                    indexOf(
+                            archive,
+                            "CRC-TEST-UNIQUE".getBytes(StandardCharsets.US_ASCII));
+            assertTrue(titleOffset >= 0);
+            int romOffset = titleOffset - 0x134;
+            archive[romOffset + 0x200] ^= 0x01;
+            Files.write(snapshotPath, archive);
+
+            RomSourceException failure =
+                    assertThrows(RomSourceException.class, snapshot::loadSingle);
+
+            assertEquals(RomSourceException.Reason.INVALID_ARCHIVE, failure.reason());
+            assertTrue(failure.getMessage().contains("CRC"));
+        }
+    }
+
+    @Test
+    public void closeWaitsForAnActiveEntryReadAndThenPermanentlyClosesTheSnapshot()
+            throws Exception {
+        File source = temporaryFolder.newFile("close-race.zip");
+        writeZip(source, new Entry("game.gb", syntheticRom("CLOSE-RACE", 0x68)));
+        RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath());
+        CountDownLatch readEntered = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        CountDownLatch closeFinished = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        Thread cancellableReader =
+                new Thread(
+                        () -> {
+                            try {
+                                snapshot.load(
+                                        snapshot.candidates().get(0).token(),
+                                        () -> {
+                                            readEntered.countDown();
+                                            while (releaseRead.getCount() != 0) {
+                                                try {
+                                                    releaseRead.await();
+                                                } catch (InterruptedException e) {
+                                                    Thread.currentThread().interrupt();
+                                                    return true;
+                                                }
+                                            }
+                                            return false;
+                                        });
+                            } catch (Throwable t) {
+                                failure.compareAndSet(null, t);
+                            }
+                        });
+        // Hold the monitor before the ZIP stream is opened so close() must wait for this read.
+        cancellableReader.start();
+        assertTrue(readEntered.await(2, TimeUnit.SECONDS));
+        Thread closer =
+                new Thread(
+                        () -> {
+                            try {
+                                snapshot.close();
+                            } catch (Throwable t) {
+                                failure.compareAndSet(null, t);
+                            } finally {
+                                closeFinished.countDown();
+                            }
+                        });
+        closer.start();
+
+        assertFalse(closeFinished.await(50, TimeUnit.MILLISECONDS));
+        releaseRead.countDown();
+        cancellableReader.join(2_000);
+        closer.join(2_000);
+
+        assertFalse(cancellableReader.isAlive());
+        assertFalse(closer.isAlive());
+        if (failure.get() != null) {
+            throw new AssertionError("snapshot load/close race failed", failure.get());
+        }
+        assertThrows(IllegalStateException.class, snapshot::loadSingle);
+    }
+
+    @Test
+    public void failedTemporaryUnlinkStillLeavesSnapshotPermanentlyClosed() throws Exception {
+        File source = temporaryFolder.newFile("failed-unlink.zip");
+        writeZip(source, new Entry("game.gb", syntheticRom("UNLINK", 0x69)));
+        RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath());
+        Path snapshotPath = temporarySnapshotPath(snapshot);
+        Files.delete(snapshotPath);
+        Files.createDirectory(snapshotPath);
+        Path blocker = Files.write(snapshotPath.resolve("blocker"), new byte[] {1});
+        try {
+            assertThrows(IOException.class, snapshot::close);
+            assertThrows(IllegalStateException.class, snapshot::loadSingle);
+            snapshot.close();
+        } finally {
+            Files.deleteIfExists(blocker);
+            Files.deleteIfExists(snapshotPath);
+        }
+    }
+
+    @Test
+    public void temporaryArchiveSnapshotUsesOwnerOnlyPermissionsWhenPosixIsAvailable()
+            throws Exception {
+        File source = temporaryFolder.newFile("permissions.zip");
+        writeZip(source, new Entry("game.gb", syntheticRom("PERMISSIONS", 0x6a)));
+
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            Path snapshotPath = temporarySnapshotPath(snapshot);
+            if (Files.getFileStore(snapshotPath).supportsFileAttributeView("posix")) {
+                assertEquals(
+                        "rw-------",
+                        java.nio.file.attribute.PosixFilePermissions.toString(
+                                Files.getPosixFilePermissions(snapshotPath)));
+            }
+        }
+    }
+
     private int temporarySnapshotCount() throws IOException {
         File directory = new File(System.getProperty("java.io.tmpdir"));
         String[] names =
@@ -271,6 +402,44 @@ public class RomSourceSnapshotTest {
                 output.closeArchiveEntry();
             }
         }
+    }
+
+    private static void writeStoredZip(File target, Entry... entries) throws IOException {
+        try (ZipOutputStream output =
+                new ZipOutputStream(
+                        new BufferedOutputStream(Files.newOutputStream(target.toPath())))) {
+            for (Entry source : entries) {
+                CRC32 crc = new CRC32();
+                crc.update(source.bytes);
+                ZipEntry entry = new ZipEntry(source.name);
+                entry.setMethod(ZipEntry.STORED);
+                entry.setSize(source.bytes.length);
+                entry.setCompressedSize(source.bytes.length);
+                entry.setCrc(crc.getValue());
+                output.putNextEntry(entry);
+                output.write(source.bytes);
+                output.closeEntry();
+            }
+        }
+    }
+
+    private static Path temporarySnapshotPath(RomSourceSnapshot snapshot) throws Exception {
+        Field field = RomSourceSnapshot.class.getDeclaredField("zipSnapshot");
+        field.setAccessible(true);
+        return (Path) field.get(snapshot);
+    }
+
+    private static int indexOf(byte[] bytes, byte[] needle) {
+        outer:
+        for (int i = 0; i <= bytes.length - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (bytes[i + j] != needle[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
     }
 
     private record Entry(String name, byte[] bytes) {}

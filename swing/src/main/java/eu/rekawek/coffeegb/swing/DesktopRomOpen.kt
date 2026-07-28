@@ -4,35 +4,47 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Desktop
 import java.awt.Dimension
 import java.awt.Dialog
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Toolkit
 import java.awt.Window
 import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
+import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import java.net.URI
 import java.nio.file.Path
 import java.util.Locale
+import java.util.concurrent.Executor
 import javax.swing.BorderFactory
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JDialog
 import javax.swing.JFrame
 import javax.swing.JLabel
+import javax.swing.JLayeredPane
 import javax.swing.JList
 import javax.swing.JOptionPane
 import javax.swing.JPanel
 import javax.swing.JProgressBar
+import javax.swing.JRootPane
 import javax.swing.JScrollPane
 import javax.swing.JTextArea
 import javax.swing.JToggleButton
 import javax.swing.ListSelectionModel
+import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.Timer
 import javax.swing.TransferHandler
+import javax.swing.UIManager
 import org.slf4j.LoggerFactory
 
 /**
@@ -72,6 +84,11 @@ internal class DesktopRomOpen(
     }
     service.open(RomOpenRequest(inputs, source))
   }
+
+  fun ownsVisibleRequest(requestId: Long): Boolean =
+      service.ownsVisibleRequest(requestId)
+
+  fun hasActiveRequest(): Boolean = service.hasActiveRequest()
 
   override fun close() {
     service.close()
@@ -416,10 +433,167 @@ internal fun createRomOpenErrorPanel(failure: RomOpenFailure): JPanel {
           SwingUtilities.getWindowAncestor(this)?.pack()
         }
       }
+  val copy =
+      JButton("Copy details").apply {
+        mnemonic = KeyEvent.VK_C
+        accessibleContext.accessibleName = "Copy technical error details"
+        accessibleContext.accessibleDescription =
+            "Copy the redacted technical error details to the clipboard"
+        addActionListener {
+          runCatching {
+                Toolkit.getDefaultToolkit()
+                    .systemClipboard
+                    .setContents(StringSelection(details.text), null)
+              }
+              .onFailure { failure ->
+                LOG.warn("Unable to copy ROM-open diagnostics", failure)
+              }
+        }
+      }
+  val buttons =
+      JPanel(FlowLayout(FlowLayout.LEADING, 8, 0)).apply {
+        add(toggle)
+        add(copy)
+      }
   return JPanel(BorderLayout(0, 10)).apply {
     add(message, BorderLayout.NORTH)
     add(detailsScroll, BorderLayout.CENTER)
-    add(toggle, BorderLayout.SOUTH)
+    add(buttons, BorderLayout.SOUTH)
+  }
+}
+
+/**
+ * Installs the platform open-file callback before settings or Swing construction can delay it.
+ * Deliveries received during startup are queued and identical CLI/platform startup deliveries are
+ * collapsed once the desktop ROM coordinator is ready.
+ */
+internal class DesktopOpenFilesBridge(
+    private val uiExecutor: Executor =
+        Executor { task -> SwingUtilities.invokeLater(task) },
+) {
+  private val lock = Any()
+  private val pending = mutableListOf<List<Path>>()
+  private var receiver: ((List<Path>) -> Unit)? = null
+
+  fun accept(paths: List<Path>) {
+    val normalized = paths.map { it.toAbsolutePath().normalize() }
+    if (normalized.isEmpty()) {
+      return
+    }
+    val target =
+        synchronized(lock) {
+          val current = receiver
+          if (current == null) {
+            pending += normalized
+          }
+          current
+        }
+    target?.let { dispatch(it, normalized) }
+  }
+
+  fun attach(
+      cliStartupPath: Path?,
+      receiver: (List<Path>) -> Unit,
+  ) {
+    val startup = cliStartupPath?.toAbsolutePath()?.normalize()
+    val queued =
+        synchronized(lock) {
+          check(this.receiver == null) { "Desktop open-file bridge is already attached" }
+          this.receiver = receiver
+          pending.toList().also { pending.clear() }
+        }
+    queued
+        .distinct()
+        .filterNot { startup != null && it.size == 1 && it.single() == startup }
+        .forEach { dispatch(receiver, it) }
+  }
+
+  private fun dispatch(receiver: (List<Path>) -> Unit, paths: List<Path>) {
+    uiExecutor.execute { receiver(paths) }
+  }
+}
+
+/** Visible and screen-reader feedback for a supported drag entering the ROM drop target. */
+internal class RomDropFeedback(private val root: JRootPane) : AutoCloseable {
+  private val normalBorder = root.border
+  private val idleDescription =
+      "Drop one Game Boy ROM or ZIP archive here to open it"
+  private val message =
+      JLabel("Drop to open this ROM", SwingConstants.CENTER).apply {
+        name = "romDropFeedback"
+        isOpaque = true
+        background = UIManager.getColor("ToolTip.background") ?: Color(255, 255, 220)
+        foreground = UIManager.getColor("ToolTip.foreground") ?: Color.BLACK
+        border =
+            BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(
+                    UIManager.getColor("Component.focusColor") ?: Color(65, 105, 225),
+                    2,
+                ),
+                BorderFactory.createEmptyBorder(8, 16, 8, 16),
+            )
+        putClientProperty("html.disable", true)
+        accessibleContext.accessibleName = "ROM drop target active"
+        accessibleContext.accessibleDescription =
+            "Release to open the dropped Game Boy ROM or ZIP archive"
+        isVisible = false
+      }
+  private val highlight =
+      BorderFactory.createLineBorder(
+          UIManager.getColor("Component.focusColor") ?: Color(65, 105, 225),
+          3,
+      )
+  private val resizeListener =
+      object : ComponentAdapter() {
+        override fun componentResized(event: ComponentEvent) = layoutMessage()
+      }
+  private val clearTimer =
+      Timer(300) { update(false) }.apply {
+        isRepeats = false
+      }
+
+  init {
+    root.accessibleContext.accessibleDescription = idleDescription
+    root.layeredPane.add(message, JLayeredPane.DRAG_LAYER)
+    root.addComponentListener(resizeListener)
+    layoutMessage()
+  }
+
+  fun update(active: Boolean) {
+    root.border = if (active) highlight else normalBorder
+    message.isVisible = active
+    root.accessibleContext.accessibleDescription =
+        if (active) {
+          "ROM drop target active. Release to open the selected input."
+        } else {
+          idleDescription
+        }
+    if (active) {
+      layoutMessage()
+      clearTimer.restart()
+    } else {
+      clearTimer.stop()
+    }
+    root.repaint()
+  }
+
+  override fun close() {
+    clearTimer.stop()
+    root.removeComponentListener(resizeListener)
+    root.layeredPane.remove(message)
+    root.border = normalBorder
+    root.accessibleContext.accessibleDescription = idleDescription
+  }
+
+  private fun layoutMessage() {
+    val preferred = message.preferredSize
+    val width = minOf(preferred.width, maxOf(1, root.width - 32))
+    message.setBounds(
+        maxOf(16, (root.width - width) / 2),
+        maxOf(16, root.height - preferred.height - 32),
+        width,
+        preferred.height,
+    )
   }
 }
 
@@ -502,8 +676,7 @@ internal fun installDesktopOpenFileHandler(open: (List<Path>) -> Unit): Boolean 
       false
     } else {
       desktop.setOpenFileHandler { event ->
-        val paths = event.files.map(File::toPath)
-        SwingUtilities.invokeLater { open(paths) }
+        open(event.files.map(File::toPath))
       }
       true
     }

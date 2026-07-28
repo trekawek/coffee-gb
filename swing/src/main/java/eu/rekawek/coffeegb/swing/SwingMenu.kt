@@ -3,7 +3,6 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
-import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
@@ -84,6 +83,7 @@ internal class SwingMenu(
     private val romSessionState: RomSessionState,
     private val displayController: DesktopDisplayController,
     private val onOpenRom: (path: java.nio.file.Path, source: RomOpenSource) -> Unit,
+    private val acceptRomLifecycle: (Long?) -> Boolean,
     private val onPreferences: () -> Unit,
     private val onQuit: () -> Unit,
 ) {
@@ -97,8 +97,6 @@ internal class SwingMenu(
   private var webcamSource: WebcamCameraSource? = null
 
   private var currentRomFileName: String? = null
-
-  private var pendingRomFileName: String? = null
 
   private var currentRomTitle: String? = null
 
@@ -150,14 +148,21 @@ internal class SwingMenu(
     )
     eventBus.register<SessionSnapshotSupportEvent> { snapshotSupport = it.snapshotSupport }
     eventBus.register<Controller.SessionPauseSupportEvent> { pauseSupport = it.enabled }
-    eventBus.register<LoadRomEvent> { pendingRomFileName = it.rom.nameWithoutExtension }
     eventBus.register<EmulationStartedEvent> {
-      currentRomFileName = pendingRomFileName ?: currentRomFileName
-      pendingRomFileName = null
+      if (!acceptRomLifecycle(it.openRequestId)) {
+        return@register
+      }
+      currentRomFileName =
+          it.origin
+              ?.displayName()
+              ?.let { name -> name.substringBeforeLast('.', name) }
+              ?: currentRomFileName
       currentRomTitle = it.romName
     }
     eventBus.register<LoadRomFailedEvent> {
-      pendingRomFileName = null
+      if (!acceptRomLifecycle(it.openRequestId)) {
+        return@register
+      }
       if (it.openRequestId == null) {
         SwingUtilities.invokeLater {
           JOptionPane.showMessageDialog(
@@ -170,6 +175,9 @@ internal class SwingMenu(
       }
     }
     eventBus.register<EmulationStoppedEvent> {
+      if (!acceptRomLifecycle(null)) {
+        return@register
+      }
       currentRomFileName = null
       currentRomTitle = null
     }
@@ -259,10 +267,17 @@ internal class SwingMenu(
       }
     }
     eventBus.register<EmulationStartedEvent> {
+      if (!acceptRomLifecycle(it.openRequestId)) {
+        return@register
+      }
       pauseGame.isEnabled = pauseSupport
       pauseGame.state = false
     }
-    eventBus.register<EmulationStoppedEvent> { pauseGame.isEnabled = false }
+    eventBus.register<EmulationStoppedEvent> {
+      if (acceptRomLifecycle(null)) {
+        pauseGame.isEnabled = false
+      }
+    }
 
     val saveSnapshot = JMenuItem("Save state")
     val loadSnapshot = JMenuItem("Load state")
@@ -287,8 +302,16 @@ internal class SwingMenu(
         )
       }
     }
-    eventBus.register<EmulationStartedEvent> { saveSnapshot.isEnabled = snapshotSupport != null }
-    eventBus.register<EmulationStoppedEvent> { saveSnapshot.isEnabled = false }
+    eventBus.register<EmulationStartedEvent> {
+      if (acceptRomLifecycle(it.openRequestId)) {
+        saveSnapshot.isEnabled = snapshotSupport != null
+      }
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      if (acceptRomLifecycle(null)) {
+        saveSnapshot.isEnabled = false
+      }
+    }
 
     loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
     gameMenu.add(loadSnapshot)
@@ -296,9 +319,15 @@ internal class SwingMenu(
     loadSnapshot.isEnabled = false
 
     eventBus.register<EmulationStartedEvent> {
-      loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(stateSlot) == true
+      if (acceptRomLifecycle(it.openRequestId)) {
+        loadSnapshot.isEnabled = snapshotSupport?.snapshotAvailable(stateSlot) == true
+      }
     }
-    eventBus.register<EmulationStoppedEvent> { loadSnapshot.isEnabled = false }
+    eventBus.register<EmulationStoppedEvent> {
+      if (acceptRomLifecycle(null)) {
+        loadSnapshot.isEnabled = false
+      }
+    }
 
     val slotMenu = JMenu("State slot")
     gameMenu.add(slotMenu)
@@ -313,8 +342,16 @@ internal class SwingMenu(
       slotMenu.add(slotItem)
     }
     slotMenu.isEnabled = false
-    eventBus.register<EmulationStartedEvent> { slotMenu.isEnabled = snapshotSupport != null }
-    eventBus.register<EmulationStoppedEvent> { slotMenu.isEnabled = false }
+    eventBus.register<EmulationStartedEvent> {
+      if (acceptRomLifecycle(it.openRequestId)) {
+        slotMenu.isEnabled = snapshotSupport != null
+      }
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      if (acceptRomLifecycle(null)) {
+        slotMenu.isEnabled = false
+      }
+    }
 
     val resetGame = JMenuItem("Reset")
     resetGame.isEnabled = false
@@ -991,8 +1028,16 @@ internal class SwingMenu(
   }
 
   private fun enableWhenEmulationActive(item: JMenuItem) {
-    eventBus.register<EmulationStartedEvent> { item.isEnabled = true }
-    eventBus.register<EmulationStoppedEvent> { item.isEnabled = false }
+    eventBus.register<EmulationStartedEvent> {
+      if (acceptRomLifecycle(it.openRequestId)) {
+        item.isEnabled = true
+      }
+    }
+    eventBus.register<EmulationStoppedEvent> {
+      if (acceptRomLifecycle(null)) {
+        item.isEnabled = false
+      }
+    }
   }
 
   internal fun updateRecentRoms() {
