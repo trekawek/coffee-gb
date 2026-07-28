@@ -204,9 +204,10 @@ Installers register `.gb`, `.gbc`, and `.rom` with Coffee GB. Association icon p
 stage-relative paths resolved from the deterministic stage working directory. The Linux desktop
 template includes `%f`, so the selected ROM path reaches the launcher rather than merely opening an
 empty application. Linux packages install a freedesktop `Game;` menu shortcut while retaining the
-Debian package section `games`. A DEB build extracts the generated entry and runs
-`desktop-file-validate`, then verifies both that section and the expected `libasound2t64`
-dependency; Windows packages request
+Debian package section `games`. A DEB build extracts the package-owned
+`/opt/coffee-gb/lib/coffee-gb-Coffee_GB.desktop` payload, runs `desktop-file-validate`, and proves
+the bounded `postinst` script registers that exact file. It also verifies the section and expected
+`libasound2t64` dependency; Windows packages request
 Start-menu and desktop shortcuts, retain a fixed upgrade UUID for upgrade/uninstall identity,
 expose help/update URLs, and provide an install-directory chooser. macOS packages set the Games
 application category and bundle identifier. OS open-file delivery is handled by the desktop
