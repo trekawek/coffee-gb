@@ -52,6 +52,7 @@ internal data class PreferencesEdit(
     val romDirectory: Path?,
     val recentFileCapacity: Int,
     val confirmationPolicy: RomChangeConfirmationPolicy,
+    val display: ApplicationSettings.Display,
     val keyboard:
         Map<
             ControllerProperties.PlayerButton,
@@ -78,6 +79,7 @@ internal data class PreferencesEdit(
                   recentFileCapacity = recentFileCapacity,
                   romChangeConfirmationPolicy = confirmationPolicy,
               ),
+          display = display,
           audio = audio,
           input =
               current.input.copy(
@@ -137,6 +139,8 @@ internal class PreferencesPanel private constructor(
               it.policy == initial.general.romChangeConfirmationPolicy
             }
       }
+  internal val displayEditor =
+      DisplayPreferencesEditor(initial.display, defaults.display)
   internal val keyboardEditor = KeyboardMappingEditor(initial.input, defaults.input)
   internal val gamepadEditor =
       GamepadPreferencesEditor(initial.input, defaults.input, gamepadSnapshots)
@@ -151,6 +155,7 @@ internal class PreferencesPanel private constructor(
 
     tabs.accessibleContext.accessibleName = "Preference categories"
     tabs.addTab("General", createGeneralPanel())
+    tabs.addTab("Display", JScrollPane(displayEditor).apply { border = null })
     tabs.addTab("Input", JScrollPane(keyboardEditor).apply { border = null })
     tabs.addTab("Gamepads", JScrollPane(gamepadEditor).apply { border = null })
     tabs.addTab("Audio", JScrollPane(audioEditor).apply { border = null })
@@ -174,6 +179,7 @@ internal class PreferencesPanel private constructor(
         CONFIRMATION_OPTIONS.first {
           it.policy == defaults.general.romChangeConfirmationPolicy
         }
+    displayEditor.restoreDefaults()
     keyboardEditor.resetToDefaults()
     gamepadEditor.restoreDefaults()
     audioEditor.restoreDefaults()
@@ -185,6 +191,17 @@ internal class PreferencesPanel private constructor(
     clearErrors()
     val directory = validateDirectory()
     val capacity = validateRecentCapacity()
+    val display =
+        try {
+          displayEditor.validatedDisplay()
+        } catch (failure: PreferenceEditorValidationException) {
+          validationSummary.text = failure.message ?: "Resolve the display settings error."
+          tabs.selectedIndex = DISPLAY_TAB
+          throw PreferencesValidationException(
+              validationSummary.text,
+              failure.invalidComponent,
+          )
+        }
     val input =
         try {
           keyboardEditor.validatedDraft()
@@ -219,6 +236,7 @@ internal class PreferencesPanel private constructor(
         romDirectory = directory,
         recentFileCapacity = capacity,
         confirmationPolicy = (confirmationPolicy.selectedItem as ConfirmationOption).policy,
+        display = display,
         keyboard = input.keyboard,
         gamepads = gamepad.selections,
         gamepadTunings = gamepad.tunings,
@@ -434,9 +452,10 @@ internal class PreferencesPanel private constructor(
 
   private companion object {
     const val GENERAL_TAB = 0
-    const val INPUT_TAB = 1
-    const val GAMEPADS_TAB = 2
-    const val AUDIO_TAB = 3
+    const val DISPLAY_TAB = 1
+    const val INPUT_TAB = 2
+    const val GAMEPADS_TAB = 3
+    const val AUDIO_TAB = 4
     val ERROR_COLOR = Color(0xB0, 0x00, 0x20)
     val CONFIRMATION_OPTIONS =
         listOf(

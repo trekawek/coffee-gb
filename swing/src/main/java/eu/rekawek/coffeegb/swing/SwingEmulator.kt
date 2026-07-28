@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.swing.io.AudioRuntimeConfiguration
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
 import eu.rekawek.coffeegb.swing.io.DesktopPlayerInput
 import eu.rekawek.coffeegb.swing.io.DesktopTiltInput
+import eu.rekawek.coffeegb.swing.io.DisplayScaleMode
 import eu.rekawek.coffeegb.swing.io.GamepadCatalog
 import eu.rekawek.coffeegb.swing.io.GamepadConfiguration
 import eu.rekawek.coffeegb.swing.io.SwingAccelerometer
@@ -25,9 +26,11 @@ import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import eu.rekawek.coffeegb.swing.io.SwingJoypad
 import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
+import java.awt.Dimension
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 
 class SwingEmulator(
     private val eventBus: EventBus,
@@ -51,6 +54,10 @@ class SwingEmulator(
   private val connectionController: ConnectionController
 
   private lateinit var controller: Controller
+
+  private var boundFrame: JFrame? = null
+
+  private var boundPanel: JPanel? = null
 
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
@@ -142,11 +149,23 @@ class SwingEmulator(
     gamepad.releaseForLifecycleChange()
   }
 
-  fun bind(jFrame: JFrame) {
+  fun minimumContentSize(): Dimension = Dimension(MINIMUM_CONTENT_WIDTH, MINIMUM_CONTENT_HEIGHT)
+
+  fun minimumContentSizeForCurrentMode(windowed: Boolean): Dimension =
+      minimumDisplayContentSize(display.scaleMode, display.preferredSize, windowed)
+
+  fun bind(
+      jFrame: JFrame,
+      isWindowedLayout: () -> Boolean = { true },
+  ) {
     val mainPanel = JPanel()
     mainPanel.setLayout(BoxLayout(mainPanel, BoxLayout.X_AXIS))
+    mainPanel.minimumSize = minimumContentSize()
+    display.minimumSize = minimumContentSize()
     mainPanel.add(display)
     display.addMouseMotionListener(accelerometer)
+    boundFrame = jFrame
+    boundPanel = mainPanel
 
     jFrame.contentPane = mainPanel
     jFrame.addKeyListener(joypad)
@@ -156,16 +175,132 @@ class SwingEmulator(
     jFrame.addMouseMotionListener(accelerometer)
 
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
-      mainPanel.preferredSize = it.preferredSize
-      // Setting preferredSize doesn't invalidate, and a pack() that leaves the frame the
-      // same size (e.g. re-selecting the current scale, or a rotation that preserves the
-      // dimensions) never triggers the reshape that refreshes the window's cached preferred
-      // size - after which every later pack() reads the stale size and stops resizing.
-      // Invalidating up from the panel clears the cache at each level so pack() recomputes.
-      mainPanel.invalidate()
-      jFrame.pack()
+      check(SwingUtilities.isEventDispatchThread()) {
+        "Display window sizing must run on the Event Dispatch Thread"
+      }
+      val windowed = isWindowedLayout()
+      applyDisplayWindowSizing(
+          jFrame,
+          mainPanel,
+          it.preferredSize,
+          windowed,
+          forceExplicitPack = true,
+      )
     }
   }
+
+  /**
+   * Refreshes top-level constraints at a fullscreen boundary even when renderer geometry did not
+   * change. On exit, pack only if the restored content area cannot contain the current exact
+   * explicit size; otherwise preserve the remembered window bounds.
+   */
+  fun refreshDisplayWindowSizing(windowed: Boolean) {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Display window sizing must run on the Event Dispatch Thread"
+    }
+    val frame = checkNotNull(boundFrame) { "The emulator display is not bound to a window" }
+    val panel = checkNotNull(boundPanel) { "The emulator display is not bound to a panel" }
+    val preferred = display.preferredSize
+    val currentContent =
+        Dimension(
+            (frame.width - frame.insets.left - frame.insets.right).coerceAtLeast(0),
+            (frame.height -
+                    frame.insets.top -
+                    frame.insets.bottom -
+                    (frame.jMenuBar?.height ?: 0))
+                .coerceAtLeast(0),
+        )
+    applyDisplayWindowSizing(
+        frame,
+        panel,
+        preferred,
+        windowed,
+        forceExplicitPack =
+            shouldPackExplicitWindow(
+                display.scaleMode,
+                preferred,
+                currentContent,
+                windowed,
+            ),
+    )
+  }
+
+  private fun applyDisplayWindowSizing(
+      frame: JFrame,
+      panel: JPanel,
+      preferred: Dimension,
+      windowed: Boolean,
+      forceExplicitPack: Boolean,
+  ) {
+    panel.preferredSize = Dimension(preferred)
+    val minimum = minimumDisplayContentSize(display.scaleMode, preferred, windowed)
+    panel.minimumSize = minimum
+    display.minimumSize = minimum
+    if (frame.isDisplayable) {
+      frame.minimumSize =
+          minimumFrameSize(
+              minimum,
+              frame.insets,
+              frame.jMenuBar?.preferredSize?.height ?: 0,
+          )
+    }
+    // Setting preferredSize doesn't invalidate, and a pack() that leaves the frame the same size
+    // never triggers the reshape that refreshes the window's cached preferred size. Invalidating
+    // up from the panel makes every later pack recompute it.
+    panel.invalidate()
+    if (forceExplicitPack && display.scaleMode.isExplicit && windowed) {
+      frame.pack()
+    } else {
+      panel.revalidate()
+      frame.validate()
+    }
+  }
+
+  private companion object {
+    const val MINIMUM_CONTENT_WIDTH = 160
+    const val MINIMUM_CONTENT_HEIGHT = 144
+  }
+}
+
+/**
+ * Explicit scale is a real windowed pixel-size contract, so manual resizing cannot crop it.
+ * Fullscreen and fit modes retain the sensible native-frame minimum; the viewport supplies a
+ * uniform fit fallback if the host cannot honor an explicit top-level minimum.
+ */
+internal fun minimumDisplayContentSize(
+    scaleMode: DisplayScaleMode,
+    preferredSize: Dimension,
+    windowed: Boolean,
+): Dimension {
+  require(preferredSize.width > 0 && preferredSize.height > 0) {
+    "Preferred display size must be positive"
+  }
+  val base = Dimension(160, 144)
+  if (!windowed || !scaleMode.isExplicit) {
+    return base
+  }
+  return Dimension(
+      maxOf(base.width, preferredSize.width),
+      maxOf(base.height, preferredSize.height),
+  )
+}
+
+internal fun shouldPackExplicitWindow(
+    scaleMode: DisplayScaleMode,
+    preferredSize: Dimension,
+    currentContentSize: Dimension,
+    windowed: Boolean,
+): Boolean {
+  require(preferredSize.width > 0 && preferredSize.height > 0) {
+    "Preferred display size must be positive"
+  }
+  require(currentContentSize.width >= 0 && currentContentSize.height >= 0) {
+    "Current display content size must not be negative"
+  }
+  return windowed &&
+      scaleMode.isExplicit &&
+      (currentContentSize.width < preferredSize.width ||
+          currentContentSize.height < preferredSize.height)
 }
 
 internal fun ApplicationSettings.toGamepadConfiguration(): GamepadConfiguration =

@@ -141,12 +141,13 @@ public class DisplayViewportTest {
     }
 
     @Test
-    public void explicitScaleDefinesDeterministicLeadingEdgeCropWhenComponentIsTooSmall() {
+    public void explicitScaleFallsBackUniformlyInsteadOfCroppingWhenComponentIsTooSmall() {
         DisplayViewport viewport = DisplayViewport.calculate(
                 319, 287, 160, 144, 0, DisplayScaleMode.EXPLICIT_2X);
 
-        assertEquals(-1, viewport.x());
-        assertEquals(-1, viewport.y());
+        assertEquals(287.0 / 144.0, viewport.scale(), EPSILON);
+        assertEquals(0, viewport.x());
+        assertEquals(0, viewport.y());
         assertEquals(new Rectangle(0, 0, 319, 287), viewport.paintBounds());
     }
 

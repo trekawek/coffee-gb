@@ -17,6 +17,8 @@ import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.sound.Sound
 import java.awt.Cursor
+import java.awt.Dimension
+import java.awt.Insets
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
@@ -41,6 +43,10 @@ class SwingGui private constructor(
 
   private lateinit var mainWindow: JFrame
 
+  private lateinit var displayController: DesktopDisplayController
+
+  private var applicationDisposeRequested = false
+
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
@@ -56,12 +62,24 @@ class SwingGui private constructor(
 
   private fun startGui() {
     mainWindow = JFrame("Coffee GB")
+    val minimumContentSize = emulator.minimumContentSize()
+    displayController =
+        DesktopDisplayController(
+            properties,
+            eventBus,
+            DesktopFullscreenRuntime(
+                mainWindow,
+                DesktopSize(minimumContentSize.width, minimumContentSize.height),
+            ),
+            DisplayWindowSizingRuntime(emulator::refreshDisplayWindowSizing),
+        )
 
     SwingMenu(
             properties,
             mainWindow,
             eventBus,
             romSessionState,
+            displayController,
             ::showPreferences,
             ::requestClose,
         )
@@ -100,16 +118,28 @@ class SwingGui private constructor(
           }
 
           override fun windowClosed(windowEvent: WindowEvent) {
-            stopGui()
+            // Borderless fullscreen requires dispose/re-show so JFrame decorations can change.
+            // Only the explicit application-close path owns runtime shutdown.
+            if (applicationDisposeRequested) {
+              stopGui()
+            }
           }
         })
 
-    emulator.bind(mainWindow)
+    emulator.bind(mainWindow) { !displayController.current().fullscreen }
     mainWindow.pack()
     mainWindow.repaint()
     mainWindow.setLocationRelativeTo(null)
-    mainWindow.isResizable = false
+    mainWindow.minimumSize =
+        minimumFrameSize(
+            emulator.minimumContentSizeForCurrentMode(
+                windowed = !displayController.current().fullscreen),
+            mainWindow.insets,
+            mainWindow.jMenuBar?.preferredSize?.height ?: 0,
+        )
+    mainWindow.isResizable = true
     mainWindow.isVisible = true
+    displayController.applyCurrent()
     properties.consumeLoadWarning()?.let { warning ->
       JOptionPane.showMessageDialog(
           mainWindow,
@@ -195,6 +225,8 @@ class SwingGui private constructor(
     if (!proceed) {
       return
     }
+    displayController.close()
+    applicationDisposeRequested = true
     mainWindow.dispose()
   }
 
@@ -212,6 +244,7 @@ class SwingGui private constructor(
       val applied = properties.applicationSettings
       emulator.applyKeyboardMapping(applied.input.toPlayerMapping())
       emulator.applyDeviceSettings(applied)
+      displayController.apply(applied.display, persist = false)
       eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
     }
   }
@@ -298,4 +331,20 @@ internal fun launchDesktopShutdownWatchdog(
         isDaemon = true
         start()
       }
+}
+
+internal fun minimumFrameSize(
+    content: Dimension,
+    insets: Insets,
+    menuHeight: Int,
+): Dimension {
+  require(content.width > 0 && content.height > 0) { "Minimum content size must be positive" }
+  require(menuHeight >= 0) { "Menu height must not be negative" }
+  return Dimension(
+      Math.addExact(content.width, Math.addExact(insets.left, insets.right)),
+      Math.addExact(
+          content.height,
+          Math.addExact(menuHeight, Math.addExact(insets.top, insets.bottom)),
+      ),
+  )
 }
