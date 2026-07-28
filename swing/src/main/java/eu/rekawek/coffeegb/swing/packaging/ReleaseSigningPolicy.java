@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -146,6 +147,59 @@ public final class ReleaseSigningPolicy {
                     environment.get("COFFEE_GB_LINUX_GPG_KEY_ID"),
                     artifact.toString()));
         };
+    }
+
+    /**
+     * Commands which must succeed after signing/notarization before a build may report verified
+     * signing. Merely accepting a signing command's exit status is not sufficient evidence.
+     */
+    public List<List<String>> verificationCommands(Path artifact) {
+        Objects.requireNonNull(artifact, "artifact");
+        return switch (target.hostOs()) {
+            case MACOS -> List.of(
+                    List.of(
+                            "codesign",
+                            "--verify",
+                            "--deep",
+                            "--strict",
+                            "--verbose=2",
+                            artifact.toString()),
+                    List.of(
+                            "spctl",
+                            "--assess",
+                            "--type",
+                            "open",
+                            "--verbose=2",
+                            artifact.toString()),
+                    List.of("xcrun", "stapler", "validate", artifact.toString()));
+            case WINDOWS -> List.of(List.of(
+                    "signtool",
+                    "verify",
+                    "/pa",
+                    "/all",
+                    "/v",
+                    artifact.toString()));
+            case LINUX -> List.of(List.of(
+                    "gpg",
+                    "--batch",
+                    "--verify",
+                    signatureArtifact(artifact).orElseThrow().toString(),
+                    artifact.toString()));
+        };
+    }
+
+    public Optional<Path> signatureArtifact(Path artifact) {
+        Objects.requireNonNull(artifact, "artifact");
+        if (target.hostOs() != NativePackageMetadata.HostOs.LINUX) {
+            return Optional.empty();
+        }
+        return Optional.of(artifact.resolveSibling(artifact.getFileName() + ".asc"));
+    }
+
+    public String verifiedSigningState() {
+        return target.hostOs() == NativePackageMetadata.HostOs.LINUX
+                ? "verified-detached"
+                : "verified-embedded";
     }
 
     private static void requireValue(

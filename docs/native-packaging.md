@@ -233,17 +233,21 @@ inventory; unknown, stale, cross-target, or edited content fails packaging.
 After jpackage, the build copies both documents into `dist/` as
 `coffee-gb-VERSION-sbom.cdx.json` and
 `coffee-gb-VERSION-TARGET-native-sbom.cdx.json`, beside the installer or application image.
+The final installer digest is computed only after any signing or notarization step.
 `PACKAGE-RESULT.properties` records the independently selected target, package type, complete Maven
-version, signing state, and exact artifact/SBOM digests. `SHA256SUMS` is written only after both
-copies have been verified and covers the result record, both directly uploadable SBOMs, and every
-regular installer or application-image file using sorted relative paths.
+version, verified signing state, and exact artifact, Maven SBOM, target-native SBOM, and detached
+signature digests. `SHA256SUMS` is written only after both SBOM copies have been verified and covers
+the result record, both directly uploadable SBOMs, any detached signature, and every regular
+installer or application-image file using sorted relative paths.
 
 The Phase 6 release gate accepts exactly one result for each of Linux x64, Windows x64, macOS x64,
 and macOS arm64. It rejects a missing/duplicate target, non-default installer type, version drift,
-SBOM drift, stale checksum, or unexpected file before copying anything into the release bundle.
+invalid target SBOM evidence, stale checksum, or unexpected file before copying anything into the
+release bundle.
 The final `NATIVE-PACKAGE-MATRIX.properties` names all four architecture-bearing installers and
-their signing state. Its release-level `SHA256SUMS` covers that matrix, the universal Maven JAR,
-the Maven and target-native SBOMs, and all four installers.
+their target-native SBOM and signing state. Its release-level `SHA256SUMS` covers that matrix, the
+universal Maven JAR, the Maven dependency SBOM, all four target-native CycloneDX SBOMs, all four
+installers, and every detached signature.
 
 All normal and pull-request builds are unsigned. Signing is reachable only through the explicit
 `--release-sign` wrapper switch and then requires all of the following:
@@ -254,17 +258,20 @@ All normal and pull-request builds are unsigned. Signing is reachable only throu
 4. an event other than `pull_request` or `pull_request_target`; and
 5. platform-specific keychain/certificate/GPG references.
 
-Credentials remain in the OS-protected store and never enter arguments, staging, logs, or package
-content. macOS adds jpackage signing and then uses a named `notarytool` keychain profile before
-stapling. Windows invokes `signtool` with a certificate-store SHA-1 and HTTPS timestamp service.
-Linux can create an armored detached GPG signature.
+Credentials remain in the OS-protected store and never enter staging or package content. macOS adds
+jpackage signing, submits with a named `notarytool` keychain profile, staples, and then requires
+successful `codesign`, Gatekeeper (`spctl`), and stapler validation. Windows invokes `signtool`
+with a certificate-store SHA-1 and HTTPS timestamp service, then requires `signtool verify`.
+Linux creates an armored detached GPG signature and requires `gpg --verify`; the `.asc` is copied
+into the release bundle, recorded in the matrix, and covered by checksums.
 
 The checked-in CI matrix deliberately builds and publishes the auditable unsigned path. It never
 references repository signing secrets and cannot invoke `--release-sign`, including for pull
 requests from forks. A maintainer may use the existing explicit signing gate only in an isolated,
 protected environment after importing credentials into the platform store. The release matrix
-records `unsigned` or `signed` for every target; the manual checklist requires that state to be
-called out in release notes.
+records `unsigned`, `verified-embedded`, or `verified-detached` for every target; it never infers a
+verified state merely because a signing command returned zero. The manual checklist requires that
+state to be called out in release notes.
 
 ## Installation warnings and fallback
 
@@ -345,6 +352,13 @@ exact dual-license notice and complete LGPL-2.1 text. Intel IPP targets carry th
 Intel Simplified Software License and the exact third-party-program file accompanying their pinned
 download.
 
+`THIRD-PARTY-COMPONENTS.txt` maps every resolved third-party Maven purl—including Commons IO,
+Commons Compress, Commons Codec, Commons Lang, Guava transitives, Kotlin, SLF4J, Checker Qual,
+JLine, and XZ—to reviewed complete license files. Packaging fails if that set differs from the
+Maven BOM, if a mapped license is absent, or if the human notice omits a coordinate. The complete
+legal tree is embedded under `META-INF/coffee-gb/legal/` before either fat JAR is assembled and is
+also copied into the native package, preventing dependency-unpack collisions from dropping it.
+
 When any native-bearing dependency changes:
 
 1. inspect the complete dependency JAR inventory, licenses, and supported architectures;
@@ -371,8 +385,8 @@ actual DMG and repeats the checks. Inspection requires:
 - exactly one linked runtime and the locked ten-module closure;
 - the exact target-native allowlist and digests, with no foreign native;
 - no ROM-like file, signing key/certificate file, developer home path, or secret-shaped text;
-- the complete legal inventory, byte-identical Maven SBOM, neutral app JAR, version, result
-  manifest, and exhaustive sorted checksums; and
+- the complete catalog-validated legal inventory, byte-identical internal Maven SBOM, neutral app
+  JAR, target release SBOM, version, result manifest, and exhaustive sorted checksums; and
 - packaged launcher `--version` plus `--package-smoke` from an isolated temporary user/cache root.
 
 The package smoke constructs its reviewable 32 KiB loop ROM in memory. It verifies video and audio

@@ -25,11 +25,13 @@ public class NativePackageVerifierTest {
         Path dist = temporaryFolder.newFolder("dist").toPath();
         Path installer = Files.writeString(
                 dist.resolve("coffee-gb.deb"), "synthetic installer", StandardCharsets.UTF_8);
-        Path sbom = Files.writeString(
-                dist.resolve("coffee-gb-1.7.15-sbom.cdx.json"),
-                "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.6\","
-                        + "\"metadata\":{\"component\":{\"version\":\"1.7.15\"}}}",
-                StandardCharsets.UTF_8);
+        Path sbom = NativePackagingTestSupport.writeTargetSbom(
+                dist.resolve("coffee-gb-1.7.15-linux-x86-64-sbom.cdx.json"),
+                installer,
+                NativeTarget.LINUX_X86_64,
+                NativePackageMetadata.PackageType.DEB,
+                "1.7.15",
+                "unsigned");
         NativePackageVerifier.writeBuildResult(
                 dist,
                 NativeTarget.LINUX_X86_64,
@@ -37,7 +39,8 @@ public class NativePackageVerifierTest {
                 "1.7.15",
                 installer,
                 sbom,
-                false);
+                "unsigned",
+                null);
         writeChecksums(dist);
 
         assertEquals(
@@ -70,6 +73,49 @@ public class NativePackageVerifierTest {
         assertThrows(
                 java.io.IOException.class,
                 () -> NativePackageVerifier.readStrictProperties(properties));
+    }
+
+    @Test
+    public void detachedSignatureIsARequiredChecksummedReleaseArtifact() throws Exception {
+        Path dist = temporaryFolder.newFolder("signed-dist").toPath();
+        Path installer = Files.writeString(
+                dist.resolve("coffee-gb.deb"), "signed installer", StandardCharsets.UTF_8);
+        Path signature = Files.writeString(
+                dist.resolve("coffee-gb.deb.asc"), "detached signature", StandardCharsets.UTF_8);
+        Path sbom = NativePackagingTestSupport.writeTargetSbom(
+                dist.resolve("coffee-gb-1.7.15-linux-x86-64-sbom.cdx.json"),
+                installer,
+                NativeTarget.LINUX_X86_64,
+                NativePackageMetadata.PackageType.DEB,
+                "1.7.15",
+                "verified-detached");
+        NativePackageVerifier.writeBuildResult(
+                dist,
+                NativeTarget.LINUX_X86_64,
+                NativePackageMetadata.PackageType.DEB,
+                "1.7.15",
+                installer,
+                sbom,
+                "verified-detached",
+                signature);
+        writeChecksums(dist);
+
+        assertEquals(
+                "verified-detached",
+                NativePackageVerifier.verifyDistribution(
+                                dist,
+                                NativeTarget.LINUX_X86_64,
+                                NativePackageMetadata.PackageType.DEB,
+                                "1.7.15")
+                        .get("signing"));
+        Files.delete(signature);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyDistribution(
+                        dist,
+                        NativeTarget.LINUX_X86_64,
+                        NativePackageMetadata.PackageType.DEB,
+                        "1.7.15"));
     }
 
     @Test

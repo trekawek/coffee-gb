@@ -25,7 +25,8 @@ then:
 2. builds the host installer without a signing request;
 3. inspects jpackage's exact payload image and runs both packaged `--version` and
    `--package-smoke`;
-4. writes `PACKAGE-RESULT.properties`, the Maven CycloneDX SBOM, and exhaustive `SHA256SUMS`;
+4. writes `PACKAGE-RESULT.properties`, a target CycloneDX SBOM containing the Maven graph plus
+   exact native/JDK/module/installer evidence, and exhaustive `SHA256SUMS`;
 5. unpacks or mounts the final installer and repeats strict inspection and both launch smokes from
    an isolated temporary home; and
 6. uploads only the installer, SBOM, checksums, result manifest, and (once, from Linux) the
@@ -49,10 +50,16 @@ has fourteen-day retention.
 ## Tagged publication
 
 The normal Maven release workflow creates the exact `coffee-gb-VERSION` tag and portable release,
-then calls the reusable native workflow with that tag. Publication waits for all four matrix jobs
-and a Linux release-gate job. The gate independently downloads the results, requires one default
-installer per target, proves all SBOM bytes match, renames installers with explicit architecture,
-and creates one release-level checksum file.
+then calls the reusable native workflow with the fully qualified `refs/tags/coffee-gb-VERSION`.
+The workflow peels that tag once to a full immutable commit ID; every matrix/gate/publication
+checkout uses that ID and verifies `HEAD`, and the tag is re-fetched and re-peeled before gating and
+again immediately before upload. A moved tag therefore fails closed. The release matrix records
+the bound source commit.
+
+Publication waits for all four matrix jobs and a Linux release-gate job. The gate independently
+downloads the results, requires one default installer and one target-specific SBOM per target,
+renames installers with explicit architecture, retains detached signatures, and creates one
+release-level checksum file.
 
 No partial matrix is uploaded. A missing platform fails the release workflow, and the GitHub
 release must not be announced as complete. If maintainers deliberately withdraw a target in a
@@ -62,7 +69,9 @@ the release notes together; never silently omit it.
 Automated CI artifacts, including tagged artifacts, are unsigned and the matrix records that fact.
 The workflow has no signing-secret references on pull requests. Platform signing/notarization is a
 separate protected-store operation gated by `--release-sign`; if maintainers use it, all resulting
-target records and release notes must accurately say `signed`.
+target records and release notes must accurately say `verified-embedded` or
+`verified-detached`; command execution without the platform verification step is not signed
+release evidence.
 
 ## Installing and removing
 

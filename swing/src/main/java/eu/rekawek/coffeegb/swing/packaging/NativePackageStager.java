@@ -72,6 +72,10 @@ public final class NativePackageStager {
         }
         verifyNeutralAppJar(request.appJar());
         verifySbom(request.sbom(), appVersion);
+        ThirdPartyNoticeInventory.validate(
+                request.sbom(), request.resourcesRoot().resolve("legal"));
+        ThirdPartyNoticeInventory.verifyEmbeddedLegal(
+                request.appJar(), request.resourcesRoot().resolve("legal"));
 
         Path stage = createFreshDirectory(request.output());
         Path input = Files.createDirectory(stage.resolve("input"));
