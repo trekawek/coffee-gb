@@ -74,6 +74,16 @@ function Invoke-Msi {
         -Wait `
         -PassThru
     if ($Msi.ExitCode -notin @(0, 3010)) {
+        try {
+            if (Test-Path -LiteralPath $Log -PathType Leaf) {
+                Write-Host "MSI $Action log tail:"
+                Get-Content -LiteralPath $Log -Tail 250
+            } else {
+                Write-Warning "MSI $Action log was not created: $Log"
+            }
+        } catch {
+            Write-Warning "Unable to read MSI $Action log ${Log}: $($_.Exception.Message)"
+        }
         throw "MSI $Action failed with exit code $($Msi.ExitCode); see $Log"
     }
 }

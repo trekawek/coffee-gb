@@ -10,6 +10,11 @@ param(
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $SwingTarget = Join-Path $RepositoryRoot "swing/target"
+$BuildRoot = if ([System.IO.Path]::IsPathRooted($BuildRoot)) {
+    [System.IO.Path]::GetFullPath($BuildRoot)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $BuildRoot))
+}
 $Dist = Join-Path $BuildRoot "dist"
 $Extracted = Join-Path $BuildRoot "extracted-installer"
 $SmokeHome = Join-Path $BuildRoot "unpacked-smoke-home"
@@ -47,6 +52,16 @@ $Msi = Start-Process `
     -Wait `
     -PassThru
 if ($Msi.ExitCode -ne 0) {
+    try {
+        if (Test-Path -LiteralPath $Log -PathType Leaf) {
+            Write-Host "MSI administrative extraction log tail:"
+            Get-Content -LiteralPath $Log -Tail 250
+        } else {
+            Write-Warning "MSI administrative extraction log was not created: $Log"
+        }
+    } catch {
+        Write-Warning "Unable to read MSI administrative extraction log ${Log}: $($_.Exception.Message)"
+    }
     throw "MSI administrative extraction failed with exit code $($Msi.ExitCode); see $Log"
 }
 
