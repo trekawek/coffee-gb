@@ -94,6 +94,56 @@ import kotlin.test.assertTrue
 class LinkedControllerTest {
 
   @Test
+  fun completedLocalWorkerDoesNotDelayNextManuallyDrivenSafePoint() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-worker-exit")
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties(settingsPath = directory.resolve("settings.properties"))
+    val controller =
+        LinkedController(eventBus, properties, null, LinkMode.NORMAL, localPlayer = 0).also {
+          it.timingTicker.disabled = true
+        }
+    val replacementWrapperReached = CountDownLatch(1)
+    val releaseReplacementWrapper = CountDownLatch(1)
+    val workerExits = AtomicInteger()
+    controller.localWorkerExitProbe = {
+      if (workerExits.incrementAndGet() == 2) {
+        replacementWrapperReached.countDown()
+        releaseReplacementWrapper.await(5, TimeUnit.SECONDS)
+      }
+    }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertTrue(replacementWrapperReached.await(5, TimeUnit.SECONDS))
+      assertEquals(1, controller.activeSessionCount())
+
+      eventBus.post(
+          PeerLoadedGameEvent(
+              ROM_BYTES,
+              null,
+              null,
+              GAMEBOY_TYPE,
+              BOOTSTRAP_MODE,
+              controller.currentFrame(),
+              player = 1,
+          ))
+      controller.runFrame()
+
+      assertEquals(
+          2,
+          controller.activeSessionCount(),
+          "A physically exiting completed worker must not defer an admitted peer event",
+      )
+    } finally {
+      releaseReplacementWrapper.countDown()
+      controller.close()
+      properties.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun localRomEventIncludesAdjacentBatteryOnlyWhenBatterySavesAreEnabled() {
     val directory = Files.createTempDirectory("coffee-gb-linked-battery")
     val rom = directory.resolve("linked-battery.gb")
