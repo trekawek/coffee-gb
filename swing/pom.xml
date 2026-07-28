@@ -20,6 +20,7 @@
             </plugin>
             <plugin>
                 <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.7.1</version>
                 <configuration>
                     <archive>
                         <manifest>
@@ -30,13 +31,26 @@
                             <Implementation-Version>${project.version}</Implementation-Version>
                         </manifestEntries>
                     </archive>
-                    <descriptorRefs>
-                        <descriptorRef>jar-with-dependencies</descriptorRef>
-                    </descriptorRefs>
-                    <appendAssemblyId>false</appendAssemblyId>
                     <finalName>coffee-gb-${project.version}</finalName>
+                    <outputTimestamp>${project.build.outputTimestamp}</outputTimestamp>
                 </configuration>
                 <executions>
+                    <execution>
+                        <id>make-target-neutral-app</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <descriptors>
+                                <descriptor>src/assembly/app.xml</descriptor>
+                            </descriptors>
+                            <appendAssemblyId>true</appendAssemblyId>
+                            <attach>true</attach>
+                            <outputDirectory>${project.build.directory}</outputDirectory>
+                            <workDirectory>${project.build.directory}/assembly-work/app</workDirectory>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>make-assembly</id>
                         <!-- this is used for inheritance merges -->
@@ -44,6 +58,37 @@
                         <!-- bind to the packaging phase -->
                         <goals>
                             <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <descriptorRefs>
+                                <descriptorRef>jar-with-dependencies</descriptorRef>
+                            </descriptorRefs>
+                            <appendAssemblyId>false</appendAssemblyId>
+                            <outputDirectory>${project.build.directory}</outputDirectory>
+                            <workDirectory>${project.build.directory}/assembly-work/universal</workDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <includes>
+                        <include>**/NativeArtifactIT.java</include>
+                    </includes>
+                    <systemPropertyVariables>
+                        <coffeeGbUniversalJar>${project.build.directory}/coffee-gb-${project.version}.jar</coffeeGbUniversalJar>
+                        <coffeeGbAppJar>${project.build.directory}/coffee-gb-${project.version}-app.jar</coffeeGbAppJar>
+                        <coffeeGbExpectedVersion>${project.version}</coffeeGbExpectedVersion>
+                    </systemPropertyVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
                         </goals>
                     </execution>
                 </executions>

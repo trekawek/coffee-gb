@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing.io;
 
 import com.sun.jna.NativeLibrary;
+import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap;
 import io.github.libsdl4j.api.gamecontroller.SDL_GameController;
 
 import java.io.File;
@@ -103,6 +104,11 @@ final class SdlGamepadBackend implements GamepadBackend {
     }
 
     private static void locateSystemSdl() {
+        String bundledDirectory =
+                System.getProperty(NativeRuntimeBootstrap.LIBRARY_DIRECTORY_PROPERTY, "");
+        if (!bundledDirectory.isBlank()) {
+            NativeLibrary.addSearchPath("SDL2", bundledDirectory);
+        }
         if (!isMac()) {
             return;
         }
