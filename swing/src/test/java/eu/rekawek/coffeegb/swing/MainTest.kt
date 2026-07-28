@@ -124,6 +124,7 @@ class MainTest {
               "--debug",
               "-h  --help",
               "--version",
+              "--package-smoke",
               "--                         Treat",
               "dmg, cgb, cgb0, sgb, sgb2, mgb",
           )) {
@@ -143,6 +144,37 @@ class MainTest {
   }
 
   @Test
+  fun `package smoke is a terminal no-ROM command`() {
+    var smokeCount = 0
+    val stdout = ByteArrayOutputStream()
+    val stderr = ByteArrayOutputStream()
+    val launches = mutableListOf<CliLaunchRequest>()
+
+    val exitCode =
+        runCli(
+            arrayOf("--package-smoke"),
+            PrintStream(stdout),
+            PrintStream(stderr),
+            TEST_VERSION,
+            packageSmoke = {
+              smokeCount++
+              PackageRuntimeSmoke.Result(123, 2, 3, 456)
+            },
+        ) {
+          launches += it
+        }
+
+    assertEquals(0, exitCode)
+    assertEquals(1, smokeCount)
+    assertTrue(launches.isEmpty())
+    assertEquals("", stderr.utf8())
+    assertEquals(
+        "Coffee GB package smoke OK: ticks=123, video=2, audio=3, state=456${newline()}",
+        stdout.utf8(),
+    )
+  }
+
+  @Test
   fun `unknown malformed and extra arguments fail with usage status`() {
     val failures =
         listOf(
@@ -154,6 +186,14 @@ class MainTest {
             Failure(arrayOf("--profile="), "--profile requires one non-empty stable ID"),
             Failure(arrayOf("--profile=cgb=extra"), "--profile requires one non-empty stable ID"),
             Failure(arrayOf("--profile=CGB"), "Unknown hardware profile 'CGB'"),
+            Failure(
+                arrayOf("--package-smoke", "game.gb"),
+                "--package-smoke cannot be combined with launch options or a ROM file",
+            ),
+            Failure(
+                arrayOf("--package-smoke", "--debug"),
+                "--package-smoke cannot be combined with launch options or a ROM file",
+            ),
             Failure(arrayOf("one.gb", "two.gb"), "Expected at most one ROM file, received 2"),
             Failure(
                 arrayOf("--profile=cgb", "--profile=cgb"),
@@ -192,7 +232,11 @@ class MainTest {
             ),
             Failure(
                 arrayOf("--help", "--version"),
-                "--help and --version cannot be used together",
+                "--help, --version, and --package-smoke cannot be used together",
+            ),
+            Failure(
+                arrayOf("--version", "--package-smoke"),
+                "--help, --version, and --package-smoke cannot be used together",
             ),
         )
 
@@ -233,6 +277,10 @@ class MainTest {
             Failure(
                 arrayOf("--version", "--version"),
                 "Option '--version' may be specified only once",
+            ),
+            Failure(
+                arrayOf("--package-smoke", "--package-smoke"),
+                "Option '--package-smoke' may be specified only once",
             ),
             Failure(arrayOf("--debug", "--debug"), "Option '--debug' may be specified only once"),
             Failure(
