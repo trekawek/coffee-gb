@@ -117,7 +117,8 @@ public final class NativePackagePlan {
         add(
                 command,
                 "--java-options",
-                "-Dcoffee-gb.native.source=$APPDIR/native-source");
+                "-Dcoffee-gb.native.source=$APPDIR/"
+                        + stage.nativeSource().getFileName());
         add(command, "--java-options", "-Dfile.encoding=UTF-8");
 
         if (packageType != NativePackageMetadata.PackageType.APP_IMAGE) {
@@ -126,6 +127,11 @@ public final class NativePackagePlan {
                     command,
                     "--license-file",
                     stage.input().resolve("legal/LICENSE.txt").toString());
+        }
+        if (packageType != NativePackageMetadata.PackageType.APP_IMAGE
+                || stage.target().hostOs() == NativePackageMetadata.HostOs.MACOS) {
+            // A predefined macOS app image keeps its existing Info.plist. Embed document
+            // associations before signing so the DMG wrapper cannot silently lose them.
             add(command, "--file-associations", stage.association().toString());
         }
 
@@ -142,18 +148,63 @@ public final class NativePackagePlan {
         return List.copyOf(command);
     }
 
+    public List<String> jpackageInstallerFromAppImageCommand(
+            Path javaHome,
+            NativePackageStager.StageResult stage,
+            Path appImage,
+            Path destination,
+            Path temporaryDirectory,
+            NativePackageMetadata.PackageType packageType) {
+        Objects.requireNonNull(stage, "stage");
+        Objects.requireNonNull(appImage, "appImage");
+        Objects.requireNonNull(packageType, "packageType");
+        stage.target().requireSupported(packageType);
+        if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
+            throw new IllegalArgumentException(
+                    "An installable package type is required for a prebuilt app image");
+        }
+
+        List<String> command = new ArrayList<>();
+        command.add(tool(javaHome, "jpackage").toString());
+        add(command, "--type", packageType.id());
+        add(command, "--name", NativePackageMetadata.APPLICATION_NAME);
+        add(command, "--app-image", appImage.toString());
+        add(command, "--dest", destination.toString());
+        add(command, "--temp", temporaryDirectory.toString());
+        add(command, "--resource-dir", stage.jpackageResources().toString());
+        add(
+                command,
+                "--app-version",
+                NativePackageMetadata.installerVersion(stage.appVersion()));
+        add(command, "--vendor", NativePackageMetadata.VENDOR);
+        add(command, "--description", NativePackageMetadata.DESCRIPTION);
+        add(command, "--copyright", NativePackageMetadata.COPYRIGHT);
+        add(command, "--about-url", NativePackageMetadata.SOURCE_URL);
+        add(
+                command,
+                "--license-file",
+                stage.input().resolve("legal/LICENSE.txt").toString());
+        add(command, "--file-associations", stage.association().toString());
+        addPlatformOptions(command, stage.target(), packageType);
+        return List.copyOf(command);
+    }
+
+    public Path expectedAppImage(
+            Path destination, NativePackageMetadata.Target target) {
+        return destination.resolve(target.hostOs() == NativePackageMetadata.HostOs.MACOS
+                ? NativePackageMetadata.APPLICATION_NAME + ".app"
+                : NativePackageMetadata.APPLICATION_NAME);
+    }
+
     public Path expectedAppImageLauncher(
             Path destination, NativePackageMetadata.Target target) {
+        Path appImage = expectedAppImage(destination, target);
         return switch (target.hostOs()) {
-            case LINUX -> destination
-                    .resolve(NativePackageMetadata.APPLICATION_NAME)
-                    .resolve("bin")
+            case LINUX -> appImage.resolve("bin")
                     .resolve(NativePackageMetadata.APPLICATION_NAME);
-            case WINDOWS -> destination
-                    .resolve(NativePackageMetadata.APPLICATION_NAME)
+            case WINDOWS -> appImage
                     .resolve(NativePackageMetadata.APPLICATION_NAME + ".exe");
-            case MACOS -> destination
-                    .resolve(NativePackageMetadata.APPLICATION_NAME + ".app")
+            case MACOS -> appImage
                     .resolve("Contents")
                     .resolve("MacOS")
                     .resolve(NativePackageMetadata.APPLICATION_NAME);
@@ -165,8 +216,7 @@ public final class NativePackagePlan {
         if (target.hostOs() != NativePackageMetadata.HostOs.WINDOWS) {
             return expectedAppImageLauncher(destination, target);
         }
-        return destination
-                .resolve(NativePackageMetadata.APPLICATION_NAME)
+        return expectedAppImage(destination, target)
                 .resolve(NativePackageMetadata.WINDOWS_CONSOLE_LAUNCHER_NAME + ".exe");
     }
 

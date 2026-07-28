@@ -75,6 +75,7 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("NATIVE_LINUX_GPG_PRIVATE_KEY"));
         assertTrue(packages.contains("NATIVE_WINDOWS_CERTIFICATE_PFX_BASE64"));
         assertTrue(packages.contains("NATIVE_MACOS_CERTIFICATE_P12_BASE64"));
+        assertTrue(packages.contains("NATIVE_MACOS_SIGNING_KEY_USER_NAME"));
         assertTrue(packages.contains("name: native-release-bundle"));
         assertFalse(packages.contains("gh release"));
         assertFalse(packages.contains("contents: write"));
@@ -86,6 +87,12 @@ public class NativePackageWorkflowTest {
         assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
         assertTrue(associationPs1.contains("Start-Process -FilePath $Fixture.Path"));
         assertTrue(associationPs1.contains("Coffee GB Console.exe"));
+        assertTrue(associationPs1.contains("$env:COFFEE_GB_RELEASE_SIGNING -eq \"true\""));
+        assertTrue(associationPs1.contains("signtool.exe"));
+        assertTrue(associationPs1.contains("/all"));
+        assertTrue(associationSh.contains("codesign --verify --deep --strict"));
+        assertTrue(associationSh.contains(
+                "com.apple.security.cs.disable-library-validation"));
 
         assertTrue(release.contains("uses: ./.github/workflows/native-packages.yml"));
         assertTrue(release.contains("checkout_ref: ${{ needs.prepare.outputs.tag_ref }}"));

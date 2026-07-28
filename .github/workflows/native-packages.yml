@@ -532,6 +532,7 @@ jobs:
         env:
           CERTIFICATE_BASE64: ${{ secrets.NATIVE_MACOS_CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.NATIVE_MACOS_CERTIFICATE_PASSWORD }}
+          SIGNING_KEY_USER_NAME: ${{ secrets.NATIVE_MACOS_SIGNING_KEY_USER_NAME }}
           SIGNING_IDENTITY: ${{ secrets.NATIVE_MACOS_SIGNING_IDENTITY }}
           NOTARY_APPLE_ID: ${{ secrets.NATIVE_MACOS_NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NATIVE_MACOS_NOTARY_TEAM_ID }}
@@ -540,6 +541,7 @@ jobs:
           for variable in \
               CERTIFICATE_BASE64 \
               CERTIFICATE_PASSWORD \
+              SIGNING_KEY_USER_NAME \
               SIGNING_IDENTITY \
               NOTARY_APPLE_ID \
               NOTARY_TEAM_ID \
@@ -569,13 +571,19 @@ jobs:
             -k "$keychain_password" \
             "$keychain"
           security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain" |
+            grep -F "\"$SIGNING_IDENTITY\"" >/dev/null || {
+              echo "The requested Developer ID Application identity was not imported" >&2
+              exit 1
+            }
           xcrun notarytool store-credentials coffee-gb-release \
             --apple-id "$NOTARY_APPLE_ID" \
             --team-id "$NOTARY_TEAM_ID" \
             --password "$NOTARY_PASSWORD" \
             --keychain "$keychain"
           {
-            echo "COFFEE_GB_MAC_SIGNING_KEY_USER_NAME=$SIGNING_IDENTITY"
+            echo "COFFEE_GB_MAC_SIGNING_KEY_USER_NAME=$SIGNING_KEY_USER_NAME"
+            echo "COFFEE_GB_MAC_SIGNING_IDENTITY=$SIGNING_IDENTITY"
             echo "COFFEE_GB_MAC_SIGNING_KEYCHAIN=$keychain"
             echo "COFFEE_GB_MAC_NOTARY_KEYCHAIN_PROFILE=coffee-gb-release"
             echo "COFFEE_GB_MAC_NOTARY_KEYCHAIN=$keychain"

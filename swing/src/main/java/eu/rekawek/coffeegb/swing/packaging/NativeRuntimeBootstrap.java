@@ -3,7 +3,10 @@ package eu.rekawek.coffeegb.swing.packaging;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.Properties;
@@ -68,13 +71,24 @@ public final class NativeRuntimeBootstrap {
                     new NativeBundleFailure.NativeSourceNotConfigured(target.orElseThrow())));
         }
         try {
+            Path sourcePath = Path.of(configuredSource);
+            NativeResourceSource source = Files.isRegularFile(
+                                    sourcePath, LinkOption.NOFOLLOW_LINKS)
+                            && !Files.isSymbolicLink(sourcePath)
+                    ? NativeResourceSource.archive(
+                            sourcePath, NativeBundleManifest.locked(target.orElseThrow()))
+                    : NativeResourceSource.directory(sourcePath);
             return bootstrap(
                     requested,
-                    NativeResourceSource.directory(Path.of(configuredSource)),
+                    source,
                     configuredCache(properties, defaultCache));
         } catch (InvalidPathException invalid) {
             return applySelection(NativeRuntimeSelection.Portable.after(
                     new NativeBundleFailure.NativeSourceNotConfigured(target.orElseThrow())));
+        } catch (IOException invalidArchive) {
+            return applySelection(NativeRuntimeSelection.Portable.after(
+                    new NativeBundleFailure.IoFailure(
+                            target.orElseThrow(), "open packaged native archive")));
         }
     }
 

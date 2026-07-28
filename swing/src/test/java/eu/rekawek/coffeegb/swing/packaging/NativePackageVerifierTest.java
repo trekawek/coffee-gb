@@ -1,23 +1,31 @@
 package eu.rekawek.coffeegb.swing.packaging;
 
+import org.apache.commons.compress.archivers.zip.UnixStat;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipMethod;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class NativePackageVerifierTest {
 
@@ -199,6 +207,27 @@ public class NativePackageVerifierTest {
         writeArchive(archive, Map.of(
                 "keys/release.p12", "not-a-real-key".getBytes(StandardCharsets.UTF_8)));
         assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+
+        Files.delete(archive);
+        writeArchive(archive, Map.of(
+                "hidden/windows/controller.dll", new byte[] {1, 2, 3}));
+        assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+
+        Files.delete(archive);
+        byte[] versionedElf = archiveBytes(Map.of(
+                "native/linux/libforeign.so.6", new byte[] {1, 2, 3}));
+        writeArchive(archive, Map.of("nested/native-resources.zip", versionedElf));
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyPayloadPolicy(
+                        layout.payload(),
+                        layout.appDirectory(),
+                        layout.runtime(),
+                        NativeTarget.WINDOWS_X86_64));
+
+        Files.delete(archive);
+        writeSymlinkArchive(archive);
+        assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
     }
 
     @Test
@@ -212,6 +241,40 @@ public class NativePackageVerifierTest {
         Files.write(layout.appDirectory().resolve("outer.jar"), archive);
 
         assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+    }
+
+    @Test
+    public void payloadPolicyBoundsTopLevelArchiveContainersAndEntryNames() throws Exception {
+        PayloadLayout layout = createPayloadLayout("bounded-archive-payload");
+        Path archive = layout.appDirectory().resolve("libraries.jar");
+        try (var channel = Files.newByteChannel(
+                archive,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE)) {
+            channel.position(256L * 1024 * 1024);
+            channel.write(ByteBuffer.wrap(new byte[] {0}));
+        }
+        java.io.IOException oversized = assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyPayloadPolicy(
+                        layout.payload(),
+                        layout.appDirectory(),
+                        layout.runtime(),
+                        NativeTarget.LINUX_X86_64));
+        assertTrue(oversized.getMessage().contains("bounded container size"));
+
+        Files.delete(archive);
+        writeArchive(
+                archive,
+                Map.of("a".repeat(4_097), new byte[] {1}));
+        java.io.IOException longName = assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyPayloadPolicy(
+                        layout.payload(),
+                        layout.appDirectory(),
+                        layout.runtime(),
+                        NativeTarget.LINUX_X86_64));
+        assertTrue(longName.getMessage().contains("entry name exceeds"));
     }
 
     @Test
@@ -271,6 +334,22 @@ public class NativePackageVerifierTest {
             }
         }
         return output.toByteArray();
+    }
+
+    private static void writeSymlinkArchive(Path output) throws Exception {
+        byte[] target = "../outside".getBytes(StandardCharsets.UTF_8);
+        CRC32 crc = new CRC32();
+        crc.update(target);
+        try (ZipArchiveOutputStream archive = new ZipArchiveOutputStream(output)) {
+            ZipArchiveEntry entry = new ZipArchiveEntry("hidden/link");
+            entry.setMethod(ZipMethod.STORED.getCode());
+            entry.setSize(target.length);
+            entry.setCrc(crc.getValue());
+            entry.setUnixMode(UnixStat.LINK_FLAG | UnixStat.DEFAULT_LINK_PERM);
+            archive.putArchiveEntry(entry);
+            archive.write(target);
+            archive.closeArchiveEntry();
+        }
     }
 
     private record PayloadLayout(Path payload, Path appDirectory, Path runtime) {

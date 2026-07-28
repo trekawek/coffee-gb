@@ -1,6 +1,9 @@
 package eu.rekawek.coffeegb.swing.packaging;
 
-import java.io.ByteArrayInputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipFile;
+import org.apache.commons.compress.utils.SeekableInMemoryByteChannel;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -12,6 +15,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -26,8 +30,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
  * Strict, host-independent inspection and launch smoke for a jpackage application payload.
@@ -43,6 +45,8 @@ public final class NativePackageVerifier {
     private static final int MAX_TEXT_BYTES = 2 * 1024 * 1024;
     private static final int MAX_ARCHIVE_DEPTH = 3;
     private static final int MAX_ARCHIVE_ENTRIES = 50_000;
+    private static final int MAX_ARCHIVE_ENTRY_NAME_LENGTH = 4_096;
+    private static final long MAX_ARCHIVE_CONTAINER_BYTES = 256L * 1024 * 1024;
     private static final long MAX_ARCHIVE_ENTRY_BYTES = 64L * 1024 * 1024;
     private static final long MAX_ARCHIVE_EXPANDED_BYTES = 512L * 1024 * 1024;
     private static final int MAX_PROCESS_OUTPUT = 4 * 1024 * 1024;
@@ -204,12 +208,17 @@ public final class NativePackageVerifier {
 
         Path packagedJar = appDirectory.resolve("coffee-gb.jar");
         Path packagedSbom = appDirectory.resolve("coffee-gb-sbom.cdx.json");
+        Path nativeSource = appDirectory.resolve("native-source.zip");
         requireRegularFile(packagedJar, "packaged app JAR");
         requireRegularFile(packagedSbom, "packaged SBOM");
+        requireRegularFile(nativeSource, "packaged native-source archive");
         String appDigest = NativePackageStager.sha256(packagedJar);
         String sbomDigest = NativePackageStager.sha256(packagedSbom);
         requireValue(inventory, "app.jar.sha256", appDigest);
         requireValue(inventory, "sbom.sha256", sbomDigest);
+        requireValue(inventory, "native.source-format", "stored-zip");
+        requireValue(
+                inventory, "native.source.sha256", NativePackageStager.sha256(nativeSource));
         if (!appDigest.equals(NativePackageStager.sha256(request.sourceAppJar()))) {
             throw new IOException("Packaged app JAR differs from Maven's neutral app JAR");
         }
@@ -220,7 +229,7 @@ public final class NativePackageVerifier {
         ThirdPartyNoticeInventory.validate(packagedSbom, request.sourceLegal());
         ThirdPartyNoticeInventory.verifyEmbeddedLegal(packagedJar, request.sourceLegal());
         verifySbom(packagedSbom, sourceVersion);
-        verifyNativeInventory(appDirectory, request.target());
+        verifyNativeInventory(nativeSource, request.target());
         verifyLegalInventory(appDirectory.resolve("legal"), request.sourceLegal());
 
         return new VerificationResult(
@@ -232,7 +241,8 @@ public final class NativePackageVerifier {
                 runtime,
                 runtimeJava,
                 launcher,
-                commandLauncher);
+                commandLauncher,
+                nativeSource);
     }
 
     public static void runSmokes(VerificationResult result, Path smokeHome)
@@ -250,7 +260,7 @@ public final class NativePackageVerifier {
                 "-Djava.awt.headless=true",
                 "-Duser.home=" + home,
                 "-Dcoffee-gb.native.target=" + result.target().id(),
-                "-Dcoffee-gb.native.source=" + result.appDirectory().resolve("native-source"),
+                "-Dcoffee-gb.native.source=" + result.nativeSource(),
                 "-Dcoffee-gb.native.cache=" + nativeCache);
         List<String> version = new ArrayList<>();
         version.add(result.runtimeJava().toString());
@@ -460,38 +470,9 @@ public final class NativePackageVerifier {
         return result;
     }
 
-    private static void verifyNativeInventory(Path appDirectory, NativeTarget target)
+    private static void verifyNativeInventory(Path nativeSource, NativeTarget target)
             throws IOException {
-        Path nativeRoot = appDirectory.resolve("native-source");
-        if (!Files.isDirectory(nativeRoot, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("Packaged native-source directory is missing");
-        }
-        Map<String, NativeBundleEntry> expected = NativeBundleManifest.locked(target)
-                .entries()
-                .stream()
-                .collect(Collectors.toMap(NativeBundleEntry::resourcePath, entry -> entry));
-        List<Path> nativePaths = boundedWalk(nativeRoot, "packaged native source");
-        Map<String, Path> actual = nativePaths.stream()
-                .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
-                .collect(Collectors.toMap(
-                        path -> relativePortable(nativeRoot, path),
-                        path -> path));
-        if (!actual.keySet().equals(expected.keySet())) {
-            Set<String> missing = new TreeSet<>(expected.keySet());
-            missing.removeAll(actual.keySet());
-            Set<String> foreign = new TreeSet<>(actual.keySet());
-            foreign.removeAll(expected.keySet());
-            throw new IOException(
-                    "Packaged native inventory mismatch; missing=" + missing + ", foreign=" + foreign);
-        }
-        for (Map.Entry<String, NativeBundleEntry> entry : expected.entrySet()) {
-            Path file = actual.get(entry.getKey());
-            NativeBundleEntry locked = entry.getValue();
-            if (Files.size(file) != locked.byteSize()
-                    || !NativePackageStager.sha256(file).equals(locked.sha256())) {
-                throw new IOException("Packaged native digest mismatch: " + entry.getKey());
-            }
-        }
+        LockedNativeArchive.verify(nativeSource, NativeBundleManifest.locked(target));
     }
 
     static void verifyLegalInventory(Path legal, Path sourceLegal) throws IOException {
@@ -555,16 +536,33 @@ public final class NativePackageVerifier {
         if (runtimeCount != 1) {
             throw new IOException("Expected one packaged runtime, found " + runtimeCount);
         }
-        verifyForbiddenContent(payloadPaths, payloadRoot, runtime, target);
+        Path lockedNativeArchive = appDirectory.resolve("native-source.zip");
+        boolean verifiedLockedNativeArchive =
+                Files.isRegularFile(lockedNativeArchive, LinkOption.NOFOLLOW_LINKS)
+                        && !Files.isSymbolicLink(lockedNativeArchive);
+        if (verifiedLockedNativeArchive) {
+            LockedNativeArchive.verify(
+                    lockedNativeArchive, NativeBundleManifest.locked(target));
+        }
+        verifyForbiddenContent(
+                payloadPaths,
+                payloadRoot,
+                runtime,
+                target,
+                verifiedLockedNativeArchive ? lockedNativeArchive : null);
     }
 
     private static void verifyForbiddenContent(
             List<Path> payloadPaths,
             Path payloadRoot,
             Path runtime,
-            NativeTarget target)
+            NativeTarget target,
+            Path lockedNativeArchive)
             throws IOException {
         Set<String> foreignNativeSuffixes = foreignNativeSuffixes(target);
+        Set<String> lockedNativeEntries = NativeBundleManifest.locked(target).entries().stream()
+                .map(NativeBundleEntry::resourcePath)
+                .collect(Collectors.toUnmodifiableSet());
         ArchiveBudget archiveBudget = new ArchiveBudget();
         for (Path path : payloadPaths) {
             String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -572,14 +570,15 @@ public final class NativePackageVerifier {
                 String relative = relativePortable(payloadRoot, path);
                 verifyForbiddenName(name, relative, foreignNativeSuffixes);
                 if (!path.startsWith(runtime) && endsWith(name, ARCHIVE_SUFFIXES)) {
-                    try (InputStream input = Files.newInputStream(path)) {
-                        verifyArchive(
-                                input,
-                                relative,
-                                1,
-                                foreignNativeSuffixes,
-                                archiveBudget);
-                    }
+                    verifyArchive(
+                            path,
+                            relative,
+                            1,
+                            foreignNativeSuffixes,
+                            archiveBudget,
+                            path.equals(lockedNativeArchive)
+                                    ? lockedNativeEntries
+                                    : Set.of());
                 }
             }
             if (path.startsWith(runtime)
@@ -594,68 +593,154 @@ public final class NativePackageVerifier {
     }
 
     private static void verifyArchive(
-            InputStream input,
+            Path archive,
+            String archivePath,
+            int depth,
+            Set<String> foreignNativeSuffixes,
+            ArchiveBudget budget,
+            Set<String> opaqueLockedNativeEntries)
+            throws IOException {
+        if (Files.isSymbolicLink(archive)
+                || !Files.isRegularFile(archive, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException(
+                    "Packaged archive is not a regular non-symlink file: " + archivePath);
+        }
+        long archiveBytes = Files.size(archive);
+        if (archiveBytes <= 0 || archiveBytes > MAX_ARCHIVE_CONTAINER_BYTES) {
+            throw new IOException(
+                    "Packaged archive exceeds the bounded container size: " + archivePath);
+        }
+        try (ZipFile zip = ZipFile.builder().setPath(archive).get()) {
+            verifyArchive(
+                    zip,
+                    archivePath,
+                    depth,
+                    foreignNativeSuffixes,
+                    budget,
+                    opaqueLockedNativeEntries);
+        }
+    }
+
+    private static void verifyArchive(
+            byte[] contents,
             String archivePath,
             int depth,
             Set<String> foreignNativeSuffixes,
             ArchiveBudget budget)
+            throws IOException {
+        try (SeekableInMemoryByteChannel channel =
+                        new SeekableInMemoryByteChannel(contents);
+                ZipFile zip = ZipFile.builder()
+                        .setSeekableByteChannel(channel)
+                        .get()) {
+            verifyArchive(
+                    zip,
+                    archivePath,
+                    depth,
+                    foreignNativeSuffixes,
+                    budget,
+                    Set.of());
+        }
+    }
+
+    private static void verifyArchive(
+            ZipFile archive,
+            String archivePath,
+            int depth,
+            Set<String> foreignNativeSuffixes,
+            ArchiveBudget budget,
+            Set<String> opaqueLockedNativeEntries)
             throws IOException {
         if (depth > MAX_ARCHIVE_DEPTH) {
             throw new IOException("Packaged archive nesting exceeds " + MAX_ARCHIVE_DEPTH
                     + " levels: " + archivePath);
         }
         Set<String> entryNames = new HashSet<>();
-        try (ZipInputStream archive = new ZipInputStream(input)) {
-            ZipEntry entry;
-            while ((entry = archive.getNextEntry()) != null) {
-                budget.addEntry(archivePath);
-                String rawName = entry.getName();
-                String normalizedName = rawName.endsWith("/")
-                        ? rawName.substring(0, rawName.length() - 1)
-                        : rawName;
-                if (!NativeBundleResolver.isSafeRelativePath(normalizedName)) {
-                    throw new IOException(
-                            "Packaged archive contains an unsafe entry path: "
-                                    + archivePath + "!/" + rawName);
-                }
-                if (!entryNames.add(normalizedName)) {
-                    throw new IOException(
-                            "Packaged archive contains a duplicate entry: "
-                                    + archivePath + "!/" + normalizedName);
-                }
-                if (entry.isDirectory()) {
-                    archive.closeEntry();
-                    continue;
-                }
+        Enumeration<ZipArchiveEntry> entries = archive.getEntriesInPhysicalOrder();
+        while (entries.hasMoreElements()) {
+            ZipArchiveEntry entry = entries.nextElement();
+            budget.addEntry(archivePath);
+            String rawName = entry.getName();
+            if (rawName.length() > MAX_ARCHIVE_ENTRY_NAME_LENGTH) {
+                throw new IOException(
+                        "Packaged archive entry name exceeds "
+                                + MAX_ARCHIVE_ENTRY_NAME_LENGTH
+                                + " characters: "
+                                + archivePath);
+            }
+            String normalizedName = rawName.endsWith("/")
+                    ? rawName.substring(0, rawName.length() - 1)
+                    : rawName;
+            if (!NativeBundleResolver.isSafeRelativePath(normalizedName)) {
+                throw new IOException(
+                        "Packaged archive contains an unsafe entry path: "
+                                + archivePath + "!/" + rawName);
+            }
+            if (!entryNames.add(normalizedName)) {
+                throw new IOException(
+                        "Packaged archive contains a duplicate entry: "
+                                + archivePath + "!/" + normalizedName);
+            }
+            if (entry.isUnixSymlink()
+                    || (!entry.isDirectory() && !isRegularArchiveEntry(entry))) {
+                throw new IOException(
+                        "Packaged archive contains a non-regular entry: "
+                                + archivePath + "!/" + normalizedName);
+            }
+            if (!archive.canReadEntryData(entry)) {
+                throw new IOException(
+                        "Packaged archive uses an unsupported entry format: "
+                                + archivePath + "!/" + normalizedName);
+            }
+            if (entry.isDirectory()) {
+                continue;
+            }
 
-                String entryPath = archivePath + "!/" + normalizedName;
-                String lowerName = normalizedName.toLowerCase(Locale.ROOT);
-                verifyForbiddenName(lowerName, entryPath, foreignNativeSuffixes);
-                byte[] contents = readArchiveEntry(archive, entryPath, budget);
-                if (endsWith(lowerName, ARCHIVE_SUFFIXES)) {
-                    verifyArchive(
-                            new ByteArrayInputStream(contents),
-                            entryPath,
-                            depth + 1,
-                            foreignNativeSuffixes,
-                            budget);
-                } else {
-                    // ISO-8859-1 preserves every ASCII byte one-to-one, so developer paths and
-                    // credential-shaped constants are detected in text resources and class files
-                    // without trusting an archive entry's suffix or declared encoding.
-                    verifyTextContent(
-                            new String(contents, StandardCharsets.ISO_8859_1),
-                            entryPath,
-                            "Packaged archive entry");
-                }
-                archive.closeEntry();
+            String entryPath = archivePath + "!/" + normalizedName;
+            String lowerName = normalizedName.toLowerCase(Locale.ROOT);
+            verifyForbiddenName(lowerName, entryPath, foreignNativeSuffixes);
+            boolean opaqueLockedNative =
+                    opaqueLockedNativeEntries.contains(normalizedName);
+            boolean nestedArchive = endsWith(lowerName, ARCHIVE_SUFFIXES);
+            byte[] contents;
+            try (InputStream input = archive.getInputStream(entry)) {
+                contents = readArchiveEntry(
+                        input,
+                        entryPath,
+                        budget,
+                        !opaqueLockedNative || nestedArchive);
+            }
+            if (nestedArchive) {
+                verifyArchive(
+                        contents,
+                        entryPath,
+                        depth + 1,
+                        foreignNativeSuffixes,
+                        budget);
+            } else if (!opaqueLockedNative) {
+                // ISO-8859-1 preserves every ASCII byte one-to-one, so developer paths and
+                // credential-shaped constants are detected in text resources and class files
+                // without trusting an archive entry's suffix or declared encoding.
+                verifyTextContent(
+                        new String(contents, StandardCharsets.ISO_8859_1),
+                        entryPath,
+                        "Packaged archive entry");
             }
         }
     }
 
+    private static boolean isRegularArchiveEntry(ZipArchiveEntry entry) {
+        int mode = entry.getUnixMode();
+        return mode == 0 || (mode & 0170000) == 0100000;
+    }
+
     private static byte[] readArchiveEntry(
-            ZipInputStream archive, String entryPath, ArchiveBudget budget) throws IOException {
-        ByteArrayOutputStream contents = new ByteArrayOutputStream();
+            InputStream archive,
+            String entryPath,
+            ArchiveBudget budget,
+            boolean capture)
+            throws IOException {
+        ByteArrayOutputStream contents = capture ? new ByteArrayOutputStream() : null;
         byte[] buffer = new byte[16 * 1024];
         long entryBytes = 0;
         int read;
@@ -666,9 +751,11 @@ public final class NativePackageVerifier {
                 throw new IOException("Packaged archive entry exceeds "
                         + MAX_ARCHIVE_ENTRY_BYTES + " expanded bytes: " + entryPath);
             }
-            contents.write(buffer, 0, read);
+            if (contents != null) {
+                contents.write(buffer, 0, read);
+            }
         }
-        return contents.toByteArray();
+        return contents == null ? new byte[0] : contents.toByteArray();
     }
 
     private static void verifyForbiddenName(
@@ -680,10 +767,17 @@ public final class NativePackageVerifier {
         if (endsWith(lowerName, SIGNING_SUFFIXES)) {
             throw new IOException("Packaged payload contains signing material: " + displayPath);
         }
-        if (endsWith(lowerName, foreignNativeSuffixes)) {
+        if (endsWith(lowerName, foreignNativeSuffixes)
+                || (foreignNativeSuffixes.contains(".so")
+                        && isVersionedElfSharedObject(lowerName))) {
             throw new IOException(
                     "Packaged payload contains a foreign native library: " + displayPath);
         }
+    }
+
+    private static boolean isVersionedElfSharedObject(String lowerName) {
+        int suffix = lowerName.lastIndexOf(".so.");
+        return suffix >= 0 && suffix + 4 < lowerName.length();
     }
 
     private static void verifyTextContent(String text, String displayPath, String description)
@@ -991,7 +1085,8 @@ public final class NativePackageVerifier {
             Path runtime,
             Path runtimeJava,
             Path launcher,
-            Path commandLauncher) {
+            Path commandLauncher,
+            Path nativeSource) {
     }
 
     private static final class Arguments {

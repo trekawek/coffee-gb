@@ -197,6 +197,16 @@ case "$target" in
     hdiutil detach "$mount_point" >/dev/null
     mounted=false
 
+    if [[ ${COFFEE_GB_RELEASE_SIGNING:-} == true ]]; then
+      codesign --verify --deep --strict --verbose=2 "$installed_app"
+      codesign \
+        --verify \
+        --verbose=2 \
+        '-R=entitlement["com.apple.security.cs.disable-library-validation"] = true' \
+        "$installed_app"
+      spctl --assess --type execute --verbose=2 "$installed_app"
+    fi
+
     info="$installed_app/Contents/Info.plist"
     [[ $(plutil -extract CFBundleIdentifier raw -o - "$info") == eu.rekawek.coffeegb ]]
     documents=$(plutil -extract CFBundleDocumentTypes json -o - "$info")

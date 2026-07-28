@@ -14,6 +14,7 @@ import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Enumeration;
@@ -30,7 +31,9 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import java.util.stream.Stream;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Builds a deterministic, target-specific jpackage input tree from Maven's neutral app JAR.
@@ -45,6 +48,8 @@ public final class NativePackageStager {
     private static final long MAX_LEGAL_FILE_BYTES = 2L * 1024L * 1024L;
     private static final FileTime DETERMINISTIC_TIME =
             FileTime.from(Instant.parse("2000-01-01T00:00:00Z"));
+    private static final LocalDateTime DETERMINISTIC_ZIP_TIME =
+            LocalDateTime.of(2000, 1, 1, 0, 0);
     private static final Set<String> NATIVE_SUFFIXES = Set.of(
             ".dll", ".dylib", ".jnilib", ".so", ".a", ".bundle", ".node");
     private static final Set<String> ROM_SUFFIXES = Set.of(
@@ -82,7 +87,7 @@ public final class NativePackageStager {
         Path associations = Files.createDirectory(stage.resolve("associations"));
         Path launchers = Files.createDirectory(stage.resolve("launchers"));
         Path jpackageResources = Files.createDirectory(stage.resolve("jpackage-resources"));
-        Path nativeSource = Files.createDirectory(input.resolve("native-source"));
+        Path nativeSource = input.resolve("native-source.zip");
         Path legal = Files.createDirectory(input.resolve("legal"));
         Path assets = Files.createDirectory(input.resolve("assets"));
 
@@ -108,7 +113,7 @@ public final class NativePackageStager {
 
         Path icon = input.resolve("coffee-gb." + target.iconSuffix());
         PackageIconWriter.write(target, icon);
-        extractLockedNativeSource(request.nativeSourceJar(), nativeManifest, nativeSource);
+        writeLockedNativeArchive(request.nativeSourceJar(), nativeManifest, nativeSource);
 
         Path association = associations.resolve("game-boy-rom.properties");
         writeUtf8(
@@ -137,6 +142,8 @@ public final class NativePackageStager {
         inventory.put("target", request.target().id());
         inventory.put("native.fingerprint", nativeManifest.fingerprint());
         inventory.put("native.gamepad-support", nativeManifest.gamepadSupport().name());
+        inventory.put("native.source-format", "stored-zip");
+        inventory.put("native.source.sha256", sha256(nativeSource));
         inventory.put(
                 "runtime.root-modules",
                 String.join(",", NativePackageMetadata.RUNTIME_ROOT_MODULES));
@@ -163,6 +170,7 @@ public final class NativePackageStager {
                 stagedSbom,
                 stagedNativeSbom,
                 icon,
+                nativeSource,
                 association,
                 windowsConsoleLauncher,
                 inventoryFile,
@@ -237,66 +245,102 @@ public final class NativePackageStager {
         }
     }
 
-    private static void extractLockedNativeSource(
+    private static void writeLockedNativeArchive(
             Path sourceJar, NativeBundleManifest manifest, Path output) throws IOException {
         Map<String, Integer> occurrences = new HashMap<>();
+        for (NativeBundleEntry expected : manifest.entries()) {
+            if (occurrences.put(expected.resourcePath(), 0) != null) {
+                throw new IOException(
+                        "Native manifest contains a duplicate resource: "
+                                + expected.resourcePath());
+            }
+        }
         try (JarFile jar = new JarFile(sourceJar.toFile(), false)) {
             Enumeration<JarEntry> jarEntries = jar.entries();
             while (jarEntries.hasMoreElements()) {
                 String name = jarEntries.nextElement().getName();
                 occurrences.computeIfPresent(name, (ignored, count) -> count + 1);
-                if (manifest.entries().stream().anyMatch(entry -> entry.resourcePath().equals(name))) {
-                    occurrences.putIfAbsent(name, 1);
-                }
             }
-            for (NativeBundleEntry expected : manifest.entries()) {
-                if (occurrences.getOrDefault(expected.resourcePath(), 0) != 1) {
-                    throw new IOException(
-                            "Native source JAR must contain exactly one "
-                                    + expected.resourcePath());
-                }
-                ZipEntry entry = jar.getEntry(expected.resourcePath());
-                if (entry == null || entry.isDirectory()) {
-                    throw new IOException(
-                            "Native source JAR is missing " + expected.resourcePath());
-                }
-                if (entry.getSize() != expected.byteSize()) {
-                    throw new IOException(
-                            "Native source size mismatch for " + expected.resourcePath());
-                }
-                Path destination = safeResolve(output, expected.resourcePath());
-                Files.createDirectories(destination.getParent());
-                try (InputStream raw = jar.getInputStream(entry)) {
-                    copyLocked(raw, destination, expected);
+            try (ZipOutputStream archive = new ZipOutputStream(Files.newOutputStream(
+                    output,
+                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE))) {
+                for (NativeBundleEntry expected : manifest.entries()) {
+                    if (occurrences.getOrDefault(expected.resourcePath(), 0) != 1) {
+                        throw new IOException(
+                                "Native source JAR must contain exactly one "
+                                        + expected.resourcePath());
+                    }
+                    ZipEntry entry = jar.getEntry(expected.resourcePath());
+                    if (entry == null || entry.isDirectory()) {
+                        throw new IOException(
+                                "Native source JAR is missing " + expected.resourcePath());
+                    }
+                    if (entry.getSize() != expected.byteSize()) {
+                        throw new IOException(
+                                "Native source size mismatch for " + expected.resourcePath());
+                    }
+                    CRC32 crc = verifyLockedEntry(jar, entry, expected);
+                    ZipEntry archived = new ZipEntry(expected.resourcePath());
+                    archived.setMethod(ZipEntry.STORED);
+                    archived.setSize(expected.byteSize());
+                    archived.setCompressedSize(expected.byteSize());
+                    archived.setCrc(crc.getValue());
+                    archived.setTimeLocal(DETERMINISTIC_ZIP_TIME);
+                    archive.putNextEntry(archived);
+                    try (InputStream input = jar.getInputStream(entry)) {
+                        copyExact(input, archive, expected);
+                    }
+                    archive.closeEntry();
                 }
             }
         }
+        LockedNativeArchive.verify(output, manifest);
     }
 
-    private static void copyLocked(
-            InputStream source, Path destination, NativeBundleEntry expected) throws IOException {
+    private static CRC32 verifyLockedEntry(
+            JarFile jar, ZipEntry source, NativeBundleEntry expected) throws IOException {
         MessageDigest digest = sha256Digest();
+        CRC32 crc = new CRC32();
         long copied = 0;
         byte[] buffer = new byte[64 * 1024];
-        try (DigestInputStream input = new DigestInputStream(source, digest);
-                OutputStream output = Files.newOutputStream(
-                        destination,
-                        StandardOpenOption.CREATE_NEW,
-                        StandardOpenOption.WRITE)) {
+        try (DigestInputStream input =
+                new DigestInputStream(jar.getInputStream(source), digest)) {
             int read;
-            while ((read = input.read(buffer)) >= 0) {
+            while ((read = input.read(buffer)) != -1) {
                 copied = Math.addExact(copied, read);
                 if (copied > expected.byteSize()) {
                     throw new IOException(
                             "Native source exceeds locked size for " + expected.resourcePath());
                 }
-                output.write(buffer, 0, read);
+                crc.update(buffer, 0, read);
             }
         }
         String actualDigest = hex(digest.digest());
         if (copied != expected.byteSize() || !actualDigest.equals(expected.sha256())) {
             throw new IOException(
                     "Native source digest mismatch for " + expected.resourcePath());
+        }
+        return crc;
+    }
+
+    private static void copyExact(
+            InputStream source, OutputStream destination, NativeBundleEntry expected)
+            throws IOException {
+        long copied = 0;
+        byte[] buffer = new byte[64 * 1024];
+        int read;
+        while ((read = source.read(buffer)) != -1) {
+            copied = Math.addExact(copied, read);
+            if (copied > expected.byteSize()) {
+                throw new IOException(
+                        "Native source changed while archiving " + expected.resourcePath());
+            }
+            destination.write(buffer, 0, read);
+        }
+        if (copied != expected.byteSize()) {
+            throw new IOException(
+                    "Native source changed while archiving " + expected.resourcePath());
         }
     }
 
@@ -454,7 +498,7 @@ public final class NativePackageStager {
         try (InputStream input = Files.newInputStream(file);
                 DigestInputStream digested = new DigestInputStream(input, digest)) {
             byte[] buffer = new byte[64 * 1024];
-            while (digested.read(buffer) >= 0) {
+            while (digested.read(buffer) != -1) {
                 // DigestInputStream updates the digest.
             }
         }
@@ -506,6 +550,7 @@ public final class NativePackageStager {
             Path sbom,
             Path nativeSbom,
             Path icon,
+            Path nativeSource,
             Path association,
             Path windowsConsoleLauncher,
             Path inventory,

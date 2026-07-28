@@ -53,4 +53,14 @@ public interface NativeResourceSource {
                     Files.newInputStream(candidate, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
         };
     }
+
+    static NativeResourceSource archive(Path archive, NativeBundleManifest manifest)
+            throws IOException {
+        Path normalizedArchive =
+                Objects.requireNonNull(archive, "archive").toAbsolutePath().normalize();
+        NativeBundleManifest locked = Objects.requireNonNull(manifest, "manifest");
+        LockedNativeArchive.verify(normalizedArchive, locked);
+        return resourcePath ->
+                LockedNativeArchive.open(normalizedArchive, locked, resourcePath);
+    }
 }

@@ -10,19 +10,25 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -57,20 +63,30 @@ public class NativePackageIT {
                     NativePackageStager.sha256(result.appJar()));
             assertEquals(target, result.target().nativeTarget());
 
-            Set<String> expectedNatives = NativeBundleManifest.locked(target)
+            List<NativeBundleEntry> expectedEntries = NativeBundleManifest.locked(target)
                     .entries()
-                    .stream()
-                    .map(NativeBundleEntry::resourcePath)
-                    .collect(Collectors.toSet());
-            Set<String> actualNatives;
-            Path nativeRoot = result.input().resolve("native-source");
-            try (Stream<Path> paths = Files.walk(nativeRoot)) {
-                actualNatives = paths.filter(Files::isRegularFile)
-                        .map(nativeRoot::relativize)
-                        .map(path -> path.toString().replace('\\', '/'))
-                        .collect(Collectors.toSet());
+                    .stream().toList();
+            assertEquals(result.input().resolve("native-source.zip"), result.nativeSource());
+            assertTrue(Files.isRegularFile(result.nativeSource(), LinkOption.NOFOLLOW_LINKS));
+            try (ZipFile archive = new ZipFile(result.nativeSource().toFile())) {
+                List<? extends ZipEntry> actualEntries =
+                        archive.stream().filter(entry -> !entry.isDirectory()).toList();
+                assertEquals(
+                        expectedEntries.stream()
+                                .map(NativeBundleEntry::resourcePath)
+                                .toList(),
+                        actualEntries.stream().map(ZipEntry::getName).toList());
+                for (int index = 0; index < expectedEntries.size(); index++) {
+                    NativeBundleEntry expected = expectedEntries.get(index);
+                    ZipEntry actual = actualEntries.get(index);
+                    assertEquals(ZipEntry.STORED, actual.getMethod());
+                    assertEquals(expected.byteSize(), actual.getSize());
+                    assertEquals(expected.byteSize(), actual.getCompressedSize());
+                    try (InputStream input = archive.getInputStream(actual)) {
+                        assertEquals(expected.sha256(), sha256(input));
+                    }
+                }
             }
-            assertEquals(expectedNatives, actualNatives);
 
             assertLegalInventory(result.input().resolve("legal"), target);
             NativeComponentInventory.verifyNativeSbom(
@@ -105,6 +121,12 @@ public class NativePackageIT {
             assertEquals(
                     "arguments=--debug\nwin-console=true\n",
                     Files.readString(result.windowsConsoleLauncher()));
+            String inventory = Files.readString(result.inventory());
+            assertTrue(inventory.contains("native.source-format=stored-zip\n"));
+            assertTrue(inventory.contains(
+                    "native.source.sha256="
+                            + NativePackageStager.sha256(result.nativeSource())
+                            + "\n"));
             if (target == NativeTarget.LINUX_X86_64) {
                 String desktopTemplate = Files.readString(
                         result.jpackageResources().resolve("Coffee GB.desktop"));
@@ -124,22 +146,29 @@ public class NativePackageIT {
         Path resources = Path.of(required("coffeeGbPackagingResources"));
         Path base = temporaryFolder.getRoot().toPath();
         NativePackageStager stager = new NativePackageStager();
-        NativePackageStager.StageResult first = stager.stage(
-                new NativePackageStager.StageRequest(
-                        NativeTarget.LINUX_X86_64,
-                        app,
-                        universal,
-                        sbom,
-                        resources,
-                        base.resolve("first")));
-        NativePackageStager.StageResult second = stager.stage(
-                new NativePackageStager.StageRequest(
-                        NativeTarget.LINUX_X86_64,
-                        app,
-                        universal,
-                        sbom,
-                        resources,
-                        base.resolve("second")));
+        TimeZone originalTimeZone = TimeZone.getDefault();
+        NativePackageStager.StageResult first;
+        NativePackageStager.StageResult second;
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+            first = stager.stage(new NativePackageStager.StageRequest(
+                    NativeTarget.LINUX_X86_64,
+                    app,
+                    universal,
+                    sbom,
+                    resources,
+                    base.resolve("first")));
+            TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Honolulu"));
+            second = stager.stage(new NativePackageStager.StageRequest(
+                    NativeTarget.LINUX_X86_64,
+                    app,
+                    universal,
+                    sbom,
+                    resources,
+                    base.resolve("second")));
+        } finally {
+            TimeZone.setDefault(originalTimeZone);
+        }
 
         assertEquals(treeDigests(first.root()), treeDigests(second.root()));
         assertThrows(
@@ -285,6 +314,28 @@ public class NativePackageIT {
             }
         }
         return digests;
+    }
+
+    private static String sha256(InputStream input) throws Exception {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+        byte[] buffer = new byte[64 * 1024];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            digest.update(buffer, 0, read);
+        }
+        byte[] bytes = digest.digest();
+        char[] encoded = new char[bytes.length * 2];
+        for (int index = 0; index < bytes.length; index++) {
+            int value = bytes[index] & 0xff;
+            encoded[index * 2] = Character.forDigit(value >>> 4, 16);
+            encoded[index * 2 + 1] = Character.forDigit(value & 0x0f, 16);
+        }
+        return new String(encoded);
     }
 
     private static String required(String property) {
