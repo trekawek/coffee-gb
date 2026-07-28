@@ -71,16 +71,48 @@
                 </executions>
             </plugin>
             <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+                <version>2.9.2</version>
+                <configuration>
+                    <outputDirectory>${project.build.directory}</outputDirectory>
+                    <outputName>coffee-gb-${project.version}-sbom.cdx</outputName>
+                    <outputFormat>json</outputFormat>
+                    <schemaVersion>1.6</schemaVersion>
+                    <projectType>application</projectType>
+                    <includeBomSerialNumber>false</includeBomSerialNumber>
+                    <includeCompileScope>true</includeCompileScope>
+                    <includeRuntimeScope>true</includeRuntimeScope>
+                    <includeProvidedScope>false</includeProvidedScope>
+                    <includeSystemScope>false</includeSystemScope>
+                    <includeTestScope>false</includeTestScope>
+                    <includeLicenseText>false</includeLicenseText>
+                    <skipAttach>true</skipAttach>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-app-sbom</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>makeBom</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
                     <includes>
                         <include>**/NativeArtifactIT.java</include>
+                        <include>**/NativePackageIT.java</include>
                     </includes>
                     <systemPropertyVariables>
                         <coffeeGbUniversalJar>${project.build.directory}/coffee-gb-${project.version}.jar</coffeeGbUniversalJar>
                         <coffeeGbAppJar>${project.build.directory}/coffee-gb-${project.version}-app.jar</coffeeGbAppJar>
+                        <coffeeGbSbom>${project.build.directory}/coffee-gb-${project.version}-sbom.cdx.json</coffeeGbSbom>
+                        <coffeeGbPackagingResources>${project.parent.basedir}/packaging/resources</coffeeGbPackagingResources>
                         <coffeeGbExpectedVersion>${project.version}</coffeeGbExpectedVersion>
                     </systemPropertyVariables>
                 </configuration>

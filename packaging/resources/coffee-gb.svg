@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img"
+     aria-labelledby="title description">
+  <title id="title">Coffee GB</title>
+  <desc id="description">A coffee-brown handheld game system with a green screen.</desc>
+  <defs>
+    <linearGradient id="case" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b9783d"/>
+      <stop offset="1" stop-color="#6d351d"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9ef9c"/>
+      <stop offset="1" stop-color="#86ad54"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="#30241f"/>
+  <rect x="48" y="40" width="416" height="432" rx="82" fill="url(#case)"/>
+  <rect x="96" y="82" width="320" height="212" rx="34" fill="#272a2b"/>
+  <rect x="122" y="108" width="268" height="160" rx="18" fill="url(#screen)"/>
+  <path d="M226 176c22-40 78-42 98-3-30-10-43 29-75 27-16-1-27-10-23-24z"
+        fill="#4d6d32"/>
+  <path d="M252 195c25 5 34-29 70-20-20 40-74 45-95 8 7 6 15 10 25 12z"
+        fill="#304924"/>
+  <path d="M129 341h42v-42h42v42h42v42h-42v42h-42v-42h-42z" fill="#2d2928"/>
+  <circle cx="352" cy="348" r="30" fill="#5c1d27"/>
+  <circle cx="405" cy="397" r="30" fill="#5c1d27"/>
+  <rect x="273" y="417" width="64" height="14" rx="7" transform="rotate(-16 273 417)"
+        fill="#3d2d29"/>
+  <rect x="330" y="417" width="64" height="14" rx="7" transform="rotate(-16 330 417)"
+        fill="#3d2d29"/>
+</svg>

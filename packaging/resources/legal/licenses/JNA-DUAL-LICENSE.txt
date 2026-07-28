@@ -1,0 +1,9 @@
+SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1
+
+Java Native Access (JNA) is licensed under the LGPL, version 2.1 or later, or (from version 4.0
+onward) the Apache License, version 2.0.
+
+You can freely decide which license you want to apply to the project.
+
+The complete license texts are distributed alongside this notice as Apache-2.0.txt and
+LGPL-2.1.txt. Upstream source is available at https://github.com/java-native-access/jna.
