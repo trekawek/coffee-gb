@@ -68,17 +68,29 @@ class KeyboardMappingEditorTest {
       }
 
   @Test
-  fun editsClearAndResetRemainADraftAndPreserveGamepads() =
+  fun editsClearAndResetRemainADraftAndPreserveGamepadSettings() =
       onEventThread {
+        val stableId = "sdl-${"a".repeat(64)}"
         val gamepads =
             mapOf(
                 0 to ApplicationSettings.GamepadSelection.Auto,
                 1 to
                     ApplicationSettings.GamepadSelection.Device(
-                        "sdl-${"a".repeat(64)}"),
+                        stableId),
             )
+        val tunings =
+            mapOf(
+                stableId to
+                    ApplicationSettings.GamepadTuning(
+                        movementDeadZone = 1_024,
+                        invertTiltY = true,
+                    ))
         val initial =
-            ApplicationSettings.Input(ApplicationSettings.Input.defaults().keyboard, gamepads)
+            ApplicationSettings.Input(
+                ApplicationSettings.Input.defaults().keyboard,
+                gamepads,
+                tunings,
+            )
         val editor = KeyboardMappingEditor(initial)
 
         assertIs<KeyboardMappingEditor.EditResult.Applied>(
@@ -86,6 +98,7 @@ class KeyboardMappingEditorTest {
         assertEquals(KeyEvent.VK_Q, editor.currentBinding(1, Button.A)?.code)
         assertEquals(KeyEvent.VK_Q, editor.validatedDraft().keyboard[playerButton(1, Button.A)]?.code)
         assertEquals(gamepads, editor.validatedDraft().gamepads)
+        assertEquals(tunings, editor.validatedDraft().gamepadTunings)
         assertNull(initial.keyboard[playerButton(1, Button.A)], "the initial value is immutable")
 
         editor.clearBinding(1, Button.A)
@@ -98,7 +111,11 @@ class KeyboardMappingEditorTest {
         editor.editBinding(1, Button.B, KeyEvent.VK_Q)
         editor.resetToDefaults()
         assertEquals(
-            ApplicationSettings.Input(ApplicationSettings.Input.defaults().keyboard, gamepads),
+            ApplicationSettings.Input(
+                ApplicationSettings.Input.defaults().keyboard,
+                gamepads,
+                tunings,
+            ),
             editor.validatedDraft(),
         )
       }

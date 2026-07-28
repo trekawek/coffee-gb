@@ -849,13 +849,18 @@ internal class SwingMenu(
   private fun createAudioMenu(): JMenu {
     val audioMenu = JMenu("Audio")
 
-    val enableSound = JCheckBoxMenuItem("Enable", properties.sound.soundEnabled)
-    enableSound.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
-    audioMenu.add(enableSound)
+    val mute = JCheckBoxMenuItem("Mute", !properties.sound.soundEnabled)
+    mute.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
+    mute.accessibleContext.accessibleName = "Mute audio"
+    audioMenu.add(mute)
 
-    enableSound.addActionListener {
-      eventBus.post(Sound.SoundEnabledEvent(enableSound.state))
-      properties.setProperty(EmulatorProperties.Key.SoundEnabled, enableSound.state.toString())
+    mute.addActionListener {
+      val enabled = !mute.state
+      eventBus.post(Sound.SoundEnabledEvent(enabled))
+      properties.setProperty(EmulatorProperties.Key.SoundEnabled, enabled.toString())
+    }
+    eventBus.register<Sound.SoundEnabledEvent> {
+      SwingUtilities.invokeLater { mute.state = !it.enabled() }
     }
     return audioMenu
   }

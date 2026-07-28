@@ -128,15 +128,48 @@ data class ApplicationSettings(
     }
   }
 
-  data class Audio(val enabled: Boolean = true)
+  data class Audio(
+      /** Historical sound.enabled value; false is the persisted master-mute compatibility path. */
+      val enabled: Boolean = true,
+      val output: AudioOutputSelection = AudioOutputSelection.Default,
+      val volume: Int = DEFAULT_AUDIO_VOLUME,
+      val latency: AudioLatency = AudioLatency.BALANCED,
+  ) {
+    init {
+      require(volume in MIN_AUDIO_VOLUME..MAX_AUDIO_VOLUME) {
+        "Audio volume must be between $MIN_AUDIO_VOLUME and $MAX_AUDIO_VOLUME"
+      }
+    }
+  }
+
+  sealed class AudioOutputSelection {
+    data object Default : AudioOutputSelection()
+
+    data class Device(val stableId: String) : AudioOutputSelection() {
+      init {
+        require(isStableAudioOutputId(stableId)) {
+          "Audio output device must be java-sound- followed by 64 lowercase hex digits"
+        }
+      }
+    }
+  }
+
+  enum class AudioLatency {
+    LOW,
+    BALANCED,
+    SAFE,
+  }
 
   class Input(
       keyboard: Map<ControllerProperties.PlayerButton, KeyboardKey>,
       gamepads: Map<Int, GamepadSelection>,
+      gamepadTunings: Map<String, GamepadTuning> = emptyMap(),
   ) {
     val keyboard: Map<ControllerProperties.PlayerButton, KeyboardKey> = immutableMapCopy(keyboard)
 
     val gamepads: Map<Int, GamepadSelection> = immutableMapCopy(gamepads)
+
+    val gamepadTunings: Map<String, GamepadTuning> = immutableMapCopy(gamepadTunings)
 
     init {
       require(gamepads.keys.all { it in 0..3 }) { "Logical gamepad player must be P1 through P4" }
@@ -150,6 +183,14 @@ data class ApplicationSettings(
             "Disabled P2 through P4 gamepad selections must be omitted"
           }
       keyboard.keys.forEach { require(it.player in 0..3) }
+      require(this.gamepadTunings.size <= MAX_GAMEPAD_TUNINGS) {
+        "At most $MAX_GAMEPAD_TUNINGS gamepad tuning profiles may be stored"
+      }
+      this.gamepadTunings.keys.forEach { stableId ->
+        require(ControllerProperties.isStableGamepadId(stableId)) {
+          "Gamepad tuning device must be sdl- followed by 64 lowercase hex digits"
+        }
+      }
     }
 
     fun toPlayerMapping(): ControllerProperties.PlayerMapping {
@@ -189,15 +230,21 @@ data class ApplicationSettings(
     fun copy(
         keyboard: Map<ControllerProperties.PlayerButton, KeyboardKey> = this.keyboard,
         gamepads: Map<Int, GamepadSelection> = this.gamepads,
-    ): Input = Input(keyboard, gamepads)
+        gamepadTunings: Map<String, GamepadTuning> = this.gamepadTunings,
+    ): Input = Input(keyboard, gamepads, gamepadTunings)
 
     override fun equals(other: Any?): Boolean =
         this === other ||
-            (other is Input && keyboard == other.keyboard && gamepads == other.gamepads)
+            (other is Input &&
+                keyboard == other.keyboard &&
+                gamepads == other.gamepads &&
+                gamepadTunings == other.gamepadTunings)
 
-    override fun hashCode(): Int = 31 * keyboard.hashCode() + gamepads.hashCode()
+    override fun hashCode(): Int =
+        31 * (31 * keyboard.hashCode() + gamepads.hashCode()) + gamepadTunings.hashCode()
 
-    override fun toString(): String = "Input(keyboard=$keyboard, gamepads=$gamepads)"
+    override fun toString(): String =
+        "Input(keyboard=$keyboard, gamepads=$gamepads, gamepadTunings=$gamepadTunings)"
 
     companion object {
       fun defaults(): Input {
@@ -293,6 +340,26 @@ data class ApplicationSettings(
     }
   }
 
+  data class GamepadTuning(
+      val movementDeadZone: Int = DEFAULT_GAMEPAD_MOVEMENT_DEAD_ZONE,
+      val tiltDeadZone: Int = DEFAULT_GAMEPAD_TILT_DEAD_ZONE,
+      val invertMovementX: Boolean = false,
+      val invertMovementY: Boolean = false,
+      val invertTiltX: Boolean = false,
+      val invertTiltY: Boolean = false,
+  ) {
+    init {
+      require(movementDeadZone in MIN_GAMEPAD_DEAD_ZONE..MAX_GAMEPAD_DEAD_ZONE) {
+        "Gamepad movement dead zone must be between $MIN_GAMEPAD_DEAD_ZONE and " +
+            MAX_GAMEPAD_DEAD_ZONE
+      }
+      require(tiltDeadZone in MIN_GAMEPAD_DEAD_ZONE..MAX_GAMEPAD_DEAD_ZONE) {
+        "Gamepad tilt dead zone must be between $MIN_GAMEPAD_DEAD_ZONE and " +
+            MAX_GAMEPAD_DEAD_ZONE
+      }
+    }
+  }
+
   data class Saves(val batterySavesEnabled: Boolean = true)
 
   data class Advanced(
@@ -319,12 +386,25 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 2
+    const val CURRENT_SCHEMA_VERSION = 3
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
+    const val MIN_AUDIO_VOLUME = 0
+    const val DEFAULT_AUDIO_VOLUME = 100
+    const val MAX_AUDIO_VOLUME = 100
+    const val MIN_GAMEPAD_DEAD_ZONE = 0
+    const val DEFAULT_GAMEPAD_MOVEMENT_DEAD_ZONE = 16_384
+    const val DEFAULT_GAMEPAD_TILT_DEAD_ZONE = 4_096
+    const val MAX_GAMEPAD_DEAD_ZONE = 32_766
+    const val MAX_GAMEPAD_TUNINGS = 32
     private val SUPPORTED_SCALES: Set<Int> =
         Collections.unmodifiableSet(linkedSetOf(1, 2, 4))
+
+    internal fun isStableAudioOutputId(value: String): Boolean =
+        value.matches(STABLE_AUDIO_OUTPUT_ID)
+
+    private val STABLE_AUDIO_OUTPUT_ID = Regex("java-sound-[0-9a-f]{64}")
   }
 }
 

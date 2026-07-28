@@ -18,6 +18,10 @@ object ApplicationSettingsCodec {
   const val RECENT_FILE_CAPACITY_KEY = "general.recentFileCapacity"
   const val RECENT_ROM_PREFIX = "general.recent."
   const val ROM_CHANGE_CONFIRMATION_POLICY_KEY = "general.romChangeConfirmationPolicy"
+  const val AUDIO_OUTPUT_KEY = "audio.outputDevice"
+  const val AUDIO_VOLUME_KEY = "audio.masterVolume"
+  const val AUDIO_LATENCY_KEY = "audio.latencyPreset"
+  const val GAMEPAD_TUNING_PREFIX = "input.gamepad."
   internal const val PRESERVED_UNKNOWN_COLLISIONS_PREFIX =
       "settings.preservedUnknownCollisions."
 
@@ -27,6 +31,9 @@ object ApplicationSettingsCodec {
   private val versionTwoFixedKeys =
       versionOneFixedKeys +
           setOf(RECENT_FILE_CAPACITY_KEY, ROM_CHANGE_CONFIRMATION_POLICY_KEY)
+  private val versionThreeFixedKeys =
+      versionTwoFixedKeys +
+          setOf(AUDIO_OUTPUT_KEY, AUDIO_VOLUME_KEY, AUDIO_LATENCY_KEY)
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -40,7 +47,7 @@ object ApplicationSettingsCodec {
             version > SUPPORTED_SCHEMA_VERSION)) {
       throw UnsupportedApplicationSettingsVersionException(encodedVersion)
     }
-    require(version == "1" || version == SUPPORTED_SCHEMA_VERSION) {
+    require(version == "1" || version == "2" || version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
     return decodeSupportedVersion(raw, sourceVersion = version.toInt())
@@ -100,6 +107,13 @@ object ApplicationSettingsCodec {
     known[EmulatorProperties.Key.ShowSgbBorder.propertyName] =
         settings.display.showSgbBorder.toString()
     known[EmulatorProperties.Key.SoundEnabled.propertyName] = settings.audio.enabled.toString()
+    known[AUDIO_OUTPUT_KEY] =
+        when (val output = settings.audio.output) {
+          ApplicationSettings.AudioOutputSelection.Default -> DEFAULT_AUDIO_OUTPUT
+          is ApplicationSettings.AudioOutputSelection.Device -> output.stableId
+        }
+    known[AUDIO_VOLUME_KEY] = settings.audio.volume.toString()
+    known[AUDIO_LATENCY_KEY] = settings.audio.latency.name
     known[BATTERY_SAVES_KEY] = settings.saves.batterySavesEnabled.toString()
 
     encodeProfile(
@@ -129,8 +143,17 @@ object ApplicationSettingsCodec {
   ): ApplicationSettingsDocument {
     val legacyDefaults = sourceVersion == 0
     val inputProperties = Properties()
-    raw.forEach { (key, value) -> inputProperties.setProperty(key, value) }
-    val input = ControllerProperties.getInputSettings(inputProperties, legacyDefaults)
+    raw
+        .filterKeys { !isGamepadTuningKey(it) }
+        .forEach { (key, value) -> inputProperties.setProperty(key, value) }
+    val input =
+        ControllerProperties.getInputSettings(inputProperties, legacyDefaults).copy(
+            gamepadTunings =
+                if (sourceVersion >= 3) {
+                  parseGamepadTunings(raw)
+                } else {
+                  emptyMap()
+                })
 
     val recentFileCapacityValue =
         if (sourceVersion >= 2) raw[RECENT_FILE_CAPACITY_KEY] else null
@@ -213,11 +236,37 @@ object ApplicationSettingsCodec {
             display = display,
             audio =
                 ApplicationSettings.Audio(
-                    parseBoolean(
-                        raw[EmulatorProperties.Key.SoundEnabled.propertyName],
-                        true,
-                        EmulatorProperties.Key.SoundEnabled.propertyName,
-                    )),
+                    enabled =
+                        parseBoolean(
+                            raw[EmulatorProperties.Key.SoundEnabled.propertyName],
+                            true,
+                            EmulatorProperties.Key.SoundEnabled.propertyName,
+                        ),
+                    output =
+                        if (sourceVersion >= 3) {
+                          parseAudioOutput(raw[AUDIO_OUTPUT_KEY])
+                        } else {
+                          ApplicationSettings.AudioOutputSelection.Default
+                        },
+                    volume =
+                        if (sourceVersion >= 3) {
+                          parseRangedInt(
+                              raw[AUDIO_VOLUME_KEY],
+                              ApplicationSettings.DEFAULT_AUDIO_VOLUME,
+                              AUDIO_VOLUME_KEY,
+                              ApplicationSettings.MIN_AUDIO_VOLUME,
+                              ApplicationSettings.MAX_AUDIO_VOLUME,
+                          )
+                        } else {
+                          ApplicationSettings.DEFAULT_AUDIO_VOLUME
+                        },
+                    latency =
+                        if (sourceVersion >= 3) {
+                          parseAudioLatency(raw[AUDIO_LATENCY_KEY])
+                        } else {
+                          ApplicationSettings.AudioLatency.BALANCED
+                        },
+                ),
             input = input,
             saves =
                 ApplicationSettings.Saves(
@@ -251,7 +300,11 @@ object ApplicationSettingsCodec {
     val preservedCollisions =
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
-        if (sourceVersion >= 2) versionTwoFixedKeys else versionOneFixedKeys
+        when {
+          sourceVersion >= 3 -> versionThreeFixedKeys
+          sourceVersion >= 2 -> versionTwoFixedKeys
+          else -> versionOneFixedKeys
+        }
     val unknown =
         raw
             .filterKeys { key ->
@@ -263,7 +316,8 @@ object ApplicationSettingsCodec {
                       supportsCanonicalRecentKeys = sourceVersion >= 2,
                   ) &&
                   !key.startsWith("btn_") &&
-                  !key.startsWith("input.")
+                  (!key.startsWith("input.") ||
+                      (sourceVersion < 3 && isGamepadTuningKey(key)))
             }
             .toMutableMap()
             .apply { putAll(preservedCollisions) }
@@ -298,12 +352,93 @@ object ApplicationSettingsCodec {
   private fun parseInt(value: String, key: String): Int =
       value.toIntOrNull() ?: throw IllegalArgumentException("Invalid $key: $value")
 
+  private fun parseRangedInt(
+      value: String?,
+      default: Int,
+      key: String,
+      minimum: Int,
+      maximum: Int,
+  ): Int {
+    if (value == null) return default
+    val parsed = parseInt(value, key)
+    require(parsed in minimum..maximum) {
+      "Invalid $key: $parsed (expected $minimum..$maximum)"
+    }
+    return parsed
+  }
+
   private fun parseBoolean(value: String?, default: Boolean, key: String): Boolean {
     if (value == null) return default
     return when (value.lowercase(Locale.ROOT)) {
       "true" -> true
       "false" -> false
       else -> throw IllegalArgumentException("Invalid $key: $value (expected true or false)")
+    }
+  }
+
+  private fun parseAudioOutput(value: String?): ApplicationSettings.AudioOutputSelection {
+    if (value == null || value == DEFAULT_AUDIO_OUTPUT) {
+      return ApplicationSettings.AudioOutputSelection.Default
+    }
+    return try {
+      ApplicationSettings.AudioOutputSelection.Device(value)
+    } catch (failure: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid $AUDIO_OUTPUT_KEY: $value " +
+              "(expected '$DEFAULT_AUDIO_OUTPUT' or java-sound- followed by 64 lowercase hex digits)",
+          failure,
+      )
+    }
+  }
+
+  private fun parseAudioLatency(value: String?): ApplicationSettings.AudioLatency {
+    if (value == null) return ApplicationSettings.AudioLatency.BALANCED
+    return try {
+      ApplicationSettings.AudioLatency.valueOf(value)
+    } catch (_: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid $AUDIO_LATENCY_KEY: $value (expected LOW, BALANCED, or SAFE)")
+    }
+  }
+
+  private fun parseGamepadTunings(
+      raw: Map<String, String>
+  ): Map<String, ApplicationSettings.GamepadTuning> {
+    val stableIds =
+        raw.keys
+            .mapNotNull { key -> gamepadTuningKey.matchEntire(key)?.groupValues?.get(1) }
+            .toSortedSet()
+    require(stableIds.size <= ApplicationSettings.MAX_GAMEPAD_TUNINGS) {
+      "At most ${ApplicationSettings.MAX_GAMEPAD_TUNINGS} gamepad tuning profiles may be stored"
+    }
+    return stableIds.associateWith { stableId ->
+      val prefix = "$GAMEPAD_TUNING_PREFIX$stableId."
+      ApplicationSettings.GamepadTuning(
+          movementDeadZone =
+              parseRangedInt(
+                  raw["${prefix}movementDeadZone"],
+                  ApplicationSettings.DEFAULT_GAMEPAD_MOVEMENT_DEAD_ZONE,
+                  "${prefix}movementDeadZone",
+                  ApplicationSettings.MIN_GAMEPAD_DEAD_ZONE,
+                  ApplicationSettings.MAX_GAMEPAD_DEAD_ZONE,
+              ),
+          tiltDeadZone =
+              parseRangedInt(
+                  raw["${prefix}tiltDeadZone"],
+                  ApplicationSettings.DEFAULT_GAMEPAD_TILT_DEAD_ZONE,
+                  "${prefix}tiltDeadZone",
+                  ApplicationSettings.MIN_GAMEPAD_DEAD_ZONE,
+                  ApplicationSettings.MAX_GAMEPAD_DEAD_ZONE,
+              ),
+          invertMovementX =
+              parseBoolean(raw["${prefix}invertMovementX"], false, "${prefix}invertMovementX"),
+          invertMovementY =
+              parseBoolean(raw["${prefix}invertMovementY"], false, "${prefix}invertMovementY"),
+          invertTiltX =
+              parseBoolean(raw["${prefix}invertTiltX"], false, "${prefix}invertTiltX"),
+          invertTiltY =
+              parseBoolean(raw["${prefix}invertTiltY"], false, "${prefix}invertTiltY"),
+      )
     }
   }
 
@@ -466,7 +601,18 @@ object ApplicationSettingsCodec {
           }
       target["input.p${player + 1}.gamepad"] = value
     }
+    input.gamepadTunings.toSortedMap().forEach { (stableId, tuning) ->
+      val prefix = "$GAMEPAD_TUNING_PREFIX$stableId."
+      target["${prefix}movementDeadZone"] = tuning.movementDeadZone.toString()
+      target["${prefix}tiltDeadZone"] = tuning.tiltDeadZone.toString()
+      target["${prefix}invertMovementX"] = tuning.invertMovementX.toString()
+      target["${prefix}invertMovementY"] = tuning.invertMovementY.toString()
+      target["${prefix}invertTiltX"] = tuning.invertTiltX.toString()
+      target["${prefix}invertTiltY"] = tuning.invertTiltY.toString()
+    }
   }
+
+  private fun isGamepadTuningKey(key: String): Boolean = gamepadTuningKey.matches(key)
 
   private fun isKnownRecentKey(
       key: String,
@@ -488,14 +634,20 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionTwoFixedKeys ||
+      key in versionThreeFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           key.startsWith("btn_") ||
           key.startsWith("input.")
 
+  private const val DEFAULT_AUDIO_OUTPUT = "default"
   private const val COLLISION_CHUNK_SIZE = 60_000
   private const val MAX_COLLISION_CHUNKS = 32
   private const val MAX_SETTINGS_PROPERTIES = 2_048
+  private val gamepadTuningKey =
+      Regex(
+          "input\\.gamepad\\.(sdl-[0-9a-f]{64})\\." +
+              "(movementDeadZone|tiltDeadZone|invertMovementX|invertMovementY|" +
+              "invertTiltX|invertTiltY)")
   private val SUPPORTED_SCHEMA_VERSION = ApplicationSettings.CURRENT_SCHEMA_VERSION.toString()
 }

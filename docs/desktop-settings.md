@@ -45,12 +45,12 @@ The application owns one immutable `ApplicationSettings` value with typed `gener
 `audio`, `input`, `saves`, and `advanced` sections. The controller-facing `EmulatorProperties`
 class is a compatibility facade over that model while older menu code is migrated.
 
-Schema 2 continues to use `${user.home}/.coffeegb.properties`; schema 0 and schema 1 are migrated
-in place so the portable JAR remains compatible during the migration window.
+Schema 3 continues to use `${user.home}/.coffeegb.properties`; schemas 0–2 are migrated in place
+so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `2` |
+| `settings.schemaVersion` | exact supported schema version | `3` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
@@ -61,6 +61,9 @@ in place so the portable JAR remains compatible during the migration window.
 | `display.colorCorrection` | boolean | `true` |
 | `display.showSgbBorder` | boolean | `false` |
 | `sound.enabled` | boolean | `true` |
+| `audio.outputDevice` | `default` or stable Java Sound device ID | `default` |
+| `audio.masterVolume` | integer percentage in `0..100` | `100` |
+| `audio.latencyPreset` | `LOW`, `BALANCED`, or `SAFE` | `BALANCED` |
 | `saves.batteryEnabled` | boolean | `true` |
 | `rom.directory` | optional local path | absent |
 | `general.recentFileCapacity` | integer in `0..50` | `10` |
@@ -72,6 +75,10 @@ in place so the portable JAR remains compatible during the migration window.
 | `fullchanger.character` | optional stable menu value | absent |
 | `btn_*`, `input.pN.btn_*` | validated keyboard binding | documented P1 defaults |
 | `input.pN.gamepad` | disabled, automatic, or stable SDL device ID | P1 automatic |
+| `input.gamepad.<stable-id>.movementDeadZone` | raw SDL threshold in `0..32766` | `16384` |
+| `input.gamepad.<stable-id>.tiltDeadZone` | raw SDL threshold in `0..32766` | `4096` |
+| `input.gamepad.<stable-id>.invertMovementX/Y` | boolean | `false` |
+| `input.gamepad.<stable-id>.invertTiltX/Y` | boolean | `false` |
 
 Recognized values are validated before becoming live settings. Boolean values are exactly `true`
 or `false` (case-insensitive); numeric settings have explicit ranges; hardware profiles,
@@ -82,17 +89,18 @@ does not partially update the active settings.
 application may close without a redundant prompt. `ALWAYS` also confirms an idle application
 close, and `NEVER` suppresses this ordinary confirmation. A battery/autosave flush failure remains
 actionable regardless of this preference. Setting recent-file capacity to zero disables history;
-reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 2
+reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 3
 does not invent or persist an update-check preference.
 
-Unrecognized legacy keys are retained losslessly when schema 2 is saved. Keys in a reserved grammar,
+Unrecognized legacy keys are retained losslessly when schema 3 is saved. Keys in a reserved grammar,
 such as an unknown `input.*` key, remain errors so a misspelled control binding is not silently
-ignored. Schema 2 stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
+ignored. Schema 3 stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
 key beyond Coffee GB's old ten-entry history remains untouched even if capacity later grows. Schema
-2 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
+3 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
 binding is therefore unbound rather than silently restored to a default. If an older unknown key
-occupies a newly reserved schema-2 name, Coffee GB keeps its original key/value in bounded internal
-migration metadata rather than overwriting or reinterpreting it.
+occupies a name reserved by a later schema, Coffee GB keeps its original key/value in bounded
+internal migration metadata rather than overwriting or reinterpreting it. At most 32 per-device
+gamepad tuning profiles are retained.
 
 ## Preferences
 
@@ -102,7 +110,19 @@ without editing the properties file. The Input tab shows all eight current bindi
 1–4. Choose **Capture** and press a key, or use the explicit **Dialog key…** action for Enter or
 Escape. Tab remains reserved for focus navigation and Backspace remains reserved for Rewind.
 Conflicting bindings identify the existing assignment and are not applied; each row also supports
-Clear and Reset.
+Clear and Reset. The Gamepads tab lists up to four logical assignments without calling SDL on the
+EDT. It keeps an unavailable configured controller visible, prevents duplicate explicit or
+automatic assignments, and exposes independent movement/tilt dead zones and X/Y inversion for each
+stable device. A mapping change releases all held input and waits for a neutral physical sample
+before accepting new presses.
+
+The Audio tab enumerates Java Sound outputs on a cancellable background worker. It supports system
+default or an explicit descriptor-hashed output, software master volume, mute, and LOW/BALANCED/SAFE
+bounded-latency presets. If an explicit output disappears, playback retains the configured ID,
+falls back to System Default, records a diagnostic, and stays silent without blocking emulation if
+no output can be opened. While fallback remains active, Coffee GB periodically returns to the
+configured output after it reappears. Device, volume, mute, and latency changes do not reset emulated
+audio clock or DC-filter phase.
 
 **Apply** validates the complete draft, writes one settings update, and switches the live keyboard
 mapping only after persistence accepts it. **Cancel**, the window close button, and Escape discard
@@ -110,8 +130,8 @@ unapplied edits. **Restore Defaults** only changes the visible draft until Apply
 
 ## Migration and recovery
 
-A file without `settings.schemaVersion` is legacy schema 0. Schema 0 and schema 1 migration is a
-pure conversion into schema 2, preserves unknown keys, retains absent profile mappings as Auto, and
+A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 2 migration is a
+pure conversion into schema 3, preserves unknown keys, retains absent profile mappings as Auto, and
 canonicalizes the finite historical uppercase profile aliases. Repeating load/migrate/save produces
 the same normalized settings. Legacy text is decoded with the platform-default charset used by the
 former `FileReader`; versioned files use strict UTF-8 with deterministic ASCII escapes.
@@ -139,7 +159,9 @@ Each save uses the repository's crash-safe same-directory writer: write a unique
 flush it, force it to stable storage, then atomically replace the destination where the file system
 supports that operation. The existing recovery fallback preserves the last complete file.
 
-Normal window shutdown waits up to a bounded timeout for the latest pending settings and reports an
-actionable failure if the writer cannot be stopped safely.
+Normal window shutdown leaves the EDT immediately. Controller, gamepad, audio, and final settings
+teardown run on a dedicated worker; audio and settings waits are bounded, and a final watchdog
+prevents a stalled host provider from leaving a hung desktop process. A settings failure preserves
+the previous complete file and reports an actionable error.
 CLI parsing and settings file I/O occur before or outside Swing component mutation; Swing component
 creation and mutation remain owned by the Event Dispatch Thread.

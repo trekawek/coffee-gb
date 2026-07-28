@@ -395,7 +395,7 @@ class ApplicationSettingsStoreTest {
   }
 
   @Test
-  fun `schema one file is rewritten once as canonical schema two`() {
+  fun `schema one file is rewritten once as canonical current schema`() {
     val directory = Files.createTempDirectory("coffee-gb-settings-schema-one")
     val path = directory.resolve("settings.properties")
     val schemaOne =
@@ -427,14 +427,14 @@ class ApplicationSettingsStoreTest {
 
           Files.readAllBytes(path).also { bytes ->
             val canonical = ApplicationSettingsStore.decodeProperties(bytes)
-            assertEquals("2", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+            assertEquals("3", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
             assertEquals(store.current(), ApplicationSettingsCodec.decode(canonical))
             assertEquals(canonical, ApplicationSettingsCodec.encode(store.current()))
           }
         }
 
     ApplicationSettingsStore(path, debounceMillis = 60_000).use { store ->
-      assertEquals("2", store.current().settings.schemaVersion.toString())
+      assertEquals("3", store.current().settings.schemaVersion.toString())
     }
     assertTrue(canonicalBytes.contentEquals(Files.readAllBytes(path)))
   }
@@ -786,6 +786,9 @@ class ApplicationSettingsStoreTest {
 
   private fun expectedCanonicalFixture(): Map<String, String> =
       mapOf(
+              "audio.latencyPreset" to "BALANCED",
+              "audio.masterVolume" to "100",
+              "audio.outputDevice" to "default",
               "datel.slot.rom" to "/legacy/roms/action-replay.gbc",
               "display.blending" to "false",
               "display.colorCorrection" to "false",
@@ -813,7 +816,7 @@ class ApplicationSettingsStoreTest {
               "general.recent.1" to "/legacy/roms/second.gbc",
               "rom.recent.future" to "preserve future recent metadata",
               "saves.batteryEnabled" to "false",
-              "settings.schemaVersion" to "2",
+              "settings.schemaVersion" to "3",
               "sound.enabled" to "false",
               "system.bootstrapMode" to "FAST_FORWARD",
               "system.cgbGames" to "cgb0",

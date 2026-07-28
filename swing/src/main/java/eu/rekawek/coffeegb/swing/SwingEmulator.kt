@@ -6,18 +6,25 @@ import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
 import eu.rekawek.coffeegb.controller.network.ConnectionController
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.swing.io.AudioDeviceCatalog
+import eu.rekawek.coffeegb.swing.io.AudioDeviceSnapshot
+import eu.rekawek.coffeegb.swing.io.AudioOutputStatus
+import eu.rekawek.coffeegb.swing.io.AudioRuntimeConfiguration
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
-import eu.rekawek.coffeegb.swing.io.SwingAccelerometer
-import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
-import eu.rekawek.coffeegb.swing.io.SwingDisplay
-import eu.rekawek.coffeegb.swing.io.SwingJoypad
-import eu.rekawek.coffeegb.swing.io.SwingGamepad
 import eu.rekawek.coffeegb.swing.io.DesktopPlayerInput
 import eu.rekawek.coffeegb.swing.io.DesktopTiltInput
+import eu.rekawek.coffeegb.swing.io.GamepadCatalog
+import eu.rekawek.coffeegb.swing.io.GamepadConfiguration
+import eu.rekawek.coffeegb.swing.io.SwingAccelerometer
+import eu.rekawek.coffeegb.swing.io.SwingDisplay
+import eu.rekawek.coffeegb.swing.io.SwingGamepad
+import eu.rekawek.coffeegb.swing.io.SwingJoypad
+import eu.rekawek.coffeegb.swing.io.SwingTiltKeys
 import javax.swing.BoxLayout
 import javax.swing.JFrame
 import javax.swing.JPanel
@@ -32,6 +39,7 @@ class SwingEmulator(
   private val gamepad: SwingGamepad
   private val gamepadThread: Thread
   private val sound: AudioSystemSound
+  private val audioDeviceCatalog = AudioDeviceCatalog()
   private val accelerometer: SwingAccelerometer
 
   private val tiltInput: DesktopTiltInput
@@ -46,18 +54,24 @@ class SwingEmulator(
 
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
-    sound = AudioSystemSound(properties.sound, eventBus, "main")
+    sound =
+        AudioSystemSound(
+            properties.applicationSettings.audio.toRuntimeConfiguration(),
+            eventBus,
+            "main",
+        ) {}
     val playerInput = DesktopPlayerInput(properties.playerInputSource, eventBus)
     tiltInput = DesktopTiltInput(eventBus)
     joypad = SwingJoypad(properties.playerInputMapping, eventBus, playerInput)
     gamepad = SwingGamepad(properties.playerInputMapping, playerInput, tiltInput, eventBus)
+    gamepad.updateConfiguration(properties.applicationSettings.toGamepadConfiguration())
     accelerometer = SwingAccelerometer(eventBus, tiltInput, display.preferredSize)
     tiltKeys = SwingTiltKeys(tiltInput)
     printer = SwingPrinter(eventBus)
     connectionController = ConnectionController(eventBus)
 
     Thread(display).start()
-    Thread(sound).start()
+    sound.start()
     gamepadThread = Thread(gamepad, "gamepad").apply { isDaemon = true; start() }
 
     controller = BasicController(eventBus, properties, console).also { it.startController() }
@@ -111,9 +125,21 @@ class SwingEmulator(
     joypad.updateMapping(mapping)
   }
 
+  fun applyDeviceSettings(settings: ApplicationSettings) {
+    gamepad.updateConfiguration(settings.toGamepadConfiguration())
+    sound.applyConfiguration(settings.audio.toRuntimeConfiguration())
+  }
+
+  fun gamepadCatalog(): GamepadCatalog = gamepad.catalog()
+
+  fun audioDevices(): List<AudioDeviceSnapshot> = audioDeviceCatalog.snapshot()
+
+  fun audioStatus(): AudioOutputStatus = sound.currentStatus()
+
   private fun releaseForLifecycleChange() {
     joypad.releaseForLifecycleChange()
     tiltInput.releaseForLifecycleChange()
+    gamepad.releaseForLifecycleChange()
   }
 
   fun bind(jFrame: JFrame) {
@@ -141,3 +167,29 @@ class SwingEmulator(
     }
   }
 }
+
+internal fun ApplicationSettings.toGamepadConfiguration(): GamepadConfiguration =
+    GamepadConfiguration(
+        input.toPlayerMapping().gamepads,
+        input.gamepadTunings.mapValues { (_, tuning) ->
+          GamepadConfiguration.Tuning(
+              tuning.movementDeadZone,
+              tuning.tiltDeadZone,
+              tuning.invertMovementX,
+              tuning.invertMovementY,
+              tuning.invertTiltX,
+              tuning.invertTiltY,
+          )
+        },
+    )
+
+internal fun ApplicationSettings.Audio.toRuntimeConfiguration(): AudioRuntimeConfiguration =
+    AudioRuntimeConfiguration(
+        when (val selection = output) {
+          ApplicationSettings.AudioOutputSelection.Default -> AudioDeviceSnapshot.SYSTEM_DEFAULT_ID
+          is ApplicationSettings.AudioOutputSelection.Device -> selection.stableId
+        },
+        volume,
+        !enabled,
+        AudioRuntimeConfiguration.LatencyPreset.valueOf(latency.name),
+    )
