@@ -4,6 +4,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,6 +13,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
@@ -173,6 +176,45 @@ public class NativePackageVerifierTest {
     }
 
     @Test
+    public void payloadPolicyInspectsForbiddenContentInsideNestedArchives() throws Exception {
+        PayloadLayout layout = createPayloadLayout("archive-payload");
+        Path archive = layout.appDirectory().resolve("libraries.jar");
+
+        writeArchive(
+                archive,
+                Map.of(
+                        "safe/readme.txt", "ordinary package resource".getBytes(StandardCharsets.UTF_8),
+                        "config/build.properties",
+                                "source=/home/release-user/coffee-gb"
+                                        .getBytes(StandardCharsets.UTF_8)));
+        assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+
+        Files.delete(archive);
+        byte[] nested = archiveBytes(Map.of(
+                "fixtures/package-smoke.gbc", new byte[] {1, 2, 3}));
+        writeArchive(archive, Map.of("nested/resources.zip", nested));
+        assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+
+        Files.delete(archive);
+        writeArchive(archive, Map.of(
+                "keys/release.p12", "not-a-real-key".getBytes(StandardCharsets.UTF_8)));
+        assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+    }
+
+    @Test
+    public void payloadPolicyBoundsNestedArchiveDepth() throws Exception {
+        PayloadLayout layout = createPayloadLayout("deep-archive-payload");
+        byte[] archive = archiveBytes(
+                Map.of("level-four/readme.txt", "safe".getBytes(StandardCharsets.UTF_8)));
+        archive = archiveBytes(Map.of("level-three.zip", archive));
+        archive = archiveBytes(Map.of("level-two.zip", archive));
+        archive = archiveBytes(Map.of("level-one.zip", archive));
+        Files.write(layout.appDirectory().resolve("outer.jar"), archive);
+
+        assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+    }
+
+    @Test
     public void legalNoticesMustMatchTheAuthoritativeResources() throws Exception {
         Path source = Path.of("../packaging/resources/legal").toAbsolutePath().normalize();
         Path packaged = temporaryFolder.newFolder("legal").toPath();
@@ -203,6 +245,35 @@ public class NativePackageVerifierTest {
                 java.io.IOException.class,
                 () -> NativePackageVerifier.verifyPayloadPolicy(
                         payload, appDirectory, runtime, NativeTarget.LINUX_X86_64));
+    }
+
+    private PayloadLayout createPayloadLayout(String name) throws Exception {
+        Path payload = temporaryFolder.newFolder(name).toPath();
+        Path appDirectory = payload.resolve("opt/coffee-gb/lib/app");
+        Path runtime = payload.resolve("opt/coffee-gb/lib/runtime");
+        Files.createDirectories(appDirectory);
+        Files.createDirectories(runtime.resolve("lib"));
+        Files.write(runtime.resolve("lib/modules"), new byte[] {1});
+        return new PayloadLayout(payload, appDirectory, runtime);
+    }
+
+    private static void writeArchive(Path output, Map<String, byte[]> entries) throws Exception {
+        Files.write(output, archiveBytes(entries));
+    }
+
+    private static byte[] archiveBytes(Map<String, byte[]> entries) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream archive = new ZipOutputStream(output)) {
+            for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+                archive.putNextEntry(new ZipEntry(entry.getKey()));
+                archive.write(entry.getValue());
+                archive.closeEntry();
+            }
+        }
+        return output.toByteArray();
+    }
+
+    private record PayloadLayout(Path payload, Path appDirectory, Path runtime) {
     }
 
     private static void writeChecksums(Path dist) throws Exception {
