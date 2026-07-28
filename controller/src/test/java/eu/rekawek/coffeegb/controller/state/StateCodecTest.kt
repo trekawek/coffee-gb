@@ -49,7 +49,9 @@ class StateCodecTest {
         assertEquals(compression, inspection.compression)
         assertTrue(inspection.checksumValid)
         assertEquals(listOf(1, 2, 3), inspection.sections.map { it.id })
+        assertEquals(file.diagnostics, inspection.diagnostics)
         assertTrue(inspection.render().contains("magic=CGBS format=1"))
+        assertTrue(inspection.render().contains("core=test-core build=deterministic-build"))
 
         StateCodec.decodeAndApply(first, session)
         repeat(256) { session.gameboy.tick() }
@@ -89,10 +91,60 @@ class StateCodecTest {
       repeat(9_001) { gameboy.tick() }
       val file = StateCodec.capture(configuration, gameboy)
       val bytes = StateCodec.encode(file)
-      assertEquals(file, StateCodec.decode(bytes))
+      val decoded = StateCodec.decode(bytes)
+      assertEquals(file, decoded)
       repeat(123) { gameboy.tick() }
-      StateCodec.decodeAndApply(bytes, configuration, gameboy)
+      StateCodec.applyDecoded(decoded, configuration, gameboy)
       assertEquals(file.root, StateCodec.capture(configuration, gameboy).root)
+    } finally {
+      gameboy.stop()
+      gameboy.close()
+    }
+  }
+
+  @Test
+  fun decodedMachineCompatibilityIsClassifiedWithoutLiveMutation() {
+    val configuration = StateCodecTestSupport.configuration()
+    val gameboy = configuration.build()
+    try {
+      gameboy.init(
+          eu.rekawek.coffeegb.core.events.EventBusImpl(),
+          SerialEndpoint.NULL_ENDPOINT,
+          null,
+      )
+      val file = StateCodec.capture(configuration, gameboy)
+      val before = StateCodec.capture(configuration, gameboy)
+
+      val compatible = StateCodec.classifyCompatibility(file, configuration)
+      assertEquals(StateCompatibilityStatus.COMPATIBLE, compatible.status)
+      assertTrue(compatible.isCompatible)
+      assertNull(compatible.reason)
+
+      val wrongRom =
+          StateCodec.classifyCompatibility(
+              file,
+              StateCodecTestSupport.configuration(StateCodecTestSupport.rom(seed = 7)),
+          )
+      assertEquals(StateCompatibilityStatus.ROM_MISMATCH, wrongRom.status)
+      assertEquals(StateDecodeReason.ROM_MISMATCH, wrongRom.reason)
+      assertTrue(!wrongRom.isCompatible)
+
+      val wrongProfileConfiguration =
+          StateCodecTestSupport.configuration().setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
+      val wrongProfile = StateCodec.classifyCompatibility(file, wrongProfileConfiguration)
+      assertEquals(StateCompatibilityStatus.HARDWARE_PROFILE_MISMATCH, wrongProfile.status)
+      assertEquals(StateDecodeReason.HARDWARE_PROFILE_MISMATCH, wrongProfile.reason)
+
+      val wrongRoot =
+          StateCodec.classifyCompatibility(
+              file,
+              StateRootKind.SESSION,
+              file.identities,
+          )
+      assertEquals(StateCompatibilityStatus.ROOT_MISMATCH, wrongRoot.status)
+      assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, wrongRoot.reason)
+
+      assertEquals(before, StateCodec.capture(configuration, gameboy))
     } finally {
       gameboy.stop()
       gameboy.close()

@@ -83,17 +83,27 @@ public class AtomicFileWriter {
 
     /** Restores the deterministic backup only when the committed target is absent. */
     public void recover(Path target) throws IOException {
+        recoverWithReport(target);
+    }
+
+    /**
+     * Restores the deterministic backup only when the committed target is absent and reports every
+     * recovery artifact that was handled.
+     */
+    public RecoveryReport recoverWithReport(Path target) throws IOException {
         Path normalized = normalizeTarget(target);
-        withLock(normalized, () -> {
-            recoverLocked(normalized);
-            cleanupStaleTemps(normalized);
-            return null;
-        });
+        return withLock(normalized, () -> recoverAndCleanupLocked(normalized));
     }
 
     /** Returns target presence after recovery while holding the target's persistence lock. */
     public boolean exists(Path target) throws IOException {
-        return read(target, path -> operations.exists(path, LinkOption.NOFOLLOW_LINKS));
+        return existsWithRecovery(target).value();
+    }
+
+    /** Returns target presence and the recovery work performed under the target's lock. */
+    public RecoveryResult<Boolean> existsWithRecovery(Path target) throws IOException {
+        return readWithRecovery(
+                target, path -> operations.exists(path, LinkOption.NOFOLLOW_LINKS));
     }
 
     /**
@@ -102,19 +112,29 @@ public class AtomicFileWriter {
      * <p>The callback may perform bounded streaming instead of allocating the entire file.
      */
     public <T> T read(Path target, PathReader<T> reader) throws IOException {
+        return readWithRecovery(target, reader).value();
+    }
+
+    /**
+     * Recovers and reads a target under its persistence lock, returning the value and a structured
+     * explanation of any restored backup or removed transaction artifact.
+     */
+    public <T> RecoveryResult<T> readWithRecovery(Path target, PathReader<T> reader)
+            throws IOException {
+        if (reader == null) {
+            throw new NullPointerException("reader");
+        }
         Path normalized = normalizeTarget(target);
         return withLock(normalized, () -> {
-            recoverLocked(normalized);
-            cleanupStaleTemps(normalized);
-            return reader.read(normalized);
+            RecoveryReport recovery = recoverAndCleanupLocked(normalized);
+            return new RecoveryResult<>(reader.read(normalized), recovery);
         });
     }
 
     private void writeLocked(Path target, byte[] intendedBytes) throws IOException {
         Path parent = target.getParent();
         operations.createDirectories(parent);
-        recoverLocked(target);
-        cleanupStaleTemps(target);
+        recoverAndCleanupLocked(target);
 
         Path temp = operations.createTempFile(parent, tempPrefix(target), ".part");
         IOException failure = null;
@@ -202,7 +222,13 @@ public class AtomicFileWriter {
         }
     }
 
-    private void recoverLocked(Path target) throws IOException {
+    private RecoveryReport recoverAndCleanupLocked(Path target) throws IOException {
+        RecoveryReport recovery = recoverLocked(target);
+        int removedTemps = cleanupStaleTemps(target);
+        return recovery.withStaleTemporaryFilesRemoved(removedTemps);
+    }
+
+    private RecoveryReport recoverLocked(Path target) throws IOException {
         Path parent = target.getParent();
         operations.createDirectories(parent);
         Path backup = backupPath(target);
@@ -211,13 +237,18 @@ public class AtomicFileWriter {
 
         if (targetExists) {
             if (backupIsRegular) {
-                operations.deleteIfExists(backup);
-                forceDirectoryBestEffort(parent);
+                boolean removed = operations.deleteIfExists(backup);
+                if (removed) {
+                    forceDirectoryBestEffort(parent);
+                }
+                return removed
+                        ? new RecoveryReport(false, true, 0)
+                        : RecoveryReport.NONE;
             }
-            return;
+            return RecoveryReport.NONE;
         }
         if (!backupIsRegular) {
-            return;
+            return RecoveryReport.NONE;
         }
 
         try {
@@ -226,6 +257,7 @@ public class AtomicFileWriter {
             operations.move(backup, target);
         }
         forceDirectoryBestEffort(parent);
+        return new RecoveryReport(true, false, 0);
     }
 
     private void removeStaleBackupAfterCommit(Path target) throws IOException {
@@ -236,7 +268,7 @@ public class AtomicFileWriter {
         }
     }
 
-    private void cleanupStaleTemps(Path target) throws IOException {
+    private int cleanupStaleTemps(Path target) throws IOException {
         Path parent = target.getParent();
         String prefix = tempPrefix(target);
         Path[] stale = new Path[MAX_STALE_TEMPS + 1];
@@ -259,12 +291,16 @@ public class AtomicFileWriter {
                     "More than " + MAX_STALE_TEMPS
                             + " stale transaction files exist for " + target.getFileName());
         }
+        int removed = 0;
         for (int i = 0; i < count; i++) {
-            operations.deleteIfExists(stale[i]);
+            if (operations.deleteIfExists(stale[i])) {
+                removed++;
+            }
         }
-        if (count > 0) {
+        if (removed > 0) {
             forceDirectoryBestEffort(parent);
         }
+        return removed;
     }
 
     private void refuseNonRegularArtifact(Path artifact) throws IOException {
@@ -348,6 +384,74 @@ public class AtomicFileWriter {
     @FunctionalInterface
     public interface PathReader<T> {
         T read(Path path) throws IOException;
+    }
+
+    /** Recovery actions performed before a read, existence check, or explicit recovery. */
+    public static final class RecoveryReport {
+
+        public static final RecoveryReport NONE = new RecoveryReport(false, false, 0);
+
+        private final boolean backupRestored;
+
+        private final boolean staleBackupRemoved;
+
+        private final int staleTemporaryFilesRemoved;
+
+        private RecoveryReport(
+                boolean backupRestored,
+                boolean staleBackupRemoved,
+                int staleTemporaryFilesRemoved) {
+            if (staleTemporaryFilesRemoved < 0 || staleTemporaryFilesRemoved > MAX_STALE_TEMPS) {
+                throw new IllegalArgumentException("Invalid stale temporary file count");
+            }
+            this.backupRestored = backupRestored;
+            this.staleBackupRemoved = staleBackupRemoved;
+            this.staleTemporaryFilesRemoved = staleTemporaryFilesRemoved;
+        }
+
+        public boolean backupRestored() {
+            return backupRestored;
+        }
+
+        public boolean staleBackupRemoved() {
+            return staleBackupRemoved;
+        }
+
+        public int staleTemporaryFilesRemoved() {
+            return staleTemporaryFilesRemoved;
+        }
+
+        public boolean recoveredAnything() {
+            return backupRestored || staleBackupRemoved || staleTemporaryFilesRemoved > 0;
+        }
+
+        private RecoveryReport withStaleTemporaryFilesRemoved(int count) {
+            if (count == 0) {
+                return this;
+            }
+            return new RecoveryReport(backupRestored, staleBackupRemoved, count);
+        }
+    }
+
+    /** Value returned by a locked read together with its structured recovery report. */
+    public static final class RecoveryResult<T> {
+
+        private final T value;
+
+        private final RecoveryReport recovery;
+
+        private RecoveryResult(T value, RecoveryReport recovery) {
+            this.value = value;
+            this.recovery = recovery;
+        }
+
+        public T value() {
+            return value;
+        }
+
+        public RecoveryReport recovery() {
+            return recovery;
+        }
     }
 
     @FunctionalInterface

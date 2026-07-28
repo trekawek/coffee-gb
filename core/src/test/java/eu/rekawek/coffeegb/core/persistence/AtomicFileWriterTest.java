@@ -137,6 +137,63 @@ public class AtomicFileWriterTest {
     }
 
     @Test
+    public void recoveryReportDistinguishesRestoredBackupFromDiscardedStaleBackup()
+            throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("reported.sav").toAbsolutePath().normalize();
+            Path backup = AtomicFileWriter.backupPath(target);
+            Files.write(backup, OLD);
+
+            AtomicFileWriter.RecoveryReport restored =
+                    AtomicFileWriter.system().recoverWithReport(target);
+
+            assertTrue(restored.backupRestored());
+            assertFalse(restored.staleBackupRemoved());
+            assertEquals(0, restored.staleTemporaryFilesRemoved());
+            assertTrue(restored.recoveredAnything());
+            assertArrayEquals(OLD, Files.readAllBytes(target));
+
+            Files.write(backup, NEW);
+            AtomicFileWriter.RecoveryReport discarded =
+                    AtomicFileWriter.system().recoverWithReport(target);
+
+            assertFalse(discarded.backupRestored());
+            assertTrue(discarded.staleBackupRemoved());
+            assertEquals(0, discarded.staleTemporaryFilesRemoved());
+            assertTrue(discarded.recoveredAnything());
+            assertArrayEquals(OLD, Files.readAllBytes(target));
+            assertFalse(Files.exists(backup));
+        });
+    }
+
+    @Test
+    public void readAndExistsReturnValuesTogetherWithBoundedTempCleanupReport()
+            throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("read-with-recovery.sav").toAbsolutePath().normalize();
+            Files.write(target, NEW);
+            String prefix = AtomicFileWriter.tempPrefix(target);
+            Files.write(directory.resolve(prefix + "one.part"), new byte[] {1});
+            Files.write(directory.resolve(prefix + "two.part"), new byte[] {2});
+
+            AtomicFileWriter.RecoveryResult<byte[]> read =
+                    AtomicFileWriter.system().readWithRecovery(target, Files::readAllBytes);
+
+            assertArrayEquals(NEW, read.value());
+            assertEquals(2, read.recovery().staleTemporaryFilesRemoved());
+            assertFalse(read.recovery().backupRestored());
+            assertFalse(read.recovery().staleBackupRemoved());
+            assertTrue(read.recovery().recoveredAnything());
+
+            AtomicFileWriter.RecoveryResult<Boolean> exists =
+                    AtomicFileWriter.system().existsWithRecovery(target);
+            assertTrue(exists.value());
+            assertFalse(exists.recovery().recoveredAnything());
+            assertEquals(0, exists.recovery().staleTemporaryFilesRemoved());
+        });
+    }
+
+    @Test
     public void firstFallbackWriteCommitsWithoutInventingAnOldFile() throws Exception {
         withDirectory(directory -> {
             Path target = directory.resolve("first.sav");

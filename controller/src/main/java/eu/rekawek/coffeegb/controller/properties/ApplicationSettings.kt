@@ -383,7 +383,100 @@ data class ApplicationSettings(
     }
   }
 
-  data class Saves(val batterySavesEnabled: Boolean = true)
+  class Saves(
+      val directory: Path? = null,
+      previousDirectories: List<Path> = emptyList(),
+      val batterySavesEnabled: Boolean = true,
+      val rewindEnabled: Boolean = true,
+      val rewindSeconds: Int = DEFAULT_REWIND_SECONDS,
+      val autosavePolicy: AutosavePolicy = AutosavePolicy.DISABLED,
+      val resumePolicy: ResumePolicy = ResumePolicy.ASK,
+  ) {
+    val previousDirectories: List<Path> = immutableListCopy(previousDirectories)
+
+    init {
+      require(directory == null || directory.toString().isNotEmpty()) {
+        "Save directory must not be an empty path"
+      }
+      require(this.previousDirectories.none { it.toString().isEmpty() }) {
+        "Previous save directories must not contain an empty path"
+      }
+      require(this.previousDirectories.size <= MAX_PREVIOUS_SAVE_DIRECTORIES) {
+        "At most $MAX_PREVIOUS_SAVE_DIRECTORIES previous save directories may be stored"
+      }
+      require(
+          this.previousDirectories.map { it.normalize() }.distinct().size ==
+              this.previousDirectories.size) {
+        "Previous save directories must be unique"
+      }
+      require(
+          directory == null ||
+              this.previousDirectories.none { it.normalize() == directory.normalize() }) {
+        "The active save directory must not also be a previous save directory"
+      }
+      require(rewindSeconds in MIN_REWIND_SECONDS..MAX_REWIND_SECONDS) {
+        "Rewind duration must be between $MIN_REWIND_SECONDS and $MAX_REWIND_SECONDS seconds"
+      }
+    }
+
+    fun copy(
+        directory: Path? = this.directory,
+        previousDirectories: List<Path> = this.previousDirectories,
+        batterySavesEnabled: Boolean = this.batterySavesEnabled,
+        rewindEnabled: Boolean = this.rewindEnabled,
+        rewindSeconds: Int = this.rewindSeconds,
+        autosavePolicy: AutosavePolicy = this.autosavePolicy,
+        resumePolicy: ResumePolicy = this.resumePolicy,
+    ): Saves =
+        Saves(
+            directory,
+            previousDirectories,
+            batterySavesEnabled,
+            rewindEnabled,
+            rewindSeconds,
+            autosavePolicy,
+            resumePolicy,
+        )
+
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            (other is Saves &&
+                directory == other.directory &&
+                previousDirectories == other.previousDirectories &&
+                batterySavesEnabled == other.batterySavesEnabled &&
+                rewindEnabled == other.rewindEnabled &&
+                rewindSeconds == other.rewindSeconds &&
+                autosavePolicy == other.autosavePolicy &&
+                resumePolicy == other.resumePolicy)
+
+    override fun hashCode(): Int {
+      var result = directory?.hashCode() ?: 0
+      result = 31 * result + previousDirectories.hashCode()
+      result = 31 * result + batterySavesEnabled.hashCode()
+      result = 31 * result + rewindEnabled.hashCode()
+      result = 31 * result + rewindSeconds
+      result = 31 * result + autosavePolicy.hashCode()
+      result = 31 * result + resumePolicy.hashCode()
+      return result
+    }
+
+    override fun toString(): String =
+        "Saves(directory=$directory, previousDirectories=$previousDirectories, " +
+            "batterySavesEnabled=$batterySavesEnabled, rewindEnabled=$rewindEnabled, " +
+            "rewindSeconds=$rewindSeconds, autosavePolicy=$autosavePolicy, " +
+            "resumePolicy=$resumePolicy)"
+  }
+
+  enum class AutosavePolicy {
+    DISABLED,
+    ON_CLOSE_AND_ROM_SWITCH,
+  }
+
+  enum class ResumePolicy {
+    NEVER,
+    ASK,
+    ALWAYS,
+  }
 
   data class Advanced(
       val dmgGamesProfile: ProfileSelection = ProfileSelection.Auto,
@@ -409,7 +502,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 4
+    const val CURRENT_SCHEMA_VERSION = 5
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
@@ -427,6 +520,10 @@ data class ApplicationSettings(
     const val MIN_LETTERBOX_COLOR = 0x000000
     const val DEFAULT_LETTERBOX_COLOR = 0x000000
     const val MAX_LETTERBOX_COLOR = 0xFFFFFF
+    const val MAX_PREVIOUS_SAVE_DIRECTORIES = 4
+    const val MIN_REWIND_SECONDS = 5
+    const val DEFAULT_REWIND_SECONDS = 30
+    const val MAX_REWIND_SECONDS = 120
 
     internal fun isStableAudioOutputId(value: String): Boolean =
         value.matches(STABLE_AUDIO_OUTPUT_ID)

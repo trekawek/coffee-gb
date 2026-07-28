@@ -25,6 +25,12 @@ object ApplicationSettingsCodec {
   const val DISPLAY_SCALING_MODE_KEY = "display.scalingMode"
   const val DISPLAY_LETTERBOX_COLOR_KEY = "display.letterboxColor"
   const val DISPLAY_FULLSCREEN_KEY = "display.fullscreen"
+  const val SAVE_DIRECTORY_KEY = "saves.directory"
+  const val PREVIOUS_SAVE_DIRECTORY_PREFIX = "saves.previousDirectory."
+  const val REWIND_ENABLED_KEY = "saves.rewindEnabled"
+  const val REWIND_SECONDS_KEY = "saves.rewindSeconds"
+  const val AUTOSAVE_POLICY_KEY = "saves.autosavePolicy"
+  const val RESUME_POLICY_KEY = "saves.resumePolicy"
   internal const val PRESERVED_UNKNOWN_COLLISIONS_PREFIX =
       "settings.preservedUnknownCollisions."
 
@@ -40,6 +46,15 @@ object ApplicationSettingsCodec {
   private val versionFourFixedKeys =
       versionThreeFixedKeys +
           setOf(DISPLAY_SCALING_MODE_KEY, DISPLAY_LETTERBOX_COLOR_KEY, DISPLAY_FULLSCREEN_KEY)
+  private val versionFiveFixedKeys =
+      versionFourFixedKeys +
+          setOf(
+              SAVE_DIRECTORY_KEY,
+              REWIND_ENABLED_KEY,
+              REWIND_SECONDS_KEY,
+              AUTOSAVE_POLICY_KEY,
+              RESUME_POLICY_KEY,
+          )
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -57,6 +72,7 @@ object ApplicationSettingsCodec {
         version == "1" ||
             version == "2" ||
             version == "3" ||
+            version == "4" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -130,6 +146,14 @@ object ApplicationSettingsCodec {
     known[AUDIO_VOLUME_KEY] = settings.audio.volume.toString()
     known[AUDIO_LATENCY_KEY] = settings.audio.latency.name
     known[BATTERY_SAVES_KEY] = settings.saves.batterySavesEnabled.toString()
+    settings.saves.directory?.let { known[SAVE_DIRECTORY_KEY] = it.toString() }
+    settings.saves.previousDirectories.forEachIndexed { index, path ->
+      known["$PREVIOUS_SAVE_DIRECTORY_PREFIX$index"] = path.toString()
+    }
+    known[REWIND_ENABLED_KEY] = settings.saves.rewindEnabled.toString()
+    known[REWIND_SECONDS_KEY] = settings.saves.rewindSeconds.toString()
+    known[AUTOSAVE_POLICY_KEY] = settings.saves.autosavePolicy.name
+    known[RESUME_POLICY_KEY] = settings.saves.resumePolicy.name
 
     encodeProfile(
         known,
@@ -304,8 +328,50 @@ object ApplicationSettingsCodec {
             input = input,
             saves =
                 ApplicationSettings.Saves(
+                    directory =
+                        if (sourceVersion >= 5) {
+                          raw[SAVE_DIRECTORY_KEY]?.let(::parsePath)
+                        } else {
+                          null
+                        },
+                    previousDirectories =
+                        if (sourceVersion >= 5) {
+                          parsePreviousSaveDirectories(raw)
+                        } else {
+                          emptyList()
+                        },
                     batterySavesEnabled =
                         parseBoolean(raw[BATTERY_SAVES_KEY], true, BATTERY_SAVES_KEY),
+                    rewindEnabled =
+                        if (sourceVersion >= 5) {
+                          parseBoolean(raw[REWIND_ENABLED_KEY], true, REWIND_ENABLED_KEY)
+                        } else {
+                          true
+                        },
+                    rewindSeconds =
+                        if (sourceVersion >= 5) {
+                          parseRangedInt(
+                              raw[REWIND_SECONDS_KEY],
+                              ApplicationSettings.DEFAULT_REWIND_SECONDS,
+                              REWIND_SECONDS_KEY,
+                              ApplicationSettings.MIN_REWIND_SECONDS,
+                              ApplicationSettings.MAX_REWIND_SECONDS,
+                          )
+                        } else {
+                          ApplicationSettings.DEFAULT_REWIND_SECONDS
+                        },
+                    autosavePolicy =
+                        if (sourceVersion >= 5) {
+                          parseAutosavePolicy(raw[AUTOSAVE_POLICY_KEY])
+                        } else {
+                          ApplicationSettings.AutosavePolicy.DISABLED
+                        },
+                    resumePolicy =
+                        if (sourceVersion >= 5) {
+                          parseResumePolicy(raw[RESUME_POLICY_KEY])
+                        } else {
+                          ApplicationSettings.ResumePolicy.ASK
+                        },
                 ),
             advanced =
                 ApplicationSettings.Advanced(
@@ -335,6 +401,7 @@ object ApplicationSettingsCodec {
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 5 -> versionFiveFixedKeys
           sourceVersion >= 4 -> versionFourFixedKeys
           sourceVersion >= 3 -> versionThreeFixedKeys
           sourceVersion >= 2 -> versionTwoFixedKeys
@@ -349,6 +416,10 @@ object ApplicationSettingsCodec {
                   !isKnownRecentKey(
                       key,
                       supportsCanonicalRecentKeys = sourceVersion >= 2,
+                  ) &&
+                  !isKnownPreviousSaveDirectoryKey(
+                      key,
+                      supportsPreviousDirectories = sourceVersion >= 5,
                   ) &&
                   !key.startsWith("btn_") &&
                   (!key.startsWith("input.") ||
@@ -434,6 +505,49 @@ object ApplicationSettingsCodec {
       throw IllegalArgumentException(
           "Invalid $AUDIO_LATENCY_KEY: $value (expected LOW, BALANCED, or SAFE)")
     }
+  }
+
+  private fun parseAutosavePolicy(value: String?): ApplicationSettings.AutosavePolicy {
+    if (value == null) return ApplicationSettings.AutosavePolicy.DISABLED
+    return try {
+      ApplicationSettings.AutosavePolicy.valueOf(value)
+    } catch (_: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid $AUTOSAVE_POLICY_KEY: $value " +
+              "(expected DISABLED or ON_CLOSE_AND_ROM_SWITCH)")
+    }
+  }
+
+  private fun parseResumePolicy(value: String?): ApplicationSettings.ResumePolicy {
+    if (value == null) return ApplicationSettings.ResumePolicy.ASK
+    return try {
+      ApplicationSettings.ResumePolicy.valueOf(value)
+    } catch (_: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid $RESUME_POLICY_KEY: $value (expected NEVER, ASK, or ALWAYS)")
+    }
+  }
+
+  private fun parsePreviousSaveDirectories(raw: Map<String, String>): List<Path> {
+    val indexed =
+        raw
+            .filterKeys { it.startsWith(PREVIOUS_SAVE_DIRECTORY_PREFIX) }
+            .mapNotNull { (key, value) ->
+              val suffix = key.removePrefix(PREVIOUS_SAVE_DIRECTORY_PREFIX)
+              val index = suffix.toIntOrNull()
+              if (index == null ||
+                  index !in 0 until ApplicationSettings.MAX_PREVIOUS_SAVE_DIRECTORIES ||
+                  suffix != index.toString()) {
+                null
+              } else {
+                index to parsePath(value)
+              }
+            }
+            .sortedBy(Pair<Int, Path>::first)
+    require(indexed.map(Pair<Int, Path>::first) == indexed.indices.toList()) {
+      "Previous save directories must be contiguous from zero"
+    }
+    return indexed.map(Pair<Int, Path>::second)
   }
 
   private fun parseDisplayScalingMode(value: String?): ApplicationSettings.DisplayScalingMode {
@@ -711,10 +825,23 @@ object ApplicationSettingsCodec {
         key == "$RECENT_ROM_PREFIX$index"
   }
 
+  private fun isKnownPreviousSaveDirectoryKey(
+      key: String,
+      supportsPreviousDirectories: Boolean,
+  ): Boolean {
+    if (!supportsPreviousDirectories || !key.startsWith(PREVIOUS_SAVE_DIRECTORY_PREFIX)) {
+      return false
+    }
+    val index = key.removePrefix(PREVIOUS_SAVE_DIRECTORY_PREFIX).toIntOrNull() ?: return false
+    return index in 0 until ApplicationSettings.MAX_PREVIOUS_SAVE_DIRECTORIES &&
+        key == "$PREVIOUS_SAVE_DIRECTORY_PREFIX$index"
+  }
+
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionFourFixedKeys ||
+      key in versionFiveFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
+          isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||
           key.startsWith("btn_") ||
           key.startsWith("input.")
 
