@@ -171,14 +171,42 @@ public final class NativePackageTool {
                 runInherited(command);
             }
         }
+        ReleaseMetadata releaseMetadata = finalizeReleaseMetadata(stage, destination);
+        System.out.println(
+                "Built " + target.id() + " " + packageType.id() + " at " + primaryArtifact);
+        System.out.println("Checksums: " + releaseMetadata.checksums());
+    }
+
+    /**
+     * Copies both Maven and target-native SBOMs next to the release artifact and then covers the
+     * complete release directory with sorted SHA-256 checksums.
+     *
+     * <p>Public for the packaging integration test; normal callers use the {@code build} command.
+     */
+    public static ReleaseMetadata finalizeReleaseMetadata(
+            NativePackageStager.StageResult stage, Path destination) throws IOException {
+        if (Files.isSymbolicLink(destination)
+                || !Files.isDirectory(destination, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException(
+                    "Release destination is not a non-symlink directory: " + destination);
+        }
         Path releaseSbom = destination.resolve(
                 NativePackageMetadata.releaseSbomFileName(stage.appVersion()));
         Files.copy(stage.sbom(), releaseSbom, StandardCopyOption.COPY_ATTRIBUTES);
+        Path releaseNativeSbom = destination.resolve(
+                NativePackageMetadata.releaseNativeSbomFileName(
+                        stage.appVersion(), stage.target().nativeTarget()));
+        Files.copy(
+                stage.nativeSbom(),
+                releaseNativeSbom,
+                StandardCopyOption.COPY_ATTRIBUTES);
+        NativeComponentInventory.verifyNativeSbom(
+                releaseNativeSbom,
+                stage.target().nativeTarget(),
+                stage.appVersion());
         Path checksumFile = destination.resolve("SHA256SUMS");
         writeChecksums(destination, checksumFile);
-        System.out.println(
-                "Built " + target.id() + " " + packageType.id() + " at " + primaryArtifact);
-        System.out.println("Checksums: " + checksumFile);
+        return new ReleaseMetadata(releaseSbom, releaseNativeSbom, checksumFile);
     }
 
     private static void requireJdk21(Path javaHome) throws IOException {
@@ -392,6 +420,9 @@ public final class NativePackageTool {
         return System.getProperty("os.name", "")
                 .toLowerCase(Locale.ROOT)
                 .startsWith("windows");
+    }
+
+    public record ReleaseMetadata(Path mavenSbom, Path nativeSbom, Path checksums) {
     }
 
     private record ProcessResult(int exitCode, String output) {

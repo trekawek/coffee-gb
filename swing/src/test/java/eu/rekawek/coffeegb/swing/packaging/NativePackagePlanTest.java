@@ -164,6 +164,7 @@ public class NativePackagePlanTest {
                 root.resolve("jpackage-resources"),
                 root.resolve("input/coffee-gb.jar"),
                 root.resolve("input/coffee-gb-sbom.cdx.json"),
+                root.resolve("input/coffee-gb-native-sbom.cdx.json"),
                 root.resolve("input/coffee-gb." + target.iconSuffix()),
                 root.resolve("associations/game-boy-rom.properties"),
                 root.resolve("input/package-manifest.properties"),
