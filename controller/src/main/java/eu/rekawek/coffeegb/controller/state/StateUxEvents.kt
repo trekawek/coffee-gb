@@ -152,6 +152,22 @@ data class StatePrepareCloseRequestEvent(val requestId: Long) : Event {
   }
 }
 
+/**
+ * Explicit user waiver after a failed/unavailable close autosave; never inferred silently.
+ *
+ * The session correlation prevents a delayed dialog choice from waiving autosave for a
+ * replacement game.
+ */
+data class StateSkipCloseAutosaveRequestEvent(
+    val requestId: Long,
+    val sessionId: Long,
+) : Event {
+  init {
+    requireRequestId(requestId)
+    require(sessionId > 0) { "State session ID must be positive" }
+  }
+}
+
 data class StatePrepareCloseCompletedEvent(
     val requestId: Long,
     val sessionId: Long,

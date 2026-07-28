@@ -15,9 +15,12 @@ import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationWorker
+import eu.rekawek.coffeegb.controller.state.StatePrepareCloseCompletedEvent
+import eu.rekawek.coffeegb.controller.state.StatePrepareCloseRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateRef
 import eu.rekawek.coffeegb.controller.state.StateRepository
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateSkipCloseAutosaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateStoragePaths
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.controller.state.StateWorkspace
@@ -33,12 +36,165 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerStateUxTest {
+
+  @Test
+  fun closeAutosaveWaiverRequiresTheFailedCurrentSession() {
+    val directory = Files.createTempDirectory("controller-autosave-waiver")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        directory = directory.resolve("saves"),
+                        autosavePolicy =
+                            ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    val closeResults = LinkedBlockingQueue<StatePrepareCloseCompletedEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<StateUxSessionEvent>(sessions::add)
+    eventBus.register<StatePrepareCloseCompletedEvent>(closeResults::add)
+    val stateExecutor = ManualExecutorService()
+    val persistence = ToggleFailWriter().also { it.fail = true }
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory { paths -> workspace(paths, persistence) },
+            StateOperationWorkerFactory { bus ->
+              StateOperationWorker(bus, executor = stateExecutor)
+            },
+        )
+    var closed = false
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val stateSession = assertNotNull(sessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      eventBus.post(StatePrepareCloseRequestEvent(50))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val failed = assertNotNull(closeResults.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(50, failed.requestId)
+      assertNotNull(failed.error)
+
+      eventBus.post(StateSkipCloseAutosaveRequestEvent(51, stateSession.sessionId + 1))
+      val stale = assertNotNull(closeResults.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(51, stale.requestId)
+      assertNotNull(stale.error)
+
+      eventBus.post(StateSkipCloseAutosaveRequestEvent(52, stateSession.sessionId))
+      val waived = assertNotNull(closeResults.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(52, waived.requestId)
+      assertNull(waived.error)
+
+      assertNotNull(controller.closeWithState())
+      closed = true
+      assertTrue(
+          Files.notExists(
+              assertNotNull(stateSession.gameDirectory)
+                  .resolve("states")
+                  .resolve("autosave")
+                  .resolve("state.cgbstate")))
+    } finally {
+      persistence.fail = false
+      if (!closed) {
+        runCatching { controller.close() }
+      }
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun closeAutosaveIsBoundedRetainedAndRetryableWithoutDesktopPreflight() {
+    val directory = Files.createTempDirectory("controller-autosave-close")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        directory = directory.resolve("saves"),
+                        autosavePolicy =
+                            ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<StateUxSessionEvent>(sessions::add)
+    val persistence = ToggleFailWriter()
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory { paths -> workspace(paths, persistence) },
+            StateOperationWorkerFactory.DEFAULT,
+        )
+    var closed = false
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val gameDirectory =
+          assertNotNull(sessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).gameDirectory
+
+      persistence.fail = true
+      val failure =
+          assertFailsWith<Controller.PersistenceBarrierException> {
+            controller.closeWithState()
+          }
+      assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
+      assertEquals("autosave state", failure.fileName)
+
+      persistence.fail = false
+      assertNotNull(controller.closeWithState())
+      closed = true
+      assertTrue(
+          Files.isRegularFile(
+              assertNotNull(gameDirectory)
+                  .resolve("states")
+                  .resolve("autosave")
+                  .resolve("state.cgbstate")))
+    } finally {
+      persistence.fail = false
+      if (!closed) {
+        runCatching { controller.close() }
+      }
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
 
   @Test
   fun romSwitchAutosaveUsesCorrelatedRetryAndCancelBarrier() {

@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.ExclusiveWriteRecovery
 import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
 import eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateDeleteRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateDiagnosticMetadata
 import eu.rekawek.coffeegb.controller.state.StateDiagnosticRedactor
@@ -29,7 +30,9 @@ import eu.rekawek.coffeegb.controller.state.StateRomHashes
 import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent
 import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateSaveMetadata
 import eu.rekawek.coffeegb.controller.state.StateScreenshotRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateSkipCloseAutosaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateStoragePaths
 import eu.rekawek.coffeegb.controller.state.StateStorageResolver
 import eu.rekawek.coffeegb.controller.state.StateUserError
@@ -275,6 +278,16 @@ class BasicController private constructor(
 
   private var closePersistenceAttempt: RetainedClosePersistence? = null
 
+  private var closeAutosaveCapture: StateFile? = null
+
+  private var closeAutosaveAttempt: RetainedCloseAutosave? = null
+
+  private var closeAutosaveCompletedSessionId: Long? = null
+
+  private var closeAutosaveSkippedSessionId: Long? = null
+
+  private var closeAutosaveWaiverSessionId: Long? = null
+
   private var closed = false
 
   /** The user's pause state before the current chain of coalesced load requests. */
@@ -321,6 +334,31 @@ class BasicController private constructor(
     eventQueue.register<StateOpenFolderRequestEvent> { requestOpenStateFolder(it) }
     eventQueue.register<StateResumeDecisionEvent> { applyResumeDecision(it) }
     eventQueue.register<StatePrepareCloseRequestEvent> { prepareClose(it) }
+    eventQueue.register<StateSkipCloseAutosaveRequestEvent> {
+      val currentSessionId = stateSessionId
+      val waiverIsCurrent =
+          it.sessionId == currentSessionId && closeAutosaveWaiverSessionId == currentSessionId
+      if (waiverIsCurrent) {
+        closeAutosaveSkippedSessionId = currentSessionId
+        closeAutosaveWaiverSessionId = null
+      }
+      eventBus.post(
+          StatePrepareCloseCompletedEvent(
+              it.requestId,
+              currentSessionId,
+              autosaved = false,
+              error =
+                  if (waiverIsCurrent) {
+                    null
+                  } else {
+                    StateUserError(
+                        "The close choice is no longer current.",
+                        "The game session or autosave attempt changed before the waiver was applied.",
+                        "Retry closing to autosave the current game, or choose close without autosave again.",
+                    )
+                  },
+          ))
+    }
     eventQueue.register<StateWorkerCompletedEvent> { finishStateWorkerRequest(it) }
     eventQueue.register<Controller.PauseEmulationEvent> {
       if (pauseStateBeforeLoading != null) {
@@ -534,8 +572,7 @@ class BasicController private constructor(
   private fun prepareClose(event: StatePrepareCloseRequestEvent) {
     val context = stateContext
     val currentSession = session
-    if (context == null ||
-        currentSession == null ||
+    if (currentSession == null ||
         properties.saves.autosavePolicy !=
             eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
                 .ON_CLOSE_AND_ROM_SWITCH) {
@@ -548,7 +585,39 @@ class BasicController private constructor(
           ))
       return
     }
+    if (context == null) {
+      closeAutosaveWaiverSessionId = stateSessionId
+      eventBus.post(
+          StatePrepareCloseCompletedEvent(
+              event.requestId,
+              stateSessionId,
+              autosaved = false,
+              error =
+                  StateUserError(
+                      "Close autosave is unavailable.",
+                      "The configured save workspace could not be initialized for this game.",
+                      "Choose a writable Saves directory, retry, or explicitly close without autosave.",
+                  ),
+          ))
+      return
+    }
+    if (pendingCloseRequestId != null) {
+      eventBus.post(
+          StatePrepareCloseCompletedEvent(
+              event.requestId,
+              context.sessionId,
+              autosaved = false,
+              error =
+                  StateUserError(
+                      "Close autosave is already in progress.",
+                      "Another close preparation owns the current immutable state capture.",
+                      "Wait for that save to finish before closing again.",
+                  ),
+          ))
+      return
+    }
     try {
+      closeAutosaveWaiverSessionId = null
       pendingCloseRequestId = event.requestId
       stateWorker.save(
           context,
@@ -782,6 +851,8 @@ class BasicController private constructor(
       StateWorkerPurpose.AUTOSAVE_CLOSE -> {
         if (pendingCloseRequestId != event.requestId) return
         pendingCloseRequestId = null
+        closeAutosaveCompletedSessionId = context.sessionId
+        closeAutosaveWaiverSessionId = null
         eventBus.post(
             StatePrepareCloseCompletedEvent(
                 event.requestId,
@@ -814,6 +885,7 @@ class BasicController private constructor(
       StateWorkerPurpose.AUTOSAVE_CLOSE -> {
         if (pendingCloseRequestId != event.requestId) return
         pendingCloseRequestId = null
+        closeAutosaveWaiverSessionId = event.context.sessionId
         eventBus.post(
             StatePrepareCloseCompletedEvent(
                 event.requestId,
@@ -1487,6 +1559,11 @@ class BasicController private constructor(
     isPaused = false
     sessionStartedNanos = System.nanoTime()
     stateSessionId = nextStateSessionId()
+    closeAutosaveCapture = null
+    closeAutosaveAttempt = null
+    closeAutosaveCompletedSessionId = null
+    closeAutosaveSkippedSessionId = null
+    closeAutosaveWaiverSessionId = null
     var stateUnavailableReason: StateUserError? = null
     stateContext =
         try {
@@ -1561,6 +1638,11 @@ class BasicController private constructor(
     rewindManager = configuredRewindManager(saves)
     val currentSession = session ?: return
     stateSessionId = nextStateSessionId()
+    closeAutosaveCapture = null
+    closeAutosaveAttempt = null
+    closeAutosaveCompletedSessionId = null
+    closeAutosaveSkippedSessionId = null
+    closeAutosaveWaiverSessionId = null
     var stateUnavailableReason: StateUserError? = null
     stateContext =
         try {
@@ -1715,6 +1797,8 @@ class BasicController private constructor(
     pauseStateBeforeLoading = null
     setPaused(true)
 
+    persistCloseAutosave(closeDeadlineNanos)
+
     if (closeState == null) {
       closeState =
           session?.let {
@@ -1778,7 +1862,96 @@ class BasicController private constructor(
     closeState = null
     closeRequestId = null
     closePersistenceAttempt = null
+    closeAutosaveCapture = null
+    closeAutosaveAttempt = null
+    closeAutosaveCompletedSessionId = null
+    closeAutosaveSkippedSessionId = null
+    closeAutosaveWaiverSessionId = null
     return state
+  }
+
+  private fun persistCloseAutosave(closeDeadlineNanos: Long) {
+    if (properties.saves.autosavePolicy !=
+        eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
+            .ON_CLOSE_AND_ROM_SWITCH) {
+      return
+    }
+    val currentSession = session ?: return
+    if (closeAutosaveCompletedSessionId == stateSessionId ||
+        closeAutosaveSkippedSessionId == stateSessionId) {
+      return
+    }
+    val context =
+        stateContext
+            ?: throw closeBarrierFailure(
+                "Close autosave is unavailable because the configured save workspace could not " +
+                    "be initialized. Choose a writable Saves directory or close explicitly " +
+                    "without autosave.",
+                java.io.IOException("Managed state workspace is unavailable"),
+                "autosave state",
+            )
+    val capture =
+        closeAutosaveCapture
+            ?: capturePortableState(currentSession).also { closeAutosaveCapture = it }
+    val attempt =
+        closeAutosaveAttempt
+            ?: RetainedCloseAutosave(
+                    Callable {
+                      try {
+                        val encoded = StateCodec.encode(capture, StateCompression.DEFLATE)
+                        context.workspace.save(
+                            StateRef.Autosave,
+                            encoded,
+                            StateSaveMetadata(
+                                label = "Autosave",
+                                savedAt = java.time.Instant.now(),
+                                playDurationNanos = currentPlayDurationNanos(),
+                            ),
+                            null,
+                        )
+                        CloseAutosaveResult.Success
+                      } catch (failure: Throwable) {
+                        CloseAutosaveResult.Failure(
+                            stateError(
+                                "Close autosave could not be completed.",
+                                failure,
+                                "The session is retained. Check the Saves directory and retry.",
+                            ))
+                      }
+                    },
+                    persistenceExecutor,
+                )
+                .also { closeAutosaveAttempt = it }
+    val result =
+        attempt.await(
+            remainingCloseNanos(closeDeadlineNanos, "close autosave"),
+            TimeUnit.NANOSECONDS,
+        )
+    when (result) {
+      null ->
+          throw closeBarrierFailure(
+              "Close autosave did not finish before the controller close deadline. " +
+                  "The immutable capture remains retained and close can be retried.",
+              java.io.IOException("Close autosave timed out"),
+              "autosave state",
+          )
+      is CloseAutosaveResult.Failure -> {
+        if (attempt.isDone) {
+          closeAutosaveAttempt = null
+        }
+        throw closeBarrierFailure(
+            "${result.error.summary} ${result.error.suggestedAction}",
+            java.io.IOException(result.error.detail),
+            "autosave state",
+        )
+      }
+      CloseAutosaveResult.Success -> {
+        closeAutosaveCompletedSessionId = context.sessionId
+        closeAutosaveSkippedSessionId = null
+        closeAutosaveCapture = null
+        closeAutosaveAttempt = null
+      }
+    }
   }
 
   private fun awaitTimingThread(closeDeadlineNanos: Long) {
@@ -1885,13 +2058,14 @@ class BasicController private constructor(
   private fun closeBarrierFailure(
       message: String,
       cause: Throwable,
+      fileName: String = closeFileName(),
   ): Controller.PersistenceBarrierException {
     val requestId = closeRequestId ?: nextPersistenceRequestId++
     closeRequestId = requestId
     return Controller.PersistenceBarrierException(
         requestId,
         Controller.PersistenceBarrierOperation.CLOSE,
-        closeFileName(),
+        fileName,
         message,
         cause,
     )
@@ -2119,6 +2293,49 @@ internal class RetainedClosePersistence(
           "Battery persistence timed out. Changes remain pending and can be retried.",
           java.io.IOException("Battery persistence timed out", cause),
       )
+}
+
+internal sealed interface CloseAutosaveResult {
+  data object Success : CloseAutosaveResult
+
+  data class Failure(val error: StateUserError) : CloseAutosaveResult
+}
+
+/**
+ * Retains one exact close-autosave writer across caller-side timeout and retry boundaries.
+ * Persistence shares the controller's ordered physical writer with battery replacement.
+ */
+internal class RetainedCloseAutosave(
+    callable: Callable<CloseAutosaveResult>,
+    persistenceExecutor: ExecutorService,
+) {
+  private val task =
+      FutureTask(callable).also {
+        persistenceExecutor.execute(it)
+      }
+
+  val isDone: Boolean
+    get() = task.isDone
+
+  /** A null result means the same task is still retained for a later bounded retry. */
+  fun await(timeout: Long, unit: TimeUnit): CloseAutosaveResult? {
+    require(timeout > 0) { "Close autosave timeout must be positive" }
+    return try {
+      task.get(timeout, unit)
+    } catch (_: TimeoutException) {
+      null
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+      null
+    } catch (failure: Exception) {
+      CloseAutosaveResult.Failure(
+          StateUserError(
+              "Close autosave worker failed.",
+              failure.cause?.message ?: failure.message ?: failure.javaClass.name,
+              "The session is retained. Retry closing after checking the Saves directory.",
+          ))
+    }
+  }
 }
 
 internal fun interface SnapshotManagerFactory {
