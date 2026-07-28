@@ -57,8 +57,9 @@ public class NativePackageWorkflowTest {
         assertEquals(2, occurrences(packages,
                 "sudo apt-get install --yes --no-install-recommends "
                         + "desktop-file-utils gnome-menus libfile-mimeinfo-perl "
-                        + "shared-mime-info xdg-utils"));
+                        + "libglib2.0-bin shared-mime-info xdg-utils"));
         assertEquals(2, occurrences(packages, "command -v desktop-file-validate"));
+        assertEquals(2, occurrences(packages, "command -v gio"));
         assertEquals(2, occurrences(packages, "command -v mimetype"));
         assertEquals(2, occurrences(packages, "command -v update-mime-database"));
         assertEquals(2, occurrences(packages, "command -v xdg-desktop-menu"));
@@ -95,7 +96,8 @@ public class NativePackageWorkflowTest {
             assertTrue(associationSh.contains(extension));
             assertTrue(associationPs1.contains("." + extension));
         }
-        assertTrue(associationSh.contains("open \"$fixture\""));
+        assertTrue(associationSh.contains("gio open \"$fixture\""));
+        assertFalse(associationSh.contains("xdg-open \"$fixture\""));
         assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
         assertTrue(associationPs1.contains("Start-Process -FilePath $Fixture.Path"));
         assertTrue(associationPs1.contains("Coffee GB Console.exe"));
@@ -105,6 +107,14 @@ public class NativePackageWorkflowTest {
         assertTrue(associationSh.contains("codesign --verify --deep --strict"));
         assertTrue(associationSh.contains(
                 "com.apple.security.cs.disable-library-validation"));
+        assertTrue(associationSh.contains("CFBundleDocumentTypes"));
+        assertTrue(associationSh.contains("UTExportedTypeDeclarations"));
+        assertTrue(associationSh.contains("eu.rekawek.coffeegb.gb"));
+        assertTrue(associationSh.contains("eu.rekawek.coffeegb.gbc"));
+        assertTrue(associationSh.contains(
+                "grep -F \"\\\"$content_type\\\"\" <<<\"$documents\""));
+        assertTrue(associationSh.contains(
+                "grep -F \"\\\"$extension\\\"\" <<<\"$exported_types\""));
         assertLicensedDmgAttach(associationSh, "\"$mount_point\"");
         assertLicensedDmgAttach(packageSh, "\"$extraction\"");
         assertFalse(associationSh.contains("-acceptlicense"));
@@ -186,15 +196,16 @@ public class NativePackageWorkflowTest {
     }
 
     private static void assertLicensedDmgAttach(String script, String mountPoint) {
-        int start = script.indexOf("printf 'Y\\n' | hdiutil attach");
+        int start = script.indexOf("hdiutil attach");
         assertTrue("Missing licensed DMG attach command", start >= 0);
-        int end = script.indexOf(">/dev/null", start);
-        assertTrue("Licensed DMG attach command has no bounded block", end > start);
+        int end = script.indexOf("<<<Y", start);
+        assertTrue("Licensed DMG attach command has no stdin acceptance", end > start);
         String command = script.substring(start, end);
         assertTrue(command.contains("-nobrowse"));
         assertTrue(command.contains("-readonly"));
         assertTrue(command.contains("-mountpoint " + mountPoint));
         assertTrue(command.lastIndexOf("\"${installers[0]}\"")
                 > command.indexOf("-mountpoint " + mountPoint));
+        assertFalse(script.contains("| hdiutil attach"));
     }
 }
