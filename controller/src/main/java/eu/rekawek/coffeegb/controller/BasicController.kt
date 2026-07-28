@@ -25,6 +25,7 @@ import eu.rekawek.coffeegb.controller.state.StatePrepareCloseRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateReadResult
 import eu.rekawek.coffeegb.controller.state.StateRecovery
 import eu.rekawek.coffeegb.controller.state.StateRef
+import eu.rekawek.coffeegb.controller.state.StateRomHashes
 import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent
 import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
@@ -230,6 +231,8 @@ class BasicController private constructor(
 
   private var stateContext: StateWorkerContext? = null
 
+  private var currentRomHashes: StateRomHashes? = null
+
   private var stateSessionId = 0L
 
   private val internalStateRequestId = AtomicLong(1L shl 60)
@@ -340,7 +343,13 @@ class BasicController private constructor(
     eventQueue.register<SgbDisplay.SetSgbBorder> {
       // The display consumes the same event on its session bus. Keep the configuration identity
       // synchronized at this frame boundary so later portable captures describe the live option.
-      session?.config?.setDisplaySgbBorder(it.borderEnabled)
+      session?.config?.let { config ->
+        config.setDisplaySgbBorder(it.borderEnabled)
+        currentRomHashes?.let { hashes ->
+          stateContext =
+              stateContext?.copy(identity = StateIdentity.from(config, hashes))
+        }
+      }
     }
     eventQueue.register<Controller.ResetEmulationEvent> {
       session?.config?.rom?.image?.let {
@@ -572,6 +581,7 @@ class BasicController private constructor(
       properties: EmulatorProperties,
       event: Controller.LoadRomEvent,
   ) {
+    cancelPendingRomSwitch()
     val currentSession = session
     val context = stateContext
     val shouldAutosave =
@@ -584,37 +594,61 @@ class BasicController private constructor(
       requestLoad(properties, event)
       return
     }
-    val requestId = nextInternalStateRequestId()
+
+    // A newer request owns the active-session autosave. Prevent an older prepared replacement
+    // from committing a different session while this state write is in flight.
+    cancelLoadJob()
+    discardReplacement(restorePause = true)
+    discardStop(restorePause = true)
+
+    val requestId = nextPersistenceRequestId++
     try {
-      pendingRomSwitch = PendingRomSwitch(requestId, event)
-      stateWorker.save(
-          checkNotNull(context),
-          requestId,
-          StateWorkerPurpose.AUTOSAVE_ROM_SWITCH,
-          StateRef.Autosave,
-          capturePortableState(checkNotNull(currentSession)),
-          label = "Autosave",
-          playDurationNanos = currentPlayDurationNanos(),
-          thumbnail = null,
-      )
+      val pending =
+          PendingRomSwitch(
+              requestId,
+              event,
+              checkNotNull(context),
+              capturePortableState(checkNotNull(currentSession)),
+              currentPlayDurationNanos(),
+          )
+      pendingRomSwitch = pending
+      submitRomSwitchAutosave(pending)
     } catch (failure: Throwable) {
       pendingRomSwitch = null
-      postStateFailure(
-          requestId,
-          StateOperation.AUTOSAVE,
+      val error =
           stateError(
               "ROM switch was cancelled because autosave could not be captured.",
               failure,
-              "The current game remains active. Retry or disable autosave in Preferences.",
-          ),
-      )
+              "The current game remains active. Retry opening the ROM or disable autosave in Preferences.",
+          )
+      eventBus.post(
+          Controller.LoadRomFailedEvent(
+              event.rom,
+              error.summary,
+              event.openRequestId,
+              Controller.RomLoadFailureKind.PERSISTENCE,
+              error.detail,
+          ))
     }
+  }
+
+  private fun submitRomSwitchAutosave(pending: PendingRomSwitch) {
+    pending.awaitingDecision = false
+    stateWorker.save(
+        pending.context,
+        pending.requestId,
+        StateWorkerPurpose.AUTOSAVE_ROM_SWITCH,
+        StateRef.Autosave,
+        pending.state,
+        label = "Autosave",
+        playDurationNanos = pending.playDurationNanos,
+        thumbnail = null,
+    )
   }
 
   private fun finishStateWorkerRequest(event: StateWorkerCompletedEvent) {
     val context = stateContext
     if (context == null ||
-        event.context !== context ||
         event.context.sessionId != context.sessionId) {
       return
     }
@@ -766,9 +800,16 @@ class BasicController private constructor(
   ) {
     when (event.purpose) {
       StateWorkerPurpose.AUTOSAVE_ROM_SWITCH -> {
-        if (pendingRomSwitch?.requestId != event.requestId) return
-        pendingRomSwitch = null
-        postStateFailure(event.requestId, StateOperation.AUTOSAVE, error)
+        val pending = pendingRomSwitch
+        if (pending == null || pending.requestId != event.requestId) return
+        pending.awaitingDecision = true
+        postPersistenceFailure(
+            pending.requestId,
+            Controller.PersistenceBarrierOperation.ROM_REPLACEMENT,
+            "autosave state",
+            "${error.summary} ${error.suggestedAction}",
+            pending.event.openRequestId,
+        )
       }
       StateWorkerPurpose.AUTOSAVE_CLOSE -> {
         if (pendingCloseRequestId != event.requestId) return
@@ -847,7 +888,12 @@ class BasicController private constructor(
     val currentSession = session ?: return
     val context = stateContext ?: return
     try {
-      StateCodec.applyDecoded(read.state, currentSession.config, currentSession.gameboy)
+      StateCodec.applyDecoded(
+          read.state,
+          currentSession.config,
+          currentSession.gameboy,
+          context.identity,
+      )
       rewindManager.clear()
       eventBus.post(
           StateOperationCompletedEvent(
@@ -900,6 +946,10 @@ class BasicController private constructor(
       StateCodec.capture(
           currentSession.config,
           currentSession.gameboy,
+          checkNotNull(stateContext) {
+                "Portable state capture requires an initialized state context"
+              }
+              .identity,
           StateDiagnosticMetadata(
               BasicController::class.java.`package`?.implementationVersion ?: "development",
               "desktop",
@@ -992,6 +1042,7 @@ class BasicController private constructor(
       return
     }
 
+    cancelPendingRomSwitch()
     discardStop(restorePause = true)
     if (pauseStateBeforeLoading == null) {
       pauseStateBeforeLoading = isPaused
@@ -1081,6 +1132,12 @@ class BasicController private constructor(
   }
 
   private fun retryPersistence(requestId: Long) {
+    pendingRomSwitch?.takeIf { it.requestId == requestId }?.let { pending ->
+      if (pending.awaitingDecision) {
+        submitRomSwitchAutosave(pending)
+      }
+      return
+    }
     replacementJob?.let { job ->
       if (job.requestId == requestId && job.attempt == null) {
         val attempt = ReplacementTask(job.capture, job.prepared)
@@ -1099,6 +1156,10 @@ class BasicController private constructor(
   }
 
   private fun cancelPersistence(requestId: Long) {
+    pendingRomSwitch?.takeIf { it.requestId == requestId }?.let {
+      cancelPendingRomSwitch()
+      return
+    }
     replacementJob?.let { job ->
       if (job.requestId == requestId) {
         discardReplacement(restorePause = true)
@@ -1131,6 +1192,7 @@ class BasicController private constructor(
       return
     }
     val pausedBeforeStop = pauseStateBeforeLoading ?: isPaused
+    cancelPendingRomSwitch()
     cancelLoadJob()
     discardReplacement(restorePause = false)
     pauseStateBeforeLoading = null
@@ -1197,14 +1259,30 @@ class BasicController private constructor(
       operation: Controller.PersistenceBarrierOperation,
       result: BatteryPersistenceResult.Failure,
   ) {
+    postPersistenceFailure(
+        requestId,
+        operation,
+        result.fileName(),
+        result.message(),
+        replacementJob?.event?.openRequestId,
+    )
+  }
+
+  private fun postPersistenceFailure(
+      requestId: Long,
+      operation: Controller.PersistenceBarrierOperation,
+      fileName: String,
+      message: String,
+      openRequestId: Long?,
+  ) {
     try {
       eventBus.post(
           Controller.RomReplacementPersistenceFailedEvent(
               requestId,
-              result.fileName(),
-              result.message(),
+              fileName,
+              message,
               operation,
-              replacementJob?.event?.openRequestId,
+              openRequestId,
           ))
     } catch (subscriberFailure: RuntimeException) {
       LOG.warn("Persistence failure subscriber threw an exception", subscriberFailure)
@@ -1272,6 +1350,7 @@ class BasicController private constructor(
     // This assignment is the ownership commit. From here on the old session is never resumed:
     // its bus may need deferred cleanup, but it cannot invalidate the fully staged candidate.
     session = committedSession
+    currentRomHashes = job.prepared.romHashes
     snapshotManager = nextSnapshotManager
     nextSession = null
     nextSnapshotManager = null
@@ -1336,7 +1415,23 @@ class BasicController private constructor(
     }
   }
 
+  private fun cancelPendingRomSwitch(notifyCancellation: Boolean = true) {
+    val pending = pendingRomSwitch ?: return
+    pendingRomSwitch = null
+    if (notifyCancellation) {
+      eventBus.post(
+          Controller.RomLoadingCancelledEvent(
+              pending.event.rom,
+              pending.event.openRequestId,
+          ))
+    }
+  }
+
   private fun cancelOpenRequest(openRequestId: Long) {
+    pendingRomSwitch?.takeIf { it.event.openRequestId == openRequestId }?.let {
+      cancelPendingRomSwitch()
+      return
+    }
     loadJob?.takeIf { it.event.openRequestId == openRequestId }?.let {
       cancelLoadJob()
       restorePauseStateAfterLoading()
@@ -1395,12 +1490,23 @@ class BasicController private constructor(
     var stateUnavailableReason: StateUserError? = null
     stateContext =
         try {
+          val identity =
+              StateIdentity.from(
+                  session.config,
+                  checkNotNull(currentRomHashes) {
+                    "Activated session has no precomputed ROM identity"
+                  },
+              )
           val paths =
-              StateStorageResolver.resolve(properties.applicationSettings.saves, session.config)
+              StateStorageResolver.resolve(
+                  properties.applicationSettings.saves,
+                  session.config,
+                  identity,
+              )
           StateWorkerContext(
               stateSessionId,
               stateWorkspaceFactory.create(paths),
-              StateIdentity.from(session.config),
+              identity,
               session.config.hardwareProfile.id(),
           )
         } catch (failure: Throwable) {
@@ -1450,6 +1556,7 @@ class BasicController private constructor(
   private fun applySavesSettings(
       saves: eu.rekawek.coffeegb.controller.properties.ApplicationSettings.Saves
   ) {
+    cancelPendingRomSwitch()
     isRewinding = false
     rewindManager = configuredRewindManager(saves)
     val currentSession = session ?: return
@@ -1457,11 +1564,18 @@ class BasicController private constructor(
     var stateUnavailableReason: StateUserError? = null
     stateContext =
         try {
-          val paths = StateStorageResolver.resolve(saves, currentSession.config)
+          val identity =
+              StateIdentity.from(
+                  currentSession.config,
+                  checkNotNull(currentRomHashes) {
+                    "Active session has no precomputed ROM identity"
+                  },
+              )
+          val paths = StateStorageResolver.resolve(saves, currentSession.config, identity)
           StateWorkerContext(
               stateSessionId,
               stateWorkspaceFactory.create(paths),
-              StateIdentity.from(currentSession.config),
+              identity,
               currentSession.config.hardwareProfile.id(),
           )
         } catch (failure: Throwable) {
@@ -1475,7 +1589,6 @@ class BasicController private constructor(
           null
         }
     pendingResume = null
-    pendingRomSwitch = null
     pendingCloseRequestId = null
     latestStateRequests.clear()
     latestSaveRequests.clear()
@@ -1501,7 +1614,7 @@ class BasicController private constructor(
     }
     stateContext = null
     pendingResume = null
-    pendingRomSwitch = null
+    cancelPendingRomSwitch()
     pendingCloseRequestId = null
     latestStateRequests.clear()
     latestSaveRequests.clear()
@@ -1520,6 +1633,7 @@ class BasicController private constructor(
     }
     console?.setGameboy(null)
     this.session = null
+    currentRomHashes = null
     snapshotManager = null
   }
 
@@ -1595,6 +1709,7 @@ class BasicController private constructor(
     // Close is a synchronous API: its caller owns retry/cancel presentation. Avoid invoking
     // arbitrary lifecycle subscribers on this thread while the one overall deadline is running.
     cancelLoadJob(notifyCancellation = false)
+    cancelPendingRomSwitch(notifyCancellation = false)
     discardReplacement(restorePause = false, notifyCancellation = false)
     discardStop(restorePause = false)
     pauseStateBeforeLoading = null
@@ -1626,7 +1741,17 @@ class BasicController private constructor(
     val state = closeState
 
     try {
-      stateWorker.close()
+      try {
+        stateWorker.close(
+            remainingCloseNanos(closeDeadlineNanos, "state worker teardown"),
+            TimeUnit.NANOSECONDS,
+        )
+      } catch (failure: IllegalStateException) {
+        throw closeBarrierFailure(
+            "State worker did not stop before the close deadline. Close can be retried.",
+            failure,
+        )
+      }
       shutdownExecutors(closeDeadlineNanos)
       eventBus.close(
           remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),
@@ -1896,6 +2021,10 @@ class BasicController private constructor(
   private data class PendingRomSwitch(
       val requestId: Long,
       val event: Controller.LoadRomEvent,
+      val context: StateWorkerContext,
+      val state: StateFile,
+      val playDurationNanos: Long?,
+      var awaitingDecision: Boolean = false,
   )
 
   private data class PendingResume(

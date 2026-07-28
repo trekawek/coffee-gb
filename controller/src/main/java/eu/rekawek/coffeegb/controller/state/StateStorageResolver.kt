@@ -21,17 +21,24 @@ object StateStorageResolver {
   fun resolve(
       saves: ApplicationSettings.Saves,
       configuration: Gameboy.GameboyConfiguration,
+  ): StateStoragePaths =
+      resolve(saves, configuration, StateIdentity.from(configuration))
+
+  fun resolve(
+      saves: ApplicationSettings.Saves,
+      configuration: Gameboy.GameboyConfiguration,
+      identity: MachineIdentity,
   ): StateStoragePaths {
     val romFile =
         requireNotNull(configuration.rom.file) {
           "Desktop state storage requires a file-backed ROM"
         }
-    val identity = StateIdentity.from(configuration).primaryRom.hex()
+    val romIdentity = identity.primaryRom.hex()
     val defaultRoot =
         requireNotNull(romFile.toPath().toAbsolutePath().normalize().parent)
             .resolve(DEFAULT_DIRECTORY)
     val activeRoot = normalizeRoot(saves.directory ?: defaultRoot)
-    val layout = StateStorageLayout(gameDirectory(activeRoot, identity))
+    val layout = StateStorageLayout(gameDirectory(activeRoot, romIdentity))
     val fallbacks =
         (listOf(defaultRoot) + saves.previousDirectories)
             .asSequence()
@@ -39,7 +46,7 @@ object StateStorageResolver {
             .filter { it != activeRoot }
             .distinct()
             .take(ApplicationSettings.MAX_PREVIOUS_SAVE_DIRECTORIES)
-            .map { StateStorageLayout(gameDirectory(it, identity)) }
+            .map { StateStorageLayout(gameDirectory(it, romIdentity)) }
             .toList()
     return StateStoragePaths(
         layout,

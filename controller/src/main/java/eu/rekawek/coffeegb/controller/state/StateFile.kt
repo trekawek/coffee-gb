@@ -166,6 +166,12 @@ data class MachineIdentity(
     val profile: HardwareProfile,
 )
 
+/** ROM-byte hashes computed while a candidate session is still owned by the loader worker. */
+data class StateRomHashes(
+    val primaryRom: RomIdentity,
+    val slotRom: RomIdentity?,
+)
+
 data class StateIdentityEntry(val player: Int, val identity: MachineIdentity?)
 
 /** Version selection shared by local state capture and the frozen protocol-v8 boundary. */
@@ -297,6 +303,16 @@ data class StateCompatibilityResult(
 /** ROM/profile identity helpers shared by capture and pre-apply validation. */
 object StateIdentity {
   fun from(configuration: Gameboy.GameboyConfiguration): MachineIdentity =
+      from(configuration, hashes(configuration))
+
+  /**
+   * Rebuilds the inexpensive profile portion of an identity from hashes captured off the
+   * controller timing thread. Runtime profile options may change without changing ROM bytes.
+   */
+  fun from(
+      configuration: Gameboy.GameboyConfiguration,
+      hashes: StateRomHashes,
+  ): MachineIdentity =
       configuration.hardwareProfile.let { resolvedProfile ->
         val hardware =
             when (resolvedProfile.family()) {
@@ -307,8 +323,8 @@ object StateIdentity {
         val datel =
             configuration.rom.cartridgeProperties.mapper == CartridgeProperties.Mapper.DATEL
         MachineIdentity(
-            hash(configuration.rom),
-            if (datel) configuration.slotRom?.let(::hash) else null,
+            hashes.primaryRom,
+            if (datel) hashes.slotRom else null,
             HardwareProfile(
                 HardwareProfile.VERSION,
                 hardware,
@@ -326,6 +342,14 @@ object StateIdentity {
             ),
         )
       }
+
+  fun hashes(configuration: Gameboy.GameboyConfiguration): StateRomHashes {
+    val datel = configuration.rom.cartridgeProperties.mapper == CartridgeProperties.Mapper.DATEL
+    return StateRomHashes(
+        hash(configuration.rom),
+        if (datel) configuration.slotRom?.let(::hash) else null,
+    )
+  }
 
   /** Hashes the exact bytes visible to the running cartridge after loader normalization. */
   fun hash(rom: Rom): RomIdentity {
