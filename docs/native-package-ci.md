@@ -25,8 +25,8 @@ then:
 2. builds the host installer without a signing request;
 3. inspects jpackage's exact payload image and runs packaged `--version`, `--package-smoke`, and
    production desktop launches both normally and with `--debug`;
-4. writes `PACKAGE-RESULT.properties`, one byte-identical Maven dependency CycloneDX SBOM, one
-   exact target-native CycloneDX SBOM generated from the locked inventory, and exhaustive
+4. writes `PACKAGE-RESULT.properties`, one canonical byte-identical Maven dependency CycloneDX
+   SBOM, one exact target-native CycloneDX SBOM generated from the locked inventory, and exhaustive
    `SHA256SUMS`;
 5. unpacks or mounts the final installer and repeats strict inspection and both launch smokes from
    an isolated temporary home; and
@@ -81,7 +81,10 @@ External properties/checksum metadata is limited to 1 MiB and 10,000 lines; reco
 2 MiB fails closed instead of skipping inspection. The Maven SBOM is bounded to 8 MiB, parsed as
 strict depth-bounded JSON, tied to the exact Coffee GB root component and version, and requires one
 unique direct Maven purl string on every object in its top-level `components` array. The sole
-content-scan exception is
+cross-host transformation normalizes JSON CRLF or lone-CR whitespace to LF. Repository checkout
+and generated Maven descriptor policy make reactor component hashes host-stable, so every
+dependency hash and all other fields remain byte-significant. Strict SBOM and legal validation are
+then repeated against the staged document. The sole content-scan exception is
 the exact target-native allowlist in `native-source.zip`: those upstream executables contain
 compiler build paths and are treated as opaque only after the dedicated reader has enforced the
 stored method, manifest order, safe regular entry type, exact byte counts, and SHA-256 values.
@@ -105,10 +108,11 @@ matrix records the bound source commit.
 
 Publication waits for the unsigned build, installer inspection, desktop/debug launch, association,
 and uninstall gates on all four targets. A Linux release-gate job independently downloads the
-results, requires one default installer, one byte-identical Maven dependency SBOM, and one exact
-target-native SBOM per target, renames installers with explicit architecture, deduplicates the
-Maven SBOM into one shared release copy, retains detached signatures, and creates one release-level
-checksum file. If protected signing was requested, the workflow then rebuilds the same immutable commit in
+results, requires one default installer, one canonical byte-identical Maven dependency SBOM, and
+one exact target-native SBOM per target, renames installers with explicit architecture,
+deduplicates the Maven SBOM into one shared release copy, retains detached signatures, and creates
+one release-level checksum file. If protected signing was requested, the workflow then rebuilds
+the same immutable commit in
 the `native-release` environment, signs and reverifies all four targets, and assembles a replacement
 complete bundle.
 

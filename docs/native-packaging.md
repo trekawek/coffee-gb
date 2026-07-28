@@ -236,6 +236,14 @@ components, exact coordinates, hashes, licenses supplied by dependency metadata,
 timestamp-free/serial-free build record. Tests and provided/system scopes are excluded because they
 are not packaged.
 
+Repository text is checked out with LF on every host, and `maven-jar-plugin:3.5.1` generates
+LF-stable Maven descriptors, so reactor component hashes remain reproducible. Before native
+staging, the raw document is strictly parsed and its root, direct component purls, and legal
+inventory are validated. Staging normalizes only JSON CRLF or lone-CR whitespace to LF, then
+repeats strict SBOM and legal validation. Every dependency hash, component identity and license,
+metadata field, and dependency edge remains byte-significant. The staged Maven SBOM is therefore
+byte-identical across all package hosts without weakening dependency provenance.
+
 Maven coordinates alone do not describe code statically embedded in the OpenCV binaries.
 `NativeComponentInventory` therefore generates a second deterministic CycloneDX 1.6 document,
 `coffee-gb-native-sbom.cdx.json`, in package input. It identifies one explicit target, the exact
@@ -432,8 +440,9 @@ actual DMG and repeats the checks. Inspection requires:
 - exact digest-locked native entries are treated as opaque executable data after their dedicated
   stored-ZIP verifier succeeds (upstream binaries contain compiler build paths), while entry names,
   foreign native suffixes, archive structure, and every byte remain independently enforced;
-- the complete catalog-validated legal inventory, byte-identical Maven dependency SBOM, neutral
-  app JAR, exact target-native SBOM, version, result manifest, and exhaustive sorted checksums; and
+- the complete catalog-validated legal inventory, canonical byte-identical Maven dependency SBOM,
+  neutral app JAR, exact target-native SBOM, version, result manifest, and exhaustive sorted
+  checksums; and
 - packaged launcher `--version` plus `--package-smoke` from isolated temporary user roots and
   distinct empty direct-runtime and launcher extraction caches, requiring exact configured-target
   evidence rather than portable fallback; and

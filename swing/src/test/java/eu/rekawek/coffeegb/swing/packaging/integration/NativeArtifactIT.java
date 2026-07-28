@@ -15,10 +15,19 @@ import java.util.jar.Attributes;
 import java.util.jar.JarFile;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /** Package-phase inventory and launch smoke for both Maven desktop artifacts. */
 public class NativeArtifactIT {
+
+    private static final Set<String> HOST_STABLE_MAVEN_AND_CORE_TEXT = Set.of(
+            "META-INF/maven/eu.rekawek.coffeegb/core/pom.xml",
+            "META-INF/maven/eu.rekawek.coffeegb/core/pom.properties",
+            "META-INF/maven/eu.rekawek.coffeegb/controller/pom.xml",
+            "META-INF/maven/eu.rekawek.coffeegb/controller/pom.properties",
+            "cheats/SOURCE.md",
+            "simplelogger.properties");
 
     @Test
     public void appIsNativeFreeAndUniversalJarRemainsRunnable() throws Exception {
@@ -52,6 +61,7 @@ public class NativeArtifactIT {
             assertEquals(
                     expectedVersion,
                     mainAttribute(appJar, Attributes.Name.IMPLEMENTATION_VERSION));
+            assertHostStableTextEntries(appJar);
         }
         assertTrue(universalEntries.containsAll(appEntries));
         assertTrue(appEntries.contains("META-INF/services/org.slf4j.spi.SLF4JServiceProvider"));
@@ -108,6 +118,24 @@ public class NativeArtifactIT {
 
     private static String mainAttribute(JarFile jar, Attributes.Name name) throws IOException {
         return jar.getManifest().getMainAttributes().getValue(name);
+    }
+
+    private static void assertHostStableTextEntries(JarFile jar) throws IOException {
+        List<String> entries = jar.stream()
+                .filter(entry -> !entry.isDirectory())
+                .map(entry -> entry.getName())
+                .filter(name -> name.startsWith("META-INF/coffee-gb/legal/")
+                        || HOST_STABLE_MAVEN_AND_CORE_TEXT.contains(name))
+                .sorted()
+                .toList();
+        assertEquals(44, entries.size());
+        for (String entry : entries) {
+            byte[] contents;
+            try (var input = jar.getInputStream(jar.getJarEntry(entry))) {
+                contents = input.readAllBytes();
+            }
+            assertFalse(entry, new String(contents, StandardCharsets.UTF_8).contains("\r"));
+        }
     }
 
     private static String required(String property) {

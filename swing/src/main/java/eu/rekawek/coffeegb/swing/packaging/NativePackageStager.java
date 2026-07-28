@@ -79,7 +79,9 @@ public final class NativePackageStager {
                             + appVersion + " and " + nativeJarVersion);
         }
         verifyNeutralAppJar(request.appJar());
-        verifySbom(request.sbom(), appVersion);
+        NativePackageVerifier.verifyMavenSbom(request.sbom(), appVersion);
+        String canonicalMavenSbom = NativePackageVerifier.canonicalizeMavenSbom(
+                Files.readString(request.sbom(), StandardCharsets.UTF_8));
         ThirdPartyNoticeInventory.validate(
                 request.sbom(), request.resourcesRoot().resolve("legal"));
         ThirdPartyNoticeInventory.verifyEmbeddedLegal(
@@ -97,7 +99,10 @@ public final class NativePackageStager {
         Path stagedApp = input.resolve("coffee-gb.jar");
         copyFile(request.appJar(), stagedApp);
         Path stagedSbom = input.resolve("coffee-gb-sbom.cdx.json");
-        copyFile(request.sbom(), stagedSbom);
+        writeUtf8(stagedSbom, canonicalMavenSbom);
+        NativePackageVerifier.verifyMavenSbom(stagedSbom, appVersion);
+        ThirdPartyNoticeInventory.validate(
+                stagedSbom, request.resourcesRoot().resolve("legal"));
         Path stagedNativeSbom = input.resolve(NativeComponentInventory.STAGED_NATIVE_SBOM);
         NativeComponentInventory.writeNativeSbom(
                 request.target(), appVersion, stagedNativeSbom);
@@ -286,17 +291,6 @@ public final class NativePackageStager {
 
     private static boolean endsWithAny(String value, Set<String> suffixes) {
         return suffixes.stream().anyMatch(value::endsWith);
-    }
-
-    private static void verifySbom(Path sbom, String appVersion) throws IOException {
-        String contents = Files.readString(sbom, StandardCharsets.UTF_8);
-        if (!contents.contains("\"bomFormat\"")
-                || !contents.contains("\"CycloneDX\"")
-                || !contents.contains("\"specVersion\"")
-                || !contents.contains("\"" + appVersion + "\"")) {
-            throw new IOException(
-                    "SBOM is not a CycloneDX inventory for application version " + appVersion);
-        }
     }
 
     private static void writeLockedNativeArchive(
@@ -562,6 +556,11 @@ public final class NativePackageStager {
             }
         }
         return hex(digest.digest());
+    }
+
+    static String sha256(byte[] contents) {
+        MessageDigest digest = sha256Digest();
+        return hex(digest.digest(contents));
     }
 
     private static MessageDigest sha256Digest() {

@@ -25,6 +25,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -403,6 +405,65 @@ public class NativePackageVerifierTest {
     }
 
     @Test
+    public void mavenSbomCanonicalizationNormalizesOnlyLineEndings()
+            throws Exception {
+        String linuxCoreHash = "a".repeat(64);
+        String linuxControllerHash = "b".repeat(64);
+        String externalHash = "e".repeat(64);
+        String linux = hostMavenSbom(
+                "\n", linuxCoreHash, linuxControllerHash, externalHash);
+        String windows = hostMavenSbom(
+                "\r\n", linuxCoreHash, linuxControllerHash, externalHash);
+
+        String canonical = NativePackageVerifier.canonicalizeMavenSbom(linux);
+        assertEquals(canonical, NativePackageVerifier.canonicalizeMavenSbom(windows));
+        assertEquals(
+                canonical,
+                NativePackageVerifier.canonicalizeMavenSbom(
+                        linux.replace('\n', '\r')));
+        assertEquals(linux, canonical);
+        assertTrue(canonical.endsWith("\n"));
+        assertFalse(canonical.contains("\r"));
+        assertTrue(canonical.contains(linuxCoreHash));
+        assertTrue(canonical.contains(linuxControllerHash));
+        assertTrue(canonical.contains(externalHash));
+        assertTrue(canonical.contains("Apache-2.0"));
+        assertTrue(canonical.contains("cyclonedx-maven-plugin"));
+        assertTrue(canonical.contains("pkg:maven/eu.rekawek.coffeegb/core@1.7.15"));
+        assertTrue(canonical.contains("pkg:maven/eu.rekawek.coffeegb/controller@1.7.15"));
+        assertTrue(canonical.contains("\"dependsOn\":["));
+
+        assertNotEquals(
+                canonical,
+                NativePackageVerifier.canonicalizeMavenSbom(
+                        linux.replace(linuxCoreHash, "c".repeat(64))));
+        assertNotEquals(
+                canonical,
+                NativePackageVerifier.canonicalizeMavenSbom(
+                        linux.replace(linuxControllerHash, "d".repeat(64))));
+        assertNotEquals(
+                canonical,
+                NativePackageVerifier.canonicalizeMavenSbom(
+                        linux.replace(externalHash, "f".repeat(64))));
+        assertNotEquals(
+                canonical,
+                NativePackageVerifier.canonicalizeMavenSbom(
+                        linux.replace(
+                                "pkg:maven/example/dependency@1?type=jar",
+                                "pkg:maven/example/dependency@2?type=jar")));
+        assertNotEquals(
+                canonical,
+                NativePackageVerifier.canonicalizeMavenSbom(
+                        linux.replace(
+                                "\"dependsOn\":[\"pkg:maven/eu.rekawek.coffeegb/core@1.7.15?type=jar\",\"pkg:maven/eu.rekawek.coffeegb/controller",
+                                "\"dependsOn\":[\"pkg:maven/eu.rekawek.coffeegb/controller")));
+
+        Path staged = temporaryFolder.newFile("canonical-maven-sbom.json").toPath();
+        Files.writeString(staged, canonical, StandardCharsets.UTF_8);
+        NativePackageVerifier.verifyMavenSbom(staged, "1.7.15");
+    }
+
+    @Test
     public void mavenSbomIsBoundedBeforeItIsRead() throws Exception {
         Path sbom = temporaryFolder.newFile("oversized-sbom.json").toPath();
         try (var channel = Files.newByteChannel(
@@ -565,6 +626,62 @@ public class NativePackageVerifierTest {
                 java.io.IOException.class,
                 () -> NativePackageVerifier.verifyPayloadPolicy(
                         payload, appDirectory, runtime, NativeTarget.LINUX_X86_64));
+    }
+
+    private static String hostMavenSbom(
+            String newline,
+            String coreHash,
+            String controllerHash,
+            String externalHash) {
+        String root = "pkg:maven/eu.rekawek.coffeegb/swing@1.7.15?type=jar";
+        String core = "pkg:maven/eu.rekawek.coffeegb/core@1.7.15?type=jar";
+        String controller =
+                "pkg:maven/eu.rekawek.coffeegb/controller@1.7.15?type=jar";
+        String external = "pkg:maven/example/dependency@1?type=jar";
+        return String.join(
+                        "\n",
+                        "{",
+                        "  \"bomFormat\": \"CycloneDX\",",
+                        "  \"specVersion\": \"1.6\",",
+                        "  \"metadata\": {",
+                        "    \"tools\": {\"components\": "
+                                + "[{\"name\":\"cyclonedx-maven-plugin\"}]},",
+                        "    \"component\": {\"type\":\"application\","
+                                + "\"bom-ref\":\"" + root + "\","
+                                + "\"group\":\"eu.rekawek.coffeegb\","
+                                + "\"name\":\"swing\",\"version\":\"1.7.15\","
+                                + "\"purl\":\"" + root + "\"}",
+                        "  },",
+                        "  \"components\": [",
+                        "    {\"type\":\"library\",\"group\":\"eu.rekawek.coffeegb\","
+                                + "\"name\":\"core\",\"version\":\"1.7.15\","
+                                + "\"purl\":\"" + core + "\","
+                                + "\"hashes\":[{\"alg\":\"SHA-256\","
+                                + "\"content\":\"" + coreHash + "\"}]},",
+                        "    {\"hashes\":[{\"alg\":\"SHA-256\","
+                                + "\"content\":\"" + controllerHash + "\"}],"
+                                + "\"type\":\"library\","
+                                + "\"group\":\"eu.rekawek.coffeegb\","
+                                + "\"name\":\"controller\",\"version\":\"1.7.15\","
+                                + "\"purl\":\"" + controller + "\"},",
+                        "    {\"type\":\"library\",\"group\":\"example\","
+                                + "\"name\":\"dependency\",\"version\":\"1\","
+                                + "\"purl\":\"" + external + "\","
+                                + "\"hashes\":[{\"alg\":\"SHA-256\","
+                                + "\"content\":\"" + externalHash + "\"}],"
+                                + "\"licenses\":[{\"license\":{\"id\":\"Apache-2.0\"}}]}",
+                        "  ],",
+                        "  \"dependencies\": [",
+                        "    {\"ref\":\"" + root + "\",\"dependsOn\":[\""
+                                + core + "\",\"" + controller + "\",\"" + external + "\"]},",
+                        "    {\"ref\":\"" + core + "\",\"dependsOn\":[]},",
+                        "    {\"ref\":\"" + controller + "\",\"dependsOn\":[\""
+                                + core + "\"]},",
+                        "    {\"ref\":\"" + external + "\",\"dependsOn\":[]}",
+                        "  ]",
+                        "}",
+                        "")
+                .replace("\n", newline);
     }
 
     private PayloadLayout createPayloadLayout(String name) throws Exception {
