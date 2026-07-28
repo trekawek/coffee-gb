@@ -85,8 +85,16 @@ public final class NativePackageStager {
         copyFile(request.appJar(), stagedApp);
         Path stagedSbom = input.resolve("coffee-gb-sbom.cdx.json");
         copyFile(request.sbom(), stagedSbom);
+        Path stagedNativeSbom = input.resolve(NativeComponentInventory.STAGED_NATIVE_SBOM);
+        NativeComponentInventory.writeNativeSbom(
+                request.target(), appVersion, stagedNativeSbom);
+        NativeComponentInventory.verifyNativeSbom(
+                stagedNativeSbom, request.target(), appVersion);
         copyFile(request.resourcesRoot().resolve("coffee-gb.svg"), assets.resolve("coffee-gb.svg"));
-        copyLegalTree(request.resourcesRoot().resolve("legal"), legal);
+        copyLegalTree(
+                request.resourcesRoot().resolve("legal"),
+                legal,
+                request.target());
         copyJpackageResourceTree(
                 request.resourcesRoot()
                         .resolve("jpackage")
@@ -128,6 +136,7 @@ public final class NativePackageStager {
         inventory.put("signing.release-hook", "explicit-environment-gated");
         inventory.put("app.jar.sha256", sha256(stagedApp));
         inventory.put("sbom.sha256", sha256(stagedSbom));
+        inventory.put("native.sbom.sha256", sha256(stagedNativeSbom));
         Path inventoryFile = input.resolve("package-manifest.properties");
         writeMap(inventoryFile, inventory);
 
@@ -142,6 +151,7 @@ public final class NativePackageStager {
                 jpackageResources,
                 stagedApp,
                 stagedSbom,
+                stagedNativeSbom,
                 icon,
                 association,
                 inventoryFile,
@@ -279,25 +289,24 @@ public final class NativePackageStager {
         }
     }
 
-    private static void copyLegalTree(Path source, Path destination) throws IOException {
+    private static void copyLegalTree(
+            Path source, Path destination, NativeTarget target) throws IOException {
         requireDirectoryWithoutSymlinks(source, "legal resources");
-        List<Path> files;
-        try (Stream<Path> paths = Files.walk(source)) {
-            files = paths.filter(Files::isRegularFile).sorted().toList();
-        }
-        if (files.isEmpty()) {
-            throw new IOException("Package legal resources are empty");
-        }
-        for (Path file : files) {
+        List<String> relativePaths = NativeComponentInventory.requiredLegalPaths(target)
+                .stream()
+                .sorted()
+                .toList();
+        for (String relativePath : relativePaths) {
+            Path file = safeResolve(source, relativePath);
             if (Files.isSymbolicLink(file)
+                    || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
                     || Files.size(file) > MAX_LEGAL_FILE_BYTES
                     || !file.getFileName().toString().endsWith(".txt")) {
                 throw new IOException("Invalid package legal resource: " + file);
             }
-            Path relative = source.relativize(file);
-            Path target = safeResolve(destination, relative.toString().replace('\\', '/'));
-            Files.createDirectories(target.getParent());
-            copyFile(file, target);
+            Path output = safeResolve(destination, relativePath);
+            Files.createDirectories(output.getParent());
+            copyFile(file, output);
         }
     }
 
@@ -484,6 +493,7 @@ public final class NativePackageStager {
             Path jpackageResources,
             Path appJar,
             Path sbom,
+            Path nativeSbom,
             Path icon,
             Path association,
             Path inventory,

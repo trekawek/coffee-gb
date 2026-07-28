@@ -107,12 +107,26 @@ public final class NativePackageMetadata {
     }
 
     public static String releaseSbomFileName(String applicationVersion) {
+        requireSafeArtifactVersion(applicationVersion);
+        return "coffee-gb-" + applicationVersion + "-sbom.cdx.json";
+    }
+
+    public static String releaseNativeSbomFileName(
+            String applicationVersion, NativeTarget target) {
+        requireSafeArtifactVersion(applicationVersion);
+        return "coffee-gb-"
+                + applicationVersion
+                + "-"
+                + Objects.requireNonNull(target, "target").id()
+                + "-native-sbom.cdx.json";
+    }
+
+    private static void requireSafeArtifactVersion(String applicationVersion) {
         installerVersion(applicationVersion);
         if (!SAFE_ARTIFACT_VERSION.matcher(applicationVersion).matches()) {
             throw new IllegalArgumentException(
                     "Application version is unsafe in a release filename: " + applicationVersion);
         }
-        return "coffee-gb-" + applicationVersion + "-sbom.cdx.json";
     }
 
     public static void requireMatchingHost(

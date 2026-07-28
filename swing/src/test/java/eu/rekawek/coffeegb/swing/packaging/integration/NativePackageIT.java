@@ -2,7 +2,9 @@ package eu.rekawek.coffeegb.swing.packaging.integration;
 
 import eu.rekawek.coffeegb.swing.packaging.NativeBundleEntry;
 import eu.rekawek.coffeegb.swing.packaging.NativeBundleManifest;
+import eu.rekawek.coffeegb.swing.packaging.NativeComponentInventory;
 import eu.rekawek.coffeegb.swing.packaging.NativePackageStager;
+import eu.rekawek.coffeegb.swing.packaging.NativePackageTool;
 import eu.rekawek.coffeegb.swing.packaging.NativeTarget;
 import org.junit.Rule;
 import org.junit.Test;
@@ -70,8 +72,31 @@ public class NativePackageIT {
             }
             assertEquals(expectedNatives, actualNatives);
 
-            assertLegalInventory(result.input().resolve("legal"));
+            assertLegalInventory(result.input().resolve("legal"), target);
+            NativeComponentInventory.verifyNativeSbom(
+                    result.nativeSbom(), target, expectedVersion);
+            String nativeSbom = Files.readString(result.nativeSbom());
+            assertTrue(nativeSbom.contains("\"bomFormat\": \"CycloneDX\""));
+            assertTrue(nativeSbom.contains("\"specVersion\": \"1.6\""));
+            assertTrue(nativeSbom.contains(
+                    "{\"name\": \"coffee-gb:native-target\", "
+                            + "\"value\": \"" + target.id() + "\"}"));
+            for (NativeComponentInventory.NativeSbomComponent component :
+                    NativeComponentInventory.components(target)) {
+                assertTrue(
+                        component.id(),
+                        nativeSbom.contains("\"name\": \"" + component.name() + "\""));
+                assertTrue(
+                        component.id(),
+                        nativeSbom.contains(
+                                "\"version\": \"" + component.version() + "\""));
+            }
+            String packageManifest = Files.readString(result.inventory());
+            assertTrue(packageManifest.contains(
+                    "native.sbom.sha256="
+                            + NativePackageStager.sha256(result.nativeSbom())));
             assertStageChecksums(result);
+            assertReleaseInventory(result);
             assertNoForbiddenStageContent(result, app);
             assertTrue(Files.size(result.icon()) > 5_000);
             assertTrue(
@@ -125,16 +150,8 @@ public class NativePackageIT {
                         first.root())));
     }
 
-    private static void assertLegalInventory(Path legal) throws Exception {
-        Set<String> expected = Set.of(
-                "LICENSE.txt",
-                "THIRD-PARTY-NOTICES.txt",
-                "licenses/Apache-2.0.txt",
-                "licenses/JLine-BSD-3-Clause.txt",
-                "licenses/JNA-DUAL-LICENSE.txt",
-                "licenses/LGPL-2.1.txt",
-                "licenses/OpenCV-BSD-3-Clause.txt",
-                "licenses/SDL2-zlib.txt");
+    private static void assertLegalInventory(Path legal, NativeTarget target) throws Exception {
+        Set<String> expected = NativeComponentInventory.requiredLegalPaths(target);
         Set<String> actual;
         try (Stream<Path> paths = Files.walk(legal)) {
             actual = paths.filter(Files::isRegularFile)
@@ -146,6 +163,56 @@ public class NativePackageIT {
         assertTrue(
                 Files.readString(legal.resolve("THIRD-PARTY-NOTICES.txt"))
                         .contains("https://github.com/trekawek/coffee-gb"));
+        for (NativeComponentInventory.NativeSbomComponent component :
+                NativeComponentInventory.components(target)) {
+            for (String legalFile : component.legalFiles()) {
+                Path file = legal.resolve(legalFile).normalize();
+                assertTrue(file.startsWith(legal));
+                assertTrue(component.id(), Files.size(file) > 0);
+            }
+        }
+    }
+
+    private void assertReleaseInventory(NativePackageStager.StageResult result) throws Exception {
+        Path release = Files.createDirectory(
+                temporaryFolder.getRoot()
+                        .toPath()
+                        .resolve(result.target().nativeTarget().id() + "-release"));
+        Files.writeString(release.resolve("package.bin"), "installer-placeholder\n");
+        NativePackageTool.ReleaseMetadata metadata =
+                NativePackageTool.finalizeReleaseMetadata(result, release);
+
+        assertEquals(
+                NativePackageStager.sha256(result.sbom()),
+                NativePackageStager.sha256(metadata.mavenSbom()));
+        assertEquals(
+                NativePackageStager.sha256(result.nativeSbom()),
+                NativePackageStager.sha256(metadata.nativeSbom()));
+        assertEquals(
+                "coffee-gb-"
+                        + result.appVersion()
+                        + "-"
+                        + result.target().nativeTarget().id()
+                        + "-native-sbom.cdx.json",
+                metadata.nativeSbom().getFileName().toString());
+        NativeComponentInventory.verifyNativeSbom(
+                metadata.nativeSbom(),
+                result.target().nativeTarget(),
+                result.appVersion());
+
+        List<String> checksums = Files.readAllLines(metadata.checksums(), StandardCharsets.UTF_8);
+        Set<String> covered = checksums.stream()
+                .map(line -> line.substring(66))
+                .collect(Collectors.toSet());
+        assertTrue(covered.contains("package.bin"));
+        assertTrue(covered.contains(metadata.mavenSbom().getFileName().toString()));
+        assertTrue(covered.contains(metadata.nativeSbom().getFileName().toString()));
+        for (String line : checksums) {
+            assertTrue("Malformed checksum line: " + line, line.matches("[0-9a-f]{64}  .+"));
+            Path file = release.resolve(line.substring(66)).normalize();
+            assertTrue(file.startsWith(release));
+            assertEquals(line.substring(0, 64), NativePackageStager.sha256(file));
+        }
     }
 
     private static void assertStageChecksums(NativePackageStager.StageResult result)

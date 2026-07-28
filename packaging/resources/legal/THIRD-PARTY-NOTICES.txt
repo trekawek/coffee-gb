@@ -2,27 +2,123 @@ Coffee GB third-party and native-library notices
 ================================================
 
 This file describes the runtime components intentionally distributed in Coffee GB native
-packages. The authoritative machine-readable dependency inventory is the adjacent CycloneDX
-SBOM. Source code for Coffee GB is available at:
-
-  https://github.com/trekawek/coffee-gb
+packages. Source links below record exact provenance; they are not substitutes for license terms.
+Every applicable license, attribution, EULA, and third-party-program notice is copied into this
+legal directory. The two adjacent CycloneDX SBOMs are the machine-readable Java and target-native
+inventories.
 
 Coffee GB
 ---------
 Copyright (c) 2017 Tomasz Rękawek and contributors.
-Licensed under the MIT License. See LICENSE.txt.
+Source: https://github.com/trekawek/coffee-gb
+License: MIT. See LICENSE.txt.
 
 OpenPnP OpenCV 4.9.0-0 / OpenCV 4.9.0
 -------------------------------------
-Native source: https://github.com/opencv/opencv
-Java loader source: https://github.com/openpnp/opencv
-License metadata: the OpenPnP Maven POM identifies the artifact as BSD; OpenCV 4.9.0 upstream is
-Apache-2.0. Both notices are preserved; see licenses/OpenCV-BSD-3-Clause.txt and
-licenses/Apache-2.0.txt.
+The four packaged OpenCV binaries come from Maven artifact org.openpnp:opencv:4.9.0-0:
 
-The OpenCV binary is redistributed without endorsement. OpenCV may incorporate optional
-third-party code under compatible licenses; its upstream third-party notices and source tree are
-available from the native source URL above.
+  Artifact SHA-256:
+    17823d249cb8ba18bc3cdb878db84936694d1cfaeac0f95517e320c8a8c458d9
+  OpenPnP source:
+    https://github.com/openpnp/opencv/tree/854505364c4b1394380ef639348840824effc6ec
+  OpenCV source:
+    https://github.com/opencv/opencv/tree/dad8af6b17f8e60d7b95a1203a1b4d22f56574cf
+
+The OpenPnP build is covered by its BSD-3-Clause text and OpenCV 4.9.0 by Apache-2.0. See
+licenses/OpenPnP-OpenCV-BSD-3-Clause.txt, licenses/Apache-2.0.txt, and the exact upstream
+attribution in licenses/OpenCV-COPYRIGHT.txt.
+
+The exact packaged OpenCV files are:
+
+  linux-x86-64
+    nu/pattern/opencv/linux/x86_64/libopencv_java490.so
+    SHA-256 4698bfd0c5d8b032649a9edc32882dcc085c990964350a8ac8e27848fd8e1142
+  windows-x86-64
+    nu/pattern/opencv/windows/x86_64/opencv_java490.dll
+    SHA-256 ab87f37830a5fd4d1f2acee8be393e20a7da2027bb298ffef7d5080f8ced06df
+  macos-x86-64
+    nu/pattern/opencv/osx/x86_64/opencv_java490.dylib
+    SHA-256 2fb0432d892c65e5e11734da13bb506545fbf6152dc9fadaafd87b0b55cac12f
+  macos-aarch64
+    nu/pattern/opencv/osx/ARMv8/opencv_java490.dylib
+    SHA-256 95584d05e00814137140295154f267f0deb3a0839c7278aecb389a45781da77b
+
+Common statically embedded OpenCV components
+--------------------------------------------
+The following versions and inclusions are locked from Core.getBuildInformation(), binary strings,
+exported version functions, and the corresponding OpenCV 4.9.0 source/install metadata:
+
+  Intel ITT Notify, API build 20151119
+    BSD-3-Clause OR GPL-2.0-only.
+    See licenses/OpenCV-ittnotify-LICENSE.BSD.txt and
+    licenses/OpenCV-ittnotify-LICENSE.GPL.txt.
+  Protocol Buffers 3.19.1
+    BSD-3-Clause. See licenses/OpenCV-protobuf-LICENSE.txt.
+  libjpeg-turbo 2.1.3-62
+    BSD-3-Clause, zlib, and IJG terms.
+    See licenses/OpenCV-libjpeg-turbo-LICENSE.txt and
+    licenses/OpenCV-libjpeg-turbo-README.ijg.txt.
+  libwebp 1.3.1
+    BSD-3-Clause. See licenses/OpenCV-libwebp-COPYING.txt.
+  libpng 1.6.37
+    libpng license. See licenses/OpenCV-libpng-LICENSE.txt.
+  LibTIFF 4.2.0, ABI 42
+    libtiff license. See licenses/OpenCV-libtiff-COPYRIGHT.txt.
+  OpenJPEG 2.5.0
+    BSD-2-Clause. See licenses/OpenCV-OpenJPEG-LICENSE.txt.
+  OpenEXR 2.3.0
+    BSD-3-Clause. See licenses/OpenCV-OpenEXR-LICENSE.txt,
+    licenses/OpenCV-OpenEXR-AUTHORS.ilmbase.txt, and
+    licenses/OpenCV-OpenEXR-AUTHORS.openexr.txt.
+  zlib 1.3
+    zlib license. See licenses/OpenCV-zlib-LICENSE.txt.
+  FlatBuffers 23.5.9
+    Apache-2.0. See licenses/Apache-2.0.txt.
+  Berkeley SoftFloat Release 3c
+    BSD-3-Clause. See licenses/OpenCV-SoftFloat-COPYING.txt.
+  OpenCV MSCR chi table, OpenCV 4.9.0 source revision above
+    BSD-3-Clause. See licenses/OpenCV-MSCR-chi-table-LICENSE.txt.
+
+Target-specific statically embedded OpenCV components
+-----------------------------------------------------
+Linux x86-64 embeds Intel IPP and IPP Integration Wrappers 2021.10.0. Its pinned OpenCV download is
+ippicv_2021.10.0_lnx_intel64_20230919_general.tgz (MD5
+606a19b207ebedfe42d59fd916cc4850) at OpenCV third-party commit
+0cc4aa06bf2bef4b05d237c69a5a96b9cd0cb85a. See
+licenses/Intel-IPP-EULA-October-2022.txt and
+licenses/Intel-IPP-2021.10.0-third-party-programs.txt.
+
+Windows x86-64 embeds Intel IPP and IPP Integration Wrappers 2021.11.0 according to the binary's
+own build information. It was taken from the official opencv-4.9.0-windows.exe, SHA-256
+fefddff0623fbd5a6fa0cecb9bccd4b822478354e6c587ebb6e40ab09dacba51. The official installer's
+accompanying third-party-program file identifies "Intel(R) Integrated Performance Primitives
+2021 Update 10", while the packaged binary identifies 2021.11.0. The official file is preserved
+verbatim in licenses/Intel-IPP-Windows-4.9.0-third-party-programs.txt rather than silently
+rewritten. The governing EULA is licenses/Intel-IPP-EULA-October-2022.txt.
+
+Linux and Windows also embed the Khronos OpenCL 1.2 headers under the MIT license. See
+licenses/OpenCV-OpenCL-Headers-LICENSE.txt. Windows additionally embeds ADE 0.1.2d under
+Apache-2.0 (licenses/Apache-2.0.txt) and Intel vaSOT from the pinned OpenCV revision under MIT
+(licenses/OpenCV-vaSOT-MIT.txt).
+
+macOS x86-64 embeds Intel IPP and IPP Integration Wrappers 2021.9.1. Its pinned OpenCV download is
+ippicv_2021.9.1_mac_intel64_20230919_general.tgz (MD5
+14f01c5a4780bfae9dde9b0aaf5e56fc) at the same OpenCV third-party commit. See
+licenses/Intel-IPP-EULA-October-2022.txt and
+licenses/Intel-IPP-2021.9.1-third-party-programs.txt. It links the system OpenCL framework rather
+than embedding the vendored headers.
+
+macOS arm64 does not embed IPP. It embeds NVIDIA Carotene 0.0.1 and the OpenCV Tegra HAL under
+BSD-3-Clause; Carotene's FAST implementation also carries Edward Rosten's BSD-3-Clause notice.
+See licenses/OpenCV-NVIDIA-Carotene-BSD-3-Clause.txt,
+licenses/OpenCV-NVIDIA-Tegra-HAL-BSD-3-Clause.txt, and
+licenses/OpenCV-Carotene-FAST-BSD-3-Clause.txt.
+
+The Windows OpenCV build metadata reports video I/O through FFmpeg, but the packaged OpenCV DLL
+does not import an FFmpeg DLL and Coffee GB does not stage the separate
+opencv_videoio_ffmpeg490_64.dll shipped by the official installer. That wrapper and its FFmpeg
+payload therefore are not distributed in a Coffee GB target-native package and are not represented
+as embedded components.
 
 libsdl4j 2.28.4-1.6 / SDL 2.28.4
 --------------------------------
@@ -40,9 +136,9 @@ Source: https://github.com/java-native-access/jna/tree/5.13.0
 SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 
 JNA permits recipients to select either Apache License 2.0 or LGPL 2.1-or-later. Coffee GB
-distributes JNA under the Apache-2.0 alternative. The complete Apache-2.0 and LGPL-2.1 texts are
-included in licenses/Apache-2.0.txt and licenses/LGPL-2.1.txt so the upstream dual-license notice
-and every recipient's available option remain explicit.
+distributes JNA under the Apache-2.0 alternative. The upstream dual-license notice and both complete
+license texts are included in licenses/JNA-DUAL-LICENSE.txt, licenses/Apache-2.0.txt, and
+licenses/LGPL-2.1.txt.
 
 JLine 3.25.1
 ------------
@@ -52,6 +148,6 @@ License: BSD-3-Clause. See licenses/JLine-BSD-3-Clause.txt.
 Other Java runtime dependencies
 -------------------------------
 The package also contains the Java libraries recorded with exact Maven coordinates and versions
-in the CycloneDX SBOM. Their licenses include Apache-2.0, MIT, BSD, and public-domain
-dedications. The SBOM is the release inventory; it is not a replacement for the license files
-shipped here or notices embedded in the application JAR.
+in the Maven CycloneDX SBOM. Their licenses include Apache-2.0, MIT, BSD, and public-domain
+dedications. Neither SBOM replaces the complete license files and notices shipped here or notices
+embedded in the application JAR.

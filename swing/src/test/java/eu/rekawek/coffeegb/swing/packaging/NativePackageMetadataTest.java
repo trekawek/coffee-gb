@@ -63,9 +63,17 @@ public class NativePackageMetadataTest {
         assertEquals(
                 "coffee-gb-1.7.15-SNAPSHOT-sbom.cdx.json",
                 NativePackageMetadata.releaseSbomFileName("1.7.15-SNAPSHOT"));
+        assertEquals(
+                "coffee-gb-1.7.15-SNAPSHOT-linux-x86-64-native-sbom.cdx.json",
+                NativePackageMetadata.releaseNativeSbomFileName(
+                        "1.7.15-SNAPSHOT", NativeTarget.LINUX_X86_64));
         assertThrows(
                 IllegalArgumentException.class,
                 () -> NativePackageMetadata.releaseSbomFileName("1.7.15-../../escape"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> NativePackageMetadata.releaseNativeSbomFileName(
+                        "1.7.15-../../escape", NativeTarget.WINDOWS_X86_64));
     }
 
     @Test
