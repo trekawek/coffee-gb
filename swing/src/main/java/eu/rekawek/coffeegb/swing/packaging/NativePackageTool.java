@@ -22,6 +22,7 @@ import java.util.stream.Stream;
 public final class NativePackageTool {
 
     private static final int MAX_CAPTURED_OUTPUT = 4 * 1024 * 1024;
+    private static final long MAX_DEBIAN_METADATA_FILE_BYTES = 64 * 1024;
 
     private NativePackageTool() {
     }
@@ -291,30 +292,39 @@ public final class NativePackageTool {
         Path extracted = Files.createDirectory(buildRoot.resolve("deb-validation"));
         runInherited(List.of(
                 "dpkg-deb", "--extract", installer.toString(), extracted.toString()));
-        Path applications = extracted.resolve("usr/share/applications");
-        List<Path> desktopEntries;
-        if (!Files.isDirectory(applications, LinkOption.NOFOLLOW_LINKS)) {
-            desktopEntries = List.of();
-        } else {
-            try (Stream<Path> files = Files.walk(applications)) {
-                desktopEntries =
-                        files.filter(path ->
-                                        Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
-                                                && path.getFileName()
-                                                        .toString()
-                                                        .endsWith(".desktop"))
-                                .toList();
-            }
-        }
-        if (desktopEntries.size() != 1) {
-            throw new IOException(
-                    "Expected exactly one generated Linux desktop entry, found "
-                            + desktopEntries);
-        }
-        Path desktopEntry = desktopEntries.get(0);
+        Path desktopEntry =
+                requireBoundedRegularFile(
+                        extracted.resolve(LinuxPackagePolicy.DESKTOP_FILE_IN_PACKAGE),
+                        MAX_DEBIAN_METADATA_FILE_BYTES,
+                        "generated Linux desktop entry");
         LinuxPackagePolicy.verifyDesktopEntry(
                 Files.readString(desktopEntry, StandardCharsets.UTF_8));
         runInherited(List.of("desktop-file-validate", desktopEntry.toString()));
+
+        Path control = Files.createDirectory(buildRoot.resolve("deb-control"));
+        runInherited(List.of(
+                "dpkg-deb", "--control", installer.toString(), control.toString()));
+        Path postInstall =
+                requireBoundedRegularFile(
+                        control.resolve("postinst"),
+                        MAX_DEBIAN_METADATA_FILE_BYTES,
+                        "DEB post-install script");
+        LinuxPackagePolicy.verifyDesktopRegistration(
+                Files.readString(postInstall, StandardCharsets.UTF_8));
+    }
+
+    private static Path requireBoundedRegularFile(
+            Path file, long maximumBytes, String description) throws IOException {
+        if (Files.isSymbolicLink(file)
+                || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException(description + " is missing or not a regular file: " + file);
+        }
+        long size = Files.size(file);
+        if (size > maximumBytes) {
+            throw new IOException(
+                    description + " exceeds " + maximumBytes + " bytes: " + file);
+        }
+        return file;
     }
 
     private static void verifyVersionOutput(String output, String appVersion) throws IOException {

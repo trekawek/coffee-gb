@@ -159,7 +159,7 @@ public final class NativePackagePlan {
         switch (target.hostOs()) {
             case LINUX -> {
                 if (packageType != NativePackageMetadata.PackageType.APP_IMAGE) {
-                    add(command, "--linux-package-name", "coffee-gb");
+                    add(command, "--linux-package-name", LinuxPackagePolicy.PACKAGE_NAME);
                     add(command, "--linux-app-release", "1");
                     // jpackage uses this value as the DEB Section/RPM Group. The freedesktop
                     // category is independently fixed to Game; in the desktop resource template.

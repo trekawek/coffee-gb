@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing.packaging;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Locale;
 
@@ -8,9 +9,15 @@ import java.util.Locale;
 final class LinuxPackagePolicy {
 
     static final String DESKTOP_CATEGORY = "Game;";
+    static final String PACKAGE_NAME = "coffee-gb";
     static final String PACKAGE_SECTION = "games";
     static final String REQUIRED_DEBIAN_AUDIO_PACKAGE = "libasound2t64";
     static final String RELEASE_BUILD_BASELINE = "Ubuntu 24.04 LTS";
+    static final String DESKTOP_FILE_NAME = "coffee-gb-Coffee_GB.desktop";
+    static final Path DESKTOP_FILE_IN_PACKAGE =
+            Path.of("opt", PACKAGE_NAME, "lib", DESKTOP_FILE_NAME);
+    static final String INSTALLED_DESKTOP_FILE =
+            "/" + DESKTOP_FILE_IN_PACKAGE.toString().replace('\\', '/');
 
     private LinuxPackagePolicy() {
     }
@@ -50,6 +57,23 @@ final class LinuxPackagePolicy {
                             + REQUIRED_DEBIAN_AUDIO_PACKAGE
                             + ", found "
                             + depends);
+        }
+    }
+
+    static void verifyDesktopRegistration(String postInstallScript) throws IOException {
+        String prefix = "xdg-desktop-menu install ";
+        var registrations =
+                postInstallScript.lines()
+                        .map(String::strip)
+                        .filter(line -> line.startsWith(prefix))
+                        .toList();
+        String expected = prefix + INSTALLED_DESKTOP_FILE;
+        if (registrations.size() != 1 || !expected.equals(registrations.get(0))) {
+            throw new IOException(
+                    "DEB post-install script must register exactly "
+                            + INSTALLED_DESKTOP_FILE
+                            + ", found "
+                            + registrations);
         }
     }
 
