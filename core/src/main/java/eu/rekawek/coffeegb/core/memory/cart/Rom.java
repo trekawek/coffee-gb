@@ -350,7 +350,7 @@ public class Rom {
      * directory structures. Both classic and ZIP64 end records are supported. The later ZipFile
      * pass remains authoritative for decompression and CRC validation.
      */
-    private static void preflightZip(Path path) throws IOException {
+    static void preflightZip(Path path) throws IOException {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
             ZipDirectoryMetadata metadata = readZipDirectoryMetadata(channel);
             if (metadata.entryCount() > MAX_ARCHIVE_ENTRIES) {
