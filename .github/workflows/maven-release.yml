@@ -273,13 +273,181 @@ jobs:
             cd native-release
             sha256sum --check SHA256SUMS
           )
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          transaction_tmp=$(mktemp -d)
+          trap 'rm -rf -- "$transaction_tmp"' EXIT
+          mapfile -t release_paths < <(
+            find native-release -mindepth 1 -maxdepth 1 -type f -print | sort
+          )
+          if (( ${#release_paths[@]} == 0 )) ||
+             find native-release -mindepth 1 -maxdepth 1 ! -type f -print -quit |
+                grep -q .; then
+            echo "Validated release bundle must contain only regular top-level files" >&2
+            exit 1
+          fi
+          printf '%s\n' "${release_paths[@]##*/}" >"$transaction_tmp/expected-assets"
+
+          signing_lines="$transaction_tmp/signing-lines"
+          : >"$signing_lines"
+          for target in \
+              linux-x86-64 \
+              windows-x86-64 \
+              macos-x86-64 \
+              macos-aarch64; do
+            mapfile -t signing_matches < <(
+              grep -E "^target\\.${target}\\.signing=" \
+                native-release/NATIVE-PACKAGE-MATRIX.properties || true
+            )
+            if (( ${#signing_matches[@]} != 1 )); then
+              echo "Release matrix has no unique signing state for $target" >&2
+              exit 1
+            fi
+            signing=${signing_matches[0]#*=}
+            if [[ "$signing" != unsigned &&
+                  "$signing" != verified-embedded &&
+                  "$signing" != verified-detached ]]; then
+              echo "Release matrix has invalid signing state for $target" >&2
+              exit 1
+            fi
+            printf -- '- `%s`: `%s`\n' "$target" "$signing" >>"$signing_lines"
+          done
+          generated_notes="$transaction_tmp/generated-notes.md"
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f "tag_name=$tag" \
+            --jq '.body' >"$generated_notes"
+          if (( $(wc -c <"$generated_notes") > 1048576 )); then
+            echo "Generated release notes exceed the bounded size" >&2
+            exit 1
+          fi
+          release_notes="$transaction_tmp/release-notes.md"
+          known_limitations="$transaction_tmp/known-limitations.md"
+          cat >"$known_limitations" <<'EOF'
+          ## Known platform limitations
+          On macOS, game controllers require a compatible system SDL2 installation; keyboard input and emulation remain usable without it.
+          EOF
+          {
+            echo '## Native package signing evidence'
+            cat "$signing_lines"
+            echo
+            cat "$known_limitations"
+            echo
+            cat "$generated_notes"
+          } >"$release_notes"
+
+          verify_remote_notes() {
+            gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json body \
+              --jq '.body | @base64' |
+              base64 --decode >"$transaction_tmp/remote-notes.md"
+            local remote_title
+            remote_title=$(gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json name \
+              --jq '.name')
+            if [[ "$remote_title" != "coffee-gb ${RELEASE_VERSION}" ]]; then
+              echo "GitHub release title differs from the validated release title" >&2
+              return 1
+            fi
+            if ! cmp --silent "$release_notes" "$transaction_tmp/remote-notes.md"; then
+              echo "GitHub release notes differ from the exact validated release notes" >&2
+              return 1
+            fi
+          }
+
+          verify_remote_assets() {
+            local download_root
+            download_root=$(mktemp -d "$transaction_tmp/download.XXXXXX")
+            gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name' |
+              sort >"$transaction_tmp/actual-assets"
+            if ! diff -u \
+                "$transaction_tmp/expected-assets" \
+                "$transaction_tmp/actual-assets"; then
+              echo "GitHub release asset names differ from the validated bundle" >&2
+              return 1
+            fi
+            gh release download "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir "$download_root"
+            local path name
+            for path in "${release_paths[@]}"; do
+              name=${path##*/}
+              if ! cmp --silent "$path" "$download_root/$name"; then
+                echo "GitHub release asset digest differs from validated $name" >&2
+                return 1
+              fi
+            done
+          }
+
+          release_state=$(gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,isPrerelease \
+              --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null || true)
+          if [[ "$release_state" == $'false\tfalse' ]]; then
+            verify_remote_assets
+            verify_remote_notes
+            echo "Existing public GitHub release already matches the validated bundle."
+            exit 0
+          fi
+          if [[ "$release_state" == $'false\ttrue' ]]; then
+            echo "Existing public GitHub release is unexpectedly a prerelease" >&2
+            exit 1
+          fi
+          if [[ -z "$release_state" ]]; then
             gh release create "$tag" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --generate-notes \
-              --title "coffee-gb ${RELEASE_VERSION}"
+              --title "coffee-gb ${RELEASE_VERSION}" \
+              --notes-file "$release_notes" \
+              --draft
+          elif [[ "$release_state" != $'true\tfalse' &&
+                  "$release_state" != $'true\ttrue' ]]; then
+            echo "Unable to determine existing GitHub release state" >&2
+            exit 1
           fi
-          gh release upload "$tag" native-release/* \
+
+          gh release edit "$tag" \
             --repo "$GITHUB_REPOSITORY" \
-            --clobber
+            --title "coffee-gb ${RELEASE_VERSION}" \
+            --notes-file "$release_notes" \
+            --prerelease=false
+          if [[ $(gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,isPrerelease \
+              --jq '[.isDraft, .isPrerelease] | @tsv') != $'true\tfalse' ]]; then
+            echo "GitHub release is not a stable draft before asset replacement" >&2
+            exit 1
+          fi
+
+          mapfile -t stale_assets < <(
+            gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name'
+          )
+          for asset in "${stale_assets[@]}"; do
+            gh release delete-asset "$tag" "$asset" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes
+          done
+          gh release upload "$tag" "${release_paths[@]}" \
+            --repo "$GITHUB_REPOSITORY"
+          verify_remote_assets
+          verify_remote_notes
+          gh release edit "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --prerelease=false
+          if [[ $(gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,isPrerelease \
+              --jq '[.isDraft, .isPrerelease] | @tsv') != $'false\tfalse' ]]; then
+            echo "GitHub release is not a stable public release after publication" >&2
+            exit 1
+          fi
+          verify_remote_assets
+          verify_remote_notes

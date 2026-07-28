@@ -262,6 +262,7 @@ public final class NativePackageTool {
                 stage.appVersion(),
                 primaryArtifact,
                 releaseSbom,
+                releaseNativeSbom,
                 signingState,
                 signatureArtifact);
         Path checksumFile = destination.resolve("SHA256SUMS");

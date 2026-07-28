@@ -58,6 +58,7 @@ internal class DesktopRomOpen(
     private val properties: EmulatorProperties,
     private val sessionState: RomSessionState,
     private val onRecentChanged: () -> Unit,
+    private val onUpdate: (RomOpenUpdate) -> Unit = {},
 ) : AutoCloseable {
 
   private val progress =
@@ -132,6 +133,7 @@ internal class DesktopRomOpen(
     check(SwingUtilities.isEventDispatchThread()) {
       "ROM-open UI updates must run on the Event Dispatch Thread"
     }
+    onUpdate(update)
     when (update) {
       is RomOpenUpdate.Progress -> handleProgress(update)
       is RomOpenUpdate.Opened -> {

@@ -158,7 +158,7 @@ class MainTest {
             TEST_VERSION,
             packageSmoke = {
               smokeCount++
-              PackageRuntimeSmoke.Result(123, 2, 3, 456)
+              PackageRuntimeSmoke.Result(123, 2, 3, 456, "linux-x86-64")
             },
         ) {
           launches += it
@@ -167,9 +167,11 @@ class MainTest {
     assertEquals(0, exitCode)
     assertEquals(1, smokeCount)
     assertTrue(launches.isEmpty())
+    assertTrue(stdout.toString().contains("native-target=linux-x86-64"))
     assertEquals("", stderr.utf8())
     assertEquals(
-        "Coffee GB package smoke OK: ticks=123, video=2, audio=3, state=456${newline()}",
+        "Coffee GB package smoke OK: ticks=123, video=2, audio=3, state=456, " +
+            "native-target=linux-x86-64${newline()}",
         stdout.utf8(),
     )
   }

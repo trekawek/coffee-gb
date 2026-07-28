@@ -101,6 +101,43 @@ public final class NativeRuntimeBootstrap {
         return applySelection(selection);
     }
 
+    /**
+     * Converts bootstrap selection into package-smoke evidence without allowing a configured
+     * target to fall back to the portable path.
+     */
+    public static String requirePackageSmokeSelection(
+            NativeRuntimeSelection selection, String requestedTarget) {
+        if (requestedTarget == null) {
+            if (selection instanceof NativeRuntimeSelection.Portable portable
+                    && portable.fallbackCause().isEmpty()) {
+                return "portable";
+            }
+            throw new IllegalStateException(
+                    "Package smoke selected target natives without an explicit target");
+        }
+        NativeTarget expected = NativeTarget.fromId(requestedTarget)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Package smoke requested unsupported native target " + requestedTarget));
+        if (!(selection instanceof NativeRuntimeSelection.TargetBundle selected)) {
+            if (!(selection instanceof NativeRuntimeSelection.Portable portable)) {
+                throw new IllegalStateException(
+                        "Package smoke bootstrap returned an unknown selection type");
+            }
+            String failure = portable.fallbackCause()
+                    .map(cause -> cause.getClass().getSimpleName())
+                    .orElse("portable fallback");
+            throw new IllegalStateException(
+                    "Package smoke requires native target " + expected.id()
+                            + ", but bootstrap produced " + failure);
+        }
+        if (selected.bundle().target() != expected) {
+            throw new IllegalStateException(
+                    "Package smoke requested native target " + expected.id()
+                            + ", but bootstrap selected " + selected.bundle().target().id());
+        }
+        return expected.id();
+    }
+
     private static NativeRuntimeSelection applySelection(NativeRuntimeSelection selection) {
         if (selection instanceof NativeRuntimeSelection.TargetBundle selected) {
             configure(selected.bundle());

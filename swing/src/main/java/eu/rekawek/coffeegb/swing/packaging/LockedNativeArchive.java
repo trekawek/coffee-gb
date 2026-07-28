@@ -205,6 +205,8 @@ final class LockedNativeArchive {
     }
 
     private static ZipFile openZip(Path source) throws IOException {
+        BoundedZipPreflight.verify(
+                source, MAX_ARCHIVE_BYTES, MAX_ENTRIES, "Locked native archive");
         return ZipFile.builder().setPath(source).get();
     }
 

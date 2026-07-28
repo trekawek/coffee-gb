@@ -4,9 +4,11 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -23,10 +25,16 @@ public class NativeReleaseToolTest {
     public void completeReleaseMatrixAndChecksumsAreRequired() throws Exception {
         Path release = temporaryFolder.newFolder("release").toPath();
         Map<String, String> matrix = new LinkedHashMap<>();
-        matrix.put("schema", "2");
+        matrix.put("schema", "3");
         matrix.put("app.version", "1.7.15");
         matrix.put("source.commit", "0123456789abcdef0123456789abcdef01234567");
         addFile(release, matrix, "portable", "coffee-gb-1.7.15.jar");
+        Path sbom = NativePackagingTestSupport.writeMavenSbom(
+                release.resolve(
+                        NativePackageMetadata.releaseSbomFileName("1.7.15")),
+                "1.7.15");
+        matrix.put("sbom.path", sbom.getFileName().toString());
+        matrix.put("sbom.sha256", NativePackageStager.sha256(sbom));
         for (NativeTarget target : NativeTarget.values()) {
             String prefix = "target." + target.id();
             String suffix =
@@ -38,16 +46,18 @@ public class NativeReleaseToolTest {
             String signing = target == NativeTarget.LINUX_X86_64
                     ? "verified-detached"
                     : "unsigned";
-            Path sbom = NativePackagingTestSupport.writeTargetSbom(
+            Path nativeSbom = NativePackagingTestSupport.writeNativeSbom(
                     release.resolve(
-                            NativePackageMetadata.releaseSbomFileName("1.7.15", target)),
-                    artifact,
+                            NativePackageMetadata.releaseNativeSbomFileName(
+                                    "1.7.15", target)),
                     target,
-                    NativePackageMetadata.target(target).defaultPackageType(),
-                    "1.7.15",
-                    signing);
-            matrix.put(prefix + ".sbom.path", sbom.getFileName().toString());
-            matrix.put(prefix + ".sbom.sha256", NativePackageStager.sha256(sbom));
+                    "1.7.15");
+            matrix.put(
+                    prefix + ".native-sbom.path",
+                    nativeSbom.getFileName().toString());
+            matrix.put(
+                    prefix + ".native-sbom.sha256",
+                    NativePackageStager.sha256(nativeSbom));
             matrix.put(prefix + ".signing", signing);
             if (target == NativeTarget.LINUX_X86_64) {
                 addFile(
@@ -69,6 +79,36 @@ public class NativeReleaseToolTest {
         assertThrows(
                 java.io.IOException.class,
                 () -> NativeReleaseTool.verifyReleaseDirectory(release, "1.7.15"));
+    }
+
+    @Test
+    public void releaseChecksumMetadataIsBoundedBeforeParsing() throws Exception {
+        Path release = temporaryFolder.newFolder("oversized-release-checksums").toPath();
+        Path checksums = release.resolve("SHA256SUMS");
+        try (var channel = Files.newByteChannel(
+                checksums,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE)) {
+            channel.position(NativePackageVerifier.MAX_METADATA_BYTES);
+            channel.write(ByteBuffer.wrap(new byte[] {1}));
+        }
+
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativeReleaseTool.verifyReleaseChecksums(release));
+    }
+
+    @Test
+    public void releaseDirectoryEntryEnumerationIsBounded() throws Exception {
+        Path release = temporaryFolder.newFolder("excess-release-entries").toPath();
+        for (int i = 0; i <= NativeReleaseTool.MAX_RELEASE_DIRECTORY_ENTRIES; i++) {
+            Files.writeString(
+                    release.resolve("entry-" + i), "bounded", StandardCharsets.UTF_8);
+        }
+
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativeReleaseTool.listBoundedReleaseEntries(release));
     }
 
     private static void addFile(

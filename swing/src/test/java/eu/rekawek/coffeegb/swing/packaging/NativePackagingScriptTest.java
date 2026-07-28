@@ -66,9 +66,13 @@ public class NativePackagingScriptTest {
         for (String contents : new String[] {associationSh, associationPs}) {
             assertTrue(contents.contains("PackageAssociationFixture"));
             assertTrue(contents.contains("COFFEE_GB_ASSOCIATION_SMOKE_MARKER"));
+            assertTrue(contents.contains("COFFEE_GB_ASSOCIATION_SMOKE_ROM"));
             assertTrue(contents.contains("association-opened-"));
             assertTrue(contents.contains("INITIAL_ARGUMENT"));
             assertTrue(contents.contains("Coffee GB association open OK"));
+            assertTrue(contents.contains("Coffee GB association shutdown OK"));
+            assertTrue(contents.contains("origin="));
+            assertTrue(contents.contains("pid="));
             assertFalse(contents.contains("curl "));
             assertFalse(contents.contains("Invoke-WebRequest"));
             assertFalse(contents.contains("wget "));
@@ -77,6 +81,7 @@ public class NativePackagingScriptTest {
         assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
         assertTrue(associationSh.contains("DESKTOP_OPEN_FILE"));
         assertTrue(associationSh.contains("dpkg --remove coffee-gb"));
+        assertTrue(associationSh.contains("! kill -0 \"$pid\""));
         assertTrue(associationSh.contains("lsregister"));
         assertTrue(associationSh.contains("codesign --verify --deep --strict"));
         assertTrue(associationSh.contains(
@@ -84,5 +89,6 @@ public class NativePackagingScriptTest {
         assertTrue(associationPs.contains("Start-Process -FilePath $Fixture"));
         assertTrue(associationPs.contains("Registry::HKEY_CLASSES_ROOT"));
         assertTrue(associationPs.contains("Invoke-Msi -Action \"/x\""));
+        assertTrue(associationPs.contains("Get-Process -Id $AssociationPid"));
     }
 }

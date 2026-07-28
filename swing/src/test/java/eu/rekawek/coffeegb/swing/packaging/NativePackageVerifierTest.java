@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -46,17 +47,41 @@ public class NativePackageVerifierTest {
     }
 
     @Test
+    public void everySmokeHandoffStartsWithAnIndependentEmptyNativeCache() throws Exception {
+        Path home = temporaryFolder.newFolder("smoke-caches").toPath();
+
+        NativePackageVerifier.SmokeCacheLayout caches =
+                NativePackageVerifier.createSmokeCaches(home);
+
+        List<Path> paths = List.of(
+                caches.directRuntime(),
+                caches.packagedLauncher(),
+                caches.desktopNormal(),
+                caches.desktopDebug());
+        assertEquals(paths.size(), new HashSet<>(paths).size());
+        for (Path cache : paths) {
+            assertTrue(Files.isDirectory(cache));
+            try (Stream<Path> contents = Files.list(cache)) {
+                assertEquals(0, contents.count());
+            }
+        }
+        Files.writeString(caches.directRuntime().resolve("prewarmed"), "cached");
+        try (Stream<Path> launcherContents = Files.list(caches.packagedLauncher())) {
+            assertEquals(0, launcherContents.count());
+        }
+    }
+
+    @Test
     public void distributionResultAndExactChecksumCoverageRoundTrip() throws Exception {
         Path dist = temporaryFolder.newFolder("dist").toPath();
         Path installer = Files.writeString(
                 dist.resolve("coffee-gb.deb"), "synthetic installer", StandardCharsets.UTF_8);
-        Path sbom = NativePackagingTestSupport.writeTargetSbom(
-                dist.resolve("coffee-gb-1.7.15-linux-x86-64-sbom.cdx.json"),
-                installer,
+        Path sbom = NativePackagingTestSupport.writeMavenSbom(
+                dist.resolve("coffee-gb-1.7.15-sbom.cdx.json"), "1.7.15");
+        Path nativeSbom = NativePackagingTestSupport.writeNativeSbom(
+                dist.resolve("coffee-gb-1.7.15-linux-x86-64-native-sbom.cdx.json"),
                 NativeTarget.LINUX_X86_64,
-                NativePackageMetadata.PackageType.DEB,
-                "1.7.15",
-                "unsigned");
+                "1.7.15");
         NativePackageVerifier.writeBuildResult(
                 dist,
                 NativeTarget.LINUX_X86_64,
@@ -64,6 +89,7 @@ public class NativePackageVerifierTest {
                 "1.7.15",
                 installer,
                 sbom,
+                nativeSbom,
                 "unsigned",
                 null);
         writeChecksums(dist);
@@ -101,19 +127,47 @@ public class NativePackageVerifierTest {
     }
 
     @Test
+    public void externalPropertiesAndTargetChecksumsAreReadWithMetadataBounds()
+            throws Exception {
+        Path properties = temporaryFolder.newFile("oversized.properties").toPath();
+        try (var channel = Files.newByteChannel(
+                properties,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING)) {
+            channel.position(NativePackageVerifier.MAX_METADATA_BYTES);
+            channel.write(ByteBuffer.wrap(new byte[] {1}));
+        }
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.readStrictProperties(properties));
+
+        Path dist = temporaryFolder.newFolder("oversized-checksums").toPath();
+        Path checksums = dist.resolve("SHA256SUMS");
+        try (var channel = Files.newByteChannel(
+                checksums,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE)) {
+            channel.position(NativePackageVerifier.MAX_METADATA_BYTES);
+            channel.write(ByteBuffer.wrap(new byte[] {1}));
+        }
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyChecksums(dist, checksums));
+    }
+
+    @Test
     public void detachedSignatureIsARequiredChecksummedReleaseArtifact() throws Exception {
         Path dist = temporaryFolder.newFolder("signed-dist").toPath();
         Path installer = Files.writeString(
                 dist.resolve("coffee-gb.deb"), "signed installer", StandardCharsets.UTF_8);
         Path signature = Files.writeString(
                 dist.resolve("coffee-gb.deb.asc"), "detached signature", StandardCharsets.UTF_8);
-        Path sbom = NativePackagingTestSupport.writeTargetSbom(
-                dist.resolve("coffee-gb-1.7.15-linux-x86-64-sbom.cdx.json"),
-                installer,
+        Path sbom = NativePackagingTestSupport.writeMavenSbom(
+                dist.resolve("coffee-gb-1.7.15-sbom.cdx.json"), "1.7.15");
+        Path nativeSbom = NativePackagingTestSupport.writeNativeSbom(
+                dist.resolve("coffee-gb-1.7.15-linux-x86-64-native-sbom.cdx.json"),
                 NativeTarget.LINUX_X86_64,
-                NativePackageMetadata.PackageType.DEB,
-                "1.7.15",
-                "verified-detached");
+                "1.7.15");
         NativePackageVerifier.writeBuildResult(
                 dist,
                 NativeTarget.LINUX_X86_64,
@@ -121,6 +175,7 @@ public class NativePackageVerifierTest {
                 "1.7.15",
                 installer,
                 sbom,
+                nativeSbom,
                 "verified-detached",
                 signature);
         writeChecksums(dist);
@@ -178,8 +233,8 @@ public class NativePackageVerifierTest {
         assertPayloadPolicyRejects(payload, appDirectory, runtime);
         Files.delete(forbidden);
 
-        Files.createDirectories(payload.resolve("other/runtime/lib"));
-        Files.write(payload.resolve("other/runtime/lib/modules"), new byte[] {1});
+        Files.createDirectories(payload.resolve("other/jre/LIB"));
+        Files.write(payload.resolve("other/jre/LIB/MODULES"), new byte[] {1});
         assertPayloadPolicyRejects(payload, appDirectory, runtime);
     }
 
@@ -227,6 +282,11 @@ public class NativePackageVerifierTest {
 
         Files.delete(archive);
         writeSymlinkArchive(archive);
+        assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
+
+        Files.delete(archive);
+        writeArchive(archive, Map.of(
+                "runtime-copy/lib/modules", new byte[] {1, 2, 3}));
         assertPayloadPolicyRejects(layout.payload(), layout.appDirectory(), layout.runtime());
     }
 
@@ -278,28 +338,185 @@ public class NativePackageVerifierTest {
     }
 
     @Test
+    public void payloadPolicyRejectsRecognizedTextBeyondTheInspectionBound() throws Exception {
+        PayloadLayout layout = createPayloadLayout("oversized-text-payload");
+        Path text = layout.appDirectory().resolve("credentials.txt");
+        try (var channel = Files.newByteChannel(
+                text,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE)) {
+            channel.write(ByteBuffer.wrap(
+                    "client_secret=synthetic-secret-value".getBytes(StandardCharsets.UTF_8)));
+            channel.position(2L * 1024 * 1024);
+            channel.write(ByteBuffer.wrap(new byte[] {0}));
+        }
+
+        java.io.IOException oversized = assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyPayloadPolicy(
+                        layout.payload(),
+                        layout.appDirectory(),
+                        layout.runtime(),
+                        NativeTarget.LINUX_X86_64));
+
+        assertTrue(oversized.getMessage().contains("bounded inspection size"));
+    }
+
+    @Test
+    public void mavenSbomIsBoundedBeforeItIsRead() throws Exception {
+        Path sbom = temporaryFolder.newFile("oversized-sbom.json").toPath();
+        try (var channel = Files.newByteChannel(
+                sbom,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING)) {
+            channel.write(ByteBuffer.wrap(
+                    "{\"bomFormat\":\"CycloneDX\"}".getBytes(StandardCharsets.UTF_8)));
+            channel.position(8L * 1024 * 1024);
+            channel.write(ByteBuffer.wrap(new byte[] {0}));
+        }
+
+        java.io.IOException oversized = assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyMavenSbom(sbom, "1.7.15"));
+
+        assertTrue(oversized.getMessage().contains("invalid size"));
+    }
+
+    @Test
+    public void mavenSbomVersionMustBelongToTheExactRootComponent() throws Exception {
+        Path sbom = temporaryFolder.newFile("wrong-root-sbom.json").toPath();
+        String wrongRoot =
+                "pkg:maven/eu.rekawek.coffeegb/swing@9.9.9?type=jar";
+        Files.writeString(
+                sbom,
+                "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.6\","
+                        + "\"metadata\":{\"component\":{\"type\":\"application\","
+                        + "\"bom-ref\":\"" + wrongRoot + "\","
+                        + "\"group\":\"eu.rekawek.coffeegb\",\"name\":\"swing\","
+                        + "\"version\":\"9.9.9\",\"purl\":\"" + wrongRoot + "\"}},"
+                        + "\"components\":[{\"type\":\"library\",\"name\":\"expected-version\","
+                        + "\"version\":\"1.7.15\","
+                        + "\"purl\":\"pkg:maven/example/dependency@1.7.15?type=jar\"}]}",
+                StandardCharsets.UTF_8);
+
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyMavenSbom(sbom, "1.7.15"));
+    }
+
+    @Test
+    public void mavenSbomRequiresStrictJsonAcrossTheCompleteDocument() throws Exception {
+        Path valid = NativePackagingTestSupport.writeMavenSbom(
+                temporaryFolder.newFile("valid-sbom.json").toPath(), "1.7.15");
+        String json = Files.readString(valid, StandardCharsets.UTF_8).stripTrailing();
+
+        Path trailingComma = temporaryFolder.newFile("trailing-comma-sbom.json").toPath();
+        Files.writeString(
+                trailingComma,
+                json.substring(0, json.length() - 1) + ",}",
+                StandardCharsets.UTF_8);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyMavenSbom(trailingComma, "1.7.15"));
+
+        Path malformedNested = temporaryFolder.newFile("malformed-nested-sbom.json").toPath();
+        Files.writeString(
+                malformedNested,
+                json.substring(0, json.length() - 1) + ",\"malformed\":[{]}",
+                StandardCharsets.UTF_8);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyMavenSbom(malformedNested, "1.7.15"));
+
+        Path nonAsciiNumber = temporaryFolder.newFile("non-ascii-number-sbom.json").toPath();
+        Files.writeString(
+                nonAsciiNumber,
+                json.substring(0, json.length() - 1)
+                        + ",\"nonAscii\":1."
+                        + Character.toString(0x0661)
+                        + "}",
+                StandardCharsets.UTF_8);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyMavenSbom(nonAsciiNumber, "1.7.15"));
+
+        Path nonAsciiEscape = temporaryFolder.newFile("non-ascii-escape-sbom.json").toPath();
+        Files.writeString(
+                nonAsciiEscape,
+                json.substring(0, json.length() - 1)
+                        + ",\"nonAsciiEscape\":\"bad\\u066"
+                        + Character.toString(0x0661)
+                        + "\"}",
+                StandardCharsets.UTF_8);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyMavenSbom(nonAsciiEscape, "1.7.15"));
+    }
+
+    @Test
+    public void mavenSbomPurlsMustBeDirectUniqueComponentFields() throws Exception {
+        Path valid = NativePackagingTestSupport.writeMavenSbom(
+                temporaryFolder.newFile("component-purls.json").toPath(), "1.7.15");
+        String json = Files.readString(valid, StandardCharsets.UTF_8);
+        int components = json.indexOf("\"components\":");
+        int dependencies = json.indexOf("\"dependencies\":");
+        String prefix = json.substring(0, components);
+        String suffix = json.substring(dependencies);
+        String dependencyPurl = "pkg:maven/example/example@1?type=jar";
+
+        Path relocated = temporaryFolder.newFile("relocated-purls.json").toPath();
+        Files.writeString(
+                relocated,
+                prefix + "\"components\":[],\"unrelated\":{\"purl\":\""
+                        + dependencyPurl + "\"}," + suffix,
+                StandardCharsets.UTF_8);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyMavenSbom(relocated, "1.7.15"));
+
+        for (String malformedComponents : List.of(
+                "[1]",
+                "[{\"name\":\"missing-purl\"}]",
+                "[{\"purl\":1}]",
+                "[{\"purl\":\"" + dependencyPurl + "\",\"purl\":\""
+                        + dependencyPurl + "\"}]",
+                "[{\"purl\":\"" + dependencyPurl + "\"},{\"purl\":\""
+                        + dependencyPurl + "\"}]")) {
+            Path malformed = temporaryFolder.newFile().toPath();
+            Files.writeString(
+                    malformed,
+                    prefix + "\"components\":" + malformedComponents + "," + suffix,
+                    StandardCharsets.UTF_8);
+            assertThrows(
+                    java.io.IOException.class,
+                    () -> NativePackageVerifier.verifyMavenSbom(malformed, "1.7.15"));
+        }
+    }
+
+    @Test
     public void legalNoticesMustMatchTheAuthoritativeResources() throws Exception {
         Path source = Path.of("../packaging/resources/legal").toAbsolutePath().normalize();
         Path packaged = temporaryFolder.newFolder("legal").toPath();
-        try (Stream<Path> paths = Files.walk(source)) {
-            for (Path path : paths.toList()) {
-                Path destination = packaged.resolve(source.relativize(path).toString());
-                if (Files.isDirectory(path)) {
-                    Files.createDirectories(destination);
-                } else {
-                    Files.copy(path, destination, StandardCopyOption.COPY_ATTRIBUTES);
-                }
-            }
+        for (String relative :
+                NativeComponentInventory.requiredLegalPaths(NativeTarget.LINUX_X86_64)) {
+            Path destination = packaged.resolve(relative);
+            Files.createDirectories(destination.getParent());
+            Files.copy(
+                    source.resolve(relative),
+                    destination,
+                    StandardCopyOption.COPY_ATTRIBUTES);
         }
 
-        NativePackageVerifier.verifyLegalInventory(packaged, source);
+        NativePackageVerifier.verifyLegalInventory(
+                packaged, source, NativeTarget.LINUX_X86_64);
         Files.writeString(
                 packaged.resolve("THIRD-PARTY-NOTICES.txt"),
                 "altered notice",
                 StandardCharsets.UTF_8);
         assertThrows(
                 java.io.IOException.class,
-                () -> NativePackageVerifier.verifyLegalInventory(packaged, source));
+                () -> NativePackageVerifier.verifyLegalInventory(
+                        packaged, source, NativeTarget.LINUX_X86_64));
     }
 
     private static void assertPayloadPolicyRejects(

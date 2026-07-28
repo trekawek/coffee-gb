@@ -17,20 +17,25 @@ has a named tester, target/architecture, date, and result. A tag push alone must
 - [ ] All four required targets passed their unit/integration build, pre-installer inspection,
   final installer unpack/mount, packaged `--version`, `--package-smoke`, normal and `--debug`
   production desktop launches, default-handler opens for generated `.gb`, `.gbc`, and `.rom`
-  fixtures, bounded shutdown, and uninstall/unregistration cleanup.
+  fixtures, bounded shutdown, and uninstall/unregistration cleanup. Each package smoke named the
+  exact configured target after starting from its own empty extraction cache.
 - [ ] If protected signing was requested, every target was rebuilt from the same immutable source
   after the unsigned gate. Windows app-image executables and the MSI, macOS app bundles and DMGs,
   and Linux detached signatures all passed their independent platform verification. The installed
   macOS app retained `com.apple.security.cs.disable-library-validation=true`, passed Gatekeeper,
   and launched with its extracted locked natives; checksums were generated afterward.
-- [ ] The release bundle contains the portable JAR, four target-specific CycloneDX SBOMs, Linux x64
-  DEB, Windows x64 MSI, macOS x64 DMG, macOS arm64 DMG,
+- [ ] The release bundle contains the portable JAR, one shared Maven dependency CycloneDX SBOM,
+  four exact target-native CycloneDX SBOMs, Linux x64 DEB, Windows x64 MSI, macOS x64 DMG,
+  macOS arm64 DMG,
   `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`, plus every detached signature named by the
   matrix.
 - [ ] Verify every `SHA256SUMS` entry independently after download.
 - [ ] Release notes state whether each target is `unsigned`, `verified-embedded`, or
-  `verified-detached` and call out any known platform limitation, including the current macOS
-  system-SDL2 requirement for game controllers.
+  `verified-detached`, exactly matching all four `target.*.signing` matrix values, and call out any
+  known platform limitation, including the current macOS system-SDL2 requirement for game
+  controllers.
+- [ ] The GitHub release is public, non-draft, and non-prerelease only after its exact remote asset
+  set and signing-state notes have been downloaded and verified.
 - [ ] No target is omitted. If a future reviewed support change removes one, its release notes and
   target/user documentation explicitly say so before publication.
 

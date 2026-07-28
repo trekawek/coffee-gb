@@ -25,21 +25,24 @@ then:
 2. builds the host installer without a signing request;
 3. inspects jpackage's exact payload image and runs packaged `--version`, `--package-smoke`, and
    production desktop launches both normally and with `--debug`;
-4. writes `PACKAGE-RESULT.properties`, a target CycloneDX SBOM containing the Maven graph plus
-   exact native/JDK/module/installer evidence, and exhaustive `SHA256SUMS`;
+4. writes `PACKAGE-RESULT.properties`, one byte-identical Maven dependency CycloneDX SBOM, one
+   exact target-native CycloneDX SBOM generated from the locked inventory, and exhaustive
+   `SHA256SUMS`;
 5. unpacks or mounts the final installer and repeats strict inspection and both launch smokes from
    an isolated temporary home; and
 6. installs the DEB/MSI or copies and registers the DMG application, generates bounded `.gb`,
    `.gbc`, and `.rom` fixtures, opens each through the host shell's default registered handler,
    requires correlated unified-ROM-service evidence, and verifies package removal or Launch
    Services cleanup; and
-7. uploads only the installer, SBOM, checksums, result manifest, and (once, from Linux) the
+7. uploads only the installer, both SBOMs, checksums, result manifest, and (once, from Linux) the
    unchanged portable Maven JAR.
 
 `--package-smoke` is deliberately headless and device-free. Its ROM is generated in memory from
 reviewable instructions; no ROM, save, screenshot, or StateFile fixture is committed or uploaded.
 The smoke covers a complete display frame, an audio buffer, live input press/release, and the
-existing portable-state codec/load path.
+existing portable-state codec/load path. The direct-runtime and packaged-launcher probes use
+different initially empty extraction caches and accept success only when output names the exact
+configured target; `native-target=portable` is valid only for an unconfigured portable-JAR run.
 
 Each target also launches the packaged production desktop twice with isolated homes: once normally
 and once through the supported `--debug` path. Linux runs under Xvfb; Windows and macOS use their
@@ -56,8 +59,10 @@ Launch Services `open` after copying the application to an isolated Applications
 bypass selection by naming the executable or bundle ID. The macOS test opens each document into an
 already-running instance and therefore requires `DESKTOP_OPEN_FILE`, while Linux and Windows
 require the launcher's `INITIAL_ARGUMENT` source. All targets wait for an `Opened` result from the
-shared service, compare its normalized path and cartridge title, exercise bounded shutdown, and
-then prove the installed launcher/registration was removed.
+shared service, require the expected normalized path, a matching direct-file origin, source, and
+cartridge title, record the exact process ID, then require that process's normal bounded-shutdown
+evidence and exit before the next fixture. Only afterward do they prove the installed
+launcher/registration was removed.
 
 The content verifier bounds traversal and rejects symlinks in application input, a second runtime,
 foreign or altered target natives, ROM-like files, signing-store exports, private-key/token-shaped
@@ -65,7 +70,18 @@ text, developer home paths, missing notices, version drift, altered SBOMs, dupli
 checksums, and unlisted files. It applies the same forbidden-name and content checks recursively to
 JAR/ZIP entries, including nested archives, with a 256 MiB top-level container limit, 4,096-character
 entry-name limit, maximum nesting depth of three, 50,000 aggregate entries, 512 MiB aggregate
-expanded data, and 64 MiB per entry. The sole content-scan exception is
+expanded data, and 64 MiB per entry. Before any ZIP/JAR reader materializes metadata, a shared
+classic-EOCD preflight rejects ZIP64/multidisk input, inconsistent offsets, sizes, or actual entry
+counts, central directories over 64 MiB, archive entry counts over the caller's bound, and repeated
+fake end-record candidates that exceed an aggregate header-scan budget. Every trusted manifest,
+legal file, and locked portable native is then consumed through an exact-length post-inflation
+reader, so forged uncompressed sizes cannot hide expansion. Portable native paths and the canonical
+`META-INF/MANIFEST.MF` are exact-one inventories; case aliases do not satisfy the manifest gate.
+External properties/checksum metadata is limited to 1 MiB and 10,000 lines; recognized top-level text over
+2 MiB fails closed instead of skipping inspection. The Maven SBOM is bounded to 8 MiB, parsed as
+strict depth-bounded JSON, tied to the exact Coffee GB root component and version, and requires one
+unique direct Maven purl string on every object in its top-level `components` array. The sole
+content-scan exception is
 the exact target-native allowlist in `native-source.zip`: those upstream executables contain
 compiler build paths and are treated as opaque only after the dedicated reader has enforced the
 stored method, manifest order, safe regular entry type, exact byte counts, and SHA-256 values.
@@ -89,17 +105,25 @@ matrix records the bound source commit.
 
 Publication waits for the unsigned build, installer inspection, desktop/debug launch, association,
 and uninstall gates on all four targets. A Linux release-gate job independently downloads the
-results, requires one default installer and one target-specific SBOM per target, renames installers
-with explicit architecture, retains detached signatures, and creates one release-level checksum
-file. If protected signing was requested, the workflow then rebuilds the same immutable commit in
+results, requires one default installer, one byte-identical Maven dependency SBOM, and one exact
+target-native SBOM per target, renames installers with explicit architecture, deduplicates the
+Maven SBOM into one shared release copy, retains detached signatures, and creates one release-level
+checksum file. If protected signing was requested, the workflow then rebuilds the same immutable commit in
 the `native-release` environment, signs and reverifies all four targets, and assembles a replacement
 complete bundle.
 
 Only after the complete native bundle passes does a protected Maven job deploy the already-tagged
 release with `mvn -P release deploy`. Only after Maven succeeds does a protected GitHub job recheck
-the tag and bundle provenance, create the GitHub release, and upload the artifacts. Tag pushes do
-not trigger the native workflow, so the release-created tag cannot start a duplicate run or cancel
-the gated release call.
+the tag and bundle provenance. It creates or reuses a draft release, clears any partial draft
+assets, uploads exactly the checksum-validated bundle, downloads and byte-compares the exact remote
+asset-name set, prepends all four matrix-validated target signing states to bounded generated
+release notes, adds the fixed macOS system-SDL2 controller limitation while confirming keyboard
+input and emulation remain usable, normalizes the release to a non-prerelease, and only then
+publishes the draft. A rerun accepts an existing stable public release only when its title, complete
+notes body, every asset name, and every asset byte exactly match the validated release; an existing
+public prerelease or any other mismatch fails closed.
+Tag pushes do not trigger the native workflow, so the release-created tag cannot start a duplicate
+run or cancel the gated release call.
 
 No partial matrix is uploaded. A missing platform fails the release workflow, and the GitHub
 release must not be announced as complete. If maintainers deliberately withdraw a target in a

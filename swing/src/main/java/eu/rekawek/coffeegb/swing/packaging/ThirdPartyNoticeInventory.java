@@ -8,15 +8,12 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Enumeration;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -32,10 +29,9 @@ final class ThirdPartyNoticeInventory {
     static final String CATALOG = "THIRD-PARTY-COMPONENTS.txt";
     static final String NOTICES = "THIRD-PARTY-NOTICES.txt";
     static final String EMBEDDED_PREFIX = "META-INF/coffee-gb/legal/";
-    private static final int MAX_SBOM_BYTES = 8 * 1024 * 1024;
+    static final int MAX_SBOM_BYTES = 8 * 1024 * 1024;
     private static final int MAX_LEGAL_ENTRIES = 128;
-    private static final Pattern PURL =
-            Pattern.compile("\"purl\"\\s*:\\s*\"(pkg:maven/[^\"\\\\]+)\"");
+    private static final long MAX_LEGAL_FILE_BYTES = 2L * 1024L * 1024L;
     private static final String FIRST_PARTY_PREFIX = "pkg:maven/eu.rekawek.coffeegb/";
 
     private ThirdPartyNoticeInventory() {
@@ -100,6 +96,11 @@ final class ThirdPartyNoticeInventory {
     static void verifyEmbeddedLegal(Path jar, Path legalRoot) throws IOException {
         Set<String> expected = expectedLegalFiles(legalRoot);
         Map<String, JarEntry> actual = new HashMap<>();
+        BoundedZipPreflight.verify(
+                jar,
+                NativePackageStager.MAX_APP_JAR_BYTES,
+                NativePackageStager.MAX_APP_JAR_ENTRIES,
+                "Application JAR legal inventory");
         try (JarFile file = new JarFile(jar.toFile(), false)) {
             Enumeration<JarEntry> entries = file.entries();
             while (entries.hasMoreElements()) {
@@ -121,12 +122,14 @@ final class ThirdPartyNoticeInventory {
                 Path source = safeLegalFile(legalRoot, relative);
                 JarEntry entry = actual.get(relative);
                 long expectedSize = Files.size(source);
-                if (entry.getSize() != expectedSize) {
+                if (expectedSize <= 0
+                        || expectedSize > MAX_LEGAL_FILE_BYTES
+                        || entry.getSize() != expectedSize) {
                     throw new IOException(
                             "Application JAR legal file has the wrong size: " + relative);
                 }
                 try (InputStream input = file.getInputStream(entry)) {
-                    String embedded = NativeBundleManifest.sha256(input.readAllBytes());
+                    String embedded = embeddedLegalSha256(input, expectedSize, relative);
                     String sourceDigest = NativePackageStager.sha256(source);
                     if (!embedded.equals(sourceDigest)) {
                         throw new IOException(
@@ -137,20 +140,28 @@ final class ThirdPartyNoticeInventory {
         }
     }
 
+    static String embeddedLegalSha256(
+            InputStream input, long expectedSize, String relative) throws IOException {
+        return BoundedArchiveEntry.sha256Exact(
+                input,
+                expectedSize,
+                MAX_LEGAL_FILE_BYTES,
+                "Application JAR legal file " + relative);
+    }
+
     static Set<String> resolvedThirdPartyPurls(Path sbom) throws IOException {
         String contents = readBounded(sbom, MAX_SBOM_BYTES, "CycloneDX Maven SBOM");
-        Matcher matcher = PURL.matcher(contents);
-        Set<String> purls = new HashSet<>();
-        while (matcher.find()) {
-            String purl = matcher.group(1);
-            if (!purl.startsWith(FIRST_PARTY_PREFIX) && !purls.add(purl)) {
-                throw new IOException("CycloneDX Maven SBOM repeats component purl " + purl);
-            }
-        }
+        return resolvedThirdPartyPurls(contents);
+    }
+
+    static Set<String> resolvedThirdPartyPurls(String contents) throws IOException {
+        Set<String> purls = NativePackageVerifier.directMavenComponentPurls(contents).stream()
+                .filter(purl -> !purl.startsWith(FIRST_PARTY_PREFIX))
+                .collect(Collectors.toUnmodifiableSet());
         if (purls.isEmpty()) {
             throw new IOException("CycloneDX Maven SBOM has no third-party component purls");
         }
-        return Set.copyOf(purls);
+        return purls;
     }
 
     private static Map<String, Set<String>> readCatalog(Path legalRoot) throws IOException {
@@ -200,7 +211,7 @@ final class ThirdPartyNoticeInventory {
         return file;
     }
 
-    private static String readBounded(Path file, long maximum, String description)
+    static String readBounded(Path file, long maximum, String description)
             throws IOException {
         if (Files.isSymbolicLink(file)
                 || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {

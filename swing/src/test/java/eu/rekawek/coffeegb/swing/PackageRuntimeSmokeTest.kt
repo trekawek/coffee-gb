@@ -17,6 +17,7 @@ class PackageRuntimeSmokeTest {
     assertTrue(result.videoFrames > 0)
     assertTrue(result.audioBuffers > 0)
     assertTrue(result.stateBytes > 0)
+    assertTrue(result.nativeTarget == "portable")
   }
 
   @Test
