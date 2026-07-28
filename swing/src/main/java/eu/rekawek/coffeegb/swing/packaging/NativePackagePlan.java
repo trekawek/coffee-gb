@@ -161,7 +161,9 @@ public final class NativePackagePlan {
                 if (packageType != NativePackageMetadata.PackageType.APP_IMAGE) {
                     add(command, "--linux-package-name", "coffee-gb");
                     add(command, "--linux-app-release", "1");
-                    add(command, "--linux-app-category", "games");
+                    // jpackage uses this value as the DEB Section/RPM Group. The freedesktop
+                    // category is independently fixed to Game; in the desktop resource template.
+                    add(command, "--linux-app-category", LinuxPackagePolicy.PACKAGE_SECTION);
                     add(command, "--linux-menu-group", "Games");
                     command.add("--linux-shortcut");
                     if (packageType == NativePackageMetadata.PackageType.DEB) {

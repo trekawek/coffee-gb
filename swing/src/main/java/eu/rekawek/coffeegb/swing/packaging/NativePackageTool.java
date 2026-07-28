@@ -161,6 +161,11 @@ public final class NativePackageTool {
             primaryArtifact = findInstaller(destination, packageType);
         }
 
+        if (targetMetadata.hostOs() == NativePackageMetadata.HostOs.LINUX
+                && packageType == NativePackageMetadata.PackageType.DEB) {
+            verifyLinuxDeb(primaryArtifact, buildRoot);
+        }
+
         if (signing != null) {
             for (List<String> command : signing.postPackageCommands(primaryArtifact)) {
                 runInherited(command);
@@ -243,6 +248,45 @@ public final class NativePackageTool {
                     "Expected exactly one " + suffix + " installer, found " + candidates);
         }
         return candidates.get(0);
+    }
+
+    private static void verifyLinuxDeb(Path installer, Path buildRoot)
+            throws IOException, InterruptedException {
+        String metadata = runCaptured(List.of(
+                "dpkg-deb",
+                "--field",
+                installer.toString(),
+                "Section",
+                "Depends"));
+        LinuxPackagePolicy.verifyDebianMetadata(metadata);
+
+        Path extracted = Files.createDirectory(buildRoot.resolve("deb-validation"));
+        runInherited(List.of(
+                "dpkg-deb", "--extract", installer.toString(), extracted.toString()));
+        Path applications = extracted.resolve("usr/share/applications");
+        List<Path> desktopEntries;
+        if (!Files.isDirectory(applications, LinkOption.NOFOLLOW_LINKS)) {
+            desktopEntries = List.of();
+        } else {
+            try (Stream<Path> files = Files.walk(applications)) {
+                desktopEntries =
+                        files.filter(path ->
+                                        Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+                                                && path.getFileName()
+                                                        .toString()
+                                                        .endsWith(".desktop"))
+                                .toList();
+            }
+        }
+        if (desktopEntries.size() != 1) {
+            throw new IOException(
+                    "Expected exactly one generated Linux desktop entry, found "
+                            + desktopEntries);
+        }
+        Path desktopEntry = desktopEntries.get(0);
+        LinuxPackagePolicy.verifyDesktopEntry(
+                Files.readString(desktopEntry, StandardCharsets.UTF_8));
+        runInherited(List.of("desktop-file-validate", desktopEntry.toString()));
     }
 
     private static void verifyVersionOutput(String output, String appVersion) throws IOException {
