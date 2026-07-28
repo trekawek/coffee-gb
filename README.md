@@ -22,9 +22,13 @@ orchestration layer use Kotlin and Java.
 
 ## Download and play
 
-Coffee GB is distributed as a single executable JAR. It requires a desktop
-**Java 16 or newer** runtime; [Java 21 LTS](https://adoptium.net/temurin/releases/?version=21)
-is recommended and is the version used by CI and release builds.
+The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or
+newer** runtime; [Java 21 LTS](https://adoptium.net/temurin/releases/?version=21) is recommended and
+is the version used by CI and release builds. Release tooling can also produce target-specific
+Linux, Windows, and macOS installers with a bundled minimized Java runtime; the portable JAR remains
+available as the platform-neutral fallback. See the
+[native packaging guide](docs/native-packaging.md) for targets, installer warnings, minimum tested
+OS versions, package contents, and verification.
 
 1. Download the JAR from the [latest Coffee GB release](https://github.com/trekawek/coffee-gb/releases/latest).
 2. Open it through your desktop's Java launcher, or start it from a terminal:

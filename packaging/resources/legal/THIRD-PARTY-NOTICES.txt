@@ -1,0 +1,57 @@
+Coffee GB third-party and native-library notices
+================================================
+
+This file describes the runtime components intentionally distributed in Coffee GB native
+packages. The authoritative machine-readable dependency inventory is the adjacent CycloneDX
+SBOM. Source code for Coffee GB is available at:
+
+  https://github.com/trekawek/coffee-gb
+
+Coffee GB
+---------
+Copyright (c) 2017 Tomasz Rękawek and contributors.
+Licensed under the MIT License. See LICENSE.txt.
+
+OpenPnP OpenCV 4.9.0-0 / OpenCV 4.9.0
+-------------------------------------
+Native source: https://github.com/opencv/opencv
+Java loader source: https://github.com/openpnp/opencv
+License metadata: the OpenPnP Maven POM identifies the artifact as BSD; OpenCV 4.9.0 upstream is
+Apache-2.0. Both notices are preserved; see licenses/OpenCV-BSD-3-Clause.txt and
+licenses/Apache-2.0.txt.
+
+The OpenCV binary is redistributed without endorsement. OpenCV may incorporate optional
+third-party code under compatible licenses; its upstream third-party notices and source tree are
+available from the native source URL above.
+
+libsdl4j 2.28.4-1.6 / SDL 2.28.4
+--------------------------------
+Native source: https://github.com/libsdl-org/SDL/tree/release-2.28.4
+Java binding source: https://github.com/libsdl4j/libsdl4j
+License: zlib. See licenses/SDL2-zlib.txt.
+
+The selected libsdl4j artifact contains audited SDL2 binaries for Linux x86-64 and Windows
+x86-64. It contains no macOS SDL2 binary; macOS packages therefore use keyboard input unless the
+user separately installs a compatible system SDL2 library.
+
+Java Native Access (JNA) 5.13.0
+-------------------------------
+Source: https://github.com/java-native-access/jna/tree/5.13.0
+SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+
+JNA permits recipients to select either Apache License 2.0 or LGPL 2.1-or-later. Coffee GB
+distributes JNA under the Apache-2.0 alternative. The complete Apache-2.0 and LGPL-2.1 texts are
+included in licenses/Apache-2.0.txt and licenses/LGPL-2.1.txt so the upstream dual-license notice
+and every recipient's available option remain explicit.
+
+JLine 3.25.1
+------------
+Source: https://github.com/jline/jline3/tree/jline-parent-3.25.1
+License: BSD-3-Clause. See licenses/JLine-BSD-3-Clause.txt.
+
+Other Java runtime dependencies
+-------------------------------
+The package also contains the Java libraries recorded with exact Maven coordinates and versions
+in the CycloneDX SBOM. Their licenses include Apache-2.0, MIT, BSD, and public-domain
+dedications. The SBOM is the release inventory; it is not a replacement for the license files
+shipped here or notices embedded in the application JAR.
