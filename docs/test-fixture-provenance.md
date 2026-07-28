@@ -88,6 +88,11 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   has SHA-256 `869a2044ee029f2876988a809864f4a0a220d0f8701b92ad8aa2248091958b36`.
   Existing `netplay-v9` contract resources and released StateFile/legacy fixtures are not
   rewritten.
+- Phase #339 adds no ROM or StateFile fixture. `PackageRuntimeSmoke` constructs a 32 KiB ROM-only
+  DMG image in memory, with the title `COFFEE-CI-SMOKE`, a valid reviewable header checksum, and an
+  infinite two-byte `JR` loop. Package CI never writes or uploads those bytes. It uses the image
+  only to publish one video frame and audio buffer, sample a synthetic A-button press/release, and
+  encode/inspect/load/re-encode the existing portable StateFile format.
 
 The canonical hash format and every expected hash are specified in
 [sgb-conformance-baselines.md](sgb-conformance-baselines.md). These values lock current Coffee GB
