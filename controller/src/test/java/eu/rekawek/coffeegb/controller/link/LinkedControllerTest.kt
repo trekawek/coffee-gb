@@ -436,6 +436,78 @@ class LinkedControllerTest {
   }
 
   @Test
+  fun linkedClockPreflightFailureReportsLoadFailureAndKeepsOldSessionRunning() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val lifecycle = mutableListOf<String>()
+    val failures = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
+    eventBus.register<Controller.RomLoadingEvent> { lifecycle += "loading" }
+    eventBus.register<Controller.LoadRomFailedEvent> {
+      lifecycle += "failed"
+      failures.add(it)
+    }
+    eventBus.register<Controller.EmulationStoppedEvent> { lifecycle += "stopped" }
+    eventBus.register<Controller.EmulationStartedEvent> { lifecycle += "started" }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      eventBus.post(
+          PeerLoadedGameEvent(
+              ROM_BYTES,
+              null,
+              null,
+              GAMEBOY_TYPE,
+              BOOTSTRAP_MODE,
+              controller.currentFrame(),
+          ))
+      controller.runFrame()
+      assertEquals(2, controller.activeSessionCount())
+      val oldLocalSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+      val oldPeerSession = assertNotNull(privateList(controller, "sessions")[1] as Session?)
+      lifecycle.clear()
+
+      val incompatibleConfig =
+          Gameboy.GameboyConfiguration(Rom(ROM))
+              .setHardwareProfile(HardwareProfileRegistry.SGB)
+              .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+              .setSupportBatterySave(false)
+      eventBus.post(Controller.RomLoadingEvent(ROM))
+      eventBus.post(
+          LinkedController.LoadedLocalConfigEvent(
+              config = incompatibleConfig,
+              snapshot = null,
+              battery = null,
+              romFile = ROM,
+          ))
+      controller.runFrame()
+
+      assertEquals(listOf("loading", "failed"), lifecycle)
+      assertEquals(ROM, assertNotNull(failures.poll(1, TimeUnit.SECONDS)).rom)
+      assertTrue(oldLocalSession === privateList(controller, "sessions")[0])
+      assertTrue(oldPeerSession === privateList(controller, "sessions")[1])
+      assertEquals(2, controller.activeSessionCount())
+
+      // The rejected command must not terminate the frame loop or poison a later valid load.
+      controller.runFrame()
+      lifecycle.clear()
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+
+      assertEquals(listOf("loading", "stopped", "started"), lifecycle)
+      assertTrue(oldLocalSession !== privateList(controller, "sessions")[0])
+      assertTrue(oldPeerSession === privateList(controller, "sessions")[1])
+      assertEquals(2, controller.activeSessionCount())
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun failedSafePointBatteryPublishRetainsOldLinkedOwnershipAndLifecycle() {
     val eventBus = EventBusImpl()
     val controller =

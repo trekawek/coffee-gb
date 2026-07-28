@@ -645,7 +645,12 @@ class LinkedController(
     require(localPlayer in 0 until mode.playerCount)
 
     eventQueue.register<LoadedLocalConfigEvent> { e ->
-      requireCompatibleLinkedClock(configs.toMutableList().also { it[localPlayer] = e.config })
+      try {
+        requireCompatibleLinkedClock(configs.toMutableList().also { it[localPlayer] = e.config })
+      } catch (failure: Exception) {
+        reportLocalLoadFailure(e.romFile, failure)
+        return@register
+      }
       val previousSession = sessions[localPlayer]
       // The initial bounded read rejects an unsafe/unreadable sidecar before this queued command.
       // Persist the live generation at the frame-safe boundary, then re-read the exact published
