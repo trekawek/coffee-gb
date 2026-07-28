@@ -156,6 +156,14 @@ jobs:
             throw "The Windows runner has no WiX light.exe required by JDK 21 jpackage"
           }
 
+      - name: Install Linux package validation prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils
+          command -v desktop-file-validate >/dev/null
+
       - name: Build, test, inspect, and package
         if: runner.os != 'Windows'
         shell: bash
@@ -459,6 +467,14 @@ jobs:
           java-version: "21"
           cache: maven
           cache-dependency-path: "**/pom.xml"
+
+      - name: Install Linux package validation prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils
+          command -v desktop-file-validate >/dev/null
 
       - name: Import isolated Linux signing key
         if: runner.os == 'Linux'

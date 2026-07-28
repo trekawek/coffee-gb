@@ -24,6 +24,18 @@ repository_root=$(cd -- "$script_dir/.." && pwd)
 maven_command=${COFFEE_GB_MAVEN_COMMAND:-mvn}
 pom_file="$repository_root/pom.xml"
 
+maven_temp_parent=${TMPDIR:-/tmp}
+[[ -d "$maven_temp_parent" ]] || {
+  echo "Maven temporary directory parent does not exist: $maven_temp_parent" >&2
+  exit 2
+}
+maven_temp_dir=$(mktemp -d "$maven_temp_parent/coffee-gb-maven.XXXXXX")
+maven_temp_dir=$(cd -- "$maven_temp_dir" && pwd -P)
+cleanup_maven_temp() {
+  rm -rf -- "$maven_temp_dir"
+}
+trap cleanup_maven_temp EXIT
+
 if [[ "$maven_command" == */* ]]; then
   [[ -x "$maven_command" ]] || {
     echo "Maven is not executable at $maven_command; set COFFEE_GB_MAVEN_COMMAND." >&2
@@ -34,7 +46,10 @@ elif ! command -v "$maven_command" >/dev/null 2>&1; then
   exit 2
 fi
 
-"$maven_command" -B --no-transfer-progress -f "$pom_file" -pl swing -am clean verify
+"$maven_command" -B --no-transfer-progress -f "$pom_file" -pl swing -am clean verify \
+  "-Dcoffee-gb.test.tmpdir=$maven_temp_dir"
+cleanup_maven_temp
+trap - EXIT
 
 shopt -s nullglob
 app_jars=("$repository_root"/swing/target/coffee-gb-*-app.jar)
