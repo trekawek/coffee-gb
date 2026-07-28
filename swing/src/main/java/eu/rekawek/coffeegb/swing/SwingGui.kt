@@ -71,6 +71,8 @@ class SwingGui private constructor(
 
   private lateinit var stateUxController: StateUxDesktopController
 
+  private lateinit var menu: SwingMenu
+
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
@@ -134,7 +136,6 @@ class SwingGui private constructor(
             emulator::captureDisplayImage,
         )
 
-    lateinit var menu: SwingMenu
     romOpen =
         DesktopRomOpen(
             mainWindow,

@@ -82,10 +82,10 @@ build. It then supplies both launcher properties:
 is `~/.coffee-gb/native-cache`.
 
 An explicit target without an external source produces `NativeSourceNotConfigured`. Unknown target
-IDs, missing entries, invalid manifests, digest/size mismatches, and I/O failures likewise have
-distinct result types. Startup logs the failure category and uses the portable fallback rather than
-crashing the desktop. With the universal JAR and no target property, the old classpath-native path
-is unchanged and no cache I/O occurs.
+IDs, missing entries, a busy native cache, invalid manifests, digest/size mismatches, and I/O
+failures likewise have distinct result types. Startup logs the failure category and uses the
+portable fallback rather than crashing the desktop. With the universal JAR and no target property,
+the old classpath-native path is unchanged and no cache I/O occurs.
 
 ## Extraction and cache safety
 
@@ -94,7 +94,8 @@ is unchanged and no cache I/O occurs.
 1. validates all resource and output paths before opening a source;
 2. rejects absolute paths, traversal, Windows drive paths, backslashes, empty segments, symlinks,
    duplicate outputs/components, oversized entries, and malformed digests;
-3. serializes writers with a JVM-local lock and an OS file lock;
+3. serves an already-verified immutable cache hit without waiting for a writer, while cache misses
+   serialize writers with interruptible JVM-local and OS file locks under one five-second deadline;
 4. copies bounded bytes into a private staging directory and verifies exact size and SHA-256;
 5. writes a deterministic manifest marker and atomically publishes the complete
    content-addressed directory; and
@@ -103,8 +104,9 @@ is unchanged and no cache I/O occurs.
 
 Corrupt published content is reported and never silently overwritten. Failed staging directories
 are removed and are never recognized as bundles. Resolution happens on the launch caller before
-Swing or the emulation timing thread starts; native discovery never runs on the EDT or timing
-thread.
+Swing or the emulation timing thread starts. Optional OpenCV loading, camera device open/close, and
+stale-result cleanup run on a cancellable daemon worker; only current-result menu and emulator-source
+updates run on the EDT. Native discovery and device I/O never run on the EDT or timing thread.
 
 ## Dependency and license constraints
 

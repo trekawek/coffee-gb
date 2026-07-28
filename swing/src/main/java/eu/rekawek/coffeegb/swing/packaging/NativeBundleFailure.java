@@ -29,6 +29,14 @@ public interface NativeBundleFailure {
         }
     }
 
+    record NativeCacheBusy(NativeTarget target, String operation)
+            implements NativeBundleFailure {
+        public NativeCacheBusy {
+            Objects.requireNonNull(target, "target");
+            Objects.requireNonNull(operation, "operation");
+        }
+    }
+
     record InvalidManifest(NativeTarget target, NativeComponent component, String reason)
             implements NativeBundleFailure {
         public InvalidManifest {

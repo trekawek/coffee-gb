@@ -55,6 +55,7 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.ButtonGroup
 import javax.swing.DefaultListCellRenderer
@@ -107,7 +108,7 @@ internal class SwingMenu(
         Thread(task, "coffee-gb-snapshot-menu").apply { isDaemon = true }
       }
 
-  private var webcamSource: WebcamCameraSource? = null
+  private lateinit var cameraController: CameraPeripheralController<WebcamCameraSource>
 
   private var currentRomFileName: String? = null
 
@@ -208,6 +209,19 @@ internal class SwingMenu(
     menuBar.add(createLinkMenu())
     window.jMenuBar = menuBar
   }
+
+  fun close() {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Menu peripherals must be closed from the Event Dispatch Thread"
+    }
+    if (::cameraController.isInitialized) {
+      cameraController.close()
+    }
+  }
+
+  fun awaitCameraShutdown(timeoutMillis: Long): Boolean =
+      !::cameraController.isInitialized ||
+          cameraController.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS)
 
   private fun createFileMenu(): JMenu {
     val fileMenu = JMenu("File")
@@ -675,26 +689,33 @@ internal class SwingMenu(
     // it is independent of the netplay/Barcode Boy/printer/GPS group below
     val camera = JCheckBoxMenuItem("Enable Game Boy Camera", false)
     peripheralsMenu.add(camera)
+    cameraController =
+        CameraPeripheralController(
+            opener = WebcamCameraSource::open,
+            sourceCloser = WebcamCameraSource::close,
+            publisher = PocketCamera::setCameraSource,
+            stateConsumer = { state ->
+              camera.text =
+                  if (state == CameraPeripheralUiState.Opening) {
+                    "Opening Game Boy Camera…"
+                  } else {
+                    "Enable Game Boy Camera"
+                  }
+              camera.state =
+                  state == CameraPeripheralUiState.Opening ||
+                      state == CameraPeripheralUiState.Enabled
+              if (state == CameraPeripheralUiState.OpenFailed && window.isDisplayable) {
+                JOptionPane.showMessageDialog(
+                    window,
+                    "No webcam could be opened.",
+                    "Game Boy Camera",
+                    JOptionPane.ERROR_MESSAGE,
+                )
+              }
+            },
+        )
     camera.addActionListener {
-      if (camera.state) {
-        val source = WebcamCameraSource.open()
-        if (source == null) {
-          camera.state = false
-          JOptionPane.showMessageDialog(
-              window,
-              "No webcam could be opened.",
-              "Game Boy Camera",
-              JOptionPane.ERROR_MESSAGE,
-          )
-        } else {
-          webcamSource = source
-          PocketCamera.setCameraSource(source)
-        }
-      } else {
-        PocketCamera.setCameraSource(null)
-        webcamSource?.close()
-        webcamSource = null
-      }
+      cameraController.requestEnabled(camera.state)
     }
 
     val printer = JCheckBoxMenuItem("Enable Game Boy Printer", false)
