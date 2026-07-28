@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.file.DirectoryIteratorException
 import java.nio.file.DirectoryStream
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -17,19 +18,35 @@ import kotlin.concurrent.withLock
  * Bounded machine-StateFile repository. The state file is authoritative; optional UI metadata is
  * committed separately and ignored whenever its recorded byte count or SHA-256 is stale.
  *
+ * Repository instances in this JVM share path-striped ref and named-namespace locks, so a state and
+ * its sidecar cannot interleave and the named-state capacity check is atomic across instances that
+ * use the same normalized path. The configured game root remains the caller-selected trust
+ * boundary; existing descendants are refused when they are symlinks, but hostile concurrent
+ * filesystem replacement requires stronger directory-handle isolation than portable NIO provides.
+ * A case-insensitive filesystem alias is accepted only when its on-disk UUID spelling is canonical.
+ *
  * This service is synchronous by design. Phase-4 controller integration owns worker scheduling.
  */
 class StateRepository(
     val layout: StateStorageLayout,
     private val persistence: AtomicFileWriter = AtomicFileWriter.system(),
 ) {
-  private val locks = Array(LOCK_STRIPES) { ReentrantLock() }
-
   /**
    * Validates and atomically commits one portable machine state. Metadata failure never rolls back
    * or invalidates the authoritative state file.
    */
   fun save(
+      ref: StateRef,
+      encodedState: ByteArray,
+      requestedMetadata: StateSaveMetadata,
+  ): StateSaveResult =
+      if (ref is StateRef.Named) {
+        namedNamespaceLock().withLock { saveLocked(ref, encodedState, requestedMetadata) }
+      } else {
+        saveLocked(ref, encodedState, requestedMetadata)
+      }
+
+  private fun saveLocked(
       ref: StateRef,
       encodedState: ByteArray,
       requestedMetadata: StateSaveMetadata,
@@ -63,6 +80,9 @@ class StateRepository(
             )
 
         val statePath = layout.stateFile(ref)
+        if (ref is StateRef.Named) {
+          enforceNamedCapacity(ref, statePath)
+        }
         ensureSafeParent(statePath)
         val stateRecovery = persistence.recoverWithReport(statePath)
         persistence.write(statePath, ownedBytes)
@@ -99,94 +119,158 @@ class StateRepository(
    * wrong-ROM and wrong-profile entries without live-state access.
    */
   fun catalog(targetIdentity: MachineIdentity? = null): StateCatalog {
-    val named = discoverNamedRefs()
-    val refs =
-        buildList {
-          (StateRef.MIN_SLOT..StateRef.MAX_SLOT).forEach { add(StateRef.Slot(it)) }
-          addAll(named.refs)
-          add(StateRef.Autosave)
+    val slots =
+        (StateRef.MIN_SLOT..StateRef.MAX_SLOT).mapNotNull { index ->
+          catalogEntry(StateRef.Slot(index), targetIdentity)
         }
-    val entries =
-        refs.mapNotNull { ref ->
-          lock(ref).withLock {
-            val raw =
-                try {
-                  readRaw(ref)
-                } catch (failure: IOException) {
-                  return@withLock StateCatalogEntry(
-                      ref,
-                      StateCatalogStatus.IO_ERROR,
-                      failure.message ?: failure.javaClass.simpleName,
-                      null,
-                      null,
-                      null,
-                      null,
-                      null,
-                      null,
-                  )
-                } ?: return@withLock null
+    val named =
+        try {
+          val refs = namedNamespaceLock().withLock(::discoverNamedRefs)
+          catalogNamedEntries(refs.refs, targetIdentity)
+        } catch (failure: IOException) {
+          NamedCatalog(
+              emptyList(),
+              truncated = true,
+              error = failure.message ?: failure.javaClass.simpleName,
+          )
+        }
+    val autosave = catalogEntry(StateRef.Autosave, targetIdentity)
+    return StateCatalog(
+        buildList {
+          addAll(slots)
+          addAll(named.entries)
+          autosave?.let(::add)
+        },
+        named.truncated,
+        named.error,
+    )
+  }
+
+  private fun catalogNamedEntries(
+      refs: List<StateRef.Named>,
+      targetIdentity: MachineIdentity?,
+  ): NamedCatalog {
+    val entries = ArrayList<StateCatalogEntry>()
+    for (ref in refs) {
+      val entry = catalogEntry(ref, targetIdentity) ?: continue
+      if (entries.size == MAX_NAMED_STATES) {
+        return NamedCatalog(entries, truncated = true, error = null)
+      }
+      entries += entry
+    }
+    return NamedCatalog(entries, truncated = false, error = null)
+  }
+
+  private fun catalogEntry(
+      ref: StateRef,
+      targetIdentity: MachineIdentity?,
+  ): StateCatalogEntry? =
+      lock(ref).withLock {
+        val raw =
             try {
-              val read = decodeRaw(raw)
-              val compatibility =
-                  if (read.state.root.kind != StateRootKind.MACHINE) {
-                    StateCompatibilityResult(
-                        StateCompatibilityStatus.ROOT_MISMATCH,
-                        StateDecodeReason.TARGET_STATE_MISMATCH,
-                        "StateFile root ${read.state.root.kind} is not a machine",
-                    )
-                  } else {
-                    targetIdentity?.let {
-                      StateCodec.classifyCompatibility(
-                          read.state,
-                          StateRootKind.MACHINE,
-                          listOf(StateIdentityEntry(0, it)),
-                      )
-                    }
-                  }
-              StateCatalogEntry(
-                  ref,
-                  if (compatibility == null || compatibility.isCompatible) {
-                    StateCatalogStatus.AVAILABLE
-                  } else {
-                    StateCatalogStatus.INCOMPATIBLE
-                  },
-                  compatibility?.detail,
-                  read.inspection,
-                  read.stateSha256,
-                  read.metadata,
-                  read.metadataWarning,
-                  compatibility,
-                  read.recovery,
-              )
-            } catch (failure: StateDecodeException) {
-              StateCatalogEntry(
-                  ref,
-                  StateCatalogStatus.CORRUPT,
-                  "${failure.reason}: ${failure.message ?: "StateFile is invalid"}",
-                  null,
-                  StateMetadataCodec.sha256(raw.bytes),
-                  null,
-                  null,
-                  null,
-                  StateRecovery(raw.recovery, AtomicFileWriter.RecoveryReport.NONE),
-              )
+              readRaw(ref)
             } catch (failure: IOException) {
-              StateCatalogEntry(
+              return@withLock StateCatalogEntry(
                   ref,
                   StateCatalogStatus.IO_ERROR,
                   failure.message ?: failure.javaClass.simpleName,
                   null,
-                  StateMetadataCodec.sha256(raw.bytes),
                   null,
                   null,
                   null,
-                  StateRecovery(raw.recovery, AtomicFileWriter.RecoveryReport.NONE),
+                  null,
+                  null,
               )
-            }
-          }
+            } ?: return@withLock null
+        try {
+          val read = decodeRaw(raw)
+          val compatibility =
+              if (read.state.root.kind != StateRootKind.MACHINE) {
+                StateCompatibilityResult(
+                    StateCompatibilityStatus.ROOT_MISMATCH,
+                    StateDecodeReason.TARGET_STATE_MISMATCH,
+                    "StateFile root ${read.state.root.kind} is not a machine",
+                )
+              } else {
+                targetIdentity?.let {
+                  StateCodec.classifyCompatibility(
+                      read.state,
+                      StateRootKind.MACHINE,
+                      listOf(StateIdentityEntry(0, it)),
+                  )
+                }
+              }
+          StateCatalogEntry(
+              ref,
+              if (compatibility == null || compatibility.isCompatible) {
+                StateCatalogStatus.AVAILABLE
+              } else {
+                StateCatalogStatus.INCOMPATIBLE
+              },
+              compatibility?.detail,
+              read.inspection,
+              read.stateSha256,
+              read.metadata,
+              read.metadataWarning,
+              compatibility,
+              read.recovery,
+          )
+        } catch (failure: StateDecodeException) {
+          undecodableCatalogEntry(raw, failure)
+        } catch (failure: IOException) {
+          StateCatalogEntry(
+              ref,
+              StateCatalogStatus.IO_ERROR,
+              failure.message ?: failure.javaClass.simpleName,
+              null,
+              StateMetadataCodec.sha256(raw.bytes),
+              null,
+              null,
+              null,
+              StateRecovery(raw.recovery, AtomicFileWriter.RecoveryReport.NONE),
+          )
         }
-    return StateCatalog(entries, named.truncated)
+      }
+
+  private fun undecodableCatalogEntry(
+      raw: RawState,
+      failure: StateDecodeException,
+  ): StateCatalogEntry {
+    val hash = StateMetadataCodec.sha256(raw.bytes)
+    val metadataRead = readMetadata(raw.ref, raw.bytes.size, hash)
+    val status = catalogStatus(failure.reason)
+    val detail = "${failure.reason}: ${failure.message ?: "StateFile is invalid"}"
+    val compatibility =
+        if (status == StateCatalogStatus.INCOMPATIBLE) {
+          StateCompatibilityResult(
+              StateCompatibilityStatus.INCOMPATIBLE,
+              failure.reason,
+              detail,
+          )
+        } else {
+          null
+        }
+    return StateCatalogEntry(
+        raw.ref,
+        status,
+        detail,
+        null,
+        hash,
+        metadataRead.metadata,
+        metadataRead.warning,
+        compatibility,
+        StateRecovery(raw.recovery, metadataRead.recovery),
+    )
   }
+
+  private fun catalogStatus(reason: StateDecodeReason): StateCatalogStatus =
+      when (reason) {
+        StateDecodeReason.UNSUPPORTED_FORMAT_VERSION,
+        StateDecodeReason.UNSUPPORTED_SECTION_VERSION,
+        StateDecodeReason.UNSUPPORTED_FLAGS,
+        StateDecodeReason.UNKNOWN_REQUIRED_SECTION -> StateCatalogStatus.INCOMPATIBLE
+        else -> StateCatalogStatus.CORRUPT
+      }
 
   private fun decodeRaw(raw: RawState): StateReadResult {
     val state = StateCodec.decode(raw.bytes)
@@ -305,11 +389,51 @@ class StateRepository(
     return output.toByteArray()
   }
 
+  private fun enforceNamedCapacity(ref: StateRef.Named, statePath: Path) {
+    val parentExists = Files.exists(statePath.parent, LinkOption.NOFOLLOW_LINKS)
+    val named = discoverNamedRefs()
+    if (parentExists && ref !in named.refs) {
+      throw IOException(
+          "Named-state storage does not use the canonical UUID spelling for ${ref.id}")
+    }
+    if (stateArtifactExists(statePath)) return
+    if (!parentExists && named.rawEntries >= MAX_CATALOG_DIRECTORY_ENTRIES) {
+      throw StateRepositoryCapacityException(
+          "Named-state directory may contain at most " +
+              "$MAX_CATALOG_DIRECTORY_ENTRIES raw entries")
+    }
+    var occupied = 0
+    for (existing in named.refs) {
+      if (existing == ref) continue
+      if (stateArtifactExists(layout.stateFile(existing))) {
+        occupied++
+        if (occupied >= MAX_NAMED_STATES) {
+          throw StateRepositoryCapacityException(
+              "At most $MAX_NAMED_STATES named states may be stored")
+        }
+      }
+    }
+  }
+
+  /**
+   * Presence and recovery failures both occupy capacity: either represents a catalog-manageable
+   * artifact and must not let a damaged namespace bypass the named-state bound.
+   */
+  private fun stateArtifactExists(path: Path): Boolean {
+    ensureSafeParent(path)
+    if (!Files.exists(path.parent, LinkOption.NOFOLLOW_LINKS)) return false
+    return try {
+      persistence.existsWithRecovery(path).value()
+    } catch (_: IOException) {
+      true
+    }
+  }
+
   private fun discoverNamedRefs(): NamedRefs {
     val directory = layout.namedDirectory
     ensureSafeParent(directory.resolve(StateStorageLayout.STATE_FILE))
     if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
-      return NamedRefs(emptyList(), false)
+      return NamedRefs(emptyList(), 0)
     }
     if (Files.isSymbolicLink(directory) ||
         !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
@@ -317,21 +441,25 @@ class StateRepository(
     }
     val refs = ArrayList<StateRef.Named>()
     var entries = 0
-    Files.newDirectoryStream(directory).use { stream: DirectoryStream<Path> ->
-      stream.forEach { child ->
-        entries++
-        if (entries > MAX_CATALOG_DIRECTORY_ENTRIES) {
-          throw IOException(
-              "Named-state directory contains more than $MAX_CATALOG_DIRECTORY_ENTRIES entries")
-        }
-        if (!Files.isSymbolicLink(child) &&
-            Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
-          layout.parseNamedDirectoryName(child.fileName.toString())?.let(refs::add)
+    try {
+      Files.newDirectoryStream(directory).use { stream: DirectoryStream<Path> ->
+        stream.forEach { child ->
+          entries++
+          if (entries > MAX_CATALOG_DIRECTORY_ENTRIES) {
+            throw IOException(
+                "Named-state directory contains more than $MAX_CATALOG_DIRECTORY_ENTRIES entries")
+          }
+          if (!Files.isSymbolicLink(child) &&
+              Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
+            layout.parseNamedDirectoryName(child.fileName.toString())?.let(refs::add)
+          }
         }
       }
+    } catch (failure: DirectoryIteratorException) {
+      throw failure.cause ?: IOException("Unable to enumerate named-state storage", failure)
     }
     refs.sortBy { it.id.toString() }
-    return NamedRefs(refs.take(MAX_NAMED_STATES), refs.size > MAX_NAMED_STATES)
+    return NamedRefs(refs, entries)
   }
 
   /**
@@ -357,7 +485,10 @@ class StateRepository(
   }
 
   private fun lock(ref: StateRef): ReentrantLock =
-      locks[(ref.storageKey().hashCode() and Int.MAX_VALUE) % locks.size]
+      sharedLock(layout.stateFile(ref), REF_LOCKS)
+
+  private fun namedNamespaceLock(): ReentrantLock =
+      sharedLock(layout.namedDirectory, NAMED_NAMESPACE_LOCKS)
 
   private data class OptionalBytes(
       val bytes: ByteArray?,
@@ -376,9 +507,15 @@ class StateRepository(
       val recovery: AtomicFileWriter.RecoveryReport,
   )
 
+  private data class NamedCatalog(
+      val entries: List<StateCatalogEntry>,
+      val truncated: Boolean,
+      val error: String?,
+  )
+
   private data class NamedRefs(
       val refs: List<StateRef.Named>,
-      val truncated: Boolean,
+      val rawEntries: Int,
   )
 
   companion object {
@@ -386,5 +523,12 @@ class StateRepository(
     const val MAX_CATALOG_DIRECTORY_ENTRIES = 512
     private const val LOCK_STRIPES = 64
     private const val DEFAULT_BUFFER_BYTES = 8192
+    private val REF_LOCKS = Array(LOCK_STRIPES) { ReentrantLock() }
+    private val NAMED_NAMESPACE_LOCKS = Array(LOCK_STRIPES) { ReentrantLock() }
+
+    private fun sharedLock(path: Path, locks: Array<ReentrantLock>): ReentrantLock {
+      val normalized = path.toAbsolutePath().normalize()
+      return locks[(normalized.hashCode() and Int.MAX_VALUE) % locks.size]
+    }
   }
 }

@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -12,6 +13,7 @@ import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -71,6 +73,7 @@ class StateRepositoryTest {
     assertTrue(catalog.entries.all { it.status == StateCatalogStatus.AVAILABLE })
     assertTrue(catalog.entries.all { it.compatibility?.isCompatible == true })
     assertFalse(catalog.namedStatesTruncated)
+    assertNull(catalog.namedStatesError)
     assertFailsWith<UnsupportedOperationException> {
       (catalog.entries as MutableList<StateCatalogEntry>).clear()
     }
@@ -89,6 +92,20 @@ class StateRepositoryTest {
     val corruptBytes =
         fixture.plain.clone().also { it[36] = (it[36].toInt() xor 1).toByte() }
     AtomicFileWriter.system().write(layout.stateFile(corrupt), corruptBytes)
+    AtomicFileWriter.system()
+        .write(
+            layout.metadataFile(corrupt),
+            StateMetadataCodec.encode(
+                StateMetadata(
+                    corrupt,
+                    "Damaged but identifiable",
+                    SAVE_TIME,
+                    null,
+                    corruptBytes.size,
+                    StateMetadataCodec.sha256(corruptBytes),
+                    null,
+                )),
+        )
 
     val catalog = repository.catalog(StateIdentity.from(other.configuration))
     val validEntry = catalog.entries.single { it.ref == valid }
@@ -100,6 +117,81 @@ class StateRepositoryTest {
     assertEquals(StateCatalogStatus.CORRUPT, corruptEntry.status)
     assertTrue(corruptEntry.detail!!.contains(StateDecodeReason.CORRUPT_CHECKSUM.name))
     assertNotNull(corruptEntry.stateSha256)
+    assertEquals("Damaged but identifiable", corruptEntry.metadata?.label)
+    assertNull(corruptEntry.metadataWarning)
+  }
+
+  @Test
+  fun `future formats and required extensions stay incompatible with matching metadata`() {
+    val fixture = machineFixture()
+    val layout = StateStorageLayout(Files.createTempDirectory("state-repository-future"))
+    val sectionOffsets = sectionOffsets(fixture.plain)
+    val variants =
+        listOf(
+            StateDecodeReason.UNSUPPORTED_FORMAT_VERSION to
+                fixture.plain.clone().also {
+                  writeU16(it, 4, StateCodec.LATEST_FORMAT_VERSION + 1)
+                },
+            StateDecodeReason.UNSUPPORTED_SECTION_VERSION to
+                fixture.plain.clone().also {
+                  writeU16(it, sectionOffsets.first() + 2, 99)
+                  refreshEnvelopeChecksum(it)
+                },
+            StateDecodeReason.UNSUPPORTED_FLAGS to
+                fixture.plain.clone().also {
+                  it[11] = 2
+                },
+            StateDecodeReason.UNKNOWN_REQUIRED_SECTION to
+                fixture.plain.clone().also {
+                  val diagnostic = sectionOffsets.last()
+                  writeU16(it, diagnostic, 4)
+                  writeU16(it, diagnostic + 4, 1)
+                  refreshEnvelopeChecksum(it)
+                },
+        )
+
+    variants.forEachIndexed { index, (reason, bytes) ->
+      val ref = StateRef.Slot(index)
+      val hash = StateMetadataCodec.sha256(bytes)
+      AtomicFileWriter.system().write(layout.stateFile(ref), bytes)
+      AtomicFileWriter.system()
+          .write(
+              layout.metadataFile(ref),
+              StateMetadataCodec.encode(
+                  StateMetadata(
+                      ref,
+                      "Unsupported $reason",
+                      SAVE_TIME.plusSeconds(index.toLong()),
+                      null,
+                      bytes.size,
+                      hash,
+                      null,
+                  )),
+          )
+      if (index == 0) {
+        val metadataPath = layout.metadataFile(ref)
+        Files.move(
+            metadataPath,
+            metadataPath.parent.resolve(".coffeegb-${artifactId(metadataPath)}.backup"),
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+      }
+    }
+
+    val entries = StateRepository(layout).catalog().entries.associateBy { it.ref }
+    variants.forEachIndexed { index, (reason, bytes) ->
+      val entry = assertNotNull(entries[StateRef.Slot(index)])
+      assertEquals(StateCatalogStatus.INCOMPATIBLE, entry.status)
+      assertEquals(StateCompatibilityStatus.INCOMPATIBLE, entry.compatibility?.status)
+      assertEquals(reason, entry.compatibility?.reason)
+      assertTrue(entry.detail!!.contains(reason.name))
+      assertEquals("Unsupported $reason", entry.metadata?.label)
+      assertNull(entry.metadataWarning)
+      assertEquals(StateMetadataCodec.sha256(bytes), entry.stateSha256)
+      if (index == 0) {
+        assertTrue(assertNotNull(entry.recovery).metadata.backupRestored())
+      }
+    }
   }
 
   @Test
@@ -187,7 +279,8 @@ class StateRepositoryTest {
   fun `rapid repeated saves remain state metadata consistent and artifact free`() {
     val fixture = machineFixture()
     val layout = StateStorageLayout(Files.createTempDirectory("state-repository-rapid"))
-    val repository = StateRepository(layout)
+    val firstRepository = StateRepository(layout)
+    val secondRepository = StateRepository(layout)
     val ref =
         StateRef.Named(UUID.fromString("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))
     val start = CountDownLatch(1)
@@ -198,7 +291,11 @@ class StateRepositoryTest {
               start.await()
               repeat(12) {
                 try {
-                  repository.save(ref, fixture.plain, StateSaveMetadata("plain", SAVE_TIME))
+                  firstRepository.save(
+                      ref,
+                      fixture.plain,
+                      StateSaveMetadata("plain", SAVE_TIME),
+                  )
                 } catch (thrown: Throwable) {
                   failure.compareAndSet(null, thrown)
                 }
@@ -208,7 +305,7 @@ class StateRepositoryTest {
               start.await()
               repeat(12) {
                 try {
-                  repository.save(
+                  secondRepository.save(
                       ref,
                       fixture.deflated,
                       StateSaveMetadata("deflated", SAVE_TIME),
@@ -224,7 +321,7 @@ class StateRepositoryTest {
     assertTrue(threads.none(Thread::isAlive))
     failure.get()?.let { throw AssertionError(it) }
 
-    val read = repository.read(ref)
+    val read = StateRepository(layout).read(ref)
     assertNull(read.metadataWarning)
     assertEquals(read.stateSha256, read.metadata?.stateSha256)
     val expectedLabel =
@@ -243,19 +340,108 @@ class StateRepositoryTest {
   }
 
   @Test
+  fun `named capacity is shared across repositories while overwrite remains allowed`() {
+    val fixture = machineFixture()
+    val layout = StateStorageLayout(Files.createTempDirectory("state-repository-capacity"))
+    val firstRepository = StateRepository(layout)
+    val secondRepository = StateRepository(layout)
+    val existing =
+        (1 until StateRepository.MAX_NAMED_STATES).map { index ->
+          StateRef.Named(UUID(0, index.toLong()))
+        }
+    existing.forEach { ref ->
+      firstRepository.save(
+          ref,
+          fixture.deflated,
+          StateSaveMetadata(savedAt = SAVE_TIME),
+      )
+    }
+
+    val candidates =
+        listOf(
+            StateRef.Named(UUID(1, 1)),
+            StateRef.Named(UUID(1, 2)),
+        )
+    val start = CountDownLatch(1)
+    val outcomes = ConcurrentLinkedQueue<SaveOutcome>()
+    val threads =
+        listOf(
+            thread(start = true) {
+              start.await()
+              outcomes += saveOutcome(firstRepository, candidates[0], fixture.deflated)
+            },
+            thread(start = true) {
+              start.await()
+              outcomes += saveOutcome(secondRepository, candidates[1], fixture.deflated)
+            },
+        )
+    start.countDown()
+    threads.forEach { it.join(TimeUnit.SECONDS.toMillis(20)) }
+    assertTrue(threads.none(Thread::isAlive))
+
+    val successes = outcomes.filter { it.failure == null }
+    val failures = outcomes.filter { it.failure != null }
+    assertEquals(1, successes.size)
+    assertEquals(1, failures.size)
+    assertTrue(failures.single().failure is StateRepositoryCapacityException)
+    assertFalse(Files.exists(layout.directory(failures.single().ref)))
+
+    val atCapacity = StateRepository(layout).catalog()
+    assertEquals(StateRepository.MAX_NAMED_STATES, atCapacity.entries.size)
+    assertFalse(atCapacity.namedStatesTruncated)
+    assertNull(atCapacity.namedStatesError)
+
+    val overwrite = existing.first()
+    secondRepository.save(
+        overwrite,
+        fixture.deflated,
+        StateSaveMetadata("overwritten", SAVE_TIME.plusSeconds(1)),
+    )
+    assertEquals("overwritten", firstRepository.read(overwrite).metadata?.label)
+
+    val rejected = StateRef.Named(UUID(2, 1))
+    assertFailsWith<StateRepositoryCapacityException> {
+      firstRepository.save(
+          rejected,
+          fixture.deflated,
+          StateSaveMetadata(savedAt = SAVE_TIME),
+      )
+    }
+    assertFalse(Files.exists(layout.directory(rejected)))
+  }
+
+  @Test
   fun `named-state discovery is bounded deterministic and ignores symlink directories`() {
     val fixture = machineFixture()
     val root = Files.createTempDirectory("state-repository-discovery")
     val layout = StateStorageLayout(root)
     Files.createDirectories(layout.namedDirectory)
-    repeat(StateRepository.MAX_NAMED_STATES + 1) { index ->
-      Files.createDirectories(
-          layout.namedDirectory.resolve(UUID.nameUUIDFromBytes("state-$index".toByteArray()).toString()))
-    }
+    val emptyRefs =
+        (0 until StateRepository.MAX_NAMED_STATES).map { index ->
+          StateRef.Named(UUID.nameUUIDFromBytes("state-$index".toByteArray()))
+        }
+    emptyRefs.forEach { Files.createDirectories(layout.directory(it)) }
     val repository = StateRepository(layout)
+    val valid =
+        StateRef.Named(UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff"))
+    repository.save(
+        valid,
+        fixture.deflated,
+        StateSaveMetadata("not crowded out", SAVE_TIME),
+    )
     val bounded = repository.catalog()
-    assertTrue(bounded.namedStatesTruncated)
-    assertTrue(bounded.entries.isEmpty())
+    assertFalse(bounded.namedStatesTruncated)
+    assertNull(bounded.namedStatesError)
+    assertEquals(listOf(valid), bounded.entries.map { it.ref })
+    assertEquals("not crowded out", bounded.entries.single().metadata?.label)
+
+    emptyRefs.forEach { AtomicFileWriter.system().write(layout.stateFile(it), fixture.deflated) }
+    val actuallyTruncated = repository.catalog()
+    val expected =
+        (emptyRefs + valid).sortedBy { it.id.toString() }.take(StateRepository.MAX_NAMED_STATES)
+    assertTrue(actuallyTruncated.namedStatesTruncated)
+    assertNull(actuallyTruncated.namedStatesError)
+    assertEquals(expected, actuallyTruncated.entries.map { it.ref })
 
     val outside = Files.createTempDirectory("state-repository-outside")
     val symlinkRef =
@@ -275,13 +461,43 @@ class StateRepositoryTest {
   }
 
   @Test
-  fun `catalog refuses unbounded directory fanout and repository rejects non-machine roots`() {
+  fun `named fanout is isolated from slots and repository rejects non-machine roots`() {
+    val fixture = machineFixture()
     val layout = StateStorageLayout(Files.createTempDirectory("state-repository-fanout"))
+    val repository = StateRepository(layout)
+    val slot = StateRef.Slot(7)
+    repository.save(slot, fixture.deflated, StateSaveMetadata(savedAt = SAVE_TIME))
+    repository.save(
+        StateRef.Autosave,
+        fixture.deflated,
+        StateSaveMetadata(savedAt = SAVE_TIME),
+    )
     Files.createDirectories(layout.namedDirectory)
-    repeat(StateRepository.MAX_CATALOG_DIRECTORY_ENTRIES + 1) { index ->
+    repeat(StateRepository.MAX_CATALOG_DIRECTORY_ENTRIES) { index ->
       Files.write(layout.namedDirectory.resolve("untrusted-$index"), byteArrayOf())
     }
-    assertFailsWith<IOException> { StateRepository(layout).catalog() }
+    val rejected =
+        StateRef.Named(UUID.fromString("dddddddd-dddd-4ddd-8ddd-dddddddddddd"))
+    assertFailsWith<StateRepositoryCapacityException> {
+      repository.save(
+          rejected,
+          fixture.deflated,
+          StateSaveMetadata(savedAt = SAVE_TIME),
+      )
+    }
+    assertFalse(Files.exists(layout.directory(rejected)))
+
+    Files.write(
+        layout.namedDirectory.resolve(
+            "untrusted-${StateRepository.MAX_CATALOG_DIRECTORY_ENTRIES}"),
+        byteArrayOf(),
+    )
+    val isolated = repository.catalog()
+    assertEquals(listOf(slot, StateRef.Autosave), isolated.entries.map { it.ref })
+    assertTrue(isolated.namedStatesTruncated)
+    assertTrue(
+        assertNotNull(isolated.namedStatesError)
+            .contains(StateRepository.MAX_CATALOG_DIRECTORY_ENTRIES.toString()))
 
     StateCodecTestSupport.session().use { session ->
       val sessionBytes = StateCodec.encode(StateCodec.capture(session))
@@ -330,6 +546,43 @@ class StateRepositoryTest {
     }
   }
 
+  private fun saveOutcome(
+      repository: StateRepository,
+      ref: StateRef.Named,
+      bytes: ByteArray,
+  ): SaveOutcome =
+      try {
+        repository.save(ref, bytes, StateSaveMetadata(savedAt = SAVE_TIME))
+        SaveOutcome(ref, null)
+      } catch (failure: Throwable) {
+        SaveOutcome(ref, failure)
+      }
+
+  private fun sectionOffsets(bytes: ByteArray): List<Int> {
+    val sectionCount = ByteBuffer.wrap(bytes, 16, Int.SIZE_BYTES).int
+    var offset = StateCodec.HEADER_SIZE
+    return List(sectionCount) {
+      val current = offset
+      val length = ByteBuffer.wrap(bytes, current + 8, Long.SIZE_BYTES).long
+      require(length in 0..Int.MAX_VALUE.toLong())
+      offset = Math.addExact(offset, Math.addExact(StateCodec.SECTION_HEADER_SIZE, length.toInt()))
+      current
+    }.also { require(offset == bytes.size) }
+  }
+
+  private fun writeU16(bytes: ByteArray, offset: Int, value: Int) {
+    require(value in 0..0xffff)
+    bytes[offset] = (value ushr 8).toByte()
+    bytes[offset + 1] = value.toByte()
+  }
+
+  private fun refreshEnvelopeChecksum(bytes: ByteArray) {
+    val checksum =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes.copyOfRange(StateCodec.HEADER_SIZE, bytes.size))
+    checksum.copyInto(bytes, STATE_CHECKSUM_OFFSET)
+  }
+
   private fun artifactId(target: Path): String {
     val digest =
         MessageDigest.getInstance("SHA-256")
@@ -342,6 +595,11 @@ class StateRepositoryTest {
       val file: StateFile,
       val plain: ByteArray,
       val deflated: ByteArray,
+  )
+
+  private data class SaveOutcome(
+      val ref: StateRef.Named,
+      val failure: Throwable?,
   )
 
   private class SelectiveFailureWriter(
@@ -361,5 +619,6 @@ class StateRepositoryTest {
 
   companion object {
     private val SAVE_TIME = Instant.parse("2026-07-28T02:03:04Z")
+    private const val STATE_CHECKSUM_OFFSET = 36
   }
 }
