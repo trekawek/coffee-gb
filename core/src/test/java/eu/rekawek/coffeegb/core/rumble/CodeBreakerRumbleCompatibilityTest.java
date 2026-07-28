@@ -55,6 +55,17 @@ public class CodeBreakerRumbleCompatibilityTest {
         }
     }
 
+    @Test
+    public void directGameboyCloseStillPublishesMotorOffOnAnActiveBus() throws Exception {
+        List<Boolean> motorLog = new ArrayList<>();
+        Gameboy gameboy = newGameboy(new Rom(DEMO.toFile()), motorLog);
+        gameboy.getAddressSpace().setByte(0xfffe, 0x80);
+
+        gameboy.close();
+
+        assertEquals(List.of(true, false), motorLog);
+    }
+
     private static Gameboy newGameboy(Rom rom, List<Boolean> motorLog) {
         Gameboy gameboy = new Gameboy.GameboyConfiguration(rom)
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)

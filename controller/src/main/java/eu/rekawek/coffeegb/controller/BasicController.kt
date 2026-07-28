@@ -578,7 +578,12 @@ class BasicController private constructor(
       // A core-startup failure must leave the old game available for resume/cancel semantics.
       nextSession = createSession(job.prepared.config, nextGameboy)
       nextGameboy = null
-      nextSnapshotManager = snapshotManagerFactory.create(job.prepared.config)
+      nextSnapshotManager =
+          if (job.prepared.config.rom.origin.persistencePath(".sn0").isPresent) {
+            snapshotManagerFactory.create(job.prepared.config)
+          } else {
+            null
+          }
     } catch (e: Exception) {
       try {
         nextSession?.discardUnstarted()
@@ -609,7 +614,7 @@ class BasicController private constructor(
     // This assignment is the ownership commit. From here on the old session is never resumed:
     // its bus may need deferred cleanup, but it cannot invalidate the fully staged candidate.
     session = committedSession
-    snapshotManager = checkNotNull(nextSnapshotManager)
+    snapshotManager = nextSnapshotManager
     nextSession = null
     nextSnapshotManager = null
     pauseStateBeforeLoading = null
@@ -701,13 +706,14 @@ class BasicController private constructor(
     val session = session ?: return
 
     isPaused = false
-    checkNotNull(snapshotManager) { "Snapshot manager must be staged before session activation" }
-
     postSessionEventSafely(session, AddPatches(patches))
     postSessionEventSafely(session, Controller.GameboyTypeEvent(session.config.gameboyType))
     postSessionEventSafely(session, Controller.HardwareProfileEvent(session.config.hardwareProfile))
     postSessionEventSafely(session, Controller.SessionPauseSupportEvent(true))
-    postSessionEventSafely(session, Controller.SessionSnapshotSupportEvent(this))
+    postSessionEventSafely(
+        session,
+        Controller.SessionSnapshotSupportEvent(if (snapshotManager == null) null else this),
+    )
     postSessionEventSafely(session, Controller.EmulationStartedEvent(session.config.rom.title))
   }
 
@@ -840,17 +846,19 @@ class BasicController private constructor(
     val state = closeState
 
     try {
+      shutdownExecutors(closeDeadlineNanos)
+      eventBus.close(
+          remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),
+          TimeUnit.NANOSECONDS,
+      )
+      // Only after every task and subscriber that can still observe the live machine has
+      // quiesced may final close release Session/Gameboy resources.
       stop(
           afterCartridgeFlush = true,
           notifyLifecycle = false,
           closeDeadlineNanos = closeDeadlineNanos,
       )
       isPaused = false
-      shutdownExecutors(closeDeadlineNanos)
-      eventBus.close(
-          remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),
-          TimeUnit.NANOSECONDS,
-      )
     } catch (failure: EventBusTeardownTimeoutException) {
       throw closeBarrierFailure(
           "Controller event subscribers did not stop before the close deadline. " +
@@ -900,7 +908,9 @@ class BasicController private constructor(
     val fileName = closeFileName()
     val attempt =
         closePersistenceAttempt
-            ?: RetainedClosePersistence(capture).also { closePersistenceAttempt = it }
+            ?: RetainedClosePersistence(capture, persistenceExecutor).also {
+              closePersistenceAttempt = it
+            }
     val result =
         attempt.await(
             fileName,
@@ -1141,15 +1151,17 @@ class BasicController private constructor(
  * cancelled or replaced: some filesystems ignore interruption, and overlapping atomic writers
  * could otherwise publish stale bytes after a retry.
  */
-internal class RetainedClosePersistence(capture: BatteryFlush) {
+internal class RetainedClosePersistence(
+    capture: BatteryFlush,
+    persistenceExecutor: ExecutorService,
+) {
   private val task =
-      FutureTask<BatteryPersistenceResult>(Callable { capture.persist() })
-          .also { future ->
-            Thread(future, "coffee-gb-close-persistence").apply {
-              isDaemon = true
-              start()
-            }
-          }
+      FutureTask<BatteryPersistenceResult>(Callable { capture.persist() }).also {
+        // Replacement, stop, and close persistence share one ordered writer. A cancelled task can
+        // remain inside filesystem code after ignoring interrupt; queueing close behind it keeps
+        // an older generation from publishing after the final close capture.
+        persistenceExecutor.execute(it)
+      }
 
   val isDone: Boolean
     get() = task.isDone

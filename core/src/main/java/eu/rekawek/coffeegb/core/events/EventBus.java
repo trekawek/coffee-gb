@@ -15,18 +15,23 @@ public interface EventBus extends AutoCloseable {
 
     @NotNull EventBus fork(String callerId);
 
-    default void close() {
-        close(1, TimeUnit.SECONDS);
-    }
+    @Override
+    void close();
 
     /**
      * Stops this bus and all descendants within one shared deadline.
      *
      * @throws EventBusTeardownTimeoutException if an asynchronous subscriber has not returned
      */
-    void close(long timeout, TimeUnit unit);
+    default void close(long timeout, TimeUnit unit) {
+        close();
+    }
 
     EventBus NULL_EVENT_BUS = new EventBus() {
+        @Override
+        public void close() {
+        }
+
         @Override
         public void close(long timeout, TimeUnit unit) {
         }

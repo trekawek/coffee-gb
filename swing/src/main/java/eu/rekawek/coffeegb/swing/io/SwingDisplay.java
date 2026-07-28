@@ -112,7 +112,16 @@ public class SwingDisplay extends JPanel implements Runnable {
                 Controller.RomLoadingCancelledEvent.class);
         eventBus.register(e -> clearPersistentNotification(),
                 Controller.EmulationStartedEvent.class, callerId);
+        // Session teardown silently quiesces core outputs after its bus stops. Reset host-only
+        // visual rumble through the owner lifecycle while subscribers are still active.
+        eventBus.register(e -> this.rumbling = false, Controller.RomLoadingEvent.class);
+        eventBus.register(e -> this.rumbling = false, Controller.EmulationStoppedEvent.class);
         requestPreferredSizeUpdate();
+    }
+
+    /** Resets host-only output state before a controller can quiesce or close its event bus. */
+    public void releaseForLifecycleChange() {
+        rumbling = false;
     }
 
     private synchronized void onHardwareProfile(Controller.HardwareProfileEvent e) {

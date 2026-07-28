@@ -91,6 +91,8 @@ import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
@@ -132,6 +134,10 @@ class LinkedController(
       )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
+
+  @VisibleForTesting
+  internal var persistLocalBatteryCapture: (BatteryFlush) -> BatteryPersistenceResult =
+      BatteryFlush::persist
 
   private val sessions = MutableList<Session?>(mode.playerCount) { null }
 
@@ -639,19 +645,46 @@ class LinkedController(
 
     eventQueue.register<LoadedLocalConfigEvent> { e ->
       requireCompatibleLinkedClock(configs.toMutableList().also { it[localPlayer] = e.config })
+      val previousSession = sessions[localPlayer]
+      // The initial bounded read rejects an unsafe/unreadable sidecar before this queued command.
+      // Persist the live generation at the frame-safe boundary, then re-read the exact published
+      // bytes. A failed write keeps the complete old session/config/topology owned and retryable.
+      val oldCapture = previousSession?.gameboy?.prepareCartridgeFlush()
+      val persistence = oldCapture?.let(persistLocalBatteryCapture)
+      if (persistence != null) {
+        oldCapture.complete(persistence)
+      }
+      if (persistence is BatteryPersistenceResult.Failure) {
+        reportLocalBatteryPersistenceFailure(e.romFile, persistence)
+        return@register
+      }
+      val refreshedBattery =
+          try {
+            readLocalBattery(e.config)
+          } catch (failure: IOException) {
+            reportLocalBatteryFailure(e.config, e.romFile, failure)
+            return@register
+          }
+
       if (sessions.all { it == null }) {
         links = StateHistory.createLinks(mode, e.config.clockSpec)
       }
       val checkpoint = isFourPlayerHost()
       if (checkpoint) reconcileHistory()
-      sessions[localPlayer]?.close()
+      previousSession?.closeAfterCartridgeFlush()
       sessions[localPlayer] = null
       // Protocol v8 owns linked P1 at frame boundaries and cannot represent local SGB P2-P4.
       // Never allow an asynchronous platform source into any linked machine.
       e.config.setPlayerInputSource(PlayerInputSource.RELEASED)
       configs[localPlayer] = e.config
       initSession(localPlayer, frame, e.snapshot)
-      sendLocalRom(includeState = e.snapshot != null, batteryBuffer = e.battery)
+      rejectedLocalState = null
+      eventBus.post(Controller.GameboyTypeEvent(e.config.gameboyType))
+      eventBus.post(Controller.HardwareProfileEvent(e.config.hardwareProfile))
+      eventBus.post(Controller.SessionPauseSupportEvent(false))
+      eventBus.post(Controller.SessionSnapshotSupportEvent(null))
+      eventBus.post(Controller.EmulationStartedEvent(e.config.rom.title))
+      sendLocalRom(includeState = e.snapshot != null, batteryBuffer = refreshedBattery)
       if (checkpoint) commitHostCheckpoint()
     }
 
@@ -916,33 +949,15 @@ class LinkedController(
           try {
             readLocalBattery(config)
           } catch (failure: IOException) {
-            val fileName =
-                config.rom.origin
-                    .persistencePath(".sav")
-                    .map { path -> path.fileName.toString() }
-                    .orElse(config.rom.origin.displayName())
-            val message = failure.message ?: "Unable to read battery save"
-            LOG.warn("Unable to read bounded linked battery payload from {}", fileName, failure)
-            eventBus.post(
-                BatteryPersistenceFailedEvent(
-                    BatteryPersistenceFailedEvent.Operation.LOAD,
-                    fileName,
-                    message,
-                ))
-            eventBus.post(Controller.LoadRomFailedEvent(it.rom, message))
+            reportLocalBatteryFailure(config, it.rom, failure)
             return@register
           }
-      rejectedLocalState = null
-      eventBus.post(Controller.GameboyTypeEvent(config.gameboyType))
-      eventBus.post(Controller.HardwareProfileEvent(config.hardwareProfile))
-      eventBus.post(Controller.SessionPauseSupportEvent(false))
-      eventBus.post(Controller.SessionSnapshotSupportEvent(null))
-      eventBus.post(Controller.EmulationStartedEvent(rom.title))
       eventBus.post(
           LoadedLocalConfigEvent(
               config = config,
               snapshot = it.state,
               battery = battery,
+              romFile = it.rom,
           ))
     }
 
@@ -1614,6 +1629,45 @@ class LinkedController(
     }
   }
 
+  private fun reportLocalBatteryFailure(
+      config: GameboyConfiguration,
+      romFile: java.io.File,
+      failure: IOException,
+  ) {
+    val fileName =
+        config.rom.origin
+            .persistencePath(".sav")
+            .map { path -> path.fileName.toString() }
+            .orElse(config.rom.origin.displayName())
+    val message = failure.message ?: "Unable to read battery save"
+    LOG.warn("Unable to read bounded linked battery payload from {}", fileName, failure)
+    eventBus.post(
+        BatteryPersistenceFailedEvent(
+            BatteryPersistenceFailedEvent.Operation.LOAD,
+            fileName,
+            message,
+        ))
+    eventBus.post(Controller.LoadRomFailedEvent(romFile, message))
+  }
+
+  private fun reportLocalBatteryPersistenceFailure(
+      romFile: java.io.File,
+      failure: BatteryPersistenceResult.Failure,
+  ) {
+    LOG.warn(
+        "Unable to publish linked battery generation to {}",
+        failure.fileName(),
+        failure.cause(),
+    )
+    eventBus.post(
+        BatteryPersistenceFailedEvent(
+            BatteryPersistenceFailedEvent.Operation.SAVE,
+            failure.fileName(),
+            failure.message(),
+        ))
+    eventBus.post(Controller.LoadRomFailedEvent(romFile, failure.message()))
+  }
+
   private fun readBoundedBattery(path: Path): ByteArray {
     val limit = StateLimits.BATTERY.decodedBytes
     val declaredSize = Files.size(path)
@@ -1832,6 +1886,11 @@ class LinkedController(
       val config: GameboyConfiguration,
       val snapshot: MachineState?,
       val battery: ByteArray?,
+      val romFile: java.io.File =
+          config.rom.origin
+              .containerPath()
+              .map { it.toFile() }
+              .orElse(java.io.File(config.rom.origin.displayName())),
   ) : Event
 
   private data class V9CheckpointPrepareEvent(

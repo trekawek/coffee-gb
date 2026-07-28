@@ -16,6 +16,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -165,6 +166,7 @@ class RomReplacementPersistenceBarrierTest {
     val entered = CountDownLatch(1)
     val release = CountDownLatch(1)
     val completed = AtomicBoolean()
+    val persistenceExecutor = Executors.newSingleThreadExecutor()
     val capture =
         object : BatteryFlush {
           override fun persist(): BatteryPersistenceResult {
@@ -183,7 +185,7 @@ class RomReplacementPersistenceBarrierTest {
         }
 
     try {
-      val attempt = RetainedClosePersistence(capture)
+      val attempt = RetainedClosePersistence(capture, persistenceExecutor)
       val started = System.nanoTime()
       val result =
           attempt.await(
@@ -213,6 +215,7 @@ class RomReplacementPersistenceBarrierTest {
           } is BatteryPersistenceResult.Success)
     } finally {
       release.countDown()
+      persistenceExecutor.shutdownNow()
     }
   }
 

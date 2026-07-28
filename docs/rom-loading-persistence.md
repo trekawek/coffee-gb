@@ -11,7 +11,8 @@ transfers, snapshots, or resumes a game must retain its `RomImage` and `RomOrigi
   identity. The public stable identity length-prefixes these fields, so delimiter text inside a
   path or entry cannot make two structured identities collide.
 - An in-memory ROM uses an explicit stable identity (normally its SHA-256 digest) and has no
-  implicit permission to create a sidecar file.
+  implicit permission to create a sidecar file. Basic sessions therefore advertise no snapshot
+  support for a memory origin, and `snapshotAvailable` returns false instead of inventing a path.
 
 Direct-file sidecars retain the existing `<rom-base>.sav` and `<rom-base>.snN` names. Archive
 sidecars use a bounded, filesystem-safe form:
@@ -94,19 +95,38 @@ quiescence, persistence, worker shutdown, and event-bus teardown; it throws
 caller can retry rather than discard state. A persistence task that outlives the caller deadline
 is retained as the sole writer: retries observe that same task and never start an overlapping
 writer. The desktop keeps the window open on failure, but the captured session remains paused
-awaiting retry rather than resuming emulation from state that may already be in flight to disk.
-Final close propagates a bounded event-subscriber timeout so its caller can retry before machine
-resources are released. Replacement, stop, and candidate discard instead mark the timed-out bus
-stopping and defer irreversible cleanup to a daemon; an already committed replacement is never
-rolled back to a stopped old machine.
+awaiting retry rather than resuming emulation from state that may already be in flight to disk. A
+cancelled replacement or stop writer and the final close writer all use the same single-thread
+executor. Even if cancellation interrupts a filesystem call that ignores interruption, the newer
+close capture stays queued behind it and is the last generation published.
+
+After final persistence succeeds, close first quiesces the ROM loader, persistence executor, and
+controller event tree within the same deadline. Only then may `Session` release `Gameboy`
+resources. A loader or subscriber timeout therefore retains both the console attachment and the
+complete machine for retry. Replacement, stop, and candidate discard instead mark the timed-out
+bus stopping and defer irreversible cleanup to a daemon; an already committed replacement is
+never rolled back to a stopped old machine.
+
+Session-owned core cleanup is silent after bus quiescence. The desktop owner releases held input
+and resets host rumble before close, including failed or deferred quit attempts; direct
+`Gameboy.close()` on an active bus still publishes the final motor-off transition. Synchronous
+posts from a stopping/closed child bus are dropped and cannot route through a retained parent into
+active siblings. Parent fork attachment and close traversal are one serialized ownership
+transaction, so no newly started child worker can escape teardown.
 
 Candidate construction failures leave the old session recoverable: all candidate-owned components
 are staged first, discarded children are closed, subscriber exceptions are isolated, and the
 console remains attached to the old machine until ownership commits.
 
 This transaction currently describes `BasicController`. `LinkedController` rejects an oversized or
-unreadable adjacent battery before replacing its retained payload/session and forwards exact
-in-memory ROM bytes, but its local ROM parse and battery preflight still run synchronously on the
+unreadable adjacent battery before replacing its retained payload/session. At its queued frame-safe
+load boundary it persists the old session's current RAM/RTC capture, re-reads the resulting bounded
+sidecar, and sends those exact bytes; a typed write/read failure retains old ownership and publishes
+no new lifecycle. Its local ROM parse and initial battery preflight still run synchronously on the
 event caller (which may be the EDT or timing thread). Linked worker-based prepare/persist/activate,
 reset, stop, and close parity remains a required follow-up before issue #336 is complete. The
 unified open service and desktop entry-point routing also belong to that follow-up.
+
+When the user keeps a session open after quit persistence fails, the desktop leaves its glass pane
+and wait cursor active with explicit “paused; close again to retry” wording. The controller has
+already entered its close pause, so ordinary input must remain blocked until that retry.

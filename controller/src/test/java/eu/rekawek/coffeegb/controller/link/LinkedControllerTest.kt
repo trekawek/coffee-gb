@@ -57,9 +57,12 @@ import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.Joypad
 import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
 import org.junit.Test
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.security.MessageDigest
@@ -120,6 +123,115 @@ class LinkedControllerTest {
       Files.deleteIfExists(battery)
       Files.deleteIfExists(rom)
       Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun sameRomReloadSendsRamAndRtcGenerationFlushedAtFrameSafePoint() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-battery-refresh")
+    val rom = directory.resolve("linked-battery.gb")
+    val battery = directory.resolve("linked-battery.sav")
+    val romBytes = ROM.readBytes()
+    romBytes[0x147] = 0x10 // MBC3 + timer + RAM + battery
+    romBytes[0x149] = 0x03 // 32 KiB RAM
+    Files.write(rom, romBytes)
+    val eventBus = EventBusImpl()
+    val properties =
+        EmulatorProperties(
+            settingsPath = directory.resolve("settings.properties"),
+            overrides = ApplicationSettingsOverrides(batterySavesEnabled = true),
+        )
+    val controller =
+        LinkedController(eventBus, properties, null).also { it.timingTicker.disabled = true }
+    val loaded = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+    eventBus.register<LinkedController.LocalRomLoadedEvent> { loaded.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(rom.toFile()))
+      controller.runFrame()
+      assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
+
+      val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+      oldSession.gameboy.addressSpace.setByte(0x0000, 0x0a)
+      oldSession.gameboy.addressSpace.setByte(0x4000, 0x00)
+      oldSession.gameboy.addressSpace.setByte(0xa000, 0x5a)
+      oldSession.gameboy.addressSpace.setByte(0x4000, 0x08)
+      oldSession.gameboy.addressSpace.setByte(0xa000, 37)
+      oldSession.gameboy.addressSpace.setByte(0x4000, 0x0c)
+      oldSession.gameboy.addressSpace.setByte(0xa000, 0x40) // halt for a stable RTC generation
+
+      eventBus.post(LoadRomEvent(rom.toFile()))
+      controller.runFrame()
+
+      val replacement = assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
+      val transmitted = assertNotNull(replacement.batteryFile)
+      assertEquals(0x8000 + 11 * Int.SIZE_BYTES, transmitted.size)
+      assertEquals(0x5a, transmitted[0].toInt() and 0xff)
+      val rtc =
+          ByteBuffer.wrap(transmitted, 0x8000, 11 * Int.SIZE_BYTES)
+              .slice()
+              .order(ByteOrder.LITTLE_ENDIAN)
+      assertEquals(37, rtc.getInt(0))
+      assertEquals(0x40, rtc.getInt(4 * Int.SIZE_BYTES))
+      assertContentEquals(Files.readAllBytes(battery), transmitted)
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      Files.deleteIfExists(directory.resolve("settings.properties"))
+      Files.deleteIfExists(battery)
+      Files.deleteIfExists(rom)
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
+  fun failedSafePointBatteryPublishRetainsOldLinkedOwnershipAndLifecycle() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    val loaded = LinkedBlockingQueue<LinkedController.LocalRomLoadedEvent>()
+    val loadFailures = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
+    val batteryFailures = LinkedBlockingQueue<BatteryPersistenceFailedEvent>()
+    eventBus.register<Controller.EmulationStartedEvent> { started.add(it) }
+    eventBus.register<LinkedController.LocalRomLoadedEvent> { loaded.add(it) }
+    eventBus.register<Controller.LoadRomFailedEvent> { loadFailures.add(it) }
+    eventBus.register<BatteryPersistenceFailedEvent> { batteryFailures.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      assertNotNull(started.poll(1, TimeUnit.SECONDS))
+      assertNotNull(loaded.poll(1, TimeUnit.SECONDS))
+      val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
+      val oldConfig = assertNotNull(privateList(controller, "configs")[0])
+      controller.persistLocalBatteryCapture = {
+        BatteryPersistenceResult.Failure(
+            BatteryPersistenceResult.FailureKind.WRITE_FAILED,
+            "cpu_instrs.sav",
+            "injected safe-point write failure",
+            IOException("disk full"),
+        )
+      }
+
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+
+      assertNotNull(loadFailures.poll(1, TimeUnit.SECONDS))
+      assertEquals(
+          BatteryPersistenceFailedEvent.Operation.SAVE,
+          assertNotNull(batteryFailures.poll(1, TimeUnit.SECONDS)).operation,
+      )
+      assertNull(started.poll(100, TimeUnit.MILLISECONDS))
+      assertNull(loaded.poll(100, TimeUnit.MILLISECONDS))
+      assertTrue(oldSession === privateList(controller, "sessions")[0])
+      assertTrue(oldConfig === privateList(controller, "configs")[0])
+    } finally {
+      controller.close()
+      eventBus.close()
     }
   }
 

@@ -26,7 +26,9 @@ interface Controller : AutoCloseable {
 
   class EmulationStoppedEvent : Event
 
-  data class LoadRomEvent(
+  data class LoadRomEvent
+  @JvmOverloads
+  constructor(
       val rom: File,
       val state: MachineState? = null,
       val image: RomImage? = null,

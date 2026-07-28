@@ -34,6 +34,17 @@ public class CodeBreakerRumble implements StatefulComponent<CodeBreakerRumble> {
         eventBus = EventBus.NULL_EVENT_BUS;
     }
 
+    /**
+     * Silences the emulated accessory after its owner has already reset host/UI output state.
+     *
+     * <p>No subscriber is invoked: this is the resource-cleanup half of a quiesced session
+     * teardown, not a live hardware transition.
+     */
+    public void quiesce() {
+        motorOn = false;
+        eventBus = EventBus.NULL_EVENT_BUS;
+    }
+
     private void setMotorOn(boolean on) {
         if (on == motorOn) {
             return;
