@@ -72,6 +72,31 @@ public class NativePackagingScriptTest {
         assertTrue(verifyPs.contains("$Msi.ExitCode"));
         assertFalse(verifyPs.contains("& msiexec.exe"));
 
+        int normalization = verifyPs.indexOf(
+                "$BuildRoot = if ([System.IO.Path]::IsPathRooted($BuildRoot)) {");
+        int firstDerivedPath = verifyPs.indexOf("$Dist = Join-Path $BuildRoot \"dist\"");
+        assertTrue(normalization >= 0);
+        assertTrue(firstDerivedPath > normalization);
+        String normalizationBlock = verifyPs.substring(normalization, firstDerivedPath);
+        assertTrue(normalizationBlock.contains("[System.IO.Path]::GetFullPath($BuildRoot)"));
+        assertTrue(normalizationBlock.contains(
+                "[System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $BuildRoot))"));
+
+        int failureStart = verifyPs.indexOf("if ($Msi.ExitCode -ne 0) {");
+        int failureEnd = verifyPs.indexOf("$Arguments = @(", failureStart);
+        assertTrue(failureStart >= 0);
+        assertTrue(failureEnd > failureStart);
+        String failureBlock = verifyPs.substring(failureStart, failureEnd);
+        int logGuard = failureBlock.indexOf("Test-Path -LiteralPath $Log -PathType Leaf");
+        int logTail = failureBlock.indexOf("Get-Content -LiteralPath $Log -Tail 250");
+        int failureThrow = failureBlock.indexOf(
+                "throw \"MSI administrative extraction failed");
+        assertTrue(logGuard >= 0);
+        assertTrue(logTail > logGuard);
+        assertTrue(failureThrow > logTail);
+        assertTrue(failureBlock.contains("$($Msi.ExitCode)"));
+        assertTrue(failureBlock.contains("see $Log"));
+
         String associationSh = Files.readString(associationShell);
         String associationPs = Files.readString(associationPowerShell);
         for (String contents : new String[] {associationSh, associationPs}) {
@@ -108,6 +133,7 @@ public class NativePackagingScriptTest {
         assertTrue(associationPs.contains("-Wait"));
         assertTrue(associationPs.contains("-PassThru"));
         assertTrue(associationPs.contains("$Msi.ExitCode"));
+        assertTrue(associationPs.contains("Get-Content -LiteralPath $Log -Tail 250"));
         assertTrue(associationPs.contains("Registry::HKEY_CLASSES_ROOT"));
         assertTrue(associationPs.contains("Invoke-Msi -Action \"/x\""));
         assertTrue(associationPs.contains("Get-Process -Id $AssociationPid"));
