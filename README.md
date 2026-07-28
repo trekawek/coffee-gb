@@ -52,6 +52,10 @@ with status 2 before Swing starts. Use `--` to end option parsing when a ROM pat
 java -jar coffee-gb-VERSION.jar -- -homebrew.gb
 ```
 
+`--package-smoke` is a no-ROM, headless installation diagnostic. It generates a tiny synthetic ROM
+in memory, publishes video and audio, samples a press/release, and round-trips the existing portable
+StateFile format. No ROM bytes are downloaded, committed, or written to disk.
+
 ROMs are not included. Coffee GB accepts `.gb`, `.gbc`, and `.rom` files and
 bounded ZIP archives containing those formats. You can also drop one local file
 on the emulator window; macOS Finder open-file events use the same opening flow.
@@ -397,6 +401,10 @@ for the universal JAR. `mvn verify` checks both inventories and launches `--vers
 artifacts. See the [native packaging foundation](docs/native-packaging.md) for the locked target
 allowlists, external native-source contract, cache safety, macOS SDL limitation, and dependency
 update procedure.
+
+Native DEB, MSI, Intel macOS DMG, and Apple-Silicon macOS DMG release assets are built on their
+matching hosts and published only after the complete matrix passes. See the
+[native package CI guide](docs/native-package-ci.md) before installing or cutting a release.
 
 ## Kudos
 

@@ -1,6 +1,6 @@
 # Native packaging
 
-This document defines the Phase 5 packaging contract for
+This document defines the Phase 5 packaging contract and its Phase 6 release validation for
 [the Desktop 2.0 package work](https://github.com/trekawek/coffee-gb/issues/338). Maven remains the
 authoritative application build. Target staging, minimized runtimes, application images, and native
 installers consume Maven outputs; they never compile a second application copy or resolve a second
@@ -233,10 +233,17 @@ inventory; unknown, stale, cross-target, or edited content fails packaging.
 After jpackage, the build copies both documents into `dist/` as
 `coffee-gb-VERSION-sbom.cdx.json` and
 `coffee-gb-VERSION-TARGET-native-sbom.cdx.json`, beside the installer or application image.
-`SHA256SUMS` is written only after both copies have been verified and covers both directly
-uploadable SBOMs plus every regular installer or application-image file using sorted relative
-paths. Phase 6 release automation should generate the final release-level checksum file over the
-portable universal JAR, both SBOM types, and host-built installers after all optional signing.
+`PACKAGE-RESULT.properties` records the independently selected target, package type, complete Maven
+version, signing state, and exact artifact/SBOM digests. `SHA256SUMS` is written only after both
+copies have been verified and covers the result record, both directly uploadable SBOMs, and every
+regular installer or application-image file using sorted relative paths.
+
+The Phase 6 release gate accepts exactly one result for each of Linux x64, Windows x64, macOS x64,
+and macOS arm64. It rejects a missing/duplicate target, non-default installer type, version drift,
+SBOM drift, stale checksum, or unexpected file before copying anything into the release bundle.
+The final `NATIVE-PACKAGE-MATRIX.properties` names all four architecture-bearing installers and
+their signing state. Its release-level `SHA256SUMS` covers that matrix, the universal Maven JAR,
+the Maven and target-native SBOMs, and all four installers.
 
 All normal and pull-request builds are unsigned. Signing is reachable only through the explicit
 `--release-sign` wrapper switch and then requires all of the following:
@@ -250,8 +257,14 @@ All normal and pull-request builds are unsigned. Signing is reachable only throu
 Credentials remain in the OS-protected store and never enter arguments, staging, logs, or package
 content. macOS adds jpackage signing and then uses a named `notarytool` keychain profile before
 stapling. Windows invokes `signtool` with a certificate-store SHA-1 and HTTPS timestamp service.
-Linux can create an armored detached GPG signature. Phase 6 owns the isolated environment-protected
-release jobs and secret wiring; PR workflows must never invoke this mode.
+Linux can create an armored detached GPG signature.
+
+The checked-in CI matrix deliberately builds and publishes the auditable unsigned path. It never
+references repository signing secrets and cannot invoke `--release-sign`, including for pull
+requests from forks. A maintainer may use the existing explicit signing gate only in an isolated,
+protected environment after importing credentials into the platform store. The release matrix
+records `unsigned` or `signed` for every target; the manual checklist requires that state to be
+called out in release notes.
 
 ## Installation warnings and fallback
 
@@ -343,3 +356,26 @@ When any native-bearing dependency changes:
    Maven/JDK toolchain; and
 6. record platform launch evidence, including camera, controller, debug-console, missing-native,
    and keyboard-only fallback behavior.
+
+## Continuous package validation
+
+`.github/workflows/native-packages.yml` runs `mvn clean verify` through the same checked-in wrappers
+on Ubuntu x64, Windows x64, macOS Intel, and macOS arm64. Java setup caches only Maven dependencies
+keyed by the POMs; `target/`, native caches, settings, ROMs, batteries, and state directories are
+never cached. Target artifacts expire after seven days and the complete gated bundle after
+fourteen.
+
+Every host verifies jpackage's pre-installer payload, then unpacks the actual DEB/MSI or mounts the
+actual DMG and repeats the checks. Inspection requires:
+
+- exactly one linked runtime and the locked ten-module closure;
+- the exact target-native allowlist and digests, with no foreign native;
+- no ROM-like file, signing key/certificate file, developer home path, or secret-shaped text;
+- the complete legal inventory, byte-identical Maven SBOM, neutral app JAR, version, result
+  manifest, and exhaustive sorted checksums; and
+- packaged launcher `--version` plus `--package-smoke` from an isolated temporary user/cache root.
+
+The package smoke constructs its reviewable 32 KiB loop ROM in memory. It verifies video and audio
+events, a live input press/release, and an encode/inspect/mutate/load/re-encode StateFile round
+trip. It neither writes the synthetic ROM nor opens Swing, a device, a user setting, or a battery
+file. See [native package CI](native-package-ci.md) for publication and operator evidence.
