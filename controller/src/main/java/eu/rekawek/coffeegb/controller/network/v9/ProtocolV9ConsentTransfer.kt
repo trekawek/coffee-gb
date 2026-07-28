@@ -614,6 +614,7 @@ internal class V9Part3Session(
 
   fun start(value: V9ManifestPairingBoundary) {
     var complete: V9PreparationBoundary? = null
+    var invalid = false
     synchronized(lock) {
       if (closed) return
       check(boundary == null) { "v9 Part-3 session already started" }
@@ -632,21 +633,25 @@ internal class V9Part3Session(
       if (proposals.size > V9Limit.MANIFEST_PROPOSALS.value ||
           proposals.any { it.transferClass !in allowedClasses } ||
           proposals.count { it.transferClass == V9TransferClass.CHECKPOINT } > 1) {
-        protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-        return
+        invalid = true
       }
       val local = localActor()
-      if (plan.configuredSourceIds().any { id ->
+      if (!invalid && plan.configuredSourceIds().any { id ->
             val proposal = proposalById[id]
             proposal == null ||
                 proposal.sourcePlayer != local ||
                 proposal.transferClass !in setOf(V9TransferClass.ROM, V9TransferClass.BATTERY)
           }) {
-        protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-        return
+        invalid = true
       }
-      proposals.forEach { transferred[it.proposalId] = 0 }
-      if (proposals.isEmpty()) complete = preparationBoundaryLocked()
+      if (!invalid) {
+        proposals.forEach { transferred[it.proposalId] = 0 }
+        if (proposals.isEmpty()) complete = preparationBoundaryLocked()
+      }
+    }
+    if (invalid) {
+      protocolFailure(V9ErrorCode.CONSENT_REJECTED)
+      return
     }
     publish()
     complete?.let(onPreparationComplete)
@@ -719,17 +724,20 @@ internal class V9Part3Session(
           return
         }
     var consentComplete = false
+    var invalid = false
     synchronized(lock) {
       if (closed || !recordVoteLocked(vote.proposalId, vote.actorPlayer, vote.decision)) {
-        protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-        return
-      }
-      if (vote.decision == V9ConsentDecision.REJECT) {
+        invalid = true
+      } else if (vote.decision == V9ConsentDecision.REJECT) {
         rejected += vote.proposalId
-        protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-        return
+        invalid = true
+      } else {
+        consentComplete = allApprovedLocked()
       }
-      consentComplete = allApprovedLocked()
+    }
+    if (invalid) {
+      protocolFailure(V9ErrorCode.CONSENT_REJECTED)
+      return
     }
     publish()
     if (consentComplete) beginSynchronization()
@@ -899,19 +907,22 @@ internal class V9Part3Session(
 
   private fun onLocalVoteWritten(proposalId: Long, decision: V9ConsentDecision) {
     var consentComplete = false
+    var invalid = false
     synchronized(lock) {
       if (closed) return
       localQueued.remove(proposalId)
       if (!recordVoteLocked(proposalId, localActor(), decision)) {
-        protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-        return
-      }
-      if (decision == V9ConsentDecision.REJECT) {
+        invalid = true
+      } else if (decision == V9ConsentDecision.REJECT) {
         rejected += proposalId
-        protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-        return
+        invalid = true
+      } else {
+        consentComplete = allApprovedLocked()
       }
-      consentComplete = allApprovedLocked()
+    }
+    if (invalid) {
+      protocolFailure(V9ErrorCode.CONSENT_REJECTED)
+      return
     }
     publish()
     if (consentComplete) beginSynchronization()
@@ -950,6 +961,7 @@ internal class V9Part3Session(
   private fun advanceTransfer() {
     var sourceProposal: V9TransferProposal? = null
     var complete: V9PreparationBoundary? = null
+    var invalid = false
     synchronized(lock) {
       if (closed) return
       if (checkpointTransportEnabled && allApprovedLocked()) {
@@ -970,11 +982,15 @@ internal class V9Part3Session(
           next.proposalId !in claimed &&
           activeSource == null) {
         if (!claimed.add(next.proposalId)) {
-          protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-          return
+          invalid = true
+        } else {
+          sourceProposal = next
         }
-        sourceProposal = next
       }
+    }
+    if (invalid) {
+      protocolFailure(V9ErrorCode.CONSENT_REJECTED)
+      return
     }
     publish()
     complete?.let(onPreparationComplete)
@@ -1271,14 +1287,20 @@ internal class V9Part3Session(
   }
 
   private fun markPrepared(proposalId: Long) {
+    var invalid = false
     synchronized(lock) {
-      if (closed || !prepared.add(proposalId)) {
-        if (!closed) protocolFailure(V9ErrorCode.CONSENT_REJECTED)
-        return
+      if (closed) return
+      if (!prepared.add(proposalId)) {
+        invalid = true
+      } else {
+        transferred[proposalId] = proposalById.getValue(proposalId).expectedSize
+        bulkDeadline?.close()
+        bulkDeadline = null
       }
-      transferred[proposalId] = proposalById.getValue(proposalId).expectedSize
-      bulkDeadline?.close()
-      bulkDeadline = null
+    }
+    if (invalid) {
+      protocolFailure(V9ErrorCode.CONSENT_REJECTED)
+      return
     }
     publish()
     advanceTransfer()
@@ -1441,6 +1463,7 @@ internal class V9Part3Session(
   }
 
   private fun failSession(reason: V9ErrorCode, diagnostic: V9Diagnostic) {
+    check(!Thread.holdsLock(lock)) { "v9 failure callback cannot retain the session lock" }
     synchronized(lock) {
       if (terminalFailure == null) terminalFailure = reason
     }
