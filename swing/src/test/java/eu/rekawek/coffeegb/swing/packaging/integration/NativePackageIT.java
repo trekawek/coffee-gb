@@ -157,6 +157,14 @@ public class NativePackageIT {
         Path sbom = Path.of(required("coffeeGbSbom"));
         Path resources = Path.of(required("coffeeGbPackagingResources"));
         Path base = temporaryFolder.getRoot().toPath();
+        String lfSbom = Files.readString(sbom, StandardCharsets.UTF_8)
+                .replace("\r\n", "\n")
+                .replace('\r', '\n');
+        Path lfSbomFile = base.resolve("maven-sbom-lf.json");
+        Path crlfSbomFile = base.resolve("maven-sbom-crlf.json");
+        Files.writeString(lfSbomFile, lfSbom, StandardCharsets.UTF_8);
+        Files.writeString(
+                crlfSbomFile, lfSbom.replace("\n", "\r\n"), StandardCharsets.UTF_8);
         NativePackageStager stager = new NativePackageStager();
         TimeZone originalTimeZone = TimeZone.getDefault();
         NativePackageStager.StageResult first;
@@ -167,7 +175,7 @@ public class NativePackageIT {
                     NativeTarget.LINUX_X86_64,
                     app,
                     universal,
-                    sbom,
+                    lfSbomFile,
                     resources,
                     base.resolve("first")));
             TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Honolulu"));
@@ -175,7 +183,7 @@ public class NativePackageIT {
                     NativeTarget.LINUX_X86_64,
                     app,
                     universal,
-                    sbom,
+                    crlfSbomFile,
                     resources,
                     base.resolve("second")));
         } finally {
@@ -189,7 +197,7 @@ public class NativePackageIT {
                         NativeTarget.LINUX_X86_64,
                         app,
                         universal,
-                        sbom,
+                        lfSbomFile,
                         resources,
                         first.root())));
     }

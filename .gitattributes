@@ -1,2 +1,4 @@
+* text=auto eol=lf
+
 /core/src/test/resources/mobile-adapter/** text eol=lf
 /controller/src/test/resources/netplay-v9/** text eol=lf

@@ -20,10 +20,12 @@ public class NativePackagingScriptTest {
         Path associationShell = packaging.resolve("verify-native-association.sh");
         Path associationPowerShell = packaging.resolve("verify-native-association.ps1");
         Path reactorPom = packaging.getParent().resolve("pom.xml");
+        Path gitAttributes = packaging.getParent().resolve(".gitattributes");
         String sh = Files.readString(shell);
         String ps = Files.readString(powerShell);
         String verifyPs = Files.readString(verifyPowerShell);
         String pom = Files.readString(reactorPom);
+        String attributes = Files.readString(gitAttributes);
 
         assertTrue(Files.isExecutable(shell));
         assertTrue(Files.isExecutable(verifyShell));
@@ -48,6 +50,10 @@ public class NativePackagingScriptTest {
         assertTrue(ps.contains("-Dcoffee-gb.test.tmpdir=$MavenTemp"));
         assertTrue(ps.contains("Resolve-Path -LiteralPath $MavenTemp"));
         assertTrue(pom.contains("-Djava.io.tmpdir=\"${coffee-gb.test.tmpdir}\""));
+        assertTrue(pom.contains(
+                "<artifactId>maven-jar-plugin</artifactId>\n"
+                        + "                <version>3.5.1</version>"));
+        assertTrue(attributes.lines().anyMatch("* text=auto eol=lf"::equals));
         assertTrue(sh.contains("COFFEE_GB_MAVEN_COMMAND:-mvn"));
         assertTrue(ps.contains("COFFEE_GB_MAVEN_COMMAND"));
         assertFalse(sh.contains("/opt/maven"));

@@ -231,7 +231,13 @@ public final class NativePackageVerifier {
         if (!appDigest.equals(NativePackageStager.sha256(request.sourceAppJar()))) {
             throw new IOException("Packaged app JAR differs from Maven's neutral app JAR");
         }
-        if (!sbomDigest.equals(NativePackageStager.sha256(request.sourceSbom()))) {
+        String canonicalSourceSbom = canonicalizeMavenSbom(
+                ThirdPartyNoticeInventory.readBounded(
+                        request.sourceSbom(),
+                        ThirdPartyNoticeInventory.MAX_SBOM_BYTES,
+                        "source CycloneDX Maven SBOM"));
+        if (!sbomDigest.equals(NativePackageStager.sha256(
+                canonicalSourceSbom.getBytes(StandardCharsets.UTF_8)))) {
             throw new IOException("Packaged SBOM differs from Maven's CycloneDX SBOM");
         }
         NativePackageStager.verifyNeutralAppJar(packagedJar);
@@ -946,6 +952,22 @@ public final class NativePackageVerifier {
         requireJsonStringField(component, "purl", rootRef, "Maven SBOM root component");
         ThirdPartyNoticeInventory.resolvedThirdPartyPurls(contents);
     }
+
+    /**
+     * Produces the byte-stable Maven SBOM embedded in every native package.
+     *
+     * <p>CycloneDX writes host line endings. Repository text and generated Maven descriptors are
+     * independently constrained to LF, so normalizing JSON whitespace line endings is sufficient
+     * and every component hash and field remains byte-significant to the release gate.
+     */
+    static String canonicalizeMavenSbom(String contents) throws IOException {
+        String description = "CycloneDX Maven SBOM";
+        new StrictJsonParser(contents, description).parse();
+        String canonical = contents.replace("\r\n", "\n").replace('\r', '\n');
+        new StrictJsonParser(canonical, "canonical CycloneDX Maven SBOM").parse();
+        return canonical;
+    }
+
     static Set<String> directMavenComponentPurls(String contents) throws IOException {
         String description = "CycloneDX Maven SBOM";
         new StrictJsonParser(contents, description).parse();
