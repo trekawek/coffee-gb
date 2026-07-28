@@ -1142,6 +1142,114 @@ class ProtocolV9ConsentTransferTest {
   }
 
   @Test
+  fun terminalFailureCallbackReleasesTheSessionLockBeforeFoundationCleanup() {
+    val bytes = privateBytes(32)
+    val pair = proposalPair(bytes)
+    val proposal = assertNotNull(pair.proposal)
+    val serverPayload = V9ManifestCodec.encode(pair.server, context(pair.server, 0))
+    val clientPayload = V9ManifestCodec.encode(pair.client, context(pair.client, 1))
+    val boundary =
+        V9ManifestPairingBoundary(
+            V9Role.CLIENT,
+            V9LinkMode.NORMAL,
+            1,
+            V9LifecycleState.EXCHANGE_CONSENT,
+            pair.server,
+            pair.client,
+            V9ManifestDigest.sha256(serverPayload),
+            V9ManifestDigest.sha256(clientPayload),
+            pair.server.differences,
+            listOf(proposal),
+        )
+    val clock = FakeClock()
+    val scheduler = ManualScheduler(clock)
+    val failureEntered = CountDownLatch(1)
+    val closeCompleted = CountDownLatch(1)
+    val writerCompleted = CountDownLatch(1)
+    val callbackObservedClose = AtomicBoolean()
+    val failureReason = AtomicReference<V9ErrorCode?>()
+    val writerFailure = AtomicReference<Throwable?>()
+    val closerFailure = AtomicReference<Throwable?>()
+    val session =
+        V9Part3Session(
+            V9Role.CLIENT,
+            V9LinkMode.NORMAL,
+            1,
+            targetPlan(),
+            clock,
+            scheduler::schedule,
+            { name, block ->
+              Thread(block, name).also {
+                it.isDaemon = true
+                it.start()
+              }
+            },
+            { _, _, _, _, written ->
+              written()
+              true
+            },
+            {},
+            { reason, _ ->
+              failureReason.compareAndSet(null, reason)
+              failureEntered.countDown()
+              callbackObservedClose.set(closeCompleted.await(5, TimeUnit.SECONDS))
+            },
+            {},
+        )
+    try {
+      session.start(boundary)
+      Thread(
+              {
+                try {
+                  if (failureEntered.await(5, TimeUnit.SECONDS)) session.close()
+                } catch (t: Throwable) {
+                  closerFailure.compareAndSet(null, t)
+                } finally {
+                  closeCompleted.countDown()
+                }
+              },
+              "v9-test-foundation-close",
+          )
+          .also {
+            it.isDaemon = true
+            it.start()
+          }
+      Thread(
+              {
+                try {
+                  session.submitConsent(41, V9ConsentDecision.REJECT)
+                } catch (t: Throwable) {
+                  writerFailure.compareAndSet(null, t)
+                } finally {
+                  writerCompleted.countDown()
+                }
+              },
+              "v9-test-local-reject",
+          )
+          .also {
+            it.isDaemon = true
+            it.start()
+          }
+
+      assertTrue(writerCompleted.await(5, TimeUnit.SECONDS), "local rejection did not finish")
+      assertTrue(closeCompleted.await(5, TimeUnit.SECONDS), "foundation cleanup did not finish")
+      assertNull(writerFailure.get())
+      assertNull(closerFailure.get())
+      assertEquals(V9ErrorCode.CONSENT_REJECTED, failureReason.get())
+      assertTrue(
+          callbackObservedClose.get(),
+          "terminal callback retained the Part-3 lock needed by foundation cleanup",
+      )
+    } finally {
+      closeCompleted.countDown()
+      session.close()
+      serverPayload.fill(0)
+      clientPayload.fill(0)
+      bytes.fill(0)
+    }
+  }
+
+  @Test
   fun zeroProposalPartThreePreservesDirectSynchronizingCompletion() {
     val manifests =
         ManifestPair(
@@ -1618,18 +1726,22 @@ class ProtocolV9ConsentTransferTest {
   private fun wireTypes(bytes: ByteArray): List<V9MessageType> {
     val result = mutableListOf<V9MessageType>()
     var offset = 0
-    while (offset < bytes.size) {
+    while (bytes.size - offset >= ProtocolV9.HEADER_BYTES) {
       val header =
           ByteBuffer.wrap(bytes, offset, ProtocolV9.HEADER_BYTES)
               .slice()
               .order(ByteOrder.BIG_ENDIAN)
       header.position(8)
-      result += requireNotNull(V9MessageType.fromWireId(header.short.toInt() and 0xffff))
+      val type = requireNotNull(V9MessageType.fromWireId(header.short.toInt() and 0xffff))
       header.position(20)
       val length = header.int
-      offset = Math.addExact(offset, Math.addExact(ProtocolV9.HEADER_BYTES, length))
+      require(length >= 0)
+      val nextOffset = Math.addExact(offset, Math.addExact(ProtocolV9.HEADER_BYTES, length))
+      // recordedBytes() is a point-in-time snapshot and can end between bounded writes.
+      if (nextOffset > bytes.size) break
+      result += type
+      offset = nextOffset
     }
-    assertEquals(bytes.size, offset)
     return result
   }
 
