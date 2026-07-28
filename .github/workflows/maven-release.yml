@@ -121,3 +121,14 @@ jobs:
             --verify-tag \
             --generate-notes \
             --title "coffee-gb ${RELEASE_VERSION}"
+
+  native-packages:
+    name: Build and publish native packages
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/native-packages.yml
+    with:
+      checkout_ref: coffee-gb-${{ inputs.release_version }}
+      publish: true
+      release_version: ${{ inputs.release_version }}

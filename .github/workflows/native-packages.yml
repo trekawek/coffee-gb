@@ -1,0 +1,306 @@
+name: Native package CI
+
+on:
+  pull_request:
+    branches: [ "master" ]
+  push:
+    branches: [ "master" ]
+    tags: [ "coffee-gb-*" ]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Exact branch, commit, or release tag to package
+        required: false
+        default: ""
+        type: string
+      publish:
+        description: Publish the complete validated matrix to the matching GitHub release
+        required: false
+        default: false
+        type: boolean
+      release_version:
+        description: Expected non-SNAPSHOT Maven version for a release call
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-packages-${{ inputs.checkout_ref || github.ref }}
+  cancel-in-progress: ${{ !inputs.publish }}
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86-64
+            package_type: deb
+            runner: ubuntu-24.04
+          - target: windows-x86-64
+            package_type: msi
+            runner: windows-2025
+          - target: macos-x86-64
+            package_type: dmg
+            runner: macos-15-intel
+          - target: macos-aarch64
+            package_type: dmg
+            runner: macos-15
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out the exact package source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
+          persist-credentials: false
+
+      - name: Set up target-architecture JDK 21 and safe Maven cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: "**/pom.xml"
+
+      - name: Prove target runner architecture
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+        run: |
+          actual=$(uname -m)
+          case "$PACKAGE_TARGET:$actual" in
+            linux-x86-64:x86_64|macos-x86-64:x86_64|macos-aarch64:arm64) ;;
+            *)
+              echo "Runner architecture $actual cannot build $PACKAGE_TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Prove Windows target runner architecture and WiX
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
+            throw "windows-x86-64 requires an X64 runner"
+          }
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            throw "The Windows runner has no WiX candle.exe required by JDK 21 jpackage"
+          }
+          if (-not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
+            throw "The Windows runner has no WiX light.exe required by JDK 21 jpackage"
+          }
+
+      - name: Build, test, inspect, and package
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: ./packaging/package-native.sh "$PACKAGE_TARGET" "$PACKAGE_TYPE"
+
+      - name: Build, test, inspect, and package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: >-
+          ./packaging/package-native.ps1
+          -Target $env:PACKAGE_TARGET
+          -Type $env:PACKAGE_TYPE
+
+      - name: Unpack final installer and repeat strict launch smokes
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: >-
+          ./packaging/verify-native-package.sh
+          "$PACKAGE_TARGET"
+          "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+
+      - name: Unpack final installer and repeat strict launch smokes
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: >-
+          ./packaging/verify-native-package.ps1
+          -Target $env:PACKAGE_TARGET
+          -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
+
+      - name: Prepare bounded unsigned CI artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: |
+          build_root="swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+          upload_root="swing/target/native-ci-upload-${PACKAGE_TARGET}"
+          mkdir "$upload_root"
+          cp "$build_root"/dist/* "$upload_root"/
+          if [[ "$PACKAGE_TARGET" == linux-x86-64 ]]; then
+            shopt -s nullglob
+            portable=(
+              swing/target/coffee-gb-*.jar
+            )
+            filtered=()
+            for candidate in "${portable[@]}"; do
+              [[ "$candidate" == *-app.jar ]] || filtered+=("$candidate")
+            done
+            if (( ${#filtered[@]} != 1 )); then
+              echo "Expected exactly one portable Maven JAR, found ${#filtered[@]}" >&2
+              exit 1
+            fi
+            cp "${filtered[0]}" "$upload_root"/
+          fi
+
+      - name: Prepare bounded unsigned CI artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: |
+          $BuildRoot = "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
+          $UploadRoot = "swing/target/native-ci-upload-$env:PACKAGE_TARGET"
+          New-Item -ItemType Directory -Path $UploadRoot | Out-Null
+          Copy-Item -Path "$BuildRoot/dist/*" -Destination $UploadRoot
+
+      - name: Upload target installer, checksum, SBOM, and result manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: swing/target/native-ci-upload-${{ matrix.target }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  release-gate:
+    name: Gate complete native package matrix
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out Maven version metadata
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: "**/pom.xml"
+
+      - name: Download every required target
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: downloaded-native
+
+      - name: Assemble and verify release-level artifacts
+        shell: bash
+        env:
+          EXPECTED_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          version=$(mvn -B --no-transfer-progress help:evaluate \
+            -Dexpression=project.version \
+            -DforceStdout \
+            -q)
+          if [[ -n "$EXPECTED_RELEASE_VERSION" && "$version" != "$EXPECTED_RELEASE_VERSION" ]]; then
+            echo "Requested release $EXPECTED_RELEASE_VERSION, but Maven reports $version" >&2
+            exit 1
+          fi
+          mapfile -t portable < <(
+            find downloaded-native -type f -name "coffee-gb-${version}.jar" -print
+          )
+          if (( ${#portable[@]} != 1 )); then
+            echo "Expected exactly one portable JAR, found ${#portable[@]}" >&2
+            exit 1
+          fi
+          java \
+            -cp "${portable[0]}" \
+            eu.rekawek.coffeegb.swing.packaging.NativeReleaseTool \
+            assemble \
+            --input downloaded-native \
+            --portable-jar "${portable[0]}" \
+            --output native-release \
+            --version "$version"
+
+      - name: Upload complete release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-release-bundle
+          path: native-release
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish validated tagged packages
+    if: inputs.publish || startsWith(github.ref, 'refs/tags/coffee-gb-')
+    needs: release-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download complete release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: native-release-bundle
+          path: native-release
+
+      - name: Publish only an exact non-SNAPSHOT release tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_REF: ${{ inputs.checkout_ref }}
+          REQUESTED_VERSION: ${{ inputs.release_version }}
+        run: |
+          if [[ -n "$REQUESTED_REF" ]]; then
+            tag=$REQUESTED_REF
+          else
+            tag=$GITHUB_REF_NAME
+          fi
+          if [[ ! "$tag" =~ ^coffee-gb-([0-9A-Za-z][0-9A-Za-z._-]*)$ ]]; then
+            echo "Native publication requires an exact coffee-gb-VERSION tag" >&2
+            exit 1
+          fi
+          version=${BASH_REMATCH[1]}
+          if [[ "$version" == *-SNAPSHOT ]]; then
+            echo "Snapshot native packages cannot be published" >&2
+            exit 1
+          fi
+          if [[ -n "$REQUESTED_VERSION" && "$version" != "$REQUESTED_VERSION" ]]; then
+            echo "Tag version $version does not match requested $REQUESTED_VERSION" >&2
+            exit 1
+          fi
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "coffee-gb ${version}"
+          fi
+          gh release upload "$tag" native-release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
