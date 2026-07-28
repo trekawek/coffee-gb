@@ -7,6 +7,7 @@ import org.junit.rules.TemporaryFolder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
@@ -69,6 +70,79 @@ public class NativePackageVerifierTest {
         assertThrows(
                 java.io.IOException.class,
                 () -> NativePackageVerifier.readStrictProperties(properties));
+    }
+
+    @Test
+    public void payloadPolicyCoversFilesOutsideTheApplicationRoot() throws Exception {
+        Path payload = temporaryFolder.newFolder("payload").toPath();
+        Path appDirectory = payload.resolve("opt/coffee-gb/lib/app");
+        Path runtime = payload.resolve("opt/coffee-gb/lib/runtime");
+        Files.createDirectories(appDirectory);
+        Files.createDirectories(runtime.resolve("lib"));
+        Files.write(runtime.resolve("lib/modules"), new byte[] {1});
+        Path outside = Files.createDirectories(payload.resolve("usr/share/coffee-gb"));
+
+        NativePackageVerifier.verifyPayloadPolicy(
+                payload, appDirectory, runtime, NativeTarget.LINUX_X86_64);
+
+        Path forbidden = Files.write(outside.resolve("foreign.dll"), new byte[] {1});
+        assertPayloadPolicyRejects(payload, appDirectory, runtime);
+        Files.delete(forbidden);
+
+        forbidden = Files.write(outside.resolve("test.gbc"), new byte[] {1});
+        assertPayloadPolicyRejects(payload, appDirectory, runtime);
+        Files.delete(forbidden);
+
+        forbidden = Files.writeString(
+                outside.resolve("build.properties"),
+                "source=C:\\\\Users\\\\developer\\\\coffee-gb",
+                StandardCharsets.UTF_8);
+        assertPayloadPolicyRejects(payload, appDirectory, runtime);
+        Files.delete(forbidden);
+
+        forbidden = Files.writeString(
+                outside.resolve("credentials.txt"),
+                "client_secret=synthetic-secret-value",
+                StandardCharsets.UTF_8);
+        assertPayloadPolicyRejects(payload, appDirectory, runtime);
+        Files.delete(forbidden);
+
+        Files.createDirectories(payload.resolve("other/runtime/lib"));
+        Files.write(payload.resolve("other/runtime/lib/modules"), new byte[] {1});
+        assertPayloadPolicyRejects(payload, appDirectory, runtime);
+    }
+
+    @Test
+    public void legalNoticesMustMatchTheAuthoritativeResources() throws Exception {
+        Path source = Path.of("../packaging/resources/legal").toAbsolutePath().normalize();
+        Path packaged = temporaryFolder.newFolder("legal").toPath();
+        try (Stream<Path> paths = Files.walk(source)) {
+            for (Path path : paths.toList()) {
+                Path destination = packaged.resolve(source.relativize(path).toString());
+                if (Files.isDirectory(path)) {
+                    Files.createDirectories(destination);
+                } else {
+                    Files.copy(path, destination, StandardCopyOption.COPY_ATTRIBUTES);
+                }
+            }
+        }
+
+        NativePackageVerifier.verifyLegalInventory(packaged, source);
+        Files.writeString(
+                packaged.resolve("THIRD-PARTY-NOTICES.txt"),
+                "altered notice",
+                StandardCharsets.UTF_8);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyLegalInventory(packaged, source));
+    }
+
+    private static void assertPayloadPolicyRejects(
+            Path payload, Path appDirectory, Path runtime) {
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativePackageVerifier.verifyPayloadPolicy(
+                        payload, appDirectory, runtime, NativeTarget.LINUX_X86_64));
     }
 
     private static void writeChecksums(Path dist) throws Exception {

@@ -149,8 +149,9 @@ jobs:
         run: |
           build_root="swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
           upload_root="swing/target/native-ci-upload-${PACKAGE_TARGET}"
-          mkdir "$upload_root"
-          cp "$build_root"/dist/* "$upload_root"/
+          package_root="$upload_root/package"
+          mkdir -p "$package_root"
+          cp "$build_root"/dist/* "$package_root"/
           if [[ "$PACKAGE_TARGET" == linux-x86-64 ]]; then
             shopt -s nullglob
             portable=(
@@ -164,7 +165,8 @@ jobs:
               echo "Expected exactly one portable Maven JAR, found ${#filtered[@]}" >&2
               exit 1
             fi
-            cp "${filtered[0]}" "$upload_root"/
+            mkdir "$upload_root/portable"
+            cp "${filtered[0]}" "$upload_root/portable/"
           fi
 
       - name: Prepare bounded unsigned CI artifact
@@ -176,8 +178,9 @@ jobs:
         run: |
           $BuildRoot = "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
           $UploadRoot = "swing/target/native-ci-upload-$env:PACKAGE_TARGET"
-          New-Item -ItemType Directory -Path $UploadRoot | Out-Null
-          Copy-Item -Path "$BuildRoot/dist/*" -Destination $UploadRoot
+          $PackageRoot = Join-Path $UploadRoot "package"
+          New-Item -ItemType Directory -Path $PackageRoot | Out-Null
+          Copy-Item -Path "$BuildRoot/dist/*" -Destination $PackageRoot
 
       - name: Upload target installer, checksum, SBOM, and result manifest
         uses: actions/upload-artifact@v4
@@ -224,8 +227,21 @@ jobs:
             -Dexpression=project.version \
             -DforceStdout \
             -q)
-          if [[ -n "$EXPECTED_RELEASE_VERSION" && "$version" != "$EXPECTED_RELEASE_VERSION" ]]; then
-            echo "Requested release $EXPECTED_RELEASE_VERSION, but Maven reports $version" >&2
+          release_version=$EXPECTED_RELEASE_VERSION
+          if [[ "$GITHUB_REF" == refs/tags/coffee-gb-* ]]; then
+            tag_version=${GITHUB_REF_NAME#coffee-gb-}
+            if [[ -n "$release_version" && "$release_version" != "$tag_version" ]]; then
+              echo "Requested release $release_version does not match tag $tag_version" >&2
+              exit 1
+            fi
+            release_version=$tag_version
+          fi
+          if [[ -n "$release_version" && "$version" != "$release_version" ]]; then
+            echo "Maven version $version does not match tagged/requested release $release_version" >&2
+            exit 1
+          fi
+          if [[ -n "$release_version" && "$version" == *-SNAPSHOT ]]; then
+            echo "Snapshot native packages cannot pass a release gate" >&2
             exit 1
           fi
           mapfile -t portable < <(

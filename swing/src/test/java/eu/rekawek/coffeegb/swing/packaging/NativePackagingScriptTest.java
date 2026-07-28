@@ -19,6 +19,7 @@ public class NativePackagingScriptTest {
         Path verifyPowerShell = packaging.resolve("verify-native-package.ps1");
         String sh = Files.readString(shell);
         String ps = Files.readString(powerShell);
+        String verifyPs = Files.readString(verifyPowerShell);
 
         assertTrue(Files.isExecutable(shell));
         assertTrue(Files.isExecutable(verifyShell));
@@ -43,15 +44,18 @@ public class NativePackagingScriptTest {
 
         for (String contents :
                 new String[] {
-                    Files.readString(verifyShell), Files.readString(verifyPowerShell)
+                    Files.readString(verifyShell), verifyPs
                 }) {
             assertTrue(contents.contains("NativePackageVerifier"));
             assertTrue(contents.contains("--run-smoke"));
             assertTrue(contents.contains("--source-app-jar"));
             assertTrue(contents.contains("--source-sbom"));
+            assertTrue(contents.contains("--source-legal"));
             assertFalse(contents.contains("curl "));
             assertFalse(contents.contains("Invoke-WebRequest"));
             assertFalse(contents.contains("wget "));
         }
+        assertTrue(verifyPs.contains("& msiexec.exe"));
+        assertFalse(verifyPs.contains("Start-Process"));
     }
 }

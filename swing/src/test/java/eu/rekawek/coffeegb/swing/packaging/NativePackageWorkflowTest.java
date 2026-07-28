@@ -42,6 +42,8 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("verify-native-package.ps1"));
         assertTrue(packages.contains("NativeReleaseTool"));
         assertTrue(packages.contains("needs: package"));
+        assertTrue(packages.contains("package_root=\"$upload_root/package\""));
+        assertTrue(packages.contains("does not match tagged/requested release"));
         assertTrue(packages.contains("retention-days: 7"));
         assertTrue(packages.contains("retention-days: 14"));
         assertTrue(packages.contains("permissions:\n  contents: read"));

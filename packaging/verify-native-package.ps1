@@ -33,21 +33,12 @@ if ($Installers.Count -ne 1) {
 
 New-Item -ItemType Directory -Path $Extracted | Out-Null
 $Log = Join-Path $BuildRoot "msi-administrative-extract.log"
-$MsiArguments = @(
-    "/a",
-    $Installers[0].FullName,
-    "/qn",
-    "TARGETDIR=$Extracted",
-    "/L*V",
-    $Log
-)
-$Msi = Start-Process -FilePath "msiexec.exe" `
-    -ArgumentList $MsiArguments `
-    -Wait `
-    -PassThru `
-    -NoNewWindow
-if ($Msi.ExitCode -ne 0) {
-    throw "MSI administrative extraction failed with exit code $($Msi.ExitCode); see $Log"
+& msiexec.exe `
+    /a $Installers[0].FullName `
+    /qn "TARGETDIR=$Extracted" `
+    "/L*V" $Log
+if ($LASTEXITCODE -ne 0) {
+    throw "MSI administrative extraction failed with exit code $LASTEXITCODE; see $Log"
 }
 
 $Arguments = @(
@@ -59,6 +50,7 @@ $Arguments = @(
     "--root", $Extracted,
     "--source-app-jar", $AppJars[0].FullName,
     "--source-sbom", $Sboms[0].FullName,
+    "--source-legal", (Join-Path $RepositoryRoot "packaging/resources/legal"),
     "--dist", $Dist,
     "--run-smoke",
     "--smoke-home", $SmokeHome
