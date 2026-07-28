@@ -158,6 +158,7 @@ class SwingGuiShutdownTest {
   fun `persistence failure keeps shutdown open and retry completes exactly once`() {
     val attempts = AtomicInteger()
     val failures = AtomicInteger()
+    val commits = AtomicInteger()
     val completions = AtomicInteger()
     val failureObserved = CountDownLatch(1)
     val completionObserved = CountDownLatch(1)
@@ -169,6 +170,7 @@ class SwingGuiShutdownTest {
                 throw persistenceFailure()
               }
             },
+            commit = { commits.incrementAndGet() },
             timeoutMillis = 2_000,
             onPersistenceFailure = { _, retry, _ ->
               failures.incrementAndGet()
@@ -186,11 +188,13 @@ class SwingGuiShutdownTest {
     coordinator.request()
     assertTrue(failureObserved.await(2, TimeUnit.SECONDS))
     assertEquals(0, completions.get(), "the failed attempt must not dispose or exit")
+    assertEquals(0, commits.get(), "irreversible teardown must wait for emulator stop")
 
     retryAction.get().invoke()
     assertTrue(completionObserved.await(2, TimeUnit.SECONDS))
     assertEquals(2, attempts.get())
     assertEquals(1, failures.get())
+    assertEquals(1, commits.get())
     assertEquals(1, completions.get())
 
     coordinator.request()
@@ -201,6 +205,7 @@ class SwingGuiShutdownTest {
   @Test
   fun `cancel after persistence failure leaves the coordinator reusable`() {
     val attempts = AtomicInteger()
+    val commits = AtomicInteger()
     val failureObserved = CountDownLatch(1)
     val completionObserved = CountDownLatch(1)
     val cancelAction = AtomicReference<() -> Unit>()
@@ -211,6 +216,7 @@ class SwingGuiShutdownTest {
                 throw persistenceFailure()
               }
             },
+            commit = { commits.incrementAndGet() },
             timeoutMillis = 2_000,
             onPersistenceFailure = { _, _, cancel ->
               cancelAction.set(cancel)
@@ -225,10 +231,12 @@ class SwingGuiShutdownTest {
     assertTrue(failureObserved.await(2, TimeUnit.SECONDS))
     cancelAction.get().invoke()
     assertFalse(completionObserved.await(50, TimeUnit.MILLISECONDS))
+    assertEquals(0, commits.get())
 
     coordinator.request()
     assertTrue(completionObserved.await(2, TimeUnit.SECONDS))
     assertEquals(2, attempts.get())
+    assertEquals(1, commits.get())
   }
 
   @Test
@@ -278,6 +286,7 @@ class SwingGuiShutdownTest {
     val release = CountDownLatch(1)
     val workerReturned = CountDownLatch(1)
     val timeoutObserved = CountDownLatch(1)
+    val commits = AtomicInteger()
     val completions = AtomicInteger()
     val coordinator =
         DesktopShutdownCoordinator(
@@ -292,6 +301,7 @@ class SwingGuiShutdownTest {
               }
               workerReturned.countDown()
             },
+            commit = { commits.incrementAndGet() },
             timeoutMillis = 25,
             onPersistenceFailure = { _, _, _ ->
               throw AssertionError("unexpected persistence failure")
@@ -312,7 +322,32 @@ class SwingGuiShutdownTest {
     assertTrue(workerReturned.await(2, TimeUnit.SECONDS))
     Thread.sleep(50)
 
+    assertEquals(0, commits.get(), "late success must not make ROM callbacks irreversible")
     assertEquals(0, completions.get(), "late success must not dispose the retained window")
+  }
+
+  @Test
+  fun `generic shutdown failure skips commit and allows retained resources to resume`() {
+    val failures = CountDownLatch(1)
+    val commits = AtomicInteger()
+    val completions = AtomicInteger()
+    val coordinator =
+        DesktopShutdownCoordinator(
+            shutdown = { throw IOException("injected peripheral failure") },
+            commit = { commits.incrementAndGet() },
+            timeoutMillis = 2_000,
+            onPersistenceFailure = { _, _, _ ->
+              throw AssertionError("generic failure was classified as persistence")
+            },
+            onFailure = { failures.countDown() },
+            onTimeout = { throw AssertionError("shutdown timed out") },
+            onSuccess = { completions.incrementAndGet() },
+        )
+
+    assertTrue(coordinator.request())
+    assertTrue(failures.await(2, TimeUnit.SECONDS))
+    assertEquals(0, commits.get())
+    assertEquals(0, completions.get())
   }
 
   @Test

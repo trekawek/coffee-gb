@@ -59,8 +59,13 @@ class SwingGui private constructor(
   private val shutdownCoordinator by lazy {
     DesktopShutdownCoordinator(
         shutdown = {
-          romOpen.close()
+          romOpen.quiesce()
           emulator.stop()
+        },
+        commit = {
+          // Only a timely, successful emulator stop makes desktop teardown irreversible. A
+          // persistence failure or watchdog timeout retains a quiesced (not closed) ROM service.
+          romOpen.close()
           console?.stop()
           closeSettings()
         },
@@ -298,7 +303,8 @@ class SwingGui private constructor(
       updateLoadingUi(activeWindowTitle, false)
       JOptionPane.showMessageDialog(
           mainWindow,
-          "Coffee GB did not finish shutting down. The window has been kept open.\n\n" +
+          "Coffee GB did not finish shutting down. The window has been kept open, and ROM " +
+              "opening remains paused so close can be retried safely.\n\n" +
               (failure.message ?: failure.javaClass.simpleName),
           "Quit failed",
           JOptionPane.ERROR_MESSAGE,
@@ -452,6 +458,7 @@ internal class DesktopShutdownCoordinator(
     private val onFailure: (Exception) -> Unit,
     private val onTimeout: () -> Unit,
     private val onSuccess: () -> Unit,
+    private val commit: () -> Unit = {},
 ) {
   private val activeAttempt = AtomicReference<ShutdownAttempt?>()
   private val decisionPending = AtomicBoolean()
@@ -514,6 +521,13 @@ internal class DesktopShutdownCoordinator(
 
   private fun finishSuccess(attempt: ShutdownAttempt) {
     if (attempt.terminal.compareAndSet(false, true)) {
+      try {
+        commit()
+      } catch (failure: Exception) {
+        activeAttempt.compareAndSet(attempt, null)
+        onFailure(failure)
+        return
+      }
       completed.set(true)
       activeAttempt.compareAndSet(attempt, null)
       onSuccess()

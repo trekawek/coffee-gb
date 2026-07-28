@@ -21,6 +21,7 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
 import java.net.URI
+import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.Locale
 import java.util.concurrent.Executor
@@ -90,8 +91,18 @@ internal class DesktopRomOpen(
 
   fun hasActiveRequest(): Boolean = service.hasActiveRequest()
 
+  /** Drains current opening work without permanently invalidating desktop callbacks. */
+  fun quiesce() {
+    service.quiesce()
+    closeProgressUi()
+  }
+
   override fun close() {
     service.close()
+    closeProgressUi()
+  }
+
+  private fun closeProgressUi() {
     if (SwingUtilities.isEventDispatchThread()) {
       progress.close()
     } else {
@@ -476,7 +487,11 @@ internal class DesktopOpenFilesBridge(
   private var receiver: ((List<Path>) -> Unit)? = null
 
   fun accept(paths: List<Path>) {
-    val normalized = paths.map { it.toAbsolutePath().normalize() }
+    val normalized =
+        paths.asSequence()
+            .take(MAX_EXTERNAL_ROM_INPUTS)
+            .map { it.toAbsolutePath().normalize() }
+            .toList()
     if (normalized.isEmpty()) {
       return
     }
@@ -484,6 +499,9 @@ internal class DesktopOpenFilesBridge(
         synchronized(lock) {
           val current = receiver
           if (current == null) {
+            if (pending.size == MAX_PENDING_DELIVERIES) {
+              pending.removeAt(0)
+            }
             pending += normalized
           }
           current
@@ -510,6 +528,10 @@ internal class DesktopOpenFilesBridge(
 
   private fun dispatch(receiver: (List<Path>) -> Unit, paths: List<Path>) {
     uiExecutor.execute { receiver(paths) }
+  }
+
+  private companion object {
+    const val MAX_PENDING_DELIVERIES = 16
   }
 }
 
@@ -623,7 +645,10 @@ internal class RomDropTransferHandler(
           if (support.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
             @Suppress("UNCHECKED_CAST")
             (support.transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>)
+                .asSequence()
+                .take(MAX_EXTERNAL_ROM_INPUTS)
                 .map { RomOpenInput.LocalPath(it.toPath()) }
+                .toList()
           } else {
             parseDroppedText(
                 support.transferable.getTransferData(DataFlavor.stringFlavor) as String)
@@ -647,24 +672,59 @@ internal class RomDropTransferHandler(
   }
 }
 
-internal fun parseDroppedText(value: String): List<RomOpenInput> =
-    value
-        .lineSequence()
-        .map(String::trim)
-        .filter { it.isNotEmpty() && !it.startsWith("#") }
-        .map { item ->
-          try {
-            val uri = URI(item)
-            if (uri.scheme.equals("file", ignoreCase = true)) {
-              RomOpenInput.LocalPath(Path.of(uri))
-            } else {
-              RomOpenInput.RemoteUrl(item)
-            }
-          } catch (_: Exception) {
+internal fun parseDroppedText(value: String): List<RomOpenInput> {
+  if (value.length > MAX_DROP_TEXT_CHARS) {
+    return rejectedDropInput(
+        "Dropped text exceeds the $MAX_DROP_TEXT_CHARS-character safety limit.",
+        "Drop text character limit exceeded (${value.length} characters)",
+    )
+  }
+  val utf8Bytes = value.toByteArray(StandardCharsets.UTF_8).size
+  if (utf8Bytes > MAX_DROP_TEXT_UTF8_BYTES) {
+    return rejectedDropInput(
+        "Dropped text exceeds Coffee GB's encoded-size safety limit.",
+        "Drop text UTF-8 limit exceeded ($utf8Bytes bytes)",
+    )
+  }
+
+  val inputs = ArrayList<RomOpenInput>(MAX_EXTERNAL_ROM_INPUTS)
+  for (line in value.lineSequence()) {
+    if (line.length > MAX_DROP_TEXT_LINE_CHARS) {
+      return rejectedDropInput(
+          "A dropped URI or path is too long to process safely.",
+          "Drop text line limit exceeded (${line.length} characters)",
+      )
+    }
+    val item = line.trim()
+    if (item.isEmpty() || item.startsWith("#")) {
+      continue
+    }
+    inputs +=
+        try {
+          val uri = URI(item)
+          if (uri.scheme.equals("file", ignoreCase = true)) {
+            RomOpenInput.LocalPath(Path.of(uri))
+          } else {
             RomOpenInput.RemoteUrl(item)
           }
+        } catch (_: Exception) {
+          RomOpenInput.RemoteUrl(item)
         }
-        .toList()
+    if (inputs.size == MAX_EXTERNAL_ROM_INPUTS) {
+      break
+    }
+  }
+  return inputs
+}
+
+private fun rejectedDropInput(message: String, technicalDetails: String): List<RomOpenInput> =
+    listOf(
+        RomOpenInput.Rejected(
+            RomOpenFailure(
+                RomOpenFailureKind.INPUT_LIMIT_EXCEEDED,
+                message,
+                technicalDetails,
+            )))
 
 internal fun installDesktopOpenFileHandler(open: (List<Path>) -> Unit): Boolean {
   if (!Desktop.isDesktopSupported()) {
@@ -676,7 +736,11 @@ internal fun installDesktopOpenFileHandler(open: (List<Path>) -> Unit): Boolean 
       false
     } else {
       desktop.setOpenFileHandler { event ->
-        open(event.files.map(File::toPath))
+        open(
+            event.files.asSequence()
+                .take(MAX_EXTERNAL_ROM_INPUTS)
+                .map(File::toPath)
+                .toList())
       }
       true
     }
@@ -697,3 +761,8 @@ private fun escapeHtml(value: String): String =
     value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 private val LOG = LoggerFactory.getLogger("DesktopRomOpen")
+
+internal const val MAX_EXTERNAL_ROM_INPUTS = 2
+internal const val MAX_DROP_TEXT_CHARS = 16 * 1024
+internal const val MAX_DROP_TEXT_UTF8_BYTES = 32 * 1024
+internal const val MAX_DROP_TEXT_LINE_CHARS = 4 * 1024

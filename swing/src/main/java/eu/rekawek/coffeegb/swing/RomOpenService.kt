@@ -33,7 +33,11 @@ enum class RomOpenSource {
 sealed interface RomOpenInput {
   data class LocalPath(val path: Path) : RomOpenInput
 
-  data class RemoteUrl(val description: String) : RomOpenInput
+  data class RemoteUrl(val description: String) : RomOpenInput {
+    override fun toString(): String = "RemoteUrl(<redacted>)"
+  }
+
+  data class Rejected(val failure: RomOpenFailure) : RomOpenInput
 }
 
 data class RomOpenRequest(
@@ -56,6 +60,8 @@ enum class RomOpenStage {
 enum class RomOpenFailureKind {
   NO_INPUT,
   MULTIPLE_INPUTS,
+  INPUT_LIMIT_EXCEEDED,
+  SHUTTING_DOWN,
   REMOTE_URL,
   MISSING,
   NOT_A_FILE,
@@ -151,6 +157,8 @@ internal constructor(
   private val closed = AtomicBoolean()
 
   private val lock = Any()
+
+  @Volatile private var quiesced = false
 
   private var active: Operation? = null
 
@@ -256,11 +264,25 @@ internal constructor(
   }
 
   fun open(request: RomOpenRequest): Long {
-    val operation = Operation(nextRequestId.getAndIncrement(), request)
+    // Snapshot and cap caller-owned input before the asynchronous worker observes it. Keeping two
+    // entries preserves the typed MULTIPLE_INPUTS result without retaining an arbitrary external
+    // collection supplied by drag/drop or an OS open-file callback.
+    val boundedRequest =
+        RomOpenRequest(
+            request.inputs.asSequence().take(MAX_EXTERNAL_INPUTS).toList(),
+            request.source,
+        )
+    val operation = Operation(nextRequestId.getAndIncrement(), boundedRequest)
+    var unavailable = false
     val prior =
         synchronized(lock) {
           check(!closed.get()) { "ROM-open service is closed" }
           visibleRequestId.set(operation.id)
+          if (quiesced) {
+            operation.terminal.set(true)
+            unavailable = true
+            return@synchronized null
+          }
           val previous = active
           previous?.also {
             it.superseded.set(true)
@@ -270,6 +292,21 @@ internal constructor(
           active = operation
           previous
         }
+    if (unavailable) {
+      publish(
+          operation,
+          RomOpenUpdate.Failed(
+              operation.id,
+              operation.request.source,
+              null,
+              RomOpenFailure(
+                  RomOpenFailureKind.SHUTTING_DOWN,
+                  "Coffee GB is paused for a retained quit attempt. Close again to retry.",
+                  "ROM-open service is temporarily quiesced for bounded shutdown",
+              ),
+          ))
+      return operation.id
+    }
     prior?.let { superseded ->
       try {
         executor.execute { cleanupSuperseded(superseded) }
@@ -361,6 +398,77 @@ internal constructor(
 
   internal fun hasActiveRequest(): Boolean =
       synchronized(lock) { active != null && !closed.get() }
+
+  /**
+   * Reversibly prevents new controller dispatches and drains cancellation/temporary-file cleanup.
+   *
+   * Unlike [close], this keeps the worker and event subscriptions available for a shutdown retry
+   * or a retained window. The desktop must call [close] only after emulator teardown succeeds.
+   */
+  internal fun quiesce() {
+    if (closed.get()) {
+      return
+    }
+    visibleRequestId.set(NO_VISIBLE_REQUEST)
+    val operation =
+        synchronized(lock) {
+          if (closed.get()) {
+            return
+          }
+          quiesced = true
+          val current = active
+          current?.also {
+            it.superseded.set(true)
+            it.cancelled.set(true)
+          }
+          active = null
+          current
+        }
+    operation?.future?.cancel(true)
+    val completion = CountDownLatch(1)
+    val failure = AtomicReference<Throwable?>()
+    val drain =
+        Runnable {
+          try {
+            cancelControllerAndCleanup(operation)
+          } catch (problem: Throwable) {
+            failure.set(problem)
+          } finally {
+            completion.countDown()
+          }
+        }
+    try {
+      executor.execute(drain)
+    } catch (_: RuntimeException) {
+      Thread(drain, "coffee-gb-rom-open-quiesce").apply {
+        isDaemon = true
+        start()
+      }
+    }
+    try {
+      if (!completion.await(QUIESCE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+        throw IllegalStateException(
+            "ROM-open work did not quiesce within $QUIESCE_TIMEOUT_MILLIS ms")
+      }
+    } catch (interrupted: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw IllegalStateException("Interrupted while quiescing ROM-open work", interrupted)
+    }
+    failure.get()?.let { problem ->
+      throw IllegalStateException("Unable to quiesce ROM-open work cleanly", problem)
+    }
+  }
+
+  /** Re-enables requests after a retained shutdown attempt once its worker has fully unwound. */
+  internal fun resume() {
+    synchronized(lock) {
+      if (!closed.get()) {
+        quiesced = false
+      }
+    }
+  }
+
+  internal fun isQuiesced(): Boolean = synchronized(lock) { quiesced && !closed.get() }
 
   override fun close() {
     if (!closed.compareAndSet(false, true)) {
@@ -473,12 +581,21 @@ internal constructor(
       }
     }
     val input = inputs.single()
+    if (input is RomOpenInput.Rejected) {
+      fail(
+          operation,
+          input.failure.kind,
+          input.failure.message,
+          input.failure.technicalDetails,
+      )
+      return
+    }
     if (input is RomOpenInput.RemoteUrl) {
       fail(
           operation,
           RomOpenFailureKind.REMOTE_URL,
           "Coffee GB opens local files only; URLs are not downloaded.",
-          "Rejected remote input (${input.description.take(80)})",
+          remoteInputTechnicalDetails(input.description),
       )
       return
     }
@@ -723,6 +840,38 @@ internal constructor(
     }
   }
 
+  private fun cancelControllerAndCleanup(operation: Operation?) {
+    if (operation == null) {
+      return
+    }
+    var failure: Throwable? = null
+    try {
+      if (operation.controllerDispatched) {
+        if (!operation.controllerDispatchComplete.await(
+            CONTROLLER_DISPATCH_CLOSE_TIMEOUT_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )) {
+          throw IllegalStateException(
+              "Controller ROM dispatch did not finish within " +
+                  "$CONTROLLER_DISPATCH_CLOSE_TIMEOUT_MILLIS ms")
+        }
+        eventBus.post(Controller.CancelRomOpenEvent(operation.id))
+      }
+    } catch (problem: Throwable) {
+      if (problem is InterruptedException) {
+        Thread.currentThread().interrupt()
+      }
+      failure = problem
+    }
+    try {
+      operation.snapshot?.close()
+      operation.snapshot = null
+    } catch (cleanupProblem: Throwable) {
+      failure?.addSuppressed(cleanupProblem) ?: run { failure = cleanupProblem }
+    }
+    failure?.let { throw it }
+  }
+
   private fun cleanupAbandonedSnapshot(operation: Operation) {
     if (isCurrent(operation)) {
       return
@@ -793,8 +942,10 @@ internal constructor(
   private companion object {
     val LOG = LoggerFactory.getLogger(RomOpenService::class.java)
     const val NO_VISIBLE_REQUEST = -1L
+    const val MAX_EXTERNAL_INPUTS = 2
     const val COPY_PROGRESS_INTERVAL_BYTES = 1024L * 1024L
     const val CONTROLLER_DISPATCH_CLOSE_TIMEOUT_MILLIS = 1_000L
+    const val QUIESCE_TIMEOUT_MILLIS = 5_000L
     const val WORKER_CLOSE_TIMEOUT_MILLIS = 3_000L
     const val CLOSE_TIMEOUT_MILLIS = 5_000L
 
@@ -870,6 +1021,11 @@ internal constructor(
 }
 
 internal fun redactRomOpenTechnicalDetails(value: String, sourcePath: Path?): String {
+  val withoutRemoteUrls =
+      value.replace(
+          Regex("(?i)\\b[a-z][a-z0-9+.-]{0,15}://[^\\s]+"),
+          "<redacted-remote-url>",
+      )
   val directories =
       buildList {
             sourcePath
@@ -887,9 +1043,19 @@ internal fun redactRomOpenTechnicalDetails(value: String, sourcePath: Path?): St
           }
           .distinct()
           .sortedByDescending(String::length)
-  return directories.fold(value) { redacted, directory ->
+  return directories.fold(withoutRemoteUrls) { redacted, directory ->
     redacted.replace(directory, "<redacted-directory>")
   }
+}
+
+private fun remoteInputTechnicalDetails(value: String): String {
+  val scheme =
+      runCatching { java.net.URI(value).scheme }
+          .getOrNull()
+          ?.lowercase()
+          ?.takeIf { it.matches(Regex("[a-z][a-z0-9+.-]{0,15}")) }
+          ?: "remote"
+  return "Rejected $scheme URL; address and credentials redacted"
 }
 
 internal interface RomRecentStore {
