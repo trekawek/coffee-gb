@@ -129,6 +129,6 @@ jobs:
       contents: write
     uses: ./.github/workflows/native-packages.yml
     with:
-      checkout_ref: coffee-gb-${{ inputs.release_version }}
+      checkout_ref: refs/tags/coffee-gb-${{ inputs.release_version }}
       publish: true
       release_version: ${{ inputs.release_version }}

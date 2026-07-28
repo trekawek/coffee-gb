@@ -40,15 +40,6 @@ public final class NativePackageVerifier {
     private static final int MAX_TEXT_BYTES = 2 * 1024 * 1024;
     private static final int MAX_PROCESS_OUTPUT = 4 * 1024 * 1024;
     private static final Duration SMOKE_TIMEOUT = Duration.ofSeconds(45);
-    private static final Set<String> LEGAL_FILES = Set.of(
-            "LICENSE.txt",
-            "THIRD-PARTY-NOTICES.txt",
-            "licenses/Apache-2.0.txt",
-            "licenses/JLine-BSD-3-Clause.txt",
-            "licenses/JNA-DUAL-LICENSE.txt",
-            "licenses/LGPL-2.1.txt",
-            "licenses/OpenCV-BSD-3-Clause.txt",
-            "licenses/SDL2-zlib.txt");
     private static final Set<String> ROM_SUFFIXES = Set.of(".gb", ".gbc", ".rom", ".sgb");
     private static final Set<String> SIGNING_SUFFIXES = Set.of(
             ".p12", ".pfx", ".pem", ".key", ".keystore", ".jks", ".mobileprovision");
@@ -213,6 +204,8 @@ public final class NativePackageVerifier {
             throw new IOException("Packaged SBOM differs from Maven's CycloneDX SBOM");
         }
         NativePackageStager.verifyNeutralAppJar(packagedJar);
+        ThirdPartyNoticeInventory.validate(packagedSbom, request.sourceLegal());
+        ThirdPartyNoticeInventory.verifyEmbeddedLegal(packagedJar, request.sourceLegal());
         verifySbom(packagedSbom, sourceVersion);
         verifyNativeInventory(appDirectory, request.target());
         verifyLegalInventory(appDirectory.resolve("legal"), request.sourceLegal());
@@ -290,7 +283,8 @@ public final class NativePackageVerifier {
             String version,
             Path primaryArtifact,
             Path sbom,
-            boolean signed)
+            String signing,
+            Path signature)
             throws IOException {
         Path absoluteDist = dist.toAbsolutePath().normalize();
         Path artifact = primaryArtifact.toAbsolutePath().normalize();
@@ -304,11 +298,19 @@ public final class NativePackageVerifier {
         }
         requireRegularFile(releaseSbom, "release SBOM");
         Map<String, String> values = new LinkedHashMap<>();
-        values.put("schema", "1");
+        if (!Set.of("unsigned", "verified-detached", "verified-embedded").contains(signing)) {
+            throw new IOException("Invalid verified signing state: " + signing);
+        }
+        requireSigningStateForTarget(target, signing);
+        if (signing.equals("verified-detached") != (signature != null)) {
+            throw new IOException(
+                    "Only verified-detached signing may have a detached signature artifact");
+        }
+        values.put("schema", "2");
         values.put("target", target.id());
         values.put("package.type", packageType.id());
         values.put("app.version", version);
-        values.put("signing", signed ? "signed" : "unsigned");
+        values.put("signing", signing);
         values.put(
                 "artifact.path",
                 relativePortable(absoluteDist, artifact));
@@ -318,6 +320,15 @@ public final class NativePackageVerifier {
         }
         values.put("sbom.path", relativePortable(absoluteDist, releaseSbom));
         values.put("sbom.sha256", NativePackageStager.sha256(releaseSbom));
+        if (signature != null) {
+            Path detached = signature.toAbsolutePath().normalize();
+            if (!detached.startsWith(absoluteDist)) {
+                throw new IOException("Detached signature must be inside dist");
+            }
+            requireRegularFile(detached, "detached package signature");
+            values.put("signature.path", relativePortable(absoluteDist, detached));
+            values.put("signature.sha256", NativePackageStager.sha256(detached));
+        }
         writeProperties(absoluteDist.resolve(RESULT_FILE), values);
     }
 
@@ -334,14 +345,15 @@ public final class NativePackageVerifier {
         Path resultFile = root.resolve(RESULT_FILE);
         Path checksums = root.resolve("SHA256SUMS");
         Map<String, String> result = readStrictProperties(resultFile);
-        requireValue(result, "schema", "1");
+        requireValue(result, "schema", "2");
         requireValue(result, "target", expectedTarget.id());
         requireValue(result, "package.type", expectedType.id());
         requireValue(result, "app.version", expectedVersion);
         String signing = required(result, "signing");
-        if (!signing.equals("unsigned") && !signing.equals("signed")) {
+        if (!Set.of("unsigned", "verified-detached", "verified-embedded").contains(signing)) {
             throw new IOException("Unknown package signing state: " + signing);
         }
+        requireSigningStateForTarget(expectedTarget, signing);
         Path artifact = safeDistributionPath(root, required(result, "artifact.path"));
         String kind = required(result, "artifact.kind");
         Set<String> expectedKeys = new HashSet<>(Set.of(
@@ -354,6 +366,18 @@ public final class NativePackageVerifier {
                 "artifact.kind",
                 "sbom.path",
                 "sbom.sha256"));
+        if (signing.equals("verified-detached")) {
+            expectedKeys.add("signature.path");
+            expectedKeys.add("signature.sha256");
+            Path signature =
+                    safeDistributionPath(root, required(result, "signature.path"));
+            requireRegularFile(signature, "detached package signature");
+            if (!signature.getFileName().toString().endsWith(".asc")) {
+                throw new IOException("Detached signature must use the .asc suffix");
+            }
+            requireValue(
+                    result, "signature.sha256", NativePackageStager.sha256(signature));
+        }
         if ("file".equals(kind)) {
             expectedKeys.add("artifact.sha256");
             requireRegularFile(artifact, "primary package artifact");
@@ -374,7 +398,8 @@ public final class NativePackageVerifier {
         Path sbom = safeDistributionPath(root, required(result, "sbom.path"));
         requireRegularFile(sbom, "release SBOM");
         requireValue(result, "sbom.sha256", NativePackageStager.sha256(sbom));
-        verifySbom(sbom, expectedVersion);
+        NativeTargetSbom.verifyReleaseBom(
+                sbom, expectedTarget, expectedType, expectedVersion, artifact, signing);
         verifyChecksums(root, checksums);
         return result;
     }
@@ -427,12 +452,13 @@ public final class NativePackageVerifier {
                 .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
                 .collect(Collectors.toMap(
                         path -> relativePortable(sourceLegal, path), path -> path));
-        if (!actual.keySet().equals(LEGAL_FILES) || !source.keySet().equals(LEGAL_FILES)) {
+        Set<String> expected = ThirdPartyNoticeInventory.expectedLegalFiles(sourceLegal);
+        if (!actual.keySet().equals(expected) || !source.keySet().equals(expected)) {
             throw new IOException(
                     "Packaged or authoritative legal inventory mismatch; packaged="
                             + actual.keySet() + ", authoritative=" + source.keySet());
         }
-        for (String relative : LEGAL_FILES) {
+        for (String relative : expected) {
             if (!NativePackageStager.sha256(actual.get(relative))
                     .equals(NativePackageStager.sha256(source.get(relative)))) {
                 throw new IOException("Packaged legal notice differs from source: " + relative);
@@ -719,6 +745,16 @@ public final class NativePackageVerifier {
         if (!expected.equals(actual)) {
             throw new IOException(
                     "Package property " + key + " must equal " + expected + ", found " + actual);
+        }
+    }
+
+    private static void requireSigningStateForTarget(
+            NativeTarget target, String signing) throws IOException {
+        boolean linux = target == NativeTarget.LINUX_X86_64;
+        if ((signing.equals("verified-detached") && !linux)
+                || (signing.equals("verified-embedded") && linux)) {
+            throw new IOException(
+                    "Signing state " + signing + " is invalid for target " + target.id());
         }
     }
 

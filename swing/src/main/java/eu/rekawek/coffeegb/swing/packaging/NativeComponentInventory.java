@@ -37,12 +37,17 @@ public final class NativeComponentInventory {
 
     private static final List<String> BASE_LEGAL_PATHS = List.of(
             "LICENSE.txt",
+            "THIRD-PARTY-COMPONENTS.txt",
             "THIRD-PARTY-NOTICES.txt",
+            "licenses/0BSD.txt",
             "licenses/Apache-2.0.txt",
+            "licenses/Apache-Commons-NOTICE.txt",
+            "licenses/Checker-Qual-MIT.txt",
             "licenses/JLine-BSD-3-Clause.txt",
             "licenses/JNA-DUAL-LICENSE.txt",
             "licenses/LGPL-2.1.txt",
-            "licenses/SDL2-zlib.txt");
+            "licenses/SDL2-zlib.txt",
+            "licenses/SLF4J-MIT.txt");
 
     private static final Map<NativeTarget, List<NativeSbomComponent>> LOCKED =
             lockedInventories();

@@ -7,14 +7,18 @@ human audio, input, fullscreen, file-association, persistence, or uninstall evid
 ## Automated gate
 
 - [ ] The Maven release tag is exactly `coffee-gb-VERSION`, is non-SNAPSHOT, and matches every
-  package manifest and `--version`.
+  package manifest and `--version`; its fully qualified ref peels to the full `source.commit`
+  recorded in `NATIVE-PACKAGE-MATRIX.properties`.
 - [ ] All four required targets passed their unit/integration build, pre-installer inspection,
   final installer unpack/mount, packaged `--version`, and `--package-smoke`.
-- [ ] The release bundle contains the portable JAR, one CycloneDX SBOM, Linux x64 DEB, Windows x64
-  MSI, macOS x64 DMG, macOS arm64 DMG, `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`.
+- [ ] The release bundle contains the portable JAR, four target-specific CycloneDX SBOMs, Linux x64
+  DEB, Windows x64 MSI, macOS x64 DMG, macOS arm64 DMG,
+  `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`, plus every detached signature named by the
+  matrix.
 - [ ] Verify every `SHA256SUMS` entry independently after download.
-- [ ] Release notes state whether each target is unsigned or signed and call out any known
-  platform limitation, including the current macOS system-SDL2 requirement for game controllers.
+- [ ] Release notes state whether each target is `unsigned`, `verified-embedded`, or
+  `verified-detached` and call out any known platform limitation, including the current macOS
+  system-SDL2 requirement for game controllers.
 - [ ] No target is omitted. If a future reviewed support change removes one, its release notes and
   target/user documentation explicitly say so before publication.
 

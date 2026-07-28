@@ -41,7 +41,12 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("verify-native-package.sh"));
         assertTrue(packages.contains("verify-native-package.ps1"));
         assertTrue(packages.contains("NativeReleaseTool"));
-        assertTrue(packages.contains("needs: package"));
+        assertTrue(packages.contains("needs: [resolve-source, package]"));
+        assertTrue(packages.contains("source_sha: ${{ steps.source.outputs.source_sha }}"));
+        assertTrue(packages.contains("ref: ${{ needs.resolve-source.outputs.source_sha }}"));
+        assertTrue(packages.contains("FETCH_HEAD^{commit}"));
+        assertTrue(packages.contains("--source-commit \"$SOURCE_SHA\""));
+        assertTrue(packages.contains("source.commit=$SOURCE_SHA"));
         assertTrue(packages.contains("package_root=\"$upload_root/package\""));
         assertTrue(packages.contains("does not match tagged/requested release"));
         assertTrue(packages.contains("retention-days: 7"));
@@ -51,7 +56,8 @@ public class NativePackageWorkflowTest {
         assertFalse(packages.contains("--release-sign"));
 
         assertTrue(release.contains("uses: ./.github/workflows/native-packages.yml"));
-        assertTrue(release.contains("checkout_ref: coffee-gb-${{ inputs.release_version }}"));
+        assertTrue(release.contains(
+                "checkout_ref: refs/tags/coffee-gb-${{ inputs.release_version }}"));
         assertTrue(release.contains("publish: true"));
     }
 }

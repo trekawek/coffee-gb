@@ -145,9 +145,60 @@ JLine 3.25.1
 Source: https://github.com/jline/jline3/tree/jline-parent-3.25.1
 License: BSD-3-Clause. See licenses/JLine-BSD-3-Clause.txt.
 
-Other Java runtime dependencies
--------------------------------
-The package also contains the Java libraries recorded with exact Maven coordinates and versions
-in the Maven CycloneDX SBOM. Their licenses include Apache-2.0, MIT, BSD, and public-domain
-dedications. Neither SBOM replaces the complete license files and notices shipped here or notices
-embedded in the application JAR.
+Apache-2.0 Java runtime components
+----------------------------------
+The following exact Maven components are distributed under Apache License 2.0. The complete text
+is in licenses/Apache-2.0.txt:
+
+  pkg:maven/com.google.code.findbugs/jsr305@3.0.2?type=jar
+  pkg:maven/com.google.errorprone/error_prone_annotations@2.23.0?type=jar
+  pkg:maven/com.google.guava/failureaccess@1.0.2?type=jar
+  pkg:maven/com.google.guava/guava@33.0.0-jre?type=jar
+  pkg:maven/com.google.guava/listenablefuture@9999.0-empty-to-avoid-conflict-with-guava?type=jar
+  pkg:maven/com.google.j2objc/j2objc-annotations@2.8?type=jar
+  pkg:maven/commons-codec/commons-codec@1.17.1?type=jar
+  pkg:maven/commons-io/commons-io@2.20.0?type=jar
+  pkg:maven/org.apache.commons/commons-compress@1.28.0?type=jar
+  pkg:maven/org.apache.commons/commons-lang3@3.15.0?type=jar
+  pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-jdk7@2.4.0?type=jar
+  pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-jdk8@2.4.0?type=jar
+  pkg:maven/org.jetbrains.kotlin/kotlin-stdlib@2.4.0?type=jar
+  pkg:maven/org.jetbrains/annotations@23.0.0?type=jar
+
+The four Apache Commons artifacts retain their required project/copyright attributions in
+licenses/Apache-Commons-NOTICE.txt.
+
+MIT Java runtime components
+---------------------------
+The following exact Maven components are distributed under the MIT License. Their exact upstream
+copyright notices and complete terms are retained separately:
+
+  pkg:maven/org.checkerframework/checker-qual@3.41.0?type=jar
+    Copyright 2004-present by the Checker Framework developers
+    See licenses/Checker-Qual-MIT.txt.
+
+  pkg:maven/org.slf4j/slf4j-api@2.0.12?type=jar
+  pkg:maven/org.slf4j/slf4j-simple@2.0.12?type=jar
+    Copyright (c) 2004-2022 QOS.ch Sarl (Switzerland)
+    See licenses/SLF4J-MIT.txt.
+
+XZ for Java 1.10
+----------------
+Source: https://github.com/tukaani-project/xz-java
+License: BSD Zero Clause License. See licenses/0BSD.txt.
+
+  pkg:maven/org.tukaani/xz@1.10?type=jar
+
+Resolved Java/native bridge coordinates
+---------------------------------------
+The detailed notices above apply to these exact resolved Maven artifacts:
+
+  pkg:maven/io.github.libsdl4j/libsdl4j@2.28.4-1.6?type=jar
+  pkg:maven/net.java.dev.jna/jna@5.13.0?type=jar
+  pkg:maven/org.jline/jline@3.25.1?type=jar
+  pkg:maven/org.openpnp/opencv@4.9.0-0?type=jar
+
+The complete, validated coordinate-to-license mapping is in THIRD-PARTY-COMPONENTS.txt. Package
+creation rejects a Maven SBOM whose third-party component set differs from that reviewed
+inventory. The separate target-native CycloneDX SBOM records exact native binaries and their
+reviewed embedded-component legal evidence.

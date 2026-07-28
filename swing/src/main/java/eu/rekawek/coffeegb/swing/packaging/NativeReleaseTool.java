@@ -20,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
@@ -46,12 +47,13 @@ public final class NativeReleaseTool {
                 throw new IllegalArgumentException("First argument must be 'assemble'");
             }
             parsed.rejectUnused(Set.of(
-                    "--input", "--portable-jar", "--output", "--version"));
+                    "--input", "--portable-jar", "--output", "--version", "--source-commit"));
             assemble(new AssembleRequest(
                     parsed.requiredPath("--input"),
                     parsed.requiredPath("--portable-jar"),
                     parsed.requiredPath("--output"),
-                    parsed.required("--version")));
+                    parsed.required("--version"),
+                    parsed.required("--source-commit")));
         } catch (IllegalArgumentException | IOException failure) {
             System.err.println("coffee-gb native release: " + failure.getMessage());
             System.exit(2);
@@ -61,6 +63,9 @@ public final class NativeReleaseTool {
     public static Path assemble(AssembleRequest request) throws IOException {
         Objects.requireNonNull(request, "request");
         NativePackageMetadata.installerVersion(request.version());
+        if (!request.sourceCommit().matches("[0-9a-f]{40}")) {
+            throw new IOException("Source commit must be a full lowercase Git object ID");
+        }
         Path input = request.input().toAbsolutePath().normalize();
         Path portableJar = request.portableJar().toAbsolutePath().normalize();
         if (!Files.isDirectory(input, LinkOption.NOFOLLOW_LINKS)) {
@@ -90,8 +95,6 @@ public final class NativeReleaseTool {
                         .equals(NativePackageVerifier.RESULT_FILE))
                 .toList();
         EnumMap<NativeTarget, TargetResult> targets = new EnumMap<>(NativeTarget.class);
-        String commonSbomDigest = null;
-        Path commonSbom = null;
         for (Path resultFile : results) {
             Path dist = resultFile.getParent();
             Map<String, String> raw = NativePackageVerifier.readStrictProperties(resultFile);
@@ -116,16 +119,13 @@ public final class NativeReleaseTool {
                 throw new IOException("Release installer must be a regular file: " + artifact);
             }
             Path sbom = safeResolve(dist, required(verified, "sbom.path"));
-            String sbomDigest = required(verified, "sbom.sha256");
-            if (commonSbomDigest == null) {
-                commonSbomDigest = sbomDigest;
-                commonSbom = sbom;
-            } else if (!commonSbomDigest.equals(sbomDigest)) {
-                throw new IOException("Target SBOMs are not byte-identical");
-            }
+            Path signature = "verified-detached".equals(required(verified, "signing"))
+                    ? safeResolve(dist, required(verified, "signature.path"))
+                    : null;
             TargetResult previous = targets.put(
                     target,
-                    new TargetResult(target, packageType, artifact, raw));
+                    new TargetResult(
+                            target, packageType, artifact, sbom, signature, verified));
             if (previous != null) {
                 throw new IOException("Duplicate target package result: " + target.id());
             }
@@ -135,25 +135,17 @@ public final class NativeReleaseTool {
             missing.removeAll(targets.keySet());
             throw new IOException("Required native release targets are missing: " + missing);
         }
-        if (commonSbom == null) {
-            throw new IOException("No target SBOM was found");
-        }
-
         Path output = createFreshDirectory(request.output());
         String safeVersion = request.version();
         Path releaseJar = output.resolve("coffee-gb-" + safeVersion + ".jar");
         Files.copy(portableJar, releaseJar, StandardCopyOption.COPY_ATTRIBUTES);
-        Path releaseSbom = output.resolve(
-                NativePackageMetadata.releaseSbomFileName(safeVersion));
-        Files.copy(commonSbom, releaseSbom, StandardCopyOption.COPY_ATTRIBUTES);
 
         Map<String, String> matrix = new LinkedHashMap<>();
-        matrix.put("schema", "1");
+        matrix.put("schema", "2");
         matrix.put("app.version", safeVersion);
+        matrix.put("source.commit", request.sourceCommit());
         matrix.put("portable.path", releaseJar.getFileName().toString());
         matrix.put("portable.sha256", NativePackageStager.sha256(releaseJar));
-        matrix.put("sbom.path", releaseSbom.getFileName().toString());
-        matrix.put("sbom.sha256", NativePackageStager.sha256(releaseSbom));
         for (NativeTarget target : NativeTarget.values()) {
             TargetResult result = targets.get(target);
             String filename = "coffee-gb-" + safeVersion + "-" + target.id()
@@ -167,6 +159,28 @@ public final class NativeReleaseTool {
             matrix.put(
                     "target." + target.id() + ".signing",
                     required(result.properties(), "signing"));
+            String sbomFilename =
+                    NativePackageMetadata.releaseSbomFileName(safeVersion, target);
+            Path sbomDestination = output.resolve(sbomFilename);
+            Files.copy(result.sbom(), sbomDestination, StandardCopyOption.COPY_ATTRIBUTES);
+            matrix.put("target." + target.id() + ".sbom.path", sbomFilename);
+            matrix.put(
+                    "target." + target.id() + ".sbom.sha256",
+                    NativePackageStager.sha256(sbomDestination));
+            if (result.signature() != null) {
+                String signatureFilename = filename + ".asc";
+                Path signatureDestination = output.resolve(signatureFilename);
+                Files.copy(
+                        result.signature(),
+                        signatureDestination,
+                        StandardCopyOption.COPY_ATTRIBUTES);
+                matrix.put(
+                        "target." + target.id() + ".signature.path",
+                        signatureFilename);
+                matrix.put(
+                        "target." + target.id() + ".signature.sha256",
+                        NativePackageStager.sha256(signatureDestination));
+            }
         }
         writeProperties(output.resolve(MATRIX_FILE), matrix);
         writeChecksums(output, output.resolve("SHA256SUMS"));
@@ -180,13 +194,28 @@ public final class NativeReleaseTool {
         Path root = directory.toAbsolutePath().normalize();
         Map<String, String> matrix =
                 NativePackageVerifier.readStrictProperties(root.resolve(MATRIX_FILE));
-        requireValue(matrix, "schema", "1");
+        requireValue(matrix, "schema", "2");
         requireValue(matrix, "app.version", expectedVersion);
+        String sourceCommit = required(matrix, "source.commit");
+        if (!sourceCommit.matches("[0-9a-f]{40}")) {
+            throw new IOException("Release source.commit is not a full Git object ID");
+        }
         verifyMatrixFile(root, matrix, "portable");
-        verifyMatrixFile(root, matrix, "sbom");
+        Set<String> expectedKeys = new HashSet<>(Set.of(
+                "schema",
+                "app.version",
+                "source.commit",
+                "portable.path",
+                "portable.sha256"));
         for (NativeTarget target : NativeTarget.values()) {
             String prefix = "target." + target.id();
             Path artifact = verifyMatrixFile(root, matrix, prefix);
+            Path sbom = verifyMatrixFile(root, matrix, prefix + ".sbom");
+            expectedKeys.add(prefix + ".path");
+            expectedKeys.add(prefix + ".sha256");
+            expectedKeys.add(prefix + ".sbom.path");
+            expectedKeys.add(prefix + ".sbom.sha256");
+            expectedKeys.add(prefix + ".signing");
             String suffix =
                     "." + NativePackageMetadata.target(target).defaultPackageType().id();
             if (!artifact.getFileName().toString().endsWith(suffix)) {
@@ -194,9 +223,35 @@ public final class NativeReleaseTool {
                         "Release target " + target.id() + " has the wrong artifact suffix");
             }
             String signing = required(matrix, prefix + ".signing");
-            if (!signing.equals("unsigned") && !signing.equals("signed")) {
+            if (!Set.of("unsigned", "verified-detached", "verified-embedded")
+                    .contains(signing)) {
                 throw new IOException("Invalid release signing state for " + target.id());
             }
+            if (signing.equals("verified-detached")) {
+                Path signature = verifyMatrixFile(root, matrix, prefix + ".signature");
+                if (!signature.getFileName().toString().endsWith(".asc")) {
+                    throw new IOException(
+                            "Detached release signature must use .asc for " + target.id());
+                }
+                expectedKeys.add(prefix + ".signature.path");
+                expectedKeys.add(prefix + ".signature.sha256");
+            }
+            NativeTargetSbom.verifyReleaseBom(
+                    sbom,
+                    target,
+                    NativePackageMetadata.target(target).defaultPackageType(),
+                    expectedVersion,
+                    artifact,
+                    signing);
+        }
+        if (!matrix.keySet().equals(expectedKeys)) {
+            Set<String> missing = new TreeSet<>(expectedKeys);
+            missing.removeAll(matrix.keySet());
+            Set<String> unexpected = new TreeSet<>(matrix.keySet());
+            unexpected.removeAll(expectedKeys);
+            throw new IOException(
+                    "Release matrix keys mismatch; missing=" + missing
+                            + ", unexpected=" + unexpected);
         }
         verifyReleaseChecksums(root);
     }
@@ -374,13 +429,14 @@ public final class NativeReleaseTool {
     }
 
     public record AssembleRequest(
-            Path input, Path portableJar, Path output, String version) {
+            Path input, Path portableJar, Path output, String version, String sourceCommit) {
 
         public AssembleRequest {
             Objects.requireNonNull(input, "input");
             Objects.requireNonNull(portableJar, "portableJar");
             Objects.requireNonNull(output, "output");
             Objects.requireNonNull(version, "version");
+            Objects.requireNonNull(sourceCommit, "sourceCommit");
         }
     }
 
@@ -388,6 +444,8 @@ public final class NativeReleaseTool {
             NativeTarget target,
             NativePackageMetadata.PackageType packageType,
             Path artifact,
+            Path sbom,
+            Path signature,
             Map<String, String> properties) {
     }
 
@@ -404,7 +462,7 @@ public final class NativeReleaseTool {
             if (args.length == 0) {
                 throw new IllegalArgumentException(
                         "Usage: NativeReleaseTool assemble --input PATH --portable-jar PATH "
-                                + "--output PATH --version VERSION");
+                                + "--output PATH --version VERSION --source-commit FULL_SHA");
             }
             Map<String, String> values = new LinkedHashMap<>();
             for (int index = 1; index < args.length; index++) {

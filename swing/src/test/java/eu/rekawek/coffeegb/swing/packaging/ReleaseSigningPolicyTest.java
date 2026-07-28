@@ -30,6 +30,9 @@ public class ReleaseSigningPolicyTest {
         assertEquals("xcrun", post.get(0).get(0));
         assertTrue(post.get(0).contains("notarytool"));
         assertTrue(post.get(1).contains("stapler"));
+        assertEquals("codesign", policy.verificationCommands(
+                Path.of("/dist/coffee-gb.dmg")).get(0).get(0));
+        assertEquals("verified-embedded", policy.verifiedSigningState());
     }
 
     @Test
@@ -65,6 +68,16 @@ public class ReleaseSigningPolicyTest {
                         .postPackageCommands(Path.of("coffee-gb.deb"))
                         .get(0)
                         .get(0));
+        assertEquals(
+                Path.of("coffee-gb.deb.asc"),
+                linuxPolicy.signatureArtifact(Path.of("coffee-gb.deb")).orElseThrow());
+        assertEquals(
+                "gpg",
+                linuxPolicy
+                        .verificationCommands(Path.of("coffee-gb.deb"))
+                        .get(0)
+                        .get(0));
+        assertEquals("verified-detached", linuxPolicy.verifiedSigningState());
     }
 
     @Test

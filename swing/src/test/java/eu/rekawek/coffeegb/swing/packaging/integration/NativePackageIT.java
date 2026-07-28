@@ -163,6 +163,9 @@ public class NativePackageIT {
         assertTrue(
                 Files.readString(legal.resolve("THIRD-PARTY-NOTICES.txt"))
                         .contains("https://github.com/trekawek/coffee-gb"));
+        assertTrue(
+                Files.readString(legal.resolve("licenses/Apache-Commons-NOTICE.txt"))
+                        .contains("Apache Commons Codec"));
         for (NativeComponentInventory.NativeSbomComponent component :
                 NativeComponentInventory.components(target)) {
             for (String legalFile : component.legalFiles()) {

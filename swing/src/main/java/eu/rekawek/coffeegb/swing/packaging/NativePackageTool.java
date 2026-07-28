@@ -121,7 +121,8 @@ public final class NativePackageTool {
         Path runtime = buildRoot.resolve("runtime");
         runInherited(plan.jlinkCommand(javaHome, runtime));
         verifyRuntimeLayout(runtime);
-        plan.verifyLinkedModules(runCaptured(plan.listModulesCommand(runtime)));
+        String linkedModulesOutput = runCaptured(plan.listModulesCommand(runtime));
+        plan.verifyLinkedModules(linkedModulesOutput);
         verifyVersionOutput(
                 runCaptured(plan.runtimeVersionSmokeCommand(runtime, stage)), stage.appVersion());
 
@@ -167,9 +168,21 @@ public final class NativePackageTool {
             verifyLinuxDeb(primaryArtifact, buildRoot);
         }
 
+        String signingState = "unsigned";
+        Path signatureArtifact = null;
         if (signing != null) {
             for (List<String> command : signing.postPackageCommands(primaryArtifact)) {
                 runInherited(command);
+            }
+            for (List<String> command : signing.verificationCommands(primaryArtifact)) {
+                runInherited(command);
+            }
+            signingState = signing.verifiedSigningState();
+            signatureArtifact = signing.signatureArtifact(primaryArtifact).orElse(null);
+            if (signatureArtifact != null
+                    && !Files.isRegularFile(signatureArtifact, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException(
+                        "Verified detached signature is missing: " + signatureArtifact);
             }
         }
         Path packagedPayload = packageType == NativePackageMetadata.PackageType.APP_IMAGE
@@ -207,7 +220,8 @@ public final class NativePackageTool {
                 stage.appVersion(),
                 primaryArtifact,
                 releaseSbom,
-                signing != null);
+                signingState,
+                signatureArtifact);
         Path checksumFile = destination.resolve("SHA256SUMS");
         writeChecksums(destination, checksumFile);
         NativePackageVerifier.verifyDistribution(

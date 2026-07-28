@@ -33,8 +33,56 @@ concurrency:
   cancel-in-progress: ${{ !inputs.publish }}
 
 jobs:
+  resolve-source:
+    name: Resolve immutable package source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      tag_ref: ${{ steps.source.outputs.tag_ref }}
+
+    steps:
+      - name: Check out requested source for resolution
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and validate the immutable source commit
+        id: source
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.checkout_ref }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          candidate=${REQUESTED_REF:-$GITHUB_REF}
+          tag_ref=
+          if [[ "$PUBLISH" == true || "$candidate" == refs/tags/coffee-gb-* ]]; then
+            if [[ ! "$candidate" =~ ^refs/tags/coffee-gb-[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+              echo "Release packaging requires a fully qualified refs/tags/coffee-gb-VERSION ref" >&2
+              exit 1
+            fi
+            tag_ref=$candidate
+            git fetch --no-tags origin "$tag_ref"
+            source_sha=$(git rev-parse 'FETCH_HEAD^{commit}')
+          else
+            source_sha=$(git rev-parse 'HEAD^{commit}')
+          fi
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Package source did not resolve to a full immutable commit ID" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse 'HEAD^{commit}')" != "$source_sha" ]]; then
+            echo "Checked-out HEAD does not equal the peeled requested source commit" >&2
+            exit 1
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "tag_ref=$tag_ref" >> "$GITHUB_OUTPUT"
+
   package:
     name: Package ${{ matrix.target }}
+    needs: resolve-source
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -59,8 +107,18 @@ jobs:
       - name: Check out the exact package source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.checkout_ref || github.ref }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
           persist-credentials: false
+
+      - name: Prove checkout equals the resolved immutable commit
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          if [[ "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Package checkout does not equal resolved source commit $SOURCE_SHA" >&2
+            exit 1
+          fi
 
       - name: Set up target-architecture JDK 21 and safe Maven cache
         uses: actions/setup-java@v4
@@ -193,7 +251,7 @@ jobs:
 
   release-gate:
     name: Gate complete native package matrix
-    needs: package
+    needs: [resolve-source, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -201,8 +259,26 @@ jobs:
       - name: Check out Maven version metadata
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.checkout_ref || github.ref }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
           persist-credentials: false
+
+      - name: Recheck immutable source and peeled release tag
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          TAG_REF: ${{ needs.resolve-source.outputs.tag_ref }}
+        run: |
+          if [[ "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Release gate checkout does not equal resolved source commit" >&2
+            exit 1
+          fi
+          if [[ -n "$TAG_REF" ]]; then
+            git fetch --no-tags origin "$TAG_REF"
+            if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+              echo "Release tag no longer peels to the resolved source commit" >&2
+              exit 1
+            fi
+          fi
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -222,14 +298,17 @@ jobs:
         shell: bash
         env:
           EXPECTED_RELEASE_VERSION: ${{ inputs.release_version }}
+          RESOLVED_TAG_REF: ${{ needs.resolve-source.outputs.tag_ref }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
         run: |
           version=$(mvn -B --no-transfer-progress help:evaluate \
             -Dexpression=project.version \
             -DforceStdout \
             -q)
           release_version=$EXPECTED_RELEASE_VERSION
-          if [[ "$GITHUB_REF" == refs/tags/coffee-gb-* ]]; then
-            tag_version=${GITHUB_REF_NAME#coffee-gb-}
+          if [[ -n "$RESOLVED_TAG_REF" ]]; then
+            tag_name=${RESOLVED_TAG_REF#refs/tags/}
+            tag_version=${tag_name#coffee-gb-}
             if [[ -n "$release_version" && "$release_version" != "$tag_version" ]]; then
               echo "Requested release $release_version does not match tag $tag_version" >&2
               exit 1
@@ -258,7 +337,8 @@ jobs:
             --input downloaded-native \
             --portable-jar "${portable[0]}" \
             --output native-release \
-            --version "$version"
+            --version "$version" \
+            --source-commit "$SOURCE_SHA"
 
       - name: Upload complete release bundle
         uses: actions/upload-artifact@v4
@@ -272,13 +352,20 @@ jobs:
   publish:
     name: Publish validated tagged packages
     if: inputs.publish || startsWith(github.ref, 'refs/tags/coffee-gb-')
-    needs: release-gate
+    needs: [resolve-source, release-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
 
     steps:
+      - name: Check out the immutable release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Download complete release bundle
         uses: actions/download-artifact@v4
         with:
@@ -289,19 +376,30 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUESTED_REF: ${{ inputs.checkout_ref }}
           REQUESTED_VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          TAG_REF: ${{ needs.resolve-source.outputs.tag_ref }}
         run: |
-          if [[ -n "$REQUESTED_REF" ]]; then
-            tag=$REQUESTED_REF
-          else
-            tag=$GITHUB_REF_NAME
-          fi
-          if [[ ! "$tag" =~ ^coffee-gb-([0-9A-Za-z][0-9A-Za-z._-]*)$ ]]; then
-            echo "Native publication requires an exact coffee-gb-VERSION tag" >&2
+          if [[ ! "$TAG_REF" =~ ^refs/tags/(coffee-gb-([0-9A-Za-z][0-9A-Za-z._-]*))$ ]]; then
+            echo "Native publication requires an exact fully qualified release tag" >&2
             exit 1
           fi
-          version=${BASH_REMATCH[1]}
+          tag=${BASH_REMATCH[1]}
+          version=${BASH_REMATCH[2]}
+          if [[ "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Publication checkout does not equal resolved source commit" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$TAG_REF"
+          if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
+            echo "Release tag moved after package source resolution; refusing publication" >&2
+            exit 1
+          fi
+          if ! grep -qx "source.commit=$SOURCE_SHA" \
+              native-release/NATIVE-PACKAGE-MATRIX.properties; then
+            echo "Release bundle is not bound to the resolved source commit" >&2
+            exit 1
+          fi
           if [[ "$version" == *-SNAPSHOT ]]; then
             echo "Snapshot native packages cannot be published" >&2
             exit 1
