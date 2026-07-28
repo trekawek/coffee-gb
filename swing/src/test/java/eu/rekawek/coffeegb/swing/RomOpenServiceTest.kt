@@ -11,6 +11,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -101,15 +102,19 @@ class RomOpenServiceTest {
 
     fixture.service.open(
         RomOpenRequest(
-            listOf(RomOpenInput.RemoteUrl("https://example.invalid/game.gb")),
+            listOf(
+                RomOpenInput.RemoteUrl(
+                    "https://alice:secret@example.invalid/game.gb?token=private#fragment")),
             RomOpenSource.DROP,
         ))
     fixture.worker.runAll()
     fixture.ui.runAll()
-    assertEquals(
-        RomOpenFailureKind.REMOTE_URL,
-        assertIs<RomOpenUpdate.Failed>(fixture.updates.last()).failure.kind,
-    )
+    val remoteFailure = assertIs<RomOpenUpdate.Failed>(fixture.updates.last()).failure
+    assertEquals(RomOpenFailureKind.REMOTE_URL, remoteFailure.kind)
+    assertFalse(remoteFailure.technicalDetails.contains("alice"))
+    assertFalse(remoteFailure.technicalDetails.contains("secret"))
+    assertFalse(remoteFailure.technicalDetails.contains("token"))
+    assertFalse(remoteFailure.technicalDetails.contains("fragment"))
 
     fixture.service.open(
         RomOpenRequest(
@@ -126,6 +131,22 @@ class RomOpenServiceTest {
         assertIs<RomOpenUpdate.Failed>(fixture.updates.last()).failure.kind,
     )
     assertTrue(fixture.loads.isEmpty())
+    fixture.close()
+  }
+
+  @Test
+  fun `request snapshots and bounds a caller owned input list before worker dispatch`() {
+    val fixture = fixture()
+    val first = romFile("owned-first.gb", "FIRST")
+    val replacement = romFile("owned-replacement.gb", "REPLACEMENT")
+    val inputs = mutableListOf<RomOpenInput>(RomOpenInput.LocalPath(first))
+
+    fixture.service.open(RomOpenRequest(inputs, RomOpenSource.DESKTOP_OPEN_FILE))
+    inputs.clear()
+    repeat(100) { inputs += RomOpenInput.LocalPath(replacement) }
+    fixture.worker.runAll()
+
+    assertEquals(first, fixture.loads.single().image!!.origin().containerPath().orElseThrow())
     fixture.close()
   }
 
@@ -447,6 +468,91 @@ class RomOpenServiceTest {
     service.close()
 
     assertEquals(before, temporarySnapshotCount())
+    eventBus.close()
+  }
+
+  @Test
+  fun `quiesce drains exact controller cancellation and can be resumed without closing service`() {
+    val eventBus = EventBusImpl(null, "quiesce-test", false)
+    val updates = CopyOnWriteArrayList<RomOpenUpdate>()
+    val firstLoaded = CountDownLatch(1)
+    val resumedLoaded = CountDownLatch(1)
+    val cancelled = CountDownLatch(1)
+    val loadCount = java.util.concurrent.atomic.AtomicInteger()
+    eventBus.register<Controller.LoadRomEvent> {
+      if (loadCount.incrementAndGet() == 1) firstLoaded.countDown()
+      else resumedLoaded.countDown()
+    }
+    eventBus.register<Controller.CancelRomOpenEvent> { cancelled.countDown() }
+    val service =
+        RomOpenService(
+            eventBus,
+            FakeRecentStore(),
+            updates::add,
+            null,
+            Executor { task -> task.run() },
+        )
+    val first = romFile("quiesce-first.gb", "FIRST")
+    val second = romFile("quiesce-second.gb", "SECOND")
+
+    val firstId = service.open(RomOpenRequest(first, RomOpenSource.CHOOSER))
+    assertTrue(firstLoaded.await(5, TimeUnit.SECONDS))
+    service.quiesce()
+
+    assertTrue(cancelled.await(2, TimeUnit.SECONDS))
+    assertTrue(service.isQuiesced())
+    val blockedId = service.open(RomOpenRequest(second, RomOpenSource.DESKTOP_OPEN_FILE))
+    val blocked =
+        assertIs<RomOpenUpdate.Failed>(
+            updates.single { it.requestId == blockedId })
+    assertEquals(RomOpenFailureKind.SHUTTING_DOWN, blocked.failure.kind)
+    assertEquals(1, loadCount.get())
+    assertTrue(updates.none { it.requestId == firstId && it is RomOpenUpdate.Opened })
+
+    service.resume()
+    assertFalse(service.isQuiesced())
+    service.open(RomOpenRequest(second, RomOpenSource.RECENT))
+    assertTrue(resumedLoaded.await(5, TimeUnit.SECONDS))
+
+    service.close()
+    eventBus.close()
+  }
+
+  @Test
+  fun `quiesce drains an archive snapshot waiting for selection without closing worker`() {
+    val eventBus = EventBusImpl(null, "quiesce-snapshot-test", false)
+    val archive = temporaryFolder.newFile("quiesce-snapshot.zip")
+    writeZip(
+        archive,
+        "one.gb" to syntheticRom("ONE", 0x61),
+        "two.gb" to syntheticRom("TWO", 0x62),
+    )
+    val awaitingSelection = CountDownLatch(1)
+    val before = temporarySnapshotCount()
+    val service =
+        RomOpenService(
+            eventBus,
+            FakeRecentStore(),
+            {
+              if (it is RomOpenUpdate.Progress &&
+                  it.stage == RomOpenStage.AWAITING_ARCHIVE_SELECTION) {
+                awaitingSelection.countDown()
+              }
+            },
+            null,
+            Executor { task -> task.run() },
+        )
+
+    service.open(RomOpenRequest(archive.toPath(), RomOpenSource.DROP))
+    assertTrue(awaitingSelection.await(5, TimeUnit.SECONDS))
+    assertEquals(before + 1, temporarySnapshotCount())
+
+    service.quiesce()
+
+    assertEquals(before, temporarySnapshotCount())
+    assertTrue(service.isQuiesced())
+    service.resume()
+    service.close()
     eventBus.close()
   }
 
