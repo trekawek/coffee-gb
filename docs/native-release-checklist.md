@@ -15,8 +15,14 @@ has a named tester, target/architecture, date, and result. A tag push alone must
   package manifest and `--version`; its fully qualified ref peels to the full `source.commit`
   recorded in `NATIVE-PACKAGE-MATRIX.properties`.
 - [ ] All four required targets passed their unit/integration build, pre-installer inspection,
-  final installer unpack/mount, packaged `--version`, `--package-smoke`, production desktop launch,
-  installed file-association open, bounded shutdown, and uninstall/unregistration cleanup.
+  final installer unpack/mount, packaged `--version`, `--package-smoke`, normal and `--debug`
+  production desktop launches, default-handler opens for generated `.gb`, `.gbc`, and `.rom`
+  fixtures, bounded shutdown, and uninstall/unregistration cleanup.
+- [ ] If protected signing was requested, every target was rebuilt from the same immutable source
+  after the unsigned gate. Windows app-image executables and the MSI, macOS app bundles and DMGs,
+  and Linux detached signatures all passed their independent platform verification. The installed
+  macOS app retained `com.apple.security.cs.disable-library-validation=true`, passed Gatekeeper,
+  and launched with its extracted locked natives; checksums were generated afterward.
 - [ ] The release bundle contains the portable JAR, four target-specific CycloneDX SBOMs, Linux x64
   DEB, Windows x64 MSI, macOS x64 DMG, macOS arm64 DMG,
   `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`, plus every detached signature named by the
@@ -32,7 +38,9 @@ has a named tester, target/architecture, date, and result. A tag push alone must
 
 - [ ] Install or copy the package in a clean standard-user account without a system Java runtime.
 - [ ] Launch with no ROM; confirm the window opens, remains responsive, and quits cleanly.
-- [ ] Run packaged `--version`; compare it with the release tag and portable JAR.
+- [ ] Run packaged `--version`; compare the complete Maven version with the release tag and
+  portable JAR. On Windows use `Coffee GB Console.exe --version` and confirm normal GUI launches do
+  not flash a console.
 - [ ] Open a known-good personally supplied ROM from the chooser, command line, drag-and-drop,
   recent list, and registered `.gb`/`.gbc`/`.rom` association.
 - [ ] Confirm a failed/cancelled ROM open leaves the running session intact and reports a useful
@@ -47,7 +55,8 @@ has a named tester, target/architecture, date, and result. A tag push alone must
 - [ ] Save and load a state, verify the thumbnail/metadata where available, and confirm a wrong-ROM
   or corrupt state is rejected without changing the live session.
 - [ ] Exercise pause/reset/rewind and a screenshot/open-folder action where supported.
-- [ ] Open the debug console once and confirm package-native fallback diagnostics contain no ROM,
+- [ ] Launch through the packaged `--debug` path (the secondary console launcher on Windows) and
+  confirm the production window starts and package-native fallback diagnostics contain no ROM,
   state, credential, or private path.
 - [ ] Uninstall/remove the application. Confirm launchers, shortcuts, and file associations are
   removed while ROMs, batteries, states, settings, screenshots, and other user data remain.
