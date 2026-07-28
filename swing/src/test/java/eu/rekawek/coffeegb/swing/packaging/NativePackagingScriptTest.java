@@ -66,7 +66,7 @@ public class NativePackagingScriptTest {
         for (String contents : new String[] {associationSh, associationPs}) {
             assertTrue(contents.contains("PackageAssociationFixture"));
             assertTrue(contents.contains("COFFEE_GB_ASSOCIATION_SMOKE_MARKER"));
-            assertTrue(contents.contains("association-opened.marker"));
+            assertTrue(contents.contains("association-opened-"));
             assertTrue(contents.contains("INITIAL_ARGUMENT"));
             assertTrue(contents.contains("Coffee GB association open OK"));
             assertFalse(contents.contains("curl "));
@@ -74,10 +74,13 @@ public class NativePackagingScriptTest {
             assertFalse(contents.contains("wget "));
         }
         assertTrue(associationSh.contains("xdg-open"));
-        assertTrue(associationSh.contains("open -b eu.rekawek.coffeegb"));
+        assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
         assertTrue(associationSh.contains("DESKTOP_OPEN_FILE"));
         assertTrue(associationSh.contains("dpkg --remove coffee-gb"));
         assertTrue(associationSh.contains("lsregister"));
+        assertTrue(associationSh.contains("codesign --verify --deep --strict"));
+        assertTrue(associationSh.contains(
+                "com.apple.security.cs.disable-library-validation"));
         assertTrue(associationPs.contains("Start-Process -FilePath $Fixture"));
         assertTrue(associationPs.contains("Registry::HKEY_CLASSES_ROOT"));
         assertTrue(associationPs.contains("Invoke-Msi -Action \"/x\""));

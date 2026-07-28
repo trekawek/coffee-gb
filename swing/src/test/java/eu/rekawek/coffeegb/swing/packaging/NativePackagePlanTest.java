@@ -81,7 +81,8 @@ public class NativePackagePlanTest {
                         command,
                         "--java-options",
                         "-Dcoffee-gb.native.target=" + nativeTarget.id());
-                assertTrue(command.contains("-Dcoffee-gb.native.source=$APPDIR/native-source"));
+                assertTrue(command.contains(
+                        "-Dcoffee-gb.native.source=$APPDIR/native-source.zip"));
                 assertFalse(command.contains("--mac-sign"));
                 assertFalse(command.stream().anyMatch(value ->
                         value.contains("TOKEN")
@@ -97,7 +98,14 @@ public class NativePackagePlanTest {
                 }
 
                 if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
-                    assertFalse(command.contains("--file-associations"));
+                    if (target.hostOs() == NativePackageMetadata.HostOs.MACOS) {
+                        assertOption(
+                                command,
+                                "--file-associations",
+                                "/stage/associations/game-boy-rom.properties");
+                    } else {
+                        assertFalse(command.contains("--file-associations"));
+                    }
                     assertFalse(command.contains("--license-file"));
                 } else {
                     assertOption(
@@ -138,6 +146,36 @@ public class NativePackagePlanTest {
     }
 
     @Test
+    public void signedInstallerPlanWrapsOnlyThePrebuiltApplicationImage() {
+        for (NativeTarget nativeTarget : NativeTarget.values()) {
+            NativePackageMetadata.Target target = NativePackageMetadata.target(nativeTarget);
+            NativePackageMetadata.PackageType packageType = target.defaultPackageType();
+            List<String> command = plan.jpackageInstallerFromAppImageCommand(
+                    Path.of("/jdk"),
+                    stage(nativeTarget),
+                    Path.of("/signed-app-image"),
+                    Path.of("/dist"),
+                    Path.of("/temp"),
+                    packageType);
+
+            assertOption(command, "--app-image", "/signed-app-image");
+            assertOption(command, "--type", packageType.id());
+            assertOption(command, "--app-version", "1.7.15");
+            assertOption(
+                    command,
+                    "--file-associations",
+                    "/stage/associations/game-boy-rom.properties");
+            assertOption(command, "--license-file", "/stage/input/legal/LICENSE.txt");
+            assertFalse(command.contains("--input"));
+            assertFalse(command.contains("--runtime-image"));
+            assertFalse(command.contains("--main-jar"));
+            assertFalse(command.contains("--main-class"));
+            assertFalse(command.contains("--add-launcher"));
+            assertFalse(command.contains("--mac-sign"));
+        }
+    }
+
+    @Test
     public void rejectsForeignPackageType() {
         assertThrows(
                 IllegalArgumentException.class,
@@ -149,6 +187,15 @@ public class NativePackagePlanTest {
                         Path.of("/temp"),
                         NativePackageMetadata.PackageType.MSI,
                         List.of()));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> plan.jpackageInstallerFromAppImageCommand(
+                        Path.of("/jdk"),
+                        stage(NativeTarget.LINUX_X86_64),
+                        Path.of("/app-image"),
+                        Path.of("/dist"),
+                        Path.of("/temp"),
+                        NativePackageMetadata.PackageType.APP_IMAGE));
     }
 
     private List<String> installer(NativeTarget target, String type) {
@@ -174,6 +221,7 @@ public class NativePackagePlanTest {
                 root.resolve("input/coffee-gb-sbom.cdx.json"),
                 root.resolve("input/coffee-gb-native-sbom.cdx.json"),
                 root.resolve("input/coffee-gb." + target.iconSuffix()),
+                root.resolve("input/native-source.zip"),
                 root.resolve("associations/game-boy-rom.properties"),
                 root.resolve("launchers/windows-console.properties"),
                 root.resolve("input/package-manifest.properties"),

@@ -135,6 +135,35 @@ try {
     if (-not (Test-Path -LiteralPath $ConsoleLauncher -PathType Leaf)) {
         throw "Installed Coffee GB console launcher does not exist: $ConsoleLauncher"
     }
+    if ($env:COFFEE_GB_RELEASE_SIGNING -eq "true") {
+        if (-not (Get-Command signtool.exe -ErrorAction SilentlyContinue)) {
+            throw "signtool.exe is required to validate the installed signed payload"
+        }
+        $InstalledRoot = Split-Path -Parent $Launcher
+        $SignableFiles = @(
+            Get-ChildItem `
+                -LiteralPath $InstalledRoot `
+                -Recurse `
+                -File | Where-Object {
+                    $_.Extension -in @(".exe", ".dll")
+                }
+        )
+        if ($SignableFiles.Count -eq 0) {
+            throw "Installed signed payload contains no executable files"
+        }
+        foreach ($SignableFile in $SignableFiles) {
+            & signtool.exe `
+                verify `
+                /pa `
+                /all `
+                /tw `
+                /v `
+                $SignableFile.FullName
+            if ($LASTEXITCODE -ne 0) {
+                throw "Installed executable signature verification failed: $($SignableFile.FullName)"
+            }
+        }
+    }
 
     $StartMenu = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Coffee GB"
     if (-not (Get-ChildItem -LiteralPath $StartMenu -Filter "*.lnk" -File)) {

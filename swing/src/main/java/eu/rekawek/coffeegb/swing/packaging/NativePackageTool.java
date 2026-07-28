@@ -130,39 +130,64 @@ public final class NativePackageTool {
         Path temporary = Files.createDirectory(buildRoot.resolve("jpackage-temp"));
         List<String> signingOptions =
                 signing == null ? List.of() : signing.jpackageOptions();
-        runInherited(
-                plan.jpackageCommand(
-                        javaHome,
-                        stage,
-                        runtime,
-                        destination,
-                        temporary,
-                        packageType,
-                        signingOptions),
-                stage.root());
+        if (signing == null) {
+            runInherited(
+                    plan.jpackageCommand(
+                            javaHome,
+                            stage,
+                            runtime,
+                            destination,
+                            temporary,
+                            packageType,
+                            signingOptions),
+                    stage.root());
+        } else {
+            Path signedAppImageDestination =
+                    Files.createDirectory(buildRoot.resolve("signed-app-image"));
+            Path appImageTemporary =
+                    Files.createDirectory(buildRoot.resolve("jpackage-app-image-temp"));
+            runInherited(
+                    plan.jpackageCommand(
+                            javaHome,
+                            stage,
+                            runtime,
+                            signedAppImageDestination,
+                            appImageTemporary,
+                            NativePackageMetadata.PackageType.APP_IMAGE,
+                            signingOptions),
+                    stage.root());
+            Path appImage =
+                    plan.expectedAppImage(signedAppImageDestination, targetMetadata);
+            NativePackageVerifier.verify(new NativePackageVerifier.VerificationRequest(
+                    target,
+                    NativePackageMetadata.PackageType.APP_IMAGE,
+                    signedAppImageDestination,
+                    stage.appJar(),
+                    stage.sbom(),
+                    resources.resolve("legal")));
+            for (List<String> command : signing.appImagePostPackageCommands(appImage)) {
+                runInherited(command);
+            }
+            for (List<String> command : signing.appImageVerificationCommands(appImage)) {
+                runInherited(command);
+            }
+            verifyAppImageLaunchers(
+                    plan, signedAppImageDestination, targetMetadata, stage.appVersion());
+            runInherited(
+                    plan.jpackageInstallerFromAppImageCommand(
+                            javaHome,
+                            stage,
+                            appImage,
+                            destination,
+                            temporary,
+                            packageType),
+                    stage.root());
+        }
 
         Path primaryArtifact;
         if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
-            Path launcher = plan.expectedAppImageLauncher(destination, targetMetadata);
-            if (!Files.isRegularFile(launcher, LinkOption.NOFOLLOW_LINKS)) {
-                throw new IOException("jpackage app-image launcher is missing: " + launcher);
-            }
-            Path commandLauncher = plan.expectedCommandLauncher(destination, targetMetadata);
-            if (!Files.isRegularFile(commandLauncher, LinkOption.NOFOLLOW_LINKS)) {
-                throw new IOException(
-                        "jpackage command launcher is missing: " + commandLauncher);
-            }
-            ProcessResult launched =
-                    runCapturedResult(List.of(commandLauncher.toString(), "--version"));
-            if (launched.exitCode != 0) {
-                throw new IOException(
-                        "Packaged launcher --version failed with exit " + launched.exitCode);
-            }
-            verifyVersionOutput(launched.output, stage.appVersion());
-            primaryArtifact = destination.resolve(
-                    targetMetadata.hostOs() == NativePackageMetadata.HostOs.MACOS
-                            ? NativePackageMetadata.APPLICATION_NAME + ".app"
-                            : NativePackageMetadata.APPLICATION_NAME);
+            verifyAppImageLaunchers(plan, destination, targetMetadata, stage.appVersion());
+            primaryArtifact = plan.expectedAppImage(destination, targetMetadata);
         } else {
             primaryArtifact = findInstaller(destination, packageType);
         }
@@ -200,6 +225,19 @@ public final class NativePackageTool {
                         stage.appJar(),
                         stage.sbom(),
                         resources.resolve("legal")));
+        if (signing != null) {
+            Path installedAppImage = targetMetadata.hostOs()
+                            == NativePackageMetadata.HostOs.MACOS
+                    ? verification.applicationRoot().getParent()
+                    : verification.applicationRoot();
+            if (installedAppImage == null) {
+                throw new IOException("Packaged macOS application image has no bundle root");
+            }
+            for (List<String> command :
+                    signing.appImageVerificationCommands(installedAppImage)) {
+                runInherited(command);
+            }
+        }
         NativePackageVerifier.runSmokes(
                 verification, buildRoot.resolve("package-smoke-home"));
 
@@ -265,6 +303,29 @@ public final class NativePackageTool {
         Path checksumFile = destination.resolve("SHA256SUMS");
         writeChecksums(destination, checksumFile);
         return new ReleaseMetadata(releaseSbom, releaseNativeSbom, checksumFile);
+    }
+
+    private static void verifyAppImageLaunchers(
+            NativePackagePlan plan,
+            Path destination,
+            NativePackageMetadata.Target target,
+            String appVersion)
+            throws IOException, InterruptedException {
+        Path launcher = plan.expectedAppImageLauncher(destination, target);
+        if (!Files.isRegularFile(launcher, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("jpackage app-image launcher is missing: " + launcher);
+        }
+        Path commandLauncher = plan.expectedCommandLauncher(destination, target);
+        if (!Files.isRegularFile(commandLauncher, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("jpackage command launcher is missing: " + commandLauncher);
+        }
+        ProcessResult launched =
+                runCapturedResult(List.of(commandLauncher.toString(), "--version"));
+        if (launched.exitCode != 0) {
+            throw new IOException(
+                    "Packaged launcher --version failed with exit " + launched.exitCode);
+        }
+        verifyVersionOutput(launched.output, appVersion);
     }
 
     private static void requireJdk21(Path javaHome) throws IOException {
