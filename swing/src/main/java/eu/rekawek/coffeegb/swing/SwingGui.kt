@@ -214,7 +214,7 @@ class SwingGui private constructor(
         retry()
       } else {
         cancel()
-        updateLoadingUi(activeWindowTitle, false)
+        pausedQuitRetryUi().let { updateLoadingUi(it.title, it.blocksInput) }
       }
     }
   }
@@ -323,6 +323,17 @@ class SwingGui private constructor(
     }
   }
 }
+
+internal data class DesktopLoadingUiState(
+    val title: String,
+    val blocksInput: Boolean,
+)
+
+internal fun pausedQuitRetryUi() =
+    DesktopLoadingUiState(
+        title = "Coffee GB: Paused; close again to retry saving before quit",
+        blocksInput = true,
+    )
 
 internal fun createSettingsShutdownHook(
     settings: AutoCloseable,

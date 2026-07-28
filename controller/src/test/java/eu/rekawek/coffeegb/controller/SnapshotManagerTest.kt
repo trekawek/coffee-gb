@@ -52,6 +52,15 @@ import org.junit.Test
 class SnapshotManagerTest {
 
   @Test
+  fun memoryOriginReportsNoSnapshotInsteadOfInventingFilesystemPersistence() {
+    val image = RomImage.memory(ROM.readBytes(), "memory-fixture.gb")
+    val configuration =
+        Gameboy.GameboyConfiguration(Rom(image)).setBootstrapMode(BootstrapMode.SKIP)
+
+    assertFalse(SnapshotManager(configuration).snapshotAvailable(0))
+  }
+
+  @Test
   fun archiveEntriesUseDistinctSnapshotAnchors() {
     withDirectory { directory ->
       val container = directory.resolve("collection.zip")

@@ -1078,14 +1078,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Releases an asynchronously prepared machine that was never attached to a session. */
     public void discardUnstarted() {
-        codeBreakerRumble.close();
+        codeBreakerRumble.quiesce();
         infraredPort.close();
         sgbBus.close();
     }
 
     @Override
     public void close() {
-        closeResources(true);
+        closeResources(true, true);
     }
 
     /**
@@ -1094,11 +1094,31 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * <p>Callers must not use this to bypass a failed or cancelled persistence result.
      */
     public void closeAfterCartridgeFlush() {
-        closeResources(false);
+        closeResources(false, true);
     }
 
-    private void closeResources(boolean flushCartridge) {
-        codeBreakerRumble.close();
+    /**
+     * Releases a machine whose owner has already quiesced its event bus and reset UI outputs.
+     *
+     * <p>Unlike {@link #close()}, this method emits no final hardware-output events.
+     */
+    public void closeSilently() {
+        closeResources(true, false);
+    }
+
+    /**
+     * Releases an already-persisted machine after its event bus and UI outputs are quiescent.
+     */
+    public void closeAfterCartridgeFlushSilently() {
+        closeResources(false, false);
+    }
+
+    private void closeResources(boolean flushCartridge, boolean publishOutputReset) {
+        if (publishOutputReset) {
+            codeBreakerRumble.close();
+        } else {
+            codeBreakerRumble.quiesce();
+        }
         infraredPort.close();
         if (flushCartridge) {
             flushCartridge();

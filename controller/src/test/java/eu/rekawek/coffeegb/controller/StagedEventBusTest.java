@@ -76,6 +76,8 @@ public class StagedEventBusTest {
         candidate.close();
 
         assertEquals(List.of(), rootDeliveries);
+        candidate.post(new ProbeEvent(257));
+        assertEquals(List.of(), rootDeliveries);
         assertThrows(IllegalStateException.class, candidate::activate);
         root.close();
     }

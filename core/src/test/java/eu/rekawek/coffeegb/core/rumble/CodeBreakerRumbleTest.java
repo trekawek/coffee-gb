@@ -64,4 +64,13 @@ public class CodeBreakerRumbleTest {
 
         assertEquals(List.of(true, false), motorLog);
     }
+
+    @Test
+    public void quiescingAccessorySilencesMotorWithoutPublishingAfterBusTeardown() {
+        mmu.setByte(0xfffe, 0x80);
+
+        rumble.quiesce();
+
+        assertEquals(List.of(true), motorLog);
+    }
 }

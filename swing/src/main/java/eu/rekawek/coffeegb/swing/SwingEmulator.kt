@@ -138,11 +138,12 @@ class SwingEmulator(
       return
     }
     // Gate disconnect callbacks before close so they cannot replace the controller halfway
-    // through its persistence transaction. A failed close clears the gate and leaves every
-    // peripheral intact; BasicController retains the paused capture for a later retry.
+    // through its persistence transaction. Host inputs and rumble are released before the core
+    // can close its bus; a failed close clears the gate while BasicController retains the paused
+    // capture and the same peripheral owners for a later retry.
     stopping.set(true)
     try {
-      controller.close()
+      closeControllerAfterLifecycleRelease(::releaseForLifecycleChange, controller::close)
     } catch (failure: Exception) {
       stopping.set(false)
       throw failure
@@ -178,6 +179,7 @@ class SwingEmulator(
     joypad.releaseForLifecycleChange()
     tiltInput.releaseForLifecycleChange()
     gamepad.releaseForLifecycleChange()
+    display.releaseForLifecycleChange()
   }
 
   fun minimumContentSize(): Dimension = Dimension(MINIMUM_CONTENT_WIDTH, MINIMUM_CONTENT_HEIGHT)
@@ -332,6 +334,14 @@ internal fun shouldPackExplicitWindow(
       scaleMode.isExplicit &&
       (currentContentSize.width < preferredSize.width ||
           currentContentSize.height < preferredSize.height)
+}
+
+internal fun closeControllerAfterLifecycleRelease(
+    release: () -> Unit,
+    close: () -> Unit,
+) {
+  release()
+  close()
 }
 
 internal fun ApplicationSettings.toGamepadConfiguration(): GamepadConfiguration =

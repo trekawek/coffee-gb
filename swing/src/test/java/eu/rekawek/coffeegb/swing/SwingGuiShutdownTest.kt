@@ -109,6 +109,15 @@ class SwingGuiShutdownTest {
   }
 
   @Test
+  fun `cancelled quit keeps paused session input blocked with retry wording`() {
+    val ui = pausedQuitRetryUi()
+
+    assertTrue(ui.blocksInput)
+    assertTrue(ui.title.contains("Paused"))
+    assertTrue(ui.title.contains("close again to retry"))
+  }
+
+  @Test
   fun `desktop shutdown leaves the EDT on a daemon worker`() {
     val ran = CountDownLatch(1)
     var workerWasEdt = true

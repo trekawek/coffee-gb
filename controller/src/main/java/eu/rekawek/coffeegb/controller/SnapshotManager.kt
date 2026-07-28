@@ -236,13 +236,17 @@ class SnapshotManager private constructor(
 
   private val origin = configuration.rom.origin
 
-  fun snapshotAvailable(slot: Int): Boolean =
-      try {
-        getSnapshotPaths(slot).any(persistence::exists)
-      } catch (failure: IOException) {
-        LOG.warn("Unable to recover snapshot slot {} before checking availability", slot, failure)
-        false
-      }
+  fun snapshotAvailable(slot: Int): Boolean {
+    if (origin.persistencePath(".sn${slot}").isEmpty) {
+      return false
+    }
+    return try {
+      getSnapshotPaths(slot).any(persistence::exists)
+    } catch (failure: IOException) {
+      LOG.warn("Unable to recover snapshot slot {} before checking availability", slot, failure)
+      false
+    }
+  }
 
   fun saveSnapshot(slot: Int, gameboy: Gameboy) {
     val snapshotFile = getSnapshotFile(slot)

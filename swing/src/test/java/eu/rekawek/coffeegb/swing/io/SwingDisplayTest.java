@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import org.junit.Test;
 
@@ -97,6 +98,30 @@ public class SwingDisplayTest {
 
         session.post(new Controller.SnapshotRestoredEvent(7));
         assertEquals("State loaded (slot 7)", textField.get(display));
+        root.close();
+    }
+
+    @Test
+    public void ownerAndSessionLifecycleResetHostRumbleWithoutCoreTeardownEvent() throws Exception {
+        EventBusImpl root = new EventBusImpl(null, null, false);
+        EventBus session = root.fork("test");
+        SwingDisplay display = new SwingDisplay(
+                new EmulatorProperties().getDisplay(), root, "test");
+        Field rumbling = SwingDisplay.class.getDeclaredField("rumbling");
+        rumbling.setAccessible(true);
+
+        session.post(new RumbleEvent(true));
+        assertTrue(rumbling.getBoolean(display));
+        display.releaseForLifecycleChange();
+        assertFalse(rumbling.getBoolean(display));
+
+        session.post(new RumbleEvent(true));
+        session.post(new Controller.RomLoadingEvent(new File("next.gb")));
+        assertFalse(rumbling.getBoolean(display));
+
+        session.post(new RumbleEvent(true));
+        session.post(new Controller.EmulationStoppedEvent());
+        assertFalse(rumbling.getBoolean(display));
         root.close();
     }
 

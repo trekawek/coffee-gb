@@ -101,7 +101,14 @@ final class StagedEventBus implements EventBus {
 
     private boolean stage(Event event, boolean async) {
         synchronized (lock) {
-            ensureOpen();
+            if (state == State.CLOSED) {
+                if (async) {
+                    ensureOpen();
+                }
+                // Core resource cleanup may synchronously silence an output after the owning
+                // session bus has quiesced. Treat that signal as local cleanup, not an error.
+                return true;
+            }
             if (state == State.ACTIVE) {
                 return false;
             }
@@ -125,6 +132,17 @@ final class StagedEventBus implements EventBus {
             }
             return delegate.fork(callerId);
         }
+    }
+
+    @Override
+    public void close() {
+        synchronized (lock) {
+            state = State.CLOSED;
+            stagedPosts.clear();
+        }
+        // Always retry the delegate close. A previous bounded attempt may have timed out while
+        // its worker was still returning.
+        delegate.close();
     }
 
     @Override

@@ -18,6 +18,7 @@ public class EventBusImpl implements EventBus {
     private final List<Registration> registrations = new CopyOnWriteArrayList<>();
     private final EventBusImpl parent;
     private final List<EventBusImpl> children = new CopyOnWriteArrayList<>();
+    private final Object lifecycleLock = new Object();
     private final String callerId;
     private final boolean asyncEventsEnabled;
     private final long closeTimeoutMillis;
@@ -76,6 +77,11 @@ public class EventBusImpl implements EventBus {
 
     @Override
     public <E extends Event> void post(E event) {
+        // A child retains its parent reference after removal so a bounded close can be retried.
+        // Never let that retained route turn a post-close cleanup signal into a sibling event.
+        if (doStop || stopped) {
+            return;
+        }
         getRoot().postToDescendants(event, callerId);
     }
 
@@ -125,16 +131,27 @@ public class EventBusImpl implements EventBus {
     @Override
     @NotNull
     public EventBusImpl fork(String callerId) {
-        if (doStop || stopped) {
-            throw new IllegalStateException("This EventBus is no longer active.");
+        synchronized (lifecycleLock) {
+            if (doStop || stopped) {
+                throw new IllegalStateException("This EventBus is no longer active.");
+            }
+            // Creation and attachment are one ownership transaction with closeBefore(). The child
+            // constructor may start an async worker, so it must be visible to the parent's close
+            // traversal before that traversal is allowed to begin.
+            EventBusImpl child = createChild(callerId);
+            children.add(child);
+            return child;
         }
-        EventBusImpl child = new EventBusImpl(this, callerId, asyncEventsEnabled);
-        children.add(child);
-        return child;
+    }
+
+    EventBusImpl createChild(String callerId) {
+        return new EventBusImpl(this, callerId, asyncEventsEnabled);
     }
 
     private void removeChild(EventBusImpl child) {
-        children.remove(child);
+        synchronized (lifecycleLock) {
+            children.remove(child);
+        }
     }
 
     @Override
@@ -155,11 +172,16 @@ public class EventBusImpl implements EventBus {
     }
 
     private void closeBefore(long deadlineNanos) {
-        for (EventBusImpl child : children) {
+        List<EventBusImpl> ownedChildren;
+        synchronized (lifecycleLock) {
+            // Prevent a new child worker from being attached after this traversal's snapshot.
+            doStop = true;
+            ownedChildren = List.copyOf(children);
+        }
+        for (EventBusImpl child : ownedChildren) {
             child.closeBefore(deadlineNanos);
         }
 
-        doStop = true;
         if (asyncThread == null) {
             stopped = true;
             stoppedSignal.countDown();

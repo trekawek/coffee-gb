@@ -137,8 +137,8 @@ class Session(
       return
     }
     when (mode) {
-      CleanupMode.FLUSH_CARTRIDGE -> gameboy.close()
-      CleanupMode.AFTER_CARTRIDGE_FLUSH -> gameboy.closeAfterCartridgeFlush()
+      CleanupMode.FLUSH_CARTRIDGE -> gameboy.closeSilently()
+      CleanupMode.AFTER_CARTRIDGE_FLUSH -> gameboy.closeAfterCartridgeFlushSilently()
       CleanupMode.DISCARD_UNSTARTED -> gameboy.discardUnstarted()
     }
     resourcesClosed = true
