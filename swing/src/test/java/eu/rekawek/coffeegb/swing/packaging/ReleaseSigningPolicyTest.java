@@ -18,6 +18,7 @@ public class ReleaseSigningPolicyTest {
         Map<String, String> environment = releaseEnvironment();
         environment.put("COFFEE_GB_MAC_SIGNING_KEY_USER_NAME", "Developer ID Application: Example");
         environment.put("COFFEE_GB_MAC_NOTARY_KEYCHAIN_PROFILE", "coffee-gb-notary");
+        environment.put("COFFEE_GB_MAC_NOTARY_KEYCHAIN", "/tmp/release.keychain-db");
 
         ReleaseSigningPolicy policy = ReleaseSigningPolicy.require(
                 NativePackageMetadata.target(NativeTarget.MACOS_AARCH64),
@@ -29,6 +30,8 @@ public class ReleaseSigningPolicyTest {
         List<List<String>> post = policy.postPackageCommands(Path.of("/dist/coffee-gb.dmg"));
         assertEquals("xcrun", post.get(0).get(0));
         assertTrue(post.get(0).contains("notarytool"));
+        assertTrue(post.get(0).contains("--keychain"));
+        assertTrue(post.get(0).contains("/tmp/release.keychain-db"));
         assertTrue(post.get(1).contains("stapler"));
         assertEquals("codesign", policy.verificationCommands(
                 Path.of("/dist/coffee-gb.dmg")).get(0).get(0));
