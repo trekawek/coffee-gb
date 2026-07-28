@@ -91,7 +91,10 @@ public final class DisplayViewport {
         } else if (mode == DisplayScaleMode.ASPECT_FIT) {
             scale = fitScale;
         } else {
-            scale = mode.explicitScale();
+            // Windowed explicit modes are protected by a matching top-level minimum size. Keep a
+            // uniform fit fallback here for smaller physical screens, transient native layout
+            // constraints, and fullscreen: exact scale must never turn into clipped source pixels.
+            scale = Math.min(mode.explicitScale(), fitScale);
         }
 
         double width = rotatedWidth * scale;

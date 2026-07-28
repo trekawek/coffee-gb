@@ -251,6 +251,12 @@ public class SwingDisplayTest {
         flushEdt();
         assertEquals(new Dimension(432, 480), latestSize.get());
         assertEquals(new Dimension(432, 480), onEdt(display::getPreferredSize));
+
+        // Reapplying settings for a fullscreen-only change must not repack and overwrite the
+        // restored window bounds.
+        eventBus.post(new SwingDisplay.SetScaleModeEvent(DisplayScaleMode.EXPLICIT_3X));
+        eventBus.post(new SwingDisplay.SetRotationEvent(90));
+        flushEdt();
         assertEquals(2, eventCount.get());
         assertTrue(allEventsOnEdt.get());
         eventBus.close();

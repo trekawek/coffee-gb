@@ -313,7 +313,7 @@ class ApplicationSettingsStoreTest {
 
       store.update(
           store.current().withSettings {
-            copy(display = display.copy(scale = 4))
+            copy(display = display.copy(explicitScale = 4))
           })
       store.flush()
       assertEquals(4, readDocument(path).settings.display.scale)
@@ -370,10 +370,8 @@ class ApplicationSettingsStoreTest {
       properties.setProperty(EmulatorProperties.Key.SoundEnabled, "false")
       assertEquals(4, properties.display.scale)
       assertFalse(properties.sound.soundEnabled)
-      assertFailsWith<IllegalArgumentException> {
-        properties.setProperty(EmulatorProperties.Key.DisplayScale, "3")
-      }
-      assertEquals(4, properties.display.scale)
+      properties.setProperty(EmulatorProperties.Key.DisplayScale, "3")
+      assertEquals(3, properties.display.scale)
 
       // Persistence is disabled, but validated menu/facade changes remain useful in this session.
       properties.flush()
@@ -427,14 +425,14 @@ class ApplicationSettingsStoreTest {
 
           Files.readAllBytes(path).also { bytes ->
             val canonical = ApplicationSettingsStore.decodeProperties(bytes)
-            assertEquals("3", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+            assertEquals("4", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
             assertEquals(store.current(), ApplicationSettingsCodec.decode(canonical))
             assertEquals(canonical, ApplicationSettingsCodec.encode(store.current()))
           }
         }
 
     ApplicationSettingsStore(path, debounceMillis = 60_000).use { store ->
-      assertEquals("3", store.current().settings.schemaVersion.toString())
+      assertEquals("4", store.current().settings.schemaVersion.toString())
     }
     assertTrue(canonicalBytes.contentEquals(Files.readAllBytes(path)))
   }
@@ -560,9 +558,9 @@ class ApplicationSettingsStoreTest {
     val writer = CountingWriter()
     val store = ApplicationSettingsStore(path, writer, debounceMillis = 60_000)
 
-    store.update(store.current().withSettings { copy(display = display.copy(scale = 1)) })
-    store.update(store.current().withSettings { copy(display = display.copy(scale = 2)) })
-    store.update(store.current().withSettings { copy(display = display.copy(scale = 4)) })
+    store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 1)) })
+    store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 2)) })
+    store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 4)) })
     assertEquals(4, store.current().settings.display.scale)
     assertEquals(0, writer.writes.get())
 
@@ -580,10 +578,10 @@ class ApplicationSettingsStoreTest {
     val writer = SignallingWriter()
     val store = ApplicationSettingsStore(path, writer, debounceMillis = 1_000)
     try {
-      store.update(store.current().withSettings { copy(display = display.copy(scale = 1)) })
+      store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 1)) })
       assertFalse(writer.written.await(100, TimeUnit.MILLISECONDS))
 
-      store.update(store.current().withSettings { copy(display = display.copy(scale = 4)) })
+      store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 4)) })
       assertFalse(writer.written.await(250, TimeUnit.MILLISECONDS))
       assertEquals(0, writer.writes.get())
 
@@ -606,7 +604,7 @@ class ApplicationSettingsStoreTest {
     Files.write(path, originalBytes)
     val writer = FailOnceWriter()
     val store = ApplicationSettingsStore(path, writer, debounceMillis = 60_000)
-    store.update(store.current().withSettings { copy(display = display.copy(scale = 4)) })
+    store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 4)) })
 
     val failure = assertFailsWith<IOException> { store.flush() }
     assertTrue(failure.message!!.contains("injected"))
@@ -626,10 +624,10 @@ class ApplicationSettingsStoreTest {
     val path = directory.resolve("settings.properties")
     val writer = BlockingFirstWriter()
     val store = ApplicationSettingsStore(path, writer, debounceMillis = 0)
-    store.update(store.current().withSettings { copy(display = display.copy(scale = 1)) })
+    store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 1)) })
     assertTrue(writer.started.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
-    store.update(store.current().withSettings { copy(display = display.copy(scale = 4)) })
+    store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 4)) })
     val closeFailure = AtomicReference<Throwable?>()
     val closeStarted = CountDownLatch(1)
     val closer =
@@ -663,7 +661,7 @@ class ApplicationSettingsStoreTest {
             debounceMillis = 0,
             closeTimeoutMillis = 100,
         )
-    store.update(store.current().withSettings { copy(display = display.copy(scale = 4)) })
+    store.update(store.current().withSettings { copy(display = display.copy(explicitScale = 4)) })
     assertTrue(writer.started.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
     val started = System.nanoTime()
@@ -793,8 +791,11 @@ class ApplicationSettingsStoreTest {
               "display.blending" to "false",
               "display.colorCorrection" to "false",
               "display.grayscale" to "true",
+              "display.fullscreen" to "false",
+              "display.letterboxColor" to "000000",
               "display.rotation" to "270",
               "display.scale" to "4",
+              "display.scalingMode" to "EXPLICIT",
               "display.showSgbBorder" to "true",
               "fullchanger.character" to "07 ま Magnesium Powered",
               "general.recentFileCapacity" to "10",
@@ -816,7 +817,7 @@ class ApplicationSettingsStoreTest {
               "general.recent.1" to "/legacy/roms/second.gbc",
               "rom.recent.future" to "preserve future recent metadata",
               "saves.batteryEnabled" to "false",
-              "settings.schemaVersion" to "3",
+              "settings.schemaVersion" to "4",
               "sound.enabled" to "false",
               "system.bootstrapMode" to "FAST_FORWARD",
               "system.cgbGames" to "cgb0",

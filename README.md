@@ -126,6 +126,7 @@ ambiguous or aliased identity.
 | Pause | <kbd>Space</kbd> |
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
 | Rewind | Hold <kbd>Backspace</kbd> |
+| Toggle fullscreen | <kbd>F11</kbd> (disabled if assigned to an emulated button) |
 
 In single-player mode, there are ten save-state slots. Battery saves (`.sav`)
 and save states (`.sn0`&ndash;`.sn9`) are stored next to the ROM. Pause, save
@@ -135,9 +136,12 @@ states, and rewind are disabled during netplay.
 <summary>Custom keyboard and game-controller mapping</summary>
 
 Desktop settings are stored in `~/.coffeegb.properties`. **File > Preferences…** configures
-General behavior, four-player keyboard bindings, gamepad assignment/tuning, and audio
-device/volume/mute/latency without manual editing. The complete typed schema, validation,
-migration, device fallback, and recovery rules are documented in the
+General behavior, aspect-correct integer/fit/1×–4× display scaling, letterboxing, fullscreen,
+four-player keyboard bindings, gamepad assignment/tuning, and audio device/volume/mute/latency
+without manual editing. The resizable display preserves DMG/CGB and SGB-border geometry; fullscreen
+restores and clamps prior window placement across monitor and DPI changes. The complete typed
+schema, validation, rendering fallback, migration, device fallback, and recovery rules are
+documented in the
 [desktop command-line and settings contract](docs/desktop-settings.md). For keyboard mappings, use
 [`KeyEvent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.desktop/java/awt/event/KeyEvent.html)
 constant names:

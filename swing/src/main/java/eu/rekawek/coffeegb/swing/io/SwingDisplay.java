@@ -27,8 +27,6 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private static final int NOTIFICATION_DURATION_MS = 1500;
 
-    private static final Color DEFAULT_LETTERBOX_COLOR = Color.BLACK;
-
     private final EventBus eventBus;
 
     private final int[] waitingFrame;
@@ -78,7 +76,7 @@ public class SwingDisplay extends JPanel implements Runnable {
         requireEventDispatchThread("SwingDisplay construction");
         this.eventBus = eventBus;
         setOpaque(true);
-        setBackground(DEFAULT_LETTERBOX_COLOR);
+        setBackground(new Color(properties.getLetterboxColor()));
         waitingFrame = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
         displayedFrame = new AtomicReference<>(DisplayFrameSnapshot.copyOf(
                 DISPLAY_WIDTH,
@@ -86,7 +84,7 @@ public class SwingDisplay extends JPanel implements Runnable {
                 new int[DISPLAY_WIDTH * DISPLAY_HEIGHT]));
         this.grayscale = properties.getGrayscale();
         this.rotation = normalizeRotation(properties.getRotation());
-        this.scaleMode = legacyScaleMode(properties.getScale());
+        this.scaleMode = initialScaleMode(properties);
         setBlending(properties.getBlending());
         setColorCorrection(properties.getColorCorrection());
 
@@ -188,12 +186,20 @@ public class SwingDisplay extends JPanel implements Runnable {
     }
 
     private void setScaleMode(DisplayScaleMode mode) {
-        scaleMode = Objects.requireNonNull(mode, "mode");
+        DisplayScaleMode requiredMode = Objects.requireNonNull(mode, "mode");
+        if (requiredMode == scaleMode) {
+            return;
+        }
+        scaleMode = requiredMode;
         requestPreferredSizeUpdate();
     }
 
     private void setRotation(int degrees) {
-        this.rotation = normalizeRotation(degrees);
+        int normalized = normalizeRotation(degrees);
+        if (normalized == rotation) {
+            return;
+        }
+        this.rotation = normalized;
         requestPreferredSizeUpdate();
     }
 
@@ -213,6 +219,14 @@ public class SwingDisplay extends JPanel implements Runnable {
         } else {
             return DisplayScaleMode.EXPLICIT_4X;
         }
+    }
+
+    private static DisplayScaleMode initialScaleMode(DisplayProperties properties) {
+        return switch (properties.getScalingMode()) {
+            case INTEGER_FIT -> DisplayScaleMode.INTEGER_FIT;
+            case ASPECT_FIT -> DisplayScaleMode.ASPECT_FIT;
+            case EXPLICIT -> DisplayScaleMode.explicit(properties.getExplicitScale());
+        };
     }
 
     private void requestPreferredSizeUpdate() {
@@ -254,6 +268,10 @@ public class SwingDisplay extends JPanel implements Runnable {
             setBackground(copiedColor);
             repaint();
         });
+    }
+
+    public DisplayScaleMode getScaleMode() {
+        return scaleMode;
     }
 
     @Override

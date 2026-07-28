@@ -1,9 +1,8 @@
 # Desktop command line and settings contract
 
-This document defines the first Desktop 2.0 compatibility boundary. The portable JAR and the
-Swing application use the same command-line parser and the same typed settings model. Later
-preferences, ROM-opening, and packaging work must extend this contract rather than introduce a
-second parser or settings file.
+This document defines the Desktop 2.0 compatibility boundary. The portable JAR and the Swing
+application use the same command-line parser and the same typed settings model. ROM-opening and
+packaging work must extend this contract rather than introduce a second parser or settings file.
 
 ## Command line
 
@@ -45,16 +44,19 @@ The application owns one immutable `ApplicationSettings` value with typed `gener
 `audio`, `input`, `saves`, and `advanced` sections. The controller-facing `EmulatorProperties`
 class is a compatibility facade over that model while older menu code is migrated.
 
-Schema 3 continues to use `${user.home}/.coffeegb.properties`; schemas 0–2 are migrated in place
+Schema 4 continues to use `${user.home}/.coffeegb.properties`; schemas 0–3 are migrated in place
 so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `3` |
+| `settings.schemaVersion` | exact supported schema version | `4` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
-| `display.scale` | supported integer scale | `2` |
+| `display.scalingMode` | `INTEGER_FIT`, `ASPECT_FIT`, or `EXPLICIT` | `EXPLICIT` |
+| `display.scale` | explicit integer scale in `1..4` | `2` |
+| `display.letterboxColor` | six uppercase RGB hexadecimal digits | `000000` |
+| `display.fullscreen` | boolean | `false` |
 | `display.rotation` | `0`, `90`, `180`, or `270` degrees | `0` |
 | `display.grayscale` | boolean | `false` |
 | `display.blending` | boolean | `true` |
@@ -89,14 +91,14 @@ does not partially update the active settings.
 application may close without a redundant prompt. `ALWAYS` also confirms an idle application
 close, and `NEVER` suppresses this ordinary confirmation. A battery/autosave flush failure remains
 actionable regardless of this preference. Setting recent-file capacity to zero disables history;
-reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 3
+reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 4
 does not invent or persist an update-check preference.
 
-Unrecognized legacy keys are retained losslessly when schema 3 is saved. Keys in a reserved grammar,
+Unrecognized legacy keys are retained losslessly when schema 4 is saved. Keys in a reserved grammar,
 such as an unknown `input.*` key, remain errors so a misspelled control binding is not silently
-ignored. Schema 3 stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
+ignored. Schema 4 stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
 key beyond Coffee GB's old ten-entry history remains untouched even if capacity later grows. Schema
-3 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
+4 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
 binding is therefore unbound rather than silently restored to a default. If an older unknown key
 occupies a name reserved by a later schema, Coffee GB keeps its original key/value in bounded
 internal migration metadata rather than overwriting or reinterpreting it. At most 32 per-device
@@ -105,10 +107,12 @@ gamepad tuning profiles are retained.
 ## Preferences
 
 Open **File → Preferences…** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd>) to change the
-default ROM directory, recent-file capacity, ROM-change confirmation policy, and keyboard controls
-without editing the properties file. The Input tab shows all eight current bindings for Players
-1–4. Choose **Capture** and press a key, or use the explicit **Dialog key…** action for Enter or
-Escape. Tab remains reserved for focus navigation and Backspace remains reserved for Rewind.
+default ROM directory, recent-file capacity, ROM-change confirmation policy, display behavior, and
+keyboard controls without editing the properties file. The Display tab exposes scaling,
+letterboxing, fullscreen, rotation, DMG grayscale, frame blending, CGB color correction, and the
+Super Game Boy border. The Input tab shows all eight current bindings for Players 1–4. Choose
+**Capture** and press a key, or use the explicit **Dialog key…** action for Enter or Escape. Tab
+remains reserved for focus navigation and Backspace remains reserved for Rewind.
 Conflicting bindings identify the existing assignment and are not applied; each row also supports
 Clear and Reset. The Gamepads tab lists up to four logical assignments without calling SDL on the
 EDT. It keeps an unavailable configured controller visible, prevents duplicate explicit or
@@ -125,16 +129,61 @@ configured output after it reappears. Device, volume, mute, and latency changes 
 audio clock or DC-filter phase.
 
 **Apply** validates the complete draft, writes one settings update, and switches the live keyboard
-mapping only after persistence accepts it. **Cancel**, the window close button, and Escape discard
-unapplied edits. **Restore Defaults** only changes the visible draft until Apply is chosen.
+mapping and display only after persistence accepts it. **Cancel**, the window close button, and
+Escape discard unapplied edits. **Restore Defaults** only changes the visible draft until Apply is
+chosen.
+
+## Display scaling and fullscreen
+
+The game image and the Swing component have independent sizes. Coffee GB copies each completed
+emulated frame into an immutable private raster before publishing it to the EDT, so repainting
+cannot retain or mutate an emulator-owned pixel buffer. DMG/CGB frames use their native 160×144
+geometry; an enabled SGB border uses its native 256×224 geometry. Rotation is included before
+viewport fitting, and both axes always use the same scale.
+
+- **Integer fit** chooses the largest whole-number scale that fits. During a transient layout
+  smaller than one native frame it temporarily uses uniform aspect fit so the image is not clipped.
+- **Fit preserving aspect ratio** uses the largest uniform fractional scale that fits.
+- **Explicit 1×–4×** keeps that exact pixel scale and recenters the image. Choosing an explicit
+  scale or changing native DMG/SGB geometry repacks the window while it is windowed, and the
+  window minimum tracks the complete rotated source size. If a physical screen or native window
+  manager cannot honor that minimum, the renderer uniformly fits as a safe no-crop fallback.
+
+Unused space is letterboxed or pillarboxed with the configured RGB color. The viewport uses
+half-open geometry and conservative paint bounds, so odd device-pixel margins put the extra pixel
+on the right or bottom without stretching or cropping the final source pixel.
+
+The main window is resizable and has a base 160×144 minimum content area; windowed explicit modes
+raise that minimum as described above. **Screen → Fullscreen** enters borderless fullscreen;
+<kbd>F11</kbd> is its accelerator unless F11 is assigned to an emulated button, in which case the
+accelerator is automatically disabled and the menu command remains available. Menu radio items,
+Preferences, persisted settings, and the live renderer are synchronized through one EDT-owned
+coordinator.
+
+Entering fullscreen remembers window placement relative to the monitor's stable AWT device ID and
+current scale transform. Exiting converts through the latest per-monitor transform and clamps the
+window to the current usable work area. If that monitor disappears, Coffee GB selects the nearest
+remaining monitor deterministically. The windowed explicit-size minimum is lowered before entry so
+it cannot constrain the monitor bounds, then recomputed after exit; the restored bounds are
+preserved unless they are too small for a display-size change made while fullscreen. While
+fullscreen, move/resize notifications plus a fullscreen-only one-second monitor refresh recover
+from monitor removal, work-area changes, and per-monitor DPI changes without retaining stale
+`GraphicsDevice` instances.
+
+Swing does not expose a reliable cross-platform swap-interval or vertical-sync capability.
+Coffee GB therefore keeps its existing event-driven repaint pacing and nearest-neighbor rendering;
+it does not present a nonfunctional vsync option. A future backend may expose optional pacing only
+after it can report and test that capability, with this repaint path remaining the fallback.
 
 ## Migration and recovery
 
-A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 2 migration is a
-pure conversion into schema 3, preserves unknown keys, retains absent profile mappings as Auto, and
-canonicalizes the finite historical uppercase profile aliases. Repeating load/migrate/save produces
-the same normalized settings. Legacy text is decoded with the platform-default charset used by the
-former `FileReader`; versioned files use strict UTF-8 with deterministic ASCII escapes.
+A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 3 migration is a
+pure conversion into schema 4, preserves unknown keys, retains absent profile mappings as Auto, and
+canonicalizes the finite historical uppercase profile aliases. Existing display scales migrate to
+explicit scale with a black letterbox and windowed startup; no previous launch is unexpectedly
+forced fullscreen. Repeating load/migrate/save produces the same normalized settings. Legacy text
+is decoded with the platform-default charset used by the former `FileReader`; versioned files use
+strict UTF-8 with deterministic ASCII escapes.
 
 The complete file is bounded, parsed, migrated, and validated before it can replace the in-memory
 defaults. If syntax or a recognized value is corrupt, Coffee GB moves the original bytes to a

@@ -22,6 +22,9 @@ object ApplicationSettingsCodec {
   const val AUDIO_VOLUME_KEY = "audio.masterVolume"
   const val AUDIO_LATENCY_KEY = "audio.latencyPreset"
   const val GAMEPAD_TUNING_PREFIX = "input.gamepad."
+  const val DISPLAY_SCALING_MODE_KEY = "display.scalingMode"
+  const val DISPLAY_LETTERBOX_COLOR_KEY = "display.letterboxColor"
+  const val DISPLAY_FULLSCREEN_KEY = "display.fullscreen"
   internal const val PRESERVED_UNKNOWN_COLLISIONS_PREFIX =
       "settings.preservedUnknownCollisions."
 
@@ -34,6 +37,9 @@ object ApplicationSettingsCodec {
   private val versionThreeFixedKeys =
       versionTwoFixedKeys +
           setOf(AUDIO_OUTPUT_KEY, AUDIO_VOLUME_KEY, AUDIO_LATENCY_KEY)
+  private val versionFourFixedKeys =
+      versionThreeFixedKeys +
+          setOf(DISPLAY_SCALING_MODE_KEY, DISPLAY_LETTERBOX_COLOR_KEY, DISPLAY_FULLSCREEN_KEY)
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -47,7 +53,11 @@ object ApplicationSettingsCodec {
             version > SUPPORTED_SCHEMA_VERSION)) {
       throw UnsupportedApplicationSettingsVersionException(encodedVersion)
     }
-    require(version == "1" || version == "2" || version == SUPPORTED_SCHEMA_VERSION) {
+    require(
+        version == "1" ||
+            version == "2" ||
+            version == "3" ||
+            version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
     return decodeSupportedVersion(raw, sourceVersion = version.toInt())
@@ -97,7 +107,12 @@ object ApplicationSettingsCodec {
       known["$RECENT_ROM_PREFIX$index"] = path.toString()
     }
 
-    known[EmulatorProperties.Key.DisplayScale.propertyName] = settings.display.scale.toString()
+    known[DISPLAY_SCALING_MODE_KEY] = settings.display.scalingMode.name
+    known[EmulatorProperties.Key.DisplayScale.propertyName] =
+        settings.display.explicitScale.toString()
+    known[DISPLAY_LETTERBOX_COLOR_KEY] =
+        "%06X".format(Locale.ROOT, settings.display.letterboxColor)
+    known[DISPLAY_FULLSCREEN_KEY] = settings.display.fullscreen.toString()
     known[EmulatorProperties.Key.DisplayGrayscale.propertyName] = settings.display.grayscale.toString()
     known[EmulatorProperties.Key.DisplayBlending.propertyName] = settings.display.blending.toString()
     known[EmulatorProperties.Key.DisplayColorCorrection.propertyName] =
@@ -182,10 +197,29 @@ object ApplicationSettingsCodec {
         }
     val display =
         ApplicationSettings.Display(
-            scale =
-                raw[EmulatorProperties.Key.DisplayScale.propertyName]?.let {
-                  parseInt(it, EmulatorProperties.Key.DisplayScale.propertyName)
-                } ?: 2,
+            scalingMode =
+                if (sourceVersion >= 4) {
+                  parseDisplayScalingMode(raw[DISPLAY_SCALING_MODE_KEY])
+                } else {
+                  ApplicationSettings.DisplayScalingMode.EXPLICIT
+                },
+            explicitScale =
+                parseDisplayScale(
+                    raw[EmulatorProperties.Key.DisplayScale.propertyName],
+                    sourceVersion,
+                ),
+            letterboxColor =
+                if (sourceVersion >= 4) {
+                  parseLetterboxColor(raw[DISPLAY_LETTERBOX_COLOR_KEY])
+                } else {
+                  ApplicationSettings.DEFAULT_LETTERBOX_COLOR
+                },
+            fullscreen =
+                if (sourceVersion >= 4) {
+                  parseBoolean(raw[DISPLAY_FULLSCREEN_KEY], false, DISPLAY_FULLSCREEN_KEY)
+                } else {
+                  false
+                },
             grayscale =
                 parseBoolean(
                     raw[EmulatorProperties.Key.DisplayGrayscale.propertyName],
@@ -301,6 +335,7 @@ object ApplicationSettingsCodec {
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 4 -> versionFourFixedKeys
           sourceVersion >= 3 -> versionThreeFixedKeys
           sourceVersion >= 2 -> versionTwoFixedKeys
           else -> versionOneFixedKeys
@@ -399,6 +434,49 @@ object ApplicationSettingsCodec {
       throw IllegalArgumentException(
           "Invalid $AUDIO_LATENCY_KEY: $value (expected LOW, BALANCED, or SAFE)")
     }
+  }
+
+  private fun parseDisplayScalingMode(value: String?): ApplicationSettings.DisplayScalingMode {
+    if (value == null) return ApplicationSettings.DisplayScalingMode.EXPLICIT
+    return try {
+      ApplicationSettings.DisplayScalingMode.valueOf(value)
+    } catch (_: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid $DISPLAY_SCALING_MODE_KEY: $value " +
+              "(expected INTEGER_FIT, ASPECT_FIT, or EXPLICIT)")
+    }
+  }
+
+  private fun parseDisplayScale(value: String?, sourceVersion: Int): Int {
+    if (value == null) return ApplicationSettings.DEFAULT_EXPLICIT_DISPLAY_SCALE
+    val parsed = parseInt(value, EmulatorProperties.Key.DisplayScale.propertyName)
+    val accepted =
+        if (sourceVersion >= 4) {
+          parsed in
+              ApplicationSettings.MIN_EXPLICIT_DISPLAY_SCALE..
+                  ApplicationSettings.MAX_EXPLICIT_DISPLAY_SCALE
+        } else {
+          parsed == 1 || parsed == 2 || parsed == 4
+        }
+    require(accepted) {
+      if (sourceVersion >= 4) {
+        "Invalid ${EmulatorProperties.Key.DisplayScale.propertyName}: $parsed " +
+            "(expected ${ApplicationSettings.MIN_EXPLICIT_DISPLAY_SCALE}.." +
+            "${ApplicationSettings.MAX_EXPLICIT_DISPLAY_SCALE})"
+      } else {
+        "Invalid ${EmulatorProperties.Key.DisplayScale.propertyName}: $parsed " +
+            "(expected 1, 2, or 4)"
+      }
+    }
+    return parsed
+  }
+
+  private fun parseLetterboxColor(value: String?): Int {
+    if (value == null) return ApplicationSettings.DEFAULT_LETTERBOX_COLOR
+    require(CANONICAL_RGB.matches(value)) {
+      "Invalid $DISPLAY_LETTERBOX_COLOR_KEY: $value (expected six uppercase hexadecimal digits)"
+    }
+    return value.toInt(16)
   }
 
   private fun parseGamepadTunings(
@@ -634,7 +712,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionThreeFixedKeys ||
+      key in versionFourFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           key.startsWith("btn_") ||
@@ -644,6 +722,7 @@ object ApplicationSettingsCodec {
   private const val COLLISION_CHUNK_SIZE = 60_000
   private const val MAX_COLLISION_CHUNKS = 32
   private const val MAX_SETTINGS_PROPERTIES = 2_048
+  private val CANONICAL_RGB = Regex("[0-9A-F]{6}")
   private val gamepadTuningKey =
       Regex(
           "input\\.gamepad\\.(sdl-[0-9a-f]{64})\\." +

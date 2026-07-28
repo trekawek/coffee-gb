@@ -54,7 +54,11 @@ class PreferencesDialogTest {
                     recentFileCapacity = 4,
                     romChangeConfirmationPolicy = RomChangeConfirmationPolicy.ALWAYS,
                 ),
-            display = ApplicationSettings.Display(scale = 4, grayscale = true),
+            display =
+                ApplicationSettings.Display(
+                    explicitScale = 4,
+                    grayscale = true,
+                ),
             audio = ApplicationSettings.Audio(enabled = false),
             input = currentInput,
             saves = ApplicationSettings.Saves(batterySavesEnabled = false),
@@ -64,6 +68,12 @@ class PreferencesDialogTest {
             romDirectory = Paths.get("new"),
             recentFileCapacity = 2,
             confirmationPolicy = RomChangeConfirmationPolicy.NEVER,
+            display =
+                ApplicationSettings.Display(
+                    scalingMode = ApplicationSettings.DisplayScalingMode.ASPECT_FIT,
+                    letterboxColor = 0x202020,
+                    fullscreen = true,
+                ),
             keyboard = emptyMap(),
             gamepads = mapOf(0 to GamepadSelection.Disabled),
             gamepadTunings =
@@ -87,7 +97,7 @@ class PreferencesDialogTest {
     assertTrue(updated.input.keyboard.isEmpty())
     assertEquals(edit.gamepads, updated.input.gamepads)
     assertEquals(edit.gamepadTunings, updated.input.gamepadTunings)
-    assertEquals(current.display, updated.display)
+    assertEquals(edit.display, updated.display)
     assertEquals(edit.audio, updated.audio)
     assertEquals(current.saves, updated.saves)
     assertEquals(current.advanced, updated.advanced)
@@ -115,6 +125,7 @@ class PreferencesDialogTest {
         assertEquals(ApplicationSettings.DEFAULT_RECENT_FILE_CAPACITY, received?.recentFileCapacity)
         assertEquals(ApplicationSettings.Input.defaults().keyboard, received?.keyboard)
         assertEquals(ApplicationSettings.Input.defaults().gamepads, received?.gamepads)
+        assertEquals(ApplicationSettings.Display(), received?.display)
         assertEquals(ApplicationSettings.Audio(), received?.audio)
       }
 
@@ -139,6 +150,13 @@ class PreferencesDialogTest {
                         enabled = false,
                         volume = 13,
                         latency = ApplicationSettings.AudioLatency.LOW,
+                    ),
+                display =
+                    ApplicationSettings.Display(
+                        scalingMode = ApplicationSettings.DisplayScalingMode.INTEGER_FIT,
+                        letterboxColor = 0x303030,
+                        fullscreen = true,
+                        rotation = ApplicationSettings.Rotation.DEG_90,
                     ),
                 input =
                     defaults.input.copy(
@@ -174,6 +192,7 @@ class PreferencesDialogTest {
         assertEquals(defaults.input.keyboard, restored.keyboard)
         assertEquals(defaults.input.gamepads, restored.gamepads)
         assertEquals(defaults.input.gamepadTunings, restored.gamepadTunings)
+        assertEquals(defaults.display, restored.display)
         assertEquals(defaults.audio, restored.audio)
         assertEquals(0, applyCount)
         assertEquals(1, closeCount)
@@ -233,6 +252,33 @@ class PreferencesDialogTest {
       }
 
   @Test
+  fun `invalid display color selects Display and keeps the dialog open`() =
+      onEdt {
+        var applyCount = 0
+        var closeCount = 0
+        val panel = PreferencesPanel(ApplicationSettings())
+        val actions =
+            PreferencesDialogActions(
+                panel,
+                applyEdit = { applyCount++ },
+                close = { closeCount++ },
+            )
+
+        panel.tabs.selectedIndex = 0
+        panel.displayEditor.letterboxColor.text = "not-a-color"
+        actions.apply()
+
+        assertEquals(0, applyCount)
+        assertEquals(0, closeCount)
+        assertEquals("Display", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertEquals(
+            "Enter a color in #RRGGBB form.",
+            panel.displayEditor.letterboxColorError.text,
+        )
+        assertSame(panel.displayEditor.letterboxColor, panel.focusOwnerOrInvalidComponent())
+      }
+
+  @Test
   fun `general fields have label associations and accessible names`() =
       onEdt {
         val panel = PreferencesPanel(ApplicationSettings())
@@ -253,6 +299,10 @@ class PreferencesDialogTest {
         assertEquals("Default ROM directory", panel.directoryField.accessibleContext.accessibleName)
         assertEquals("Recent files to keep", panel.recentCapacity.accessibleContext.accessibleName)
         assertFalse(panel.tabs.accessibleContext.accessibleName.isNullOrBlank())
+        assertEquals(
+            listOf("General", "Display", "Input", "Gamepads", "Audio"),
+            (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
+        )
       }
 
   @Test
@@ -303,7 +353,7 @@ class PreferencesDialogTest {
   fun `leaving the Input tab cancels keyboard capture`() =
       onEdt {
         val panel = PreferencesPanel(ApplicationSettings())
-        panel.tabs.selectedIndex = 1
+        panel.tabs.selectedIndex = 2
         val capture =
             descendants(panel.keyboardEditor)
                 .filterIsInstance<AbstractButton>()

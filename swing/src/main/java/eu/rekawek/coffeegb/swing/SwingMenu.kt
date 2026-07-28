@@ -26,6 +26,7 @@ import eu.rekawek.coffeegb.controller.network.ConnectionController.StartClientEv
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StartServerEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
 import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.BootstrapMode
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties.Key.CgbGamesType
@@ -41,13 +42,7 @@ import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
 import eu.rekawek.coffeegb.core.genie.PatchFactory
-import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import eu.rekawek.coffeegb.core.sound.Sound
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetBlendingEvent
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetColorCorrectionEvent
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetGrayscaleEvent
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetRotationEvent
-import eu.rekawek.coffeegb.swing.io.SwingDisplay.SetScaleEvent
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
@@ -59,6 +54,7 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
+import javax.swing.ButtonGroup
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.JCheckBoxMenuItem
@@ -71,6 +67,7 @@ import javax.swing.JMenuBar
 import javax.swing.JMenuItem
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.JRadioButtonMenuItem
 import javax.swing.JScrollPane
 import javax.swing.JTextField
 import javax.swing.KeyStroke
@@ -84,6 +81,7 @@ internal class SwingMenu(
     private val window: JFrame,
     private val eventBus: EventBus,
     private val romSessionState: RomSessionState,
+    private val displayController: DesktopDisplayController,
     private val onPreferences: () -> Unit,
     private val onQuit: () -> Unit,
 ) {
@@ -784,66 +782,11 @@ internal class SwingMenu(
   }
 
   private fun createScreenMenu(): JMenu {
-    val screenMenu = JMenu("Screen")
-
-    val scale = JMenu("Scale")
-    screenMenu.add(scale)
-
-    for (s in mutableListOf(1, 2, 4)) {
-      val item = JCheckBoxMenuItem(s.toString() + "x", s == properties.display.scale)
-      item.addActionListener {
-        eventBus.post(SetScaleEvent(s))
-        uncheckAllBut(scale, item)
-        properties.setProperty(EmulatorProperties.Key.DisplayScale, s.toString())
-      }
-      scale.add(item)
-    }
-
-    val rotate = JMenu("Rotate")
-    screenMenu.add(rotate)
-
-    for (deg in mutableListOf(0, 90, 180, 270)) {
-      val label = if (deg == 0) "None" else "$deg°"
-      val item = JCheckBoxMenuItem(label, deg == properties.display.rotation)
-      item.addActionListener {
-        eventBus.post(SetRotationEvent(deg))
-        uncheckAllBut(rotate, item)
-        properties.setProperty(EmulatorProperties.Key.DisplayRotation, deg.toString())
-      }
-      rotate.add(item)
-    }
-
-    val grayscale = JCheckBoxMenuItem("DMG grayscale", properties.display.grayscale)
-    screenMenu.add(grayscale)
-    grayscale.addActionListener {
-      eventBus.post(SetGrayscaleEvent(grayscale.state))
-      properties.setProperty(EmulatorProperties.Key.DisplayGrayscale, grayscale.state.toString())
-    }
-
-    val colorCorrection =
-        JCheckBoxMenuItem("CGB color correction", properties.display.colorCorrection)
-    screenMenu.add(colorCorrection)
-    colorCorrection.addActionListener {
-      eventBus.post(SetColorCorrectionEvent(colorCorrection.state))
-      properties.setProperty(
-          EmulatorProperties.Key.DisplayColorCorrection, colorCorrection.state.toString())
-    }
-
-    val blending = JCheckBoxMenuItem("LCD ghosting (frame blend)", properties.display.blending)
-    screenMenu.add(blending)
-    blending.addActionListener {
-      eventBus.post(SetBlendingEvent(blending.state))
-      properties.setProperty(EmulatorProperties.Key.DisplayBlending, blending.state.toString())
-    }
-
-    val showSgbBorder = JCheckBoxMenuItem("Show SGB border", properties.display.showSgbBorder)
-    screenMenu.add(showSgbBorder)
-    showSgbBorder.addActionListener {
-      properties.setProperty(EmulatorProperties.Key.ShowSgbBorder, showSgbBorder.state.toString())
-      eventBus.post(SgbDisplay.SetSgbBorder(showSgbBorder.state))
-    }
-
-    return screenMenu
+    return createScreenMenu(
+        displayController,
+        eventBus,
+        keyboardBindings = { properties.applicationSettings.input.keyboard.values },
+    )
   }
 
   private fun createAudioMenu(): JMenu {
@@ -1172,4 +1115,150 @@ internal class SwingMenu(
       }
     }
   }
+}
+
+/**
+ * Builds the display controls around the same coordinator used by Preferences.
+ *
+ * Kept as a small seam so radio grouping, accelerators, and event-driven synchronization can be
+ * exercised without constructing the rest of the desktop menu or touching the filesystem.
+ */
+internal fun createScreenMenu(
+    displayController: DesktopDisplayController,
+    eventBus: EventBus,
+    keyboardBindings: () -> Collection<ApplicationSettings.KeyboardKey>,
+): JMenu {
+  check(SwingUtilities.isEventDispatchThread()) {
+    "The Screen menu must be created on the Event Dispatch Thread"
+  }
+  val screenMenu = JMenu("Screen")
+  val initial = displayController.current()
+
+  /**
+   * F11 is conventional and modifier-free, but emulator bindings are user-owned. If it is mapped
+   * to a Game Boy button, the menu remains available and the accelerator is disabled instead of
+   * delivering one physical press to two owners.
+   */
+  fun fullscreenAccelerator(): KeyStroke? =
+      if (keyboardBindings().none { it.code == KeyEvent.VK_F11 }) {
+        KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0)
+      } else {
+        null
+      }
+
+  val fullscreen = JCheckBoxMenuItem("Fullscreen", initial.fullscreen)
+  fullscreen.accelerator = fullscreenAccelerator()
+  fullscreen.accessibleContext.accessibleName = "Fullscreen"
+  fullscreen.addActionListener { displayController.setFullscreen(fullscreen.state) }
+  screenMenu.add(fullscreen)
+  screenMenu.addSeparator()
+
+  val scale = JMenu("Scale")
+  screenMenu.add(scale)
+  val scaleGroup = ButtonGroup()
+  val scaleItems =
+      mutableMapOf<Pair<ApplicationSettings.DisplayScalingMode, Int>, JRadioButtonMenuItem>()
+
+  fun addScale(
+      title: String,
+      mode: ApplicationSettings.DisplayScalingMode,
+      explicitScale: Int = initial.explicitScale,
+  ) {
+    val key =
+        mode to
+            if (mode == ApplicationSettings.DisplayScalingMode.EXPLICIT) {
+              explicitScale
+            } else {
+              0
+            }
+    val selected =
+        initial.scalingMode == mode &&
+            (mode != ApplicationSettings.DisplayScalingMode.EXPLICIT ||
+                initial.explicitScale == explicitScale)
+    val item = JRadioButtonMenuItem(title, selected)
+    item.addActionListener {
+      displayController.update { current ->
+        current.copy(scalingMode = mode, explicitScale = explicitScale)
+      }
+    }
+    scaleGroup.add(item)
+    scale.add(item)
+    scaleItems[key] = item
+  }
+  addScale("Integer fit", ApplicationSettings.DisplayScalingMode.INTEGER_FIT)
+  addScale("Fit to window", ApplicationSettings.DisplayScalingMode.ASPECT_FIT)
+  scale.addSeparator()
+  for (factor in
+      ApplicationSettings.MIN_EXPLICIT_DISPLAY_SCALE..
+          ApplicationSettings.MAX_EXPLICIT_DISPLAY_SCALE) {
+    addScale("${factor}x", ApplicationSettings.DisplayScalingMode.EXPLICIT, factor)
+  }
+
+  val rotate = JMenu("Rotate")
+  screenMenu.add(rotate)
+  val rotateGroup = ButtonGroup()
+  val rotateItems = mutableMapOf<Int, JRadioButtonMenuItem>()
+  for (rotation in ApplicationSettings.Rotation.entries) {
+    val degrees = rotation.degrees
+    val label = if (degrees == 0) "None" else "$degrees°"
+    val item = JRadioButtonMenuItem(label, rotation == initial.rotation)
+    item.addActionListener {
+      displayController.update { current -> current.copy(rotation = rotation) }
+    }
+    rotateGroup.add(item)
+    rotate.add(item)
+    rotateItems[degrees] = item
+  }
+
+  val grayscale = JCheckBoxMenuItem("DMG grayscale", initial.grayscale)
+  screenMenu.add(grayscale)
+  grayscale.addActionListener {
+    displayController.update { it.copy(grayscale = grayscale.state) }
+  }
+
+  val colorCorrection =
+      JCheckBoxMenuItem("CGB color correction", initial.colorCorrection)
+  screenMenu.add(colorCorrection)
+  colorCorrection.addActionListener {
+    displayController.update { it.copy(colorCorrection = colorCorrection.state) }
+  }
+
+  val blending = JCheckBoxMenuItem("LCD ghosting (frame blend)", initial.blending)
+  screenMenu.add(blending)
+  blending.addActionListener {
+    displayController.update { it.copy(blending = blending.state) }
+  }
+
+  val showSgbBorder = JCheckBoxMenuItem("Show SGB border", initial.showSgbBorder)
+  screenMenu.add(showSgbBorder)
+  showSgbBorder.addActionListener {
+    displayController.update { it.copy(showSgbBorder = showSgbBorder.state) }
+  }
+
+  fun synchronize(display: ApplicationSettings.Display) {
+    val scaleKey =
+        display.scalingMode to
+            if (display.scalingMode == ApplicationSettings.DisplayScalingMode.EXPLICIT) {
+              display.explicitScale
+            } else {
+              0
+            }
+    scaleItems[scaleKey]?.isSelected = true
+    rotateItems[display.rotation.degrees]?.isSelected = true
+    fullscreen.accelerator = fullscreenAccelerator()
+    fullscreen.state = display.fullscreen
+    grayscale.state = display.grayscale
+    colorCorrection.state = display.colorCorrection
+    blending.state = display.blending
+    showSgbBorder.state = display.showSgbBorder
+  }
+  eventBus.register<DisplaySettingsChangedEvent> { event ->
+    if (SwingUtilities.isEventDispatchThread()) {
+      synchronize(event.display)
+    } else {
+      SwingUtilities.invokeLater { synchronize(event.display) }
+    }
+  }
+
+  return screenMenu
 }

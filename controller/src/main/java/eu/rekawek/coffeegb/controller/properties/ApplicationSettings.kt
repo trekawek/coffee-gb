@@ -24,9 +24,6 @@ data class ApplicationSettings(
     require(schemaVersion == CURRENT_SCHEMA_VERSION) {
       "Application settings schema must be $CURRENT_SCHEMA_VERSION"
     }
-    require(display.scale in SUPPORTED_SCALES) {
-      "Display scale must be one of ${SUPPORTED_SCALES.sorted()}"
-    }
     input.toPlayerMapping()
     advanced.dmgGamesProfile.explicitProfileOrNull()?.let(HardwareProfileRegistry::requireRegistered)
     advanced.cgbGamesProfile.explicitProfileOrNull()?.let(HardwareProfileRegistry::requireRegistered)
@@ -107,13 +104,39 @@ data class ApplicationSettings(
   }
 
   data class Display(
-      val scale: Int = 2,
+      val scalingMode: DisplayScalingMode = DisplayScalingMode.EXPLICIT,
+      val explicitScale: Int = DEFAULT_EXPLICIT_DISPLAY_SCALE,
+      val letterboxColor: Int = DEFAULT_LETTERBOX_COLOR,
+      val fullscreen: Boolean = false,
       val grayscale: Boolean = false,
       val blending: Boolean = true,
       val colorCorrection: Boolean = true,
       val rotation: Rotation = Rotation.DEG_0,
       val showSgbBorder: Boolean = false,
-  )
+  ) {
+    init {
+      require(explicitScale in MIN_EXPLICIT_DISPLAY_SCALE..MAX_EXPLICIT_DISPLAY_SCALE) {
+        "Explicit display scale must be between $MIN_EXPLICIT_DISPLAY_SCALE and " +
+            MAX_EXPLICIT_DISPLAY_SCALE
+      }
+      require(letterboxColor in MIN_LETTERBOX_COLOR..MAX_LETTERBOX_COLOR) {
+        "Letterbox color must be an RGB value between 0x000000 and 0xFFFFFF"
+      }
+    }
+
+    /**
+     * Compatibility view for callers that have not yet adopted fit modes. New code should use
+     * [scalingMode] and [explicitScale].
+     */
+    val scale: Int
+      get() = explicitScale
+  }
+
+  enum class DisplayScalingMode {
+    INTEGER_FIT,
+    ASPECT_FIT,
+    EXPLICIT,
+  }
 
   enum class Rotation(val degrees: Int) {
     DEG_0(0),
@@ -386,7 +409,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 3
+    const val CURRENT_SCHEMA_VERSION = 4
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
@@ -398,8 +421,12 @@ data class ApplicationSettings(
     const val DEFAULT_GAMEPAD_TILT_DEAD_ZONE = 4_096
     const val MAX_GAMEPAD_DEAD_ZONE = 32_766
     const val MAX_GAMEPAD_TUNINGS = 32
-    private val SUPPORTED_SCALES: Set<Int> =
-        Collections.unmodifiableSet(linkedSetOf(1, 2, 4))
+    const val MIN_EXPLICIT_DISPLAY_SCALE = 1
+    const val DEFAULT_EXPLICIT_DISPLAY_SCALE = 2
+    const val MAX_EXPLICIT_DISPLAY_SCALE = 4
+    const val MIN_LETTERBOX_COLOR = 0x000000
+    const val DEFAULT_LETTERBOX_COLOR = 0x000000
+    const val MAX_LETTERBOX_COLOR = 0xFFFFFF
 
     internal fun isStableAudioOutputId(value: String): Boolean =
         value.matches(STABLE_AUDIO_OUTPUT_ID)
