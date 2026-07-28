@@ -40,6 +40,10 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("persist-credentials: false"));
         assertTrue(packages.contains("verify-native-package.sh"));
         assertTrue(packages.contains("verify-native-package.ps1"));
+        assertTrue(packages.contains("verify-native-association.sh"));
+        assertTrue(packages.contains("verify-native-association.ps1"));
+        assertTrue(packages.contains(
+                "Install package and open the synthetic ROM through the OS association"));
         assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
         assertTrue(packages.contains("environment: native-release"));

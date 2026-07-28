@@ -214,6 +214,28 @@ jobs:
           -Target $env:PACKAGE_TARGET
           -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
 
+      - name: Install package and open the synthetic ROM through the OS association
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: |
+          ./packaging/verify-native-association.sh \
+            "$PACKAGE_TARGET" \
+            "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
+
+      - name: Install package and open the synthetic ROM through the OS association
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+          PACKAGE_TYPE: ${{ matrix.package_type }}
+        run: >-
+          ./packaging/verify-native-association.ps1
+          -Target $env:PACKAGE_TARGET
+          -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
+
       - name: Prepare bounded unsigned CI artifact
         if: runner.os != 'Windows'
         shell: bash

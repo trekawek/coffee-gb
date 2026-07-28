@@ -1,8 +1,9 @@
 # Native release checklist
 
 Record the release tag, target, OS version, architecture, package filename/SHA-256, signing state,
-tester, hardware/VM, and date for every row. CI launch smokes are necessary but do not replace
-human audio, input, fullscreen, file-association, persistence, or uninstall evidence.
+tester, hardware/VM, and date for every row. CI launch and generated-ROM association smokes are
+necessary but do not replace human audio, input, fullscreen, personally supplied ROM,
+persistence, or uninstall evidence.
 
 The completed record is the approval evidence for the protected `native-release` GitHub
 environment. Do not approve that environment—or publish its bundle—until every required row below
@@ -14,7 +15,8 @@ has a named tester, target/architecture, date, and result. A tag push alone must
   package manifest and `--version`; its fully qualified ref peels to the full `source.commit`
   recorded in `NATIVE-PACKAGE-MATRIX.properties`.
 - [ ] All four required targets passed their unit/integration build, pre-installer inspection,
-  final installer unpack/mount, packaged `--version`, and `--package-smoke`.
+  final installer unpack/mount, packaged `--version`, `--package-smoke`, production desktop launch,
+  installed file-association open, bounded shutdown, and uninstall/unregistration cleanup.
 - [ ] The release bundle contains the portable JAR, four target-specific CycloneDX SBOMs, Linux x64
   DEB, Windows x64 MSI, macOS x64 DMG, macOS arm64 DMG,
   `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`, plus every detached signature named by the
