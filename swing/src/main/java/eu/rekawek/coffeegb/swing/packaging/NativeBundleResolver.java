@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
@@ -40,6 +42,23 @@ public final class NativeBundleResolver {
     private static final String MARKER = ".coffee-gb-native-bundle";
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Map<Path, ReentrantLock> PROCESS_LOCKS = new ConcurrentHashMap<>();
+    private static final long DEFAULT_LOCK_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(5);
+    private static final long DEFAULT_LOCK_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(25);
+
+    private final long lockTimeoutNanos;
+    private final long lockRetryNanos;
+
+    public NativeBundleResolver() {
+        this(DEFAULT_LOCK_TIMEOUT_NANOS, DEFAULT_LOCK_RETRY_NANOS);
+    }
+
+    NativeBundleResolver(long lockTimeoutNanos, long lockRetryNanos) {
+        if (lockTimeoutNanos < 0 || lockRetryNanos <= 0) {
+            throw new IllegalArgumentException("lock timeout must be non-negative and retry positive");
+        }
+        this.lockTimeoutNanos = lockTimeoutNanos;
+        this.lockRetryNanos = lockRetryNanos;
+    }
 
     public NativeRuntimeSelection select(
             Optional<String> requestedTarget,
@@ -87,21 +106,52 @@ public final class NativeBundleResolver {
         String basename = manifest.target().id() + "-" + manifest.fingerprint();
         Path bundle = root.resolve(basename);
         Path lockPath = root.resolve("." + basename + ".lock");
+        try {
+            if (Files.exists(bundle, LinkOption.NOFOLLOW_LINKS)) {
+                NativeBundleResult optimistic = verify(manifest, bundle);
+                if (optimistic instanceof NativeBundleResult.Ready) {
+                    return optimistic;
+                }
+            }
+        } catch (SecurityException failure) {
+            return failedIo(manifest, "inspect native cache");
+        }
         ReentrantLock processLock = PROCESS_LOCKS.computeIfAbsent(lockPath, ignored -> new ReentrantLock());
-        processLock.lock();
+        long deadline = deadlineAfter(lockTimeoutNanos);
+        boolean processLockAcquired;
+        try {
+            processLockAcquired = tryProcessLock(processLock, deadline);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return cacheBusy(manifest, "interrupted while waiting for native cache");
+        }
+        if (!processLockAcquired) {
+            return cacheBusy(manifest, "timed out waiting for in-process native cache");
+        }
         try {
             Files.createDirectories(root);
             try (FileChannel channel = FileChannel.open(
-                            lockPath,
-                            Set.of(
-                                    StandardOpenOption.CREATE,
-                                    StandardOpenOption.WRITE,
-                                    LinkOption.NOFOLLOW_LINKS));
-                    FileLock ignored = channel.lock()) {
-                if (Files.exists(bundle, LinkOption.NOFOLLOW_LINKS)) {
-                    return verify(manifest, bundle);
+                    lockPath,
+                    Set.of(
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.WRITE,
+                            LinkOption.NOFOLLOW_LINKS))) {
+                FileLock fileLock;
+                try {
+                    fileLock = tryFileLock(channel, deadline);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return cacheBusy(manifest, "interrupted while waiting for native cache file lock");
                 }
-                return extractAndPublish(manifest, source, root, bundle);
+                if (fileLock == null) {
+                    return cacheBusy(manifest, "timed out waiting for native cache file lock");
+                }
+                try (fileLock) {
+                    if (Files.exists(bundle, LinkOption.NOFOLLOW_LINKS)) {
+                        return verify(manifest, bundle);
+                    }
+                    return extractAndPublish(manifest, source, root, bundle);
+                }
             } catch (IOException | SecurityException failure) {
                 return failedIo(manifest, "lock or inspect native cache");
             }
@@ -110,6 +160,42 @@ public final class NativeBundleResolver {
         } finally {
             processLock.unlock();
         }
+    }
+
+    private boolean tryProcessLock(ReentrantLock processLock, long deadline)
+            throws InterruptedException {
+        long remaining = remainingNanos(deadline);
+        return remaining == 0
+                ? processLock.tryLock()
+                : processLock.tryLock(remaining, TimeUnit.NANOSECONDS);
+    }
+
+    private FileLock tryFileLock(FileChannel channel, long deadline)
+            throws IOException, InterruptedException {
+        while (true) {
+            try {
+                FileLock acquired = channel.tryLock();
+                if (acquired != null) {
+                    return acquired;
+                }
+            } catch (OverlappingFileLockException unavailableInThisJvm) {
+                // A cache alias can reach the same OS lock through a different in-process key.
+            }
+            long remaining = remainingNanos(deadline);
+            if (remaining == 0) {
+                return null;
+            }
+            TimeUnit.NANOSECONDS.sleep(Math.min(lockRetryNanos, remaining));
+        }
+    }
+
+    private static long deadlineAfter(long timeoutNanos) {
+        return System.nanoTime() + timeoutNanos;
+    }
+
+    private static long remainingNanos(long deadline) {
+        long remaining = deadline - System.nanoTime();
+        return remaining <= 0 ? 0 : remaining;
     }
 
     private NativeBundleResult extractAndPublish(
@@ -405,6 +491,12 @@ public final class NativeBundleResolver {
     private static NativeBundleResult failedIo(NativeBundleManifest manifest, String operation) {
         return new NativeBundleResult.Failed(
                 new NativeBundleFailure.IoFailure(manifest.target(), operation));
+    }
+
+    private static NativeBundleResult cacheBusy(
+            NativeBundleManifest manifest, String operation) {
+        return new NativeBundleResult.Failed(
+                new NativeBundleFailure.NativeCacheBusy(manifest.target(), operation));
     }
 
     private static MessageDigest sha256Digest() {

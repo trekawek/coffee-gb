@@ -8,8 +8,11 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -186,6 +190,137 @@ public class NativeBundleResolverTest {
     }
 
     @Test
+    public void inProcessLockContentionHasABoundedTypedFailureAndIsInterruptible()
+            throws Exception {
+        byte[] bytes = "locked".getBytes(StandardCharsets.UTF_8);
+        NativeBundleManifest manifest = manifest(List.of(entry(
+                NativeComponent.JNA_DISPATCH, "native/jna.so", "lib/jna.so", bytes)));
+        Path cache = temporary.newFolder("in-process-lock").toPath();
+        CountDownLatch sourceEntered = new CountDownLatch(1);
+        CountDownLatch releaseSource = new CountDownLatch(1);
+        NativeResourceSource blockingSource = path -> {
+            sourceEntered.countDown();
+            while (true) {
+                try {
+                    releaseSource.await();
+                    break;
+                } catch (InterruptedException ignored) {
+                    // Keep the first resolver inside the critical section until the test releases it.
+                }
+            }
+            return Optional.of(new ByteArrayInputStream(bytes));
+        };
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<NativeBundleResult> first = executor.submit(
+                    () -> new NativeBundleResolver().resolve(manifest, blockingSource, cache));
+            assertTrue(sourceEntered.await(3, TimeUnit.SECONDS));
+
+            NativeBundleResult timedOut = new NativeBundleResolver(0, 1)
+                    .resolve(
+                            manifest,
+                            path -> {
+                                throw new AssertionError("contending resolver must not open sources");
+                            },
+                            cache);
+            NativeBundleFailure.NativeCacheBusy timeoutFailure =
+                    (NativeBundleFailure.NativeCacheBusy)
+                            ((NativeBundleResult.Failed) timedOut).failure();
+            assertTrue(timeoutFailure.operation().contains("in-process"));
+
+            AtomicReference<NativeBundleResult> interruptedResult = new AtomicReference<>();
+            AtomicReference<Boolean> interruptRestored = new AtomicReference<>(false);
+            Thread waiter = new Thread(
+                    () -> {
+                        interruptedResult.set(new NativeBundleResolver().resolve(
+                                manifest,
+                                path -> {
+                                    throw new AssertionError(
+                                            "interrupted resolver must not open sources");
+                                },
+                                cache));
+                        interruptRestored.set(Thread.currentThread().isInterrupted());
+                    },
+                    "native-lock-interrupt-test");
+            waiter.start();
+            waiter.interrupt();
+            waiter.join(3_000);
+            assertFalse("interrupted lock waiter did not terminate", waiter.isAlive());
+            NativeBundleFailure.NativeCacheBusy interruptedFailure =
+                    (NativeBundleFailure.NativeCacheBusy)
+                            ((NativeBundleResult.Failed) interruptedResult.get()).failure();
+            assertTrue(interruptedFailure.operation().contains("interrupted"));
+            assertTrue(interruptRestored.get());
+
+            releaseSource.countDown();
+            assertTrue(first.get(3, TimeUnit.SECONDS) instanceof NativeBundleResult.Ready);
+        } finally {
+            releaseSource.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    public void externalProcessLockHasABoundedTypedFailure() throws Exception {
+        byte[] bytes = "locked".getBytes(StandardCharsets.UTF_8);
+        NativeBundleManifest manifest = manifest(List.of(entry(
+                NativeComponent.JNA_DISPATCH, "native/jna.so", "lib/jna.so", bytes)));
+        Path cache = temporary.newFolder("external-lock").toPath();
+        Path lockPath = lockPath(cache, manifest);
+
+        try (ExternalLockHolder holder = ExternalLockHolder.start(lockPath, temporary)) {
+            NativeBundleResult result = new NativeBundleResolver(0, 1)
+                    .resolve(
+                            manifest,
+                            path -> {
+                                throw new AssertionError("locked resolver must not open sources");
+                            },
+                            cache);
+
+            NativeBundleFailure.NativeCacheBusy failure =
+                    (NativeBundleFailure.NativeCacheBusy)
+                            ((NativeBundleResult.Failed) result).failure();
+            assertTrue(failure.operation().contains("file lock"));
+        }
+    }
+
+    @Test
+    public void validPublishedCacheHitDoesNotWaitForExternalWriterLock() throws Exception {
+        byte[] bytes = "locked".getBytes(StandardCharsets.UTF_8);
+        NativeBundleManifest manifest = manifest(List.of(entry(
+                NativeComponent.JNA_DISPATCH, "native/jna.so", "lib/jna.so", bytes)));
+        Path cache = temporary.newFolder("optimistic-cache-hit").toPath();
+        NativeBundleResolver resolver = new NativeBundleResolver();
+        NativeRuntimeBundle published =
+                ((NativeBundleResult.Ready)
+                                resolver.resolve(
+                                        manifest,
+                                        path -> Optional.of(new ByteArrayInputStream(bytes)),
+                                        cache))
+                        .bundle();
+
+        try (ExternalLockHolder holder =
+                ExternalLockHolder.start(lockPath(cache, manifest), temporary)) {
+            long started = System.nanoTime();
+            NativeBundleResult result = new NativeBundleResolver(TimeUnit.SECONDS.toNanos(2), 1)
+                    .resolve(
+                            manifest,
+                            path -> {
+                                throw new AssertionError("cache hit must not reopen sources");
+                            },
+                            cache);
+            long elapsedMillis =
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+            assertTrue(result instanceof NativeBundleResult.Ready);
+            assertEquals(
+                    published.root(),
+                    ((NativeBundleResult.Ready) result).bundle().root());
+            assertTrue("valid cache hit waited for held lock: " + elapsedMillis, elapsedMillis < 500);
+        }
+    }
+
+    @Test
     public void corruptPublishedBundleIsReportedAndNeverSilentlyReplaced() throws Exception {
         byte[] bytes = "locked".getBytes(StandardCharsets.UTF_8);
         NativeBundleManifest manifest = manifest(List.of(entry(
@@ -293,6 +428,103 @@ public class NativeBundleResolverTest {
                     .map(path -> path.toString().replace('\\', '/'))
                     .sorted()
                     .toList();
+        }
+    }
+
+    private static Path lockPath(Path cache, NativeBundleManifest manifest) {
+        String basename = manifest.target().id() + "-" + manifest.fingerprint();
+        return cache.resolve("." + basename + ".lock");
+    }
+
+    public static final class LockHolder {
+
+        private LockHolder() {
+        }
+
+        public static void main(String[] args) throws Exception {
+            Path lockPath = Path.of(args[0]);
+            Path ready = Path.of(args[1]);
+            Path release = Path.of(args[2]);
+            Files.createDirectories(lockPath.getParent());
+            try (FileChannel channel = FileChannel.open(
+                            lockPath,
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.WRITE);
+                    FileLock ignored = channel.lock()) {
+                Files.writeString(ready, "ready", StandardOpenOption.CREATE_NEW);
+                while (!Files.exists(release)) {
+                    Thread.sleep(10);
+                }
+            }
+        }
+    }
+
+    private static final class ExternalLockHolder implements AutoCloseable {
+
+        private final Process process;
+        private final Path release;
+
+        private ExternalLockHolder(Process process, Path release) {
+            this.process = process;
+            this.release = release;
+        }
+
+        static ExternalLockHolder start(
+                Path lockPath, TemporaryFolder temporary) throws Exception {
+            Path communication = temporary.newFolder("lock-helper").toPath();
+            Path ready = communication.resolve("ready");
+            Path release = communication.resolve("release");
+            Path java = Path.of(
+                    System.getProperty("java.home"),
+                    "bin",
+                    System.getProperty("os.name", "").toLowerCase().contains("win")
+                            ? "java.exe"
+                            : "java");
+            Path testClasses = Path.of(
+                    NativeBundleResolverTest.class
+                            .getProtectionDomain()
+                            .getCodeSource()
+                            .getLocation()
+                            .toURI());
+            Process process = new ProcessBuilder(
+                            java.toString(),
+                            "-cp",
+                            testClasses.toString(),
+                            LockHolder.class.getName(),
+                            lockPath.toString(),
+                            ready.toString(),
+                            release.toString())
+                    .redirectErrorStream(true)
+                    .start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (!Files.exists(ready)
+                    && process.isAlive()
+                    && System.nanoTime() - deadline < 0) {
+                Thread.sleep(10);
+            }
+            if (!Files.exists(ready)) {
+                process.destroyForcibly();
+                process.waitFor(3, TimeUnit.SECONDS);
+                throw new AssertionError(
+                        "lock helper did not become ready: "
+                                + new String(
+                                        process.getInputStream().readAllBytes(),
+                                        StandardCharsets.UTF_8));
+            }
+            return new ExternalLockHolder(process, release);
+        }
+
+        @Override
+        public void close() throws Exception {
+            Files.writeString(release, "release", StandardOpenOption.CREATE_NEW);
+            if (!process.waitFor(3, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                assertTrue("lock helper did not terminate", process.waitFor(3, TimeUnit.SECONDS));
+            }
+            assertEquals(
+                    new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8),
+                    0,
+                    process.exitValue());
         }
     }
 }
