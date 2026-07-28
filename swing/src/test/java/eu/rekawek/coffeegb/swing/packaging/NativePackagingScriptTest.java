@@ -137,5 +137,49 @@ public class NativePackagingScriptTest {
         assertTrue(associationPs.contains("Registry::HKEY_CLASSES_ROOT"));
         assertTrue(associationPs.contains("Invoke-Msi -Action \"/x\""));
         assertTrue(associationPs.contains("Get-Process -Id $AssociationPid"));
+        assertTrue(associationPs.contains("$_.Path -eq $Launcher"));
+        int shutdownEvidence = associationPs.indexOf(
+                "if ($ShutdownEvidence -cnotcontains $Expected)");
+        int exitDeadline = associationPs.indexOf(
+                "$ExitDeadline = [DateTime]::UtcNow.AddSeconds(60)", shutdownEvidence);
+        int exactProcessWait = associationPs.indexOf(
+                "while ((Get-Process -Id $AssociationPid", exitDeadline);
+        int exactProcessLoopEnd = associationPs.indexOf("\n        }\n", exactProcessWait);
+        int exactProcessFailure = associationPs.indexOf(
+                "association process did not exit", exactProcessWait);
+        int launcherExitDeadline = associationPs.indexOf(
+                "$LauncherExitDeadline = [DateTime]::UtcNow.AddSeconds(60)",
+                exactProcessFailure);
+        int initialProcessSnapshot = associationPs.indexOf(
+                "$RemainingProcesses = @(Get-CoffeeGbProcesses)", launcherExitDeadline);
+        int launcherProcessWait = associationPs.indexOf(
+                "while ($RemainingProcesses.Count -gt 0 -and", initialProcessSnapshot);
+        int launcherProcessLoopEnd = associationPs.indexOf(
+                "\n        }\n", launcherProcessWait);
+        int refreshedProcessSnapshot = associationPs.indexOf(
+                "$RemainingProcesses = @(Get-CoffeeGbProcesses)",
+                initialProcessSnapshot + 1);
+        int launcherProcessFailure = associationPs.indexOf(
+                "if ($RemainingProcesses.Count -gt 0)", refreshedProcessSnapshot);
+        assertTrue(shutdownEvidence >= 0);
+        assertTrue(exitDeadline > shutdownEvidence);
+        assertTrue(exactProcessWait > exitDeadline);
+        assertTrue(exactProcessLoopEnd > exactProcessWait);
+        assertTrue(associationPs.substring(exactProcessWait, exactProcessLoopEnd)
+                .contains("[DateTime]::UtcNow -lt $ExitDeadline"));
+        assertTrue(exactProcessFailure > exactProcessLoopEnd);
+        assertTrue(launcherExitDeadline > exactProcessFailure);
+        assertTrue(initialProcessSnapshot > launcherExitDeadline);
+        assertTrue(launcherProcessWait > initialProcessSnapshot);
+        assertTrue(launcherProcessLoopEnd > launcherProcessWait);
+        assertTrue(associationPs.substring(launcherProcessWait, launcherProcessLoopEnd)
+                .contains("[DateTime]::UtcNow -lt $LauncherExitDeadline"));
+        assertTrue(refreshedProcessSnapshot > launcherProcessWait);
+        assertTrue(refreshedProcessSnapshot < launcherProcessLoopEnd);
+        assertTrue(launcherProcessFailure > launcherProcessLoopEnd);
+        assertTrue(associationPs.contains(
+                "remaining pids=$RemainingPids; launcher=$Launcher"));
+        assertTrue(associationPs.contains(
+                "Installed Windows $($Fixture.Extension) association lifecycle passed"));
     }
 }
