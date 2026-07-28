@@ -784,12 +784,15 @@ internal constructor(
   }
 
   private fun publish(operation: Operation, update: RomOpenUpdate) {
-    if (!mayPublish(operation)) {
+    val cancellationSensitive = update is RomOpenUpdate.Progress
+    if (!mayPublish(operation) || (cancellationSensitive && operation.cancelled.get())) {
       return
     }
     val sequence = operation.nextUpdateSequence.incrementAndGet()
     uiExecutor.execute {
-      if (mayPublish(operation) && operation.claimDelivery(sequence)) {
+      if (mayPublish(operation) &&
+          (!cancellationSensitive || !operation.cancelled.get()) &&
+          operation.claimDelivery(sequence)) {
         listener(update)
       }
     }
@@ -822,7 +825,7 @@ internal constructor(
       }
 
   private inline fun withCurrent(requestId: Long, action: (Operation) -> Unit) {
-    current(requestId)?.let(action)
+    current(requestId)?.takeUnless { it.cancelled.get() }?.let(action)
   }
 
   private fun isCurrent(operation: Operation): Boolean =

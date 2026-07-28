@@ -97,6 +97,39 @@ class RomOpenServiceTest {
   }
 
   @Test
+  fun `controller progress cannot overwrite cancellation while terminal acknowledgement still wins`() {
+    val fixture = fixture()
+    val source = romFile("cancel-progress.gb", "CANCEL")
+    val requestId = fixture.service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+    val updatesBeforeCancel = fixture.updates.toList()
+
+    // Queue one progress delivery before cancellation and deliver another controller progress
+    // event afterwards. Neither may restore progress controls while cancellation awaits its ack.
+    fixture.eventBus.post(Controller.RomLoadingEvent(source.toFile(), requestId))
+    fixture.service.cancel(requestId)
+    fixture.eventBus.post(
+        Controller.RomReplacementPersistenceFailedEvent(
+            91L,
+            "cancel-progress.sav",
+            "synthetic persistence barrier",
+            openRequestId = requestId,
+        ))
+    fixture.ui.runAll()
+
+    assertEquals(updatesBeforeCancel, fixture.updates)
+
+    fixture.worker.runAll()
+    fixture.eventBus.post(Controller.RomLoadingCancelledEvent(source.toFile(), requestId))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertEquals(requestId, assertIs<RomOpenUpdate.Cancelled>(fixture.updates.last()).requestId)
+    fixture.close()
+  }
+
+  @Test
   fun `typed preparation failure never reaches controller or recents`() {
     val fixture = fixture()
     val source = temporaryFolder.newFile("notes.txt").toPath()
