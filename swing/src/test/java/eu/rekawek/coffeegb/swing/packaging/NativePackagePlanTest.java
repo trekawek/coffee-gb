@@ -109,6 +109,7 @@ public class NativePackagePlanTest {
         assertTrue(linux.contains("--linux-shortcut"));
         assertOption(linux, "--linux-menu-group", "Games");
         assertOption(linux, "--linux-package-name", "coffee-gb");
+        assertOption(linux, "--linux-app-category", LinuxPackagePolicy.PACKAGE_SECTION);
         assertOption(linux, "--linux-deb-maintainer", "tomek@rekawek.eu");
 
         List<String> windows = installer(NativeTarget.WINDOWS_X86_64, "msi");

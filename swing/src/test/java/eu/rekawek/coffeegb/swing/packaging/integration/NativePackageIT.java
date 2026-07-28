@@ -81,6 +81,8 @@ public class NativePackageIT {
                 String desktopTemplate = Files.readString(
                         result.jpackageResources().resolve("Coffee GB.desktop"));
                 assertTrue(desktopTemplate.contains("Exec=APPLICATION_LAUNCHER %f"));
+                assertTrue(desktopTemplate.contains("Categories=Game;"));
+                assertFalse(desktopTemplate.contains("DEPLOY_BUNDLE_CATEGORY"));
             }
             assertEquals(DETERMINISTIC_TIME, Files.getLastModifiedTime(result.root()));
         }

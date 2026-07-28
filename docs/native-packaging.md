@@ -136,7 +136,7 @@ the host; after selection, the tool rejects a mismatched host OS or architecture
 
 | Target | Host | Default installer | Other validated type | Host prerequisites |
 | --- | --- | --- | --- | --- |
-| `linux-x86-64` | Linux x86-64 | DEB | RPM, app-image | JDK 21+, `dpkg-deb` for DEB or `rpmbuild` for RPM |
+| `linux-x86-64` | Linux x86-64 | DEB | RPM, app-image | JDK 21+, `dpkg-deb` and `desktop-file-validate` for DEB, or `rpmbuild` for RPM |
 | `windows-x86-64` | Windows x86-64 | MSI | EXE, app-image | JDK 21+, WiX supported by that JDK |
 | `macos-x86-64` | macOS x86-64 | DMG | PKG, app-image | JDK 21+, Xcode command-line packaging tools |
 | `macos-aarch64` | macOS arm64 | DMG | PKG, app-image | arm64 JDK 21+, Xcode command-line packaging tools |
@@ -200,7 +200,10 @@ version but are omitted from the numeric OS installer version.
 Installers register `.gb`, `.gbc`, and `.rom` with Coffee GB. Association icon paths are stable
 stage-relative paths resolved from the deterministic stage working directory. The Linux desktop
 template includes `%f`, so the selected ROM path reaches the launcher rather than merely opening an
-empty application. Linux packages install a Games-menu shortcut; Windows packages request
+empty application. Linux packages install a freedesktop `Game;` menu shortcut while retaining the
+Debian package section `games`. A DEB build extracts the generated entry and runs
+`desktop-file-validate`, then verifies both that section and the expected `libasound2t64`
+dependency; Windows packages request
 Start-menu and desktop shortcuts, retain a fixed upgrade UUID for upgrade/uninstall identity,
 expose help/update URLs, and provide an install-directory chooser. macOS packages set the Games
 application category and bundle identifier. OS open-file delivery is handled by the desktop
@@ -238,12 +241,16 @@ release jobs and secret wiring; PR workflows must never invoke this mode.
 
 ## Installation warnings and fallback
 
-Project release floors are Linux x86-64 with glibc 2.27 or newer (Ubuntu 18.04-era), Windows 10
-x86-64 or newer, and macOS 12 or newer on the packaged architecture. These are conservative test
-floors, not a claim that every older machine fails. Each native package bundles its Java runtime,
-so users do not install Java separately. Linux desktop integration depends on the distribution's
-ordinary menu/MIME tools, Windows MSI/EXE creation depends on WiX, and macOS Gatekeeper warns for
-unsigned local/PR builds; only protected release builds may be signed and notarized.
+The Linux x86-64 release baseline is Ubuntu 24.04 LTS or a compatible newer distribution, matching
+the release build provenance and the generated DEB's `libasound2t64` dependency. A bare glibc
+version is not a sufficient compatibility claim because the bundled Java runtime and desktop/audio
+libraries have additional ABI and package requirements. Windows 10 x86-64 or newer and macOS 12 or
+newer on the packaged architecture remain the other project release floors. These are conservative
+tested floors, not a claim that every older machine fails. Each native package bundles its Java
+runtime, so users do not install Java separately. Linux desktop integration depends on the
+distribution's ordinary menu/MIME tools, Windows MSI/EXE creation depends on WiX, and macOS
+Gatekeeper warns for unsigned local/PR builds; only protected release builds may be signed and
+notarized.
 
 The portable `coffee-gb-VERSION.jar` remains the platform-neutral fallback and main Maven artifact.
 It requires Java 16 or newer (Java 21 LTS recommended) and retains all dependency natives, so it is
