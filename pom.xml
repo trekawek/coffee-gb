@@ -34,7 +34,10 @@
         <skipTests>false</skipTests>
         <skip.unit.tests>${skipTests}</skip.unit.tests>
         <integration.test.threadCount>2</integration.test.threadCount>
-        <coffee-gb.test.tmpdir>${java.io.tmpdir}</coffee-gb.test.tmpdir>
+        <!-- Keep ordinary test files inside the module build tree. macOS exposes its system
+             temporary directory through /var, which is a symlink to /private/var; battery-path
+             safety checks correctly reject such logical paths unless callers resolve them first. -->
+        <coffee-gb.test.tmpdir>${project.build.directory}</coffee-gb.test.tmpdir>
     </properties>
     <build>
         <pluginManagement>
