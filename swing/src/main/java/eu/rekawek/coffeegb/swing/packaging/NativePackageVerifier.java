@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing.packaging;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,6 +26,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * Strict, host-independent inspection and launch smoke for a jpackage application payload.
@@ -38,6 +41,10 @@ public final class NativePackageVerifier {
     static final String RESULT_FILE = "PACKAGE-RESULT.properties";
     private static final int MAX_TREE_ENTRIES = 30_000;
     private static final int MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_ARCHIVE_DEPTH = 3;
+    private static final int MAX_ARCHIVE_ENTRIES = 50_000;
+    private static final long MAX_ARCHIVE_ENTRY_BYTES = 64L * 1024 * 1024;
+    private static final long MAX_ARCHIVE_EXPANDED_BYTES = 512L * 1024 * 1024;
     private static final int MAX_PROCESS_OUTPUT = 4 * 1024 * 1024;
     private static final Duration SMOKE_TIMEOUT = Duration.ofSeconds(45);
     private static final Set<String> ROM_SUFFIXES = Set.of(".gb", ".gbc", ".rom", ".sgb");
@@ -56,6 +63,7 @@ public final class NativePackageVerifier {
             ".xml",
             ".yaml",
             ".yml");
+    private static final Set<String> ARCHIVE_SUFFIXES = Set.of(".jar", ".zip");
     private static final Pattern DEVELOPER_PATH = Pattern.compile(
             "(?i)(?:/home/[a-z0-9._-]+/|/Users/[a-z0-9._-]+/|[a-z]:\\\\Users\\\\[^\\\\]+\\\\)");
     private static final Pattern SECRET_MATERIAL = Pattern.compile(
@@ -539,20 +547,21 @@ public final class NativePackageVerifier {
             NativeTarget target)
             throws IOException {
         Set<String> foreignNativeSuffixes = foreignNativeSuffixes(target);
+        ArchiveBudget archiveBudget = new ArchiveBudget();
         for (Path path : payloadPaths) {
             String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
             if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
-                if (endsWith(name, ROM_SUFFIXES)) {
-                    throw new IOException("Packaged payload contains a ROM-like file: "
-                            + relativePortable(payloadRoot, path));
-                }
-                if (endsWith(name, SIGNING_SUFFIXES)) {
-                    throw new IOException("Packaged payload contains signing material: "
-                            + relativePortable(payloadRoot, path));
-                }
-                if (endsWith(name, foreignNativeSuffixes)) {
-                    throw new IOException("Packaged payload contains a foreign native library: "
-                            + relativePortable(payloadRoot, path));
+                String relative = relativePortable(payloadRoot, path);
+                verifyForbiddenName(name, relative, foreignNativeSuffixes);
+                if (!path.startsWith(runtime) && endsWith(name, ARCHIVE_SUFFIXES)) {
+                    try (InputStream input = Files.newInputStream(path)) {
+                        verifyArchive(
+                                input,
+                                relative,
+                                1,
+                                foreignNativeSuffixes,
+                                archiveBudget);
+                    }
                 }
             }
             if (path.startsWith(runtime)
@@ -562,15 +571,135 @@ public final class NativePackageVerifier {
                 continue;
             }
             String text = Files.readString(path, StandardCharsets.UTF_8);
-            String normalizedText = text.replace("\\\\", "\\");
-            if (DEVELOPER_PATH.matcher(text).find()
-                    || DEVELOPER_PATH.matcher(normalizedText).find()) {
-                throw new IOException("Packaged text contains a developer home path: "
-                        + relativePortable(payloadRoot, path));
+            verifyTextContent(text, relativePortable(payloadRoot, path), "Packaged text");
+        }
+    }
+
+    private static void verifyArchive(
+            InputStream input,
+            String archivePath,
+            int depth,
+            Set<String> foreignNativeSuffixes,
+            ArchiveBudget budget)
+            throws IOException {
+        if (depth > MAX_ARCHIVE_DEPTH) {
+            throw new IOException("Packaged archive nesting exceeds " + MAX_ARCHIVE_DEPTH
+                    + " levels: " + archivePath);
+        }
+        Set<String> entryNames = new HashSet<>();
+        try (ZipInputStream archive = new ZipInputStream(input)) {
+            ZipEntry entry;
+            while ((entry = archive.getNextEntry()) != null) {
+                budget.addEntry(archivePath);
+                String rawName = entry.getName();
+                String normalizedName = rawName.endsWith("/")
+                        ? rawName.substring(0, rawName.length() - 1)
+                        : rawName;
+                if (!NativeBundleResolver.isSafeRelativePath(normalizedName)) {
+                    throw new IOException(
+                            "Packaged archive contains an unsafe entry path: "
+                                    + archivePath + "!/" + rawName);
+                }
+                if (!entryNames.add(normalizedName)) {
+                    throw new IOException(
+                            "Packaged archive contains a duplicate entry: "
+                                    + archivePath + "!/" + normalizedName);
+                }
+                if (entry.isDirectory()) {
+                    archive.closeEntry();
+                    continue;
+                }
+
+                String entryPath = archivePath + "!/" + normalizedName;
+                String lowerName = normalizedName.toLowerCase(Locale.ROOT);
+                verifyForbiddenName(lowerName, entryPath, foreignNativeSuffixes);
+                byte[] contents = readArchiveEntry(archive, entryPath, budget);
+                if (endsWith(lowerName, ARCHIVE_SUFFIXES)) {
+                    verifyArchive(
+                            new ByteArrayInputStream(contents),
+                            entryPath,
+                            depth + 1,
+                            foreignNativeSuffixes,
+                            budget);
+                } else {
+                    // ISO-8859-1 preserves every ASCII byte one-to-one, so developer paths and
+                    // credential-shaped constants are detected in text resources and class files
+                    // without trusting an archive entry's suffix or declared encoding.
+                    verifyTextContent(
+                            new String(contents, StandardCharsets.ISO_8859_1),
+                            entryPath,
+                            "Packaged archive entry");
+                }
+                archive.closeEntry();
             }
-            if (SECRET_MATERIAL.matcher(text).find()) {
-                throw new IOException("Packaged text contains secret-like material: "
-                        + relativePortable(payloadRoot, path));
+        }
+    }
+
+    private static byte[] readArchiveEntry(
+            ZipInputStream archive, String entryPath, ArchiveBudget budget) throws IOException {
+        ByteArrayOutputStream contents = new ByteArrayOutputStream();
+        byte[] buffer = new byte[16 * 1024];
+        long entryBytes = 0;
+        int read;
+        while ((read = archive.read(buffer)) >= 0) {
+            entryBytes += read;
+            budget.addExpandedBytes(read, entryPath);
+            if (entryBytes > MAX_ARCHIVE_ENTRY_BYTES) {
+                throw new IOException("Packaged archive entry exceeds "
+                        + MAX_ARCHIVE_ENTRY_BYTES + " expanded bytes: " + entryPath);
+            }
+            contents.write(buffer, 0, read);
+        }
+        return contents.toByteArray();
+    }
+
+    private static void verifyForbiddenName(
+            String lowerName, String displayPath, Set<String> foreignNativeSuffixes)
+            throws IOException {
+        if (endsWith(lowerName, ROM_SUFFIXES)) {
+            throw new IOException("Packaged payload contains a ROM-like file: " + displayPath);
+        }
+        if (endsWith(lowerName, SIGNING_SUFFIXES)) {
+            throw new IOException("Packaged payload contains signing material: " + displayPath);
+        }
+        if (endsWith(lowerName, foreignNativeSuffixes)) {
+            throw new IOException(
+                    "Packaged payload contains a foreign native library: " + displayPath);
+        }
+    }
+
+    private static void verifyTextContent(String text, String displayPath, String description)
+            throws IOException {
+        String normalizedText = text.replace("\\\\", "\\");
+        if (DEVELOPER_PATH.matcher(text).find()
+                || DEVELOPER_PATH.matcher(normalizedText).find()) {
+            throw new IOException(
+                    description + " contains a developer home path: " + displayPath);
+        }
+        if (SECRET_MATERIAL.matcher(text).find()) {
+            throw new IOException(
+                    description + " contains secret-like material: " + displayPath);
+        }
+    }
+
+    private static final class ArchiveBudget {
+        private int entries;
+        private long expandedBytes;
+
+        private void addEntry(String archivePath) throws IOException {
+            entries++;
+            if (entries > MAX_ARCHIVE_ENTRIES) {
+                throw new IOException("Packaged archives exceed "
+                        + MAX_ARCHIVE_ENTRIES + " aggregate entries at " + archivePath);
+            }
+        }
+
+        private void addExpandedBytes(int bytes, String entryPath) throws IOException {
+            expandedBytes += bytes;
+            if (expandedBytes > MAX_ARCHIVE_EXPANDED_BYTES) {
+                throw new IOException("Packaged archives exceed "
+                        + MAX_ARCHIVE_EXPANDED_BYTES
+                        + " aggregate expanded bytes at " + entryPath);
             }
         }
     }
