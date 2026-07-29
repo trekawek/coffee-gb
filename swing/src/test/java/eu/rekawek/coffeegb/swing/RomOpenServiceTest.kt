@@ -23,6 +23,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
+import org.apache.commons.compress.archivers.sevenz.SevenZMethod
+import org.apache.commons.compress.archivers.sevenz.SevenZMethodConfiguration
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -203,14 +207,16 @@ class RomOpenServiceTest {
   }
 
   @Test
-  fun `invalid-header homebrew reaches the controller from raw and zip sources`() {
+  fun `invalid-header homebrew reaches the controller from raw zip and seven-z sources`() {
     val bytes = ByteArray(0x8000).also { it[0x200] = 0x42 }
     val raw = temporaryFolder.newFile("headerless-homebrew.gb").toPath()
     Files.write(raw, bytes)
     val zip = temporaryFolder.newFile("headerless-homebrew.zip")
     writeZip(zip, "homebrew/headerless.gb" to bytes)
+    val sevenZ = temporaryFolder.newFile("headerless-homebrew.7z")
+    writeSevenZ(sevenZ, "homebrew/headerless.gb" to bytes)
 
-    listOf(raw, zip.toPath()).forEach { source ->
+    listOf(raw, zip.toPath(), sevenZ.toPath()).forEach { source ->
       val fixture = fixture()
       fixture.service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
       fixture.worker.runAll()
@@ -754,7 +760,8 @@ class RomOpenServiceTest {
   private fun temporarySnapshotCount(): Int =
       File(System.getProperty("java.io.tmpdir"))
           .list { _, name ->
-            name.startsWith("coffee-gb-rom-snapshot-") && name.endsWith(".zip")
+            name.startsWith("coffee-gb-rom-snapshot-") &&
+                (name.endsWith(".zip") || name.endsWith(".7z"))
           }
           ?.size
           ?: 0
@@ -870,6 +877,21 @@ class RomOpenServiceTest {
           output.putNextEntry(ZipEntry(name))
           output.write(bytes)
           output.closeEntry()
+        }
+      }
+    }
+
+    fun writeSevenZ(target: File, vararg entries: Pair<String, ByteArray>) {
+      SevenZOutputFile(target).use { output ->
+        output.setContentMethods(listOf(SevenZMethodConfiguration(SevenZMethod.LZMA2)))
+        entries.forEach { (name, bytes) ->
+          val entry = SevenZArchiveEntry().apply {
+            this.name = name
+            size = bytes.size.toLong()
+          }
+          output.putArchiveEntry(entry)
+          output.write(bytes)
+          output.closeArchiveEntry()
         }
       }
     }

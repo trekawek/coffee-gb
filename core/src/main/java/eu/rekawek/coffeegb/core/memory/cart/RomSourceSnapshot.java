@@ -36,10 +36,11 @@ import java.util.zip.ZipFile;
 /**
  * Immutable, bounded snapshot of one untrusted desktop ROM source.
  *
- * <p>Raw files are retained as an immutable {@link RomImage}. ZIP containers are copied from one
- * source handle into a private temporary file before any inventory or extraction. The original
- * path remains the origin and persistence anchor; the temporary path is never observable outside
- * this object.
+ * <p>Raw files are retained as an immutable {@link RomImage}. ZIP and 7z containers are copied
+ * from one source handle into a private temporary file before any inventory or extraction. The
+ * original path remains the origin and persistence anchor; the temporary path is never observable
+ * outside this object. The 7z parser runs in a bounded helper JVM because the current library can
+ * allocate some malformed header structures before applying its configured memory limit.
  */
 public final class RomSourceSnapshot implements Closeable {
 
@@ -49,7 +50,9 @@ public final class RomSourceSnapshot implements Closeable {
 
     private final RomImage directImage;
 
-    private final Path zipSnapshot;
+    private final Path archiveSnapshot;
+
+    private final ArchiveFormat archiveFormat;
 
     private final List<ArchiveCandidate> candidates;
 
@@ -60,12 +63,14 @@ public final class RomSourceSnapshot implements Closeable {
     private RomSourceSnapshot(
             Path sourcePath,
             RomImage directImage,
-            Path zipSnapshot,
+            Path archiveSnapshot,
+            ArchiveFormat archiveFormat,
             List<ArchiveCandidate> candidates,
             int extensionCandidateCount) {
         this.sourcePath = sourcePath;
         this.directImage = directImage;
-        this.zipSnapshot = zipSnapshot;
+        this.archiveSnapshot = archiveSnapshot;
+        this.archiveFormat = archiveFormat;
         this.candidates = Collections.unmodifiableList(new ArrayList<>(candidates));
         this.extensionCandidateCount = extensionCandidateCount;
     }
@@ -88,22 +93,17 @@ public final class RomSourceSnapshot implements Closeable {
                                         ? ""
                                         : normalized.getFileName().toString())
                         .toLowerCase(Locale.ROOT);
-        if ("7z".equals(extension)) {
-            throw new RomSourceException(
-                    RomSourceException.Reason.UNSUPPORTED_SEVEN_Z,
-                    "7z archives are not opened because their metadata allocation cannot be "
-                            + "bounded before parsing; extract the ROM or use ZIP");
-        }
         validateSourceFile(normalized);
         boolean zip = "zip".equals(extension);
-        if (!zip && !isRomExtension(extension)) {
+        boolean sevenZ = "7z".equals(extension);
+        if (!zip && !sevenZ && !isRomExtension(extension)) {
             throw new RomSourceException(
                     RomSourceException.Reason.UNSUPPORTED_TYPE,
-                    "Supported ROM inputs are .gb, .gbc, .rom, and .zip");
+                    "Supported ROM inputs are .gb, .gbc, .rom, .zip, and .7z");
         }
         checkCancelled(cancelled);
 
-        if (!zip) {
+        if (!zip && !sevenZ) {
             try (FileChannel channel = FileChannel.open(normalized, StandardOpenOption.READ);
                     InputStream input = Channels.newInputStream(channel)) {
                 long declaredSize = channel.size();
@@ -113,7 +113,7 @@ public final class RomSourceSnapshot implements Closeable {
                                 readRomBytes(input, declaredSize, cancelled, copiedBytes));
                 checkCancelled(cancelled);
                 return new RomSourceSnapshot(
-                        normalized, image, null, List.of(), 0);
+                        normalized, image, null, null, List.of(), 0);
             } catch (RomSourceException e) {
                 throw e;
             } catch (NoSuchFileException | FileNotFoundException e) {
@@ -124,16 +124,39 @@ public final class RomSourceSnapshot implements Closeable {
         }
 
         Path temporary = null;
+        ArchiveFormat archiveFormat = zip ? ArchiveFormat.ZIP : ArchiveFormat.SEVEN_Z;
         try {
-            temporary = createPrivateTemporarySnapshot();
+            temporary = createPrivateTemporarySnapshot(archiveFormat.suffix);
             copyContainer(normalized, temporary, cancelled, copiedBytes);
             checkCancelled(cancelled);
-            Rom.preflightZip(temporary);
-            Inventory inventory = inventory(normalized, temporary, cancelled);
+            Inventory inventory;
+            if (archiveFormat == ArchiveFormat.ZIP) {
+                Rom.preflightZip(temporary);
+                inventory = inventoryZip(normalized, temporary, cancelled);
+            } else {
+                SevenZArchiveWorker.Inventory sevenZInventory =
+                        SevenZArchiveWorker.inspectIsolated(temporary, cancelled);
+                List<ArchiveCandidate> sevenZCandidates =
+                        sevenZInventory.entries().stream()
+                                .map(
+                                        entry ->
+                                                new ArchiveCandidate(
+                                                        entry.token(),
+                                                        entry.entryName(),
+                                                        entry.entryOccurrence(),
+                                                        entry.uncompressedBytes(),
+                                                        entry.title()))
+                                .toList();
+                inventory =
+                        new Inventory(
+                                sevenZCandidates,
+                                sevenZInventory.extensionCandidateCount());
+            }
             return new RomSourceSnapshot(
                     normalized,
                     null,
                     temporary,
+                    archiveFormat,
                     inventory.candidates,
                     inventory.extensionCandidateCount);
         } catch (RomSourceException e) {
@@ -146,13 +169,13 @@ public final class RomSourceSnapshot implements Closeable {
             deleteSnapshot(temporary, e);
             throw new RomSourceException(
                     RomSourceException.Reason.INVALID_ARCHIVE,
-                    "The ZIP archive is invalid or unsupported",
+                    "The archive is invalid or unsupported",
                     e);
         } catch (IllegalArgumentException e) {
             deleteSnapshot(temporary, e);
             throw new RomSourceException(
                     RomSourceException.Reason.UNSAFE_ARCHIVE_ENTRY,
-                    "The ZIP archive contains an unsafe entry path",
+                    "The archive contains an unsafe entry path",
                     e);
         } catch (IOException e) {
             deleteSnapshot(temporary, e);
@@ -171,7 +194,7 @@ public final class RomSourceSnapshot implements Closeable {
     }
 
     public boolean isArchive() {
-        return zipSnapshot != null;
+        return archiveSnapshot != null;
     }
 
     public List<ArchiveCandidate> candidates() {
@@ -211,7 +234,15 @@ public final class RomSourceSnapshot implements Closeable {
                         .findFirst()
                         .orElseThrow(RomSourceSnapshot::invalidSelection);
         checkCancelled(cancelled);
-        try (ZipFile zip = new ZipFile(zipSnapshot.toFile())) {
+        if (archiveFormat == ArchiveFormat.SEVEN_Z) {
+            return loadSevenZ(selected, cancelled);
+        }
+        return loadZip(selected, cancelled);
+    }
+
+    private RomImage loadZip(ArchiveCandidate selected, BooleanSupplier cancelled)
+            throws IOException {
+        try (ZipFile zip = new ZipFile(archiveSnapshot.toFile())) {
             Enumeration<? extends ZipEntry> entries = zip.entries();
             long ordinal = 0;
             while (entries.hasMoreElements()) {
@@ -253,6 +284,25 @@ public final class RomSourceSnapshot implements Closeable {
         }
     }
 
+    private RomImage loadSevenZ(ArchiveCandidate selected, BooleanSupplier cancelled)
+            throws IOException {
+        byte[] bytes =
+                SevenZArchiveWorker.extractIsolated(
+                        archiveSnapshot,
+                        selected.token(),
+                        selected.entryName(),
+                        selected.uncompressedBytes(),
+                        cancelled);
+        checkCancelled(cancelled);
+        RomOrigin origin =
+                RomOrigin.archiveEntry(
+                        sourcePath,
+                        selected.entryName(),
+                        selected.entryOccurrence(),
+                        extensionCandidateCount == 1);
+        return new RomImage(origin, bytes);
+    }
+
     @Override
     public synchronized void close() throws IOException {
         if (closed) {
@@ -261,11 +311,11 @@ public final class RomSourceSnapshot implements Closeable {
         // A failed unlink must not leave a usable object whose backing bytes may be retried after
         // ownership was released. The delete-on-exit fallback is cleanup only, never a reopen.
         closed = true;
-        if (zipSnapshot != null) {
+        if (archiveSnapshot != null) {
             try {
-                Files.deleteIfExists(zipSnapshot);
+                Files.deleteIfExists(archiveSnapshot);
             } catch (IOException failure) {
-                zipSnapshot.toFile().deleteOnExit();
+                archiveSnapshot.toFile().deleteOnExit();
                 throw failure;
             }
         }
@@ -293,17 +343,17 @@ public final class RomSourceSnapshot implements Closeable {
         }
     }
 
-    private static Path createPrivateTemporarySnapshot() throws IOException {
+    private static Path createPrivateTemporarySnapshot(String suffix) throws IOException {
         FileAttribute<?> permissions =
                 PosixFilePermissions.asFileAttribute(
                         PosixFilePermissions.fromString("rw-------"));
         try {
-            return Files.createTempFile("coffee-gb-rom-snapshot-", ".zip", permissions);
+            return Files.createTempFile("coffee-gb-rom-snapshot-", suffix, permissions);
         } catch (UnsupportedOperationException e) {
             // Non-POSIX providers (notably Windows) do not accept a POSIX creation attribute.
             // Their createTempFile implementation still creates a new unpredictable path owned
             // by the current process account.
-            return Files.createTempFile("coffee-gb-rom-snapshot-", ".zip");
+            return Files.createTempFile("coffee-gb-rom-snapshot-", suffix);
         }
     }
 
@@ -417,7 +467,7 @@ public final class RomSourceSnapshot implements Closeable {
                         + " bytes)");
     }
 
-    private static Inventory inventory(
+    private static Inventory inventoryZip(
             Path sourcePath,
             Path snapshot,
             BooleanSupplier cancelled) throws IOException {
@@ -554,7 +604,7 @@ public final class RomSourceSnapshot implements Closeable {
     private static String archiveMessage(IOException failure) {
         String message = failure.getMessage();
         return message == null || message.isBlank()
-                ? "The ZIP archive is invalid or unreadable"
+                ? "The archive is invalid or unreadable"
                 : message;
     }
 
@@ -596,4 +646,15 @@ public final class RomSourceSnapshot implements Closeable {
     private record Inventory(
             List<ArchiveCandidate> candidates,
             int extensionCandidateCount) {}
+
+    private enum ArchiveFormat {
+        ZIP(".zip"),
+        SEVEN_Z(".7z");
+
+        private final String suffix;
+
+        ArchiveFormat(String suffix) {
+            this.suffix = suffix;
+        }
+    }
 }

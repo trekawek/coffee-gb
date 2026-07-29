@@ -144,7 +144,7 @@ class MainTest {
   }
 
   @Test
-  fun `package smoke is a terminal no-ROM command`() {
+  fun `package smoke is a terminal self-contained command`() {
     var smokeCount = 0
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()

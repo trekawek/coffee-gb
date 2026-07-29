@@ -1,10 +1,15 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry;
+import org.apache.commons.compress.archivers.sevenz.SevenZMethod;
+import org.apache.commons.compress.archivers.sevenz.SevenZMethodConfiguration;
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
-import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
-import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.tukaani.xz.LZMA2Options;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -139,15 +144,124 @@ public class RomSourceSnapshotTest {
     }
 
     @Test
-    public void rejectsSevenZBeforeOpeningThePath() {
+    public void loadsValidRomFromMixedCaseSevenZArchive() throws Exception {
+        File source = temporaryFolder.newFile("game.7Z");
+        byte[] bytes = syntheticRom("SEVENZ", 0x23);
+        writeSevenZ(
+                source,
+                new Entry("README.txt", "hello".getBytes(StandardCharsets.UTF_8)),
+                new Entry("games/game.GB", bytes));
+
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            assertTrue(snapshot.isArchive());
+            assertEquals(1, snapshot.candidates().size());
+            assertEquals("games/game.GB", snapshot.candidates().get(0).entryName());
+
+            RomImage image = snapshot.loadSingle();
+            assertArrayEquals(bytes, image.bytes());
+            assertEquals(RomOrigin.Kind.ARCHIVE_ENTRY, image.origin().kind());
+            assertEquals(
+                    source.toPath().toAbsolutePath().normalize(),
+                    image.origin().containerPath().orElseThrow());
+            assertEquals("games/game.GB", image.origin().archiveEntry().orElseThrow());
+        }
+    }
+
+    @Test
+    public void sevenZWithMultipleRomsRequiresAndLoadsTheExactSelection() throws Exception {
+        File source = temporaryFolder.newFile("selection.7z");
+        byte[] first = syntheticRom("FIRST-7Z", 0x24);
+        byte[] second = syntheticRom("SECOND-7Z", 0x25);
+        writeSevenZ(
+                source,
+                new Entry("one/game.gb", first),
+                new Entry("two/game.gbc", second));
+
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            List<RomSourceSnapshot.ArchiveCandidate> candidates = snapshot.candidates();
+            assertEquals(2, candidates.size());
+            assertEquals("one/game.gb", candidates.get(0).entryName());
+            assertEquals("two/game.gbc", candidates.get(1).entryName());
+
+            RomSourceException failure =
+                    assertThrows(RomSourceException.class, snapshot::loadSingle);
+            assertEquals(RomSourceException.Reason.INVALID_SELECTION, failure.reason());
+
+            RomImage image = snapshot.load(candidates.get(1).token());
+            assertArrayEquals(second, image.bytes());
+            assertEquals("two/game.gbc", image.origin().archiveEntry().orElseThrow());
+            assertEquals(0, image.origin().archiveEntryOccurrence());
+        }
+    }
+
+    @Test
+    public void unsafeSevenZEntryRejectsTheWholeArchiveBeforeSelection() throws Exception {
+        File source = temporaryFolder.newFile("unsafe.7z");
+        writeSevenZ(
+                source,
+                new Entry("../escape.txt", new byte[] {1}),
+                new Entry("game.gb", syntheticRom("SAFE-7Z", 0x26)));
+
         RomSourceException failure =
                 assertThrows(
                         RomSourceException.class,
-                        () ->
-                                RomSourceSnapshot.open(
-                                        temporaryFolder.getRoot().toPath().resolve("missing.7Z")));
+                        () -> RomSourceSnapshot.open(source.toPath()));
 
-        assertEquals(RomSourceException.Reason.UNSUPPORTED_SEVEN_Z, failure.reason());
+        assertEquals(RomSourceException.Reason.UNSAFE_ARCHIVE_ENTRY, failure.reason());
+    }
+
+    @Test
+    public void acceptsInvalidHeaderFromSevenZAsAnUntitledCandidate() throws Exception {
+        File source = temporaryFolder.newFile("homebrew.7z");
+        byte[] bytes = new byte[0x8000];
+        bytes[0x200] = 0x27;
+        writeSevenZ(source, new Entry("custom/homebrew.gb", bytes));
+
+        assertFalse(RomHeaderInspector.inspect(bytes).hasCartridgeShape());
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            assertEquals(1, snapshot.candidates().size());
+            assertEquals("", snapshot.candidates().get(0).title());
+            RomImage image = snapshot.loadSingle();
+            assertArrayEquals(bytes, image.bytes());
+            assertEquals("custom/homebrew.gb", image.origin().archiveEntry().orElseThrow());
+        }
+    }
+
+    @Test
+    public void sevenZDecoderMemoryLimitIsReportedAsAContainerLimit() throws Exception {
+        File source = temporaryFolder.newFile("large-dictionary.7z");
+        LZMA2Options options = new LZMA2Options();
+        options.setMode(LZMA2Options.MODE_UNCOMPRESSED);
+        options.setDictSize((Rom.MAX_SEVEN_Z_MEMORY_KIB + 8 * 1024) * 1024);
+        writeSevenZ(
+                source,
+                List.of(new SevenZMethodConfiguration(SevenZMethod.LZMA2, options)),
+                new Entry("game.gb", syntheticRom("MEMORY-7Z", 0x28)));
+
+        RomSourceException failure =
+                assertThrows(
+                        RomSourceException.class,
+                        () -> RomSourceSnapshot.open(source.toPath()));
+
+        assertEquals(RomSourceException.Reason.CONTAINER_TOO_LARGE, failure.reason());
+    }
+
+    @Test
+    public void sevenZPathReplacementAfterInventoryCannotChangeSelectedBytes() throws Exception {
+        File source = temporaryFolder.newFile("replace.7z");
+        byte[] original = syntheticRom("ORIGINAL-7Z", 0x29);
+        writeSevenZ(source, new Entry("game.gb", original));
+
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            byte[] replacement = syntheticRom("REPLACED-7Z", 0x2a);
+            writeSevenZ(source, new Entry("game.gb", replacement));
+
+            RomImage image = snapshot.loadSingle();
+            assertArrayEquals(original, image.bytes());
+            assertEquals(
+                    source.toPath().toAbsolutePath().normalize(),
+                    image.origin().containerPath().orElseThrow());
+        }
     }
 
     @Test
@@ -390,7 +504,7 @@ public class RomSourceSnapshotTest {
                 directory.list(
                         (ignored, name) ->
                                 name.startsWith("coffee-gb-rom-snapshot-")
-                                        && name.endsWith(".zip"));
+                                        && (name.endsWith(".zip") || name.endsWith(".7z")));
         return names == null ? 0 : names.length;
     }
 
@@ -419,6 +533,31 @@ public class RomSourceSnapshotTest {
                 output.putNextEntry(new ZipEntry(entry.name));
                 output.write(entry.bytes);
                 output.closeEntry();
+            }
+        }
+    }
+
+    private static void writeSevenZ(File target, Entry... entries) throws IOException {
+        writeSevenZ(
+                target,
+                List.of(new SevenZMethodConfiguration(SevenZMethod.LZMA2)),
+                entries);
+    }
+
+    private static void writeSevenZ(
+            File target,
+            Iterable<? extends SevenZMethodConfiguration> methods,
+            Entry... entries)
+            throws IOException {
+        try (SevenZOutputFile output = new SevenZOutputFile(target)) {
+            output.setContentMethods(methods);
+            for (Entry source : entries) {
+                SevenZArchiveEntry entry = new SevenZArchiveEntry();
+                entry.setName(source.name);
+                entry.setSize(source.bytes.length);
+                output.putArchiveEntry(entry);
+                output.write(source.bytes);
+                output.closeArchiveEntry();
             }
         }
     }
@@ -454,7 +593,7 @@ public class RomSourceSnapshotTest {
     }
 
     private static Path temporarySnapshotPath(RomSourceSnapshot snapshot) throws Exception {
-        Field field = RomSourceSnapshot.class.getDeclaredField("zipSnapshot");
+        Field field = RomSourceSnapshot.class.getDeclaredField("archiveSnapshot");
         field.setAccessible(true);
         return (Path) field.get(snapshot);
     }

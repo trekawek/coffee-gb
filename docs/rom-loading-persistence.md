@@ -49,6 +49,7 @@ of total JVM heap use:
 | Archive records | 4,096 |
 | Declared aggregate uncompressed archive data | 256 MiB |
 | Commons Compress 7z decoder/memory estimate | 64 MiB |
+| Isolated 7z helper JVM heap | 192 MiB |
 | Linked battery payload | 2 MiB |
 
 The ZIP loader parses bounded central-directory metadata, including ZIP64 end records and at most
@@ -62,10 +63,11 @@ include a mutation regression, and be the only path advertised as an adversarial
 
 A 7z entry count may live inside an encoded header. Commons Compress 1.28 can allocate a
 count-sized `BitSet` while parsing empty-stream flags before its archive-statistics memory check,
-so `setMaxMemoryLimitKiB` does not prove bounded entry-metadata allocation. The 64 MiB setting
-remains useful decoder defense in depth, and the 4,096-entry check still applies after construction,
-but direct 7z loading is legacy-only. The unified safe open service must reject 7z with a typed
-unsupported-format result until a parser with a pre-allocation bound is available.
+so `setMaxMemoryLimitKiB` alone does not prove bounded entry-metadata allocation. The unified
+open service therefore inventories and extracts 7z snapshots in a helper JVM with a 192 MiB heap
+and a 60-second deadline. The helper also applies the 64 MiB decoder limit and the same entry,
+aggregate-size, entry-path, and ROM-size checks as the ZIP path. A parser memory failure or timeout
+terminates only the helper and is reported as an archive failure to the emulator process.
 
 Both loaders inventory metadata before opening the selected entry. Entries with an unknown
 declared uncompressed size are rejected. The selected stream is still counted while reading, so a

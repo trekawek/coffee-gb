@@ -19,7 +19,7 @@ still be opened.
 | `--debug` | Open the developer console. |
 | `-h`, `--help` | Print usage and exit successfully. |
 | `--version` | Print the packaged application version and exit successfully. |
-| `--package-smoke` | Run the isolated no-ROM package self-test and exit successfully. |
+| `--package-smoke` | Run the self-contained headless package self-test and exit successfully. |
 
 Unknown, repeated, malformed, or conflicting options are usage errors. They write an actionable
 diagnostic to standard error and exit with status 2 without constructing Swing components.

@@ -40,8 +40,8 @@ fun main(args: Array<String>) {
           System.err,
           applicationVersion(),
           packageSmoke = {
-            // Exercise the package-native handoff before constructing the synthetic machine.
-            // The smoke itself is intentionally headless and never reads a user ROM.
+            // Exercise the package-native handoff before constructing the synthetic archive and
+            // machine. The smoke is intentionally headless and never reads an external/user ROM.
             val selection = NativeRuntimeBootstrap.bootstrapFromSystem()
             val nativeTarget =
                 NativeRuntimeBootstrap.requirePackageSmokeSelection(
@@ -268,10 +268,12 @@ internal fun printUsage(stream: PrintStream) {
   stream.println("      --debug                    Enable debug console")
   stream.println("  -h  --help                     Display this help and exit")
   stream.println("      --version                  Display version and exit")
-  stream.println("      --package-smoke            Run the no-ROM headless package self-test")
+  stream.println("      --package-smoke            Run the self-contained headless package self-test")
   stream.println("      --                         Treat the remaining argument as the ROM file")
   stream.println()
-  stream.println("ROM_FILE must be a local .gb, .gbc, .rom, or bounded .zip file.")
+  stream.println(
+      "ROM_FILE must be a local .gb, .gbc, or .rom file, or a bounded .zip/.7z archive."
+  )
 }
 
 private object VersionMarker

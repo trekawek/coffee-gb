@@ -372,7 +372,7 @@ internal fun chooseArchiveCandidate(
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         selectedIndex = 0
         visibleRowCount = minOf(candidates.size, 10)
-        accessibleContext.accessibleName = "ROMs in ZIP archive"
+        accessibleContext.accessibleName = "ROMs in archive"
         cellRenderer =
             object : DefaultListCellRenderer() {
               override fun getListCellRendererComponent(
@@ -402,7 +402,7 @@ internal fun chooseArchiveCandidate(
       }
   val panel =
       JPanel(BorderLayout(0, 8)).apply {
-        add(JLabel("Choose a ROM from this ZIP archive:"), BorderLayout.NORTH)
+        add(JLabel("Choose a ROM from this archive:"), BorderLayout.NORTH)
         add(JScrollPane(list), BorderLayout.CENTER)
         preferredSize = Dimension(540, minOf(360, 75 + candidates.size * 28))
       }
@@ -634,9 +634,9 @@ internal class DesktopQuitBridge(
 internal class RomDropFeedback(private val root: JRootPane) : AutoCloseable {
   private val normalBorder = root.border
   private val idleDescription =
-      "Drop one Game Boy ROM or ZIP archive here to open it"
+      "Drop one Game Boy ROM or ZIP or 7z archive here to open it"
   private val message =
-      JLabel("Drop to open this ROM", SwingConstants.CENTER).apply {
+      JLabel("Drop to open this ROM or archive", SwingConstants.CENTER).apply {
         name = "romDropFeedback"
         isOpaque = true
         background = UIManager.getColor("ToolTip.background") ?: Color(255, 255, 220)
@@ -650,9 +650,9 @@ internal class RomDropFeedback(private val root: JRootPane) : AutoCloseable {
                 BorderFactory.createEmptyBorder(8, 16, 8, 16),
             )
         putClientProperty("html.disable", true)
-        accessibleContext.accessibleName = "ROM drop target active"
+        accessibleContext.accessibleName = "ROM or archive drop target active"
         accessibleContext.accessibleDescription =
-            "Release to open the dropped Game Boy ROM or ZIP archive"
+            "Release to open the dropped Game Boy ROM or ZIP or 7z archive"
         isVisible = false
       }
   private val highlight =

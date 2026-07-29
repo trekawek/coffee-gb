@@ -52,22 +52,22 @@ with status 2 before Swing starts. Use `--` to end option parsing when a ROM pat
 java -jar coffee-gb-VERSION.jar -- -homebrew.gb
 ```
 
-`--package-smoke` is a no-ROM, headless installation diagnostic. It generates a tiny synthetic ROM
-in memory, publishes video and audio, samples a press/release, and round-trips the existing portable
-StateFile format. No ROM bytes are downloaded, committed, or written to disk.
+`--package-smoke` is a self-contained, headless installation diagnostic. It generates a tiny
+synthetic ROM, opens it from a private temporary 7z archive to verify packaged archive support,
+publishes video and audio, samples a press/release, and round-trips the existing portable StateFile
+format. It reads no external or user ROM; generated files are deleted and are never committed,
+packaged, cached, or uploaded.
 
 ROMs are not included. Coffee GB accepts `.gb`, `.gbc`, and `.rom` files and
-bounded ZIP archives containing those formats. You can also drop one local file
-on the emulator window; macOS Finder open-file events use the same opening flow.
-If a ZIP contains several valid ROMs, Coffee GB asks which exact entry to open.
-7z files are deliberately rejected because their metadata allocation cannot be
-bounded before parsing—extract the ROM or create a ZIP instead. Recent ROMs are
-recorded only after a game starts successfully.
+bounded ZIP and 7z archives containing those formats. You can also drop one local
+file on the emulator window; macOS Finder open-file events use the same opening
+flow. If an archive contains several valid ROMs, Coffee GB asks which exact entry
+to open. Recent ROMs are recorded only after a game starts successfully.
 
 Opening is cancellable and runs away from the Swing event thread. Coffee GB
 snapshots the selected bytes before parsing them, rejects remote URLs, multiple
-dropped files, unsafe ZIP paths, and archives outside its size/count limits, and
-keeps the current game running if preparation or save-before-switch fails. On
+dropped files, unsafe archive paths, and archives outside its size/count limits,
+and keeps the current game running if preparation or save-before-switch fails. On
 macOS, game-controller support also requires SDL2 (`brew install sdl2`);
 keyboard input works without it.
 
@@ -238,7 +238,7 @@ local SGB controller slots, so every linked machine masks the live four-slot des
 - **Hardware-focused accuracy:** a cycle-stepped CPU and high-accuracy PPU, APU,
   timer, DMA, serial, and infrared behavior.
 - **Everyday play:** battery-backed saves, ten save-state slots, pause/reset,
-  hold-to-rewind, success-only recent ROMs, drag-and-drop, and bounded ZIP
+  hold-to-rewind, success-only recent ROMs, drag-and-drop, and bounded ZIP/7z
   archive loading.
 - **Rollback netplay:** TCP multiplayer for link-cable games, with local rollback
   hiding normal network latency and synchronized infrared communication.

@@ -66,7 +66,6 @@ enum class RomOpenFailureKind {
   MISSING,
   NOT_A_FILE,
   UNSUPPORTED_TYPE,
-  UNSUPPORTED_SEVEN_Z,
   UNREADABLE,
   LIMIT_EXCEEDED,
   INVALID_ARCHIVE,
@@ -605,7 +604,7 @@ internal constructor(
         fail(
             operation,
             RomOpenFailureKind.MULTIPLE_INPUTS,
-            "Open one ROM or ZIP at a time.",
+            "Open one ROM or archive at a time.",
             "ROM-open request ${operation.id} contained ${inputs.size} inputs",
         )
         return
@@ -990,8 +989,6 @@ internal constructor(
           RomSourceException.Reason.MISSING -> RomOpenFailureKind.MISSING
           RomSourceException.Reason.NOT_A_FILE -> RomOpenFailureKind.NOT_A_FILE
           RomSourceException.Reason.UNSUPPORTED_TYPE -> RomOpenFailureKind.UNSUPPORTED_TYPE
-          RomSourceException.Reason.UNSUPPORTED_SEVEN_Z ->
-              RomOpenFailureKind.UNSUPPORTED_SEVEN_Z
           RomSourceException.Reason.UNREADABLE -> RomOpenFailureKind.UNREADABLE
           RomSourceException.Reason.ROM_TOO_LARGE -> RomOpenFailureKind.LIMIT_EXCEEDED
           RomSourceException.Reason.CONTAINER_TOO_LARGE -> RomOpenFailureKind.LIMIT_EXCEEDED
@@ -1010,11 +1007,9 @@ internal constructor(
           RomSourceException.Reason.MISSING ->
               "The selected ROM no longer exists."
           RomSourceException.Reason.NOT_A_FILE ->
-              "Select one ROM file or ZIP archive, not a directory."
+              "Select one ROM file or archive, not a directory."
           RomSourceException.Reason.UNSUPPORTED_TYPE ->
-              "Coffee GB opens .gb, .gbc, .rom, and .zip files."
-          RomSourceException.Reason.UNSUPPORTED_SEVEN_Z ->
-              "7z cannot be opened safely. Extract the ROM or create a ZIP archive."
+              "Coffee GB opens .gb, .gbc, .rom, .zip, and .7z files."
           RomSourceException.Reason.UNREADABLE ->
               "The selected ROM could not be read."
           RomSourceException.Reason.ROM_TOO_LARGE ->
@@ -1022,11 +1017,11 @@ internal constructor(
           RomSourceException.Reason.CONTAINER_TOO_LARGE ->
               "The selected archive exceeds Coffee GB's safety limits."
           RomSourceException.Reason.INVALID_ARCHIVE ->
-              "The ZIP archive is invalid, corrupt, or exceeds a safety limit."
+              "The archive is invalid, corrupt, or exceeds a safety limit."
           RomSourceException.Reason.UNSAFE_ARCHIVE_ENTRY ->
-              "The ZIP archive contains an unsafe entry path."
+              "The archive contains an unsafe entry path."
           RomSourceException.Reason.NO_ROM_CANDIDATES ->
-              "The ZIP archive contains no supported ROM files."
+              "The archive contains no supported ROM files."
           RomSourceException.Reason.INVALID_HEADER ->
               "The file does not contain a complete Game Boy ROM header."
           RomSourceException.Reason.INVALID_SELECTION ->

@@ -34,7 +34,8 @@ public class Rom {
      * Defense-in-depth limit for Commons Compress's supported decoder memory (including
      * LZMA/LZMA2) and archive-statistics checks. It is not a complete metadata-allocation bound:
      * Commons Compress 1.28 may allocate count-sized 7z header structures before validating its
-     * statistics. Direct 7z loading therefore remains a legacy compatibility path.
+     * statistics. The unified snapshot loader isolates 7z parsing in a bounded helper process;
+     * this direct-file compatibility path still parses it in-process.
      */
     static final int MAX_SEVEN_Z_MEMORY_KIB = 64 * 1024;
 
@@ -81,9 +82,9 @@ public class Rom {
     /**
      * Legacy file-opening compatibility path.
      *
-     * <p>ZIP metadata is preflighted on a bounded channel, but {@link ZipFile} subsequently
-     * reopens the path. Security-sensitive callers must use the unified snapshotting open service
-     * rather than treating this constructor as a TOCTOU-safe trust boundary.
+     * <p>Archive loading reopens the path, and direct 7z loading parses metadata in-process.
+     * Security-sensitive callers must use the unified snapshotting open service rather than
+     * treating this constructor as a TOCTOU-safe trust boundary.
      */
     public Rom(File romFile) throws IOException {
         this(loadFile(romFile), romFile);
