@@ -7,9 +7,11 @@ import eu.rekawek.coffeegb.core.memory.cart.type.Datel;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * The Datel "Orbit V2" Action Replay mapper (issue #66): 8 KB banking, ASIC RAM, the
@@ -17,15 +19,23 @@ import static org.junit.Assert.assertNotNull;
  */
 public class DatelTest {
 
-    /** A 128 KB image with a bad logo (Datel detection) and a marker byte per 8 KB bank. */
+    /** A 128 KB Action Replay image with a bad logo and a marker byte per 8 KB bank. */
     private static byte[] datelRom() {
-        byte[] rom = new byte[0x20000];
+        return datelRom(0x20000);
+    }
+
+    private static byte[] datelRom(int size) {
+        byte[] rom = new byte[size];
         rom[0x100] = 0x00;
         rom[0x101] = (byte) 0xc3;
+        rom[0x102] = 0x50;
+        rom[0x103] = 0x01;
         rom[0x104] = 0x44; // deliberately not the Nintendo logo
+        byte[] title = "Action Replay V4".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(title, 0, rom, 0x134, title.length);
         rom[0x147] = 0x00; // "ROM only"
         rom[0x148] = 0x02;
-        for (int bank = 0; bank < 16; bank++) {
+        for (int bank = 0; bank < rom.length / 0x2000; bank++) {
             rom[bank * 0x2000 + 0x1000] = (byte) (0xA0 + bank);
         }
         return rom;
@@ -66,8 +76,17 @@ public class DatelTest {
     @Test
     public void detectedAsDatel() throws IOException {
         assertNotNull(build().getDatel());
-        assertEquals(CartridgeProperties.Mapper.DATEL,
-                new Rom(datelRom()).getCartridgeProperties().getMapper());
+        CartridgeProperties properties = new Rom(datelRom()).getCartridgeProperties();
+        assertEquals(CartridgeProperties.Mapper.DATEL, properties.getMapper());
+        assertTrue(properties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
+    }
+
+    @Test
+    public void trimmedGameSharkOnlineImageIsDetectedAsDatel() throws IOException {
+        CartridgeProperties properties = new Rom(datelRom(0x14000)).getCartridgeProperties();
+
+        assertEquals(CartridgeProperties.Mapper.DATEL, properties.getMapper());
+        assertTrue(properties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
     }
 
     @Test

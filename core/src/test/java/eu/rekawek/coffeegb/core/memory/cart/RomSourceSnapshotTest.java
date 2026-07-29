@@ -51,9 +51,39 @@ public class RomSourceSnapshotTest {
     }
 
     @Test
-    public void rejectsInvalidHeaderWithTypedReason() throws Exception {
+    public void acceptsInvalidHeaderWithoutChangingItsBytes() throws Exception {
         File source = temporaryFolder.newFile("junk.gb");
-        Files.write(source.toPath(), new byte[0x8000]);
+        byte[] bytes = new byte[0x8000];
+        bytes[0x200] = 0x42;
+        Files.write(source.toPath(), bytes);
+
+        assertFalse(RomHeaderInspector.inspect(bytes).hasCartridgeShape());
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            assertArrayEquals(bytes, snapshot.loadSingle().bytes());
+        }
+    }
+
+    @Test
+    public void acceptsInvalidHeaderFromZipAsAnUntitledCandidate() throws Exception {
+        File source = temporaryFolder.newFile("homebrew.zip");
+        byte[] bytes = new byte[0x8000];
+        bytes[0x200] = 0x43;
+        writeZip(source, new Entry("custom/homebrew.gb", bytes));
+
+        assertFalse(RomHeaderInspector.inspect(bytes).hasCartridgeShape());
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(source.toPath())) {
+            assertEquals(1, snapshot.candidates().size());
+            assertEquals("", snapshot.candidates().get(0).title());
+            RomImage image = snapshot.loadSingle();
+            assertArrayEquals(bytes, image.bytes());
+            assertEquals("custom/homebrew.gb", image.origin().archiveEntry().orElseThrow());
+        }
+    }
+
+    @Test
+    public void rejectsTruncatedDirectRomWithTypedReason() throws Exception {
+        File source = temporaryFolder.newFile("truncated.gb");
+        Files.write(source.toPath(), new byte[RomHeaderInspector.HEADER_LENGTH - 1]);
 
         RomSourceException failure =
                 assertThrows(

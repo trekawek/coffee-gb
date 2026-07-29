@@ -30,6 +30,9 @@ internal object StateCodecTestSupport {
         bytes[0x102] = 0x50
         bytes[0x103] = 0x01
         bytes[0x104] = 0x44
+        "Action Replay V4".forEachIndexed { index, character ->
+          bytes[0x134 + index] = character.code.toByte()
+        }
         bytes[0x147] = 0
         bytes[0x148] = 0x02
         bytes[0x150] = 0x18

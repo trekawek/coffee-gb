@@ -203,6 +203,27 @@ class RomOpenServiceTest {
   }
 
   @Test
+  fun `invalid-header homebrew reaches the controller from raw and zip sources`() {
+    val bytes = ByteArray(0x8000).also { it[0x200] = 0x42 }
+    val raw = temporaryFolder.newFile("headerless-homebrew.gb").toPath()
+    Files.write(raw, bytes)
+    val zip = temporaryFolder.newFile("headerless-homebrew.zip")
+    writeZip(zip, "homebrew/headerless.gb" to bytes)
+
+    listOf(raw, zip.toPath()).forEach { source ->
+      val fixture = fixture()
+      fixture.service.open(RomOpenRequest(source, RomOpenSource.CHOOSER))
+      fixture.worker.runAll()
+      fixture.ui.runAll()
+
+      assertEquals(1, fixture.loads.size, source.toString())
+      assertTrue(fixture.loads.single().image!!.bytes().contentEquals(bytes), source.toString())
+      assertTrue(fixture.updates.none { it is RomOpenUpdate.Failed }, source.toString())
+      fixture.close()
+    }
+  }
+
+  @Test
   fun `controller startup details redact unrelated absolute paths`() {
     val fixture = fixture()
     val source = romFile("redacted-controller-path.gb", "REDACT")

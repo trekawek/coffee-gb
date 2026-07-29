@@ -174,6 +174,11 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         addressSpace.setClockPaused(paused);
     }
 
+    /** Bypasses mapper-side boot-ROM handshakes when the console boot itself is skipped. */
+    public void skipBoot() {
+        addressSpace.skipBoot();
+    }
+
     /** Returns detached MBC3 pause bookkeeping, or null for mappers without that clock. */
     public RealTimeClock.RuntimeState captureRtcRuntimeState() {
         return addressSpace instanceof Mbc3 mbc3 ? mbc3.captureRtcRuntimeState() : null;

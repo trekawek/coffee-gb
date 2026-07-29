@@ -11,6 +11,10 @@ public interface MemoryController extends AddressSpace, StatefulComponent<Memory
     default void setClockPaused(boolean paused) {
     }
 
+    /** Applies mapper state normally reached while the console boot ROM reads the cartridge. */
+    default void skipBoot() {
+    }
+
     default void flushRam() {
     }
 

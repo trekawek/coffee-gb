@@ -130,6 +130,15 @@ public class SachenMmc implements MemoryController {
     }
 
     @Override
+    public void skipBoot() {
+        // The boot ROM's header reads normally advance raw boards through their lockout.
+        // Cooked dumps also stop serving the synthetic logo once execution reaches the game.
+        lockState = UNLOCKED;
+        transition = 0;
+        serveBootLogo = false;
+    }
+
+    @Override
     public void setByte(int address, int value) {
         // the boot ROM never writes the cart; the first write is the game taking over, so the
         // cooked logo shim steps aside and the real ROM bytes become visible

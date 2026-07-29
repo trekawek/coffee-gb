@@ -331,6 +331,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             bootTimedOut = cpu.getRegisters().getPC() != 0x100;
         }
         if (bootTimedOut || configuration.bootstrapMode == BootstrapMode.SKIP) {
+            // Some unlicensed mappers transform the header only while the console boot ROM is
+            // reading it. Bypassing (or abandoning) that ROM must complete the mapper-side
+            // handshake before the CPU starts at the cartridge entry point.
+            cartridge.skipBoot();
             // the Datel Action Replay's ASIC presents a valid CGB header to the console,
             // so the machine boots native-colour despite the dump's garbage flag byte
             applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
