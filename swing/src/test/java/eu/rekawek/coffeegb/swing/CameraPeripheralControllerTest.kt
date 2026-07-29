@@ -24,6 +24,7 @@ class CameraPeripheralControllerTest {
   @Test
   fun `open and close stay on worker while publication and UI stay on EDT`() {
     val source = TestSource()
+    val openedDevice = AtomicInteger(-1)
     val openOffEdt = AtomicBoolean()
     val closeOffEdt = AtomicBoolean()
     val opened = CountDownLatch(1)
@@ -33,10 +34,12 @@ class CameraPeripheralControllerTest {
     val callbacksOnEdt = AtomicBoolean(true)
     val controller =
         CameraPeripheralController(
-            opener = {
+            opener = { device ->
+              openedDevice.set(device)
               openOffEdt.set(!SwingUtilities.isEventDispatchThread())
               source
             },
+            initialDeviceIndex = 3,
             sourceCloser = {
               closeOffEdt.set(!SwingUtilities.isEventDispatchThread())
               sourceClosed.countDown()
@@ -55,6 +58,7 @@ class CameraPeripheralControllerTest {
     assertFailsWith<IllegalStateException> { controller.requestEnabled(true) }
     onEdt { controller.requestEnabled(true) }
     assertTrue(opened.await(3, TimeUnit.SECONDS))
+    assertEquals(3, openedDevice.get())
     assertTrue(openOffEdt.get())
     assertSame(source, publications.last())
 
@@ -77,7 +81,7 @@ class CameraPeripheralControllerTest {
   }
 
   @Test
-  fun `cancelled stale open is closed and only the newer result reaches the EDT`() {
+  fun `device selected during blocked open is captured per operation and stale source is closed`() {
     val first = TestSource()
     val second = TestSource()
     val firstEntered = CountDownLatch(1)
@@ -85,13 +89,14 @@ class CameraPeripheralControllerTest {
     val firstClosed = CountDownLatch(1)
     val secondEnabled = CountDownLatch(1)
     val secondClosed = CountDownLatch(1)
-    val opens = AtomicInteger()
+    val openedDevices = Collections.synchronizedList(mutableListOf<Int>())
     val publications = Collections.synchronizedList(mutableListOf<CameraSource?>())
     val states = Collections.synchronizedList(mutableListOf<CameraPeripheralUiState>())
     val controller =
         CameraPeripheralController(
-            opener = {
-              if (opens.getAndIncrement() == 0) {
+            opener = { device ->
+              openedDevices += device
+              if (device == 0) {
                 firstEntered.countDown()
                 awaitIgnoringInterrupt(releaseFirst)
                 first
@@ -120,20 +125,17 @@ class CameraPeripheralControllerTest {
 
     onEdt { controller.requestEnabled(true) }
     assertTrue(firstEntered.await(3, TimeUnit.SECONDS))
-    onEdt {
-      controller.requestEnabled(false)
-      controller.requestEnabled(true)
-    }
+    onEdt { controller.selectDevice(4) }
     releaseFirst.countDown()
 
     assertTrue(firstClosed.await(3, TimeUnit.SECONDS))
     assertTrue(secondEnabled.await(3, TimeUnit.SECONDS))
     assertFalse(publications.contains(first))
     assertSame(second, publications.last())
+    assertEquals(listOf(0, 4), openedDevices)
     assertEquals(
         listOf(
             CameraPeripheralUiState.Opening,
-            CameraPeripheralUiState.Disabled,
             CameraPeripheralUiState.Opening,
             CameraPeripheralUiState.Enabled,
         ),
@@ -147,13 +149,67 @@ class CameraPeripheralControllerTest {
   }
 
   @Test
+  fun `device preference restarts an enabled source but never enables a disabled camera`() {
+    val first = TestSource()
+    val second = TestSource()
+    val openedDevices = Collections.synchronizedList(mutableListOf<Int>())
+    val firstEnabled = CountDownLatch(1)
+    val secondEnabled = CountDownLatch(1)
+    val firstClosed = CountDownLatch(1)
+    val secondClosed = CountDownLatch(1)
+    val publications = Collections.synchronizedList(mutableListOf<CameraSource?>())
+    val controller =
+        CameraPeripheralController(
+            opener = { device ->
+              openedDevices += device
+              if (device == 0) first else second
+            },
+            sourceCloser = {
+              when (it) {
+                first -> firstClosed.countDown()
+                second -> secondClosed.countDown()
+              }
+            },
+            publisher = {
+              publications += it
+              when (it) {
+                first -> firstEnabled.countDown()
+                second -> secondEnabled.countDown()
+              }
+            },
+            stateConsumer = {},
+        )
+
+    assertFailsWith<IllegalStateException> { controller.selectDevice(5) }
+    onEdt { controller.requestEnabled(true) }
+    assertTrue(firstEnabled.await(3, TimeUnit.SECONDS))
+    onEdt { controller.selectDevice(0) }
+    assertEquals(listOf(0), openedDevices)
+
+    onEdt { controller.selectDevice(5) }
+
+    assertTrue(firstClosed.await(3, TimeUnit.SECONDS))
+    assertTrue(secondEnabled.await(3, TimeUnit.SECONDS))
+    assertEquals(listOf(0, 5), openedDevices)
+    assertEquals(listOf(first, null, second), publications)
+
+    onEdt { controller.requestEnabled(false) }
+    assertTrue(secondClosed.await(3, TimeUnit.SECONDS))
+    onEdt { controller.selectDevice(9) }
+    assertEquals(listOf(0, 5), openedDevices)
+
+    onEdt { controller.close() }
+    assertTrue(controller.awaitTermination(3, TimeUnit.SECONDS))
+  }
+
+  @Test
   fun `current open failure is reported on EDT without publishing a source`() {
     val failed = CountDownLatch(1)
     val states = Collections.synchronizedList(mutableListOf<CameraPeripheralUiState>())
     val publications = Collections.synchronizedList(mutableListOf<CameraSource?>())
     val controller =
         CameraPeripheralController<TestSource>(
-            opener = {
+            opener = { _ ->
               assertFalse(SwingUtilities.isEventDispatchThread())
               null
             },
@@ -192,7 +248,7 @@ class CameraPeripheralControllerTest {
     val executor = Executors.newSingleThreadExecutor()
     val controller =
         CameraPeripheralController(
-            opener = { source },
+            opener = { _ -> source },
             sourceCloser = {
               assertFalse(SwingUtilities.isEventDispatchThread())
               sourceClosed.countDown()
@@ -231,7 +287,7 @@ class CameraPeripheralControllerTest {
     val closes = AtomicInteger()
     val controller =
         CameraPeripheralController(
-            opener = { source },
+            opener = { _ -> source },
             sourceCloser = { closes.incrementAndGet() },
             publisher = {
               assertTrue(SwingUtilities.isEventDispatchThread())
@@ -247,6 +303,7 @@ class CameraPeripheralControllerTest {
     assertTrue(enabled.await(3, TimeUnit.SECONDS))
     controller.close()
     controller.close()
+    onEdt { controller.selectDevice(8) }
 
     assertTrue(controller.awaitTermination(3, TimeUnit.SECONDS))
     assertTrue(detached.await(3, TimeUnit.SECONDS))

@@ -30,7 +30,8 @@ internal sealed interface CameraPeripheralUiState {
  * emulator. Cancellation or disposal closes every stale source on a worker before it can escape.
  */
 internal class CameraPeripheralController<T : CameraSource>(
-    private val opener: () -> T?,
+    private val opener: (Int) -> T?,
+    initialDeviceIndex: Int = 0,
     private val sourceCloser: (T) -> Unit,
     private val publisher: (CameraSource?) -> Unit,
     private val stateConsumer: (CameraPeripheralUiState) -> Unit,
@@ -44,9 +45,15 @@ internal class CameraPeripheralController<T : CameraSource>(
     private val edtOwnership: () -> Boolean = SwingUtilities::isEventDispatchThread,
 ) : Closeable {
 
+  init {
+    require(initialDeviceIndex >= 0) { "camera device index must not be negative" }
+  }
+
   private val stateLock = Any()
 
   private var operation = 0L
+
+  private var deviceIndex = initialDeviceIndex
 
   private var desired = false
 
@@ -63,12 +70,38 @@ internal class CameraPeripheralController<T : CameraSource>(
       return
     }
 
+    startOpening(failIfClosed = true)
+  }
+
+  /** Selects a source without enabling a disabled camera; an active source is replaced safely. */
+  fun selectDevice(deviceIndex: Int) {
+    requireEdt()
+    require(deviceIndex >= 0) { "camera device index must not be negative" }
+    val restart =
+        synchronized(stateLock) {
+          if (closed || this.deviceIndex == deviceIndex) return
+          this.deviceIndex = deviceIndex
+          desired
+        }
+    if (restart) {
+      // close() is intentionally allowed off the EDT. If it wins this race, selection is already
+      // terminal and this internal restart becomes a no-op rather than surfacing an Apply failure.
+      startOpening(failIfClosed = false)
+    }
+  }
+
+  private fun startOpening(failIfClosed: Boolean) {
     val current: Long
+    val requestedDeviceIndex: Int
     val previous: T?
     synchronized(stateLock) {
-      check(!closed) { "camera peripheral controller is closed" }
+      if (closed) {
+        check(!failIfClosed) { "camera peripheral controller is closed" }
+        return
+      }
       operation++
       current = operation
+      requestedDeviceIndex = deviceIndex
       desired = true
       pending?.cancel(true)
       pending = null
@@ -82,7 +115,7 @@ internal class CameraPeripheralController<T : CameraSource>(
 
     val submitted =
         try {
-          executor.submit { openOnWorker(current) }
+          executor.submit { openOnWorker(current, requestedDeviceIndex) }
         } catch (_: RejectedExecutionException) {
           failSubmission(current)
           return
@@ -115,11 +148,11 @@ internal class CameraPeripheralController<T : CameraSource>(
     stateConsumer(CameraPeripheralUiState.Disabled)
   }
 
-  private fun openOnWorker(expectedOperation: Long) {
+  private fun openOnWorker(expectedOperation: Long, requestedDeviceIndex: Int) {
     check(!SwingUtilities.isEventDispatchThread()) { "camera open must not run on the EDT" }
     val source =
         try {
-          opener()
+          opener(requestedDeviceIndex)
         } catch (failure: Throwable) {
           LOG.warn("Failed to open the camera peripheral", failure)
           null

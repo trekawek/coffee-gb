@@ -16,7 +16,7 @@ class ApplicationSettingsDesktopTest {
     assertNull(defaults.desktop.windowSize)
 
     val encoded = ApplicationSettingsCodec.encode(ApplicationSettingsDocument(defaults))
-    assertEquals("6", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals("7", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
     assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_WIDTH_KEY in encoded)
     assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_HEIGHT_KEY in encoded)
 
@@ -33,7 +33,7 @@ class ApplicationSettingsDesktopTest {
   }
 
   @Test
-  fun `schema six window size round trips canonically with unknown settings`() {
+  fun `window size round trips canonically with unknown settings`() {
     val size = ApplicationSettings.WindowSize(937, 641)
     val document =
         ApplicationSettingsDocument(
@@ -67,7 +67,7 @@ class ApplicationSettingsDesktopTest {
       assertEquals(future, migrated.unknownProperties, "schema ${version ?: 0}")
 
       val canonical = ApplicationSettingsCodec.encode(migrated)
-      assertEquals("6", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+      assertEquals("7", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
       assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_WIDTH_KEY in canonical)
       assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_HEIGHT_KEY in canonical)
       assertTrue(

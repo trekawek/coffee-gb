@@ -165,6 +165,8 @@ This feature adds the optional `saves.rewindMemoryMiB` property to settings sche
 decode as 64 MiB, so schema-5 files written before this feature remain valid. Later desktop-window
 geometry advances the current document to schema 6; schema-5 save fields retain their original
 ownership and continue to decode before the schema-6 desktop section is applied.
+Camera-device selection later advances the current document to schema 7; schemas 0-6 preserve the
+future camera key without interpreting it during migration.
 
 For the binary format and persistence guarantees, see [StateFile v2](state-file-v2.md) and
 [atomic persistence](atomic-persistence.md).

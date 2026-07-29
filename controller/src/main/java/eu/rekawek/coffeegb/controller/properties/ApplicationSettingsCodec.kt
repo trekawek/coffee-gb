@@ -22,6 +22,7 @@ object ApplicationSettingsCodec {
   const val AUDIO_VOLUME_KEY = "audio.masterVolume"
   const val AUDIO_LATENCY_KEY = "audio.latencyPreset"
   const val GAMEPAD_TUNING_PREFIX = "input.gamepad."
+  const val CAMERA_DEVICE_INDEX_KEY = "peripherals.cameraDeviceIndex"
   const val DISPLAY_SCALING_MODE_KEY = "display.scalingMode"
   const val DISPLAY_LETTERBOX_COLOR_KEY = "display.letterboxColor"
   const val DISPLAY_FULLSCREEN_KEY = "display.fullscreen"
@@ -61,6 +62,7 @@ object ApplicationSettingsCodec {
           )
   private val versionSixFixedKeys =
       versionFiveFixedKeys + setOf(DESKTOP_WINDOW_WIDTH_KEY, DESKTOP_WINDOW_HEIGHT_KEY)
+  private val versionSevenFixedKeys = versionSixFixedKeys + CAMERA_DEVICE_INDEX_KEY
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -80,6 +82,7 @@ object ApplicationSettingsCodec {
             version == "3" ||
             version == "4" ||
             version == "5" ||
+            version == "6" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -156,6 +159,7 @@ object ApplicationSettingsCodec {
         }
     known[AUDIO_VOLUME_KEY] = settings.audio.volume.toString()
     known[AUDIO_LATENCY_KEY] = settings.audio.latency.name
+    known[CAMERA_DEVICE_INDEX_KEY] = settings.peripherals.cameraDeviceIndex.toString()
     known[BATTERY_SAVES_KEY] = settings.saves.batterySavesEnabled.toString()
     settings.saves.directory?.let { known[SAVE_DIRECTORY_KEY] = it.toString() }
     settings.saves.previousDirectories.forEachIndexed { index, path ->
@@ -338,6 +342,20 @@ object ApplicationSettingsCodec {
                         },
                 ),
             input = input,
+            peripherals =
+                ApplicationSettings.Peripherals(
+                    cameraDeviceIndex =
+                        if (sourceVersion >= 7) {
+                          parseRangedInt(
+                              raw[CAMERA_DEVICE_INDEX_KEY],
+                              ApplicationSettings.DEFAULT_CAMERA_DEVICE_INDEX,
+                              CAMERA_DEVICE_INDEX_KEY,
+                              ApplicationSettings.MIN_CAMERA_DEVICE_INDEX,
+                              ApplicationSettings.MAX_CAMERA_DEVICE_INDEX,
+                          )
+                        } else {
+                          ApplicationSettings.DEFAULT_CAMERA_DEVICE_INDEX
+                        }),
             saves =
                 ApplicationSettings.Saves(
                     directory =
@@ -435,6 +453,7 @@ object ApplicationSettingsCodec {
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 7 -> versionSevenFixedKeys
           sourceVersion >= 6 -> versionSixFixedKeys
           sourceVersion >= 5 -> versionFiveFixedKeys
           sourceVersion >= 4 -> versionFourFixedKeys
@@ -901,7 +920,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionSixFixedKeys ||
+      key in versionSevenFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||

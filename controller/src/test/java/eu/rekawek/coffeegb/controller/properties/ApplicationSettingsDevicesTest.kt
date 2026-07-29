@@ -103,7 +103,7 @@ class ApplicationSettingsDevicesTest {
     mutableTunings.clear()
 
     val encoded = ApplicationSettingsCodec.encode(document)
-    assertEquals("6", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals("7", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
     assertEquals(audioId('c'), encoded[ApplicationSettingsCodec.AUDIO_OUTPUT_KEY])
     assertEquals("37", encoded[ApplicationSettingsCodec.AUDIO_VOLUME_KEY])
     assertEquals("LOW", encoded[ApplicationSettingsCodec.AUDIO_LATENCY_KEY])
@@ -163,7 +163,7 @@ class ApplicationSettingsDevicesTest {
       assertEquals(futureValues, migrated.unknownProperties)
 
       val canonical = ApplicationSettingsCodec.encode(migrated)
-      assertEquals("6", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+      assertEquals("7", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
       assertEquals("default", canonical[ApplicationSettingsCodec.AUDIO_OUTPUT_KEY])
       assertEquals("100", canonical[ApplicationSettingsCodec.AUDIO_VOLUME_KEY])
       assertEquals("BALANCED", canonical[ApplicationSettingsCodec.AUDIO_LATENCY_KEY])
@@ -262,7 +262,112 @@ class ApplicationSettingsDevicesTest {
   }
 
   @Test
-  fun `controller facades expose applied audio and gamepad tuning snapshots`() {
+  fun `camera device model has an explicit bounded default`() {
+    assertEquals(
+        ApplicationSettings.DEFAULT_CAMERA_DEVICE_INDEX,
+        ApplicationSettings.Peripherals().cameraDeviceIndex,
+    )
+    ApplicationSettings.Peripherals(ApplicationSettings.MIN_CAMERA_DEVICE_INDEX)
+    ApplicationSettings.Peripherals(ApplicationSettings.MAX_CAMERA_DEVICE_INDEX)
+    listOf(
+            ApplicationSettings.MIN_CAMERA_DEVICE_INDEX - 1,
+            ApplicationSettings.MAX_CAMERA_DEVICE_INDEX + 1,
+        )
+        .forEach { invalid ->
+          assertFailsWith<IllegalArgumentException> {
+            ApplicationSettings.Peripherals(invalid)
+          }
+        }
+  }
+
+  @Test
+  fun `schema seven camera choice round trips and rejects malformed indexes`() {
+    val document =
+        ApplicationSettingsDocument(
+            ApplicationSettings(
+                peripherals =
+                    ApplicationSettings.Peripherals(
+                        ApplicationSettings.MAX_CAMERA_DEVICE_INDEX)),
+            mapOf("plugin.camera-filter" to "sepia"),
+        )
+
+    val encoded = ApplicationSettingsCodec.encode(document)
+
+    assertEquals("7", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals(
+        ApplicationSettings.MAX_CAMERA_DEVICE_INDEX.toString(),
+        encoded[ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY],
+    )
+    assertEquals(document, ApplicationSettingsCodec.decode(encoded))
+
+    listOf(
+            "camera",
+            "-1",
+            (ApplicationSettings.MAX_CAMERA_DEVICE_INDEX + 1).toString(),
+            "2147483648",
+        )
+        .forEach { invalid ->
+          assertFailsWith<IllegalArgumentException>("Expected rejection for $invalid") {
+            ApplicationSettingsCodec.decode(
+                mapOf(
+                    ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "7",
+                    ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY to invalid,
+                ))
+          }
+        }
+  }
+
+  @Test
+  fun `schemas zero through six preserve future camera choice without activating it`() {
+    (0..6).forEach { sourceVersion ->
+      val raw =
+          buildMap {
+            if (sourceVersion > 0) {
+              put(ApplicationSettingsCodec.SCHEMA_VERSION_KEY, sourceVersion.toString())
+            }
+            put(ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY, "4")
+          }
+
+      val migrated = ApplicationSettingsCodec.decode(raw)
+
+      assertEquals(
+          ApplicationSettings.DEFAULT_CAMERA_DEVICE_INDEX,
+          migrated.settings.peripherals.cameraDeviceIndex,
+      )
+      assertEquals(
+          "4",
+          migrated.unknownProperties[ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY],
+      )
+      val canonical = ApplicationSettingsCodec.encode(migrated)
+      assertEquals("0", canonical[ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY])
+      assertTrue(
+          canonical.keys.any {
+            it.startsWith(ApplicationSettingsCodec.PRESERVED_UNKNOWN_COLLISIONS_PREFIX)
+          })
+      assertEquals(migrated, ApplicationSettingsCodec.decode(canonical))
+    }
+  }
+
+  @Test
+  fun `schema six collision envelope retains future camera choice through schema seven`() {
+    val collision = mapOf(ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY to "9")
+    val migrated =
+        ApplicationSettingsCodec.decode(
+            mapOf(
+                ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "6",
+                "${ApplicationSettingsCodec.PRESERVED_UNKNOWN_COLLISIONS_PREFIX}0" to
+                    serializeCollisions(collision),
+            ))
+
+    assertEquals(ApplicationSettings.Peripherals(), migrated.settings.peripherals)
+    assertEquals(collision, migrated.unknownProperties)
+    val canonical = ApplicationSettingsCodec.encode(migrated)
+    assertEquals("0", canonical[ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY])
+    assertEquals(migrated, ApplicationSettingsCodec.decode(canonical))
+  }
+
+  @Test
+  fun `controller facades expose and persist applied device snapshots`() {
     val path = Files.createTempDirectory("coffee-gb-devices").resolve("settings.properties")
     val stableId = gamepadId('1')
     val audio =
@@ -284,6 +389,7 @@ class ApplicationSettingsDevicesTest {
         current.copy(
             audio = audio,
             input = current.input.copy(gamepadTunings = mapOf(stableId to tuning)),
+            peripherals = ApplicationSettings.Peripherals(cameraDeviceIndex = 7),
         )
       }
 
@@ -294,6 +400,7 @@ class ApplicationSettingsDevicesTest {
       assertEquals(mapOf(stableId to tuning), properties.gamepadTunings)
       assertEquals(tuning, properties.gamepadTuning(stableId))
       assertEquals(ApplicationSettings.GamepadTuning(), properties.gamepadTuning(gamepadId('2')))
+      assertEquals(7, properties.applicationSettings.peripherals.cameraDeviceIndex)
       properties.flush()
     }
 
@@ -302,6 +409,7 @@ class ApplicationSettingsDevicesTest {
             ApplicationSettingsStore.decodeProperties(Files.readAllBytes(path)))
     assertEquals(audio, persisted.settings.audio)
     assertEquals(mapOf(stableId to tuning), persisted.settings.input.gamepadTunings)
+    assertEquals(7, persisted.settings.peripherals.cameraDeviceIndex)
   }
 
   private fun gamepadId(fill: Char): String = "sdl-" + fill.toString().repeat(64)

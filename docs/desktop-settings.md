@@ -42,16 +42,16 @@ particular, `--use-bootstrap` and `--disable-battery-saves` do not change the ne
 ## Typed settings model
 
 The application owns one immutable `ApplicationSettings` value with typed `general`, `display`,
-`audio`, `input`, `saves`, `advanced`, and desktop-shell sections. The controller-facing
+`audio`, `input`, `peripherals`, `saves`, `advanced`, and desktop-shell sections. The controller-facing
 `EmulatorProperties` class is a compatibility facade over that model while older menu code is
 migrated.
 
-Schema 6 continues to use `${user.home}/.coffeegb.properties`; schemas 0–5 are migrated in place
+Schema 7 continues to use `${user.home}/.coffeegb.properties`; schemas 0–6 are migrated in place
 so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `6` |
+| `settings.schemaVersion` | exact supported schema version | `7` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
@@ -84,6 +84,7 @@ so the portable JAR remains compatible during the migration window.
 | `input.gamepad.<stable-id>.tiltDeadZone` | raw SDL threshold in `0..32766` | `4096` |
 | `input.gamepad.<stable-id>.invertMovementX/Y` | boolean | `false` |
 | `input.gamepad.<stable-id>.invertTiltX/Y` | boolean | `false` |
+| `peripherals.cameraDeviceIndex` | OpenCV camera device index in `0..15` | `0` |
 
 Recognized values are validated before becoming live settings. Boolean values are exactly `true`
 or `false` (case-insensitive); numeric settings have explicit ranges; hardware profiles,
@@ -94,14 +95,14 @@ does not partially update the active settings.
 application may close without a redundant prompt. `ALWAYS` also confirms an idle application
 close, and `NEVER` suppresses this ordinary confirmation. A battery/autosave flush failure remains
 actionable regardless of this preference. Setting recent-file capacity to zero disables history;
-reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 6
+reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 7
 does not invent or persist an update-check preference.
 
 Unrecognized legacy keys are retained losslessly when the current schema is saved. Keys in a reserved grammar,
 such as an unknown `input.*` key, remain errors so a misspelled control binding is not silently
 ignored. The current schema stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
 key beyond Coffee GB's old ten-entry history remains untouched even if capacity later grows. Schema
-6 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
+7 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
 binding is therefore unbound rather than silently restored to a default. If an older unknown key
 occupies a name reserved by a later schema, Coffee GB keeps its original key/value in bounded
 internal migration metadata rather than overwriting or reinterpreting it. At most 32 per-device
@@ -125,6 +126,14 @@ and exposes independent movement/tilt dead zones and X/Y inversion for each stab
 mapping change releases all held input and waits for a neutral physical sample before accepting new
 presses.
 
+The Peripherals tab selects Camera 1 (Coffee GB's default and the first OpenCV camera slot) or
+another numbered camera for the webcam-backed Game Boy Camera. OpenCV exposes portable numeric
+device slots but not stable cross-platform camera names, so reconnecting hardware can change their
+order. Merely opening Preferences never probes or opens a camera. Applying a different choice
+reopens the source asynchronously only when **Peripherals → Enable Game Boy Camera** is already
+enabled; otherwise the choice is remembered for the next enable request. A failed explicit choice
+remains selected and is never silently replaced with a different camera.
+
 The Audio tab enumerates Java Sound outputs on a cancellable background worker. It supports system
 default or an explicit descriptor-hashed output, a 0–100 master-volume slider, mute, and
 LOW/BALANCED/SAFE bounded-latency presets. If an explicit output disappears, playback retains the configured ID,
@@ -133,8 +142,8 @@ no output can be opened. While fallback remains active, Coffee GB periodically r
 configured output after it reappears. Device, volume, mute, and latency changes do not reset emulated
 audio clock or DC-filter phase.
 
-**Apply** validates the complete draft, writes one settings update, and switches the live keyboard
-mapping and display only after persistence accepts it. **Cancel**, the window close button, and
+**Apply** validates the complete draft, writes one settings update, and switches the live keyboard,
+camera, and display settings only after persistence accepts it. **Cancel**, the window close button, and
 Escape discard unapplied edits. **Restore Defaults** only changes the visible draft until Apply is
 chosen.
 
@@ -188,8 +197,8 @@ after it can report and test that capability, with this repaint path remaining t
 
 ## Migration and recovery
 
-A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 5 migration is a
-pure conversion into schema 6, preserves unknown keys, retains absent profile mappings as Auto, and
+A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 6 migration is a
+pure conversion into schema 7, preserves unknown keys, retains absent profile mappings as Auto, and
 canonicalizes the finite historical uppercase profile aliases. Existing display scales migrate to
 explicit scale with a black letterbox and windowed startup; no previous launch is unexpectedly
 forced fullscreen. Older schemas have no saved desktop size and retain the existing packed,

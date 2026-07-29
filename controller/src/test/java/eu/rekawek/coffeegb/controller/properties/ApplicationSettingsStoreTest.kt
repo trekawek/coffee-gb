@@ -425,14 +425,14 @@ class ApplicationSettingsStoreTest {
 
           Files.readAllBytes(path).also { bytes ->
             val canonical = ApplicationSettingsStore.decodeProperties(bytes)
-            assertEquals("6", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+            assertEquals("7", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
             assertEquals(store.current(), ApplicationSettingsCodec.decode(canonical))
             assertEquals(canonical, ApplicationSettingsCodec.encode(store.current()))
           }
         }
 
     ApplicationSettingsStore(path, debounceMillis = 60_000).use { store ->
-      assertEquals("6", store.current().settings.schemaVersion.toString())
+      assertEquals("7", store.current().settings.schemaVersion.toString())
     }
     assertTrue(canonicalBytes.contentEquals(Files.readAllBytes(path)))
   }
@@ -829,7 +829,8 @@ class ApplicationSettingsStoreTest {
               "saves.rewindEnabled" to "true",
               "saves.rewindMemoryMiB" to "64",
               "saves.rewindSeconds" to "30",
-              "settings.schemaVersion" to "6",
+              "peripherals.cameraDeviceIndex" to "0",
+              "settings.schemaVersion" to "7",
               "sound.enabled" to "false",
               "system.bootstrapMode" to "FAST_FORWARD",
               "system.cgbGames" to "cgb0",

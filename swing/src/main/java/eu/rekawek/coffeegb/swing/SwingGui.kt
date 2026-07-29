@@ -545,6 +545,7 @@ class SwingGui private constructor(
       val applied = properties.applicationSettings
       emulator.applyKeyboardMapping(applied.input.toPlayerMapping())
       emulator.applyDeviceSettings(applied)
+      menu.applyCameraSettings(applied.peripherals)
       displayController.apply(
           applied.display,
           persist = false,

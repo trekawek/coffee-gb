@@ -52,7 +52,21 @@ public class WebcamCameraSource implements CameraSource, AutoCloseable {
      * @return the source, or {@code null} if the native library is unavailable (e.g. an
      * unsupported architecture) or no camera can be opened
      */
-    public static synchronized WebcamCameraSource open() {
+    public static WebcamCameraSource open() {
+        return open(0);
+    }
+
+    /**
+     * Loads the native library and opens one explicitly selected camera device.
+     *
+     * @param deviceIndex the non-negative OpenCV camera index
+     * @return the source, or {@code null} if the native library is unavailable or the selected
+     * device cannot be opened
+     */
+    public static synchronized WebcamCameraSource open(int deviceIndex) {
+        if (deviceIndex < 0) {
+            throw new IllegalArgumentException("Camera device index must not be negative");
+        }
         try {
             if (!nativeLoaded) {
                 String packaged =
@@ -68,16 +82,16 @@ public class WebcamCameraSource implements CameraSource, AutoCloseable {
                 }
                 nativeLoaded = true;
             }
-            VideoCapture capture = new VideoCapture(0);
+            VideoCapture capture = new VideoCapture(deviceIndex);
             if (!capture.isOpened()) {
-                LOG.warn("No webcam could be opened (device 0)");
+                LOG.warn("No webcam could be opened (device {})", deviceIndex);
                 capture.release();
                 return null;
             }
-            LOG.info("Opened webcam device 0 via OpenCV");
+            LOG.info("Opened webcam device {} via OpenCV", deviceIndex);
             return new WebcamCameraSource(capture);
         } catch (Throwable t) {
-            LOG.warn("Failed to open the webcam", t);
+            LOG.warn("Failed to open webcam device " + deviceIndex, t);
             return null;
         }
     }

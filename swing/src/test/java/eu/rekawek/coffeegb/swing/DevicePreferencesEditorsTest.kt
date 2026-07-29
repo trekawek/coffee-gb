@@ -20,6 +20,36 @@ import org.junit.Test
 class DevicePreferencesEditorsTest {
 
   @Test
+  fun `camera choices map human labels to bounded indexes and restore defaults`() =
+      onEdt {
+        val editor =
+            PeripheralsPreferencesEditor(
+                ApplicationSettings.Peripherals(cameraDeviceIndex = 7),
+                ApplicationSettings.Peripherals(cameraDeviceIndex = 2),
+            )
+
+        assertEquals(16, editor.cameraDevice.itemCount)
+        assertEquals(
+            "Camera 1 (Coffee GB default)",
+            (editor.cameraDevice.getItemAt(0) as PeripheralsPreferencesEditor.CameraOption).label,
+        )
+        assertEquals(
+            "Camera 16",
+            (editor.cameraDevice.getItemAt(15) as PeripheralsPreferencesEditor.CameraOption).label,
+        )
+        assertEquals(7, editor.validatedPeripherals().cameraDeviceIndex)
+        assertEquals(
+            "Game Boy Camera device",
+            editor.cameraDevice.accessibleContext.accessibleName,
+        )
+
+        editor.cameraDevice.selectedIndex = 15
+        assertEquals(15, editor.validatedPeripherals().cameraDeviceIndex)
+        editor.restoreDefaults()
+        assertEquals(2, editor.validatedPeripherals().cameraDeviceIndex)
+      }
+
+  @Test
   fun `gamepad snapshot choices retain unavailable assignments and persist per-device tuning`() =
       onEdt {
         val unavailableId = gamepadId('a')
@@ -371,10 +401,23 @@ class DevicePreferencesEditorsTest {
       assertEquals("Gamepads", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
       assertTrue(panel.validationSummary.text.contains("multiple players"))
       assertEquals(
-          listOf("General", "System", "Display", "Input", "Gamepads", "Audio", "Saves"),
+          listOf(
+              "General",
+              "System",
+              "Display",
+              "Input",
+              "Gamepads",
+              "Peripherals",
+              "Audio",
+              "Saves",
+          ),
           (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
       )
       assertEquals("Gamepad preferences", panel.gamepadEditor.accessibleContext.accessibleName)
+      assertEquals(
+          "Peripheral preferences",
+          panel.peripheralsEditor.accessibleContext.accessibleName,
+      )
       assertEquals("Audio preferences", panel.audioEditor.accessibleContext.accessibleName)
     }
   }
