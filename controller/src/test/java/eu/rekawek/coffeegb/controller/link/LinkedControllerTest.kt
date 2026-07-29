@@ -66,9 +66,10 @@ import eu.rekawek.coffeegb.core.joypad.LogicalPlayerButtonPressEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
-import eu.rekawek.coffeegb.core.memory.cart.RomSourceException
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import org.junit.Assume
 import org.junit.Test
 import java.io.IOException
@@ -1576,11 +1577,20 @@ class LinkedControllerTest {
   }
 
   @Test
-  fun configuredDatelSlotRejectsSevenZBeforeLegacyArchiveParsing() {
+  fun configuredDatelSlotLoadsFromSafeSevenZSnapshot() {
     val directory = Files.createTempDirectory("coffee-gb-datel-slot-seven-z")
-    val slot = directory.resolve("private-slot.7z")
+    val slot = directory.resolve("slot.7z")
     val settings = directory.resolve("settings.properties")
-    Files.write(slot, byteArrayOf(0x37, 0x7a, 0xbc.toByte(), 0xaf.toByte()))
+    val slotBytes = Files.readAllBytes(ROM.toPath())
+    SevenZOutputFile(slot.toFile()).use { output ->
+      val entry = SevenZArchiveEntry().apply {
+        name = "slot.gb"
+        size = slotBytes.size.toLong()
+      }
+      output.putArchiveEntry(entry)
+      output.write(slotBytes)
+      output.closeArchiveEntry()
+    }
     Files.write(
         settings,
         ApplicationSettingsStore.encodeProperties(
@@ -1592,14 +1602,15 @@ class LinkedControllerTest {
     )
     val properties = EmulatorProperties(settingsPath = settings)
     try {
-      val failure =
-          assertFailsWith<RomSourceException> {
-            Controller.createGameboyConfig(
-                properties,
-                Rom(StateCodecTestSupport.datelRom()),
-            )
-          }
-      assertEquals(RomSourceException.Reason.UNSUPPORTED_SEVEN_Z, failure.reason())
+      val configuration =
+          Controller.createGameboyConfig(
+              properties,
+              Rom(StateCodecTestSupport.datelRom()),
+          )
+      val loaded = assertNotNull(configuration.slotRom)
+      assertContentEquals(slotBytes, loaded.image.bytes())
+      assertEquals(RomOrigin.Kind.ARCHIVE_ENTRY, loaded.origin.kind())
+      assertEquals("slot.gb", loaded.origin.archiveEntry().orElseThrow())
     } finally {
       properties.close()
       Files.deleteIfExists(slot)

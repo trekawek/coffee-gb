@@ -9,7 +9,6 @@ public final class RomSourceException extends IOException {
         MISSING,
         NOT_A_FILE,
         UNSUPPORTED_TYPE,
-        UNSUPPORTED_SEVEN_Z,
         UNREADABLE,
         ROM_TOO_LARGE,
         CONTAINER_TOO_LARGE,

@@ -8,21 +8,36 @@ import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.RomImage
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.core.sound.Sound
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.atomic.AtomicReference
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
+import org.apache.commons.compress.archivers.sevenz.SevenZMethod
+import org.apache.commons.compress.archivers.sevenz.SevenZMethodConfiguration
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 
 /**
  * Small, redistributable end-to-end diagnostic used against the actual packaged launcher.
  *
- * The ROM is generated in memory from reviewable instructions and is never written or packaged.
- * One deterministic machine exercises video and audio publication, live input sampling, and the
- * existing portable StateFile codec. It does not construct Swing, inspect a user's files, or
- * enable battery persistence.
+ * The ROM is generated from reviewable instructions and placed in a private temporary 7z archive
+ * so the packaged launcher also proves its isolated archive helper can run. Generated ROM bytes
+ * remain confined to temporary files which are deleted after extraction. One deterministic
+ * machine exercises the extracted bytes, video and audio publication, live input sampling, and the
+ * existing portable StateFile codec. It does not construct Swing, inspect a user's files, enable
+ * battery persistence, or package or upload the generated archive.
  */
 object PackageRuntimeSmoke {
 
   private const val MAX_TICKS = 250_000
+
+  private const val ARCHIVE_ENTRY = "generated/coffee-gb-package-smoke.gb"
 
   data class Result(
       val ticks: Int,
@@ -41,8 +56,9 @@ object PackageRuntimeSmoke {
             listOf(setOf(Button.A), emptySet(), emptySet(), emptySet()),
         )
     val input = AtomicReference(pressed)
+    val image = loadSyntheticSevenZ()
     val configuration =
-        Gameboy.GameboyConfiguration(Rom(syntheticPackageRom()))
+        Gameboy.GameboyConfiguration(Rom(image))
             .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
             .setSupportBatterySave(false)
             .setPlayerInputSource { input.get() }
@@ -100,6 +116,70 @@ object PackageRuntimeSmoke {
     } finally {
       gameboy.close()
       bus.close()
+    }
+  }
+
+  private fun loadSyntheticSevenZ(): RomImage {
+    val expected = syntheticPackageRom()
+    val archive = createPrivateTemporaryArchive()
+    var failure: Throwable? = null
+    try {
+      SevenZOutputFile(archive.toFile()).use { output ->
+        output.setContentMethods(listOf(SevenZMethodConfiguration(SevenZMethod.LZMA2)))
+        val entry =
+            SevenZArchiveEntry().apply {
+              name = ARCHIVE_ENTRY
+              size = expected.size.toLong()
+            }
+        output.putArchiveEntry(entry)
+        output.write(expected)
+        output.closeArchiveEntry()
+      }
+
+      RomSourceSnapshot.open(archive).use { snapshot ->
+        check(snapshot.candidates().size == 1) {
+          "Synthetic 7z did not expose exactly one ROM candidate"
+        }
+        val image = snapshot.loadSingle()
+        check(image.bytes().contentEquals(expected)) {
+          "Synthetic 7z extraction changed the ROM bytes"
+        }
+        check(image.origin().kind() == RomOrigin.Kind.ARCHIVE_ENTRY) {
+          "Synthetic 7z did not retain an archive-entry origin"
+        }
+        check(image.origin().containerPath().orElseThrow() == archive.toAbsolutePath().normalize()) {
+          "Synthetic 7z origin did not retain the exact container path"
+        }
+        check(image.origin().archiveEntry().orElseThrow() == ARCHIVE_ENTRY) {
+          "Synthetic 7z origin did not retain the exact entry name"
+        }
+        check(image.origin().archiveEntryOccurrence() == 0) {
+          "Synthetic 7z origin did not retain the exact entry occurrence"
+        }
+        return image
+      }
+    } catch (problem: Throwable) {
+      failure = problem
+      throw problem
+    } finally {
+      try {
+        Files.deleteIfExists(archive)
+      } catch (cleanupFailure: IOException) {
+        archive.toFile().deleteOnExit()
+        failure?.addSuppressed(cleanupFailure) ?: throw cleanupFailure
+      }
+    }
+  }
+
+  private fun createPrivateTemporaryArchive(): Path {
+    val permissions =
+        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+    return try {
+      Files.createTempFile("coffee-gb-package-smoke-", ".7z", permissions)
+    } catch (_: UnsupportedOperationException) {
+      // Windows providers do not accept POSIX attributes. Their temporary-file implementation
+      // still creates a new unpredictable path owned by the current process account.
+      Files.createTempFile("coffee-gb-package-smoke-", ".7z")
     }
   }
 

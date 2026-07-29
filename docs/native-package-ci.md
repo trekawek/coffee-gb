@@ -37,10 +37,12 @@ then:
 7. uploads only the installer, both SBOMs, checksums, result manifest, and (once, from Linux) the
    unchanged portable Maven JAR.
 
-`--package-smoke` is deliberately headless and device-free. Its ROM is generated in memory from
-reviewable instructions; no ROM, save, screenshot, or StateFile fixture is committed or uploaded.
-The smoke covers a complete display frame, an audio buffer, live input press/release, and the
-existing portable-state codec/load path. The direct-runtime and packaged-launcher probes use
+`--package-smoke` is deliberately headless, device-free, and independent of external or user ROMs.
+It generates a reviewable ROM in a private temporary 7z archive, opens it through the isolated 7z
+helper, verifies the exact extracted bytes and archive-entry origin, and deletes all generated
+files. It then covers a complete display frame, an audio buffer, live input press/release, and the
+existing portable-state codec/load path. No ROM, save, screenshot, or StateFile fixture is
+committed, packaged, cached, or uploaded. The direct-runtime and packaged-launcher probes use
 different initially empty extraction caches and accept success only when output names the exact
 configured target; `native-target=portable` is valid only for an unconfigured portable-JAR run.
 

@@ -10,7 +10,7 @@ import org.junit.Test
 class PackageRuntimeSmokeTest {
 
   @Test
-  fun `generated fixture exercises video audio input and portable state`() {
+  fun `generated 7z exercises packaged extraction video audio input and portable state`() {
     val result = PackageRuntimeSmoke.run()
 
     assertTrue(result.ticks in 1..250_000)

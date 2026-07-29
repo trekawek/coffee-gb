@@ -229,7 +229,7 @@ internal class SwingMenu(
     val load = JMenuItem("Load ROM")
     load.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_L, KEY_MODIFIER)
     load.accessibleContext.accessibleDescription =
-        "Open a Game Boy ROM or bounded ZIP archive"
+        "Open a Game Boy ROM or bounded ZIP or 7z archive"
     fileMenu.add(load)
 
     recentRomsMenu = JMenu("Recent ROMs")
@@ -240,14 +240,15 @@ internal class SwingMenu(
     fc.dialogTitle = "Open Game Boy ROM"
     fc.fileFilter =
         FileNameExtensionFilter(
-            "Game Boy ROMs and ZIP archives (*.gb, *.gbc, *.rom, *.zip)",
+            "Game Boy ROMs and archives (*.gb, *.gbc, *.rom, *.zip, *.7z)",
             "gb",
             "gbc",
             "rom",
             "zip",
+            "7z",
         )
     fc.isAcceptAllFileFilterUsed = false
-    fc.accessibleContext.accessibleName = "Choose a Game Boy ROM or ZIP archive"
+    fc.accessibleContext.accessibleName = "Choose a Game Boy ROM or ZIP or 7z archive"
     val systemDefaultRomDirectory = fc.currentDirectory
 
     load.addActionListener {
