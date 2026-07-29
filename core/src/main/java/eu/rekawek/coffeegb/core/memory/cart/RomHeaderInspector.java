@@ -119,8 +119,8 @@ public final class RomHeaderInspector {
             boolean headerChecksumValid) {
 
         /**
-         * Conservative candidate signal. Header defects remain visible to callers instead of
-         * rejecting known homebrew/unlicensed compatibility cases in the core parser.
+         * Conservative signal for trusting display metadata. It must not be used to reject a
+         * bounded ROM: homebrew and unlicensed cartridges may intentionally violate both checks.
          */
         public boolean hasCartridgeShape() {
             return nintendoLogoValid || headerChecksumValid;

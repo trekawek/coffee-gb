@@ -76,6 +76,15 @@ public class CookedSachenTest {
     }
 
     @Test
+    public void skippedBootRevealsRealRomBytesWithoutAWrite() throws IOException {
+        Cartridge cart = build();
+
+        cart.skipBoot();
+
+        assertEquals(SACHEN_HEADER[0], cart.getByte(0x0104));
+    }
+
+    @Test
     public void bootsAtBaseBankZero() throws IOException {
         Cartridge cart = build();
         // 0x0000-0x3FFF maps base bank 0, the switchable window defaults to bank 1

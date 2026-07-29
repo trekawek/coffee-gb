@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -70,6 +72,18 @@ public final class CartridgeProperties {
     private static final int[] SACHEN_COOKED_HEADER = {
             0x11, 0x23, 0xf1, 0x1e, 0x01, 0x22, 0xf0, 0x00,
             0x08, 0x99, 0x78, 0x00, 0x08, 0x11, 0x9a, 0x48
+    };
+
+    // FlashGBX Orbit V2 fingerprints for the two known older firmware headers. SHA-1 is
+    // used only as a compact ROM identity, not for a security decision.
+    private static final int[] DATEL_OLDER_HEADER_1_SHA1 = {
+            0xc1, 0xf4, 0x15, 0x4a, 0xef, 0xcc, 0x5b, 0xe7, 0xec, 0x83,
+            0xa8, 0xbb, 0x7b, 0xc0, 0x95, 0x83, 0x35, 0xec, 0x9a, 0xf2
+    };
+
+    private static final int[] DATEL_OLDER_HEADER_2_SHA1 = {
+            0xc9, 0x50, 0x65, 0xcb, 0x31, 0x96, 0x26, 0x6c, 0x32, 0x58,
+            0xab, 0x07, 0xa1, 0x9e, 0x0c, 0x10, 0xa6, 0xed, 0xcc, 0x67
     };
 
     /**
@@ -392,17 +406,21 @@ public final class CartridgeProperties {
     }
 
     private static boolean isDatel(RomInfo info) {
-        return info.data.length > 0x8000
-                && isPlainRomType(info.rawType())
-                && !info.hasValidLogo()
-                && !isSachen(info);
+        int[] orbitV2Entry = {0x00, 0xc3, 0x50, 0x01};
+        if (info.data.length <= 0x8000
+                || info.rawType() != 0x00
+                || info.hasValidLogo()) {
+            return false;
+        }
+        boolean currentFirmware = "Action Replay V4".equals(info.title())
+                && matches(info.data, 0x0100, orbitV2Entry);
+        return currentFirmware
+                || info.hasSha1(0x0101, 0x0140, DATEL_OLDER_HEADER_1_SHA1)
+                || info.hasSha1(0x0101, 0x0140, DATEL_OLDER_HEADER_2_SHA1);
     }
 
     private static boolean hasDatelCgbHeader(RomInfo info) {
-        return info.data.length > 0x8000
-                && info.rawType() == 0x00
-                && !info.hasValidLogo()
-                && !isSachen(info);
+        return isDatel(info);
     }
 
     private static boolean isSachen(RomInfo info) {
@@ -740,6 +758,30 @@ public final class CartridgeProperties {
                 value.update(data[i]);
             }
             return (int) value.getValue();
+        }
+
+        private boolean hasSha1(int from, int to, int[] expected) {
+            if (from < 0 || to < from || to > data.length) {
+                return false;
+            }
+            try {
+                MessageDigest digest = MessageDigest.getInstance("SHA-1");
+                for (int i = from; i < to; i++) {
+                    digest.update((byte) data[i]);
+                }
+                byte[] actual = digest.digest();
+                if (actual.length != expected.length) {
+                    return false;
+                }
+                for (int i = 0; i < actual.length; i++) {
+                    if ((actual[i] & 0xff) != expected[i]) {
+                        return false;
+                    }
+                }
+                return true;
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException("Required SHA-1 ROM fingerprint unavailable", e);
+            }
         }
     }
 }

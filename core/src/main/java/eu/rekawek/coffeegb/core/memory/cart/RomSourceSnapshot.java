@@ -112,11 +112,6 @@ public final class RomSourceSnapshot implements Closeable {
                                 RomOrigin.directFile(normalized),
                                 readRomBytes(input, declaredSize, cancelled, copiedBytes));
                 checkCancelled(cancelled);
-                if (!RomHeaderInspector.inspect(image).hasCartridgeShape()) {
-                    throw new RomSourceException(
-                            RomSourceException.Reason.INVALID_HEADER,
-                            "The file does not contain a recognizable Game Boy cartridge header");
-                }
                 return new RomSourceSnapshot(
                         normalized, image, null, List.of(), 0);
             } catch (RomSourceException e) {
@@ -240,13 +235,7 @@ public final class RomSourceSnapshot implements Closeable {
                                 selected.entryName(),
                                 selected.entryOccurrence(),
                                 extensionCandidateCount == 1);
-                RomImage image = new RomImage(origin, bytes);
-                if (!RomHeaderInspector.inspect(image).hasCartridgeShape()) {
-                    throw new RomSourceException(
-                            RomSourceException.Reason.INVALID_HEADER,
-                            "The selected entry no longer has a recognizable cartridge header");
-                }
-                return image;
+                return new RomImage(origin, bytes);
             }
             throw invalidSelection();
         } catch (RomSourceException e) {
@@ -467,15 +456,17 @@ public final class RomSourceSnapshot implements Closeable {
                     } else if (entry.getSize() >= RomHeaderInspector.HEADER_LENGTH) {
                         try (InputStream input = zip.getInputStream(entry)) {
                             RomHeaderInspector.Header header = RomHeaderInspector.inspect(input);
-                            if (header.hasCartridgeShape()) {
-                                candidates.add(
-                                        new ArchiveCandidate(
-                                                ordinal,
-                                                entry.getName(),
-                                                occurrence,
-                                                entry.getSize(),
-                                                header.title()));
-                            }
+                            // Header bytes are advisory metadata, never an admission rule.
+                            // Homebrew and unlicensed boards may put executable or scrambled
+                            // data here; an untrusted title falls back to the entry filename.
+                            String title = header.hasCartridgeShape() ? header.title() : "";
+                            candidates.add(
+                                    new ArchiveCandidate(
+                                            ordinal,
+                                            entry.getName(),
+                                            occurrence,
+                                            entry.getSize(),
+                                            title));
                         }
                     }
                 }
@@ -493,7 +484,7 @@ public final class RomSourceSnapshot implements Closeable {
             }
             throw new RomSourceException(
                     RomSourceException.Reason.INVALID_HEADER,
-                    "No ROM entry in the ZIP contains a recognizable cartridge header");
+                    "No ROM entry in the ZIP is large enough to contain a cartridge header");
         }
         return new Inventory(candidates, extensionCandidates);
     }

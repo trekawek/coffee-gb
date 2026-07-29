@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
 
@@ -29,7 +30,9 @@ public class DatelSlotCheatTest {
         rom[0x101] = (byte) 0xc3;
         rom[0x102] = 0x50;
         rom[0x103] = 0x01;
-        rom[0x104] = 0x44; // bad logo -> detected as Datel
+        rom[0x104] = 0x44; // deliberately bad logo
+        byte[] title = "Action Replay V4".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(title, 0, rom, 0x134, title.length);
         rom[0x147] = 0x00;
         rom[0x148] = 0x02;
         // spin the CPU in place so the test drives the bus itself

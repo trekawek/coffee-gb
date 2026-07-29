@@ -1566,7 +1566,12 @@ class DetachedStateTest {
       ByteArray(0x20000).also {
         it[0x100] = 0x00
         it[0x101] = 0xc3.toByte()
-        it[0x104] = 0x44 // invalid Nintendo logo selects the Datel mapper
+        it[0x102] = 0x50
+        it[0x103] = 0x01
+        it[0x104] = 0x44
+        "Action Replay V4".forEachIndexed { index, character ->
+          it[0x134 + index] = character.code.toByte()
+        }
         it[0x147] = 0x00
         it[0x148] = 0x02
       }

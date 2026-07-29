@@ -1028,7 +1028,7 @@ internal constructor(
           RomSourceException.Reason.NO_ROM_CANDIDATES ->
               "The ZIP archive contains no supported ROM files."
           RomSourceException.Reason.INVALID_HEADER ->
-              "The file does not contain a recognizable Game Boy cartridge header."
+              "The file does not contain a complete Game Boy ROM header."
           RomSourceException.Reason.INVALID_SELECTION ->
               "The archive selection is no longer valid."
         }
