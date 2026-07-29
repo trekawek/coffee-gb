@@ -22,7 +22,7 @@ controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateCodec.kt	b9df
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateFile.kt	36226dc08bb44311fa10a2795cadfda9b5f1267260081760b5f321a596f8daab
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSectionCodecs.kt	f22438ad0cc47a2ffb8384762aa896f8f832a7cfd5050c7dcf3ebc87200d7cf6
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSemantics.kt	8a19c681c3c031c889a2f17cd9c9fb4daf10cba63f4ce27af1cff2a97fa731fb
-core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	c1402e3ecf604d6086551b7054fd874299f2856599badcb97e4352ea73bb1125
+core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	cf480d9a5cb088b205ced0b7bc0f519682d26c4c573d8ca2ae6b1a0c6dac81d7
 core/src/main/java/eu/rekawek/coffeegb/core/GameboyType.java	9e28a6c29287477e503b6c6867fe1e5c352c44eae720aeb508ff5a0fe930bd2b
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/Cpu.java	1674586181415f65aaf57ff6ce3a4d36478a27bcfb25966403a4341303378fc8
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/InterruptManager.java	b717f6185cb210c09f05860061dec3686a527ee0de4b5faccef1d835f8fcc057
