@@ -852,6 +852,20 @@ internal object StateSemantics {
           it.range("streamLength", 0, 32); it.range("bankPortRun", 0, 3)
           it.require(it.int("bankPortRun") <= it.int("streamLength"), "has a bank-port run longer than its stream")
         }
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Vf001General\$Vf001GeneralState"] =
+        constrained("VF001 config, injection, replacement, and nested MBC5 state retain their protocol bounds.") {
+          it.recordType("delegateMemento", MBC5_STATE)
+          it.range("runningValue", 0, 0xff); it.range("cur6000", 0, 0xff)
+          it.require(it.intArray("cur700x").size == 15, "must have fifteen config registers")
+          it.intValues("cur700x", 0, 0xff)
+          it.range("sequenceStartBank", 0, 0xff); it.range("sequenceStartAddress", 0, 0xffff)
+          it.range("sequenceLength", 0, 4)
+          it.require(it.intArray("sequence").size == 4, "must have a four-byte injection buffer")
+          it.intValues("sequence", 0, 0xff)
+          it.range("sequenceBytesLeft", 0, it.int("sequenceLength"))
+          it.range("replacementStartAddress", 0, 0xffff)
+          it.range("replacementSourceBank", 0, 0xff); it.range("selectedRomBank", 0, 0x1ff)
+        }
     target["eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera\$PocketCameraState"] =
         constrained("Pocket Camera ROM/RAM selectors and camera register bytes are bounded.") {
           it.range("romBank", 0, 0x3f); it.range("ramBank", 0, 0x0f)

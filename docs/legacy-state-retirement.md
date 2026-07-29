@@ -51,7 +51,7 @@ carries the compatibility leaves.
 The architecture test strips the marked compatibility declarations and proves that the remaining
 live owner source has no `Memento<T>` or compatibility-leaf dependency. It also proves that every
 normal record is non-serializable, the normal and compatibility registries are disjoint, and the
-93 normal IDs, 91 compatibility IDs, exact native-serialization allowlist, and network prohibition
+94 normal IDs, 91 compatibility IDs, exact native-serialization allowlist, and network prohibition
 remain pinned.
 
 ## Supported migration inputs and limits

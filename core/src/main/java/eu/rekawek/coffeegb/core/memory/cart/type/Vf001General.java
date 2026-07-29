@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -205,14 +204,4 @@ public class Vf001General implements MemoryController {
             implements ComponentState<MemoryController> {
     }
 
-    /** Importer-only compatibility record for released local snapshots. */
-    private record Vf001GeneralMemento(Memento<MemoryController> delegateMemento,
-                                        boolean configMode, int runningValue, int cur6000,
-                                        int[] cur700x, int sequenceStartBank,
-                                        int sequenceStartAddress, int sequenceLength,
-                                        int[] sequence, int sequenceBytesLeft,
-                                        boolean replaceBankZero, int replacementStartAddress,
-                                        int replacementSourceBank, int selectedRomBank)
-            implements Memento<MemoryController> {
-    }
 }

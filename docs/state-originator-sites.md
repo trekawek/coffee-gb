@@ -95,6 +95,7 @@ the ordinary deep-owned `captureState()` contract, or any portable/legacy byte s
 - COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/Sintax.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/SlMulticart.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/Tama5.java`
+- COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/Vf001General.java`
 - COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/Vf001Zook.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/WisdomTree.java`
 - COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/XploderGb.java`

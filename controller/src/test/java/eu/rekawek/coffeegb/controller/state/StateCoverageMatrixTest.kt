@@ -58,6 +58,24 @@ class StateCoverageMatrixTest {
             mapper("Vf001Zook", listOf(0x7081 to 0x46, 0x7081 to 0x58, 0x7081 to 0x54)) {
               Vf001Zook(it, Battery.NULL_BATTERY)
             },
+            mapper(
+                "Vf001General",
+                listOf(
+                    0x0000 to 0x0a,
+                    0x7000 to 0x96,
+                    0x7001 to 0x00,
+                    0x7002 to 0x01,
+                    0x7003 to 0x80,
+                    0x7004 to 0x11,
+                    0x7005 to 0xaa,
+                    0x7006 to 0x22,
+                    0x7007 to 0xdd,
+                    0x7000 to 0x25,
+                    0x2000 to 0x03,
+                    0xa000 to 0x3b,
+                ),
+                listOf(0x0100, 0x0101, 0x0102, 0x0103, 0x4000, 0xa000),
+            ) { Vf001General(it, Battery.NULL_BATTERY) },
             mapper("Mbc6", listOf(0x0000 to 0x0a, 0x2000 to 0x03, 0x3000 to 0x04, 0xa000 to 0x35)) {
               Mbc6(it, Battery.NULL_BATTERY)
             },
@@ -164,7 +182,7 @@ class StateCoverageMatrixTest {
         StateTypeRegistry.recordClassNames.filter {
           it.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.")
         }
-    assertEquals(26, registeredMapperRecords.size)
+    assertEquals(27, registeredMapperRecords.size)
   }
 
   private fun directState(controller: MemoryController): DirectState =
@@ -750,6 +768,7 @@ class StateCoverageMatrixTest {
             "LiCheng",
             "XploderGb",
             "Vf001Zook",
+            "Vf001General",
             "Mbc6",
             "Mbc7",
             "Mmm01",
