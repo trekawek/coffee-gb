@@ -84,6 +84,8 @@ class SwingGui private constructor(
 
   private lateinit var menu: SwingMenu
 
+  private val desktopQuit = DesktopQuitBridge()
+
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
@@ -291,6 +293,10 @@ class SwingGui private constructor(
             mainWindow.jMenuBar?.preferredSize?.height ?: 0,
         )
     mainWindow.isResizable = true
+    // Claim native Quit only after every coordinated-shutdown dependency exists. Attaching before
+    // installation also guarantees a callback can only enqueue, never run inside AppKit dispatch.
+    desktopQuit.attach(::requestClose)
+    installDesktopQuitHandler(desktopQuit::accept)
     mainWindow.isVisible = true
     displayController.applyCurrent()
     properties.consumeLoadWarning()?.let { warning ->
@@ -594,11 +600,11 @@ class SwingGui private constructor(
 }
 
 /**
- * Opens the platform delivery gate before native extraction can delay startup.
+ * Opens the platform file delivery gate before native extraction can delay startup.
  *
  * Both operations deliberately run on the caller's launcher thread: native bootstrap must finish
  * before settings construct gamepad backends or the EDT constructs camera UI, while an OS
- * open-file callback received during bootstrap is retained by [DesktopOpenFilesBridge].
+ * open-file callbacks received during bootstrap are retained by [DesktopOpenFilesBridge].
  */
 internal fun prepareDesktopLaunch(
     desktopOpenFiles: DesktopOpenFilesBridge,
