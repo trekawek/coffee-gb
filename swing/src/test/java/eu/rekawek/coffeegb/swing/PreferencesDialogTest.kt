@@ -76,6 +76,9 @@ class PreferencesDialogTest {
                     datelSlotRom = Paths.get("datel-hidden.gb"),
                     fullChangerCharacter = "7",
                 ),
+            desktop =
+                ApplicationSettings.Desktop(
+                    windowSize = ApplicationSettings.WindowSize(913, 617)),
         )
     val edit =
         PreferencesEdit(
@@ -119,6 +122,7 @@ class PreferencesDialogTest {
     assertEquals(edit.audio, updated.audio)
     assertEquals(current.saves, updated.saves)
     assertEquals(edit.advanced, updated.advanced)
+    assertEquals(current.desktop, updated.desktop)
   }
 
   @Test

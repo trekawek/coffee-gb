@@ -162,11 +162,9 @@ is 30 seconds and 64 MiB.
 ## Settings compatibility note
 
 This feature adds the optional `saves.rewindMemoryMiB` property to settings schema 5. Missing values
-decode as 64 MiB, so schema-5 files written before this feature remain valid. Schema 5 was introduced
-by the immediately preceding recent-ROM/settings phase; this phase deliberately extends that same
-version instead of creating a migration that depends on parallel branch order. If another branch
-consumes schema 5 before these changes are rebased, move this key's fixed-key ownership and migration
-tests to the next schema number as one isolated block.
+decode as 64 MiB, so schema-5 files written before this feature remain valid. Later desktop-window
+geometry advances the current document to schema 6; schema-5 save fields retain their original
+ownership and continue to decode before the schema-6 desktop section is applied.
 
 For the binary format and persistence guarantees, see [StateFile v2](state-file-v2.md) and
 [atomic persistence](atomic-persistence.md).

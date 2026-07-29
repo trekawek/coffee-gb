@@ -169,7 +169,8 @@ General and System behavior, 1×/2×/4× window sizing, letterboxing, fullscreen
 four-player keyboard bindings, gamepad assignment/tuning, audio device/volume/mute/latency, and
 Saves policy (directory, battery saves, rewind bounds, autosave, and resume) without manual editing.
 The resizable display always fits the complete DMG/CGB or SGB-border image while preserving its
-aspect ratio; fullscreen restores and clamps prior window placement across monitor and DPI changes.
+aspect ratio. The last normal window size is restored on launch, while fullscreen restores and
+clamps prior window placement across monitor and DPI changes.
 The complete typed schema, validation,
 rendering fallback, migration, device fallback, and recovery rules are documented in the
 [desktop command-line and settings contract](docs/desktop-settings.md). For keyboard mappings, use

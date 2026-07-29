@@ -15,10 +15,48 @@ import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class SwingGuiShutdownTest {
+
+  @Test
+  fun `successful settings close finishes suspended window size persistence`() {
+    val calls = mutableListOf<String>()
+
+    closeDesktopSettingsRecoverably(
+        suspendWindowSize = { calls += "suspend" },
+        closeSettings = { calls += "settings" },
+        resumeWindowSize = { calls += "resume" },
+        finishWindowSize = { calls += "finish" },
+    )
+
+    assertEquals(listOf("suspend", "settings", "finish"), calls)
+  }
+
+  @Test
+  fun `failed settings close rearms window size persistence and retains the failure`() {
+    val calls = mutableListOf<String>()
+    val expected = IOException("settings close failed")
+
+    val actual =
+        assertFailsWith<IOException> {
+          closeDesktopSettingsRecoverably(
+              suspendWindowSize = { calls += "suspend" },
+              closeSettings = {
+                calls += "settings"
+                throw expected
+              },
+              resumeWindowSize = { calls += "resume" },
+              finishWindowSize = { calls += "finish" },
+          )
+        }
+
+    assertSame(expected, actual)
+    assertEquals(listOf("suspend", "settings", "resume"), calls)
+  }
+
   @Test
   fun `JVM shutdown attempts every teardown step and preserves the first failure`() {
     val calls = mutableListOf<String>()

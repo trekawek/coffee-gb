@@ -42,15 +42,16 @@ particular, `--use-bootstrap` and `--disable-battery-saves` do not change the ne
 ## Typed settings model
 
 The application owns one immutable `ApplicationSettings` value with typed `general`, `display`,
-`audio`, `input`, `saves`, and `advanced` sections. The controller-facing `EmulatorProperties`
-class is a compatibility facade over that model while older menu code is migrated.
+`audio`, `input`, `saves`, `advanced`, and desktop-shell sections. The controller-facing
+`EmulatorProperties` class is a compatibility facade over that model while older menu code is
+migrated.
 
-Schema 4 continues to use `${user.home}/.coffeegb.properties`; schemas 0–3 are migrated in place
+Schema 6 continues to use `${user.home}/.coffeegb.properties`; schemas 0–5 are migrated in place
 so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `4` |
+| `settings.schemaVersion` | exact supported schema version | `6` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
@@ -63,6 +64,7 @@ so the portable JAR remains compatible during the migration window.
 | `display.blending` | boolean | `true` |
 | `display.colorCorrection` | boolean | `true` |
 | `display.showSgbBorder` | boolean | `false` |
+| `desktop.windowWidth`, `desktop.windowHeight` | optional positive outer-frame dimensions; both or neither | absent |
 | `sound.enabled` | boolean | `true` |
 | `audio.outputDevice` | `default` or stable Java Sound device ID | `default` |
 | `audio.masterVolume` | integer percentage in `0..100` | `100` |
@@ -92,14 +94,14 @@ does not partially update the active settings.
 application may close without a redundant prompt. `ALWAYS` also confirms an idle application
 close, and `NEVER` suppresses this ordinary confirmation. A battery/autosave flush failure remains
 actionable regardless of this preference. Setting recent-file capacity to zero disables history;
-reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 4
+reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 6
 does not invent or persist an update-check preference.
 
-Unrecognized legacy keys are retained losslessly when schema 4 is saved. Keys in a reserved grammar,
+Unrecognized legacy keys are retained losslessly when the current schema is saved. Keys in a reserved grammar,
 such as an unknown `input.*` key, remain errors so a misspelled control binding is not silently
-ignored. Schema 4 stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
+ignored. The current schema stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
 key beyond Coffee GB's old ten-entry history remains untouched even if capacity later grows. Schema
-4 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
+6 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
 binding is therefore unbound rather than silently restored to a default. If an older unknown key
 occupies a name reserved by a later schema, Coffee GB keeps its original key/value in bounded
 internal migration metadata rather than overwriting or reinterpreting it. At most 32 per-device
@@ -162,6 +164,13 @@ available. <kbd>Escape</kbd> always leaves fullscreen when the main game window 
 remaining available to windowed emulation and dialogs. Menu radio items, Preferences, persisted
 settings, and the live renderer are synchronized through one EDT-owned coordinator.
 
+Coffee GB stores the last normal, windowed outer-frame width and height. On the next launch that
+size is clamped to the current frame minimum and primary usable work area, then centered as before.
+Fullscreen, maximized, and iconified dimensions never replace the saved normal size; window
+position and maximized state are intentionally not persisted. Live-resize updates are coalesced,
+while a final normal size is captured before a successful settings close. If settings are read-only,
+window geometry remains session-only and the existing file is untouched.
+
 Entering fullscreen remembers window placement relative to the monitor's stable AWT device ID and
 current scale transform. Exiting converts through the latest per-monitor transform and clamps the
 window to the current usable work area. If that monitor disappears, Coffee GB selects the nearest
@@ -179,11 +188,12 @@ after it can report and test that capability, with this repaint path remaining t
 
 ## Migration and recovery
 
-A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 3 migration is a
-pure conversion into schema 4, preserves unknown keys, retains absent profile mappings as Auto, and
+A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 5 migration is a
+pure conversion into schema 6, preserves unknown keys, retains absent profile mappings as Auto, and
 canonicalizes the finite historical uppercase profile aliases. Existing display scales migrate to
 explicit scale with a black letterbox and windowed startup; no previous launch is unexpectedly
-forced fullscreen. Repeating load/migrate/save produces the same normalized settings. Legacy text
+forced fullscreen. Older schemas have no saved desktop size and retain the existing packed,
+centered startup. Repeating load/migrate/save produces the same normalized settings. Legacy text
 is decoded with the platform-default charset used by the former `FileReader`; versioned files use
 strict UTF-8 with deterministic ASCII escapes.
 

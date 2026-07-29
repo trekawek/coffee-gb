@@ -19,6 +19,7 @@ data class ApplicationSettings(
     val input: Input = Input.defaults(),
     val saves: Saves = Saves(),
     val advanced: Advanced = Advanced(),
+    val desktop: Desktop = Desktop(),
 ) {
   init {
     require(schemaVersion == CURRENT_SCHEMA_VERSION) {
@@ -148,6 +149,21 @@ data class ApplicationSettings(
       fun fromDegrees(degrees: Int): Rotation =
           entries.firstOrNull { it.degrees == degrees }
               ?: throw IllegalArgumentException("Display rotation must be 0, 90, 180, or 270")
+    }
+  }
+
+  /** Desktop-shell state that is deliberately independent from editable display preferences. */
+  data class Desktop(
+      val windowSize: WindowSize? = null,
+  )
+
+  /** Last normal, windowed outer-frame size. Placement and maximized state are not persisted. */
+  data class WindowSize(
+      val width: Int,
+      val height: Int,
+  ) {
+    init {
+      require(width > 0 && height > 0) { "Desktop window size must be positive" }
     }
   }
 
@@ -533,7 +549,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 5
+    const val CURRENT_SCHEMA_VERSION = 6
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
