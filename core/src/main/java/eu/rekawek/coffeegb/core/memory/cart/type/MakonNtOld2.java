@@ -71,8 +71,11 @@ public class MakonNtOld2 implements MemoryController {
         value &= 0xff;
         if (address >= 0x2000 && address < 0x4000) {
             selectRomBank(value);
-        } else if (address == 0x5001) {
-            setRumbleEnabled((value & 0x80) != 0);
+        } else if (address >= 0x5000 && address < 0x6000
+                && (address & 0x03) == 0x01) {
+            if (address == 0x5001) {
+                setRumbleEnabled((value & 0x80) != 0);
+            }
             updateMotor(value);
 
             int newBaseRomBank = (value & 0x3f) * 2;
@@ -80,7 +83,8 @@ public class MakonNtOld2 implements MemoryController {
                 baseRomBank = newBaseRomBank;
                 mappedRomBank = 1;
             }
-        } else if (address == 0x5002) {
+        } else if (address >= 0x5000 && address < 0x6000
+                && (address & 0x03) == 0x02) {
             gameRomBankMask = switch (value & 0x0f) {
                 case 0x08 -> 0x0f; // 256 KiB
                 case 0x0c -> 0x07; // 128 KiB
@@ -89,7 +93,8 @@ public class MakonNtOld2 implements MemoryController {
                 default -> 0x1f;   // 512 KiB
             };
             updateMotor(value);
-        } else if (address == 0x5003) {
+        } else if (address >= 0x5000 && address < 0x6000
+                && (address & 0x03) == 0x03) {
             updateMotor(value);
             weirdMode = (value & 0x10) != 0;
             selectRomBank(selectedRomBank);

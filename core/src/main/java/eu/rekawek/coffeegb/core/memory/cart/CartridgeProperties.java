@@ -356,6 +356,7 @@ public final class CartridgeProperties {
     private static boolean isMakonNtOld2(RomInfo info) {
         int headerCrc = info.crc32(0x0100, 0x50);
         return headerCrc == 0x5758d6d9 // Caise Gedou 24-in-1 / Super 21-in-1
+                || headerCrc == 0x0b1b808a // Super Donkey Kong 5 (rumble)
                 || info.data.length > 0x80000
                 && "POKEBOM USA".equals(info.title())
                 && info.byteAt(0x0102) == 0xe0;

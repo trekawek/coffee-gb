@@ -51,6 +51,21 @@ public class MakonNtOld2Test {
     }
 
     @Test
+    public void detectsSuperDonkeyKong5HeaderFingerprint() throws IOException {
+        byte[] data = multicartRom(0xc0);
+        Arrays.fill(data, 0x0100, 0x0150, (byte) 0);
+        // Synthetic 0x50-byte header with CRC-32 0b1b808a.
+        byte[] crcSuffix = {0x5d, 0x36, 0x7a, (byte) 0xe6};
+        System.arraycopy(crcSuffix, 0, data, 0x014c, crcSuffix.length);
+
+        Rom rom = new Rom(data);
+        assertEquals(CartridgeProperties.Mapper.MAKON_NT_OLD_2,
+                rom.getCartridgeProperties().getMapper());
+        assertTrue(new Cartridge(rom, Battery.NULL_BATTERY)
+                .getMemoryController() instanceof MakonNtOld2);
+    }
+
+    @Test
     public void masksBanksToTheSelectedGameSizeAndSupportsAlternateWiring()
             throws IOException {
         MemoryController mapper = new MakonNtOld2(
@@ -71,6 +86,20 @@ public class MakonNtOld2Test {
         assertEquals(97, mapper.getByte(0x4000));
         mapper.setByte(0x2000, 4);
         assertEquals(98, mapper.getByte(0x4000));
+    }
+
+    @Test
+    public void mirrorsMulticartRegistersAcrossThe5000Range() throws IOException {
+        MemoryController mapper = new MakonNtOld2(
+                new Rom(multicartRom(0xe0)), Battery.NULL_BATTERY);
+
+        mapper.setByte(0x50e9, 0x20); // low address bits 1: base bank 64
+        mapper.setByte(0x50ee, 0x0c); // low address bits 2: 128 KiB mask
+        mapper.setByte(0x50ef, 0x10); // low address bits 3: alternate wiring
+        mapper.setByte(0x2137, 0x02); // alternate wiring maps bank 2 to bank 1
+
+        assertEquals(64, mapper.getByte(0x0000));
+        assertEquals(65, mapper.getByte(0x4000));
     }
 
     @Test
