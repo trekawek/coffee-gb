@@ -42,6 +42,16 @@ class StateCoverageMatrixTest {
             mapper("Mbc5", listOf(0x0000 to 0x0a, 0x2000 to 0x25, 0x4000 to 0x0a, 0xa000 to 0x34)) {
               Mbc5(mutableRom(0x1e), Battery.NULL_BATTERY)
             },
+            mapper(
+                "LiCheng",
+                listOf(
+                    0x0000 to 0x0a,
+                    0x2100 to 0x25,
+                    0x2200 to 0x11,
+                    0x4000 to 0x0a,
+                    0xa000 to 0x3b,
+                ),
+            ) { LiCheng(mutableRom(0x1e), Battery.NULL_BATTERY) },
             mapper("Mbc6", listOf(0x0000 to 0x0a, 0x2000 to 0x03, 0x3000 to 0x04, 0xa000 to 0x35)) {
               Mbc6(it, Battery.NULL_BATTERY)
             },
@@ -726,6 +736,7 @@ class StateCoverageMatrixTest {
             "Mbc2",
             "Mbc3",
             "Mbc5",
+            "LiCheng",
             "Mbc6",
             "Mbc7",
             "Mmm01",

@@ -33,7 +33,7 @@ The exact remaining compatibility surface and removal policy are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 
 The exact field-by-field inventory of all 91 admitted production record types is committed in
-[state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 99
+[state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 100
 production state contracts and capture owner/call-site files is committed in
 [state-originator-sites.md](state-originator-sites.md). `StateTypeRegistry` is the executable type
 allowlist. `StateCoverageMatrixTest` gives every mutable mapper and stateful serial peripheral an
@@ -100,7 +100,7 @@ component state; the six fields named above are in the detached supplement; and 
 ## Mapper coverage matrix
 
 Every supported mutable mapper family is explicit and executable: `BasicRom`, `Mbc1`, `Mbc2`,
-`Mbc3`/RTC, `Mbc5`, `Mbc6` RAM/flash, `Mbc7`/EEPROM, `Mmm01`, `PocketCamera`, `Huc1`, `Huc3`,
+`Mbc3`/RTC, `Mbc5`, `LiCheng`, `Mbc6` RAM/flash, `Mbc7`/EEPROM, `Mmm01`, `PocketCamera`, `Huc1`, `Huc3`,
 `Tama5`, `BungEms`, `BhgosMulticart`, `MakonNtOld2`, `DuzMulticart`, `Mani32kMulticart`,
 `SlMulticart`, `Sintax`, `Bbd`, both `SachenMmc` modes, `WisdomTree`, and `Datel` with a real MBC3
 pass-through slot. For each family the matrix captures a non-idle setup, runs address/tick probes,
