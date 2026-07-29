@@ -74,6 +74,22 @@ public class SwingDisplayTest {
     }
 
     @Test
+    public void linkedControllerOwnerStartClearsPersistentLoadingNotification() throws Exception {
+        EventBusImpl root = new EventBusImpl(null, null, false);
+        EventBus linkedController = root.fork("session");
+        SwingDisplay display = newDisplay(root, "main");
+        Field textField = SwingDisplay.class.getDeclaredField("persistentNotificationText");
+        textField.setAccessible(true);
+
+        linkedController.post(new Controller.RomLoadingEvent(new File("linked.gb")));
+        assertEquals("Loading…", textField.get(display));
+
+        linkedController.post(new Controller.EmulationStartedEvent("LINKED"));
+        assertNull(textField.get(display));
+        root.close();
+    }
+
+    @Test
     public void snapshotCompletionEventsShowAnOnScreenNotification() throws Exception {
         EventBusImpl root = new EventBusImpl(null, null, false);
         EventBus session = root.fork("test");
@@ -418,8 +434,12 @@ public class SwingDisplayTest {
     }
 
     private static SwingDisplay newDisplay(EventBus eventBus) throws Exception {
+        return newDisplay(eventBus, "test");
+    }
+
+    private static SwingDisplay newDisplay(EventBus eventBus, String callerId) throws Exception {
         return onEdt(() -> new SwingDisplay(
-                new EmulatorProperties().getDisplay(), eventBus, "test"));
+                new EmulatorProperties().getDisplay(), eventBus, callerId));
     }
 
     private static BufferedImage paintAtPreferredSize(SwingDisplay display) throws Exception {

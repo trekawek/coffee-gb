@@ -118,8 +118,11 @@ public class SwingDisplay extends JPanel implements Runnable {
                 Controller.LoadRomFailedEvent.class);
         eventBus.register(e -> clearPersistentNotification(),
                 Controller.RomLoadingCancelledEvent.class);
+        // LinkedController publishes the local owner lifecycle from its "session" bus while
+        // forwarding frame/audio output through the caller-filtered "main" bus. Loading is a
+        // host lifecycle notification, so its successful terminal event must remain unfiltered.
         eventBus.register(e -> clearPersistentNotification(),
-                Controller.EmulationStartedEvent.class, callerId);
+                Controller.EmulationStartedEvent.class);
         // Session teardown silently quiesces core outputs after its bus stops. Reset host-only
         // visual rumble through the owner lifecycle while subscribers are still active.
         eventBus.register(e -> this.rumbling = false, Controller.RomLoadingEvent.class);
