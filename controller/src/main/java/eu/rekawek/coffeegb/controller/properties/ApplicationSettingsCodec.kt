@@ -25,6 +25,8 @@ object ApplicationSettingsCodec {
   const val DISPLAY_SCALING_MODE_KEY = "display.scalingMode"
   const val DISPLAY_LETTERBOX_COLOR_KEY = "display.letterboxColor"
   const val DISPLAY_FULLSCREEN_KEY = "display.fullscreen"
+  const val DESKTOP_WINDOW_WIDTH_KEY = "desktop.windowWidth"
+  const val DESKTOP_WINDOW_HEIGHT_KEY = "desktop.windowHeight"
   const val SAVE_DIRECTORY_KEY = "saves.directory"
   const val PREVIOUS_SAVE_DIRECTORY_PREFIX = "saves.previousDirectory."
   const val REWIND_ENABLED_KEY = "saves.rewindEnabled"
@@ -57,6 +59,8 @@ object ApplicationSettingsCodec {
               AUTOSAVE_POLICY_KEY,
               RESUME_POLICY_KEY,
           )
+  private val versionSixFixedKeys =
+      versionFiveFixedKeys + setOf(DESKTOP_WINDOW_WIDTH_KEY, DESKTOP_WINDOW_HEIGHT_KEY)
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -75,6 +79,7 @@ object ApplicationSettingsCodec {
             version == "2" ||
             version == "3" ||
             version == "4" ||
+            version == "5" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -131,6 +136,10 @@ object ApplicationSettingsCodec {
     known[DISPLAY_LETTERBOX_COLOR_KEY] =
         "%06X".format(Locale.ROOT, settings.display.letterboxColor)
     known[DISPLAY_FULLSCREEN_KEY] = settings.display.fullscreen.toString()
+    settings.desktop.windowSize?.let { size ->
+      known[DESKTOP_WINDOW_WIDTH_KEY] = size.width.toString()
+      known[DESKTOP_WINDOW_HEIGHT_KEY] = size.height.toString()
+    }
     known[EmulatorProperties.Key.DisplayGrayscale.propertyName] = settings.display.grayscale.toString()
     known[EmulatorProperties.Key.DisplayBlending.propertyName] = settings.display.blending.toString()
     known[EmulatorProperties.Key.DisplayColorCorrection.propertyName] =
@@ -412,12 +421,21 @@ object ApplicationSettingsCodec {
                     fullChangerCharacter =
                         raw[EmulatorProperties.Key.FullChangerCharacter.propertyName],
                 ),
+            desktop =
+                ApplicationSettings.Desktop(
+                    windowSize =
+                        if (sourceVersion >= 6) {
+                          parseDesktopWindowSize(raw)
+                        } else {
+                          null
+                        }),
         )
 
     val preservedCollisions =
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 6 -> versionSixFixedKeys
           sourceVersion >= 5 -> versionFiveFixedKeys
           sourceVersion >= 4 -> versionFourFixedKeys
           sourceVersion >= 3 -> versionThreeFixedKeys
@@ -600,6 +618,27 @@ object ApplicationSettingsCodec {
       }
     }
     return parsed
+  }
+
+  private fun parseDesktopWindowSize(
+      raw: Map<String, String>
+  ): ApplicationSettings.WindowSize? {
+    val widthValue = raw[DESKTOP_WINDOW_WIDTH_KEY]
+    val heightValue = raw[DESKTOP_WINDOW_HEIGHT_KEY]
+    require((widthValue == null) == (heightValue == null)) {
+      "$DESKTOP_WINDOW_WIDTH_KEY and $DESKTOP_WINDOW_HEIGHT_KEY must be stored together"
+    }
+    if (widthValue == null || heightValue == null) return null
+    val width = parseInt(widthValue, DESKTOP_WINDOW_WIDTH_KEY)
+    val height = parseInt(heightValue, DESKTOP_WINDOW_HEIGHT_KEY)
+    return try {
+      ApplicationSettings.WindowSize(width, height)
+    } catch (failure: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid desktop window size: ${width}x$height (expected positive dimensions)",
+          failure,
+      )
+    }
   }
 
   private fun parseLetterboxColor(value: String?): Int {
@@ -862,7 +901,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionFiveFixedKeys ||
+      key in versionSixFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||

@@ -74,6 +74,8 @@ class SwingGui private constructor(
 
   private lateinit var displayController: DesktopDisplayController
 
+  private lateinit var windowSizeController: DesktopWindowSizeController
+
   private lateinit var fullscreenEscape: FullscreenEscapeDispatcher
 
   private lateinit var romOpen: DesktopRomOpen
@@ -121,11 +123,18 @@ class SwingGui private constructor(
           romOpen.close()
           runDesktopEdtStep(stateUxController::close)
           console?.stop()
-          // No process-wide key dispatcher may persist display settings once store closure begins.
-          // Removal runs on the EDT, so a queued Escape either completes before this boundary or
-          // cannot race the settings close below.
-          runDesktopEdtStep(fullscreenEscape::close)
-          closeSettings()
+          closeDesktopSettingsRecoverably(
+              suspendWindowSize = { runDesktopEdtStep(windowSizeController::suspend) },
+              closeSettings = {
+                // No process-wide key dispatcher may persist display settings once store closure
+                // begins. Removal runs on the EDT, so a queued Escape either completes before this
+                // boundary or cannot race the settings close below.
+                runDesktopEdtStep(fullscreenEscape::close)
+                closeSettings()
+              },
+              resumeWindowSize = { runDesktopEdtStep(windowSizeController::resume) },
+              finishWindowSize = { runDesktopEdtStep(windowSizeController::close) },
+          )
           jvmShutdown.markCompleted()
         },
         timeoutMillis = DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
@@ -156,6 +165,12 @@ class SwingGui private constructor(
                 DesktopSize(minimumContentSize.width, minimumContentSize.height),
             ),
             DisplayWindowSizingRuntime(emulator::refreshDisplayWindowSizing),
+        )
+    windowSizeController =
+        DesktopWindowSizeController(
+            properties,
+            mainWindow,
+            isFullscreen = displayController::isFullscreen,
         )
     fullscreenEscape =
         FullscreenEscapeDispatcher(
@@ -199,6 +214,7 @@ class SwingGui private constructor(
             )
           },
           romOpen::close,
+          { runDesktopEdtStep(windowSizeController::close) },
           properties::close,
       )
     }
@@ -283,8 +299,6 @@ class SwingGui private constructor(
     emulator.bind(mainWindow) { !displayController.current().fullscreen }
     installRomDropTarget()
     mainWindow.pack()
-    mainWindow.repaint()
-    mainWindow.setLocationRelativeTo(null)
     mainWindow.minimumSize =
         minimumFrameSize(
             emulator.minimumContentSizeForCurrentMode(
@@ -292,6 +306,9 @@ class SwingGui private constructor(
             mainWindow.insets,
             mainWindow.jMenuBar?.preferredSize?.height ?: 0,
         )
+    windowSizeController.restore()
+    mainWindow.repaint()
+    mainWindow.setLocationRelativeTo(null)
     mainWindow.isResizable = true
     // Claim native Quit only after every coordinated-shutdown dependency exists. Attaching before
     // installation also guarantees a callback can only enqueue, never run inside AppKit dispatch.
@@ -299,6 +316,7 @@ class SwingGui private constructor(
     installDesktopQuitHandler(desktopQuit::accept)
     mainWindow.isVisible = true
     displayController.applyCurrent()
+    windowSizeController.install()
     properties.consumeLoadWarning()?.let { warning ->
       JOptionPane.showMessageDialog(
           mainWindow,
@@ -732,6 +750,27 @@ internal fun stopEmulatorBeforeCamera(
 ) {
   stopEmulator()
   cameraAfterStop?.invoke()
+}
+
+/** Keeps window-size observation recoverable until the settings store has closed successfully. */
+internal fun closeDesktopSettingsRecoverably(
+    suspendWindowSize: () -> Unit,
+    closeSettings: () -> Unit,
+    resumeWindowSize: () -> Unit,
+    finishWindowSize: () -> Unit,
+) {
+  suspendWindowSize()
+  try {
+    closeSettings()
+  } catch (failure: Exception) {
+    try {
+      resumeWindowSize()
+    } catch (resumeFailure: Exception) {
+      failure.addSuppressed(resumeFailure)
+    }
+    throw failure
+  }
+  finishWindowSize()
 }
 
 /**
