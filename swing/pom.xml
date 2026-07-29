@@ -4,11 +4,11 @@
     <parent>
         <artifactId>coffee-gb</artifactId>
         <groupId>eu.rekawek.coffeegb</groupId>
-        <version>1.7.16</version>
+        <version>1.7.17-SNAPSHOT</version>
     </parent>
 
     <artifactId>swing</artifactId>
-    <version>1.7.16</version>
+    <version>1.7.17-SNAPSHOT</version>
 
     <name>swing</name>
     <build>
@@ -163,12 +163,12 @@
         <dependency>
             <groupId>eu.rekawek.coffeegb</groupId>
             <artifactId>controller</artifactId>
-            <version>1.7.16</version>
+            <version>1.7.17-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>eu.rekawek.coffeegb</groupId>
             <artifactId>core</artifactId>
-            <version>1.7.16</version>
+            <version>1.7.17-SNAPSHOT</version>
         </dependency>
         <!-- OpenCV with bundled natives for the webcam camera source; unlike the old
              sarxos/bridj stack this ships Apple-Silicon (osx arm64) natives, and Linux /
