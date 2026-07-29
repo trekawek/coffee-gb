@@ -129,6 +129,31 @@ public class SachenMmc implements MemoryController {
         }
     }
 
+    /**
+     * Returns the 48 logo bytes that the cartridge presents while the boot ROM draws its
+     * splash. The MMC1 always serves the A7-high copy; MMC2 uses the low copy on DMG and
+     * the A7-high copy after the CGB boot ROM's early WRAM write. Cooked dumps use the
+     * synthetic Nintendo logo served by {@link #getByte(int)} before their first write.
+     */
+    public int[] getBootLogoForSkippedBoot(boolean cgb) {
+        if (cooked) {
+            return NINTENDO_LOGO.clone();
+        }
+        int[] logo = new int[NINTENDO_LOGO.length];
+        boolean highCopy = !mmc2 || cgb;
+        for (int i = 0; i < logo.length; i++) {
+            int address = 0x0104 + i;
+            if (highCopy) {
+                address |= 0x80;
+            }
+            if (scrambledHeader) {
+                address = unscramble(address);
+            }
+            logo[i] = rom[address];
+        }
+        return logo;
+    }
+
     @Override
     public void skipBoot() {
         // The boot ROM's header reads normally advance raw boards through their lockout.

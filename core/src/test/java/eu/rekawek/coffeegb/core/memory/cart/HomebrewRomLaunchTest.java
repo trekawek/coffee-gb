@@ -31,6 +31,8 @@ public class HomebrewRomLaunchTest {
             0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
     };
 
+    private static final int[] BOOT_DISPLAY_LOGO = syntheticBootDisplayLogo();
+
     @Rule
     public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
@@ -83,17 +85,28 @@ public class HomebrewRomLaunchTest {
                     rom.getCartridgeProperties().getMapper());
             assertEquals("HOMEBREW", rom.getTitle());
 
-            assertProgramRuns(rom);
+            assertProgramRuns(rom, BOOT_DISPLAY_LOGO);
         }
     }
 
     private static void assertProgramRuns(Rom rom) throws Exception {
+        assertProgramRuns(rom, null);
+    }
+
+    private static void assertProgramRuns(Rom rom, int[] bootDisplayLogo) throws Exception {
         EventBusImpl eventBus = new EventBusImpl(null, "homebrew-launch-test", false);
         try (Gameboy gameboy = new Gameboy.GameboyConfiguration(rom)
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                 .setSupportBatterySave(false)
                 .build()) {
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            if (bootDisplayLogo != null) {
+                assertBootLogoTiles(gameboy, bootDisplayLogo);
+            } else {
+                for (int address = 0x8010; address < 0x8190; address++) {
+                    assertEquals(0, gameboy.getGpu().getVideoRam0().getByte(address));
+                }
+            }
             gameboy.getAddressSpace().setByte(0xc000, 0);
             for (int tick = 0;
                  tick < 20_000 && gameboy.getAddressSpace().getByte(0xc000) != 0x42;
@@ -105,6 +118,30 @@ public class HomebrewRomLaunchTest {
         } finally {
             eventBus.close();
         }
+    }
+
+    private static void assertBootLogoTiles(Gameboy gameboy, int[] logo) {
+        int address = 0x8010;
+        for (int value : logo) {
+            address = assertBootLogoNibble(gameboy, address, value >> 4);
+            address = assertBootLogoNibble(gameboy, address, value);
+        }
+        assertEquals(0x8190, address);
+    }
+
+    private static int assertBootLogoNibble(Gameboy gameboy, int address, int value) {
+        int expanded = 0;
+        for (int bit = 3; bit >= 0; bit--) {
+            expanded <<= 2;
+            if ((value & (1 << bit)) != 0) {
+                expanded |= 0x03;
+            }
+        }
+        assertEquals(expanded, gameboy.getGpu().getVideoRam0().getByte(address));
+        assertEquals(0, gameboy.getGpu().getVideoRam0().getByte(address + 1));
+        assertEquals(expanded, gameboy.getGpu().getVideoRam0().getByte(address + 2));
+        assertEquals(0, gameboy.getGpu().getVideoRam0().getByte(address + 3));
+        return address + 4;
     }
 
     private static byte[] oversizedHeaderlessHomebrewRom() {
@@ -144,6 +181,7 @@ public class HomebrewRomLaunchTest {
 
         for (int i = 0; i < NINTENDO_LOGO.length; i++) {
             putLogical(rom, 0x0104 + i, NINTENDO_LOGO[i]);
+            putLogical(rom, 0x0184 + i, BOOT_DISPLAY_LOGO[i]);
         }
         byte[] title = "HOMEBREW".getBytes(StandardCharsets.US_ASCII);
         for (int i = 0; i < title.length; i++) {
@@ -158,6 +196,14 @@ public class HomebrewRomLaunchTest {
         rom[0x014d] = 0x7F;
         assertFalse(RomHeaderInspector.inspect(rom).hasCartridgeShape());
         return rom;
+    }
+
+    private static int[] syntheticBootDisplayLogo() {
+        int[] logo = new int[NINTENDO_LOGO.length];
+        for (int i = 0; i < logo.length; i++) {
+            logo[i] = (i * 37 + 0x5a) & 0xff;
+        }
+        return logo;
     }
 
     private static void putLogical(byte[] rom, int logicalAddress, int... bytes) {

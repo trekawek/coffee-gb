@@ -345,6 +345,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // Some unlicensed mappers transform the header only while the console boot ROM is
             // reading it. Bypassing (or abandoning) that ROM must complete the mapper-side
             // handshake before the CPU starts at the cartridge entry point.
+            if (configuration.bootstrapMode == BootstrapMode.SKIP) {
+                restoreSachenBootLogoForSkippedBoot();
+            }
             cartridge.skipBoot();
             // the Datel Action Replay's ASIC presents a valid CGB header to the console,
             // so the machine boots native-colour despite the dump's garbage flag byte
@@ -352,6 +355,33 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     && !cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
         }
         applyBootCompatibilityIfReady();
+    }
+
+    private void restoreSachenBootLogoForSkippedBoot() {
+        var sachen = cartridge.getSachenMmc();
+        if (sachen == null) {
+            return;
+        }
+        int address = 0x8010;
+        for (int value : sachen.getBootLogoForSkippedBoot(gbc)) {
+            address = writeDmgBootLogoNibble(address, value >> 4);
+            address = writeDmgBootLogoNibble(address, value);
+        }
+    }
+
+    private int writeDmgBootLogoNibble(int address, int value) {
+        int expanded = 0;
+        for (int bit = 3; bit >= 0; bit--) {
+            expanded <<= 2;
+            if ((value & (1 << bit)) != 0) {
+                expanded |= 0x03;
+            }
+        }
+        gpu.getVideoRam0().setByte(address, expanded);
+        gpu.getVideoRam0().setByte(address + 1, 0);
+        gpu.getVideoRam0().setByte(address + 2, expanded);
+        gpu.getVideoRam0().setByte(address + 3, 0);
+        return address + 4;
     }
 
     private void applyBootCompatibilityIfReady() {
