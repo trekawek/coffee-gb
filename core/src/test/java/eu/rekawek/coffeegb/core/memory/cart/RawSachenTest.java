@@ -8,6 +8,7 @@ import org.junit.Test;
 import java.io.IOException;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class RawSachenTest {
@@ -66,6 +67,14 @@ public class RawSachenTest {
     public void derivesBankCountFromRawDumpSize() throws IOException {
         assertEquals(32, new Rom(rawMmc2Rom(0x80000)).getRomBanks());
         assertEquals(128, new Rom(rawMmc2Rom(0x200000)).getRomBanks());
+    }
+
+    @Test
+    public void ordinaryRawMmc2RomDoesNotInheritMightyMixLyTiming() throws IOException {
+        Rom rom = new Rom(rawMmc2Rom());
+
+        assertFalse(rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.EARLY_CGB_LY_READ_EDGE));
     }
 
     @Test
