@@ -844,6 +844,14 @@ internal object StateSemantics {
           it.intValues("ram", 0, 0xff)
           it.range("selectedRomBank", 0, 0xff); it.range("selectedRamBank", 0, 0x0f)
         }
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Vf001Zook\$Vf001ZookState"] =
+        constrained("Zook's VF001 shift window and four-write bank-port phase are bounded with its nested MBC5 state.") {
+          it.recordType("delegateMemento", MBC5_STATE)
+          it.require(it.intArray("stream").size == 32, "must have a 32-byte shift window")
+          it.intValues("stream", 0, 0xff)
+          it.range("streamLength", 0, 32); it.range("bankPortRun", 0, 3)
+          it.require(it.int("bankPortRun") <= it.int("streamLength"), "has a bank-port run longer than its stream")
+        }
     target["eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera\$PocketCameraState"] =
         constrained("Pocket Camera ROM/RAM selectors and camera register bytes are bounded.") {
           it.range("romBank", 0, 0x3f); it.range("ramBank", 0, 0x0f)

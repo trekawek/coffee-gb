@@ -23,7 +23,7 @@ class StateInventoryTest {
           "- `${type.name}`: $fields"
         }
 
-    assertEquals(92, runtime.size)
+    assertEquals(93, runtime.size)
     assertEquals(runtime, documented)
     assertEquals(11, StateTypeRegistry.enumClasses.size)
   }
@@ -63,7 +63,7 @@ class StateInventoryTest {
             }
             .sorted()
 
-    assertEquals(101, discovered.size)
+    assertEquals(102, discovered.size)
     assertTrue(discovered.all { '\\' !in it })
     assertEquals(discovered, documented)
   }
@@ -71,7 +71,7 @@ class StateInventoryTest {
   @Test
   fun everyAdmittedRecordHasAnExplicitSemanticPolicyAndRationale() {
     assertEquals(StateTypeRegistry.recordClassNames.toSet(), StateSemantics.policyAudit.keys)
-    assertEquals(92, StateSemantics.policyAudit.size)
+    assertEquals(93, StateSemantics.policyAudit.size)
     assertTrue(StateSemantics.policyAudit.values.all { it.isNotBlank() })
   }
 

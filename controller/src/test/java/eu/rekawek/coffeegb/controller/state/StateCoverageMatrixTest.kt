@@ -55,6 +55,9 @@ class StateCoverageMatrixTest {
             mapper("XploderGb", listOf(0x0006 to 0x25, 0x0007 to 0x0a, 0xa000 to 0x3b)) {
               XploderGb(it, Battery.NULL_BATTERY)
             },
+            mapper("Vf001Zook", listOf(0x7081 to 0x46, 0x7081 to 0x58, 0x7081 to 0x54)) {
+              Vf001Zook(it, Battery.NULL_BATTERY)
+            },
             mapper("Mbc6", listOf(0x0000 to 0x0a, 0x2000 to 0x03, 0x3000 to 0x04, 0xa000 to 0x35)) {
               Mbc6(it, Battery.NULL_BATTERY)
             },
@@ -161,7 +164,7 @@ class StateCoverageMatrixTest {
         StateTypeRegistry.recordClassNames.filter {
           it.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.")
         }
-    assertEquals(25, registeredMapperRecords.size)
+    assertEquals(26, registeredMapperRecords.size)
   }
 
   private fun directState(controller: MemoryController): DirectState =
@@ -536,6 +539,7 @@ class StateCoverageMatrixTest {
       probes: List<Int>,
   ): List<Int> {
     val trace = mutableListOf<Int>()
+    if (controller is Vf001Zook) controller.setByte(0x7081, 0x5f)
     repeat(4) { round ->
       probes.forEach { trace += controller.getByte(it) }
       controller.tick()
@@ -745,6 +749,7 @@ class StateCoverageMatrixTest {
             "Mbc5",
             "LiCheng",
             "XploderGb",
+            "Vf001Zook",
             "Mbc6",
             "Mbc7",
             "Mmm01",
