@@ -13,6 +13,7 @@ import org.junit.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -42,6 +43,11 @@ public class MakonNtOld2Test {
 
         mapper.setByte(0x2000, 3);
         assertEquals(67, mapper.getByte(0x4000));
+    }
+
+    @Test
+    public void detectsSuper21In1HeaderFingerprint() throws IOException {
+        assertNtOld2Header(new byte[] {0x26, (byte) 0xef, (byte) 0xa7, (byte) 0xd3});
     }
 
     @Test
@@ -129,5 +135,17 @@ public class MakonNtOld2Test {
         data[0x0147] = 0x19; // MBC5 in the menu's standard header
         data[0x0148] = 0x06; // 2 MiB
         return data;
+    }
+
+    private static void assertNtOld2Header(byte[] crcSuffix) throws IOException {
+        byte[] data = multicartRom(0xc0);
+        Arrays.fill(data, 0x0100, 0x0150, (byte) 0);
+        System.arraycopy(crcSuffix, 0, data, 0x014c, crcSuffix.length);
+
+        Rom rom = new Rom(data);
+        assertEquals(CartridgeProperties.Mapper.MAKON_NT_OLD_2,
+                rom.getCartridgeProperties().getMapper());
+        assertTrue(new Cartridge(rom, Battery.NULL_BATTERY)
+                .getMemoryController() instanceof MakonNtOld2);
     }
 }
