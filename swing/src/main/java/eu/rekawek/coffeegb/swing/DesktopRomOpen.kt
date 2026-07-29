@@ -14,6 +14,7 @@ import java.awt.Toolkit
 import java.awt.Window
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
+import java.awt.desktop.QuitResponse
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
@@ -506,9 +507,9 @@ internal fun createRomOpenErrorPanel(failure: RomOpenFailure): JPanel {
 }
 
 /**
- * Installs the platform open-file callback before settings or Swing construction can delay it.
- * Deliveries received during startup are queued and identical CLI/platform startup deliveries are
- * collapsed once the desktop ROM coordinator is ready.
+ * Retains platform open-file callbacks received before settings or Swing construction completes.
+ * Identical CLI/platform startup deliveries are collapsed once the desktop ROM coordinator is
+ * ready.
  */
 internal class DesktopOpenFilesBridge(
     private val uiExecutor: Executor =
@@ -564,6 +565,68 @@ internal class DesktopOpenFilesBridge(
 
   private companion object {
     const val MAX_PENDING_DELIVERIES = 16
+  }
+}
+
+/**
+ * Queues and coalesces native application-quit requests outside the platform callback. A request
+ * received before the Swing close coordinator attaches is retained until it is ready.
+ */
+internal class DesktopQuitBridge(
+    private val uiExecutor: Executor =
+        Executor { task -> SwingUtilities.invokeLater(task) },
+) {
+  private val lock = Any()
+  private var pending = false
+  private var deliveryInFlight = false
+  private var receiver: (() -> Unit)? = null
+
+  fun accept() {
+    val target =
+        synchronized(lock) {
+          val current = receiver
+          if (current == null) {
+            pending = true
+            null
+          } else if (deliveryInFlight) {
+            null
+          } else {
+            deliveryInFlight = true
+            current
+          }
+        }
+    target?.let(::dispatch)
+  }
+
+  fun attach(receiver: () -> Unit) {
+    val target =
+        synchronized(lock) {
+          check(this.receiver == null) { "Desktop quit bridge is already attached" }
+          this.receiver = receiver
+          if (pending) {
+            pending = false
+            deliveryInFlight = true
+            receiver
+          } else {
+            null
+          }
+        }
+    target?.let(::dispatch)
+  }
+
+  private fun dispatch(receiver: () -> Unit) {
+    try {
+      uiExecutor.execute {
+        try {
+          receiver()
+        } finally {
+          synchronized(lock) { deliveryInFlight = false }
+        }
+      }
+    } catch (failure: RuntimeException) {
+      synchronized(lock) { deliveryInFlight = false }
+      throw failure
+    }
   }
 }
 
@@ -780,6 +843,30 @@ internal fun installDesktopOpenFileHandler(open: (List<Path>) -> Unit): Boolean 
     LOG.warn("Desktop open-file integration is unavailable", failure)
     false
   }
+}
+
+internal fun installDesktopQuitHandler(quit: () -> Unit): Boolean {
+  if (!Desktop.isDesktopSupported()) {
+    return false
+  }
+  return try {
+    val desktop = Desktop.getDesktop()
+    if (!desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)) {
+      false
+    } else {
+      desktop.setQuitHandler { _, response -> handleDesktopQuitRequest(response, quit) }
+      true
+    }
+  } catch (failure: RuntimeException) {
+    LOG.warn("Desktop quit integration is unavailable", failure)
+    false
+  }
+}
+
+/** Cancels Java's synchronous default exit before handing termination to the desktop coordinator. */
+internal fun handleDesktopQuitRequest(response: QuitResponse, quit: () -> Unit) {
+  response.cancelQuit()
+  quit()
 }
 
 internal fun formatByteCount(bytes: Long): String =
