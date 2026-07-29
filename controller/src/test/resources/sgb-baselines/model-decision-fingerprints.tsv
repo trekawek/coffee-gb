@@ -22,7 +22,7 @@ controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateCodec.kt	b9df
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateFile.kt	36226dc08bb44311fa10a2795cadfda9b5f1267260081760b5f321a596f8daab
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSectionCodecs.kt	f22438ad0cc47a2ffb8384762aa896f8f832a7cfd5050c7dcf3ebc87200d7cf6
 controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateSemantics.kt	8a19c681c3c031c889a2f17cd9c9fb4daf10cba63f4ce27af1cff2a97fa731fb
-core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	402b6db1f7b7f4836a6a558d57b8ba40a412924922ac6242320edc91316f97b6
+core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java	c1402e3ecf604d6086551b7054fd874299f2856599badcb97e4352ea73bb1125
 core/src/main/java/eu/rekawek/coffeegb/core/GameboyType.java	9e28a6c29287477e503b6c6867fe1e5c352c44eae720aeb508ff5a0fe930bd2b
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/Cpu.java	1674586181415f65aaf57ff6ce3a4d36478a27bcfb25966403a4341303378fc8
 core/src/main/java/eu/rekawek/coffeegb/core/cpu/InterruptManager.java	b717f6185cb210c09f05860061dec3686a527ee0de4b5faccef1d835f8fcc057
@@ -37,7 +37,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/genie/Genie.java	f2f1d19f855f93f72fc
 core/src/main/java/eu/rekawek/coffeegb/core/genie/Patch.java	5a22a47f38349f395da4980b7775dca8244ba0023989d22e2451e17b33681eec
 core/src/main/java/eu/rekawek/coffeegb/core/gpu/Display.java	67ecd21a7ca118b32be86e1f3b1a0dab225526621a3d3892da0d99998c8dce94
 core/src/main/java/eu/rekawek/coffeegb/core/gpu/Fetcher.java	6e18e7f99d78eff67a5505f99cc3fbab43de43495b431fe52863424e9c499050
-core/src/main/java/eu/rekawek/coffeegb/core/gpu/Gpu.java	680e95fa8852ebc2d7aed398783503c3ed7094ba8da04b93a9dc627074f79c24
+core/src/main/java/eu/rekawek/coffeegb/core/gpu/Gpu.java	0f0077bf64fd6ee156518a2b8d4a1f79f754828c89bcaaea6657b4719c31d2ca
 core/src/main/java/eu/rekawek/coffeegb/core/gpu/GpuRegisterValues.java	7c67c7999c728e0a2469823391c1e4ca1113b94a84ac134be23f0cbddaeb9c6e
 core/src/main/java/eu/rekawek/coffeegb/core/gpu/Lcdc.java	5dd928f7cfdd574d6b545f273a372e5d31908977447d0c7f5f640d4a282bf5ad
 core/src/main/java/eu/rekawek/coffeegb/core/gpu/StatRegister.java	65b82ba13dc22ee47434cdf9b40f500fadc3a9bc860f6ffe5c3bd3fda72b9557
