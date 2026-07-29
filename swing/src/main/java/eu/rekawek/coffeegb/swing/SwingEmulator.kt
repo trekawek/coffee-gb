@@ -37,10 +37,20 @@ import javax.swing.SwingUtilities
 /** Synchronous boundary emitted before an old controller is closed and replaced. */
 internal class ControllerOwnershipChangingEvent : Event
 
+/** Emitted only after replacement-controller ownership has been installed successfully. */
+internal class ControllerOwnershipCommittedEvent : Event
+
+/** Idempotently returns serial-port ownership from a linked controller to a basic controller. */
+internal class EnsureStandaloneControllerEvent : Event
+
 class SwingEmulator(
     private val eventBus: EventBus,
     private val console: Console?,
     private val properties: EmulatorProperties,
+    private val mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
+        Controller.MobileAdapterConfigurationProvider {
+          Controller.MobileAdapterConfiguration.syntheticOffline()
+        },
 ) {
   private val display: SwingDisplay
   private val joypad: SwingJoypad
@@ -68,6 +78,8 @@ class SwingEmulator(
 
   private val controllerLifecycle = ControllerLifecycleGate()
 
+  @Volatile private var linkedControllerActive = false
+
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
     sound =
@@ -91,7 +103,13 @@ class SwingEmulator(
     gamepadThread = Thread(gamepad, "gamepad").apply { isDaemon = true; start() }
 
     controller =
-        BasicController(eventBus, properties, console, DesktopStateExternalActions())
+        BasicController(
+                eventBus,
+                properties,
+                console,
+                DesktopStateExternalActions(),
+                mobileAdapterConfigurationProvider,
+            )
             .also { it.startController() }
 
     eventBus.register<ConnectionController.ServerGotConnectionEvent> {
@@ -101,13 +119,16 @@ class SwingEmulator(
       controllerLifecycle.transitionIfActive { startLinkedController(it.mode, it.player) }
     }
     eventBus.register<ConnectionController.ServerLostConnectionEvent> {
-      controllerLifecycle.transitionIfActive(::startBasicController)
+      returnToBasicControllerIfLinked()
     }
     eventBus.register<ConnectionController.StopServerEvent> {
-      controllerLifecycle.transitionIfActive(::startBasicController)
+      returnToBasicControllerIfLinked()
     }
     eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      controllerLifecycle.transitionIfActive(::startBasicController)
+      returnToBasicControllerIfLinked()
+    }
+    eventBus.register<EnsureStandaloneControllerEvent> {
+      returnToBasicControllerIfLinked()
     }
     eventBus.register<Controller.RomLoadingEvent> { releaseForLifecycleChange() }
     eventBus.register<Controller.EmulationStoppedEvent> { releaseForLifecycleChange() }
@@ -118,11 +139,29 @@ class SwingEmulator(
     releaseForLifecycleChange()
     val state = controller.closeWithState()
     controller =
-        BasicController(eventBus, properties, console, DesktopStateExternalActions())
+        BasicController(
+                eventBus,
+                properties,
+                console,
+                DesktopStateExternalActions(),
+                mobileAdapterConfigurationProvider,
+            )
             .also { it.startController() }
+    linkedControllerActive = false
+    eventBus.post(ControllerOwnershipCommittedEvent())
     if (state != null) {
       eventBus.post(Controller.LoadRomEvent(state.rom.image, state.state))
     }
+  }
+
+  private fun returnToBasicControllerIfLinked() {
+    // STOP_CLIENT can synchronously install the standalone controller and still be followed by a
+    // delayed ClientDisconnected event. Re-check linked ownership while holding the same lifecycle
+    // lock as the transition so that stale/duplicate callbacks cannot replace the new controller.
+    controllerLifecycle.transitionIfActiveWhen(
+        condition = { linkedControllerActive },
+        transition = ::startBasicController,
+    )
   }
 
   private fun startLinkedController(mode: LinkMode, player: Int) {
@@ -131,6 +170,8 @@ class SwingEmulator(
     val state = controller.closeWithState()
     controller =
         LinkedController(eventBus, properties, console, mode, player).also { it.startController() }
+    linkedControllerActive = true
+    eventBus.post(ControllerOwnershipCommittedEvent())
     if (state != null) {
       eventBus.post(Controller.LoadRomEvent(state.rom.image, state.state))
     }
@@ -157,6 +198,8 @@ class SwingEmulator(
         },
     )
   }
+
+  internal fun isLinkedControllerActive(): Boolean = linkedControllerActive
 
   /**
    * Applies an explicit close-autosave waiver to the controller retained by a failed stop. The
@@ -369,6 +412,18 @@ internal class ControllerLifecycleGate {
   fun transitionIfActive(transition: () -> Unit): Boolean =
       synchronized(lock) {
         if (stopping || stopped) {
+          return@synchronized false
+        }
+        transition()
+        true
+      }
+
+  fun transitionIfActiveWhen(
+      condition: () -> Boolean,
+      transition: () -> Unit,
+  ): Boolean =
+      synchronized(lock) {
+        if (stopping || stopped || !condition()) {
           return@synchronized false
         }
         transition()

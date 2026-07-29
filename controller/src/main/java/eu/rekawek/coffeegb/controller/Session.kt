@@ -20,6 +20,7 @@ class Session(
     serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
     infraredEndpoint: InfraredEndpoint = InfraredEndpoint.NULL_ENDPOINT,
     prebuiltGameboy: Gameboy? = null,
+    serialEndpointDisconnect: () -> Unit = {},
 ) : AutoCloseable {
 
   internal val gameboy: Gameboy = prebuiltGameboy ?: config.build()
@@ -35,10 +36,23 @@ class Session(
   internal var serialEndpoint: SerialEndpoint = serialEndpoint
     private set
 
+  /**
+   * Controller-owned host/backend cleanup. It deliberately lives outside captured endpoint state
+   * and runs immediately after core endpoint ownership has moved or been detached.
+   */
+  private var serialEndpointDisconnect: () -> Unit = serialEndpointDisconnect
+
   internal val infraredEndpoint: InfraredEndpoint = infraredEndpoint
 
   init {
-    gameboy.init(eventBus, serialEndpoint, this.infraredEndpoint, if (staged) null else console)
+    try {
+      gameboy.init(eventBus, serialEndpoint, this.infraredEndpoint, if (staged) null else console)
+    } catch (failure: Throwable) {
+      disconnectSerialEndpointSafely(serialEndpoint, this.serialEndpointDisconnect)
+      this.serialEndpoint = SerialEndpoint.NULL_ENDPOINT
+      this.serialEndpointDisconnect = NO_SERIAL_ENDPOINT_DISCONNECT
+      throw failure
+    }
   }
 
   /**
@@ -53,10 +67,51 @@ class Session(
     (eventBus as StagedEventBus).activate()
   }
 
-  /** Hot-swaps the link-port device (e.g. connecting the printer) without a reset. */
-  fun setSerialEndpoint(endpoint: SerialEndpoint) {
+  /**
+   * Hot-swaps the link-port device without a reset.
+   *
+   * The caller must prepare [endpoint] and its backend before entering this method. Installation
+   * commits before the previous endpoint is disconnected, so a failed core handoff leaves the old
+   * endpoint and controller selection usable. The disconnect callback must be idempotent and
+   * non-blocking; failures are contained so teardown cannot strand a half-replaced session.
+   */
+  @Synchronized
+  fun setSerialEndpoint(
+      endpoint: SerialEndpoint,
+      disconnect: () -> Unit = NO_SERIAL_ENDPOINT_DISCONNECT,
+  ) {
+    if (resourcesClosed) {
+      disconnectSerialEndpointSafely(endpoint, disconnect)
+      throw IllegalStateException("Cannot attach a serial endpoint to a closed session")
+    }
+
+    val previousEndpoint = serialEndpoint
+    val previousDisconnect = serialEndpointDisconnect
+    try {
+      gameboy.setSerialEndpoint(endpoint)
+    } catch (failure: Throwable) {
+      try {
+        gameboy.setSerialEndpoint(previousEndpoint)
+      } catch (rollbackFailure: Throwable) {
+        failure.addSuppressed(rollbackFailure)
+      }
+      disconnectSerialEndpointSafely(endpoint, disconnect)
+      throw failure
+    }
     serialEndpoint = endpoint
-    gameboy.setSerialEndpoint(endpoint)
+    serialEndpointDisconnect = disconnect
+    disconnectSerialEndpointSafely(previousEndpoint, previousDisconnect)
+  }
+
+  /** Disconnects the selected device and leaves the emulated link port physically empty. */
+  @Synchronized
+  internal fun detachSerialEndpoint() {
+    val previousEndpoint = serialEndpoint
+    val previousDisconnect = serialEndpointDisconnect
+    gameboy.setSerialEndpoint(SerialEndpoint.NULL_ENDPOINT)
+    serialEndpoint = SerialEndpoint.NULL_ENDPOINT
+    serialEndpointDisconnect = NO_SERIAL_ENDPOINT_DISCONNECT
+    disconnectSerialEndpointSafely(previousEndpoint, previousDisconnect)
   }
 
   override fun close() {
@@ -71,6 +126,7 @@ class Session(
     require(timeout > 0) { "Session close timeout must be positive" }
     val deadlineNanos = System.nanoTime() + unit.toNanos(timeout).coerceAtLeast(1)
     gameboy.stop()
+    detachSerialEndpoint()
     val remainingNanos = deadlineNanos - System.nanoTime()
     if (remainingNanos <= 0) {
       throw EventBusTeardownTimeoutException(
@@ -88,6 +144,7 @@ class Session(
 
   private fun closeNonFinal(mode: CleanupMode) {
     gameboy.stop()
+    detachSerialEndpoint()
     try {
       // No irreversible machine cleanup happens while an event subscriber can still be running.
       eventBus.close()
@@ -138,6 +195,7 @@ class Session(
     if (resourcesClosed) {
       return
     }
+    detachSerialEndpoint()
     when (mode) {
       CleanupMode.FLUSH_CARTRIDGE -> gameboy.closeSilently()
       CleanupMode.AFTER_CARTRIDGE_FLUSH -> gameboy.closeAfterCartridgeFlushSilently()
@@ -172,6 +230,26 @@ class Session(
 
   private companion object {
     val LOG = LoggerFactory.getLogger(Session::class.java)
+
+    val NO_SERIAL_ENDPOINT_DISCONNECT: () -> Unit = {}
+
+    fun disconnectSerialEndpointSafely(
+        endpoint: SerialEndpoint,
+        disconnect: () -> Unit,
+    ) {
+      try {
+        endpoint.disconnect()
+      } catch (_: RuntimeException) {
+        // A backend exception may carry a host, path, account, payload, or credential. Cleanup
+        // diagnostics deliberately expose only this stable category.
+        LOG.warn("Unable to disconnect a serial endpoint cleanly")
+      }
+      try {
+        disconnect()
+      } catch (_: RuntimeException) {
+        LOG.warn("Unable to disconnect a serial endpoint backend cleanly")
+      }
+    }
   }
 }
 

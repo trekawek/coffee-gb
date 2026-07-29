@@ -14,6 +14,8 @@ import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
+import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -302,6 +304,7 @@ class StateCodecTest {
             GameboyPrinterSerialEndpoint { _, _, _, _, _, _ -> },
             GpsReceiverSerialEndpoint(),
             BarcodeBoySerialEndpoint().also { it.scan("4901234567894") },
+            MobileAdapterSerialEndpoint(ClockSpec.LEGACY, 0x08, ByteArray(256)),
         )
     endpoints.forEach { endpoint ->
       StateCodecTestSupport.session(endpoint = endpoint).use { session ->

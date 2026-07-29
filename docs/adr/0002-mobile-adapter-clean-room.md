@@ -1,8 +1,8 @@
 # ADR 0002: clean-room Mobile Adapter architecture
 
-- Status: accepted for the Phase 0 contract gate
+- Status: accepted; Phase 0 contract and Phase 1 deterministic offline engine implemented
 - Date: 2026-07-26
-- Issues: #346, #318, #311
+- Issues: #399, #351, #346, #314, #318, #311
 
 ## Decision
 
@@ -18,23 +18,36 @@ Mobile Adapter GB is an exclusive, platform-neutral **serial peripheral**. It is
 
 Core may not import or own sockets, DNS, files, threads, futures, executors, AWT/Swing, host wall
 clock, or blocking callbacks. Controller and desktop work may never block the emulator thread or
-EDT. The engine's clock and timeout input is explicit and deterministic. All queues, payloads,
+EDT. Phase 1 realizes this dependency direction with `MobileAdapterEngine`, an idle-high
+`MobileAdapterSerialEndpoint`, a bounded nonblocking backend port, and a deterministic in-memory
+fake. The engine's clock and timeout input is explicit and deterministic. All queues, payloads,
 connection slots, and configuration ranges have the limits in
 [mobile-adapter-contract.md](../mobile-adapter-contract.md).
+The in-memory fake uses one immutable snapshot and a lock-free atomic compare/exchange solely to
+linearize bounded generation cancellation. That primitive creates no thread, task, future,
+executor, callback, or blocking wait and is not captured as emulator state.
 
 ## Ownership and state
 
 Exactly one serial peripheral owns a Game Boy serial endpoint. Changing the configured peripheral
-is prepared off-thread and committed atomically at the emulator safe point; replacement cancels
-old jobs and releases their resources before the new endpoint becomes visible. Captured state may
-contain packet/parser phase, bounded request/response bytes, configuration bytes, deterministic
-timer counters, connection-slot identifiers, and status codes. It must never contain a live
-socket, DNS resolver, file handle, callback, task, thread, executor, UI object, or host timestamp.
+prepares a candidate before the handoff and commits the core installation atomically at the
+emulator safe point. Only after that commit succeeds does the controller disconnect the previous
+endpoint and cancel its jobs. A failed installation disconnects the candidate and leaves the
+previous endpoint and its backend ownership usable. Phase 1 captured state may contain
+packet/parser phase, bounded request/response bytes, configuration bytes, deterministic timer
+counters, the bounded pending-packet count, and status codes. It contains no mutable connection
+identifiers; adding those belongs to the evidence-backed Phase #352 command work. Captured state
+must never contain a live socket, DNS resolver, file handle, callback, task, thread, executor, UI
+object, or host timestamp.
 
-Save/load and rewind restore deterministic engine state but disconnect/cancel every live backend
-operation. A restored request may be reported as disconnected/cancelled and explicitly retried by
+Capture/save observes only deterministic engine state and does not disconnect live backend work.
+State load/restore and rewind disconnect/cancel every live backend operation before restoring that
+state. A restored request may be reported as disconnected/cancelled and explicitly retried by
 guest software; it may not resurrect a host connection. Failed restore/configuration leaves both
-the old endpoint and backend ownership unchanged.
+the old endpoint and backend ownership unchanged when validation or preparation rejects the
+candidate before commit. Once a validated restore begins, backend cancellation is deliberately
+irreversible: an unexpected apply failure rolls deterministic machine/endpoint state back but
+leaves host backend work disconnected rather than attempting to resurrect it.
 
 ## Clean-room boundary
 

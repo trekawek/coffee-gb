@@ -97,9 +97,13 @@ attacker. See
 [normative v9 contract](docs/netplay-protocol-v9.md). The implemented foundation boundary is
 documented in [netplay-v9-foundation.md](docs/netplay-v9-foundation.md).
 
-Mobile Adapter GB support is likewise specification-only. The clean-room design treats it as a
-bounded serial peripheral, never a rollback link mode, and neither connects to historical Nintendo
-services nor bundles service data. See [the Mobile Adapter contract](docs/mobile-adapter-contract.md).
+Mobile Adapter GB support includes a deterministic **offline** Phase-1 engine and an exclusive
+link-port selector. The clean-room design treats it as a bounded serial peripheral, never a
+rollback link mode, and neither connects to historical Nintendo services nor bundles service
+data. DNS, TCP, UDP, dialling, and service commands remain disabled. The frozen evidence does not
+yet define the acknowledgement/response polling order, so Coffee GB exposes those channels to
+tests without inventing commercial-game compatibility. See
+[the Mobile Adapter contract](docs/mobile-adapter-contract.md).
 
 ### Hardware profiles and command-line selection
 

@@ -29,6 +29,7 @@ the ordinary deep-owned `captureState()` contract, or any portable/legacy byte s
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/link/StateHistory.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/DetachedState.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/MachineSnapshot.kt`
+- WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/SessionSnapshot.kt`
 - WORKFLOW `controller/src/main/java/eu/rekawek/coffeegb/controller/state/StateCodec.kt`
 - COMPOSITE `core/src/main/java/eu/rekawek/coffeegb/core/Gameboy.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/cpu/Cpu.java`
@@ -108,6 +109,8 @@ the ordinary deep-owned `captureState()` contract, or any portable/legacy byte s
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/serial/Peer2PeerSerialEndpoint.java`
 - CONTRACT `core/src/main/java/eu/rekawek/coffeegb/core/serial/SerialEndpoint.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/serial/SerialPort.java`
+- OWNER `core/src/main/java/eu/rekawek/coffeegb/core/serial/mobile/MobileAdapterEngine.java`
+- OWNER `core/src/main/java/eu/rekawek/coffeegb/core/serial/mobile/MobileAdapterSerialEndpoint.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/sgb/Background.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/sgb/Commands.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/sgb/SgbDisplay.java`

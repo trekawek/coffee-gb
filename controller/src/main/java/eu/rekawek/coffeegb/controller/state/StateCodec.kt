@@ -188,9 +188,15 @@ object StateCodec {
   fun capture(
       session: Session,
       diagnostics: StateDiagnosticMetadata? = null,
+  ): StateFile = capture(session, StateIdentity.from(session.config), diagnostics)
+
+  internal fun capture(
+      session: Session,
+      identity: MachineIdentity,
+      diagnostics: StateDiagnosticMetadata? = null,
   ): StateFile =
       StateFile(
-          listOf(StateIdentityEntry(0, StateIdentity.from(session.config))),
+          listOf(StateIdentityEntry(0, identity)),
           SessionStateRoot(session.captureDetachedState()),
           diagnostics,
       )
@@ -359,13 +365,29 @@ object StateCodec {
       session: Session,
       probe: ((ApplyStage) -> Unit)?,
   ) {
-    val file = decode(bytes)
+    applyDecoded(decode(bytes), session, StateIdentity.from(session.config), probe)
+  }
+
+  internal fun applyDecoded(
+      file: StateFile,
+      session: Session,
+      identity: MachineIdentity,
+  ) {
+    applyDecoded(file, session, identity, null)
+  }
+
+  private fun applyDecoded(
+      file: StateFile,
+      session: Session,
+      identity: MachineIdentity,
+      probe: ((ApplyStage) -> Unit)?,
+  ) {
     val root =
         file.root as? SessionStateRoot
             ?: targetMismatch("StateFile root ${file.root.kind} is not a session")
     validateTargetIdentities(
         file.identities,
-        listOf(StateIdentityEntry(0, StateIdentity.from(session.config))),
+        listOf(StateIdentityEntry(0, identity)),
     )
     val compatibleRoot = preparePortableRootForApply(file) as SessionStateRoot
     try {

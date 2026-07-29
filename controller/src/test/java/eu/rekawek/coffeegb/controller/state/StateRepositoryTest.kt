@@ -638,20 +638,19 @@ class StateRepositoryTest {
       val sessionLayout =
           StateStorageLayout(Files.createTempDirectory("state-session-root"))
       val sessionRef = StateRef.Slot(0)
-      val failure =
-          assertFailsWith<StateDecodeException> {
-            StateRepository(sessionLayout)
-                .save(
-                    sessionRef,
-                    sessionBytes,
-                    StateSaveMetadata(savedAt = SAVE_TIME),
-                )
-          }
-      assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, failure.reason)
-      AtomicFileWriter.system().write(sessionLayout.stateFile(sessionRef), sessionBytes)
-      val entry = StateRepository(sessionLayout).catalog().entries.single()
-      assertEquals(StateCatalogStatus.INCOMPATIBLE, entry.status)
-      assertEquals(StateCompatibilityStatus.ROOT_MISMATCH, entry.compatibility?.status)
+      StateRepository(sessionLayout)
+          .save(
+              sessionRef,
+              sessionBytes,
+              StateSaveMetadata(savedAt = SAVE_TIME),
+          )
+      val entry =
+          StateRepository(sessionLayout)
+              .catalog(StateIdentity.from(session.config))
+              .entries
+              .single()
+      assertEquals(StateCatalogStatus.AVAILABLE, entry.status)
+      assertEquals(StateCompatibilityStatus.COMPATIBLE, entry.compatibility?.status)
     }
   }
 

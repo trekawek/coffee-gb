@@ -108,6 +108,8 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.memory.cart.type.XploderGb\$XploderGbState",
           "eu.rekawek.coffeegb.core.memory.cart.type.Vf001Zook\$Vf001ZookState",
           "eu.rekawek.coffeegb.core.memory.cart.type.Vf001General\$Vf001GeneralState",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState",
       )
 
   val legacyRecordClassNames =

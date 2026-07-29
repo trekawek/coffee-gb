@@ -17,19 +17,35 @@ import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationWorker
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.RecordState
+import eu.rekawek.coffeegb.controller.state.SessionStateRoot
+import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateGraph
 import eu.rekawek.coffeegb.controller.state.StateRef
 import eu.rekawek.coffeegb.controller.state.StateRepository
+import eu.rekawek.coffeegb.controller.state.StateSaveMetadata
+import eu.rekawek.coffeegb.controller.state.StateStorageLayout
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateStoragePaths
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.controller.state.StateWorkspace
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
+import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.time.Instant
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -45,6 +61,242 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerStateUxTest {
+
+  @Test
+  fun managedSessionStateRestoresPartialMobileAndReleasedMachineRootsCancelOnlyOnSuccess() {
+    val directory = Files.createTempDirectory("controller-mobile-managed-state")
+    val rom = directory.resolve("game.gb").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        directory = directory.resolve("saves"),
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    val selections =
+        LinkedBlockingQueue<Controller.SerialPeripheralSelectionChangedEvent>()
+    val completed = LinkedBlockingQueue<StateOperationCompletedEvent>()
+    val failed = LinkedBlockingQueue<StateOperationFailedEvent>()
+    val snapshotSaved = LinkedBlockingQueue<Controller.SnapshotSavedEvent>()
+    val snapshotRestored = LinkedBlockingQueue<Controller.SnapshotRestoredEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<StateUxSessionEvent>(sessions::add)
+    eventBus.register<Controller.SerialPeripheralSelectionChangedEvent>(selections::add)
+    eventBus.register<StateOperationCompletedEvent>(completed::add)
+    eventBus.register<StateOperationFailedEvent>(failed::add)
+    eventBus.register<Controller.SnapshotSavedEvent>(snapshotSaved::add)
+    eventBus.register<Controller.SnapshotRestoredEvent>(snapshotRestored::add)
+    eventBus.register<GbcFrameReadyEvent>(frames::add)
+    val mobileEndpoint = AtomicReference<MobileAdapterSerialEndpoint>()
+    val preparer =
+        SessionPreparer { emulatorProperties, event ->
+          val configuration =
+              Controller.createGameboyConfig(emulatorProperties, Rom(event.rom))
+                  .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+          val gameboy =
+              object : Gameboy(configuration) {
+                override fun init(
+                    bus: EventBus,
+                    serialEndpoint: SerialEndpoint,
+                    infraredEndpoint: InfraredEndpoint,
+                    console: Console?,
+                ) {
+                  if (serialEndpoint is MobileAdapterSerialEndpoint) {
+                    mobileEndpoint.set(serialEndpoint)
+                  }
+                  super.init(bus, serialEndpoint, infraredEndpoint, console)
+                }
+              }
+          PreparedSession.Ready(configuration, gameboy)
+        }
+    val stateExecutor = ManualExecutorService()
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            preparer,
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory.DEFAULT,
+            StateOperationWorkerFactory { bus ->
+              StateOperationWorker(bus, executor = stateExecutor)
+            },
+            mobileAdapterConfigurationProvider =
+                Controller.MobileAdapterConfigurationProvider {
+                  Controller.MobileAdapterConfiguration.syntheticOffline()
+                },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(
+          Controller.SetSerialPeripheralEvent(
+              Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      assertEquals(
+          Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          selections.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.selection,
+      )
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val stateSession = assertNotNull(sessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val endpoint = assertNotNull(mobileEndpoint.get())
+
+      eventBus.post(Controller.PauseEmulationEvent())
+      Thread.sleep(100)
+      frames.clear()
+      assertNull(frames.poll(200, TimeUnit.MILLISECONDS))
+
+      val begin = mobilePacket(0x10, "NINTENDO".encodeToByteArray())
+      feedMobile(endpoint, begin.copyOf(6))
+      val slot = StateRef.Slot(3)
+      eventBus.post(StateSaveRequestEvent(1, stateSession.sessionId, slot, null, null))
+      stateExecutor.runNext()
+      assertEquals(
+          StateOperation.SAVE,
+          assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).operation,
+      )
+
+      val repository =
+          StateRepository(StateStorageLayout(assertNotNull(stateSession.gameDirectory)))
+      val savedSession = repository.read(slot).state
+      val sessionRoot = savedSession.root as SessionStateRoot
+      val endpointRecord = sessionRoot.session.serialState as RecordState
+      val engineRecord = endpointRecord.fields.single { it.name == "engineState" }.value as RecordState
+      assertEquals(
+          6,
+          (engineRecord.fields.single { it.name == "packetCount" }.value
+                  as eu.rekawek.coffeegb.controller.state.Int32State)
+              .value,
+      )
+
+      endpoint.disconnect()
+      eventBus.post(StateLoadRefRequestEvent(2, stateSession.sessionId, slot))
+      stateExecutor.runNext()
+      assertEquals(
+          StateOperation.LOAD,
+          assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).operation,
+      )
+      assertEquals(6, endpoint.snapshot().retainedBytes())
+      feedMobile(endpoint, begin.copyOfRange(6, begin.size))
+      assertEquals(MobileAdapterEngine.Outcome.SESSION_STARTED, endpoint.snapshot().outcome())
+
+      val releasedMachine =
+          eu.rekawek.coffeegb.controller.state.StateFile(
+              savedSession.identities,
+              MachineStateRoot(sessionRoot.session.machine),
+              savedSession.diagnostics,
+              savedSession.formatVersion,
+          )
+      val incompatibleIdentity = releasedMachine.identities.single().identity!!
+      val incompatibleRomHash = incompatibleIdentity.primaryRom.copyBytes()
+      incompatibleRomHash[0] = (incompatibleRomHash[0].toInt() xor 0xff).toByte()
+      val incompatibleMachine =
+          eu.rekawek.coffeegb.controller.state.StateFile(
+              listOf(
+                  releasedMachine.identities.single().copy(
+                      identity =
+                          incompatibleIdentity.copy(
+                              primaryRom =
+                                  eu.rekawek.coffeegb.controller.state.RomIdentity(
+                                      incompatibleRomHash)))),
+              releasedMachine.root,
+              releasedMachine.diagnostics,
+              releasedMachine.formatVersion,
+          )
+      repository.save(
+          slot,
+          StateCodec.encode(incompatibleMachine),
+          StateSaveMetadata(savedAt = Instant.EPOCH),
+      )
+      val beforeInvalid = StateGraph.capture(endpoint.captureState())
+      eventBus.post(StateLoadRefRequestEvent(3, stateSession.sessionId, slot))
+      stateExecutor.runNext()
+      assertEquals(
+          StateOperation.LOAD,
+          assertNotNull(failed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).operation,
+      )
+      assertEquals(beforeInvalid, StateGraph.capture(endpoint.captureState()))
+
+      repository.save(
+          slot,
+          StateCodec.encode(releasedMachine),
+          StateSaveMetadata(savedAt = Instant.EPOCH.plusSeconds(1)),
+      )
+      eventBus.post(StateLoadRefRequestEvent(4, stateSession.sessionId, slot))
+      stateExecutor.runNext()
+      assertEquals(
+          StateOperation.LOAD,
+          assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).operation,
+      )
+      assertEquals(MobileAdapterEngine.Outcome.CANCELLED, endpoint.snapshot().outcome())
+      assertEquals(0, endpoint.snapshot().retainedBytes())
+      assertTrue(endpoint.snapshot().responsePacket().isEmpty())
+
+      // Public direct snapshot events now own the same session timeline.
+      feedMobile(endpoint, begin.copyOf(6))
+      eventBus.post(Controller.SaveSnapshotEvent(4))
+      assertEquals(
+          4,
+          assertNotNull(snapshotSaved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot,
+      )
+      val directSidecar = directory.resolve("game.sn4")
+      assertEquals(
+          eu.rekawek.coffeegb.controller.state.StateRootKind.SESSION,
+          StateCodec.inspect(Files.readAllBytes(directSidecar)).rootKind,
+      )
+      endpoint.disconnect()
+      eventBus.post(Controller.RestoreSnapshotEvent(4))
+      assertEquals(
+          4,
+          assertNotNull(snapshotRestored.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot,
+      )
+      assertEquals(6, endpoint.snapshot().retainedBytes())
+
+      // The managed quick-load fallback reads a portable sidecar off-thread, then applies its
+      // session root at the controller frame boundary.
+      endpoint.disconnect()
+      feedMobile(endpoint, begin.copyOf(2))
+      eventBus.post(Controller.SaveSnapshotEvent(5))
+      assertEquals(
+          5,
+          assertNotNull(snapshotSaved.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).slot,
+      )
+      endpoint.disconnect()
+      eventBus.post(StateLoadRefRequestEvent(5, stateSession.sessionId, StateRef.Slot(5)))
+      stateExecutor.runNext()
+      assertEquals(
+          StateOperation.LOAD,
+          assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).operation,
+      )
+      assertEquals(2, endpoint.snapshot().retainedBytes())
+
+      // Released machine-root sidecars remain readable, but deliberately reset Mobile because
+      // they cannot describe an endpoint continuation.
+      Files.write(directory.resolve("game.sn6"), StateCodec.encode(releasedMachine))
+      eventBus.post(StateLoadRefRequestEvent(6, stateSession.sessionId, StateRef.Slot(6)))
+      stateExecutor.runNext()
+      assertEquals(
+          StateOperation.LOAD,
+          assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).operation,
+      )
+      assertEquals(MobileAdapterEngine.Outcome.CANCELLED, endpoint.snapshot().outcome())
+      assertEquals(0, endpoint.snapshot().retainedBytes())
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
 
   @Test
   fun closeAutosaveWaiverRequiresTheExactCompletedFailure() {
@@ -842,6 +1094,31 @@ class BasicControllerStateUxTest {
       persistence: AtomicFileWriter,
   ): StateWorkspace =
       StateWorkspace(paths) { layout -> StateRepository(layout, persistence) }
+
+  private fun feedMobile(endpoint: MobileAdapterSerialEndpoint, bytes: ByteArray) {
+    bytes.forEach { byte ->
+      endpoint.setSb(byte.toInt() and 0xff)
+      endpoint.startSending()
+      repeat(8) { endpoint.sendBit() }
+    }
+  }
+
+  private fun mobilePacket(command: Int, data: ByteArray): ByteArray {
+    val bytes = ByteArray(8 + data.size)
+    bytes[0] = 0x99.toByte()
+    bytes[1] = 0x66
+    bytes[2] = command.toByte()
+    bytes[4] = (data.size ushr 8).toByte()
+    bytes[5] = data.size.toByte()
+    data.copyInto(bytes, 6)
+    var checksum = 0
+    for (index in 2 until 6 + data.size) {
+      checksum = (checksum + (bytes[index].toInt() and 0xff)) and 0xffff
+    }
+    bytes[6 + data.size] = (checksum ushr 8).toByte()
+    bytes[7 + data.size] = checksum.toByte()
+    return bytes
+  }
 
   private fun deleteTree(path: Path) {
     if (!Files.exists(path)) return

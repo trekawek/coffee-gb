@@ -107,6 +107,7 @@ internal object StateSemantics {
     fun boolean(name: String): Boolean = value(name) as Boolean
     fun string(name: String): String = value(name) as String
     fun enumName(name: String): String = (value(name) as Enum<*>).name
+    fun byteArray(name: String): ByteArray = value(name) as ByteArray
     fun intArray(name: String): IntArray = value(name) as IntArray
     fun longArray(name: String): LongArray = value(name) as LongArray
     fun objectArray(name: String): Array<*> = value(name) as Array<*>
@@ -760,6 +761,18 @@ internal object StateSemantics {
             it.require(it.intArray("pendingBits").all { bit -> bit in -1..1 }, "has an invalid pending bit")
             it.require(it.intArray("consecutiveFf").all { count -> count >= 0 }, "has a negative FF counter")
           })
+      put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState",
+          clockConstrained(
+              "Mobile Adapter parser, configuration, output, outcome, slots, and emulated idle timer are validated together.",
+              ::validateMobileAdapterEngine,
+              ::validateMobileAdapterClock,
+          ))
+      put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState",
+          constrained("Mobile Adapter endpoint bit/byte latches and nested pure engine state are bounded.") {
+            it.recordType("engineState", MOBILE_ADAPTER_ENGINE_STATE)
+            it.range("sb", 0, 0xff)
+            it.range("sendBitIndex", 0, 7)
+          })
 
       put("eu.rekawek.coffeegb.core.genie.Genie\$GameGeniePatchState",
           constrained("Game Genie addresses/data are fixed-width; -1 is the no-old-value sentinel.") {
@@ -796,6 +809,256 @@ internal object StateSemantics {
       }
     }
   }
+
+  private fun validateMobileAdapterEngine(fields: RecordFields) {
+    fields.oneOf("phaseId", MOBILE_PHASE_SLEEP, MOBILE_PHASE_SESSION)
+    fields.range("outcomeId", MOBILE_OUTCOME_NEED_MORE, MOBILE_OUTCOME_PENDING_LIMIT)
+    fields.require(
+        fields.int("outcomeId") != MOBILE_OUTCOME_TIME_REGRESSION,
+        "contains a transient time-regression outcome",
+    )
+    fields.range("errorId", MOBILE_ERROR_NONE, MOBILE_ERROR_PENDING_LIMIT)
+    fields.range("deviceId", 0, 0x7f)
+
+    val packet = fields.byteArray("packetBuffer")
+    fields.require(
+        packet.size == MOBILE_PACKET_BYTES,
+        "must own exactly $MOBILE_PACKET_BYTES parser bytes",
+    )
+    val packetCount = fields.int("packetCount")
+    fields.require(packetCount in 0..packet.size, "has invalid packetCount=$packetCount")
+    val expectedPacketBytes = fields.int("expectedPacketBytes")
+    if (packetCount < MOBILE_HEADER_BYTES) {
+      fields.require(
+          expectedPacketBytes == -1,
+          "has an expected packet size before the complete header",
+      )
+    } else {
+      val declared = unsigned16(packet, 4)
+      val expected = MOBILE_PACKET_OVERHEAD_BYTES + declared
+      fields.require(declared <= MOBILE_PACKET_DATA_BYTES, "has an oversized retained packet")
+      fields.require(expectedPacketBytes == expected, "has an inconsistent retained packet size")
+      fields.require(packetCount < expected, "retains a complete packet instead of committing it")
+    }
+    if (packetCount >= 2) {
+      fields.require(
+          (packet[0].toInt() and 0xff) == 0x99 && (packet[1].toInt() and 0xff) == 0x66,
+          "has invalid retained packet magic",
+      )
+    }
+    if (packetCount >= 4) {
+      fields.require(packet[3].toInt() == 0, "has a non-zero retained reserved byte")
+    }
+    fields.require(
+        (packetCount until packet.size).all { packet[it].toInt() == 0 },
+        "has stale bytes beyond the retained parser prefix",
+    )
+
+    val configuration = fields.byteArray("configuration")
+    fields.require(
+        configuration.size == MOBILE_CONFIGURATION_BYTES,
+        "must own exactly $MOBILE_CONFIGURATION_BYTES configuration bytes",
+    )
+    val response = fields.byteArray("responsePacket")
+    fields.require(response.size <= MOBILE_PACKET_BYTES, "has an oversized response packet")
+    if (response.isNotEmpty()) validateMobileOutputPacket(fields, response)
+    val acknowledgement = fields.byteArray("acknowledgement")
+    fields.require(
+        acknowledgement.isEmpty() || acknowledgement.size == 2,
+        "has an acknowledgement other than zero or two bytes",
+    )
+    if (acknowledgement.size == 2) {
+      fields.require(
+          (acknowledgement[0].toInt() and 0xff) == (fields.int("deviceId") or 0x80),
+          "has an acknowledgement for another device ID",
+      )
+    }
+    fields.nonNegativeLong("idlePhaseUnits")
+    if (!fields.boolean("serialByteObserved")) {
+      fields.require(fields.long("idlePhaseUnits") == 0L, "has idle time without serial input")
+    }
+    fields.require(
+        packetCount == 0 || fields.boolean("serialByteObserved"),
+        "retains parser bytes without serial input ownership",
+    )
+    fields.range("pendingPacketSlots", 0, MOBILE_PENDING_PACKET_SLOTS)
+    validateMobileOutcome(fields, response, acknowledgement)
+  }
+
+  private fun validateMobileAdapterClock(fields: RecordFields, clock: ClockSpec) {
+    val boundary = Math.multiplyExact(3L, clock.secondPhaseLimit())
+    fields.range("idlePhaseUnits", 0L, boundary)
+    fields.require(
+        fields.long("idlePhaseUnits") % clock.secondPhaseUnitsPerTick() == 0L,
+        "has an idle timer not aligned to a master tick",
+    )
+    if (fields.int("outcomeId") == MOBILE_OUTCOME_IDLE_BOUNDARY_WAIT) {
+      fields.require(
+          fields.int("packetCount") > 0 && fields.long("idlePhaseUnits") == boundary,
+          "has an inconsistent exact idle-boundary result",
+      )
+    }
+  }
+
+  private fun validateMobileOutcome(
+      fields: RecordFields,
+      response: ByteArray,
+      acknowledgement: ByteArray,
+  ) {
+    val outcome = fields.int("outcomeId")
+    val expectedError =
+        when (outcome) {
+          MOBILE_OUTCOME_CHECKSUM_ERROR -> MOBILE_ERROR_CHECKSUM
+          MOBILE_OUTCOME_UNSUPPORTED_COMMAND -> MOBILE_ERROR_UNSUPPORTED_COMMAND
+          MOBILE_OUTCOME_MAGIC_ERROR -> MOBILE_ERROR_INVALID_MAGIC
+          MOBILE_OUTCOME_RESERVED_ERROR -> MOBILE_ERROR_RESERVED_VALUE
+          MOBILE_OUTCOME_LENGTH_LIMIT -> MOBILE_ERROR_LENGTH_LIMIT
+          MOBILE_OUTCOME_BUFFER_LIMIT -> MOBILE_ERROR_BUFFER_LIMIT
+          MOBILE_OUTCOME_PENDING_LIMIT -> MOBILE_ERROR_PENDING_LIMIT
+          else -> MOBILE_ERROR_NONE
+        }
+    fields.require(fields.int("errorId") == expectedError, "has inconsistent outcome/error IDs")
+
+    val expectedAck =
+        when (outcome) {
+          MOBILE_OUTCOME_SESSION_STARTED -> 0x90
+          MOBILE_OUTCOME_SESSION_ENDED -> 0x91
+          MOBILE_OUTCOME_SESSION_RESET -> 0x96
+          MOBILE_OUTCOME_CONFIG_READ, MOBILE_OUTCOME_CONFIG_READ_BOUNDARY -> 0x99
+          MOBILE_OUTCOME_CHECKSUM_ERROR -> 0xf1
+          MOBILE_OUTCOME_UNSUPPORTED_COMMAND -> 0xf0
+          else -> -1
+        }
+    fields.require(
+        (expectedAck == -1) == acknowledgement.isEmpty(),
+        "has inconsistent outcome/acknowledgement presence",
+    )
+    if (expectedAck != -1) {
+      fields.require(
+          (acknowledgement[1].toInt() and 0xff) == expectedAck,
+          "has an acknowledgement inconsistent with its outcome",
+      )
+    }
+
+    val expectsResponse =
+        outcome == MOBILE_OUTCOME_SESSION_STARTED ||
+            outcome == MOBILE_OUTCOME_SESSION_ENDED ||
+            outcome == MOBILE_OUTCOME_SESSION_RESET ||
+            outcome == MOBILE_OUTCOME_CONFIG_READ ||
+            outcome == MOBILE_OUTCOME_CONFIG_READ_BOUNDARY
+    fields.require(
+        expectsResponse == response.isNotEmpty(),
+        "has inconsistent outcome/response presence",
+    )
+    if (expectsResponse) {
+      fields.require(
+          (response[2].toInt() and 0xff) == expectedAck,
+          "has a response command inconsistent with its outcome",
+      )
+      val data = response.copyOfRange(6, response.size - 2)
+      when (outcome) {
+        MOBILE_OUTCOME_SESSION_STARTED ->
+            fields.require(
+                data.contentEquals(MOBILE_BEGIN_SESSION_DATA),
+                "has an invalid begin-session response",
+            )
+        MOBILE_OUTCOME_SESSION_ENDED, MOBILE_OUTCOME_SESSION_RESET ->
+            fields.require(data.isEmpty(), "has data in an empty response")
+        MOBILE_OUTCOME_CONFIG_READ, MOBILE_OUTCOME_CONFIG_READ_BOUNDARY ->
+            validateMobileConfigurationResponse(fields, outcome, data)
+      }
+    }
+
+    val phase = fields.int("phaseId")
+    if (outcome == MOBILE_OUTCOME_SESSION_STARTED || outcome == MOBILE_OUTCOME_SESSION_RESET) {
+      fields.require(phase == MOBILE_PHASE_SESSION, "has a session result while asleep")
+    }
+    if (outcome == MOBILE_OUTCOME_SESSION_ENDED ||
+        outcome == MOBILE_OUTCOME_IDLE_TIMEOUT_RESET ||
+        outcome == MOBILE_OUTCOME_CANCELLED) {
+      fields.require(phase == MOBILE_PHASE_SLEEP, "has a terminal result while in session")
+    }
+    if (outcome == MOBILE_OUTCOME_IDLE_TIMEOUT_RESET || outcome == MOBILE_OUTCOME_CANCELLED) {
+      fields.require(!fields.boolean("serialByteObserved"), "cleanup retained serial idle ownership")
+    }
+    if (phase == MOBILE_PHASE_SESSION) {
+      fields.require(
+          fields.boolean("serialByteObserved"),
+          "has an active session without serial input ownership",
+      )
+    }
+    val commandDerivedOutcome =
+        outcome != MOBILE_OUTCOME_NEED_MORE &&
+            outcome != MOBILE_OUTCOME_PENDING_LIMIT &&
+            outcome != MOBILE_OUTCOME_IDLE_TIMEOUT_RESET &&
+            outcome != MOBILE_OUTCOME_CANCELLED
+    if (commandDerivedOutcome) {
+      fields.require(
+          fields.boolean("serialByteObserved"),
+          "has a command-derived result without serial input ownership",
+      )
+    }
+    if (outcome == MOBILE_OUTCOME_PENDING_LIMIT) {
+      fields.require(
+          fields.int("pendingPacketSlots") == MOBILE_PENDING_PACKET_SLOTS,
+          "has pending-limit outcome without both slots occupied",
+      )
+    }
+    if (outcome != MOBILE_OUTCOME_NEED_MORE &&
+        outcome != MOBILE_OUTCOME_IDLE_BOUNDARY_WAIT &&
+        outcome != MOBILE_OUTCOME_PENDING_LIMIT) {
+      fields.require(fields.int("packetCount") == 0, "completed result retained parser bytes")
+    }
+  }
+
+  private fun validateMobileOutputPacket(fields: RecordFields, response: ByteArray) {
+    fields.require(
+        response.size >= MOBILE_PACKET_OVERHEAD_BYTES &&
+            (response[0].toInt() and 0xff) == 0x99 &&
+            (response[1].toInt() and 0xff) == 0x66 &&
+            response[3].toInt() == 0,
+        "has invalid response framing",
+    )
+    val length = unsigned16(response, 4)
+    fields.require(
+        length <= MOBILE_PACKET_DATA_BYTES &&
+            response.size == MOBILE_PACKET_OVERHEAD_BYTES + length,
+        "has invalid response length",
+    )
+    var checksum = 0
+    for (index in 2 until 6 + length) {
+      checksum = (checksum + (response[index].toInt() and 0xff)) and 0xffff
+    }
+    fields.require(unsigned16(response, 6 + length) == checksum, "has invalid response checksum")
+  }
+
+  private fun validateMobileConfigurationResponse(
+      fields: RecordFields,
+      outcome: Int,
+      data: ByteArray,
+  ) {
+    fields.require(
+        data.size in 1..MOBILE_CONFIGURATION_OPERATION_BYTES + 1,
+        "has an invalid configuration response length",
+    )
+    val offset = data[0].toInt() and 0xff
+    val requested = data.size - 1
+    fields.require(
+        offset + requested <= MOBILE_CONFIGURATION_BYTES,
+        "has an out-of-bounds configuration response",
+    )
+    fields.require(
+        (outcome == MOBILE_OUTCOME_CONFIG_READ_BOUNDARY) ==
+            (requested == MOBILE_CONFIGURATION_OPERATION_BYTES),
+        "has an inconsistent configuration boundary outcome",
+    )
+    // The response is an immutable snapshot of configuration bytes at command completion. A
+    // controller may replace the live configuration before the packet is shifted out, so only
+    // framing/range semantics can be validated against the current engine state here.
+  }
+
+  private fun unsigned16(bytes: ByteArray, offset: Int): Int =
+      ((bytes[offset].toInt() and 0xff) shl 8) or (bytes[offset + 1].toInt() and 0xff)
 
   private fun checkDelayLine(fields: RecordFields) {
     val entries = fields.value("delayEntry") as IntArray?
@@ -956,6 +1219,40 @@ internal object StateSemantics {
   private const val SGB_DISPLAY_STATE_ALLOWED_BITS = 0x1ff
   private const val FULL_CHANGER_SCHEDULE_SIZE = 36
   private const val BARCODE_FRAME_SIZE = 30
+  private const val MOBILE_PACKET_DATA_BYTES = 254
+  private const val MOBILE_PACKET_BYTES = 262
+  private const val MOBILE_HEADER_BYTES = 6
+  private const val MOBILE_PACKET_OVERHEAD_BYTES = 8
+  private const val MOBILE_CONFIGURATION_BYTES = 256
+  private const val MOBILE_CONFIGURATION_OPERATION_BYTES = 128
+  private const val MOBILE_PENDING_PACKET_SLOTS = 2
+  private const val MOBILE_PHASE_SLEEP = 1
+  private const val MOBILE_PHASE_SESSION = 2
+  private const val MOBILE_OUTCOME_NEED_MORE = 1
+  private const val MOBILE_OUTCOME_SESSION_STARTED = 2
+  private const val MOBILE_OUTCOME_SESSION_ENDED = 3
+  private const val MOBILE_OUTCOME_SESSION_RESET = 4
+  private const val MOBILE_OUTCOME_CHECKSUM_ERROR = 5
+  private const val MOBILE_OUTCOME_IDLE_TIMEOUT_RESET = 6
+  private const val MOBILE_OUTCOME_IDLE_BOUNDARY_WAIT = 7
+  private const val MOBILE_OUTCOME_CONFIG_READ = 8
+  private const val MOBILE_OUTCOME_CONFIG_READ_BOUNDARY = 9
+  private const val MOBILE_OUTCOME_UNSUPPORTED_COMMAND = 10
+  private const val MOBILE_OUTCOME_MAGIC_ERROR = 11
+  private const val MOBILE_OUTCOME_RESERVED_ERROR = 12
+  private const val MOBILE_OUTCOME_LENGTH_LIMIT = 13
+  private const val MOBILE_OUTCOME_BUFFER_LIMIT = 14
+  private const val MOBILE_OUTCOME_TIME_REGRESSION = 15
+  private const val MOBILE_OUTCOME_CANCELLED = 16
+  private const val MOBILE_OUTCOME_PENDING_LIMIT = 17
+  private const val MOBILE_ERROR_NONE = 0
+  private const val MOBILE_ERROR_INVALID_MAGIC = 1
+  private const val MOBILE_ERROR_RESERVED_VALUE = 2
+  private const val MOBILE_ERROR_LENGTH_LIMIT = 3
+  private const val MOBILE_ERROR_CHECKSUM = 4
+  private const val MOBILE_ERROR_UNSUPPORTED_COMMAND = 5
+  private const val MOBILE_ERROR_BUFFER_LIMIT = 6
+  private const val MOBILE_ERROR_PENDING_LIMIT = 8
   private const val CPU_VISIBLE_PPU_REGISTERS = 12
   private const val DISPLAY_STATE = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState"
   private const val PIXEL_TRANSFER_STATE =
@@ -976,6 +1273,10 @@ internal object StateSemantics {
   private const val MBC5_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
   private const val MBC7_EEPROM_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
+  private const val MOBILE_ADAPTER_ENGINE_STATE =
+      "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState"
+  private val MOBILE_BEGIN_SESSION_DATA =
+      byteArrayOf(0x4e, 0x49, 0x4e, 0x54, 0x45, 0x4e, 0x44, 0x4f)
   private val REGISTERED_PATCH_TYPES =
       setOf(
           "eu.rekawek.coffeegb.core.genie.Genie\$GameGeniePatchState",

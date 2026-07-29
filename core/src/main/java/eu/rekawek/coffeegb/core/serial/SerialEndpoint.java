@@ -4,6 +4,15 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
+    /**
+     * Releases deterministic ownership held by this endpoint before it is detached or discarded.
+     *
+     * <p>Most synchronous peripherals own no external lifecycle and therefore need no action. An
+     * endpoint with queued protocol work must override this method and make repeated calls safe.
+     */
+    default void disconnect() {
+    }
+
     /** Advances external-device wall-clock state by one Game Boy master tick. */
     default void tick() {
     }

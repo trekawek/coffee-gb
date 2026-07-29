@@ -13,6 +13,8 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.Battery
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
 import eu.rekawek.coffeegb.core.memory.cart.type.*
 import eu.rekawek.coffeegb.core.serial.*
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
+import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import kotlin.test.assertEquals
@@ -257,6 +259,17 @@ class StateCoverageMatrixTest {
               setExternalTransfer(true)
               startSending()
               repeat(140) { tick() }
+            },
+            peripheral(
+                "MobileAdapter",
+                MobileAdapterSerialEndpoint(ClockSpec.LEGACY, 0x08, ByteArray(256)),
+            ) {
+              setSb(0x99)
+              startSending()
+              repeat(8) { sendBit() }
+              setSb(0x66)
+              startSending()
+              repeat(8) { sendBit() }
             },
         )
 
@@ -798,6 +811,7 @@ class StateCoverageMatrixTest {
             "GpsReceiver",
             "BarcodeBoy",
             "FourPlayerAdapter",
+            "MobileAdapter",
         )
   }
 }

@@ -129,6 +129,52 @@ class SwingEmulatorLifecycleTest {
   }
 
   @Test
+  fun `duplicate disconnect callback cannot replace an already standalone controller`() {
+    val gate = ControllerLifecycleGate()
+    val linked = AtomicBoolean(true)
+    val replacements = AtomicInteger()
+    val returnToStandalone = {
+      gate.transitionIfActiveWhen(condition = linked::get) {
+        replacements.incrementAndGet()
+        linked.set(false)
+      }
+    }
+
+    assertTrue(returnToStandalone())
+    assertTrue(!returnToStandalone())
+    assertEquals(1, replacements.get())
+  }
+
+  @Test
+  fun `racing return callbacks linearize to one standalone replacement`() {
+    val gate = ControllerLifecycleGate()
+    val linked = AtomicBoolean(true)
+    val replacements = AtomicInteger()
+    val ready = CountDownLatch(2)
+    val start = CountDownLatch(1)
+    val workers =
+        List(2) {
+          Thread {
+                ready.countDown()
+                start.await()
+                gate.transitionIfActiveWhen(condition = linked::get) {
+                  replacements.incrementAndGet()
+                  linked.set(false)
+                }
+              }
+              .apply { isDaemon = true }
+        }
+
+    workers.forEach(Thread::start)
+    assertTrue(ready.await(5, TimeUnit.SECONDS))
+    start.countDown()
+    workers.forEach { it.join(5_000) }
+
+    assertEquals(1, replacements.get())
+    assertTrue(workers.none(Thread::isAlive))
+  }
+
+  @Test
   fun `failed controller ownership release blocks transitions but permits stop retry`() {
     val gate = ControllerLifecycleGate()
     val releaseCalls = AtomicInteger()

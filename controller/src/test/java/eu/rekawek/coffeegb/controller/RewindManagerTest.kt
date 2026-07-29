@@ -4,6 +4,12 @@ import eu.rekawek.coffeegb.controller.state.MachineSnapshot
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.hardware.ClockSpec
+import eu.rekawek.coffeegb.core.serial.mobile.DeterministicMobileAdapterBackend
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterBackendPort
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -11,6 +17,51 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class RewindManagerTest {
+
+  @Test
+  fun sessionRewindRestoresPartialMobileTransferCancelsBackendAndAccountsForSerialState() {
+    val backend = TrackingBackend()
+    val endpoint =
+        MobileAdapterSerialEndpoint(
+            ClockSpec.LEGACY,
+            0x08,
+            ByteArray(MobileAdapterEngine.CONFIGURATION_BYTES),
+            backend,
+        )
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      val begin = mobilePacket(0x10, "NINTENDO".encodeToByteArray())
+      feedMobile(endpoint, begin.copyOf(2))
+      endpoint.setSb(begin[2].toInt() and 0xff)
+      endpoint.startSending()
+      repeat(3) { endpoint.sendBit() }
+      session.gameboy.addressSpace.setByte(TEST_ADDRESS, 0x31)
+
+      val manager = RewindManager()
+      manager.record(session)
+      val machineBytes =
+          MachineSnapshot.retainedStats(manager.snapshotsForTesting()).modeledRetainedBytes
+      assertTrue(manager.retainedBytesForTesting() > machineBytes)
+
+      repeat(5) { endpoint.sendBit() }
+      feedMobile(endpoint, begin.copyOfRange(3, begin.size))
+      val expected = endpoint.snapshot()
+      session.gameboy.addressSpace.setByte(TEST_ADDRESS, 0x72)
+      assertEquals(
+          MobileAdapterBackendPort.OfferResult.ACCEPTED,
+          backend.offer(
+              backend.generation(),
+              MobileAdapterBackendPort.BackendRequest(3, 0x42, byteArrayOf(1, 2, 3))),
+      )
+
+      assertTrue(manager.rewindOneStep(session))
+      assertEquals(0x31, session.gameboy.addressSpace.getByte(TEST_ADDRESS))
+      assertTrue(backend.cancellations >= 2)
+      assertEquals(0, backend.occupiedRequestSlots())
+      repeat(5) { endpoint.sendBit() }
+      feedMobile(endpoint, begin.copyOfRange(3, begin.size))
+      assertMobileResultEquals(expected, endpoint.snapshot())
+    }
+  }
 
   @Test
   fun capacityCadenceEvictionRewindAndClearRemainExact() {
@@ -162,6 +213,57 @@ class RewindManagerTest {
               GameboyType.CGB,
           )
           .setSupportBatterySave(false)
+
+  private fun feedMobile(endpoint: MobileAdapterSerialEndpoint, bytes: ByteArray) {
+    bytes.forEach { byte ->
+      endpoint.setSb(byte.toInt() and 0xff)
+      endpoint.startSending()
+      repeat(8) { endpoint.sendBit() }
+    }
+  }
+
+  private fun mobilePacket(command: Int, data: ByteArray): ByteArray {
+    val bytes = ByteArray(8 + data.size)
+    bytes[0] = 0x99.toByte()
+    bytes[1] = 0x66
+    bytes[2] = command.toByte()
+    bytes[4] = (data.size ushr 8).toByte()
+    bytes[5] = data.size.toByte()
+    data.copyInto(bytes, 6)
+    var checksum = 0
+    for (index in 2 until 6 + data.size) {
+      checksum = (checksum + (bytes[index].toInt() and 0xff)) and 0xffff
+    }
+    bytes[6 + data.size] = (checksum ushr 8).toByte()
+    bytes[7 + data.size] = checksum.toByte()
+    return bytes
+  }
+
+  private fun assertMobileResultEquals(
+      expected: MobileAdapterEngine.EngineResult,
+      actual: MobileAdapterEngine.EngineResult,
+  ) {
+    assertEquals(expected.phase(), actual.phase())
+    assertEquals(expected.outcome(), actual.outcome())
+    assertEquals(expected.error(), actual.error())
+    assertContentEquals(expected.responsePacket(), actual.responsePacket())
+    assertContentEquals(expected.acknowledgement(), actual.acknowledgement())
+    assertEquals(expected.retainedBytes(), actual.retainedBytes())
+    assertEquals(expected.pendingPacketSlots(), actual.pendingPacketSlots())
+  }
+
+  private class TrackingBackend(
+      private val delegate: DeterministicMobileAdapterBackend =
+          DeterministicMobileAdapterBackend(),
+  ) : MobileAdapterBackendPort by delegate {
+    var cancellations = 0
+      private set
+
+    override fun cancelAll() {
+      cancellations++
+      delegate.cancelAll()
+    }
+  }
 
   companion object {
     /** Exact production-cadence primitive-array baseline measured on master 195d9172. */

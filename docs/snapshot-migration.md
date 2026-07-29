@@ -5,12 +5,13 @@ events. Their contents now have an explicit format boundary.
 
 ## Production format
 
-Every new save is a portable StateFile `MACHINE` root encoded with deterministic raw DEFLATE.
-DMG/CGB/CGB0 use the released v1 identity. `sgb`, `sgb2`, and `mgb` use the explicit canonical
-identity in StateFile v2 so SGB RTC phase and DMG-family model identity cannot be confused with v1.
-Historical v1 SGB files remain byte-exact on decode/re-encode and convert their phase, while fully
-detached, before target validation and mutation. Capture
-runs when `BasicController` dispatches the save event at its emulation-thread frame boundary.
+Every new controller save is a portable StateFile `SESSION` root encoded with deterministic raw
+DEFLATE, so the selected serial peripheral and its bounded deterministic state travel with the
+machine. DMG/CGB/CGB0 use the released v1 identity. `sgb`, `sgb2`, and `mgb` use the explicit
+canonical identity in StateFile v2 so SGB RTC phase and DMG-family model identity cannot be
+confused with v1. Historical v1 SGB files remain byte-exact on decode/re-encode and convert their
+phase, while fully detached, before target validation and mutation. Capture runs when
+`BasicController` dispatches the save event at its emulation-thread frame boundary.
 `SnapshotManager` owns the exact active `GameboyConfiguration`, so the identity section records the
 normalized primary-ROM SHA-256, optional Datel slot-ROM SHA-256, and complete stable hardware
 profile. ROM bytes and host services are not written.
@@ -18,10 +19,11 @@ profile. ROM bytes and host services are not written.
 The live/runtime state contracts and the exact native-serialization allowlist are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 
-Rewind states remain in memory as internal, structurally shared `MachineSnapshot` values;
-`ControllerState` and boot/reset handoff use explicit non-serializable component/detached state.
-Netplay protocol v8 independently uses StateFile v1, rejects SGB, SGB2, and MGB, and cannot
-invoke this local legacy importer; see
+Production rewind states remain in memory as internal `SessionSnapshot` values. Each combines a
+structurally shared `MachineSnapshot` with bounded serial-device state; `ControllerState` and
+boot/reset handoff use explicit non-serializable component/detached state. Netplay protocol v8
+independently uses StateFile v1, rejects SGB, SGB2, and MGB, and cannot invoke this local legacy
+importer; see
 [netplay-protocol-v8.md](netplay-protocol-v8.md).
 
 ## Bounded format detection
@@ -65,10 +67,10 @@ that absence is reported explicitly. ROM contents are never included.
 `LegacySnapshotMigrationPolicy.PRESERVE` is the production default. It restores an accepted local
 legacy file without changing its bytes.
 
-`REWRITE_AFTER_SUCCESS` is an explicit opt-in seam for callers and tests. It captures and writes a
-portable machine file only after the legacy read, validation, and live restore have all completed
-successfully. A failed read, preflight, or apply leaves both the running machine and original file
-bytes unchanged.
+`REWRITE_AFTER_SUCCESS` is an explicit opt-in seam for callers and tests. On the production session
+route, it captures and writes a portable SESSION-root file only after the legacy read, validation,
+and live restore have all completed successfully. A failed read, preflight, or apply leaves both
+the running machine and original file bytes unchanged.
 
 Ordinary saves and this optional rewrite share the core crash-recoverable persistence transaction.
 The complete portable bytes are forced in a unique same-directory temp and atomically replaced
