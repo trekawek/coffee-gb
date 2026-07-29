@@ -101,6 +101,18 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void earlyCgbLyReadCompatibilityOnlyAdvancesTheCpuBusLatch() {
+        Fixture fixture = new Fixture(true, false, true);
+        fixture.advanceTo(143, 447);
+
+        assertEquals(143, fixture.readLy());
+        fixture.tick();
+
+        assertEquals(143, fixture.gpu.getVisibleLy());
+        assertEquals(144, fixture.readLy());
+    }
+
+    @Test
     public void ordinaryHaltWakeSamplesNextCgbVblankLyAcrossReadCycle() {
         Fixture fixture = new Fixture(true);
         fixture.stat.setByte(StatRegister.ADDRESS, 0x10);
@@ -2268,6 +2280,10 @@ public class StatRegisterTest {
         }
 
         private Fixture(boolean gbc, boolean doubleSpeed) {
+            this(gbc, doubleSpeed, false);
+        }
+
+        private Fixture(boolean gbc, boolean doubleSpeed, boolean earlyCgbLyReadEdge) {
             interrupts = new InterruptManager(gbc);
             stat = new StatRegister(interrupts);
             speedMode = doubleSpeed ? new SpeedMode(gbc) {
@@ -2284,7 +2300,9 @@ public class StatRegisterTest {
                     new VRamTransfer(NULL_EVENT_BUS),
                     stat,
                     gbc,
-                    speedMode);
+                    speedMode,
+                    false,
+                    earlyCgbLyReadEdge);
             stat.init(gpu);
         }
 

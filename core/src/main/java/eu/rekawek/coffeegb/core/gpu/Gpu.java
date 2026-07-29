@@ -43,6 +43,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private final eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode;
 
+    private final boolean earlyCgbLyReadEdge;
+
     private final ColorPalette bgPalette;
 
     private final ColorPalette oamPalette;
@@ -173,6 +175,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                StatRegister statRegister, boolean gbc,
                eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
                boolean mealybugDmgBlob) {
+        this(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode,
+                mealybugDmgBlob, false);
+    }
+
+    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer,
+               StatRegister statRegister, boolean gbc,
+               eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
+               boolean mealybugDmgBlob, boolean earlyCgbLyReadEdge) {
         this.statRegister = statRegister;
         Arrays.fill(cpuVisiblePpuRegisters, -1);
         this.display = display;
@@ -180,6 +190,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.lcdc = new Lcdc(mealybugDmgBlob);
         this.gbc = gbc;
         this.speedMode = speedMode;
+        this.earlyCgbLyReadEdge = earlyCgbLyReadEdge;
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -855,6 +866,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return line + 1;
         }
         int visibleLy = getVisibleLy();
+        if (earlyCgbLyReadEdge && gbc && !speedMode.isDmgCompat()
+                && speedMode.getSpeedMode() == 1 && line < 153 && ticksInLine >= 448) {
+            // Mighty Mix polls LY in a 32-dot loop while its VBlank handler spends
+            // two lines in OAM DMA. The original cart observes the next LY value in
+            // the final CPU read slot, preserving 144 across the interrupt. Keep the
+            // calibrated PPU/LYC edge at dot 452 and advance only this CPU-bus latch.
+            return line + 1;
+        }
         if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
                 && lcdEnableClockPhase && !lyReadLatchRephasedBySpeedSwitch
                 && line == 153 && ticksInLine < 4

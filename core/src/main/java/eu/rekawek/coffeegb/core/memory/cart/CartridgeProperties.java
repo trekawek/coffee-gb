@@ -63,6 +63,7 @@ public final class CartridgeProperties {
         CGB0_REVISION,
         MEALYBUG_DMG_BLOB,
         CODEBREAKER_RUMBLE,
+        EARLY_CGB_LY_READ_EDGE,
         PRESERVE_INVALID_HEADER_CHECKSUM
     }
 
@@ -129,6 +130,8 @@ public final class CartridgeProperties {
                     Mapper.SACHEN_MMC1, Feature.SCRAMBLED_SACHEN_HEADER),
             profile("raw Sachen MMC2", CartridgeProperties::isRawSachenMmc2,
                     Mapper.SACHEN_MMC2, Feature.SCRAMBLED_SACHEN_HEADER),
+            features("Mighty Mix VBlank LY polling", CartridgeProperties::isMightyMix31,
+                    Feature.EARLY_CGB_LY_READ_EDGE),
             features("Rocman X Gold option probe", CartridgeProperties::isRocmanXGold,
                     Feature.SACHEN_OPEN_BUS_BANKS),
             mapper("linear-header Sachen MMC2", CartridgeProperties::isLinearSachenMmc2,
@@ -430,6 +433,11 @@ public final class CartridgeProperties {
                 && info.byteAt(0x184) == 0xce
                 && info.byteAt(0x1c4) == 0xed
                 && info.byteAt(0x194) == 0x66;
+    }
+
+    private static boolean isMightyMix31(RomInfo info) {
+        // Exact No-Intro raw MMC2 dump attached to issue #171.
+        return info.data.length == 0x200000 && info.crc32() == 0x21524051;
     }
 
     private static boolean isLinearSachenMmc2(RomInfo info) {

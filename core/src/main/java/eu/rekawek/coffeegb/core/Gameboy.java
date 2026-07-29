@@ -212,7 +212,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         dma = new Dma(getAddressSpace(), oamRam, speedMode);
         statRegister = new StatRegister(interruptManager);
         gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode,
-                configuration.mealybugDmgBlob);
+                configuration.mealybugDmgBlob,
+                cartridgeProperties.has(CartridgeProperties.Feature.EARLY_CGB_LY_READ_EDGE));
         mmu.setGpu(gpu);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace(), speedMode);
