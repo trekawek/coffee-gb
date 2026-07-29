@@ -25,6 +25,7 @@ public final class CartridgeProperties {
         DUZ_MULTICART,
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
+        LI_CHENG,
         BBD,
         SINTAX,
         SACHEN_MMC1,
@@ -109,6 +110,8 @@ public final class CartridgeProperties {
                     Mapper.BHGOS_MULTICART),
             mapper("Makon/NT old type 2 multicart", CartridgeProperties::isMakonNtOld2,
                     Mapper.MAKON_NT_OLD_2),
+            mapper("Li Cheng unlicensed mapper", CartridgeProperties::isLiCheng,
+                    Mapper.LI_CHENG),
             mapper("BBD unlicensed mapper", CartridgeProperties::isBbd,
                     Mapper.BBD),
             mapper("Sintax unlicensed mapper", CartridgeProperties::isSintax,
@@ -357,6 +360,18 @@ public final class CartridgeProperties {
         return info.data.length > 0x80000
                 && "POKEBOM USA".equals(info.title())
                 && info.byteAt(0x0102) == 0xe0;
+    }
+
+    private static boolean isLiCheng(RomInfo info) {
+        int secondaryLogo = info.crc32(0x0184, 0x30);
+        boolean liChengLogo = secondaryLogo == 0xd2b57657
+                || secondaryLogo == 0x20d092e2;
+        boolean inconsistentHeader = info.rawType() == 0x01
+                || info.declaredRomBanks() != info.physicalRomBanks();
+        return (liChengLogo && inconsistentHeader)
+                // Yingxiong Tianxia / Pokemon Jade (Telefang bootleg) uses a normal
+                // secondary logo, so its header is the stable mapper fingerprint.
+                || info.crc32(0x0100, 0x50) == 0x3ef5afb2;
     }
 
     private static boolean isBbd(RomInfo info) {
@@ -723,7 +738,11 @@ public final class CartridgeProperties {
         }
 
         private int romBanks() {
-            int declaredBanks = switch (byteAt(0x0148)) {
+            return Math.max(declaredRomBanks(), physicalRomBanks());
+        }
+
+        private int declaredRomBanks() {
+            return switch (byteAt(0x0148)) {
                 case 0 -> 2;
                 case 1 -> 4;
                 case 2 -> 8;
@@ -738,8 +757,10 @@ public final class CartridgeProperties {
                 case 0x54 -> 96;
                 default -> 2;
             };
-            int physicalBanks = Math.max(2, (data.length + 0x3fff) / 0x4000);
-            return Math.max(declaredBanks, physicalBanks);
+        }
+
+        private int physicalRomBanks() {
+            return Math.max(2, (data.length + 0x3fff) / 0x4000);
         }
 
         private int crc32() {
