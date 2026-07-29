@@ -26,6 +26,7 @@ public final class CartridgeProperties {
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
         LI_CHENG,
+        VF001_ZOOK,
         BBD,
         SINTAX,
         SACHEN_MMC1,
@@ -115,6 +116,8 @@ public final class CartridgeProperties {
                     Mapper.MAKON_NT_OLD_2),
             mapper("Li Cheng unlicensed mapper", CartridgeProperties::isLiCheng,
                     Mapper.LI_CHENG),
+            mapper("Vast Fame VF001 Zook protection", CartridgeProperties::isVf001Zook,
+                    Mapper.VF001_ZOOK),
             mapper("BBD unlicensed mapper", CartridgeProperties::isBbd,
                     Mapper.BBD),
             mapper("Sintax unlicensed mapper", CartridgeProperties::isSintax,
@@ -383,6 +386,15 @@ public final class CartridgeProperties {
                 // Yingxiong Tianxia / Pokemon Jade (Telefang bootleg) uses a normal
                 // secondary logo, so its header is the stable mapper fingerprint.
                 || info.crc32(0x0100, 0x50) == 0x3ef5afb2;
+    }
+
+    private static boolean isVf001Zook(RomInfo info) {
+        int[] bankSelectThunk = {
+                0x21, 0x81, 0x70, 0x1a, 0x77, 0x13, 0x1a, 0x77, 0x13,
+                0x1a, 0x77, 0x13, 0x1a, 0x77, 0xfa, 0xff, 0x7f
+        };
+        return info.crc32(0x0184, 0x30) == 0x42b773b8
+                && matches(info.data, 0x3ef5, bankSelectThunk);
     }
 
     private static boolean isBbd(RomInfo info) {
