@@ -66,7 +66,8 @@ of a linked root carries its own explicit ID.
 ## Payload and compatibility
 
 Payload section schema 1 and the original 91 numeric record IDs are byte-for-byte unchanged; the
-Xploder mapper state is appended as ID 92 and the VF001 Zook mapper state as ID 93. In v2, the
+Xploder mapper state is appended as ID 92, the VF001 Zook mapper state as ID 93, and the VF001
+General mapper state as ID 94. In v2, the
 MBC3 `subSecondTicks` scalar is the explicit profile's numerator-domain phase:
 
 | Identity | Valid phase | Live increment per machine tick |
