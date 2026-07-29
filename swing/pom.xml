@@ -112,6 +112,7 @@
                     <includeTestScope>false</includeTestScope>
                     <includeLicenseText>false</includeLicenseText>
                     <skipAttach>true</skipAttach>
+                    <skipNotDeployed>false</skipNotDeployed>
                 </configuration>
                 <executions>
                     <execution>
