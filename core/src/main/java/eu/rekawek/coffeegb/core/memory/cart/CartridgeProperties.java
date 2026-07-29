@@ -45,6 +45,7 @@ public final class CartridgeProperties {
         BLANK_CGB_BOOT_TILE,
         CLEAR_BOOT_TILEMAP,
         CLEAR_DUNGEON_WARRIOR_RENDERER_COUNT,
+        CLEAR_DICTIONARY_JOYPAD_STATE,
         DATEL_CGB_HEADER,
         SCRAMBLED_SACHEN_HEADER,
         MBC1_MULTICART,
@@ -146,6 +147,9 @@ public final class CartridgeProperties {
             features("Dungeon Warrior prototype renderer state",
                     CartridgeProperties::isDungeonWarriorPrototype,
                     Feature.CLEAR_DUNGEON_WARRIOR_RENDERER_COUNT),
+            features("Yinghan Zidian joypad state",
+                    CartridgeProperties::isYinghanZidian,
+                    Feature.CLEAR_DICTIONARY_JOYPAD_STATE),
             features("FreeArt Intro V2", CartridgeProperties::isFreeArtIntroV2,
                     Feature.MBC1_RAM_ENABLED_AT_POWER_ON),
             features("Helitac V0.01 boot WRAM", CartridgeProperties::isHelitacV001,
@@ -558,6 +562,19 @@ public final class CartridgeProperties {
                 && info.byteAt(0x014f) == 0x86
                 && matches(info.data, 0x1be1, rendererRecordSetup)
                 && info.crc32() == 0x2910429c;
+    }
+
+    private static boolean isYinghanZidian(RomInfo info) {
+        return info.data.length == 0x100000
+                && info.hasNullTerminatedTitle("DICTIONARY")
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x1b
+                && info.byteAt(0x0148) == 0x05
+                && info.byteAt(0x0149) == 0x01
+                && info.byteAt(0x014c) == 0x01
+                && info.byteAt(0x014d) == 0x4f
+                && info.byteAt(0x014e) == 0xa9
+                && info.byteAt(0x014f) == 0x84;
     }
 
     private static boolean isHelitacV001(RomInfo info) {

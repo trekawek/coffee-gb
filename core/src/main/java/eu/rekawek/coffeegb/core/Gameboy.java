@@ -283,6 +283,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // seams. Keep the hardware-like WRAM pattern everywhere else.
             mmu.setByte(0xc0bc, 0);
         }
+        if (cartridgeProperties.has(
+                CartridgeProperties.Feature.CLEAR_DICTIONARY_JOYPAD_STATE)) {
+            // This title leaves its five-byte joypad edge/repeat state uninitialized at
+            // D8D0-D8D4. Hardware-like WRAM garbage can therefore look like a held Start
+            // button and skip the title screen. Clear only the private input state the ROM
+            // assumes starts at zero, retaining the power-on pattern everywhere else.
+            for (int address = 0xd8d0; address <= 0xd8d4; address++) {
+                mmu.setByte(address, 0);
+            }
+        }
         mmu.setBusListener(cartridge.getSachenMmc());
 
         cpu = new Cpu(new DmaCpuAddressSpace(getAddressSpace(), dma, gbc,
