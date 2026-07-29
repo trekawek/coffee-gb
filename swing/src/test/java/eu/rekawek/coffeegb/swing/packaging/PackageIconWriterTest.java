@@ -37,11 +37,11 @@ public class PackageIconWriterTest {
                 NativePackageMetadata.target(NativeTarget.WINDOWS_X86_64), icon);
         byte[] header = Files.readAllBytes(icon);
         assertTrue(header.length > 5_000);
-        assertArrayEquals(new byte[] {0, 0, 1, 0, 4, 0}, slice(header, 0, 6));
-        assertEquals(16, header[6] & 0xff);
-        assertEquals(32, header[22] & 0xff);
-        assertEquals(48, header[38] & 0xff);
-        assertEquals(0, header[54] & 0xff);
+        assertArrayEquals(new byte[] {0, 0, 1, 0, 7, 0}, slice(header, 0, 6));
+        int[] expectedSizes = {16, 24, 32, 48, 64, 128, 0};
+        for (int i = 0; i < expectedSizes.length; i++) {
+            assertEquals(expectedSizes[i], header[6 + i * 16] & 0xff);
+        }
     }
 
     @Test

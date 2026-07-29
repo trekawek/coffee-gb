@@ -2,30 +2,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img"
      aria-labelledby="title description">
   <title id="title">Coffee GB</title>
-  <desc id="description">A coffee-brown handheld game system with a green screen.</desc>
-  <defs>
-    <linearGradient id="case" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#b9783d"/>
-      <stop offset="1" stop-color="#6d351d"/>
-    </linearGradient>
-    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#d9ef9c"/>
-      <stop offset="1" stop-color="#86ad54"/>
-    </linearGradient>
-  </defs>
-  <rect x="24" y="24" width="464" height="464" rx="104" fill="#30241f"/>
-  <rect x="48" y="40" width="416" height="432" rx="82" fill="url(#case)"/>
-  <rect x="96" y="82" width="320" height="212" rx="34" fill="#272a2b"/>
-  <rect x="122" y="108" width="268" height="160" rx="18" fill="url(#screen)"/>
-  <path d="M226 176c22-40 78-42 98-3-30-10-43 29-75 27-16-1-27-10-23-24z"
-        fill="#4d6d32"/>
-  <path d="M252 195c25 5 34-29 70-20-20 40-74 45-95 8 7 6 15 10 25 12z"
-        fill="#304924"/>
-  <path d="M129 341h42v-42h42v42h42v42h-42v42h-42v-42h-42z" fill="#2d2928"/>
-  <circle cx="352" cy="348" r="30" fill="#5c1d27"/>
-  <circle cx="405" cy="397" r="30" fill="#5c1d27"/>
-  <rect x="273" y="417" width="64" height="14" rx="7" transform="rotate(-16 273 417)"
-        fill="#3d2d29"/>
-  <rect x="330" y="417" width="64" height="14" rx="7" transform="rotate(-16 330 417)"
-        fill="#3d2d29"/>
+  <desc id="description">
+    A warm coffee mug shaped like a pocket game system, with steam, a green screen,
+    a directional pad, and two action buttons.
+  </desc>
+
+  <!-- Transparent corners keep the mark neutral on desktop icon themes. -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="#211410"/>
+
+  <!-- The handle sits behind the console body so the silhouette reads as a mug. -->
+  <path fill="#e7c790" fill-rule="evenodd"
+        d="M360 205h35c47 0 83 37 83 84v41c0 47-36 84-83 84h-35V205zm35 44h-13v121h13c22 0 39-18 39-40v-41c0-22-17-40-39-40z"/>
+
+  <!-- Steam is deliberately chunky enough to survive 16 px rendering. -->
+  <path d="M219 127c-19-18 15-36-2-61" fill="none" stroke="#fff0d2"
+        stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M286 127c-19-18 15-36-2-61" fill="none" stroke="#fff0d2"
+        stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="78" y="140" width="330" height="305" rx="72" fill="#e7c790"/>
+  <rect x="128" y="160" width="230" height="28" rx="14" fill="#4b2a1b"/>
+  <rect x="122" y="205" width="242" height="110" rx="24" fill="#a8b86c"/>
+
+  <path d="M158 335h38v32h32v38h-32v32h-38v-32h-32v-38h32z"
+        fill="#4b2a1b"/>
+  <circle cx="315" cy="365" r="25" fill="#c45c3c"/>
+  <circle cx="362" cy="402" r="25" fill="#c45c3c"/>
 </svg>

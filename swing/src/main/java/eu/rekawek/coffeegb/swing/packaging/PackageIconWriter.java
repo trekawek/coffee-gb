@@ -1,10 +1,11 @@
 package eu.rekawek.coffeegb.swing.packaging;
 
 import javax.imageio.ImageIO;
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
-import java.awt.geom.AffineTransform;
+import java.awt.Stroke;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
@@ -38,7 +39,7 @@ final class PackageIconWriter {
     }
 
     private static void writeIco(Path output) throws IOException {
-        int[] sizes = {16, 32, 48, 256};
+        int[] sizes = {16, 24, 32, 48, 64, 128, 256};
         List<byte[]> images = new ArrayList<>();
         for (int size : sizes) {
             images.add(png(size));
@@ -101,7 +102,7 @@ final class PackageIconWriter {
             graphics.setRenderingHint(
                     RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
             graphics.scale(size / (double) CANVAS, size / (double) CANVAS);
-            draw(graphics);
+            draw(graphics, size <= 24);
         } finally {
             graphics.dispose();
         }
@@ -112,67 +113,84 @@ final class PackageIconWriter {
         return bytes.toByteArray();
     }
 
-    private static void draw(Graphics2D graphics) {
-        graphics.setColor(new Color(0x30, 0x24, 0x1f));
-        graphics.fill(new RoundRectangle2D.Double(24, 24, 464, 464, 104, 104));
+    private static void draw(Graphics2D graphics, boolean compact) {
+        Color espresso = new Color(0x21, 0x14, 0x10);
+        Color oat = new Color(0xe7, 0xc7, 0x90);
+        Color cream = new Color(0xff, 0xf0, 0xd2);
+        Color coffee = new Color(0x4b, 0x2a, 0x1b);
 
-        graphics.setColor(new Color(0x8d, 0x4e, 0x29));
-        graphics.fill(new RoundRectangle2D.Double(48, 40, 416, 432, 82, 82));
+        graphics.setColor(espresso);
+        graphics.fill(new RoundRectangle2D.Double(24, 24, 464, 464, 108, 108));
 
-        graphics.setColor(new Color(0x27, 0x2a, 0x2b));
-        graphics.fill(new RoundRectangle2D.Double(96, 82, 320, 212, 34, 34));
+        Path2D handle = new Path2D.Double(Path2D.WIND_EVEN_ODD);
+        handle.moveTo(360, 205);
+        handle.lineTo(395, 205);
+        handle.curveTo(442, 205, 478, 242, 478, 289);
+        handle.lineTo(478, 330);
+        handle.curveTo(478, 377, 442, 414, 395, 414);
+        handle.lineTo(360, 414);
+        handle.closePath();
+        handle.moveTo(395, 249);
+        handle.lineTo(382, 249);
+        handle.lineTo(382, 370);
+        handle.lineTo(395, 370);
+        handle.curveTo(417, 370, 434, 352, 434, 330);
+        handle.lineTo(434, 289);
+        handle.curveTo(434, 267, 417, 249, 395, 249);
+        handle.closePath();
+        graphics.setColor(oat);
+        graphics.fill(handle);
 
-        graphics.setColor(new Color(0xa9, 0xcf, 0x72));
-        graphics.fill(new RoundRectangle2D.Double(122, 108, 268, 160, 18, 18));
+        Stroke previousStroke = graphics.getStroke();
+        graphics.setStroke(new BasicStroke(
+                compact ? 32 : 26, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(cream);
+        if (compact) {
+            Path2D steam = new Path2D.Double();
+            steam.moveTo(252, 127);
+            steam.curveTo(231, 107, 267, 90, 250, 66);
+            graphics.draw(steam);
+        } else {
+            Path2D leftSteam = new Path2D.Double();
+            leftSteam.moveTo(219, 127);
+            leftSteam.curveTo(200, 109, 234, 91, 217, 66);
+            graphics.draw(leftSteam);
+            Path2D rightSteam = new Path2D.Double();
+            rightSteam.moveTo(286, 127);
+            rightSteam.curveTo(267, 109, 301, 91, 284, 66);
+            graphics.draw(rightSteam);
+        }
+        graphics.setStroke(previousStroke);
 
-        Path2D beanUpper = new Path2D.Double();
-        beanUpper.moveTo(226, 176);
-        beanUpper.curveTo(248, 136, 304, 134, 324, 173);
-        beanUpper.curveTo(294, 163, 281, 202, 249, 200);
-        beanUpper.curveTo(233, 199, 222, 190, 226, 176);
-        graphics.setColor(new Color(0x4d, 0x6d, 0x32));
-        graphics.fill(beanUpper);
+        graphics.setColor(oat);
+        graphics.fill(new RoundRectangle2D.Double(78, 140, 330, 305, 72, 72));
 
-        Path2D beanLower = new Path2D.Double();
-        beanLower.moveTo(252, 195);
-        beanLower.curveTo(277, 200, 286, 166, 322, 175);
-        beanLower.curveTo(302, 215, 248, 220, 227, 183);
-        beanLower.curveTo(234, 189, 242, 193, 252, 195);
-        graphics.setColor(new Color(0x30, 0x49, 0x24));
-        graphics.fill(beanLower);
+        graphics.setColor(coffee);
+        graphics.fill(new RoundRectangle2D.Double(128, 160, 230, 28, 28, 28));
+
+        graphics.setColor(new Color(0xa8, 0xb8, 0x6c));
+        graphics.fill(new RoundRectangle2D.Double(122, 205, 242, 110, 48, 48));
 
         Path2D dpad = new Path2D.Double();
-        dpad.moveTo(129, 341);
-        dpad.lineTo(171, 341);
-        dpad.lineTo(171, 299);
-        dpad.lineTo(213, 299);
-        dpad.lineTo(213, 341);
-        dpad.lineTo(255, 341);
-        dpad.lineTo(255, 383);
-        dpad.lineTo(213, 383);
-        dpad.lineTo(213, 425);
-        dpad.lineTo(171, 425);
-        dpad.lineTo(171, 383);
-        dpad.lineTo(129, 383);
+        dpad.moveTo(158, 335);
+        dpad.lineTo(196, 335);
+        dpad.lineTo(196, 367);
+        dpad.lineTo(228, 367);
+        dpad.lineTo(228, 405);
+        dpad.lineTo(196, 405);
+        dpad.lineTo(196, 437);
+        dpad.lineTo(158, 437);
+        dpad.lineTo(158, 405);
+        dpad.lineTo(126, 405);
+        dpad.lineTo(126, 367);
+        dpad.lineTo(158, 367);
         dpad.closePath();
-        graphics.setColor(new Color(0x2d, 0x29, 0x28));
+        graphics.setColor(coffee);
         graphics.fill(dpad);
 
-        graphics.setColor(new Color(0x5c, 0x1d, 0x27));
-        graphics.fill(new Ellipse2D.Double(322, 318, 60, 60));
-        graphics.fill(new Ellipse2D.Double(375, 367, 60, 60));
-
-        graphics.setColor(new Color(0x3d, 0x2d, 0x29));
-        fillRotatedRoundRect(graphics, 273, 417, 64, 14, -16);
-        fillRotatedRoundRect(graphics, 330, 417, 64, 14, -16);
-    }
-
-    private static void fillRotatedRoundRect(
-            Graphics2D graphics, double x, double y, double width, double height, double degrees) {
-        AffineTransform previous = graphics.getTransform();
-        graphics.rotate(Math.toRadians(degrees), x + width / 2, y + height / 2);
-        graphics.fill(new RoundRectangle2D.Double(x, y, width, height, 14, 14));
-        graphics.setTransform(previous);
+        graphics.setColor(new Color(0xc4, 0x5c, 0x3c));
+        graphics.fill(new Ellipse2D.Double(290, 340, 50, 50));
+        graphics.fill(new Ellipse2D.Double(337, 377, 50, 50));
     }
 
     private static void writeBytes(Path output, byte[] bytes) throws IOException {
