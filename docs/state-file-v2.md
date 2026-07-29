@@ -65,7 +65,8 @@ of a linked root carries its own explicit ID.
 
 ## Payload and compatibility
 
-Payload section schema 1 and all 91 numeric record IDs are byte-for-byte unchanged. In v2, the
+Payload section schema 1 and the original 91 numeric record IDs are byte-for-byte unchanged; the
+Xploder mapper state is appended as ID 92. In v2, the
 MBC3 `subSecondTicks` scalar is the explicit profile's numerator-domain phase:
 
 | Identity | Valid phase | Live increment per machine tick |

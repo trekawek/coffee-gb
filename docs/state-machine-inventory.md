@@ -8,7 +8,7 @@ Before mutation, apply checks the hardware tag, nested record/mapper tree, invar
 serial endpoint and component-state root, cartridge RTC locations, runtime DTO, held input, and linked
 topology against the already-configured target. Null is admitted only for audited owner/field or
 array-element positions, not inferred from the non-null value's type. The adapter then reconstructs
-the complete replacement and applies the semantic policy registered for each of the 91 admitted
+the complete replacement and applies the semantic policy registered for each of the 92 admitted
 record types. Those policies reject invalid indices, counts, capacities, command phases, and scalar
 relationships before the first live mutation. If an unexpected component apply nevertheless
 throws, the adapter restores the machine, both RTC locations, serial endpoint/runtime, held
@@ -32,8 +32,8 @@ Protocol v8 remains StateFile-v1-only and rejects MGB before linked construction
 The exact remaining compatibility surface and removal policy are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 
-The exact field-by-field inventory of all 91 admitted production record types is committed in
-[state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 100
+The exact field-by-field inventory of all 92 admitted production record types is committed in
+[state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 101
 production state contracts and capture owner/call-site files is committed in
 [state-originator-sites.md](state-originator-sites.md). `StateTypeRegistry` is the executable type
 allowlist. `StateCoverageMatrixTest` gives every mutable mapper and stateful serial peripheral an
@@ -102,7 +102,7 @@ component state; the six fields named above are in the detached supplement; and 
 Every supported mutable mapper family is explicit and executable: `BasicRom`, `Mbc1`, `Mbc2`,
 `Mbc3`/RTC, `Mbc5`, `LiCheng`, `Mbc6` RAM/flash, `Mbc7`/EEPROM, `Mmm01`, `PocketCamera`, `Huc1`, `Huc3`,
 `Tama5`, `BungEms`, `BhgosMulticart`, `MakonNtOld2`, `DuzMulticart`, `Mani32kMulticart`,
-`SlMulticart`, `Sintax`, `Bbd`, both `SachenMmc` modes, `WisdomTree`, and `Datel` with a real MBC3
+`SlMulticart`, `Sintax`, `Bbd`, both `SachenMmc` modes, `WisdomTree`, `XploderGb`, and `Datel` with a real MBC3
 pass-through slot. For each family the matrix captures a non-idle setup, runs address/tick probes,
 restores through the detached graph, reruns the same probes, and compares both observable trace and
 final state. Dedicated mid-operation cases capture MBC6 during JEDEC unlock/ID/program sequences,
@@ -144,7 +144,7 @@ types are rejected through the adapter before its live-mutation callback.
 Records whose fields are deliberately not range-constrained still have an explicit policy and
 rationale in that registry. Examples are raw bus/address/register latches, signed emulated clocks,
 documented `-1`/minimum-value sentinels, and parent records whose only relationship-bearing values
-are validated by nested records. `StateInventoryTest` requires the policy-key set to equal all 91
+are validated by nested records. `StateInventoryTest` requires the policy-key set to equal all 92
 admitted record types, so a new state record cannot enter the model without an audited choice. Rollback
 is retained for unexpected failures in legacy restore code; it is not the validation path for a
 deterministically malformed detached candidate.
