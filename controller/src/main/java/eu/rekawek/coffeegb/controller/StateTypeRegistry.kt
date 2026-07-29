@@ -1,8 +1,9 @@
 package eu.rekawek.coffeegb.controller
 
 /**
- * Audited explicit component-state types paired by ID with Coffee GB 1.7.14 compatibility
- * records. The two class inventories are deliberately disjoint.
+ * Audited explicit component-state types and Coffee GB 1.7.14 compatibility records. The two
+ * class inventories are deliberately disjoint. Newly appended portable types do not acquire
+ * compatibility records because no released local snapshot could contain them.
  *
  * IDs are the one-based position in each list for portable StateFile v1. The codec deliberately
  * uses this exact audited inventory so a future record or enum cannot silently become decodable.
@@ -104,6 +105,7 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.genie.Genie\$GameSharkPatchState",
           "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWriteState",
           "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWriteState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.XploderGb\$XploderGbState",
       )
 
   val legacyRecordClassNames =

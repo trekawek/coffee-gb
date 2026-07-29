@@ -104,7 +104,7 @@ class LegacySerializationBoundaryTest {
       )
     }
     assertEquals(87, compatibilityRecords)
-    assertEquals(91, StateTypeRegistry.recordClasses.size)
+    assertEquals(92, StateTypeRegistry.recordClasses.size)
     assertEquals(91, StateTypeRegistry.legacyRecordClasses.size)
     assertTrue(
         StateTypeRegistry.recordClasses.take(87).all(ComponentState::class.java::isAssignableFrom))
@@ -126,7 +126,7 @@ class LegacySerializationBoundaryTest {
         "Normal and compatibility record registries must be disjoint",
     )
     val legacyLeafClasses = StateTypeRegistry.legacyRecordClasses.takeLast(4).toSet()
-    StateTypeRegistry.recordClasses.takeLast(4)
+    StateTypeRegistry.recordClasses.drop(87).take(4)
         .zip(StateTypeRegistry.legacyRecordClasses.takeLast(4))
         .forEachIndexed { index, (normal, legacy) ->
           assertEquals(

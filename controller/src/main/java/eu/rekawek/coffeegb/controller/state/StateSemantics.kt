@@ -837,6 +837,13 @@ internal object StateSemantics {
         constrained("MBC5 exposes a nine-bit ROM bank and four-bit RAM/rumble register.") {
           it.range("selectedRamBank", 0, 0x0f); it.range("selectedRomBank", 0, 0x1ff)
         }
+    target["eu.rekawek.coffeegb.core.memory.cart.type.XploderGb\$XploderGbState"] =
+        constrained("Xploder exposes byte ROM banking, sixteen RAM banks, and a fixed 128 KiB RAM image.") {
+          it.recordType("batteryMemento", MEMORY_BATTERY_STATE, FILE_BATTERY_STATE)
+          it.require(it.intArray("ram").size == 16 * 0x2000, "must have sixteen 8 KiB RAM banks")
+          it.intValues("ram", 0, 0xff)
+          it.range("selectedRomBank", 0, 0xff); it.range("selectedRamBank", 0, 0x0f)
+        }
     target["eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera\$PocketCameraState"] =
         constrained("Pocket Camera ROM/RAM selectors and camera register bytes are bounded.") {
           it.range("romBank", 0, 0x3f); it.range("ramBank", 0, 0x0f)

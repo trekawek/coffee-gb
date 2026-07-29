@@ -58,7 +58,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/memory/DmaCpuAddressSpace.java	21c6c
 core/src/main/java/eu/rekawek/coffeegb/core/memory/Mmu.java	88871bd68d6536f575f0408a552cc830a5ebef334f48efd8acd6dda9efb01a81
 core/src/main/java/eu/rekawek/coffeegb/core/memory/OamEchoRam.java	be80f590f7b90d4a4d4218884d9eef3f59e6faf9f5444c71231ae069175c209b
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/Cartridge.java	a978c0c211d961cb8dbea351ee966688a67a0c5b631fa3deb993d718150a4ecb
-core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/CartridgeProperties.java	08e6b97ef115d4a6a1f56347442172cdd1b56d073fdb2d238b32bf95f0b7fc54
+core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/CartridgeProperties.java	b5f0db3e5ce50ade13f608d40bff663f3fd42e03de4068eaad444c8f4ba25638
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/Rom.java	e9d582677dee455dc05525376632f88e4d84546ddd905a40299143215b012f54
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/RomSourceSnapshot.java	31294a694422869e695dbe37b0f4eaad4c06d3d011fa6bba17749a5646986be2
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/SevenZArchiveWorker.java	1a35c077c510b21d70fed9ddccf5ad2a6583e127ad3b2d68b58667a29cee4eef

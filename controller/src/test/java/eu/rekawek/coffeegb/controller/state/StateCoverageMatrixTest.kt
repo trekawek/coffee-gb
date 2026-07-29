@@ -52,6 +52,9 @@ class StateCoverageMatrixTest {
                     0xa000 to 0x3b,
                 ),
             ) { LiCheng(mutableRom(0x1e), Battery.NULL_BATTERY) },
+            mapper("XploderGb", listOf(0x0006 to 0x25, 0x0007 to 0x0a, 0xa000 to 0x3b)) {
+              XploderGb(it, Battery.NULL_BATTERY)
+            },
             mapper("Mbc6", listOf(0x0000 to 0x0a, 0x2000 to 0x03, 0x3000 to 0x04, 0xa000 to 0x35)) {
               Mbc6(it, Battery.NULL_BATTERY)
             },
@@ -158,7 +161,7 @@ class StateCoverageMatrixTest {
         StateTypeRegistry.recordClassNames.filter {
           it.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.")
         }
-    assertEquals(24, registeredMapperRecords.size)
+    assertEquals(25, registeredMapperRecords.size)
   }
 
   private fun directState(controller: MemoryController): DirectState =
@@ -579,6 +582,10 @@ class StateCoverageMatrixTest {
         )
         .forEach { (address, value) -> controller.setByte(address, value) }
     if (controller is WisdomTree) controller.setByte(0x0029, 0)
+    if (controller is XploderGb) {
+      controller.setByte(0x0006, 0x7d)
+      controller.setByte(0x0007, 0x0f)
+    }
     repeat(3) { controller.tick() }
   }
 
@@ -737,6 +744,7 @@ class StateCoverageMatrixTest {
             "Mbc3",
             "Mbc5",
             "LiCheng",
+            "XploderGb",
             "Mbc6",
             "Mbc7",
             "Mmm01",

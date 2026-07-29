@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
-import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -125,10 +124,4 @@ public class XploderGb implements MemoryController {
             implements ComponentState<MemoryController> {
     }
 
-    /** Importer-only compatibility record for released local snapshots. */
-    private record XploderGbMemento(Memento<Battery> batteryMemento, int[] ram,
-                                     int selectedRomBank, int selectedRamBank,
-                                     boolean ramUpdated)
-            implements Memento<MemoryController> {
-    }
 }

@@ -5,8 +5,8 @@ used those artifacts to complete the platform-neutral practical command set, iss
 independent local SGB P1-P4 host input, and issue #343 established immutable per-session hardware
 profiles and clocks. Issue #344 added the evidence-backed `sgb2` identity and exact SGB-family
 clock contract. Issue #345 adds the evidence-backed `mgb` identity and an enforceable contributor
-extension process. Neither phase changes the practical SGB command set. The 91 portable record IDs
-and every StateFile-v1 field remain unchanged.
+extension process. Neither phase changes the practical SGB command set. The original 91 portable
+record IDs and every existing StateFile-v1 field remain unchanged; mapper records append after them.
 
 ## Checked-in sources of truth
 
