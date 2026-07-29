@@ -27,10 +27,11 @@ import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 
 /**
- * Gathers the independently built target installers only after the complete target set validates.
+ * Gathers the independently built target packages only after the complete target set validates.
  *
  * <p>This is the release gate used after artifact download. It normalizes architecture-bearing
- * filenames, proves every target result/checksum/SBOM, and writes one release-level checksum file.
+ * filenames, proves every target result/checksum/SBOM, records the validated SBOM digests without
+ * publishing JSON files, and writes one release-level checksum file.
  */
 public final class NativeReleaseTool {
 
@@ -117,7 +118,7 @@ public final class NativeReleaseTool {
                     dist, target, packageType, request.version());
             Path artifact = safeResolve(dist, required(verified, "artifact.path"));
             if (!"file".equals(required(verified, "artifact.kind"))) {
-                throw new IOException("Release installer must be a regular file: " + artifact);
+                throw new IOException("Release package must be a regular file: " + artifact);
             }
             Path sbom = safeResolve(dist, required(verified, "sbom.path"));
             Path nativeSbom =
@@ -157,21 +158,14 @@ public final class NativeReleaseTool {
         String safeVersion = request.version();
         Path releaseJar = output.resolve("coffee-gb-" + safeVersion + ".jar");
         Files.copy(portableJar, releaseJar, StandardCopyOption.COPY_ATTRIBUTES);
-        Path releaseSbom =
-                output.resolve(NativePackageMetadata.releaseSbomFileName(safeVersion));
-        Files.copy(
-                firstTarget.mavenSbom(),
-                releaseSbom,
-                StandardCopyOption.COPY_ATTRIBUTES);
 
         Map<String, String> matrix = new LinkedHashMap<>();
-        matrix.put("schema", "3");
+        matrix.put("schema", "4");
         matrix.put("app.version", safeVersion);
         matrix.put("source.commit", request.sourceCommit());
         matrix.put("portable.path", releaseJar.getFileName().toString());
         matrix.put("portable.sha256", NativePackageStager.sha256(releaseJar));
-        matrix.put("sbom.path", releaseSbom.getFileName().toString());
-        matrix.put("sbom.sha256", NativePackageStager.sha256(releaseSbom));
+        matrix.put("sbom.sha256", mavenSbomDigest);
         for (NativeTarget target : NativeTarget.values()) {
             TargetResult result = targets.get(target);
             String filename = "coffee-gb-" + safeVersion + "-" + target.id()
@@ -185,19 +179,9 @@ public final class NativeReleaseTool {
             matrix.put(
                     "target." + target.id() + ".signing",
                     required(result.properties(), "signing"));
-            String nativeSbomFilename =
-                    NativePackageMetadata.releaseNativeSbomFileName(safeVersion, target);
-            Path nativeSbomDestination = output.resolve(nativeSbomFilename);
-            Files.copy(
-                    result.nativeSbom(),
-                    nativeSbomDestination,
-                    StandardCopyOption.COPY_ATTRIBUTES);
-            matrix.put(
-                    "target." + target.id() + ".native-sbom.path",
-                    nativeSbomFilename);
             matrix.put(
                     "target." + target.id() + ".native-sbom.sha256",
-                    NativePackageStager.sha256(nativeSbomDestination));
+                    NativePackageStager.sha256(result.nativeSbom()));
             if (result.signature() != null) {
                 String signatureFilename = filename + ".asc";
                 Path signatureDestination = output.resolve(signatureFilename);
@@ -225,38 +209,29 @@ public final class NativeReleaseTool {
         Path root = directory.toAbsolutePath().normalize();
         Map<String, String> matrix =
                 NativePackageVerifier.readStrictProperties(root.resolve(MATRIX_FILE));
-        requireValue(matrix, "schema", "3");
+        requireValue(matrix, "schema", "4");
         requireValue(matrix, "app.version", expectedVersion);
         String sourceCommit = required(matrix, "source.commit");
         if (!sourceCommit.matches("[0-9a-f]{40}")) {
             throw new IOException("Release source.commit is not a full Git object ID");
         }
         verifyMatrixFile(root, matrix, "portable");
-        Path sbom = verifyMatrixFile(root, matrix, "sbom");
-        if (!sbom.getFileName()
-                .toString()
-                .equals(NativePackageMetadata.releaseSbomFileName(expectedVersion))) {
-            throw new IOException("Release Maven SBOM has the wrong filename");
-        }
-        NativePackageVerifier.verifyMavenSbom(sbom, expectedVersion);
+        requireSha256(matrix, "sbom.sha256");
         Set<String> expectedKeys = new HashSet<>(Set.of(
                 "schema",
                 "app.version",
                 "source.commit",
                 "portable.path",
                 "portable.sha256",
-                "sbom.path",
                 "sbom.sha256"));
         for (NativeTarget target : NativeTarget.values()) {
             String prefix = "target." + target.id();
             Path artifact = verifyMatrixFile(root, matrix, prefix);
-            Path nativeSbom =
-                    verifyMatrixFile(root, matrix, prefix + ".native-sbom");
             expectedKeys.add(prefix + ".path");
             expectedKeys.add(prefix + ".sha256");
-            expectedKeys.add(prefix + ".native-sbom.path");
             expectedKeys.add(prefix + ".native-sbom.sha256");
             expectedKeys.add(prefix + ".signing");
+            requireSha256(matrix, prefix + ".native-sbom.sha256");
             String suffix =
                     "." + NativePackageMetadata.target(target).defaultPackageType().id();
             if (!artifact.getFileName().toString().endsWith(suffix)) {
@@ -278,15 +253,6 @@ public final class NativeReleaseTool {
                 expectedKeys.add(prefix + ".signature.path");
                 expectedKeys.add(prefix + ".signature.sha256");
             }
-            String expectedNativeSbom =
-                    NativePackageMetadata.releaseNativeSbomFileName(
-                            expectedVersion, target);
-            if (!nativeSbom.getFileName().toString().equals(expectedNativeSbom)) {
-                throw new IOException(
-                        "Release target-native SBOM has the wrong filename for " + target.id());
-            }
-            NativeComponentInventory.verifyNativeSbom(
-                    nativeSbom, target, expectedVersion);
         }
         if (!matrix.keySet().equals(expectedKeys)) {
             Set<String> missing = new TreeSet<>(expectedKeys);
@@ -297,7 +263,21 @@ public final class NativeReleaseTool {
                     "Release matrix keys mismatch; missing=" + missing
                             + ", unexpected=" + unexpected);
         }
+        for (Path entry : listBoundedReleaseEntries(root)) {
+            if (entry.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".json")) {
+                throw new IOException(
+                        "Release directory must not contain JSON artifacts: " + entry);
+            }
+        }
         verifyReleaseChecksums(root);
+    }
+
+    private static void requireSha256(Map<String, String> values, String key)
+            throws IOException {
+        String value = required(values, key);
+        if (!value.matches("[0-9a-f]{64}")) {
+            throw new IOException(key + " is not a lowercase SHA-256 digest");
+        }
     }
 
     private static Path verifyMatrixFile(

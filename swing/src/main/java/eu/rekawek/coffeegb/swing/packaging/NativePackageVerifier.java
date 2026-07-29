@@ -35,7 +35,7 @@ import java.util.stream.Stream;
  * Strict, host-independent inspection and launch smoke for a jpackage application payload.
  *
  * <p>The same verifier runs against jpackage's pre-installer image and the payload unpacked from
- * the final DEB, MSI, or DMG. It never follows symlinks or trusts package metadata to select a
+ * the final DEB, EXE, or DMG. It never follows symlinks or trusts package metadata to select a
  * target. A target and the authoritative Maven app/SBOM artifacts are supplied independently.
  */
 public final class NativePackageVerifier {

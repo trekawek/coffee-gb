@@ -127,8 +127,8 @@ neutral JAR, universal JAR, and CycloneDX SBOM, and then invoke the same Java pa
 ```
 
 ```powershell
-# Windows x86-64 MSI (the target's default installer)
-.\packaging\package-native.ps1 windows-x86-64 msi
+# Windows x86-64 EXE (the target's default package)
+.\packaging\package-native.ps1 windows-x86-64 exe
 ```
 
 Both wrappers use the portable `mvn` command from `PATH`. Set `COFFEE_GB_MAVEN_COMMAND` to an
@@ -141,7 +141,7 @@ the host; after selection, the tool rejects a mismatched host OS or architecture
 | Target | Host | Default installer | Other validated type | Host prerequisites |
 | --- | --- | --- | --- | --- |
 | `linux-x86-64` | Linux x86-64 | DEB | RPM, app-image | JDK 21+, `dpkg-deb` and `desktop-file-validate` for DEB, or `rpmbuild` for RPM |
-| `windows-x86-64` | Windows x86-64 | MSI | EXE, app-image | JDK 21+, WiX supported by that JDK |
+| `windows-x86-64` | Windows x86-64 | EXE | MSI, app-image | JDK 21+, WiX supported by that JDK |
 | `macos-x86-64` | macOS x86-64 | DMG | PKG, app-image | JDK 21+, Xcode command-line packaging tools |
 | `macos-aarch64` | macOS arm64 | DMG | PKG, app-image | arm64 JDK 21+, Xcode command-line packaging tools |
 
@@ -163,9 +163,10 @@ directory in that tree receives the fixed timestamp `2000-01-01T00:00:00Z`. The 
   hashes for distributed native files and exact embedded-component build evidence;
 - the exact target-specific legal inventory: the MIT license, native and third-party notices, full
   applicable license/EULA texts, attributions, and pinned source provenance;
+- a platform-safe installer license derived from the canonical NFC UTF-8 MIT license;
 - a repository-native SVG icon plus a generated target PNG, multi-resolution ICO, or
   multi-resolution ICNS container;
-- `.gb`, `.gbc`, and `.rom` file-association metadata; and
+- an explicit no-registration policy for `.gb`, `.gbc`, and `.rom`; and
 - deterministic Windows secondary-launcher metadata for the console-enabled
   `Coffee GB Console.exe` debug launcher; and
 - a stable package inventory containing version, target, native fingerprint, runtime roots,
@@ -209,24 +210,28 @@ repository source/about URL, semantic numeric installer metadata, the vector-der
 same `MainKt` entry point. Snapshot or prerelease suffixes remain in the JAR's reported application
 version but are omitted from the numeric OS installer version.
 
-Installers register `.gb`, `.gbc`, and `.rom` with Coffee GB. Association icon paths are stable
-stage-relative paths resolved from the deterministic stage working directory. The Linux desktop
-template includes `%f`, so the selected ROM path reaches the launcher rather than merely opening an
-empty application. Linux packages install a freedesktop `Game;` menu shortcut while retaining the
-Debian package section `games`. A DEB build extracts the package-owned
+The canonical packaged legal files remain NFC-normalized UTF-8 and staging requires the exact
+author name `Tomasz Rękawek`. Linux passes that UTF-8 text to jpackage. Windows and macOS installer
+license dialogs instead receive deterministic ASCII RTF whose `\u` escapes preserve every Unicode
+code unit; the macOS resource override uses an RTF resource rather than the legacy `TEXT` resource.
+This keeps the installed legal copy byte-identical while avoiding locale-dependent installer
+decoding.
+
+Installers do not register `.gb`, `.gbc`, or `.rom` with Coffee GB and do not request default- or
+optional-handler status. Staging creates no jpackage association files, Linux desktop metadata has
+no `MimeType`, macOS bundles declare no document or exported/imported type keys, and Windows
+installation must not add Coffee GB to extension class or `OpenWith` registrations. Users can
+still open ROMs deliberately from the chooser, command line, drag-and-drop, or recent list. The
+Linux desktop template retains `%f` for an explicitly supplied path but advertises no ROM MIME
+type. Linux packages install a freedesktop `Game;` menu shortcut while retaining the Debian package
+section `games`. A DEB build extracts the package-owned
 `/opt/coffee-gb/lib/coffee-gb-Coffee_GB.desktop` payload, runs `desktop-file-validate`, and proves
 the bounded `postinst` script registers that exact file. It also verifies the section and expected
 `libasound2t64` dependency; Windows packages request
 Start-menu and desktop shortcuts, retain a fixed upgrade UUID for upgrade/uninstall identity,
 expose help/update URLs, and provide an install-directory chooser. macOS packages set the Games
-application category and bundle identifier. OS open-file delivery is handled by the desktop
-ROM-open service. The host matrix installs or copies every final package, opens a generated ROM
-through the registered shell association, requires the unified service's correlated success
-evidence, and then verifies uninstall/registration cleanup. The macOS case deliberately starts the
-installed application first so Launch Services must deliver the document to the existing instance.
-The installed-package gate generates and opens all three extensions through `xdg-open`, Windows
-ShellExecute, or plain macOS `open`; it does not name Coffee GB directly, so each case proves that
-the OS selected the registered default handler.
+application category and bundle identifier. The desktop ROM-open service remains available for
+explicit application-directed open-file events; packaging never claims those file types.
 
 ## SBOM, checksums, and release signing
 
@@ -259,17 +264,19 @@ The final installer digest is computed only after any signing or notarization st
 `PACKAGE-RESULT.properties` records the independently selected target, package type, complete Maven
 version, verified signing state, and exact artifact, Maven SBOM, target-native SBOM, and detached
 signature digests. `SHA256SUMS` is written only after both SBOM copies have been verified and covers
-the result record, both directly uploadable SBOMs, any detached signature, and every regular
-installer or application-image file using sorted relative paths.
+the result record, both short-lived validation SBOMs, any detached signature, and every regular
+package or application-image file using sorted relative paths. The matrix gate consumes those JSON
+files, but never copies them into the final release bundle.
 
 The Phase 6 release gate accepts exactly one result for each of Linux x64, Windows x64, macOS x64,
-and macOS arm64. It rejects a missing/duplicate target, non-default installer type, version drift,
+and macOS arm64. It rejects a missing/duplicate target, non-default package type, version drift,
 invalid target-native SBOM evidence, stale checksum, or unexpected file before copying anything into the
 release bundle.
-The final `NATIVE-PACKAGE-MATRIX.properties` names all four architecture-bearing installers and
-their target-native SBOM and signing state. Its release-level `SHA256SUMS` covers that matrix, the
-universal Maven JAR, the Maven dependency SBOM, all four target-native CycloneDX SBOMs, all four
-installers, and every detached signature.
+The final `NATIVE-PACKAGE-MATRIX.properties` names all four architecture-bearing packages and
+records their validated Maven and target-native SBOM digests plus signing state. The JSON SBOMs
+remain internal validation inputs and are not copied into the release bundle. Its release-level
+`SHA256SUMS` covers the matrix, universal Maven JAR, all four packages, and every detached
+signature; the release directory rejects every `*.json` file.
 
 All normal and pull-request builds are unsigned. Signing is reachable only through the explicit
 `--release-sign` wrapper switch and then requires all of the following:
@@ -291,13 +298,13 @@ Protected release signing uses a two-stage image flow before any digest is final
 6. only then copy the verified Maven dependency SBOM and target-native SBOM and write the result
    manifest and checksums.
 
-On Windows the policy is deliberately MSI-only. It deterministically Authenticode-signs every
+On Windows the policy is deliberately EXE-only. It deterministically Authenticode-signs every
 visible executable/DLL in the app image with SHA-256 and an RFC 3161 HTTPS timestamp, appending
 rather than replacing an existing vendor signature, and requires `/pa /all /tw` verification
-before MSI creation, in jpackage's installer image, and after installation. Digest-locked
+before EXE creation, in jpackage's package image, and after installation. Digest-locked
 third-party native-source binaries are stored rather than compressed inside a deterministic ZIP;
 platform signing seals that resource without rewriting the upstream bytes later checked during
-runtime extraction. The policy then signs and verifies the outer MSI. On macOS the protected path
+runtime extraction. The policy then signs and verifies the outer EXE. On macOS the protected path
 is deliberately DMG-only: jpackage signs the `.app` with its JDK-enabling default entitlements,
 `codesign --deep --strict` verifies the complete bundle, and an explicit code requirement proves
 that the application signature contains
@@ -423,7 +430,7 @@ keyed by the POMs; `target/`, native caches, settings, ROMs, batteries, and stat
 never cached. Target artifacts expire after seven days and the complete gated bundle after
 fourteen.
 
-Every host verifies jpackage's pre-installer payload, then unpacks the actual DEB/MSI or mounts the
+Every host verifies jpackage's pre-installer payload, then unpacks or installs the actual DEB/EXE or mounts the
 actual DMG and repeats the checks. Inspection requires:
 
 - exactly one linked runtime and the locked ten-module closure;
@@ -449,9 +456,9 @@ actual DMG and repeats the checks. Inspection requires:
 - normal and `--debug` production Swing startups (Xvfb on Linux, hosted desktop session elsewhere)
   that prove a visible frame, menu, display content, off-EDT readiness evidence, and bounded normal
   shutdown; and
-- a real install/copy followed by default-handler shell launches of generated `.gb`, `.gbc`, and
-  `.rom` fixtures through `xdg-open`, Windows ShellExecute, or macOS Launch Services, correlated
-  unified-service success, bounded shutdown, and uninstall/unregistration cleanup.
+- final-package checks proving the DEB desktop entry has no `MimeType`, the DMG application has no
+  document or exported/imported type declarations, and the installed Windows EXE creates no Coffee
+  GB `.gb`, `.gbc`, or `.rom` class/`OpenWith` registration.
 
 The headless package smoke constructs its reviewable 32 KiB loop ROM, writes it into a private
 temporary 7z, and opens it through the isolated helper. It verifies byte-exact extraction, the
@@ -460,7 +467,5 @@ encode/inspect/mutate/load/re-encode StateFile round trip. It reads no external 
 opens no device, user setting, or battery file; all generated temporary files are deleted and are
 never packaged, cached, or uploaded. Its `native-target` result must equal the configured package
 target; only a portable-JAR invocation with no target property may report `portable`.
-The installed-association smoke writes the same generated bytes only into its isolated, non-uploaded
-smoke directory. The separate desktop smoke constructs the production Swing frontend without a
-ROM. See
+The separate desktop smoke constructs the production Swing frontend without a ROM. See
 [native package CI](native-package-ci.md) for publication and operator evidence.

@@ -65,7 +65,7 @@ public class NativePackagePlanTest {
     }
 
     @Test
-    public void everyInstallerPlanIncludesMetadataAssociationsAndNoSigning() {
+    public void everyInstallerPlanIncludesMetadataWithoutRomAssociationsOrSigning() {
         for (NativeTarget nativeTarget : NativeTarget.values()) {
             NativePackageMetadata.Target target = NativePackageMetadata.target(nativeTarget);
             for (NativePackageMetadata.PackageType packageType : target.packageTypes()) {
@@ -95,6 +95,7 @@ public class NativePackagePlanTest {
                         value.contains("TOKEN")
                                 || value.contains("PASSWORD")
                                 || value.contains("SECRET")));
+                assertFalse(command.contains("--file-associations"));
                 if (nativeTarget == NativeTarget.WINDOWS_X86_64) {
                     assertOption(
                             command,
@@ -107,29 +108,13 @@ public class NativePackagePlanTest {
                 }
 
                 if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
-                    if (target.hostOs() == NativePackageMetadata.HostOs.MACOS) {
-                        assertOptions(
-                                command,
-                                "--file-associations",
-                                staged.associationFiles().stream()
-                                        .map(Path::toString)
-                                        .toList());
-                    } else {
-                        assertFalse(command.contains("--file-associations"));
-                    }
                     assertFalse(command.contains("--license-file"));
                 } else {
-                    assertOptions(
-                            command,
-                            "--file-associations",
-                            staged.associationFiles().stream()
-                                    .map(Path::toString)
-                                    .toList());
                     assertOption(command, "--about-url", NativePackageMetadata.SOURCE_URL);
                     assertOption(
                             command,
                             "--license-file",
-                            staged.input().resolve("legal/LICENSE.txt").toString());
+                            staged.installerLicense().toString());
                 }
             }
         }
@@ -144,7 +129,7 @@ public class NativePackagePlanTest {
         assertOption(linux, "--linux-app-category", LinuxPackagePolicy.PACKAGE_SECTION);
         assertOption(linux, "--linux-deb-maintainer", "tomek@rekawek.eu");
 
-        List<String> windows = installer(NativeTarget.WINDOWS_X86_64, "msi");
+        List<String> windows = installer(NativeTarget.WINDOWS_X86_64, "exe");
         assertTrue(windows.contains("--win-menu"));
         assertTrue(windows.contains("--win-shortcut"));
         assertTrue(windows.contains("--win-dir-chooser"));
@@ -179,16 +164,11 @@ public class NativePackagePlanTest {
             assertOption(command, "--app-image", appImage.toString());
             assertOption(command, "--type", packageType.id());
             assertOption(command, "--app-version", "1.7.15");
-            assertOptions(
-                    command,
-                    "--file-associations",
-                    staged.associationFiles().stream()
-                            .map(Path::toString)
-                            .toList());
+            assertFalse(command.contains("--file-associations"));
             assertOption(
                     command,
                     "--license-file",
-                    staged.input().resolve("legal/LICENSE.txt").toString());
+                    staged.installerLicense().toString());
             assertFalse(command.contains("--input"));
             assertFalse(command.contains("--runtime-image"));
             assertFalse(command.contains("--main-jar"));
@@ -238,17 +218,16 @@ public class NativePackagePlanTest {
         return new NativePackageStager.StageResult(
                 root,
                 root.resolve("input"),
-                root.resolve("associations"),
                 root.resolve("jpackage-resources"),
                 root.resolve("input/coffee-gb.jar"),
                 root.resolve("input/coffee-gb-sbom.cdx.json"),
                 root.resolve("input/coffee-gb-native-sbom.cdx.json"),
                 root.resolve("input/coffee-gb." + target.iconSuffix()),
                 root.resolve("input/native-source.zip"),
-                List.of(
-                        root.resolve("associations/game-boy-rom.properties"),
-                        root.resolve("associations/game-boy-color-rom.properties")),
                 root.resolve("launchers/windows-console.properties"),
+                target.hostOs() == NativePackageMetadata.HostOs.LINUX
+                        ? root.resolve("input/legal/LICENSE.txt")
+                        : root.resolve("installer-license/coffee-gb-license.rtf"),
                 root.resolve("input/package-manifest.properties"),
                 root.resolve("STAGE-SHA256SUMS"),
                 "1.7.15-SNAPSHOT",

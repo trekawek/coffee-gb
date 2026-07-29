@@ -25,7 +25,7 @@ orchestration layer use Kotlin and Java.
 The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or
 newer** runtime; [Java 21 LTS](https://adoptium.net/temurin/releases/?version=21) is recommended and
 is the version used by CI and release builds. Release tooling can also produce target-specific
-Linux, Windows, and macOS installers with a bundled minimized Java runtime; the portable JAR remains
+Linux, Windows, and macOS packages with a bundled minimized Java runtime; the portable JAR remains
 available as the platform-neutral fallback. See the
 [native packaging guide](docs/native-packaging.md) for targets, installer warnings, minimum tested
 OS versions, package contents, and verification.
@@ -407,7 +407,7 @@ artifacts. See the [native packaging foundation](docs/native-packaging.md) for t
 allowlists, external native-source contract, cache safety, macOS SDL limitation, and dependency
 update procedure.
 
-Native DEB, MSI, Intel macOS DMG, and Apple-Silicon macOS DMG release assets are built on their
+Native DEB, Windows EXE, Intel macOS DMG, and Apple-Silicon macOS DMG release assets are built on their
 matching hosts and published only after the complete matrix passes. See the
 [native package CI guide](docs/native-package-ci.md) before installing or cutting a release.
 

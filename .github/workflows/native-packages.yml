@@ -86,7 +86,7 @@ jobs:
             package_type: deb
             runner: ubuntu-24.04
           - target: windows-x86-64
-            package_type: msi
+            package_type: exe
             runner: windows-2025
           - target: macos-x86-64
             package_type: dmg
@@ -156,11 +156,8 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl libglib2.0-bin shared-mime-info xdg-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus xdg-utils
           command -v desktop-file-validate >/dev/null
-          command -v gio >/dev/null
-          command -v mimetype >/dev/null
-          command -v update-mime-database >/dev/null
           command -v xdg-desktop-menu >/dev/null
           test -d /etc/xdg/menus
           test -d /usr/share/desktop-directories
@@ -210,7 +207,7 @@ jobs:
               "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
           fi
 
-      - name: Unpack final installer and repeat strict launch smokes
+      - name: Install final package and repeat strict launch smokes
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -219,28 +216,6 @@ jobs:
           COFFEE_GB_DESKTOP_SMOKE: "true"
         run: >-
           ./packaging/verify-native-package.ps1
-          -Target $env:PACKAGE_TARGET
-          -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
-
-      - name: Install package and open the synthetic ROM through the OS association
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          PACKAGE_TARGET: ${{ matrix.target }}
-          PACKAGE_TYPE: ${{ matrix.package_type }}
-        run: |
-          ./packaging/verify-native-association.sh \
-            "$PACKAGE_TARGET" \
-            "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
-
-      - name: Install package and open the synthetic ROM through the OS association
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          PACKAGE_TARGET: ${{ matrix.target }}
-          PACKAGE_TYPE: ${{ matrix.package_type }}
-        run: >-
-          ./packaging/verify-native-association.ps1
           -Target $env:PACKAGE_TARGET
           -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
 
@@ -286,7 +261,7 @@ jobs:
           New-Item -ItemType Directory -Path $PackageRoot | Out-Null
           Copy-Item -Path "$BuildRoot/dist/*" -Destination $PackageRoot
 
-      - name: Upload target installer, checksums, both SBOMs, and result manifest
+      - name: Upload target package and internal validation metadata
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-${{ matrix.target }}
@@ -424,7 +399,7 @@ jobs:
             package_type: deb
             runner: ubuntu-24.04
           - target: windows-x86-64
-            package_type: msi
+            package_type: exe
             runner: windows-2025
           - target: macos-x86-64
             package_type: dmg
@@ -474,11 +449,8 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus libfile-mimeinfo-perl libglib2.0-bin shared-mime-info xdg-utils
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils gnome-menus xdg-utils
           command -v desktop-file-validate >/dev/null
-          command -v gio >/dev/null
-          command -v mimetype >/dev/null
-          command -v update-mime-database >/dev/null
           command -v xdg-desktop-menu >/dev/null
           test -d /etc/xdg/menus
           test -d /usr/share/desktop-directories
@@ -640,9 +612,6 @@ jobs:
               "$PACKAGE_TARGET" \
               "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
           fi
-          ./packaging/verify-native-association.sh \
-            "$PACKAGE_TARGET" \
-            "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
 
       - name: Rebuild, sign, verify, and smoke the release package
         if: runner.os == 'Windows'
@@ -660,9 +629,6 @@ jobs:
             -Type $env:PACKAGE_TYPE `
             -ReleaseSign
           ./packaging/verify-native-package.ps1 `
-            -Target $env:PACKAGE_TARGET `
-            -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
-          ./packaging/verify-native-association.ps1 `
             -Target $env:PACKAGE_TARGET `
             -BuildRoot "swing/target/native-package-$env:PACKAGE_TARGET-$env:PACKAGE_TYPE"
 

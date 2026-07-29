@@ -284,6 +284,11 @@ jobs:
             echo "Validated release bundle must contain only regular top-level files" >&2
             exit 1
           fi
+          if find native-release -mindepth 1 -maxdepth 1 -type f \
+              -iname '*.json' -print -quit | grep -q .; then
+            echo "Validated release bundle must not contain JSON artifacts" >&2
+            exit 1
+          fi
           printf '%s\n' "${release_paths[@]##*/}" >"$transaction_tmp/expected-assets"
 
           signing_lines="$transaction_tmp/signing-lines"

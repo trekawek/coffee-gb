@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   echo "Usage: packaging/package-native.sh TARGET [TYPE] [--release-sign]" >&2
   echo "Targets: linux-x86-64, windows-x86-64, macos-x86-64, macos-aarch64" >&2
-  echo "TYPE defaults to deb, msi, or dmg for the selected host; app-image is portable per host." >&2
+  echo "TYPE defaults to deb, exe, or dmg for the selected host; app-image is portable per host." >&2
   exit 2
 }
 

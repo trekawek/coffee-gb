@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>LPic</key>
+    <array>
+        <dict>
+            <key>Attributes</key>
+            <string>0x0000</string>
+            <key>Data</key>
+            <data>AAAAAgAAAAAAAAAAAAQAAA==</data>
+            <key>ID</key>
+            <string>5000</string>
+            <key>Name</key>
+            <string></string>
+        </dict>
+    </array>
+    <key>STR#</key>
+    <array>
+        <dict>
+            <key>Attributes</key>
+            <string>0x0000</string>
+            <key>Data</key>
+            <data>AAYNRW5nbGlzaCBkZWZhdWx0BUFncmVlCERpc2FncmVlBVByaW50B1NhdmUuLi56SWYgeW91IGFncmVlIHdpdGggdGhlIHRlcm1zIG9mIHRoaXMgbGljZW5zZSwgY2xpY2sgIkFncmVlIiB0byBhY2Nlc3MgdGhlIHNvZnR3YXJlLiAgSWYgeW91IGRvIG5vdCBhZ3JlZSwgcHJlc3MgIkRpc2FncmVlLiI=</data>
+            <key>ID</key>
+            <string>5000</string>
+            <key>Name</key>
+            <string>English buttons</string>
+        </dict>
+        <dict>
+            <key>Attributes</key>
+            <string>0x0000</string>
+            <key>Data</key>
+            <data>AAYHRW5nbGlzaAVBZ3JlZQhEaXNhZ3JlZQVQcmludAdTYXZlLi4ue0lmIHlvdSBhZ3JlZSB3aXRoIHRoZSB0ZXJtcyBvZiB0aGlzIGxpY2Vuc2UsIHByZXNzICJBZ3JlZSIgdG8gaW5zdGFsbCB0aGUgc29mdHdhcmUuICBJZiB5b3UgZG8gbm90IGFncmVlLCBwcmVzcyAiRGlzYWdyZWUiLg==</data>
+            <key>ID</key>
+            <string>5002</string>
+            <key>Name</key>
+            <string>English</string>
+        </dict>
+    </array>
+    <key>RTF </key>
+    <array>
+        <dict>
+            <key>Attributes</key>
+            <string>0x0000</string>
+            <key>Data</key>
+            <data>APPLICATION_LICENSE_TEXT</data>
+            <key>ID</key>
+            <string>5000</string>
+            <key>Name</key>
+            <string>English SLA</string>
+        </dict>
+    </array>
+    <key>styl</key>
+    <array>
+        <dict>
+            <key>Attributes</key>
+            <string>0x0000</string>
+            <key>Data</key>
+            <data>AAMAAAAAAAwACQAUAAAAAAAAAAAAAAAAACcADAAJABQBAAAAAAAAAAAAAAAAKgAMAAkAFAAAAAAAAAAAAAA=</data>
+            <key>ID</key>
+            <string>5000</string>
+            <key>Name</key>
+            <string>English SLA</string>
+        </dict>
+    </array>
+    <key>TMPL</key>
+    <array>
+        <dict>
+            <key>Attributes</key>
+            <string>0x0000</string>
+            <key>Data</key>
+            <data>E0RlZmF1bHQgTGFuZ3VhZ2UgSUREV1JEBUNvdW50T0NOVAQqKioqTFNUQwtzeXMgbGFuZyBJRERXUkQebG9jYWwgcmVzIElEIChvZmZzZXQgZnJvbSA1MDAwRFdSRBAyLWJ5dGUgbGFuZ3VhZ2U/RFdSRAQqKioqTFNURQ==</data>
+            <key>ID</key>
+            <string>128</string>
+            <key>Name</key>
+            <string>LPic</string>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -27,17 +27,13 @@ public final class NativePackageMetadata {
     public static final String DESCRIPTION =
             "Game Boy, Game Boy Color, and Super Game Boy emulator";
     public static final String SOURCE_URL = "https://github.com/trekawek/coffee-gb";
+    public static final String AUTHOR_NAME = "Tomasz Rękawek";
     public static final String COPYRIGHT =
-            "Copyright (c) 2017-2026 Tomasz Rękawek and contributors";
+            "Copyright (c) 2017-2026 " + AUTHOR_NAME + " and contributors";
     public static final String WINDOWS_UPGRADE_UUID =
             "a3d9752e-bbb8-4c51-9b4e-60cff9f55ec8";
     static final String GAME_BOY_COLOR_ROM_EXTENSION = "gb" + "c";
     static final String SUPER_GAME_BOY_ROM_EXTENSION = "s" + "gb";
-    public static final String GAME_BOY_ROM_MIME_TYPE = "application/x-gameboy-rom";
-    public static final String GAME_BOY_COLOR_ROM_MIME_TYPE =
-            "application/x-gameboy-color-rom";
-    public static final List<String> ROM_EXTENSIONS =
-            List.of("gb", GAME_BOY_COLOR_ROM_EXTENSION, "rom");
 
     /**
      * The roots are the direct static jdeps result plus the EC security provider used by
@@ -265,7 +261,7 @@ public final class NativePackageMetadata {
                         Architecture.X86_64,
                         "ico",
                         Set.of(PackageType.APP_IMAGE, PackageType.MSI, PackageType.EXE),
-                        PackageType.MSI));
+                        PackageType.EXE));
         targets.put(
                 NativeTarget.MACOS_X86_64,
                 new Target(

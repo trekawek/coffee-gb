@@ -85,6 +85,39 @@ else
     }
 fi
 
+if [[ "$package_type" == deb ]]; then
+  mapfile -d '' desktop_files < <(
+    find "$extraction" -type f -name '*.desktop' -print0
+  )
+  (( ${#desktop_files[@]} == 1 )) || {
+    echo "Expected exactly one desktop entry in the Linux package." >&2
+    exit 2
+  }
+  if grep -Eq '^MimeType=' "${desktop_files[0]}"; then
+    echo "The Linux package must not register ROM MIME types." >&2
+    exit 2
+  fi
+else
+  command -v plutil >/dev/null 2>&1 || {
+    echo "plutil is required to inspect macOS document registration." >&2
+    exit 2
+  }
+  info="$extraction/Coffee GB.app/Contents/Info.plist"
+  [[ -f "$info" && ! -L "$info" ]] || {
+    echo "The mounted macOS package has no regular Coffee GB Info.plist." >&2
+    exit 2
+  }
+  for key in \
+      CFBundleDocumentTypes \
+      UTExportedTypeDeclarations \
+      UTImportedTypeDeclarations; do
+    if plutil -extract "$key" json -o - "$info" >/dev/null 2>&1; then
+      echo "The macOS package must not declare $key." >&2
+      exit 2
+    fi
+  done
+fi
+
 java \
   -cp "${app_jars[0]}" \
   eu.rekawek.coffeegb.swing.packaging.NativePackageVerifier \

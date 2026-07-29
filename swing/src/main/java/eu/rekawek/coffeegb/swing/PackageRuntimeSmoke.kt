@@ -186,8 +186,8 @@ object PackageRuntimeSmoke {
 }
 
 /**
- * Reviewable, redistributable ROM bytes shared by the in-process runtime smoke and the installed
- * file-association smoke. The fixture contains no third-party game code or assets.
+ * Reviewable, redistributable ROM bytes used by the in-process runtime smoke. The fixture contains
+ * no third-party game code or assets.
  */
 internal fun syntheticPackageRom(): ByteArray =
     ByteArray(0x8000).also { bytes ->

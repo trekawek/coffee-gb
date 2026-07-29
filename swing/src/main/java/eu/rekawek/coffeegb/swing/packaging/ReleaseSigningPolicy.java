@@ -56,9 +56,9 @@ public final class ReleaseSigningPolicy {
                     "Release signing requires an installer artifact, not app-image");
         }
         if (target.hostOs() == NativePackageMetadata.HostOs.WINDOWS
-                && packageType != NativePackageMetadata.PackageType.MSI) {
+                && packageType != NativePackageMetadata.PackageType.EXE) {
             throw new IllegalArgumentException(
-                    "Windows release signing supports MSI only");
+                    "Windows release signing supports EXE only");
         }
         if (target.hostOs() == NativePackageMetadata.HostOs.MACOS
                 && packageType != NativePackageMetadata.PackageType.DMG) {

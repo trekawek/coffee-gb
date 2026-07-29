@@ -89,7 +89,6 @@ public final class NativePackageStager {
 
         Path stage = createFreshDirectory(request.output());
         Path input = Files.createDirectory(stage.resolve("input"));
-        Path associations = Files.createDirectory(stage.resolve("associations"));
         Path launchers = Files.createDirectory(stage.resolve("launchers"));
         Path jpackageResources = Files.createDirectory(stage.resolve("jpackage-resources"));
         Path nativeSource = input.resolve("native-source.zip");
@@ -118,30 +117,13 @@ public final class NativePackageStager {
                         .resolve("jpackage")
                         .resolve(target.hostOs().id()),
                 jpackageResources);
+        Path installerLicense = NativePackageLicense.prepare(
+                legal.resolve("LICENSE.txt"), stage, jpackageResources, target.hostOs());
 
         Path icon = input.resolve("coffee-gb." + target.iconSuffix());
         PackageIconWriter.write(target, icon);
         writeLockedNativeArchive(request.nativeSourceJar(), nativeManifest, nativeSource);
 
-        Path gameBoyAssociation = associations.resolve("game-boy-rom.properties");
-        writeUtf8(
-                gameBoyAssociation,
-                "description=Game Boy ROM\n"
-                        + "extension=gb,rom\n"
-                        + "icon=input/" + icon.getFileName() + "\n"
-                        + "mime-type=" + NativePackageMetadata.GAME_BOY_ROM_MIME_TYPE + "\n");
-        Path gameBoyColorAssociation =
-                associations.resolve("game-boy-color-rom.properties");
-        writeUtf8(
-                gameBoyColorAssociation,
-                "description=Game Boy Color ROM\n"
-                        + "extension=" + NativePackageMetadata.GAME_BOY_COLOR_ROM_EXTENSION + "\n"
-                        + "icon=input/" + icon.getFileName() + "\n"
-                        + "mime-type="
-                        + NativePackageMetadata.GAME_BOY_COLOR_ROM_MIME_TYPE
-                        + "\n");
-        List<Path> associationFiles =
-                List.of(gameBoyAssociation, gameBoyColorAssociation);
         Path windowsConsoleLauncher = launchers.resolve("windows-console.properties");
         writeUtf8(
                 windowsConsoleLauncher,
@@ -167,13 +149,17 @@ public final class NativePackageStager {
         inventory.put(
                 "runtime.root-modules",
                 String.join(",", NativePackageMetadata.RUNTIME_ROOT_MODULES));
-        inventory.put(
-                "file-associations", String.join(",", NativePackageMetadata.ROM_EXTENSIONS));
         inventory.put("signing.default", "unsigned");
         inventory.put("signing.release-hook", "explicit-environment-gated");
         inventory.put("app.jar.sha256", sha256(stagedApp));
         inventory.put("sbom.sha256", sha256(stagedSbom));
         inventory.put("native.sbom.sha256", sha256(stagedNativeSbom));
+        inventory.put(
+                "installer-license.format",
+                target.hostOs() == NativePackageMetadata.HostOs.LINUX
+                        ? "utf-8-text"
+                        : "ascii-rtf-unicode");
+        inventory.put("installer-license.sha256", sha256(installerLicense));
         Path inventoryFile = input.resolve("package-manifest.properties");
         writeMap(inventoryFile, inventory);
 
@@ -184,15 +170,14 @@ public final class NativePackageStager {
         return new StageResult(
                 stage,
                 input,
-                associations,
                 jpackageResources,
                 stagedApp,
                 stagedSbom,
                 stagedNativeSbom,
                 icon,
                 nativeSource,
-                associationFiles,
                 windowsConsoleLauncher,
+                installerLicense,
                 inventoryFile,
                 checksums,
                 appVersion,
@@ -602,24 +587,19 @@ public final class NativePackageStager {
     public record StageResult(
             Path root,
             Path input,
-            Path associations,
             Path jpackageResources,
             Path appJar,
             Path sbom,
             Path nativeSbom,
             Path icon,
             Path nativeSource,
-            List<Path> associationFiles,
             Path windowsConsoleLauncher,
+            Path installerLicense,
             Path inventory,
             Path checksums,
             String appVersion,
             NativePackageMetadata.Target target,
             NativeBundleManifest nativeManifest) {
-
-        public StageResult {
-            associationFiles = List.copyOf(associationFiles);
-        }
     }
 
     private record OptionalPath(Path path) {

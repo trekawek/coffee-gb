@@ -12,6 +12,8 @@ public class NativePackageMetadataTest {
 
     @Test
     public void declaresFourExplicitTargetsAndHostPackageTypes() {
+        assertEquals("Tomasz Rękawek", NativePackageMetadata.AUTHOR_NAME);
+        assertTrue(NativePackageMetadata.COPYRIGHT.contains(NativePackageMetadata.AUTHOR_NAME));
         assertEquals(
                 Set.of(
                         "linux-x86-64",
@@ -36,7 +38,7 @@ public class NativePackageMetadataTest {
         NativePackageMetadata.Target windows =
                 NativePackageMetadata.target(NativeTarget.WINDOWS_X86_64);
         assertEquals("ico", windows.iconSuffix());
-        assertEquals(NativePackageMetadata.PackageType.MSI, windows.defaultPackageType());
+        assertEquals(NativePackageMetadata.PackageType.EXE, windows.defaultPackageType());
 
         NativePackageMetadata.Target macArm =
                 NativePackageMetadata.target(NativeTarget.MACOS_AARCH64);

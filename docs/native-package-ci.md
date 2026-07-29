@@ -6,7 +6,7 @@ Linux. Each jpackage invocation runs on its target architecture:
 | Target | GitHub-hosted runner | Deliverable | Final-package check |
 | --- | --- | --- | --- |
 | Linux x64 | `ubuntu-24.04` | DEB | `dpkg-deb --extract` |
-| Windows x64 | `windows-2025` | MSI | `msiexec /a` administrative extraction |
+| Windows x64 | `windows-2025` | EXE | silent install into an isolated verification directory |
 | macOS x64 | `macos-15-intel` | DMG | read-only `hdiutil` mount |
 | macOS arm64 | `macos-15` | DMG | read-only `hdiutil` mount |
 
@@ -22,7 +22,8 @@ target-neutral staging integration tests, before building one unsigned installer
 then:
 
 1. verifies the minimized runtime module closure and launches the neutral JAR with that runtime;
-2. builds the host installer without a signing request;
+2. validates the canonical NFC UTF-8 license and exact `Tomasz Rękawek` author name, generates the
+   platform-safe installer license, and builds the host installer without a signing request;
 3. inspects jpackage's exact payload image and runs packaged `--version`, `--package-smoke`, and
    production desktop launches both normally and with `--debug`;
 4. writes `PACKAGE-RESULT.properties`, one canonical byte-identical Maven dependency CycloneDX
@@ -30,12 +31,11 @@ then:
    `SHA256SUMS`;
 5. unpacks or mounts the final installer and repeats strict inspection and both launch smokes from
    an isolated temporary home; and
-6. installs the DEB/MSI or copies and registers the DMG application, generates bounded `.gb`,
-   `.gbc`, and `.rom` fixtures, opens each through the host shell's default registered handler,
-   requires correlated unified-ROM-service evidence, and verifies package removal or Launch
-   Services cleanup; and
-7. uploads only the installer, both SBOMs, checksums, result manifest, and (once, from Linux) the
-   unchanged portable Maven JAR.
+6. proves the final DEB desktop entry, installed EXE registry state, and DMG application metadata
+   do not register `.gb`, `.gbc`, or `.rom` with Coffee GB; and
+7. uploads the short-lived target validation inputs, including both SBOMs, checksums, result
+   manifest, and (once, from Linux) the unchanged portable Maven JAR. The final gated release
+   bundle records the verified SBOM digests but excludes all `*.json` files.
 
 `--package-smoke` is deliberately headless, device-free, and independent of external or user ROMs.
 It generates a reviewable ROM in a private temporary 7z archive, opens it through the isolated 7z
@@ -54,17 +54,12 @@ completes the normal bounded shutdown path. A synthetic core-only smoke cannot s
 Windows keeps the primary `Coffee GB.exe` GUI launcher console-free and uses the secondary
 `Coffee GB Console.exe` launcher for debug output and the exact full-Maven-version command probe.
 
-The association gate uses `xdg-open` under Xvfb and a private desktop configuration on Linux,
-Windows ShellExecute after inspecting all three registered extension ProgIDs, and plain macOS
-Launch Services `open` after copying the application to an isolated Applications directory. Every
-`.gb`, `.gbc`, and `.rom` case must select Coffee GB as the OS default handler; the tests never
-bypass selection by naming the executable or bundle ID. The macOS test opens each document into an
-already-running instance and therefore requires `DESKTOP_OPEN_FILE`, while Linux and Windows
-require the launcher's `INITIAL_ARGUMENT` source. All targets wait for an `Opened` result from the
-shared service, require the expected normalized path, a matching direct-file origin, source, and
-cartridge title, record the exact process ID, then require that process's normal bounded-shutdown
-evidence and exit before the next fixture. Only afterward do they prove the installed
-launcher/registration was removed.
+The no-registration gate inspects the exact final artifacts. Linux rejects any `MimeType` in the
+packaged Coffee GB desktop entry. macOS rejects `CFBundleDocumentTypes`,
+`UTExportedTypeDeclarations`, and `UTImportedTypeDeclarations` in the mounted application. Windows
+silently installs the EXE into an isolated directory and rejects any `.gb`, `.gbc`, or `.rom`
+extension class, `OpenWithProgids`, or `OpenWithList` entry that resolves to Coffee GB. These checks
+run again for protected signed builds.
 
 The content verifier bounds traversal and rejects symlinks in application input, a second runtime,
 foreign or altered target natives, ROM-like files, signing-store exports, private-key/token-shaped
@@ -94,8 +89,7 @@ Foreign natives and extra, duplicate, traversing, compressed, or symlink entries
 
 Maven's repository cache is keyed only by `pom.xml` inputs. CI never caches build output,
 `~/.coffee-gb`, package smoke homes, settings, ROM directories, batteries, states, device data, or
-native extraction caches. The generated association ROM remains only in non-uploaded `target/`
-smoke output. Per-target artifacts have seven-day retention; the complete gated bundle has
+native extraction caches. Per-target artifacts have seven-day retention; the complete gated bundle has
 fourteen-day retention.
 
 ## Tagged publication
@@ -108,12 +102,12 @@ commit ID; every matrix and gate checkout uses that ID and verifies `HEAD`, and 
 re-fetched and re-peeled before each promotion. A moved tag therefore fails closed. The release
 matrix records the bound source commit.
 
-Publication waits for the unsigned build, installer inspection, desktop/debug launch, association,
-and uninstall gates on all four targets. A Linux release-gate job independently downloads the
-results, requires one default installer, one canonical byte-identical Maven dependency SBOM, and
-one exact target-native SBOM per target, renames installers with explicit architecture,
-deduplicates the Maven SBOM into one shared release copy, retains detached signatures, and creates
-one release-level checksum file. If protected signing was requested, the workflow then rebuilds
+Publication waits for the unsigned build, installer inspection, desktop/debug launch, and
+no-registration gates on all four targets. A Linux release-gate job independently downloads the
+results, requires one default package, one canonical byte-identical Maven dependency SBOM, and
+one exact target-native SBOM per target, renames packages with explicit architecture, records the
+verified SBOM digests without copying JSON into the release bundle, retains detached signatures,
+and creates one release-level checksum file. If protected signing was requested, the workflow then rebuilds
 the same immutable commit in
 the `native-release` environment, signs and reverifies all four targets, and assembles a replacement
 complete bundle.
@@ -140,7 +134,7 @@ Normal and pull-request artifacts are unsigned and the matrix records that fact.
 dispatch can request `sign_native_packages`; only then, after the unsigned four-target gate, does
 the protected `native-release` matrix import ephemeral credentials and invoke `--release-sign`.
 The Windows path signs and verifies every visible executable/DLL in a prebuilt app image, creates
-an MSI from that signed image, signs and verifies the MSI, then verifies the installed executable
+an EXE from that signed image, signs and verifies the EXE, then verifies the installed executable
 payload. Digest-locked third-party native-source bytes live in a deterministic stored ZIP, so
 platform signing seals the archive without changing the upstream sizes or SHA-256 values that the
 runtime verifies while extracting.
@@ -175,8 +169,8 @@ must update the adjacent version comment and revalidate all workflow tests befor
 
 - Linux: verify `SHA256SUMS`, install the DEB with the distribution package tool, and remove the
   `coffee-gb` package with that same tool.
-- Windows: verify `SHA256SUMS`, open the MSI, and remove Coffee GB through Installed Apps or the
-  same MSI product identity.
+- Windows: verify `SHA256SUMS`, open the EXE, and remove Coffee GB through Installed Apps or the
+  same EXE product identity.
 - macOS: verify the checksum, open the DMG, copy Coffee GB to Applications, eject the image, and
   remove the application by moving it to Trash.
 

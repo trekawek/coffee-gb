@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing.packaging.integration;
 import eu.rekawek.coffeegb.swing.packaging.NativeBundleEntry;
 import eu.rekawek.coffeegb.swing.packaging.NativeBundleManifest;
 import eu.rekawek.coffeegb.swing.packaging.NativeComponentInventory;
+import eu.rekawek.coffeegb.swing.packaging.NativePackageMetadata;
 import eu.rekawek.coffeegb.swing.packaging.NativePackageStager;
 import eu.rekawek.coffeegb.swing.packaging.NativePackageTool;
 import eu.rekawek.coffeegb.swing.packaging.NativeTarget;
@@ -89,6 +90,7 @@ public class NativePackageIT {
             }
 
             assertLegalInventory(result.input().resolve("legal"), target);
+            assertInstallerLicense(result);
             NativeComponentInventory.verifyNativeSbom(
                     result.nativeSbom(), target, expectedVersion);
             String nativeSbom = Files.readString(result.nativeSbom());
@@ -111,30 +113,20 @@ public class NativePackageIT {
             assertTrue(packageManifest.contains(
                     "native.sbom.sha256="
                             + NativePackageStager.sha256(result.nativeSbom())));
+            assertTrue(packageManifest.contains(
+                    "installer-license.sha256="
+                            + NativePackageStager.sha256(result.installerLicense())));
             assertStageChecksums(result);
             assertReleaseInventory(result);
             assertNoForbiddenStageContent(result, app);
             assertTrue(Files.size(result.icon()) > 5_000);
-            assertEquals(2, result.associationFiles().size());
-            for (Path association : result.associationFiles()) {
-                assertTrue(
-                        Files.readString(association)
-                                .contains("icon=input/coffee-gb."
-                                        + result.target().iconSuffix()));
-            }
-            String gameBoyAssociation = Files.readString(result.associationFiles().get(0));
-            assertTrue(gameBoyAssociation.contains("extension=gb,rom\n"));
-            assertTrue(gameBoyAssociation.contains("mime-type=application/x-gameboy-rom\n"));
-            String gameBoyColorAssociation =
-                    Files.readString(result.associationFiles().get(1));
-            assertTrue(gameBoyColorAssociation.contains("extension=gbc\n"));
-            assertTrue(gameBoyColorAssociation
-                    .contains("mime-type=application/x-gameboy-color-rom\n"));
+            assertFalse(Files.exists(result.root().resolve("associations")));
             assertEquals(
                     "arguments=--debug\nwin-console=true\n",
                     Files.readString(result.windowsConsoleLauncher()));
             String inventory = Files.readString(result.inventory());
             assertTrue(inventory.contains("native.source-format=stored-zip\n"));
+            assertFalse(inventory.contains("file-associations"));
             assertTrue(inventory.contains(
                     "native.source.sha256="
                             + NativePackageStager.sha256(result.nativeSource())
@@ -144,6 +136,8 @@ public class NativePackageIT {
                         result.jpackageResources().resolve("Coffee GB.desktop"));
                 assertTrue(desktopTemplate.contains("Exec=APPLICATION_LAUNCHER %f"));
                 assertTrue(desktopTemplate.contains("Categories=Game;"));
+                assertFalse(desktopTemplate.contains("MimeType="));
+                assertFalse(desktopTemplate.contains("DESKTOP_MIMES"));
                 assertFalse(desktopTemplate.contains("DEPLOY_BUNDLE_CATEGORY"));
             }
             assertEquals(DETERMINISTIC_TIME, Files.getLastModifiedTime(result.root()));
@@ -213,6 +207,9 @@ public class NativePackageIT {
         }
         assertEquals(expected, actual);
         assertTrue(
+                Files.readString(legal.resolve("LICENSE.txt"), StandardCharsets.UTF_8)
+                        .contains(NativePackageMetadata.AUTHOR_NAME));
+        assertTrue(
                 Files.readString(legal.resolve("THIRD-PARTY-NOTICES.txt"))
                         .contains("https://github.com/trekawek/coffee-gb"));
         assertTrue(
@@ -225,6 +222,39 @@ public class NativePackageIT {
                 assertTrue(file.startsWith(legal));
                 assertTrue(component.id(), Files.size(file) > 0);
             }
+        }
+    }
+
+    private static void assertInstallerLicense(NativePackageStager.StageResult result)
+            throws Exception {
+        NativePackageMetadata.HostOs hostOs = result.target().hostOs();
+        String manifest = Files.readString(result.inventory(), StandardCharsets.UTF_8);
+        if (hostOs == NativePackageMetadata.HostOs.LINUX) {
+            assertEquals(result.input().resolve("legal/LICENSE.txt"), result.installerLicense());
+            assertTrue(manifest.contains("installer-license.format=utf-8-text\n"));
+            assertTrue(
+                    Files.readString(result.installerLicense(), StandardCharsets.UTF_8)
+                            .contains(NativePackageMetadata.AUTHOR_NAME));
+            return;
+        }
+
+        byte[] bytes = Files.readAllBytes(result.installerLicense());
+        for (byte value : bytes) {
+            assertTrue("Installer RTF must be ASCII", (value & 0x80) == 0);
+        }
+        String rtf = new String(bytes, StandardCharsets.US_ASCII);
+        assertTrue(rtf.startsWith("{\\rtf1\\ansi\\ansicpg1252"));
+        assertTrue(rtf.contains("Tomasz R\\u281?kawek"));
+        assertFalse(rtf.contains("Tomasz Rekawek"));
+        assertFalse(rtf.contains("ƒô"));
+        assertTrue(manifest.contains("installer-license.format=ascii-rtf-unicode\n"));
+
+        if (hostOs == NativePackageMetadata.HostOs.MACOS) {
+            String template = Files.readString(
+                    result.jpackageResources().resolve("Coffee GB-license.plist"),
+                    StandardCharsets.US_ASCII);
+            assertTrue(template.contains("<key>RTF </key>"));
+            assertTrue(template.contains("<data>APPLICATION_LICENSE_TEXT</data>"));
         }
     }
 

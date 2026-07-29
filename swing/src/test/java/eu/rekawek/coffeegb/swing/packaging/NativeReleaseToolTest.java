@@ -25,16 +25,11 @@ public class NativeReleaseToolTest {
     public void completeReleaseMatrixAndChecksumsAreRequired() throws Exception {
         Path release = temporaryFolder.newFolder("release").toPath();
         Map<String, String> matrix = new LinkedHashMap<>();
-        matrix.put("schema", "3");
+        matrix.put("schema", "4");
         matrix.put("app.version", "1.7.15");
         matrix.put("source.commit", "0123456789abcdef0123456789abcdef01234567");
         addFile(release, matrix, "portable", "coffee-gb-1.7.15.jar");
-        Path sbom = NativePackagingTestSupport.writeMavenSbom(
-                release.resolve(
-                        NativePackageMetadata.releaseSbomFileName("1.7.15")),
-                "1.7.15");
-        matrix.put("sbom.path", sbom.getFileName().toString());
-        matrix.put("sbom.sha256", NativePackageStager.sha256(sbom));
+        matrix.put("sbom.sha256", "0".repeat(64));
         for (NativeTarget target : NativeTarget.values()) {
             String prefix = "target." + target.id();
             String suffix =
@@ -46,18 +41,7 @@ public class NativeReleaseToolTest {
             String signing = target == NativeTarget.LINUX_X86_64
                     ? "verified-detached"
                     : "unsigned";
-            Path nativeSbom = NativePackagingTestSupport.writeNativeSbom(
-                    release.resolve(
-                            NativePackageMetadata.releaseNativeSbomFileName(
-                                    "1.7.15", target)),
-                    target,
-                    "1.7.15");
-            matrix.put(
-                    prefix + ".native-sbom.path",
-                    nativeSbom.getFileName().toString());
-            matrix.put(
-                    prefix + ".native-sbom.sha256",
-                    NativePackageStager.sha256(nativeSbom));
+            matrix.put(prefix + ".native-sbom.sha256", "1".repeat(64));
             matrix.put(prefix + ".signing", signing);
             if (target == NativeTarget.LINUX_X86_64) {
                 addFile(
@@ -71,6 +55,13 @@ public class NativeReleaseToolTest {
         writeChecksums(release);
 
         NativeReleaseTool.verifyReleaseDirectory(release, "1.7.15");
+
+        Path unexpectedJson = Files.writeString(
+                release.resolve("unexpected.json"), "{}", StandardCharsets.UTF_8);
+        assertThrows(
+                java.io.IOException.class,
+                () -> NativeReleaseTool.verifyReleaseDirectory(release, "1.7.15"));
+        Files.delete(unexpectedJson);
 
         Files.writeString(
                 release.resolve(matrix.get("target.macos-aarch64.path")),

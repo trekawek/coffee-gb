@@ -126,15 +126,8 @@ public final class NativePackagePlan {
             add(
                     command,
                     "--license-file",
-                    stage.input().resolve("legal/LICENSE.txt").toString());
+                    stage.installerLicense().toString());
         }
-        if (packageType != NativePackageMetadata.PackageType.APP_IMAGE
-                || stage.target().hostOs() == NativePackageMetadata.HostOs.MACOS) {
-            // A predefined macOS app image keeps its existing Info.plist. Embed document
-            // associations before signing so the DMG wrapper cannot silently lose them.
-            addFileAssociations(command, stage);
-        }
-
         addPlatformOptions(command, stage.target(), packageType);
         if (stage.target().hostOs() == NativePackageMetadata.HostOs.WINDOWS) {
             add(
@@ -183,8 +176,7 @@ public final class NativePackagePlan {
         add(
                 command,
                 "--license-file",
-                stage.input().resolve("legal/LICENSE.txt").toString());
-        addFileAssociations(command, stage);
+                stage.installerLicense().toString());
         addPlatformOptions(command, stage.target(), packageType);
         return List.copyOf(command);
     }
@@ -295,10 +287,4 @@ public final class NativePackagePlan {
         command.add(value);
     }
 
-    private static void addFileAssociations(
-            List<String> command, NativePackageStager.StageResult stage) {
-        for (Path association : stage.associationFiles()) {
-            add(command, "--file-associations", association.toString());
-        }
-    }
 }

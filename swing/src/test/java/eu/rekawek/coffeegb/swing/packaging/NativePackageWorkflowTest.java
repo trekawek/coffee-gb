@@ -19,11 +19,8 @@ public class NativePackageWorkflowTest {
         String release = normalizedText(workflows.resolve("maven-release.yml"));
         String maven = normalizedText(workflows.resolve("maven.yml"));
         Path packaging = Path.of("../packaging").toAbsolutePath().normalize();
-        String associationSh =
-                normalizedText(packaging.resolve("verify-native-association.sh"));
-        String associationPs1 =
-                normalizedText(packaging.resolve("verify-native-association.ps1"));
         String packageSh = normalizedText(packaging.resolve("verify-native-package.sh"));
+        String packagePs1 = normalizedText(packaging.resolve("verify-native-package.ps1"));
 
         for (String target :
                 new String[] {
@@ -46,22 +43,21 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("cache: maven"));
         assertTrue(packages.contains("cache-dependency-path: \"**/pom.xml\""));
         assertTrue(packages.contains("persist-credentials: false"));
+        assertEquals(2, occurrences(packages, "package_type: exe"));
+        assertFalse(packages.contains("package_type: msi"));
         assertTrue(packages.contains("verify-native-package.sh"));
         assertTrue(packages.contains("verify-native-package.ps1"));
-        assertTrue(packages.contains("verify-native-association.sh"));
-        assertTrue(packages.contains("verify-native-association.ps1"));
-        assertTrue(packages.contains(
-                "Install package and open the synthetic ROM through the OS association"));
+        assertFalse(packages.contains("verify-native-association"));
+        assertFalse(packages.contains("OS association"));
         assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
         assertEquals(2, occurrences(packages,
                 "sudo apt-get install --yes --no-install-recommends "
-                        + "desktop-file-utils gnome-menus libfile-mimeinfo-perl "
-                        + "libglib2.0-bin shared-mime-info xdg-utils"));
+                        + "desktop-file-utils gnome-menus xdg-utils"));
         assertEquals(2, occurrences(packages, "command -v desktop-file-validate"));
-        assertEquals(2, occurrences(packages, "command -v gio"));
-        assertEquals(2, occurrences(packages, "command -v mimetype"));
-        assertEquals(2, occurrences(packages, "command -v update-mime-database"));
+        assertEquals(0, occurrences(packages, "command -v gio"));
+        assertEquals(0, occurrences(packages, "command -v mimetype"));
+        assertEquals(0, occurrences(packages, "command -v update-mime-database"));
         assertEquals(2, occurrences(packages, "command -v xdg-desktop-menu"));
         assertEquals(2, occurrences(packages, "test -d /etc/xdg/menus"));
         assertEquals(2, occurrences(packages, "test -d /usr/share/desktop-directories"));
@@ -92,32 +88,14 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("name: native-release-bundle"));
         assertFalse(packages.contains("gh release"));
         assertFalse(packages.contains("contents: write"));
-        for (String extension : new String[] {"gb", "gbc", "rom"}) {
-            assertTrue(associationSh.contains(extension));
-            assertTrue(associationPs1.contains("." + extension));
-        }
-        assertTrue(associationSh.contains("gio open \"$fixture\""));
-        assertFalse(associationSh.contains("xdg-open \"$fixture\""));
-        assertFalse(associationSh.contains("open -b eu.rekawek.coffeegb"));
-        assertTrue(associationPs1.contains("Start-Process -FilePath $Fixture.Path"));
-        assertTrue(associationPs1.contains("Coffee GB Console.exe"));
-        assertTrue(associationPs1.contains("$env:COFFEE_GB_RELEASE_SIGNING -eq \"true\""));
-        assertTrue(associationPs1.contains("signtool.exe"));
-        assertTrue(associationPs1.contains("/all"));
-        assertTrue(associationSh.contains("codesign --verify --deep --strict"));
-        assertTrue(associationSh.contains(
-                "com.apple.security.cs.disable-library-validation"));
-        assertTrue(associationSh.contains("CFBundleDocumentTypes"));
-        assertTrue(associationSh.contains("UTExportedTypeDeclarations"));
-        assertTrue(associationSh.contains("eu.rekawek.coffeegb.gb"));
-        assertTrue(associationSh.contains("eu.rekawek.coffeegb.gbc"));
-        assertTrue(associationSh.contains(
-                "grep -F \"\\\"$content_type\\\"\" <<<\"$documents\""));
-        assertTrue(associationSh.contains(
-                "grep -F \"\\\"$extension\\\"\" <<<\"$exported_types\""));
-        assertLicensedDmgAttach(associationSh, "\"$mount_point\"");
+        assertTrue(packageSh.contains("grep -Eq '^MimeType='"));
+        assertTrue(packageSh.contains("CFBundleDocumentTypes"));
+        assertTrue(packageSh.contains("UTExportedTypeDeclarations"));
+        assertTrue(packageSh.contains("UTImportedTypeDeclarations"));
+        assertTrue(packagePs1.contains("Assert-NoRomAssociations"));
+        assertTrue(packagePs1.contains("OpenWithProgids"));
+        assertTrue(packagePs1.contains("OpenWithList"));
         assertLicensedDmgAttach(packageSh, "\"$extraction\"");
-        assertFalse(associationSh.contains("-acceptlicense"));
         assertFalse(packageSh.contains("-acceptlicense"));
 
         assertTrue(release.contains("uses: ./.github/workflows/native-packages.yml"));
@@ -141,6 +119,8 @@ public class NativePackageWorkflowTest {
         assertTrue(release.contains("--draft"));
         assertTrue(release.contains("gh release delete-asset"));
         assertTrue(release.contains("gh release upload \"$tag\" \"${release_paths[@]}\""));
+        assertTrue(release.contains("must not contain JSON artifacts"));
+        assertTrue(release.contains("-iname '*.json'"));
         assertTrue(release.contains("GitHub release asset names differ"));
         assertTrue(release.contains("cmp --silent"));
         assertTrue(release.contains("--draft=false"));
