@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -162,12 +161,6 @@ public class Vf001Zook implements MemoryController {
     private record Vf001ZookState(ComponentState<MemoryController> delegateMemento,
                                    int[] stream, int streamLength, int bankPortRun)
             implements ComponentState<MemoryController> {
-    }
-
-    /** Importer-only compatibility record for released local snapshots. */
-    private record Vf001ZookMemento(Memento<MemoryController> delegateMemento,
-                                     int[] stream, int streamLength, int bankPortRun)
-            implements Memento<MemoryController> {
     }
 
     /*

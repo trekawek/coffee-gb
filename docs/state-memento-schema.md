@@ -1,6 +1,6 @@
 # Audited state-record schema
 
-This is the exact captured-field inventory for all 92 production record types admitted by
+This is the exact captured-field inventory for all 93 production record types admitted by
 `StateTypeRegistry`. Each bullet's one-based position is its stable StateFile-v1 record type ID;
 each line names the non-serializable `ComponentState` record and every component captured by
 `captureState`. The
@@ -128,3 +128,4 @@ altering the 1.7.13/1.7.14 migration schema listed below.
 - `eu.rekawek.coffeegb.core.gpu.Gpu$PendingPpuWriteState`: address, value, mask, remainingDots
 - `eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer$DelayedWindowWriteState`: value, remainingDots
 - `eu.rekawek.coffeegb.core.memory.cart.type.XploderGb$XploderGbState`: batteryMemento, ram, selectedRomBank, selectedRamBank, ramUpdated
+- `eu.rekawek.coffeegb.core.memory.cart.type.Vf001Zook$Vf001ZookState`: delegateMemento, stream, streamLength, bankPortRun

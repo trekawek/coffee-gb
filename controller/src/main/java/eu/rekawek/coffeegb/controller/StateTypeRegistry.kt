@@ -106,6 +106,7 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWriteState",
           "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$DelayedWindowWriteState",
           "eu.rekawek.coffeegb.core.memory.cart.type.XploderGb\$XploderGbState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Vf001Zook\$Vf001ZookState",
       )
 
   val legacyRecordClassNames =
