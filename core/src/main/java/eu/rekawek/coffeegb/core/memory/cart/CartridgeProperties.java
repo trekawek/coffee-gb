@@ -27,6 +27,7 @@ public final class CartridgeProperties {
         MAKON_NT_OLD_2,
         LI_CHENG,
         VF001_ZOOK,
+        VF001_GENERAL,
         BBD,
         SINTAX,
         SACHEN_MMC1,
@@ -118,6 +119,8 @@ public final class CartridgeProperties {
                     Mapper.LI_CHENG),
             mapper("Vast Fame VF001 Zook protection", CartridgeProperties::isVf001Zook,
                     Mapper.VF001_ZOOK),
+            mapper("Vast Fame VF001 protection", CartridgeProperties::isVf001General,
+                    Mapper.VF001_GENERAL),
             mapper("BBD unlicensed mapper", CartridgeProperties::isBbd,
                     Mapper.BBD),
             mapper("Sintax unlicensed mapper", CartridgeProperties::isSintax,
@@ -395,6 +398,12 @@ public final class CartridgeProperties {
         };
         return info.crc32(0x0184, 0x30) == 0x42b773b8
                 && matches(info.data, 0x3ef5, bankSelectThunk);
+    }
+
+    private static boolean isVf001General(RomInfo info) {
+        // Zhihuan Wang 2 shares its secondary-logo signature with genuine GGB81
+        // cartridges, but this exact image programs the distinct VF001 protocol.
+        return info.crc32() == 0xe6748d1f;
     }
 
     private static boolean isBbd(RomInfo info) {
