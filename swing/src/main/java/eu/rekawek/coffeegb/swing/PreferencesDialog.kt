@@ -67,6 +67,7 @@ internal data class PreferencesEdit(
         >,
     val gamepads: Map<Int, ApplicationSettings.GamepadSelection>,
     val gamepadTunings: Map<String, ApplicationSettings.GamepadTuning>,
+    val cameraDeviceIndex: Int,
     val audio: ApplicationSettings.Audio,
     val saves: ApplicationSettings.Saves? = null,
     val advanced: ApplicationSettings.Advanced? = null,
@@ -106,6 +107,7 @@ internal data class PreferencesEdit(
                   gamepads = gamepads,
                   gamepadTunings = gamepadTunings,
               ),
+          peripherals = current.peripherals.copy(cameraDeviceIndex = cameraDeviceIndex),
       )
 }
 
@@ -168,6 +170,8 @@ internal class PreferencesPanel private constructor(
   internal val keyboardEditor = KeyboardMappingEditor(initial.input, defaults.input)
   internal val gamepadEditor =
       GamepadPreferencesEditor(initial.input, defaults.input, gamepadSnapshots)
+  internal val peripheralsEditor =
+      PeripheralsPreferencesEditor(initial.peripherals, defaults.peripherals)
   internal val audioEditor =
       AudioPreferencesEditor(initial.audio, defaults.audio, audioDevices)
   internal val savesEditor =
@@ -185,6 +189,7 @@ internal class PreferencesPanel private constructor(
     tabs.addTab("Display", JScrollPane(displayEditor).apply { border = null })
     tabs.addTab("Input", JScrollPane(keyboardEditor).apply { border = null })
     tabs.addTab("Gamepads", JScrollPane(gamepadEditor).apply { border = null })
+    tabs.addTab("Peripherals", JScrollPane(peripheralsEditor).apply { border = null })
     tabs.addTab("Audio", JScrollPane(audioEditor).apply { border = null })
     tabs.addTab("Saves", JScrollPane(savesEditor).apply { border = null })
     tabs.addChangeListener {
@@ -211,6 +216,7 @@ internal class PreferencesPanel private constructor(
     systemEditor.restoreDefaults()
     keyboardEditor.resetToDefaults()
     gamepadEditor.restoreDefaults()
+    peripheralsEditor.restoreDefaults()
     audioEditor.restoreDefaults()
     savesEditor.restoreDefaults()
     clearErrors()
@@ -281,6 +287,7 @@ internal class PreferencesPanel private constructor(
         keyboard = input.keyboard,
         gamepads = gamepad.selections,
         gamepadTunings = gamepad.tunings,
+        cameraDeviceIndex = peripheralsEditor.validatedPeripherals().cameraDeviceIndex,
         audio = audio,
         saves = saves,
         advanced = systemEditor.validatedAdvanced(),
@@ -507,8 +514,9 @@ internal class PreferencesPanel private constructor(
     const val DISPLAY_TAB = 2
     const val INPUT_TAB = 3
     const val GAMEPADS_TAB = 4
-    const val AUDIO_TAB = 5
-    const val SAVES_TAB = 6
+    const val PERIPHERALS_TAB = 5
+    const val AUDIO_TAB = 6
+    const val SAVES_TAB = 7
     val ERROR_COLOR = Color(0xB0, 0x00, 0x20)
     val CONFIRMATION_OPTIONS =
         listOf(

@@ -246,9 +246,9 @@ local SGB controller slots, so every linked machine masks the live four-slot des
 - **Broad cartridge support:** MBC1/1M, MBC2, MBC3 with RTC and MBC30, MBC5,
   MBC6 with flash, MBC7 with EEPROM/accelerometer, MMM01, HuC1, HuC3, TAMA5,
   Pocket Camera, and numerous unlicensed and multicart mappers.
-- **Accessories:** webcam-backed Game Boy Camera, Game Boy Printer with PNG
-  export, Barcode Boy, Full Changer infrared, Datel Action Replay pass-through,
-  cartridge rumble, and tilt input.
+- **Accessories:** webcam-backed Game Boy Camera with a persisted camera-device choice,
+  Game Boy Printer with PNG export, Barcode Boy, Full Changer infrared, Datel Action
+  Replay pass-through, cartridge rumble, and tilt input.
 - **Desktop controls and display:** keyboard and game-controller input, scaling,
   rotation, grayscale, CGB color correction, LCD ghosting, and an SGB-border toggle.
 - **Cheats:** Game Genie and GameShark codes, plus a bundled searchable

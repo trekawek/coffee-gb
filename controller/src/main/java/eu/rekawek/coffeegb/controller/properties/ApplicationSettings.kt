@@ -17,6 +17,7 @@ data class ApplicationSettings(
     val display: Display = Display(),
     val audio: Audio = Audio(),
     val input: Input = Input.defaults(),
+    val peripherals: Peripherals = Peripherals(),
     val saves: Saves = Saves(),
     val advanced: Advanced = Advanced(),
     val desktop: Desktop = Desktop(),
@@ -379,6 +380,18 @@ data class ApplicationSettings(
     }
   }
 
+  /** Host peripherals whose selection is independent from emulated link-port state. */
+  data class Peripherals(
+      val cameraDeviceIndex: Int = DEFAULT_CAMERA_DEVICE_INDEX,
+  ) {
+    init {
+      require(cameraDeviceIndex in MIN_CAMERA_DEVICE_INDEX..MAX_CAMERA_DEVICE_INDEX) {
+        "Camera device index must be between $MIN_CAMERA_DEVICE_INDEX and " +
+            MAX_CAMERA_DEVICE_INDEX
+      }
+    }
+  }
+
   data class GamepadTuning(
       val movementDeadZone: Int = DEFAULT_GAMEPAD_MOVEMENT_DEAD_ZONE,
       val tiltDeadZone: Int = DEFAULT_GAMEPAD_TILT_DEAD_ZONE,
@@ -549,7 +562,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 6
+    const val CURRENT_SCHEMA_VERSION = 7
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
@@ -561,6 +574,9 @@ data class ApplicationSettings(
     const val DEFAULT_GAMEPAD_TILT_DEAD_ZONE = 4_096
     const val MAX_GAMEPAD_DEAD_ZONE = 32_766
     const val MAX_GAMEPAD_TUNINGS = 32
+    const val MIN_CAMERA_DEVICE_INDEX = 0
+    const val DEFAULT_CAMERA_DEVICE_INDEX = 0
+    const val MAX_CAMERA_DEVICE_INDEX = 15
     const val MIN_EXPLICIT_DISPLAY_SCALE = 1
     const val DEFAULT_EXPLICIT_DISPLAY_SCALE = 2
     const val MAX_EXPLICIT_DISPLAY_SCALE = 4

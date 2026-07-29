@@ -69,6 +69,7 @@ class PreferencesDialogTest {
                 ),
             audio = ApplicationSettings.Audio(enabled = false),
             input = currentInput,
+            peripherals = ApplicationSettings.Peripherals(cameraDeviceIndex = 3),
             saves = ApplicationSettings.Saves(batterySavesEnabled = false),
             advanced =
                 ApplicationSettings.Advanced(
@@ -97,6 +98,7 @@ class PreferencesDialogTest {
                 mapOf(
                     "sdl-" + "b".repeat(64) to
                         ApplicationSettings.GamepadTuning(tiltDeadZone = 1_024)),
+            cameraDeviceIndex = 6,
             audio =
                 ApplicationSettings.Audio(
                     enabled = true,
@@ -118,6 +120,7 @@ class PreferencesDialogTest {
     assertTrue(updated.input.keyboard.isEmpty())
     assertEquals(edit.gamepads, updated.input.gamepads)
     assertEquals(edit.gamepadTunings, updated.input.gamepadTunings)
+    assertEquals(6, updated.peripherals.cameraDeviceIndex)
     assertEquals(edit.display, updated.display)
     assertEquals(edit.audio, updated.audio)
     assertEquals(current.saves, updated.saves)
@@ -149,6 +152,7 @@ class PreferencesDialogTest {
             keyboard = latest.input.keyboard,
             gamepads = latest.input.gamepads,
             gamepadTunings = latest.input.gamepadTunings,
+            cameraDeviceIndex = latest.peripherals.cameraDeviceIndex,
             audio = latest.audio,
             advanced = dialogSnapshot.copy(bootstrapMode = BootstrapMode.NORMAL),
         )
@@ -185,6 +189,10 @@ class PreferencesDialogTest {
         assertEquals(ApplicationSettings.DEFAULT_RECENT_FILE_CAPACITY, received?.recentFileCapacity)
         assertEquals(ApplicationSettings.Input.defaults().keyboard, received?.keyboard)
         assertEquals(ApplicationSettings.Input.defaults().gamepads, received?.gamepads)
+        assertEquals(
+            ApplicationSettings.DEFAULT_CAMERA_DEVICE_INDEX,
+            received?.cameraDeviceIndex,
+        )
         assertEquals(ApplicationSettings.Display(), received?.display)
         assertEquals(ApplicationSettings.Audio(), received?.audio)
         assertEquals(ApplicationSettings.Saves(), received?.saves)
@@ -410,7 +418,16 @@ class PreferencesDialogTest {
         assertEquals("Recent files to keep", panel.recentCapacity.accessibleContext.accessibleName)
         assertFalse(panel.tabs.accessibleContext.accessibleName.isNullOrBlank())
         assertEquals(
-            listOf("General", "System", "Display", "Input", "Gamepads", "Audio", "Saves"),
+            listOf(
+                "General",
+                "System",
+                "Display",
+                "Input",
+                "Gamepads",
+                "Peripherals",
+                "Audio",
+                "Saves",
+            ),
             (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
         )
       }

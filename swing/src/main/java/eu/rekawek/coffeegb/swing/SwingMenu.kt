@@ -118,6 +118,8 @@ internal class SwingMenu(
 
   private var pauseSupport: Boolean = false
 
+  private var cameraDeviceIndex = properties.applicationSettings.peripherals.cameraDeviceIndex
+
   private lateinit var cameraController: CameraPeripheralController<WebcamCameraSource>
 
   private lateinit var cameraShutdown: BoundedCameraShutdown
@@ -220,6 +222,16 @@ internal class SwingMenu(
   fun closeCameraAfterSuccessfulStop(timeoutMillis: Long) {
     if (::cameraShutdown.isInitialized) {
       cameraShutdown.closeAndAwait(timeoutMillis)
+    }
+  }
+
+  fun applyCameraSettings(peripherals: ApplicationSettings.Peripherals) {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Camera preferences must be applied from the Event Dispatch Thread"
+    }
+    cameraDeviceIndex = peripherals.cameraDeviceIndex
+    if (::cameraController.isInitialized) {
+      cameraController.selectDevice(peripherals.cameraDeviceIndex)
     }
   }
 
@@ -638,6 +650,7 @@ internal class SwingMenu(
     cameraController =
         CameraPeripheralController(
             opener = WebcamCameraSource::open,
+            initialDeviceIndex = cameraDeviceIndex,
             sourceCloser = WebcamCameraSource::close,
             publisher = PocketCamera::setCameraSource,
             stateConsumer = { state ->
@@ -653,7 +666,7 @@ internal class SwingMenu(
               if (state == CameraPeripheralUiState.OpenFailed && window.isDisplayable) {
                 JOptionPane.showMessageDialog(
                     window,
-                    "No webcam could be opened.",
+                    "Camera ${cameraDeviceIndex + 1} could not be opened.",
                     "Game Boy Camera",
                     JOptionPane.ERROR_MESSAGE,
                 )
