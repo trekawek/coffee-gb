@@ -1000,6 +1000,26 @@ class LinkedController(
       }
     }
 
+    // Standalone peripherals and netplay are mutually exclusive owners of the physical serial
+    // port. The desktop normally stops netplay before posting this request, but non-UI callers
+    // still receive a deterministic, presentation-safe conflict instead of a silently lost event.
+    eventBus.register<Controller.SetSerialPeripheralEvent> { request ->
+      rejectStandaloneSerialRequest(request.selection)
+    }
+    eventBus.register<Controller.SetPrinterEvent> { request ->
+      if (request.enabled) rejectStandaloneSerialRequest(Controller.SerialPeripheralSelection.PRINTER)
+    }
+    eventBus.register<Controller.SetBarcodeBoyEvent> { request ->
+      if (request.enabled) {
+        rejectStandaloneSerialRequest(Controller.SerialPeripheralSelection.BARCODE_BOY)
+      }
+    }
+    eventBus.register<Controller.SetGpsReceiverEvent> { request ->
+      if (request.enabled) {
+        rejectStandaloneSerialRequest(Controller.SerialPeripheralSelection.GPS_RECEIVER)
+      }
+    }
+
     // This subscription intentionally bypasses the bounded event queue: disconnect cleanup must
     // be able to release the exact old connection's retained budget even when that queue is full.
     eventBus.register<PeerEventSourceDisconnectedEvent> {
@@ -1010,6 +1030,17 @@ class LinkedController(
 
   override fun startController() {
     thread.start()
+  }
+
+  private fun rejectStandaloneSerialRequest(
+      selection: Controller.SerialPeripheralSelection
+  ) {
+    postHostEventSafely(
+        Controller.SerialPeripheralStatusEvent(
+            selection,
+            Controller.SerialPeripheralStatus.UNAVAILABLE,
+            Controller.SerialPeripheralError.PORT_OWNED_BY_LINK,
+        ))
   }
 
   fun runFrame() {

@@ -175,16 +175,141 @@ interface Controller : AutoCloseable {
   /** Posted while the rewind key is held; the emulation plays backwards while active. */
   data class RewindEvent(val active: Boolean) : Event
 
-  /** Connects or disconnects the Barcode Boy scanner on the link port (resets the game). */
+  /**
+   * The exclusive device selected for a standalone Game Boy link port.
+   *
+   * [PEER_TO_PEER] preserves the historical default: an unconnected link cable endpoint that can
+   * later be paired by a linked controller. [NONE] models a physically empty port. Mobile Adapter
+   * backend availability is reported separately through [SerialPeripheralStatusEvent].
+   */
+  enum class SerialPeripheralSelection {
+    NONE,
+    PRINTER,
+    BARCODE_BOY,
+    GPS_RECEIVER,
+    MOBILE_ADAPTER_GB,
+    PEER_TO_PEER,
+  }
+
+  /** Selects exactly one standalone link-port peripheral at the next controller safe point. */
+  data class SetSerialPeripheralEvent(val selection: SerialPeripheralSelection) : Event
+
+  /** Emitted after a commit and when a newly active session reasserts its authoritative choice. */
+  data class SerialPeripheralSelectionChangedEvent(val selection: SerialPeripheralSelection) :
+      Event
+
+  enum class SerialPeripheralStatus {
+    /** The choice is retained, but no emulation session currently owns an endpoint. */
+    DETACHED,
+
+    /** The selected endpoint is installed in the active standalone emulation session. */
+    ATTACHED,
+
+    /** The requested endpoint could not be prepared; the previous selection remains active. */
+    UNAVAILABLE,
+  }
+
+  /**
+   * Stable, presentation-safe peripheral failures. These values intentionally carry no exception
+   * text, path, payload, host, account, or configuration bytes.
+   */
+  enum class SerialPeripheralError(
+      val code: String,
+      val userMessage: String,
+  ) {
+    ENDPOINT_UNAVAILABLE(
+        "ENDPOINT_UNAVAILABLE",
+        "The selected serial peripheral is not available in this configuration.",
+    ),
+    CONFIGURATION_INVALID(
+        "CONFIGURATION_INVALID",
+        "The selected serial peripheral configuration is invalid.",
+    ),
+    STORAGE_FAILED(
+        "STORAGE_FAILED",
+        "The selected serial peripheral configuration could not be loaded.",
+    ),
+    PORT_OWNED_BY_LINK(
+        "PORT_OWNED_BY_LINK",
+        "Stop the active network link before selecting a standalone serial peripheral.",
+    ),
+  }
+
+  /** Current attachment state for a requested or committed standalone serial peripheral. */
+  data class SerialPeripheralStatusEvent(
+      val selection: SerialPeripheralSelection,
+      val status: SerialPeripheralStatus,
+      val error: SerialPeripheralError? = null,
+  ) : Event {
+    init {
+      require((status == SerialPeripheralStatus.UNAVAILABLE) == (error != null)) {
+        "Unavailable serial status and typed error must be present together"
+      }
+    }
+  }
+
+  /** Immutable, defensively copied configuration supplied to an offline Mobile Adapter. */
+  class MobileAdapterConfiguration(
+      val deviceId: Int,
+      configuration: ByteArray,
+  ) {
+    private val configuration = configuration.clone()
+
+    init {
+      require(deviceId in 0..0x7f) { "Mobile Adapter device ID must fit in seven bits" }
+      require(this.configuration.size == MOBILE_ADAPTER_CONFIGURATION_BYTES) {
+        "Mobile Adapter configuration must contain $MOBILE_ADAPTER_CONFIGURATION_BYTES bytes"
+      }
+    }
+
+    fun copyBytes(): ByteArray = configuration.clone()
+
+    companion object {
+      const val MOBILE_ADAPTER_CONFIGURATION_BYTES = 256
+
+      /**
+       * Fresh deterministic Phase-351 offline defaults: device 08, the documented MA header,
+       * zero-filled private area, and the complete 00..7f public test pattern.
+       */
+      @JvmStatic
+      fun syntheticOffline(): MobileAdapterConfiguration {
+        val bytes = ByteArray(MOBILE_ADAPTER_CONFIGURATION_BYTES)
+        bytes[0] = 0x4d
+        bytes[1] = 0x41
+        bytes[2] = 0x81.toByte()
+        for (index in 128 until MOBILE_ADAPTER_CONFIGURATION_BYTES) {
+          bytes[index] = (index - 128).toByte()
+        }
+        return MobileAdapterConfiguration(0x08, bytes)
+      }
+    }
+  }
+
+  /**
+   * Synchronous preparation seam for already-local bounded configuration. Implementations must not
+   * perform network I/O and should map durable-store failures to [SerialPeripheralPreparationException].
+   */
+  fun interface MobileAdapterConfigurationProvider {
+    fun load(): MobileAdapterConfiguration
+  }
+
+  /** Typed provider failure whose public surface cannot carry raw storage or configuration data. */
+  class SerialPeripheralPreparationException(val error: SerialPeripheralError) :
+      IllegalStateException(error.code)
+
+  /**
+   * Legacy adapter for selecting the Barcode Boy. Disabling it only clears the port when Barcode
+   * Boy still owns the exclusive selection.
+   */
   data class SetBarcodeBoyEvent(val enabled: Boolean) : Event
 
   /** Simulates swiping a card with the given 13-digit JAN-13 barcode on the Barcode Boy. */
   data class ScanBarcodeEvent(val barcode: String) : Event
 
-  /** Connects or disconnects the Game Boy Printer on the link port (resets the game). */
+  /** Legacy ownership-aware adapter for selecting the Game Boy Printer. */
   data class SetPrinterEvent(val enabled: Boolean) : Event
 
-  /** Connects or disconnects a simulated Trimble GPS receiver on the CGB link port. */
+  /** Legacy ownership-aware adapter for selecting a simulated Trimble GPS receiver. */
   data class SetGpsReceiverEvent(val enabled: Boolean) : Event
 
   /**

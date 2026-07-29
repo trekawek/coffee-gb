@@ -15,8 +15,11 @@ import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -71,12 +74,28 @@ public class AtomicFileWriter {
      * of the way.
      */
     public void write(Path target, byte[] intendedBytes) throws IOException {
+        write(target, intendedBytes, false);
+    }
+
+    /**
+     * Replaces {@code target} with owner-readable/owner-writable bytes when POSIX permissions are
+     * available.
+     *
+     * <p>The temporary inode is restricted and verified before either rename path, so a permission
+     * failure cannot commit the new bytes. Filesystems without a POSIX view retain their native
+     * protection model.
+     */
+    public void writeOwnerOnly(Path target, byte[] intendedBytes) throws IOException {
+        write(target, intendedBytes, true);
+    }
+
+    private void write(Path target, byte[] intendedBytes, boolean ownerOnly) throws IOException {
         if (intendedBytes == null) {
             throw new NullPointerException("intendedBytes");
         }
         Path normalized = normalizeTarget(target);
         withLock(normalized, () -> {
-            writeLocked(normalized, intendedBytes);
+            writeLocked(normalized, intendedBytes, ownerOnly);
             return null;
         });
     }
@@ -131,18 +150,26 @@ public class AtomicFileWriter {
         });
     }
 
-    private void writeLocked(Path target, byte[] intendedBytes) throws IOException {
+    private void writeLocked(Path target, byte[] intendedBytes, boolean ownerOnly)
+            throws IOException {
         Path parent = target.getParent();
         operations.createDirectories(parent);
+        if (ownerOnly) {
+            operations.verifyOwnerOnlyParent(parent);
+        }
         recoverAndCleanupLocked(target);
 
         Path temp = operations.createTempFile(parent, tempPrefix(target), ".part");
         IOException failure = null;
         try {
+            if (ownerOnly) {
+                operations.restrictToOwner(temp);
+            }
             stageListener.reached(Stage.BEFORE_WRITE, target, temp);
             try (FileChannel channel =
                     operations.openFile(temp, StandardOpenOption.WRITE,
-                            StandardOpenOption.TRUNCATE_EXISTING)) {
+                            StandardOpenOption.TRUNCATE_EXISTING,
+                            LinkOption.NOFOLLOW_LINKS)) {
                 ByteBuffer bytes = ByteBuffer.wrap(intendedBytes);
                 int zeroWrites = 0;
                 while (bytes.hasRemaining()) {
@@ -167,6 +194,10 @@ public class AtomicFileWriter {
 
             stageListener.reached(Stage.AFTER_FORCE_BEFORE_REPLACEMENT, target, temp);
             stageListener.reached(Stage.BEFORE_TARGET_RENAME, target, temp);
+            if (ownerOnly) {
+                // No test hook occurs between this pathname/inode verification and the move.
+                operations.restrictToOwner(temp);
+            }
             try {
                 operations.move(
                         temp,
@@ -174,7 +205,7 @@ public class AtomicFileWriter {
                         StandardCopyOption.ATOMIC_MOVE,
                         StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException unsupported) {
-                replaceWithRecoveryBackup(target, temp);
+                replaceWithRecoveryBackup(target, temp, ownerOnly);
                 removeStaleBackupAfterCommit(target);
                 cleanupStaleTemps(target);
                 return;
@@ -200,7 +231,8 @@ public class AtomicFileWriter {
         }
     }
 
-    private void replaceWithRecoveryBackup(Path target, Path temp) throws IOException {
+    private void replaceWithRecoveryBackup(Path target, Path temp, boolean ownerOnly)
+            throws IOException {
         Path parent = target.getParent();
         Path backup = backupPath(target);
         boolean targetExists = operations.exists(target, LinkOption.NOFOLLOW_LINKS);
@@ -212,6 +244,11 @@ public class AtomicFileWriter {
         }
 
         stageListener.reached(Stage.BEFORE_FALLBACK_TARGET_RENAME, target, temp);
+        if (ownerOnly) {
+            // The fallback stage hook may simulate interruption or substitution after preserving
+            // the old target, so verify the new inode again immediately before its rename.
+            operations.restrictToOwner(temp);
+        }
         operations.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         stageListener.reached(Stage.AFTER_TARGET_RENAME, target, temp);
         forceDirectoryBestEffort(parent);
@@ -328,7 +365,8 @@ public class AtomicFileWriter {
         } catch (IOException | UnsupportedOperationException e) {
             // Windows and some network/filesystem providers cannot open or fsync directories.
             // The file bytes were forced before any move; retain best-effort metadata durability.
-            LOG.debug("Parent-directory metadata force is unsupported for {}", parent, e);
+            // Do not log the path or exception: callers may use this writer for private state.
+            LOG.debug("Parent-directory metadata force is unsupported");
         }
     }
 
@@ -454,6 +492,18 @@ public class AtomicFileWriter {
         }
     }
 
+    /** Typed pre-commit failure for an owner-only replacement. */
+    public static class OwnerOnlyPermissionsException extends IOException {
+
+        public OwnerOnlyPermissionsException(String message) {
+            super(message);
+        }
+
+        public OwnerOnlyPermissionsException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     @FunctionalInterface
     private interface IoCallable<T> {
         T call() throws IOException;
@@ -482,6 +532,10 @@ public class AtomicFileWriter {
         void createDirectories(Path directory) throws IOException;
 
         Path createTempFile(Path directory, String prefix, String suffix) throws IOException;
+
+        void verifyOwnerOnlyParent(Path directory) throws IOException;
+
+        void restrictToOwner(Path path) throws IOException;
 
         FileChannel openFile(Path path, OpenOption... options) throws IOException;
 
@@ -514,6 +568,72 @@ public class AtomicFileWriter {
         public Path createTempFile(Path directory, String prefix, String suffix)
                 throws IOException {
             return Files.createTempFile(directory, prefix, suffix);
+        }
+
+        @Override
+        public void verifyOwnerOnlyParent(Path directory) throws IOException {
+            if (Files.isSymbolicLink(directory) ||
+                    !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+                throw new OwnerOnlyPermissionsException(
+                        "Owner-only replacement parent is not a direct directory");
+            }
+            PosixFileAttributeView view;
+            try {
+                view = Files.getFileAttributeView(
+                        directory, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (UnsupportedOperationException unsupported) {
+                return;
+            }
+            if (view == null) return;
+            try {
+                Set<PosixFilePermission> permissions = view.readAttributes().permissions();
+                if (permissions.contains(PosixFilePermission.GROUP_WRITE) ||
+                        permissions.contains(PosixFilePermission.OTHERS_WRITE)) {
+                    throw new OwnerOnlyPermissionsException(
+                            "Owner-only replacement parent is writable by another principal");
+                }
+            } catch (OwnerOnlyPermissionsException failure) {
+                throw failure;
+            } catch (UnsupportedOperationException unsupported) {
+                // Non-POSIX providers have no portable directory permission representation.
+            } catch (IOException | SecurityException failure) {
+                throw new OwnerOnlyPermissionsException(
+                        "Owner-only replacement parent permissions could not be verified", failure);
+            }
+        }
+
+        @Override
+        public void restrictToOwner(Path path) throws IOException {
+            if (Files.isSymbolicLink(path) ||
+                    !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw new OwnerOnlyPermissionsException(
+                        "Owner-only temporary artifact is not a regular file");
+            }
+            PosixFileAttributeView view;
+            try {
+                view = Files.getFileAttributeView(
+                        path, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (UnsupportedOperationException unsupported) {
+                return;
+            }
+            if (view == null) return;
+            Set<PosixFilePermission> expected = Set.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE);
+            try {
+                view.setPermissions(expected);
+                if (!view.readAttributes().permissions().equals(expected)) {
+                    throw new OwnerOnlyPermissionsException(
+                            "Owner-only temporary permissions were not retained");
+                }
+            } catch (UnsupportedOperationException unsupported) {
+                // Non-POSIX providers have no portable owner-only representation.
+            } catch (OwnerOnlyPermissionsException failure) {
+                throw failure;
+            } catch (IOException | SecurityException failure) {
+                throw new OwnerOnlyPermissionsException(
+                        "Owner-only temporary permissions could not be applied", failure);
+            }
         }
 
         @Override

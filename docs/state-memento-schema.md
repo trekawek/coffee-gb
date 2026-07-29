@@ -1,6 +1,6 @@
 # Audited state-record schema
 
-This is the exact captured-field inventory for all 94 production record types admitted by
+This is the exact captured-field inventory for all 96 production record types admitted by
 `StateTypeRegistry`. Each bullet's one-based position is its stable StateFile-v1 record type ID;
 each line names the non-serializable `ComponentState` record and every component captured by
 `captureState`. The
@@ -130,3 +130,5 @@ altering the 1.7.13/1.7.14 migration schema listed below.
 - `eu.rekawek.coffeegb.core.memory.cart.type.XploderGb$XploderGbState`: batteryMemento, ram, selectedRomBank, selectedRamBank, ramUpdated
 - `eu.rekawek.coffeegb.core.memory.cart.type.Vf001Zook$Vf001ZookState`: delegateMemento, stream, streamLength, bankPortRun
 - `eu.rekawek.coffeegb.core.memory.cart.type.Vf001General$Vf001GeneralState`: delegateMemento, configMode, runningValue, cur6000, cur700x, sequenceStartBank, sequenceStartAddress, sequenceLength, sequence, sequenceBytesLeft, replaceBankZero, replacementStartAddress, replacementSourceBank, selectedRomBank
+- `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine$MobileAdapterEngineState`: phaseId, outcomeId, errorId, deviceId, packetBuffer, packetCount, expectedPacketBytes, configuration, responsePacket, acknowledgement, idlePhaseUnits, serialByteObserved, pendingPacketSlots
+- `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint$MobileAdapterSerialEndpointState`: engineState, sb, sendBitIndex

@@ -2,9 +2,11 @@
 
 ## Scope and ownership
 
-`MachineSnapshot` is Coffee GB's internal rewind representation. It is immutable, service-free, and
-owned by the emulator thread. It is not a StateFile root, has no byte codec, is not serializable,
-and must never cross a disk or network boundary. Disk snapshots use StateFile v1/v2 as required by
+`MachineSnapshot` is Coffee GB's internal machine-rewind representation. `SessionSnapshot` pairs
+it with the active serial peripheral's immutable, service-free detached state for session-aware
+rewind. Both are owned by the emulator thread. Neither is a StateFile root or serializable, and
+`MachineSnapshot` has no byte codec. Neither representation may cross a disk or network boundary.
+Disk snapshots use StateFile v1/v2 as required by
 profile identity; protocol-v8 netplay uses StateFile v1;
 `ControllerState` and boot/reset use explicit detached/component state. The local-only historical
 importer is a separate migration boundary and is never reachable from rewind.
@@ -16,7 +18,12 @@ restore concurrently with `Gameboy.tick`, cartridge flushing, or endpoint mutati
 The live four-slot physical-input service is deliberately not rewound. The event/protocol-owned P1
 subset remains session input for linked rollback history.
 
-`RewindManager` keeps the existing 300 entries and records every sixth emulated frame. A successful
+`RewindManager` keeps the existing 300 entries and records every sixth emulated frame. The
+session-aware overload captures the configured endpoint identity and its detached component state
+alongside the paged machine generation; the retained-byte total includes the serial graph's arrays
+and immutable value/container nodes. The legacy `Gameboy` overload remains available for callers
+that intentionally rewind only a machine, and a history cannot mix machine-only and session-aware
+entries. A successful
 ROM load/reset or disk-state load clears the history and resets capture cadence. The default
 constructor enables rewind. Its explicit disabled mode returns before cadence bookkeeping or
 machine inspection, so it creates no per-frame snapshot allocation and a rewind request cannot
@@ -27,8 +34,10 @@ freeze forward emulation.
 The snapshot graph covers the complete Phase-1 machine inventory, including the primary and Datel
 slot RTC runtime and the two compatibility DMG FIFO runtime records. It contains only immutable
 scalars, enum/type IDs, immutable record/container nodes, and private primitive-array pages. It
-never retains an event bus, callback, console, file, time source, thread, ROM byte array, or other
-host service.
+never retains an event bus, callback, console, file, time source, thread, ROM byte array, Mobile
+Adapter backend port, socket, or other host service. A session snapshot retains only the endpoint
+family ID and service-free serial record graph; restore targets the already-configured live
+endpoint and backend.
 
 Primitive arrays use fixed 4096-byte payload pages:
 
@@ -93,6 +102,12 @@ and mapper/battery ownership, runs the Phase-1 semantic validation, and validate
 runtime supplements. It retains a rollback capture for unexpected failures while applying the
 machine, FIFO runtime, and RTC runtime. Snapshot pages are private and the test/benchmark probe
 returns only opaque page-identity tokens.
+
+Session-aware restore additionally verifies endpoint presence, family, component root, runtime,
+and target-clock Mobile Adapter semantics before mutation. It cancels the live endpoint/backend
+operation before restoring either machine or serial state, preventing host I/O from completing
+against the rewound protocol phase. The live backend object is not reconstructed from history.
+Unexpected apply failure rolls both machine and serial state back from deep-owned captures.
 
 The semantic stage receives the restored target profile's exact `ClockSpec`: its Sound pending
 prefix/full-buffer and write index must fit that clock's stereo controller-frame capacity, and each

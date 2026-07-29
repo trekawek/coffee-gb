@@ -298,6 +298,7 @@ enum class SerialPeripheralState {
   GPS_RECEIVER,
   BARCODE_BOY,
   FOUR_PLAYER_ADAPTER,
+  MOBILE_ADAPTER_GB,
 }
 
 /** Detached state owned by one controller Session, including event/protocol-owned P1 input. */
@@ -592,7 +593,7 @@ internal object DetachedStateAdapter {
     validateTarget(session, state)
     val machine = reconstructMachine(state.machine, session.gameboy.clockSpec)
     val serialValue = StateGraph.restore(state.serialState)
-    StateSemantics.validate(serialValue)
+    StateSemantics.validateForClock(serialValue, session.gameboy.clockSpec)
     if (serialValue != null && serialValue !is ComponentState<*>) {
       throw StateApplyException("Session serial state has the wrong root type")
     }
@@ -641,7 +642,7 @@ internal object DetachedStateAdapter {
     probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)
   }
 
-  private fun serialPeripheral(endpoint: SerialEndpoint): SerialPeripheralState =
+  internal fun serialPeripheral(endpoint: SerialEndpoint): SerialPeripheralState =
       when (endpoint.javaClass.name) {
         "eu.rekawek.coffeegb.core.serial.SerialEndpoint\$1" -> SerialPeripheralState.NONE
         "eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint" ->
@@ -656,12 +657,14 @@ internal object DetachedStateAdapter {
             SerialPeripheralState.BARCODE_BOY
         "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$Endpoint" ->
             SerialPeripheralState.FOUR_PLAYER_ADAPTER
+        "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint" ->
+            SerialPeripheralState.MOBILE_ADAPTER_GB
         else ->
             throw StateCaptureException(
               "Unsupported serial endpoint ${endpoint.javaClass.name}; state was not omitted")
       }
 
-  private fun captureSerialRuntime(endpoint: SerialEndpoint): SerialRuntimeState =
+  internal fun captureSerialRuntime(endpoint: SerialEndpoint): SerialRuntimeState =
       if (endpoint is BarcodeBoySerialEndpoint) {
         endpoint.captureRuntimeState().let {
           BarcodeBoyRuntimeState(it.transferArmed(), it.copyPending())
@@ -670,7 +673,7 @@ internal object DetachedStateAdapter {
         NoSerialRuntimeState
       }
 
-  private fun validateSerialRuntime(endpoint: SerialEndpoint, state: SerialRuntimeState) {
+  internal fun validateSerialRuntime(endpoint: SerialEndpoint, state: SerialRuntimeState) {
     val valid =
         when (state) {
           is BarcodeBoyRuntimeState -> endpoint is BarcodeBoySerialEndpoint
@@ -682,7 +685,7 @@ internal object DetachedStateAdapter {
     }
   }
 
-  private fun applySerialRuntime(endpoint: SerialEndpoint, state: SerialRuntimeState) {
+  internal fun applySerialRuntime(endpoint: SerialEndpoint, state: SerialRuntimeState) {
     validateSerialRuntime(endpoint, state)
     if (endpoint is BarcodeBoySerialEndpoint && state is BarcodeBoyRuntimeState) {
       endpoint.restoreRuntimeState(
@@ -1191,6 +1194,10 @@ internal object StateGraph {
       setOf(
           "eu.rekawek.coffeegb.core.sound.Sound\$SoundState" to "buffer",
           "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState" to "data",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState" to
+              "responsePacket",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState" to
+              "acknowledgement",
           "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState" to "schedule",
           "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState" to
               "dataTransfer",

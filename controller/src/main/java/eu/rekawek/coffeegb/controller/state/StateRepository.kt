@@ -77,10 +77,10 @@ class StateRepository(
         }
         val ownedBytes = encodedState.clone()
         val decoded = StateCodec.decode(ownedBytes)
-        if (decoded.root.kind != StateRootKind.MACHINE) {
+        if (decoded.root.kind !in LOCAL_ROOT_KINDS) {
           throw StateDecodeException(
               StateDecodeReason.TARGET_STATE_MISMATCH,
-              "Local state repository accepts machine-root StateFiles only",
+              "Local state repository accepts machine- or session-root StateFiles only",
           )
         }
         val hash = StateMetadataCodec.sha256(ownedBytes)
@@ -387,18 +387,19 @@ class StateRepository(
             } ?: return@withLock null
         try {
           val read = decodeRaw(raw)
+          val rootKind = read.state.root.kind
           val compatibility =
-              if (read.state.root.kind != StateRootKind.MACHINE) {
+              if (rootKind !in LOCAL_ROOT_KINDS) {
                 StateCompatibilityResult(
                     StateCompatibilityStatus.ROOT_MISMATCH,
                     StateDecodeReason.TARGET_STATE_MISMATCH,
-                    "StateFile root ${read.state.root.kind} is not a machine",
+                    "StateFile root $rootKind is not a local machine or session",
                 )
               } else {
                 targetIdentity?.let {
                   StateCodec.classifyCompatibility(
                       read.state,
-                      StateRootKind.MACHINE,
+                      rootKind,
                       listOf(StateIdentityEntry(0, it)),
                   )
                 }
@@ -770,6 +771,9 @@ class StateRepository(
   )
 
   companion object {
+    private val LOCAL_ROOT_KINDS =
+        setOf(StateRootKind.MACHINE, StateRootKind.SESSION)
+
     const val MAX_NAMED_STATES = 128
     const val MAX_CATALOG_DIRECTORY_ENTRIES = 512
     const val MAX_STATE_DIRECTORY_ENTRIES = 32

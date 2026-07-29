@@ -99,6 +99,61 @@ import kotlin.test.assertTrue
 class LinkedControllerTest {
 
   @Test
+  fun standaloneSerialRequestsDuringLinkedOwnershipReportTypedConflicts() {
+    val directory = Files.createTempDirectory("coffee-gb-linked-serial-owner")
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties(settingsPath = directory.resolve("settings.properties"))
+    val controller = LinkedController(eventBus, properties, null)
+    val statuses = LinkedBlockingQueue<Controller.SerialPeripheralStatusEvent>()
+    eventBus.register<Controller.SerialPeripheralStatusEvent>(statuses::add)
+
+    try {
+      eventBus.post(
+          Controller.SetSerialPeripheralEvent(
+              Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+
+      assertEquals(
+          Controller.SerialPeripheralStatusEvent(
+              Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+              Controller.SerialPeripheralStatus.UNAVAILABLE,
+              Controller.SerialPeripheralError.PORT_OWNED_BY_LINK,
+          ),
+          statuses.poll(1, TimeUnit.SECONDS),
+      )
+
+      val legacyRequests =
+          listOf(
+              Controller.SetPrinterEvent(true) to Controller.SerialPeripheralSelection.PRINTER,
+              Controller.SetBarcodeBoyEvent(true) to
+                  Controller.SerialPeripheralSelection.BARCODE_BOY,
+              Controller.SetGpsReceiverEvent(true) to
+                  Controller.SerialPeripheralSelection.GPS_RECEIVER,
+          )
+      legacyRequests.forEach { (request, selection) ->
+        eventBus.post(request)
+        assertEquals(
+            Controller.SerialPeripheralStatusEvent(
+                selection,
+                Controller.SerialPeripheralStatus.UNAVAILABLE,
+                Controller.SerialPeripheralError.PORT_OWNED_BY_LINK,
+            ),
+            statuses.poll(1, TimeUnit.SECONDS),
+        )
+      }
+
+      eventBus.post(Controller.SetPrinterEvent(false))
+      eventBus.post(Controller.SetBarcodeBoyEvent(false))
+      eventBus.post(Controller.SetGpsReceiverEvent(false))
+      assertEquals(null, statuses.poll(100, TimeUnit.MILLISECONDS))
+      assertEquals(0, controller.activeSessionCount())
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun completedLocalWorkerDoesNotDelayNextManuallyDrivenSafePoint() {
     val directory = Files.createTempDirectory("coffee-gb-linked-worker-exit")
     val eventBus = EventBusImpl()

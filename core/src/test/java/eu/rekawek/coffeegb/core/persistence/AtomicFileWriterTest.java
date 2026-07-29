@@ -9,9 +9,11 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -106,6 +108,148 @@ public class AtomicFileWriterTest {
             assertEquals(target.toAbsolutePath().normalize().getParent(), temps.get(0).getParent());
             assertEquals(target.toAbsolutePath().normalize().getParent(), temps.get(1).getParent());
             assertNoTransactionArtifacts(directory, target);
+        });
+    }
+
+    @Test
+    public void ownerOnlyReplacementRestrictsTemporaryInodeBeforeEitherRenamePath()
+            throws Exception {
+        for (boolean fallback : List.of(false, true)) {
+            withDirectory(directory -> {
+                Path target = directory.resolve("private.bin");
+                Files.write(target, OLD);
+                RecordingOperations operations = new RecordingOperations();
+                operations.rejectAtomicReplacement = fallback;
+
+                new AtomicFileWriter(operations, AtomicFileWriter.StageListener.NOOP)
+                        .writeOwnerOnly(target, NEW);
+
+                String committedMove = fallback ? "move-fallback" : "move-atomic";
+                assertTrue(operations.events.indexOf("restrict-owner")
+                        < operations.events.indexOf("force-file"));
+                assertTrue(operations.events.indexOf("restrict-owner")
+                        < operations.events.lastIndexOf(committedMove));
+                if (Files.getFileStore(target).supportsFileAttributeView("posix")) {
+                    assertEquals(
+                            Set.of(PosixFilePermission.OWNER_READ,
+                                    PosixFilePermission.OWNER_WRITE),
+                            Files.getPosixFilePermissions(target));
+                }
+                assertArrayEquals(NEW, Files.readAllBytes(target));
+            });
+        }
+    }
+
+    @Test
+    public void ownerOnlyPreparationFailureLeavesPriorTargetAndNoArtifacts() throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("private-failure.bin");
+            Files.write(target, OLD);
+            RecordingOperations operations = new RecordingOperations();
+            operations.rejectOwnerOnly = true;
+
+            expectFailure(() ->
+                    new AtomicFileWriter(operations, AtomicFileWriter.StageListener.NOOP)
+                            .writeOwnerOnly(target, NEW));
+
+            assertArrayEquals(OLD, Files.readAllBytes(target));
+            assertNoTransactionArtifacts(directory, target);
+            assertFalse(operations.events.contains("move-atomic"));
+            assertFalse(operations.events.contains("move-fallback"));
+        });
+    }
+
+    @Test
+    public void ownerOnlyWriteDoesNotFollowAReplacedTemporarySymlink() throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("private-symlink.bin");
+            Path victim = directory.resolve("victim.bin");
+            Files.write(target, OLD);
+            Files.write(victim, "untouched-victim".getBytes());
+            byte[] victimBefore = Files.readAllBytes(victim);
+            AtomicReference<Path> hostileTemp = new AtomicReference<>();
+            AtomicFileWriter writer = new AtomicFileWriter(
+                    new RecordingOperations(),
+                    (stage, ignored, temp) -> {
+                        if (stage == AtomicFileWriter.Stage.BEFORE_WRITE) {
+                            Files.delete(temp);
+                            try {
+                                Files.createSymbolicLink(temp, victim.getFileName());
+                            } catch (UnsupportedOperationException unsupported) {
+                                throw new IOException("symbolic links unavailable", unsupported);
+                            }
+                            hostileTemp.set(temp);
+                        }
+                    });
+
+            expectFailure(() -> writer.writeOwnerOnly(target, NEW));
+
+            assertArrayEquals(OLD, Files.readAllBytes(target));
+            assertArrayEquals(victimBefore, Files.readAllBytes(victim));
+            Path substituted = hostileTemp.get();
+            if (substituted != null) {
+                assertTrue(Files.isSymbolicLink(substituted));
+                Files.delete(substituted);
+            }
+        });
+    }
+
+    @Test
+    public void ownerOnlyWriteRepairsARegularTemporarySubstitutionBeforeCommit()
+            throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("private-regular-swap.bin");
+            Files.write(target, OLD);
+            AtomicBoolean replaced = new AtomicBoolean();
+            AtomicFileWriter writer = new AtomicFileWriter(
+                    new RecordingOperations(),
+                    (stage, ignored, temp) -> {
+                        if (stage == AtomicFileWriter.Stage.BEFORE_WRITE &&
+                                replaced.compareAndSet(false, true)) {
+                            Files.delete(temp);
+                            Files.write(temp, "hostile-placeholder".getBytes());
+                            if (Files.getFileStore(temp).supportsFileAttributeView("posix")) {
+                                Files.setPosixFilePermissions(temp, Set.of(
+                                        PosixFilePermission.OWNER_READ,
+                                        PosixFilePermission.OWNER_WRITE,
+                                        PosixFilePermission.GROUP_READ,
+                                        PosixFilePermission.GROUP_WRITE,
+                                        PosixFilePermission.OTHERS_READ,
+                                        PosixFilePermission.OTHERS_WRITE));
+                            }
+                        }
+                    });
+
+            writer.writeOwnerOnly(target, NEW);
+
+            assertArrayEquals(NEW, Files.readAllBytes(target));
+            if (Files.getFileStore(target).supportsFileAttributeView("posix")) {
+                assertEquals(
+                        Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+                        Files.getPosixFilePermissions(target));
+            }
+        });
+    }
+
+    @Test
+    public void ownerOnlyWriteRejectsGroupWritableParentBeforeCreatingArtifacts()
+            throws Exception {
+        withDirectory(directory -> {
+            if (!Files.getFileStore(directory).supportsFileAttributeView("posix")) return;
+            Files.setPosixFilePermissions(directory, Set.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE,
+                    PosixFilePermission.OWNER_EXECUTE,
+                    PosixFilePermission.GROUP_WRITE,
+                    PosixFilePermission.GROUP_EXECUTE));
+            Path target = directory.resolve("private-untrusted-parent.bin");
+
+            expectFailure(() -> AtomicFileWriter.system().writeOwnerOnly(target, NEW));
+
+            assertFalse(Files.exists(target));
+            try (var files = Files.list(directory)) {
+                assertEquals(0, files.count());
+            }
         });
     }
 
@@ -449,6 +593,18 @@ public class AtomicFileWriterTest {
         private int maximumWrite = Integer.MAX_VALUE;
 
         private boolean rejectAtomicReplacement;
+
+        private boolean rejectOwnerOnly;
+
+        @Override
+        public void restrictToOwner(Path path) throws IOException {
+            events.add("restrict-owner");
+            if (rejectOwnerOnly) {
+                throw new AtomicFileWriter.OwnerOnlyPermissionsException(
+                        "injected owner-only preparation failure");
+            }
+            super.restrictToOwner(path);
+        }
 
         @Override
         public int write(FileChannel channel, ByteBuffer bytes) throws IOException {

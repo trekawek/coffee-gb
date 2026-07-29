@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.controller.state.MachineSnapshot
+import eu.rekawek.coffeegb.controller.state.SessionSnapshot
 
 /**
  * Rolling history of emulation states for the rewind feature. A state is recorded every
@@ -15,7 +16,32 @@ internal class RewindManager(
     private val memoryBudgetBytes: Long = DEFAULT_MEMORY_BUDGET_BYTES,
 ) {
 
-  private val states = ArrayDeque<MachineSnapshot>()
+  private sealed interface RewindEntry {
+    val machine: MachineSnapshot
+    val auxiliaryCaptureBytes: Long
+  }
+
+  private data class MachineEntry(
+      override val machine: MachineSnapshot,
+  ) : RewindEntry {
+    override val auxiliaryCaptureBytes: Long = 0
+  }
+
+  private data class SessionEntry(
+      val snapshot: SessionSnapshot,
+  ) : RewindEntry {
+    override val machine: MachineSnapshot = snapshot.machine
+    override val auxiliaryCaptureBytes: Long = snapshot.serialModeledBytes
+  }
+
+  private enum class HistoryKind {
+    MACHINE,
+    SESSION,
+  }
+
+  private val states = ArrayDeque<RewindEntry>()
+
+  private var historyKind: HistoryKind? = null
 
   private val capacity =
       Math.multiplyExact(durationSeconds, APPROXIMATE_FRAMES_PER_SECOND) / RECORD_INTERVAL
@@ -47,16 +73,32 @@ internal class RewindManager(
     // This is intentionally the first operation. A disabled manager does not advance cadence,
     // inspect the live machine, allocate a capture DTO, or create a snapshot.
     if (!enabled) return
+    selectHistory(HistoryKind.MACHINE)
     if (frameCounter++ % RECORD_INTERVAL != 0) {
       return
     }
     if (states.size == capacity) {
       states.removeFirst()
     }
-    val snapshot = MachineSnapshot.capture(gameboy, states.lastOrNull())
-    states.addLast(snapshot)
+    val entry = MachineEntry(MachineSnapshot.capture(gameboy, states.lastOrNull()?.machine))
+    states.addLast(entry)
     approximateRetainedBytes =
-        saturatingAdd(approximateRetainedBytes, approximateCaptureBytes(snapshot))
+        saturatingAdd(approximateRetainedBytes, approximateCaptureBytes(entry))
+    captureCount++
+    enforceMemoryBudget()
+  }
+
+  /** Captures machine plus active serial-endpoint state at the controller frame safe point. */
+  fun record(session: Session) {
+    if (!enabled) return
+    selectHistory(HistoryKind.SESSION)
+    if (frameCounter++ % RECORD_INTERVAL != 0) return
+    if (states.size == capacity) states.removeFirst()
+    val previous = (states.lastOrNull() as? SessionEntry)?.snapshot
+    val entry = SessionEntry(SessionSnapshot.capture(session, previous))
+    states.addLast(entry)
+    approximateRetainedBytes =
+        saturatingAdd(approximateRetainedBytes, approximateCaptureBytes(entry))
     captureCount++
     enforceMemoryBudget()
   }
@@ -64,8 +106,22 @@ internal class RewindManager(
   /** Restores the most recent recorded state; returns false when the history is empty. */
   fun rewindOneStep(gameboy: Gameboy): Boolean {
     if (!enabled) return false
-    val state = states.removeLastOrNull() ?: return false
-    state.restore(gameboy)
+    if (historyKind == HistoryKind.SESSION) {
+      throw IllegalStateException("Session rewind history requires rewindOneStep(Session)")
+    }
+    val state = states.removeLastOrNull() as? MachineEntry ?: return false
+    state.machine.restore(gameboy)
+    return true
+  }
+
+  /** Restores machine and serial endpoint state, cancelling live endpoint work before mutation. */
+  fun rewindOneStep(session: Session): Boolean {
+    if (!enabled) return false
+    if (historyKind == HistoryKind.MACHINE) {
+      throw IllegalStateException("Machine-only rewind history cannot restore a Session")
+    }
+    val state = states.removeLastOrNull() as? SessionEntry ?: return false
+    state.snapshot.restore(session)
     return true
   }
 
@@ -73,20 +129,26 @@ internal class RewindManager(
     states.clear()
     frameCounter = 0
     approximateRetainedBytes = 0
+    historyKind = null
   }
 
   internal val historySize: Int
     get() = states.size
 
-  internal fun snapshotsForTesting(): List<MachineSnapshot> = states.toList()
+  internal fun snapshotsForTesting(): List<MachineSnapshot> = states.map(RewindEntry::machine)
 
   internal fun retainedBytesForTesting(): Long =
-      MachineSnapshot.retainedStats(states).modeledRetainedBytes
+      retainedBytes(states.toList())
+
+  private fun selectHistory(requested: HistoryKind) {
+    if (historyKind != null && historyKind != requested) clear()
+    historyKind = requested
+  }
 
   private fun enforceMemoryBudget() {
     if (approximateRetainedBytes <= memoryBudgetBytes) return
     val snapshots = states.toList()
-    var retained = MachineSnapshot.retainedStats(snapshots).modeledRetainedBytes
+    var retained = retainedBytes(snapshots)
     if (retained > memoryBudgetBytes && snapshots.size > 1) {
       // Retention is monotonic for suffixes. Locate the smallest eviction in logarithmic exact
       // scans instead of repeatedly traversing the entire graph once per removed snapshot.
@@ -95,9 +157,7 @@ internal class RewindManager(
       while (minimumRemoval < maximumRemoval) {
         val candidate = minimumRemoval + (maximumRemoval - minimumRemoval) / 2
         val candidateBytes =
-            MachineSnapshot.retainedStats(
-                    snapshots.subList(candidate, snapshots.size))
-                .modeledRetainedBytes
+            retainedBytes(snapshots.subList(candidate, snapshots.size))
         if (candidateBytes <= memoryBudgetBytes) {
           maximumRemoval = candidate
         } else {
@@ -106,20 +166,31 @@ internal class RewindManager(
       }
       repeat(minimumRemoval) { states.removeFirst() }
       budgetEvictionCount += minimumRemoval
-      retained = MachineSnapshot.retainedStats(states).modeledRetainedBytes
+      retained = retainedBytes(states.toList())
     }
     // Reset drift to the exact retained graph after the exceptional budget path.
     approximateRetainedBytes = retained
   }
 
-  private fun approximateCaptureBytes(snapshot: MachineSnapshot): Long {
-    val stats = snapshot.captureStats
+  private fun retainedBytes(entries: List<RewindEntry>): Long =
+      when (historyKind) {
+        HistoryKind.SESSION ->
+            SessionSnapshot.retainedBytes(entries.map { (it as SessionEntry).snapshot })
+        HistoryKind.MACHINE, null ->
+            MachineSnapshot.retainedStats(entries.map(RewindEntry::machine)).modeledRetainedBytes
+      }
+
+  private fun approximateCaptureBytes(entry: RewindEntry): Long {
+    val stats = entry.machine.captureStats
     // A copied payload page has an aligned array/object header. Value nodes vary by type; 256
     // bytes per new node intentionally overestimates the current bounded snapshot graph.
     val pageBytes =
         saturatingAdd(stats.copiedPageBytes, stats.copiedPages.toLong() * PAGE_OVERHEAD_BYTES)
     val nodeBytes = stats.newValueNodes.toLong() * CONSERVATIVE_VALUE_NODE_BYTES
-    return saturatingAdd(SNAPSHOT_OVERHEAD_BYTES, saturatingAdd(pageBytes, nodeBytes))
+    return saturatingAdd(
+        entry.auxiliaryCaptureBytes,
+        saturatingAdd(SNAPSHOT_OVERHEAD_BYTES, saturatingAdd(pageBytes, nodeBytes)),
+    )
   }
 
   private fun saturatingAdd(left: Long, right: Long): Long =

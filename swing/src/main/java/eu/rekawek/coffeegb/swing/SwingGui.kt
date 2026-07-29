@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingCancelledEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationStore
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.debug.Console
@@ -59,6 +60,8 @@ class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
     private val properties: EmulatorProperties,
+    private val mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider,
+    private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
     private val desktopOpenFiles: DesktopOpenFilesBridge,
     private val jvmShutdown: DesktopJvmShutdownCoordinator,
 ) {
@@ -132,7 +135,13 @@ class SwingGui private constructor(
 
   init {
     eventBus = EventBusImpl()
-    emulator = SwingEmulator(eventBus, console, properties)
+    emulator =
+        SwingEmulator(
+            eventBus,
+            console,
+            properties,
+            mobileAdapterConfigurationProvider,
+        )
   }
 
   private fun startGui() {
@@ -215,6 +224,8 @@ class SwingGui private constructor(
             stateUxController::takeScreenshot,
             stateUxController::openSaveFolder,
             ::requestClose,
+            mobileAdapterConfigurationUiState,
+            emulator::isLinkedControllerActive,
         )
     menu.addMenu()
     eventBus.register<RomLoadingEvent> { event ->
@@ -571,6 +582,21 @@ class SwingGui private constructor(
       // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
       // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
       val properties = EmulatorProperties(settingsOverrides)
+      val mobileConfigurationResult =
+          MobileAdapterConfigurationStore(MobileAdapterConfigurationStore.defaultPath()).load()
+      mobileConfigurationResult.error?.let { error ->
+        LOG.warn("Mobile Adapter configuration load used a safe fallback ({})", error.code)
+      }
+      val storedMobileConfiguration = mobileConfigurationResult.configuration
+      val mobileAdapterConfigurationUiState =
+          MobileAdapterConfigurationUiState.from(mobileConfigurationResult)
+      val mobileAdapterConfigurationProvider =
+          Controller.MobileAdapterConfigurationProvider {
+            Controller.MobileAdapterConfiguration(
+                storedMobileConfiguration.deviceId,
+                storedMobileConfiguration.configurationBytes(),
+            )
+          }
       val jvmShutdown =
           DesktopJvmShutdownCoordinator(
               fallback = properties::close,
@@ -584,6 +610,8 @@ class SwingGui private constructor(
                 debug,
                 initialRom,
                 properties,
+                mobileAdapterConfigurationProvider,
+                mobileAdapterConfigurationUiState,
                 desktopOpenFiles,
                 jvmShutdown,
             )

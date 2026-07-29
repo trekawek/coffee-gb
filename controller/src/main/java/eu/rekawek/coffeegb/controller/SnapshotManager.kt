@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.MachineIdentity
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateDecodeException
@@ -236,8 +238,9 @@ internal object SnapshotFileReader {
  * compatibility path reads and decodes a sidecar on the state worker, then applies its detached
  * result at a later emulation-thread frame boundary.
  *
- * New saves are portable machine-root StateFiles. Legacy Java input is admitted only by the exact
- * historical header and strict local allowlisted reader.
+ * Controller-owned saves are portable session-root StateFiles. The Gameboy-only overloads and
+ * machine-root inputs remain for source and released-file compatibility. Legacy Java input is
+ * admitted only by the exact historical header and strict local allowlisted reader.
  */
 class SnapshotManager private constructor(
     private val configuration: Gameboy.GameboyConfiguration,
@@ -283,8 +286,21 @@ class SnapshotManager private constructor(
     persistence.write(snapshotFile.toPath(), bytes)
   }
 
+  fun saveSnapshot(slot: Int, session: Session) {
+    val snapshotFile = getSnapshotFile(slot)
+    val bytes =
+        StateCodec.encode(
+            StateCodec.capture(session),
+            StateCompression.DEFLATE,
+        )
+    persistence.write(snapshotFile.toPath(), bytes)
+  }
+
   fun loadSnapshot(slot: Int, gameboy: Gameboy): Boolean =
       loadSnapshot(slot, gameboy, legacyMigrationPolicy)
+
+  fun loadSnapshot(slot: Int, session: Session): Boolean =
+      loadSnapshot(slot, session, legacyMigrationPolicy)
 
   /**
    * Reads and decodes a compatibility sidecar without recovery, cleanup, migration, or live-machine
@@ -382,6 +398,46 @@ class SnapshotManager private constructor(
     }
   }
 
+  /** Session-aware compatibility apply used by managed quick load at a frame boundary. */
+  internal fun applySnapshotReadOnly(snapshot: CompatibilitySnapshot, session: Session) {
+    val target = StateIdentity.from(configuration)
+    when (snapshot) {
+      is CompatibilitySnapshot.Portable ->
+          try {
+            applyPortable(snapshot.state, session, target)
+          } catch (failure: StateDecodeException) {
+            throw loadFailure(
+                snapshot.format,
+                failure.reason,
+                target,
+                snapshot.sourceIdentity,
+                failure.message ?: "Portable snapshot is invalid or incompatible",
+                failure,
+            )
+          }
+      is CompatibilitySnapshot.Legacy ->
+          try {
+            DetachedStateAdapter.applyLegacyState(
+                session.gameboy,
+                snapshot.state,
+                legacyApplyProbe,
+            )
+            // Historical Java state has no serial continuation. Cancel only after the machine
+            // commit succeeds so a rejected importer result leaves the complete session intact.
+            session.serialEndpoint.disconnect()
+          } catch (failure: Exception) {
+            throw loadFailure(
+                snapshot.format,
+                null,
+                target,
+                null,
+                failure.message ?: "Legacy snapshot is incompatible with the target",
+                failure,
+            )
+          }
+    }
+  }
+
   private fun readSnapshotFileReadOnly(path: Path): SnapshotFileBytes? {
     return try {
       Files.newInputStream(
@@ -454,6 +510,61 @@ class SnapshotManager private constructor(
     return true
   }
 
+  private fun loadSnapshot(
+      slot: Int,
+      session: Session,
+      migrationPolicy: LegacySnapshotMigrationPolicy,
+  ): Boolean {
+    val target = StateIdentity.from(configuration)
+    var snapshotFile: File? = null
+    val snapshot =
+        try {
+          getSnapshotPaths(slot).firstNotNullOfOrNull { path ->
+            persistence.read(path) { recovered ->
+              if (!Files.exists(recovered)) {
+                null
+              } else {
+                SnapshotFileReader.read(recovered.toFile(), readLimits).also {
+                  snapshotFile = path.toFile()
+                }
+              }
+            }
+          }
+        } catch (failure: SnapshotReadException) {
+          throw loadFailure(
+              failure.format,
+              null,
+              target,
+              null,
+              failure.message ?: "Snapshot file could not be read",
+              failure,
+          )
+        } catch (failure: IOException) {
+          throw loadFailure(
+              null,
+              null,
+              target,
+              null,
+              "Snapshot transaction recovery or read failed",
+              failure,
+          )
+        }
+        ?: return false
+
+    when (snapshot.format) {
+      SnapshotFileFormat.PORTABLE -> loadPortable(snapshot.bytes, target, session)
+      SnapshotFileFormat.LEGACY_JAVA ->
+          loadLegacy(
+              requireNotNull(snapshotFile),
+              snapshot.bytes,
+              target,
+              session,
+              migrationPolicy,
+          )
+    }
+    return true
+  }
+
   private fun loadPortable(
       bytes: ByteArray,
       target: MachineIdentity,
@@ -471,6 +582,43 @@ class SnapshotManager private constructor(
           failure.message ?: "Portable snapshot is invalid or incompatible",
           failure,
       )
+    }
+  }
+
+  private fun loadPortable(
+      bytes: ByteArray,
+      target: MachineIdentity,
+      session: Session,
+  ) {
+    val source = inspectMachineIdentity(bytes)
+    try {
+      applyPortable(StateCodec.decode(bytes), session, target)
+    } catch (failure: StateDecodeException) {
+      throw loadFailure(
+          SnapshotFileFormat.PORTABLE,
+          failure.reason,
+          target,
+          source,
+          failure.message ?: "Portable snapshot is invalid or incompatible",
+          failure,
+      )
+    }
+  }
+
+  private fun applyPortable(
+      file: StateFile,
+      session: Session,
+      target: MachineIdentity,
+  ) {
+    when (file.root) {
+      is SessionStateRoot -> StateCodec.applyDecoded(file, session, target)
+      is MachineStateRoot -> {
+        StateCodec.applyDecoded(file, configuration, session.gameboy, target)
+        // Released portable sidecars have no endpoint state. Reset only after successful machine
+        // apply, preserving endpoint/parser ownership when the old file is rejected.
+        session.serialEndpoint.disconnect()
+      }
+      else -> StateCodec.applyDecoded(file, session, target)
     }
   }
 
@@ -518,6 +666,54 @@ class SnapshotManager private constructor(
       } catch (failure: IOException) {
         // The state is already restored successfully. The transaction remains recoverable and
         // migration is deliberately best effort.
+        LOG.warn("Legacy snapshot restored, but its optional portable rewrite failed", failure)
+      }
+    }
+  }
+
+  private fun loadLegacy(
+      snapshotFile: File,
+      bytes: ByteArray,
+      target: MachineIdentity,
+      session: Session,
+      migrationPolicy: LegacySnapshotMigrationPolicy,
+  ) {
+    val legacyState =
+        try {
+          LegacySnapshotImporter.importGameboyState(bytes)
+        } catch (failure: Exception) {
+          throw loadFailure(
+              SnapshotFileFormat.LEGACY_JAVA,
+              null,
+              target,
+              null,
+              failure.message ?: "Legacy snapshot is invalid or unsupported",
+              failure,
+          )
+        }
+    try {
+      DetachedStateAdapter.applyLegacyState(session.gameboy, legacyState, legacyApplyProbe)
+      session.serialEndpoint.disconnect()
+    } catch (failure: Exception) {
+      throw loadFailure(
+          SnapshotFileFormat.LEGACY_JAVA,
+          null,
+          target,
+          null,
+          failure.message ?: "Legacy snapshot is incompatible with the target",
+          failure,
+      )
+    }
+
+    if (migrationPolicy == LegacySnapshotMigrationPolicy.REWRITE_AFTER_SUCCESS) {
+      val portable =
+          StateCodec.encode(
+              StateCodec.capture(session),
+              StateCompression.DEFLATE,
+          )
+      try {
+        persistence.write(snapshotFile.toPath(), portable)
+      } catch (failure: IOException) {
         LOG.warn("Legacy snapshot restored, but its optional portable rewrite failed", failure)
       }
     }

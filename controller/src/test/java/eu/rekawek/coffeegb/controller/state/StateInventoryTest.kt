@@ -23,9 +23,33 @@ class StateInventoryTest {
           "- `${type.name}`: $fields"
         }
 
-    assertEquals(94, runtime.size)
+    assertEquals(96, runtime.size)
     assertEquals(runtime, documented)
     assertEquals(11, StateTypeRegistry.enumClasses.size)
+  }
+
+  @Test
+  fun mobileAdapterPortableIdsArePinnedToAppendOnlyValues() {
+    assertEquals(
+        95,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState") +
+            1,
+    )
+    assertEquals(
+        96,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState") +
+            1,
+    )
+    assertEquals(
+        8,
+        StatePayloadSectionCodec.serialPeripheralId(SerialPeripheralState.MOBILE_ADAPTER_GB),
+    )
+    assertEquals(
+        SerialPeripheralState.MOBILE_ADAPTER_GB,
+        StatePayloadSectionCodec.serialPeripheral(8),
+    )
   }
 
   @Test
@@ -63,7 +87,7 @@ class StateInventoryTest {
             }
             .sorted()
 
-    assertEquals(103, discovered.size)
+    assertEquals(106, discovered.size)
     assertTrue(discovered.all { '\\' !in it })
     assertEquals(discovered, documented)
   }
@@ -71,7 +95,7 @@ class StateInventoryTest {
   @Test
   fun everyAdmittedRecordHasAnExplicitSemanticPolicyAndRationale() {
     assertEquals(StateTypeRegistry.recordClassNames.toSet(), StateSemantics.policyAudit.keys)
-    assertEquals(94, StateSemantics.policyAudit.size)
+    assertEquals(96, StateSemantics.policyAudit.size)
     assertTrue(StateSemantics.policyAudit.values.all { it.isNotBlank() })
   }
 

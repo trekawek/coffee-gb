@@ -20,6 +20,8 @@ import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateLoadRequestEvent
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.state.StateOpenFolderRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
@@ -62,6 +64,7 @@ import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
@@ -89,6 +92,8 @@ class BasicController private constructor(
     private val closeTimeoutMillis: Long,
     private val liveBatteryStorageResolver: LiveBatteryStorageResolver =
         LiveBatteryStorageResolver.DEFAULT,
+    private val mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
+        SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
 ) : Controller, SnapshotSupport {
 
   constructor(
@@ -128,11 +133,35 @@ class BasicController private constructor(
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
   )
 
+  constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      externalActions: StateExternalActions,
+      mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider,
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      RomSessionPreparer(),
+      createLoadExecutor(),
+      SnapshotManagerFactory.DEFAULT,
+      configuredRewindManager(properties),
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory {
+        StateOperationWorker(it, externalActions = externalActions)
+      },
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+      mobileAdapterConfigurationProvider = mobileAdapterConfigurationProvider,
+  )
+
   internal constructor(
       parentEventBus: EventBus,
       properties: EmulatorProperties,
       console: Console?,
       sessionPreparer: SessionPreparer,
+      mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
+          SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
   ) : this(
       parentEventBus,
       properties,
@@ -144,6 +173,7 @@ class BasicController private constructor(
       StateWorkspaceFactory.DEFAULT,
       StateOperationWorkerFactory.DEFAULT,
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+      mobileAdapterConfigurationProvider = mobileAdapterConfigurationProvider,
   )
 
   internal constructor(
@@ -216,6 +246,8 @@ class BasicController private constructor(
       closeTimeoutMillis: Long = CONTROLLER_CLOSE_TIMEOUT_MILLIS,
       liveBatteryStorageResolver: LiveBatteryStorageResolver =
           LiveBatteryStorageResolver.DEFAULT,
+      mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
+          SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
   ) : this(
       parentEventBus,
       properties,
@@ -228,6 +260,7 @@ class BasicController private constructor(
       stateWorkerFactory,
       closeTimeoutMillis,
       liveBatteryStorageResolver,
+      mobileAdapterConfigurationProvider,
   )
 
   private val timingTicker = TimingTicker()
@@ -312,18 +345,9 @@ class BasicController private constructor(
   /** The user's pause state before the current chain of coalesced load requests. */
   private var pauseStateBeforeLoading: Boolean? = null
 
-  // when the Barcode Boy is connected the session uses a BarcodeBoySerialEndpoint instead
-  // of the netplay peer endpoint; scans are routed to it
-  private var barcodeBoyEnabled = false
-
-  private var barcodeBoy: BarcodeBoySerialEndpoint? = null
-
-  // the Game Boy Printer is likewise wired in place of the netplay peer endpoint; its
-  // finished bands are forwarded to the UI as PrinterPrintEvents
-  private var printerEnabled = false
-
-  // GPS Boy uses a Trimble receiver connected to the same link port through a software UART.
-  private var gpsReceiverEnabled = false
+  /** One explicit owner replaces the former independently mutable peripheral booleans. */
+  private var serialPeripheralSelection =
+      Controller.SerialPeripheralSelection.PEER_TO_PEER
 
   private val thread =
       Thread(
@@ -421,37 +445,29 @@ class BasicController private constructor(
     eventQueue.register<Controller.StopEmulationEvent> {
       requestStop()
     }
-    eventQueue.register<Controller.SetBarcodeBoyEvent> {
-      if (barcodeBoyEnabled != it.enabled) {
-        barcodeBoyEnabled = it.enabled
-        // the Barcode Boy and the printer share the link port, so only one at a time
-        if (barcodeBoyEnabled) {
-          printerEnabled = false
-          gpsReceiverEnabled = false
-        }
-        reconnectLinkDevice()
-      }
+    eventQueue.register<Controller.SetSerialPeripheralEvent> {
+      selectSerialPeripheral(it.selection)
     }
-    eventQueue.register<Controller.ScanBarcodeEvent> { barcodeBoy?.scan(it.barcode) }
+    eventQueue.register<Controller.SetBarcodeBoyEvent> {
+      applyLegacySerialSelection(
+          Controller.SerialPeripheralSelection.BARCODE_BOY,
+          it.enabled,
+      )
+    }
+    eventQueue.register<Controller.ScanBarcodeEvent> {
+      (session?.serialEndpoint as? BarcodeBoySerialEndpoint)?.scan(it.barcode)
+    }
     eventQueue.register<Controller.SetPrinterEvent> {
-      if (printerEnabled != it.enabled) {
-        printerEnabled = it.enabled
-        if (printerEnabled) {
-          barcodeBoyEnabled = false
-          gpsReceiverEnabled = false
-        }
-        reconnectLinkDevice()
-      }
+      applyLegacySerialSelection(
+          Controller.SerialPeripheralSelection.PRINTER,
+          it.enabled,
+      )
     }
     eventQueue.register<Controller.SetGpsReceiverEvent> {
-      if (gpsReceiverEnabled != it.enabled) {
-        gpsReceiverEnabled = it.enabled
-        if (gpsReceiverEnabled) {
-          barcodeBoyEnabled = false
-          printerEnabled = false
-        }
-        reconnectLinkDevice()
-      }
+      applyLegacySerialSelection(
+          Controller.SerialPeripheralSelection.GPS_RECEIVER,
+          it.enabled,
+      )
     }
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
       session?.config?.let { config ->
@@ -484,7 +500,7 @@ class BasicController private constructor(
             replacementJob == null &&
             stopJob == null &&
             isRewinding &&
-            session?.gameboy?.let { rewindManager.rewindOneStep(it) } == true
+            session?.let { rewindManager.rewindOneStep(it) } == true
 
     var emulated = false
     val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
@@ -496,7 +512,7 @@ class BasicController private constructor(
       timingTicker.run(clockSpec)
     }
     if (emulated && !rewound) {
-      session?.gameboy?.let { rewindManager.record(it) }
+      session?.let { rewindManager.record(it) }
     }
   }
 
@@ -506,13 +522,27 @@ class BasicController private constructor(
   ): Session {
     val sessionBus = StagedEventBus(eventBus.fork("main"))
     try {
+      val serialEndpoint =
+          createLinkDevice(serialPeripheralSelection, sessionBus, config.clockSpec)
       return Session(
           config,
           sessionBus,
           console,
-          createLinkDevice(sessionBus, config.clockSpec),
+          serialEndpoint,
           prebuiltGameboy = prebuiltGameboy,
       )
+    } catch (failure: Controller.SerialPeripheralPreparationException) {
+      postSerialPeripheralStatus(
+          serialPeripheralSelection,
+          Controller.SerialPeripheralStatus.UNAVAILABLE,
+          failure.error,
+      )
+      try {
+        sessionBus.close()
+      } catch (cleanupException: Exception) {
+        failure.addSuppressed(cleanupException)
+      }
+      throw failure
     } catch (e: Exception) {
       try {
         sessionBus.close()
@@ -1081,12 +1111,23 @@ class BasicController private constructor(
     val currentSession = session ?: return
     val context = stateContext ?: return
     try {
-      StateCodec.applyDecoded(
-          read.state,
-          currentSession.config,
-          currentSession.gameboy,
-          context.identity,
-      )
+      when (read.state.root) {
+        is SessionStateRoot ->
+            StateCodec.applyDecoded(read.state, currentSession, context.identity)
+        is MachineStateRoot -> {
+          // Released managed states predate session roots. They have no serial continuation, so
+          // a successful load deterministically cancels any live endpoint parser/backend
+          // ownership. Apply first so an invalid old file retains the complete active session.
+          StateCodec.applyDecoded(
+              read.state,
+              currentSession.config,
+              currentSession.gameboy,
+              context.identity,
+          )
+          currentSession.serialEndpoint.disconnect()
+        }
+        else -> StateCodec.applyDecoded(read.state, currentSession, context.identity)
+      }
       // A portable state contains the cartridge clock pause bit. Pause ownership belongs to the
       // live desktop workflow, so loading must not let an old capture override the effective
       // pause selected for this session.
@@ -1161,7 +1202,7 @@ class BasicController private constructor(
       return
     }
     try {
-      manager.applySnapshotReadOnly(snapshot, currentSession.gameboy)
+      manager.applySnapshotReadOnly(snapshot, currentSession)
       // Match managed-load ownership: a saved cartridge clock pause bit must not override the
       // effective pause chosen for the live desktop session.
       currentSession.gameboy.setCartridgeClockPaused(isPaused)
@@ -1247,8 +1288,7 @@ class BasicController private constructor(
 
   private fun capturePortableState(currentSession: Session): StateFile =
       StateCodec.capture(
-          currentSession.config,
-          currentSession.gameboy,
+          currentSession,
           checkNotNull(stateContext) {
                 "Portable state capture requires an initialized state context"
               }
@@ -1665,7 +1705,6 @@ class BasicController private constructor(
         e.addSuppressed(cleanupFailure)
       }
       console?.setGameboy(session?.gameboy)
-      reconnectLinkDevice()
       reportLoadFailure(job.event, e)
       return
     }
@@ -1691,6 +1730,10 @@ class BasicController private constructor(
 
     previousSession?.let { oldSession ->
       postSessionEventSafely(oldSession, Controller.EmulationStoppedEvent())
+      postSerialPeripheralStatus(
+          serialPeripheralSelection,
+          Controller.SerialPeripheralStatus.DETACHED,
+      )
       try {
         oldSession.closeAfterCartridgeFlush()
       } catch (cleanupFailure: RuntimeException) {
@@ -1802,29 +1845,145 @@ class BasicController private constructor(
     setPaused(restorePaused)
   }
 
-  private fun createLinkDevice(sessionBus: EventBus, clockSpec: ClockSpec): SerialEndpoint =
-      if (printerEnabled) {
-        barcodeBoy = null
-        GameboyPrinterSerialEndpoint { argb, width, height, top, bottom, exposure ->
-          sessionBus.post(Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
-        }
-      } else if (barcodeBoyEnabled) {
-        BarcodeBoySerialEndpoint().also { barcodeBoy = it }
-      } else if (gpsReceiverEnabled) {
-        barcodeBoy = null
-        GpsReceiverSerialEndpoint(clockSpec)
-      } else {
-        barcodeBoy = null
-        Peer2PeerSerialEndpoint()
+  private fun createLinkDevice(
+      selection: Controller.SerialPeripheralSelection,
+      sessionBus: EventBus,
+      clockSpec: ClockSpec,
+  ): SerialEndpoint =
+      when (selection) {
+        Controller.SerialPeripheralSelection.NONE -> SerialEndpoint.NULL_ENDPOINT
+        Controller.SerialPeripheralSelection.PRINTER ->
+            GameboyPrinterSerialEndpoint { argb, width, height, top, bottom, exposure ->
+              sessionBus.post(
+                  Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
+            }
+        Controller.SerialPeripheralSelection.BARCODE_BOY -> BarcodeBoySerialEndpoint()
+        Controller.SerialPeripheralSelection.GPS_RECEIVER ->
+            GpsReceiverSerialEndpoint(clockSpec)
+        Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB ->
+            createMobileAdapterEndpoint(clockSpec)
+        Controller.SerialPeripheralSelection.PEER_TO_PEER -> Peer2PeerSerialEndpoint()
       }
 
-  /**
-   * Plug the currently selected link-port device into the running session without a reset, so
-   * connecting the printer, Barcode Boy or GPS receiver doesn't restart the game.
-   */
-  private fun reconnectLinkDevice() {
-    val session = session ?: return
-    session.setSerialEndpoint(createLinkDevice(session.eventBus, session.config.clockSpec))
+  private fun createMobileAdapterEndpoint(clockSpec: ClockSpec): SerialEndpoint {
+    val configuration =
+        try {
+          mobileAdapterConfigurationProvider.load()
+        } catch (failure: Controller.SerialPeripheralPreparationException) {
+          throw failure
+        } catch (_: IllegalArgumentException) {
+          throw Controller.SerialPeripheralPreparationException(
+              Controller.SerialPeripheralError.CONFIGURATION_INVALID)
+        } catch (failure: Exception) {
+          // Do not copy exception text into logs or UI: a durable provider may include a path,
+          // endpoint, account name, or configuration fragment in its original failure.
+          LOG.warn(
+              "Mobile Adapter configuration provider failed with {}",
+              failure.javaClass.name,
+          )
+          throw Controller.SerialPeripheralPreparationException(
+              Controller.SerialPeripheralError.STORAGE_FAILED)
+        }
+    return try {
+      MobileAdapterSerialEndpoint(
+          clockSpec,
+          configuration.deviceId,
+          configuration.copyBytes(),
+      )
+    } catch (_: IllegalArgumentException) {
+      throw Controller.SerialPeripheralPreparationException(
+          Controller.SerialPeripheralError.CONFIGURATION_INVALID)
+    }
+  }
+
+  private fun applyLegacySerialSelection(
+      legacySelection: Controller.SerialPeripheralSelection,
+      enabled: Boolean,
+  ) {
+    if (enabled) {
+      selectSerialPeripheral(legacySelection)
+    } else if (serialPeripheralSelection == legacySelection) {
+      selectSerialPeripheral(Controller.SerialPeripheralSelection.PEER_TO_PEER)
+    }
+  }
+
+  /** Prepares first, then commits one exclusive endpoint at the controller frame safe point. */
+  private fun selectSerialPeripheral(selection: Controller.SerialPeripheralSelection) {
+    if (serialPeripheralSelection == selection) {
+      return
+    }
+    val currentSession = session
+    if (currentSession == null) {
+      serialPeripheralSelection = selection
+      postSerialPeripheralEventSafely(
+          Controller.SerialPeripheralSelectionChangedEvent(selection))
+      postSerialPeripheralStatus(selection, Controller.SerialPeripheralStatus.DETACHED)
+      return
+    }
+
+    val endpoint =
+        try {
+          createLinkDevice(selection, currentSession.eventBus, currentSession.config.clockSpec)
+        } catch (failure: Controller.SerialPeripheralPreparationException) {
+          postSerialPeripheralStatus(
+              selection,
+              Controller.SerialPeripheralStatus.UNAVAILABLE,
+              failure.error,
+          )
+          return
+        }
+    try {
+      currentSession.setSerialEndpoint(endpoint)
+    } catch (failure: RuntimeException) {
+      LOG.warn(
+          "Unable to attach serial peripheral {} after preparation",
+          selection,
+      )
+      postSerialPeripheralStatus(
+          selection,
+          Controller.SerialPeripheralStatus.UNAVAILABLE,
+          Controller.SerialPeripheralError.ENDPOINT_UNAVAILABLE,
+      )
+      return
+    }
+    val previousSelection = serialPeripheralSelection
+    // The session handoff is the ownership commit. Update the controller's internal selection
+    // before invoking any presentation subscriber, because EventBus dispatch is synchronous and
+    // an unrelated UI/plugin callback must not split endpoint ownership from controller state.
+    serialPeripheralSelection = selection
+    // Session rewind entries are pinned to one endpoint identity. Only a committed handoff
+    // invalidates them; preparation and handoff failures leave the old endpoint/history intact.
+    rewindManager.clear()
+    postSerialPeripheralStatus(
+        previousSelection,
+        Controller.SerialPeripheralStatus.DETACHED,
+    )
+    postSerialPeripheralEventSafely(
+        Controller.SerialPeripheralSelectionChangedEvent(selection))
+    postSerialPeripheralStatus(selection, Controller.SerialPeripheralStatus.ATTACHED)
+  }
+
+  private fun postSerialPeripheralStatus(
+      selection: Controller.SerialPeripheralSelection,
+      status: Controller.SerialPeripheralStatus,
+      error: Controller.SerialPeripheralError? = null,
+  ) {
+    postSerialPeripheralEventSafely(
+        Controller.SerialPeripheralStatusEvent(selection, status, error))
+  }
+
+  private fun postSerialPeripheralEventSafely(event: Event) {
+    try {
+      eventBus.post(event)
+    } catch (_: RuntimeException) {
+      // These notifications describe an already-decided controller transition. Keep subscriber
+      // failures outside the ownership transaction and omit details that may contain paths or
+      // private configuration material.
+      LOG.warn(
+          "Serial peripheral presentation subscriber failed for {}",
+          event.javaClass.simpleName,
+      )
+    }
   }
 
   private fun start(openRequestId: Long? = null) {
@@ -1907,6 +2066,12 @@ class BasicController private constructor(
       latestStateRequests[StateOperation.RESUME] = requestId
       stateWorker.scanResume(context, requestId)
     }
+    postSerialPeripheralEventSafely(
+        Controller.SerialPeripheralSelectionChangedEvent(serialPeripheralSelection))
+    postSerialPeripheralStatus(
+        serialPeripheralSelection,
+        Controller.SerialPeripheralStatus.ATTACHED,
+    )
   }
 
   private fun applySavesSettings(
@@ -2002,6 +2167,10 @@ class BasicController private constructor(
       closeDeadlineNanos: Long? = null,
   ) {
     val session = session ?: return
+    postSerialPeripheralStatus(
+        serialPeripheralSelection,
+        Controller.SerialPeripheralStatus.DETACHED,
+    )
     if (notifyLifecycle) {
       postSessionEventSafely(session, StateUxSessionEvent(stateSessionId, false, null))
       postSessionEventSafely(session, Controller.EmulationStoppedEvent())
@@ -2044,7 +2213,7 @@ class BasicController private constructor(
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
     try {
-      manager.saveSnapshot(slot, currentSession.gameboy)
+      manager.saveSnapshot(slot, currentSession)
       currentSession.eventBus.post(Controller.SnapshotSavedEvent(slot))
     } catch (e: Exception) {
       LOG.warn("Unable to save snapshot slot {}", slot, e)
@@ -2069,7 +2238,7 @@ class BasicController private constructor(
     }
     val manager = snapshotManager ?: return
     try {
-      if (manager.loadSnapshot(slot, currentSession.gameboy)) {
+      if (manager.loadSnapshot(slot, currentSession)) {
         rewindManager.clear()
         currentSession.eventBus.post(Controller.SnapshotRestoredEvent(slot))
       }
@@ -2462,6 +2631,11 @@ class BasicController private constructor(
     const val CONTROLLER_CLOSE_TIMEOUT_MILLIS = 8_000L
 
     val STATE_SESSION_IDS = AtomicLong()
+
+    val SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION =
+        Controller.MobileAdapterConfigurationProvider {
+          Controller.MobileAdapterConfiguration.syntheticOffline()
+        }
 
     fun nextStateSessionId(): Long =
         STATE_SESSION_IDS.updateAndGet { current -> Math.addExact(current, 1L) }

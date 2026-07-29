@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
+import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralSelection
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.network.ConnectionController
@@ -112,6 +113,8 @@ internal class SwingMenu(
     private val onScreenshot: () -> Unit,
     private val onOpenSaveFolder: () -> Unit,
     private val onQuit: () -> Unit,
+    private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
+    private val isLinkedControllerActive: () -> Boolean,
 ) {
 
   @Volatile private var stateSlot = 0
@@ -130,13 +133,8 @@ internal class SwingMenu(
 
   private val cheatDatabase: CheatDatabase by lazy { CheatDatabase.loadBundled() }
 
-  // the link port carries one device at a time: netplay, Barcode Boy, printer or GPS.
-  // These are the menu toggles for each; enabling one disconnects the rest.
-  private lateinit var barcodeBoyItem: JCheckBoxMenuItem
-
-  private lateinit var printerItem: JCheckBoxMenuItem
-
-  private lateinit var gpsReceiverItem: JCheckBoxMenuItem
+  // One radio-group binding mirrors the controller's exclusive serial-port owner.
+  private lateinit var serialPeripheralBinding: SerialPeripheralMenuBinding
 
   private lateinit var startServerItem: JCheckBoxMenuItem
 
@@ -682,25 +680,32 @@ internal class SwingMenu(
       cameraController.requestEnabled(camera.state)
     }
 
-    val printer = JCheckBoxMenuItem("Enable Game Boy Printer", false)
-    printerItem = printer
-    peripheralsMenu.add(printer)
-    printer.addActionListener {
-      eventBus.post(Controller.SetPrinterEvent(printer.state))
-      if (printer.state) {
-        disconnectOtherLinkPeripherals(printer)
-      }
-    }
+    serialPeripheralBinding =
+        SerialPeripheralMenuBinding(
+            eventBus,
+            transitionPrerequisites = { selection ->
+              serialPeripheralTransitionPrerequisites(
+                  selection,
+                  serverSelected = startServerItem.state,
+                  clientSelected = connectToServerItem.state,
+                  linkedControllerActive = isLinkedControllerActive(),
+              )
+            },
+        )
+    peripheralsMenu.add(serialPeripheralBinding.menu)
 
-    val gpsReceiver = JCheckBoxMenuItem("Enable GPS Receiver (GPS Boy)", false)
-    gpsReceiverItem = gpsReceiver
-    peripheralsMenu.add(gpsReceiver)
-    gpsReceiver.addActionListener {
-      eventBus.post(Controller.SetGpsReceiverEvent(gpsReceiver.state))
-      if (gpsReceiver.state) {
-        disconnectOtherLinkPeripherals(gpsReceiver)
-      }
+    val mobileAdapterDetails = JMenuItem("Mobile Adapter GB configuration…")
+    mobileAdapterDetails.accessibleContext.accessibleDescription =
+        "Show the deterministic offline Mobile Adapter configuration and network boundary"
+    mobileAdapterDetails.addActionListener {
+      JOptionPane.showMessageDialog(
+          window,
+          mobileAdapterConfigurationUiState.detailsText(),
+          "Mobile Adapter GB configuration",
+          JOptionPane.INFORMATION_MESSAGE,
+      )
     }
+    peripheralsMenu.add(mobileAdapterDetails)
 
     val arMenu = JMenu("Action Replay")
     peripheralsMenu.add(arMenu)
@@ -759,23 +764,13 @@ internal class SwingMenu(
     val barcodeMenu = JMenu("Barcode Boy")
     peripheralsMenu.add(barcodeMenu)
 
-    val barcodeBoy = JCheckBoxMenuItem("Enable Barcode Boy", false)
-    barcodeBoyItem = barcodeBoy
-    barcodeMenu.add(barcodeBoy)
-    barcodeBoy.addActionListener {
-      eventBus.post(Controller.SetBarcodeBoyEvent(barcodeBoy.state))
-      if (barcodeBoy.state) {
-        disconnectOtherLinkPeripherals(barcodeBoy)
-      }
-    }
-
     val scanBarcode = JMenuItem("Scan Barcode…")
     barcodeMenu.add(scanBarcode)
     scanBarcode.addActionListener {
-      if (!barcodeBoy.state) {
+      if (!serialPeripheralBinding.isSelected(SerialPeripheralSelection.BARCODE_BOY)) {
         JOptionPane.showMessageDialog(
             window,
-            "Enable \"Enable Barcode Boy\" first.",
+            "Select Barcode Boy under Link-port device first.",
             "Barcode Boy",
             JOptionPane.INFORMATION_MESSAGE,
         )
@@ -802,23 +797,9 @@ internal class SwingMenu(
     return peripheralsMenu
   }
 
-  /**
-   * Only one device can sit on the link port at a time, so turning one on unplugs the others:
-   * the netplay cable (server/client), the Barcode Boy, the printer and the GPS receiver.
-   */
-  private fun disconnectOtherLinkPeripherals(keep: JCheckBoxMenuItem) {
-    if (barcodeBoyItem !== keep && barcodeBoyItem.state) {
-      barcodeBoyItem.state = false
-      eventBus.post(Controller.SetBarcodeBoyEvent(false))
-    }
-    if (printerItem !== keep && printerItem.state) {
-      printerItem.state = false
-      eventBus.post(Controller.SetPrinterEvent(false))
-    }
-    if (gpsReceiverItem !== keep && gpsReceiverItem.state) {
-      gpsReceiverItem.state = false
-      eventBus.post(Controller.SetGpsReceiverEvent(false))
-    }
+  /** Return standalone ownership to the ordinary link endpoint before starting netplay. */
+  private fun disconnectStandaloneLinkPeripheral(keep: JCheckBoxMenuItem) {
+    eventBus.post(Controller.SetSerialPeripheralEvent(SerialPeripheralSelection.PEER_TO_PEER))
     if (startServerItem !== keep && startServerItem.state) {
       startServerItem.state = false
       eventBus.post(StopServerEvent())
@@ -895,7 +876,7 @@ internal class SwingMenu(
               else -> null
             }
         if (mode != null) {
-          disconnectOtherLinkPeripherals(startServer)
+          disconnectStandaloneLinkPeripheral(startServer)
           eventBus.post(StartServerEvent(mode))
         } else {
           startServer.state = false
@@ -913,7 +894,7 @@ internal class SwingMenu(
         val host: String? =
             JOptionPane.showInputDialog(window, "Please enter server IP address", "127.0.0.1")
         if (host != null) {
-          disconnectOtherLinkPeripherals(connectToServer)
+          disconnectStandaloneLinkPeripheral(connectToServer)
           eventBus.post(StartClientEvent(host))
         } else {
           connectToServer.state = false

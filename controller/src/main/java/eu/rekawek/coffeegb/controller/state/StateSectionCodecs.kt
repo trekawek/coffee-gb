@@ -591,6 +591,8 @@ internal object StatePayloadSectionCodec {
               "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState"
           SerialPeripheralState.FOUR_PLAYER_ADAPTER ->
               "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterState"
+          SerialPeripheralState.MOBILE_ADAPTER_GB ->
+              "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState"
         }
     val expected = StateTypeRegistry.recordClassNames.indexOf(expectedName) + 1
     if (expected == 0 || record.typeId != expected) {
@@ -603,7 +605,7 @@ internal object StatePayloadSectionCodec {
     if (value !in 0..0xff) malformed("Portable byte-valued integer $value is invalid")
   }
 
-  private fun serialPeripheralId(value: SerialPeripheralState): Int =
+  internal fun serialPeripheralId(value: SerialPeripheralState): Int =
       when (value) {
         SerialPeripheralState.NONE -> 1
         SerialPeripheralState.BYTE_RECEIVER -> 2
@@ -612,9 +614,10 @@ internal object StatePayloadSectionCodec {
         SerialPeripheralState.GPS_RECEIVER -> 5
         SerialPeripheralState.BARCODE_BOY -> 6
         SerialPeripheralState.FOUR_PLAYER_ADAPTER -> 7
+        SerialPeripheralState.MOBILE_ADAPTER_GB -> 8
       }
 
-  private fun serialPeripheral(id: Int): SerialPeripheralState =
+  internal fun serialPeripheral(id: Int): SerialPeripheralState =
       when (id) {
         1 -> SerialPeripheralState.NONE
         2 -> SerialPeripheralState.BYTE_RECEIVER
@@ -623,6 +626,7 @@ internal object StatePayloadSectionCodec {
         5 -> SerialPeripheralState.GPS_RECEIVER
         6 -> SerialPeripheralState.BARCODE_BOY
         7 -> SerialPeripheralState.FOUR_PLAYER_ADAPTER
+        8 -> SerialPeripheralState.MOBILE_ADAPTER_GB
         else ->
             throw StateDecodeException(
                 StateDecodeReason.MALFORMED_ENUM,

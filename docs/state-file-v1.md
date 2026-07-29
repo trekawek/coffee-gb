@@ -5,9 +5,10 @@ independent of Coffee GB's Maven/application version and of Java serialization. 
 integers are big-endian, all lengths are nonnegative, and all strings are strict UTF-8.
 
 The codec and explicit decode-then-apply seam are used by local slot snapshots and protocol-v8
-netplay. Rewind uses its separate internal, structurally shared `MachineSnapshot` representation;
-`ControllerState` and boot/reset use explicit detached/component state. Network state has no
-Java-serialization compatibility path.
+netplay. Production rewind uses separate internal `SessionSnapshot` entries, which combine a
+structurally shared `MachineSnapshot` with bounded serial-device state; `ControllerState` and
+boot/reset use explicit detached/component state. Network state has no Java-serialization
+compatibility path.
 
 ## Envelope
 
@@ -118,12 +119,16 @@ phase described in [StateFile v2](state-file-v2.md). New exact-clock SGB capture
 A session payload adds:
 
 - serial peripheral byte: 1 none, 2 byte receiver, 3 peer-to-peer, 4 printer, 5 GPS receiver,
-  6 Barcode Boy, 7 four-player adapter;
+  6 Barcode Boy, 7 four-player adapter, 8 Mobile Adapter GB;
 - serial StateValue, whose registered root type must match that peripheral;
 - runtime tag 0 (none) or 1 (Barcode Boy), with strict `transferArmed` and pending-presence
   booleans; a present pending scan is exactly 30 signed 32-bit byte-valued entries;
 - unsigned 32-bit held-button count and strictly increasing button IDs:
   RIGHT 1, LEFT 2, UP 3, DOWN 4, A 5, B 6, SELECT 7, START 8.
+
+The Mobile Adapter StateValue contains only its endpoint transfer cursor and nested engine protocol
+state. It cannot contain a backend port, socket, callback, or other host resource; apply validates
+it against and restores it into the already-configured live endpoint.
 
 A linked payload contains a nonnegative signed 64-bit frame, local-player byte, topology byte
 (1 normal, 2 four-player adapter), unsigned 32-bit player count (exactly four), then four canonical
@@ -160,19 +165,21 @@ Every value starts with a one-byte tag:
 
 Float NaN payloads and signed zero are preserved with `doubleToRawLongBits`. Int32-map keys are
 strictly increasing and unique. Record type IDs are the one-based stable entries of the audited
-94-record `StateTypeRegistry`; field count, name, and declaration order are encoded and checked.
+96-record `StateTypeRegistry`; field count, name, and declaration order are encoded and checked.
 The 11 enum type IDs use the same audited ordering, while enum value IDs are an explicit v1
 one-based registry verified against the production enum names. Class names from input are never
 loaded or instantiated.
 
-The record ID/name/field registry is the exact ordered 94-record appendix in
+The record ID/name/field registry is the exact ordered 96-record appendix in
 [state-memento-schema.md](state-memento-schema.md), where each bullet's one-based position is its
 ID. IDs 88 through 91 deliberately name non-serializable normal-state leaves; the local legacy
 importer has ID-aligned historical descriptor classes with the same field schemas. StateFile does
 not encode either JVM class name, so this runtime/compatibility separation does not change v1
 bytes. ID 92 is the append-only Xploder mapper state and ID 93 is the append-only VF001 Zook
-mapper state. ID 94 is the append-only VF001 General mapper state. None has a legacy descriptor
-because no released Java-serialized snapshot could contain them. The v1 enum registry is:
+mapper state. ID 94 is the append-only VF001 General mapper state. ID 95 is the append-only Mobile
+Adapter engine state and ID 96 is its append-only serial-endpoint state. None of IDs 92 through 96
+has a legacy descriptor because no released Java-serialized snapshot could contain them. The v1
+enum registry is:
 
 | Type ID | Enum | Value IDs in order starting at 1 |
 |---:|---|---|
@@ -279,10 +286,12 @@ and is not a list of SGB logical controllers.
 
 ## Local slot integration and legacy dispatch
 
-`SnapshotManager` captures a machine root with the exact active `GameboyConfiguration` at
-`BasicController`'s frame-boundary event-dispatch safe point and writes canonical DEFLATE StateFile
-bytes to the existing `.sn<slot>` filename. New slot files therefore begin with `CGBS`; the local
-save path never emits a Java serialization header.
+`SnapshotManager` captures a SESSION root with the exact active `GameboyConfiguration` and serial
+peripheral state at `BasicController`'s frame-boundary event-dispatch safe point, then writes
+canonical DEFLATE StateFile bytes to the existing `.sn<slot>` filename. New slot files therefore
+begin with `CGBS`; the local save path never emits a Java serialization header. Earlier portable
+MACHINE-root slot files remain readable; after a successful machine-only restore, the controller
+disconnects the active serial endpoint because that older root carries no endpoint state.
 
 Local reads use exactly four prefix bytes:
 

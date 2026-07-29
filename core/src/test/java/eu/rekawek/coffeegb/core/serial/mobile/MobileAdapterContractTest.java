@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.serial.mobile;
 
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import org.junit.Test;
 
 import java.io.BufferedReader;
@@ -18,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -99,8 +101,10 @@ public class MobileAdapterContractTest {
             assertEquals(request.length,
                     fragments.stream().mapToInt(FragmentStep::count).sum());
             long previous = -1;
+            long productionMillis = 0;
             int requestOffset = 0;
             ReferenceMobileEngine engine = new ReferenceMobileEngine(row.get("initial_state"));
+            MobileAdapterEngine production = productionEngine(row.get("initial_state"));
             for (int i = 0; i < fragments.size(); i++) {
                 FragmentStep fragment = fragments.get(i);
                 assertTrue(row.get("id"), fragment.millis >= previous);
@@ -108,11 +112,17 @@ public class MobileAdapterContractTest {
                 int next = Math.addExact(requestOffset, fragment.count);
                 assertTrue(row.get("id"), next <= request.length);
                 EngineResult current;
+                MobileAdapterEngine.EngineResult productionCurrent =
+                        production.advanceTicks(fragment.millis - productionMillis);
+                productionMillis = fragment.millis;
                 if (fragment.count == 0) {
                     current = engine.advanceTo(fragment.millis);
                 } else {
                     current = engine.feed(Arrays.copyOfRange(request, requestOffset, next),
                             fragment.millis);
+                    for (int offset = requestOffset; offset < next; offset++) {
+                        productionCurrent = production.acceptByte(request[offset] & 0xff);
+                    }
                     requestOffset = next;
                 }
                 if (requestOffset < request.length &&
@@ -122,16 +132,29 @@ public class MobileAdapterContractTest {
                     assertEquals(0, current.response.length);
                     assertEquals(0, current.ack.length);
                     assertEquals(0, current.commits);
+                    assertEquals(row.get("id") + ":production-fragment=" + i,
+                            MobileAdapterEngine.Outcome.NEED_MORE, productionCurrent.outcome());
+                    assertEquals(0, productionCurrent.responsePacket().length);
+                    assertEquals(0, productionCurrent.acknowledgement().length);
                 }
                 assertTrue(current.retainedBytes <= 262);
                 assertTrue(current.pendingSlots <= 2);
+                assertTrue(productionCurrent.retainedBytes() <= 262);
+                assertTrue(productionCurrent.pendingPacketSlots() <= 2);
             }
             assertEquals(request.length, requestOffset);
             EngineResult engineResult = engine.snapshot();
+            MobileAdapterEngine.EngineResult productionResult = production.snapshot();
             assertEquals(row.get("id"), row.get("expected_state"), engineResult.state);
             assertEquals(row.get("id"), row.get("expected_result"), engineResult.outcome);
             assertArrayEquals(row.get("id"), response, engineResult.response);
             assertArrayEquals(row.get("id"), ack, engineResult.ack);
+            assertEquals(row.get("id"), row.get("expected_state"),
+                    productionResult.phase().name());
+            assertEquals(row.get("id"), row.get("expected_result"),
+                    productionResult.outcome().name());
+            assertArrayEquals(row.get("id"), response, productionResult.responsePacket());
+            assertArrayEquals(row.get("id"), ack, productionResult.acknowledgement());
 
             FragmentResult fragmentSummary = fragments(row.get("fragments"));
             if (row.get("expected_result").equals("IDLE_TIMEOUT_RESET")) {
@@ -379,19 +402,110 @@ public class MobileAdapterContractTest {
     }
 
     @Test
-    public void phaseZeroAddsNoProductionEngineOrHostDependency() throws Exception {
+    public void productionMobileAdapterStaysPureAndHostIndependent() throws Exception {
         Path root = repositoryRoot();
+        Path productionRoot = root.resolve("core/src/main");
+        Path mobilePackage = productionRoot.resolve(
+                "java/eu/rekawek/coffeegb/core/serial/mobile");
         List<Path> production;
-        try (var paths = Files.walk(root)) {
+        try (var paths = Files.walk(productionRoot)) {
             production = paths.filter(Files::isRegularFile)
-                    .filter(path -> path.toString().contains("/src/main/"))
-                    .filter(path -> path.toString().endsWith(".java") || path.toString().endsWith(".kt"))
+                    .filter(path -> path.toString().endsWith(".java") ||
+                            path.toString().endsWith(".kt"))
+                    .filter(path -> path.startsWith(mobilePackage) ||
+                            path.getFileName().toString().contains("MobileAdapter"))
+                    .sorted()
                     .collect(Collectors.toList());
         }
-        String joined = production.stream().map(path -> {
-            try { return read(path); } catch (IOException e) { throw new RuntimeException(e); }
-        }).collect(Collectors.joining("\n"));
-        assertFalse(joined.contains("MobileAdapter"));
+        assertFalse("Expected Mobile Adapter production sources", production.isEmpty());
+
+        Set<String> allowedInternalImports = Set.of(
+                "eu.rekawek.coffeegb.core.hardware.ClockSpec",
+                "eu.rekawek.coffeegb.core.serial.SerialEndpoint",
+                "eu.rekawek.coffeegb.core.state.ComponentState",
+                "eu.rekawek.coffeegb.core.state.StatefulComponent");
+        Pattern internalImport = Pattern.compile(
+                "(?m)^\\s*import\\s+(eu\\.rekawek\\.coffeegb\\.[A-Za-z0-9_.$]+)\\s*;");
+        Set<String> observedInternalImports = new java.util.HashSet<>();
+        List<String> violations = new ArrayList<>();
+        for (Path source : production) {
+            String code = sourceCodeOnly(read(source));
+            var imports = internalImport.matcher(code);
+            while (imports.find()) {
+                String imported = imports.group(1);
+                observedInternalImports.add(imported);
+                if (!allowedInternalImports.contains(imported)) {
+                    violations.add(root.relativize(source) +
+                            ": unapproved internal dependency " + imported);
+                }
+            }
+            String declarationsRemoved = code.replaceAll(
+                    "(?m)^\\s*(?:package|import)\\s+[^;]+;\\s*", "");
+            if (Pattern.compile("\\beu\\.rekawek\\.coffeegb\\.")
+                    .matcher(declarationsRemoved).find()) {
+                violations.add(root.relativize(source) +
+                        ": fully-qualified internal dependency bypasses the import whitelist");
+            }
+        }
+        assertEquals(allowedInternalImports, observedInternalImports);
+
+        // Scan the complete, explicitly pinned dependency closure as well as the Mobile package.
+        // A future Mobile class therefore cannot hide host work behind a generic core helper.
+        List<Path> purityClosure = new ArrayList<>(production);
+        for (String imported : allowedInternalImports) {
+            purityClosure.add(productionRoot.resolve("java/").resolve(
+                    imported.replace('.', '/') + ".java"));
+        }
+        purityClosure.add(productionRoot.resolve(
+                "java/eu/rekawek/coffeegb/core/state/MachineStateCapture.java"));
+        assertTrue(purityClosure.stream().allMatch(Files::isRegularFile));
+
+        Map<String, Pattern> forbiddenDependencies = new LinkedHashMap<>();
+        forbiddenDependencies.put("networking or DNS", Pattern.compile(
+                "\\b(?:java|javax)\\.net(?:\\.|\\b)|" +
+                        "\\bjavax\\.naming(?:\\.|\\b)|" +
+                        "\\b(?:okhttp3|io\\.netty|org\\.apache\\.http)(?:\\.|\\b)|" +
+                        "\\b(?:Socket|ServerSocket|DatagramSocket|DatagramPacket|" +
+                        "InetAddress|URLConnection|HttpClient)\\b"));
+        forbiddenDependencies.put("filesystem access", Pattern.compile(
+                "\\b(?:java\\.nio\\.file|java\\.nio\\.channels|kotlin\\.io\\.path)" +
+                        "(?:\\.|\\b)|" +
+                        "\\bjava\\.io\\.(?:File|FileDescriptor|FileInputStream|" +
+                        "FileOutputStream|FileReader|FileWriter|RandomAccessFile)\\b|" +
+                        "\\b(?:File|Files|Path|Paths|FileSystem|FileSystems|" +
+                        "FileInputStream|FileOutputStream|FileReader|FileWriter|" +
+                        "RandomAccessFile)\\b"));
+        forbiddenDependencies.put("threads, blocking synchronization, futures, or executors", Pattern.compile(
+                "\\bjava\\.util\\.concurrent\\.(?!atomic\\.AtomicReference\\b)|" +
+                        "\\bkotlin\\.concurrent(?:\\.|\\b)|" +
+                        "\\b(?:Thread|ThreadLocal|Runnable|Callable|Future|CompletionStage|" +
+                        "CompletableFuture|Executor|ExecutorService|ScheduledExecutorService|" +
+                        "ForkJoinPool|Timer|TimerTask|Lock|Condition|Semaphore|CountDownLatch|" +
+                        "BlockingQueue)\\b|\\b(?:synchronized|volatile)\\b"));
+        forbiddenDependencies.put("AWT or Swing", Pattern.compile(
+                "\\b(?:java\\.awt|javax\\.swing)(?:\\.|\\b)"));
+        forbiddenDependencies.put("controller layer", Pattern.compile(
+                "\\beu\\.rekawek\\.coffeegb\\.controller(?:\\.|\\b)"));
+        forbiddenDependencies.put("host wall clock", Pattern.compile(
+                "\\bSystem\\s*(?:\\.|::)\\s*(?:currentTimeMillis|nanoTime)\\b|" +
+                        "\\b(?:Instant|LocalDate|LocalDateTime|OffsetDateTime|ZonedDateTime)" +
+                        "\\s*(?:\\.|::)\\s*now\\b|" +
+                        "\\bClock\\s*\\.\\s*system(?:UTC|DefaultZone)?\\b|" +
+                        "\\bCalendar\\s*\\.\\s*getInstance\\b|" +
+                        "\\bnew\\s+Date\\s*\\(|" +
+                        "\\bjava\\.time\\.Clock\\b|\\bjava\\.util\\.(?:Date|Calendar)\\b|" +
+                        "\\b(?:TimeSource|SystemClock|measureTimeMillis|measureNanoTime)\\b"));
+
+        for (Path source : purityClosure) {
+            String code = sourceCodeOnly(read(source));
+            for (Map.Entry<String, Pattern> dependency : forbiddenDependencies.entrySet()) {
+                if (dependency.getValue().matcher(code).find()) {
+                    violations.add(root.relativize(source) + ": " + dependency.getKey());
+                }
+            }
+        }
+        assertTrue("Forbidden Mobile Adapter production dependencies:\n" +
+                String.join("\n", violations), violations.isEmpty());
 
         String resources = Files.readString(root.resolve(
                 "core/src/test/resources/mobile-adapter/transcripts.tsv"), StandardCharsets.UTF_8);
@@ -405,6 +519,70 @@ public class MobileAdapterContractTest {
                 "host wall clock", "blocking")) {
             assertTrue(forbiddenCore, adr.contains(forbiddenCore));
         }
+    }
+
+    private static String sourceCodeOnly(String source) {
+        char[] result = source.toCharArray();
+        int offset = 0;
+        while (offset < result.length) {
+            if (offset + 1 < result.length && result[offset] == '/' && result[offset + 1] == '/') {
+                blank(result, offset++);
+                blank(result, offset++);
+                while (offset < result.length && result[offset] != '\n' && result[offset] != '\r') {
+                    blank(result, offset++);
+                }
+            } else if (offset + 1 < result.length && result[offset] == '/' &&
+                    result[offset + 1] == '*') {
+                blank(result, offset++);
+                blank(result, offset++);
+                while (offset < result.length) {
+                    if (offset + 1 < result.length && result[offset] == '*' &&
+                            result[offset + 1] == '/') {
+                        blank(result, offset++);
+                        blank(result, offset++);
+                        break;
+                    }
+                    blank(result, offset++);
+                }
+            } else if (offset + 2 < result.length && result[offset] == '"' &&
+                    result[offset + 1] == '"' && result[offset + 2] == '"') {
+                blank(result, offset++);
+                blank(result, offset++);
+                blank(result, offset++);
+                while (offset < result.length) {
+                    if (offset + 2 < result.length && result[offset] == '"' &&
+                            result[offset + 1] == '"' && result[offset + 2] == '"') {
+                        blank(result, offset++);
+                        blank(result, offset++);
+                        blank(result, offset++);
+                        break;
+                    }
+                    blank(result, offset++);
+                }
+            } else if (result[offset] == '"' || result[offset] == '\'') {
+                char delimiter = result[offset];
+                blank(result, offset++);
+                boolean escaped = false;
+                while (offset < result.length) {
+                    char value = result[offset];
+                    blank(result, offset++);
+                    if (escaped) {
+                        escaped = false;
+                    } else if (value == '\\') {
+                        escaped = true;
+                    } else if (value == delimiter) {
+                        break;
+                    }
+                }
+            } else {
+                offset++;
+            }
+        }
+        return new String(result);
+    }
+
+    private static void blank(char[] value, int offset) {
+        if (value[offset] != '\n' && value[offset] != '\r') value[offset] = ' ';
     }
 
     private static Packet parsePacket(byte[] bytes) {
@@ -505,6 +683,24 @@ public class MobileAdapterContractTest {
             offset += array.length;
         }
         return result;
+    }
+
+    private static MobileAdapterEngine productionEngine(String initialState) {
+        byte[] configuration = new byte[MobileAdapterEngine.CONFIGURATION_BYTES];
+        configuration[0] = 0x4d;
+        configuration[1] = 0x41;
+        configuration[2] = (byte) 0x81;
+        for (int i = 0; i < 128; i++) configuration[128 + i] = (byte) i;
+        MobileAdapterEngine engine = new MobileAdapterEngine(
+                new ClockSpec(1_000, 60, 1), 0x08, configuration);
+        if (initialState.equals("SESSION")) {
+            for (byte value : hex("9966100000084e494e54454e444f0277")) {
+                engine.acceptByte(value & 0xff);
+            }
+        } else if (!initialState.equals("SLEEP")) {
+            throw new IllegalArgumentException("Unknown Mobile state " + initialState);
+        }
+        return engine;
     }
 
     private static String sha256(byte[] bytes) throws NoSuchAlgorithmException {
