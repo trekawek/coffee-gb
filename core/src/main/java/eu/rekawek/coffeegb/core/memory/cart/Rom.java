@@ -132,6 +132,8 @@ public class Rom {
         // Dimensionless Sample, #76 - it renders past a SKIP boot but hangs the boot ROM).
         // BGB, SameBoy and real flashcarts silently fix it; only touches already-invalid ROMs.
         if (!cartridgeProperties.has(CartridgeProperties.Feature.SCRAMBLED_SACHEN_HEADER)
+                && !cartridgeProperties.has(
+                        CartridgeProperties.Feature.PRESERVE_INVALID_HEADER_CHECKSUM)
                 && rom.length > 0x014D) {
             int headerChecksum = 0;
             for (int a = 0x0134; a <= 0x014C; a++) {

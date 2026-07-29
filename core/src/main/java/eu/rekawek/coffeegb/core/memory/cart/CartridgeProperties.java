@@ -33,6 +33,7 @@ public final class CartridgeProperties {
         SACHEN_MMC2_LINEAR,
         SACHEN_COOKED,
         DATEL,
+        XPLODER_GB,
         WISDOM_TREE,
         MBC1,
         POCKET_CAMERA,
@@ -59,7 +60,8 @@ public final class CartridgeProperties {
         SACHEN_OPEN_BUS_BANKS,
         CGB0_REVISION,
         MEALYBUG_DMG_BLOB,
-        CODEBREAKER_RUMBLE
+        CODEBREAKER_RUMBLE,
+        PRESERVE_INVALID_HEADER_CHECKSUM
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -131,6 +133,8 @@ public final class CartridgeProperties {
                     Mapper.DATEL),
             features("Datel colour header", CartridgeProperties::hasDatelCgbHeader,
                     Feature.DATEL_CGB_HEADER),
+            profile("Future Console Design Xploder GB", CartridgeProperties::isXploderGb,
+                    Mapper.XPLODER_GB, Feature.PRESERVE_INVALID_HEADER_CHECKSUM),
             mapper("Wisdom Tree 32 KiB banking", CartridgeProperties::isWisdomTree,
                     Mapper.WISDOM_TREE),
             mapper("Xin Shuma Baobei Huang MBC5 wiring",
@@ -443,6 +447,13 @@ public final class CartridgeProperties {
 
     private static boolean hasDatelCgbHeader(RomInfo info) {
         return isDatel(info);
+    }
+
+    private static boolean isXploderGb(RomInfo info) {
+        // Xploder is a pass-through cheat cartridge, so its own logo area contains
+        // an FCD credit line. Both known firmware revisions share this fingerprint.
+        return info.rawType() == 0x69
+                && info.crc32(0x0104, 0x30) == 0xf13ffa9a;
     }
 
     private static boolean isSachen(RomInfo info) {

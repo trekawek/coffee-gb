@@ -91,6 +91,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             case SACHEN_MMC2_LINEAR -> new SachenMmc(rom, true, false);
             case SACHEN_COOKED -> new SachenMmc(rom, 0);
             case DATEL -> new Datel(rom, battery);
+            case XPLODER_GB -> new XploderGb(rom, battery);
             case WISDOM_TREE -> new WisdomTree(rom);
             case MBC1 -> new Mbc1(rom, battery);
             case POCKET_CAMERA -> new PocketCamera(rom, battery);
@@ -223,7 +224,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     }
 
     private static Battery createBattery(Rom rom, BatteryStorage configuredStorage) {
-        if (rom.getType().isBattery()) {
+        boolean xploderGb = rom.getCartridgeProperties().getMapper()
+                == CartridgeProperties.Mapper.XPLODER_GB;
+        if (rom.getType().isBattery() || xploderGb) {
             // Existing MBC implementations expose RAM in 8 KiB banks. Plain ROM+RAM
             // is the exception: its 2 KiB header size is mirrored across A000-BFFF.
             int ramSize = rom.getType() == CartridgeType.ROM_RAM_BATTERY
@@ -232,6 +235,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
                 ramSize = 0x8000;
             }
             if (rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.SL_MULTICART) {
+                ramSize = 0x20000;
+            }
+            if (xploderGb) {
                 ramSize = 0x20000;
             }
             if (ramSize == 0 && rom.getType().isRam()) {
