@@ -46,7 +46,7 @@ public final class DebugInstrumentation implements DebugHooks {
 
     private long masterTick;
 
-    private DebugBreakpointId pendingBreakpointId;
+    private DebugBreakpoint pendingBreakpoint;
 
     private long pendingMatchTick;
 
@@ -322,7 +322,7 @@ public final class DebugInstrumentation implements DebugHooks {
             if (condition instanceof DebugCounterCondition counter
                     && counter.counter() == DebugCounterType.MASTER_TICK
                     && counter.value() == masterTick) {
-                offerImmediateMatch(breakpoint.id());
+                offerImmediateMatch(breakpoint);
                 return;
             }
         }
@@ -340,14 +340,14 @@ public final class DebugInstrumentation implements DebugHooks {
             if (condition instanceof DebugCounterCondition counter
                     && counter.counter() == DebugCounterType.FRAME
                     && counter.value() == frame) {
-                offerImmediateMatch(breakpoint.id());
+                offerImmediateMatch(breakpoint);
                 return;
             }
             if (ppuStateKnown
                     && condition instanceof DebugPpuCondition
                     && DebugBreakpointMatcher.matchesPpu(
                             breakpoint, ownerFrame, ppuLy, ppuMode)) {
-                offerImmediateMatch(breakpoint.id());
+                offerImmediateMatch(breakpoint);
                 return;
             }
         }
@@ -360,7 +360,7 @@ public final class DebugInstrumentation implements DebugHooks {
     }
 
     public void clearPendingMatch() {
-        pendingBreakpointId = null;
+        pendingBreakpoint = null;
         pendingMatchTick = 0;
         readyMatch = null;
     }
@@ -387,8 +387,8 @@ public final class DebugInstrumentation implements DebugHooks {
     }
 
     private boolean hasPendingOrReadyMatch(DebugBreakpointId breakpointId) {
-        return breakpointId.equals(pendingBreakpointId)
-                || readyMatch != null && breakpointId.equals(readyMatch.breakpointId());
+        return pendingBreakpoint != null && breakpointId.equals(pendingBreakpoint.id())
+                || readyMatch != null && breakpointId.equals(readyMatch.breakpoint().id());
     }
 
     @Override
@@ -398,7 +398,7 @@ public final class DebugInstrumentation implements DebugHooks {
             if (breakpoint.condition() instanceof DebugPcCondition
                     && DebugBreakpointMatcher.matchesInstruction(
                             breakpoint, programCounter, false, 0)) {
-                offerRetirementMatch(breakpoint.id());
+                offerRetirementMatch(breakpoint);
                 return;
             }
         }
@@ -412,7 +412,7 @@ public final class DebugInstrumentation implements DebugHooks {
             if (breakpoint.condition() instanceof DebugOpcodeCondition
                     && DebugBreakpointMatcher.matchesInstruction(
                             breakpoint, programCounter, cbPrefixed, opcode)) {
-                offerRetirementMatch(breakpoint.id());
+                offerRetirementMatch(breakpoint);
                 return;
             }
         }
@@ -435,9 +435,9 @@ public final class DebugInstrumentation implements DebugHooks {
         if (instructionKnown && opcode == 0xd9) {
             completeAcceptedInterrupt();
         }
-        if (pendingBreakpointId != null && readyMatch == null) {
-            readyMatch = new BreakpointMatch(pendingBreakpointId, pendingMatchTick);
-            pendingBreakpointId = null;
+        if (pendingBreakpoint != null && readyMatch == null) {
+            readyMatch = new BreakpointMatch(pendingBreakpoint, pendingMatchTick);
+            pendingBreakpoint = null;
             pendingMatchTick = 0;
         }
     }
@@ -474,7 +474,7 @@ public final class DebugInstrumentation implements DebugHooks {
                     // Bus accesses are themselves complete observations. Owners poll only after
                     // the enclosing Gameboy.tick(), so expose the match at that safe point even
                     // when the CPU is idle and no retirement follows (for example STOP polling).
-                    offerImmediateMatch(breakpoint.id());
+                    offerImmediateMatch(breakpoint);
                     break;
                 }
             }
@@ -507,7 +507,7 @@ public final class DebugInstrumentation implements DebugHooks {
             DebugBreakpoint breakpoint = enabledBreakpoints[i];
             if (breakpoint.condition() instanceof DebugInterruptCondition
                     && DebugBreakpointMatcher.matchesInterrupt(breakpoint, interrupt)) {
-                offerRetirementMatch(breakpoint.id());
+                offerRetirementMatch(breakpoint);
                 break;
             }
         }
@@ -568,7 +568,7 @@ public final class DebugInstrumentation implements DebugHooks {
             if (breakpoint.condition() instanceof DebugPpuCondition
                     && DebugBreakpointMatcher.matchesPpu(
                             breakpoint, ownerFrame, line, mode)) {
-                offerImmediateMatch(breakpoint.id());
+                offerImmediateMatch(breakpoint);
                 break;
             }
         }
@@ -626,7 +626,7 @@ public final class DebugInstrumentation implements DebugHooks {
                     if (breakpoint.condition() instanceof DebugSerialCondition
                             && DebugBreakpointMatcher.matchesSerial(
                                     breakpoint, event, value)) {
-                        offerImmediateMatch(breakpoint.id());
+                        offerImmediateMatch(breakpoint);
                         break;
                     }
                 }
@@ -674,27 +674,32 @@ public final class DebugInstrumentation implements DebugHooks {
         }
     }
 
-    private void offerRetirementMatch(DebugBreakpointId breakpointId) {
-        if (pendingBreakpointId == null && readyMatch == null) {
-            pendingBreakpointId = breakpointId;
+    private void offerRetirementMatch(DebugBreakpoint breakpoint) {
+        if (pendingBreakpoint == null && readyMatch == null) {
+            pendingBreakpoint = breakpoint;
             pendingMatchTick = masterTick;
         }
     }
 
-    private void offerImmediateMatch(DebugBreakpointId breakpointId) {
-        if (pendingBreakpointId == null && readyMatch == null) {
-            readyMatch = new BreakpointMatch(breakpointId, masterTick);
+    private void offerImmediateMatch(DebugBreakpoint breakpoint) {
+        if (pendingBreakpoint == null && readyMatch == null) {
+            readyMatch = new BreakpointMatch(breakpoint, masterTick);
         }
     }
 
     /** Lightweight owner-side match completed into a public hit after snapshot capture. */
-    public record BreakpointMatch(DebugBreakpointId breakpointId, long matchMasterTick) {
+    public record BreakpointMatch(DebugBreakpoint breakpoint, long matchMasterTick) {
 
         public BreakpointMatch {
-            Objects.requireNonNull(breakpointId, "breakpointId");
+            Objects.requireNonNull(breakpoint, "breakpoint");
             if (matchMasterTick < 0) {
                 throw new IllegalArgumentException("Match tick must not be negative");
             }
+        }
+
+        /** Compatibility accessor for clients that only need the breakpoint identity. */
+        public DebugBreakpointId breakpointId() {
+            return breakpoint.id();
         }
     }
 }

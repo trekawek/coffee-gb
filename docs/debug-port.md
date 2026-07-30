@@ -228,12 +228,24 @@ SC starts the transfer. Completion observes the final received SB value after th
 after the port has finalized its completed state.
 
 A hit is completed only at a coherent safe point, acquires the debugger pause, and records a
-`DebugBreakpointHit` containing the breakpoint ID, the tick of the observed match, and the final
-snapshot. A PC or opcode observation can precede its final snapshot by the remaining ticks of that
+`DebugBreakpointHit` containing the breakpoint ID, the immutable definition that matched, the tick
+of the observed match, and the final snapshot. Capturing the complete definition keeps the stop
+explanation stable when that ID is later edited, removed, or reused. `activePause` is true while
+that automatic stop still owns the current debugger pause. It becomes false before the next guest
+tick or after any successful state discontinuity, including resume, forward or reverse stepping,
+direct Agent ticking, lifecycle-driven partial-frame completion, user rewind, and state or snapshot
+restore. Zero-tick requests, snapshot and inspection recapture, and rejected restores do not change
+it. A new breakpoint during movement replaces the historical hit with a new active one. The
+stopping snapshot itself remains paused and immutable. The compatibility three-argument
+constructor represents legacy ID-only hits with an empty definition and defaults `activePause` to
+true; owner implementations use the definition-carrying constructor.
+
+A PC or opcode observation can precede its final snapshot by the remaining ticks of that
 instruction. A memory observation stops after its enclosing master tick, so its snapshot may
 describe a CPU partway through the instruction; this also guarantees that STOP-time bus polling
 cannot strand a watchpoint waiting for a retirement that never occurs. `lastBreakpointHit` returns
-the most recent automatic stop and reports `NO_BREAKPOINT_HIT` before the first one.
+the most recent automatic stop, including historical hits, and reports `NO_BREAKPOINT_HIT` before
+the first one.
 
 The first matching observed event before a stop wins. If several definitions match that same event,
 the lowest numeric ID wins, independent of insertion order. Editing or removing a definition
@@ -393,9 +405,10 @@ monotonic across a reverse. `DebugReverseStepResult.restoredPosition` is the his
 including its frame position; `replayAnchor` identifies the retained frame checkpoint used for a
 direct restore or scratch replay. Its `snapshot` is the coherent post-commit view labelled with the
 current live counters. The compatibility `restoredPoint()` accessor names that anchor and must not
-be mistaken for an instruction target. Breakpoint definitions and trace configuration survive;
-pending breakpoint correlation, the last hit, and retained trace entries are cleared so
-observations from two timelines cannot be spliced.
+be mistaken for an instruction target. Breakpoint definitions and trace configuration survive.
+Pending breakpoint correlation and retained trace entries are cleared so observations from two
+timelines cannot be spliced. The last hit survives as history with `activePause` false and
+continues to describe its original stopping timeline and captured definition.
 
 A successful reverse moves only the cursor. Checkpoints and transcript records after it remain
 retained and continue to count against both budgets. `futureCheckpointCount` counts retained

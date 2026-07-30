@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.debug.DebugAudioChannelInspection
 import eu.rekawek.coffeegb.core.debug.DebugAudioInspection
 import eu.rekawek.coffeegb.core.debug.DebugApuState
 import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
 import eu.rekawek.coffeegb.core.debug.DebugByteData
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugCpuState
@@ -30,6 +31,8 @@ import eu.rekawek.coffeegb.core.debug.DebugStepResult
 import eu.rekawek.coffeegb.core.debug.DebugTimerState
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
@@ -367,7 +370,7 @@ class DebuggerPanelTest {
       assertContains(onEdt { panel.memoryArea.text }, "released")
       assertFalse(onEdt { panel.snapshotLabel.text }.contains("snapshot 2"))
       assertFalse(onEdt { panel.refreshButton.isEnabled })
-      assertEquals(0, onEdt { panel.breakpointModel.rowCount })
+      assertEquals(0, onEdt { panel.breakpointPane.tableModel.rowCount })
     } finally {
       onEdt(panel::close)
     }
@@ -394,6 +397,364 @@ class DebuggerPanelTest {
       onEdt { panel.refreshButton.doClick() }
       assertEquals(3, client.historyRequests.size)
       assertEquals(4, client.inspections.size)
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `breakpoint metadata identifies the current stop and becomes historical after movement`() {
+    val client =
+        RecordingDebuggerClient(
+            131,
+            capabilities(breakpoints = true),
+            deferLastBreakpointHit = true,
+        )
+    val breakpoint =
+        DebugBreakpoint(DebugBreakpointId(7), true, DebugPcCondition.at(0x0150))
+    client.breakpointDefinitions = listOf(breakpoint)
+    val panel = attach(client)
+    try {
+      val stoppingSnapshot = snapshot(131, 1, paused = true, pc = 0x0150)
+      val recapturedSnapshot =
+          snapshot(
+              131,
+              2,
+              paused = true,
+              pc = 0x0150,
+              masterTick = stoppingSnapshot.masterTick(),
+              frame = stoppingSnapshot.frame(),
+              retiredInstructions = stoppingSnapshot.execution().retiredInstructions(),
+          )
+      completeInspection(client.inspections.single(), recapturedSnapshot)
+      flushEdt()
+
+      client.lastBreakpointHitRequests.single().complete(
+          DebugResult.success(DebugBreakpointHit(breakpoint, 9, stoppingSnapshot, true))
+      )
+      flushEdt()
+
+      assertContains(onEdt { panel.stopReasonLabel.text }, "Stopped by breakpoint #7")
+      assertContains(onEdt { panel.stopReasonLabel.text }, "${'$'}0150")
+      assertContains(onEdt { panel.stopReasonLabel.text }, "matched tick 9")
+
+      val followUp = client.inspections.last()
+      completeInspection(followUp, snapshot(131, 3, paused = true, pc = 0x0151))
+      flushEdt()
+
+      assertContains(onEdt { panel.stopReasonLabel.text }, "Last stop: breakpoint #7")
+      assertFalse(onEdt { panel.stopReasonLabel.text }.startsWith("Stopped by"))
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `foreign generation breakpoint metadata is rejected by every breakpoint surface`() {
+    val client =
+        RecordingDebuggerClient(
+            132,
+            capabilities(breakpoints = true),
+            deferLastBreakpointHit = true,
+        )
+    val breakpoint =
+        DebugBreakpoint(DebugBreakpointId(8), true, DebugPcCondition.at(0x0200))
+    client.breakpointDefinitions = listOf(breakpoint)
+    val panel = attach(client)
+    try {
+      completeInspection(
+          client.inspections.single(),
+          snapshot(132, 1, paused = true, pc = 0x0200),
+      )
+      flushEdt()
+
+      client.lastBreakpointHitRequests.single().complete(
+          DebugResult.success(
+              DebugBreakpointHit(
+                  breakpoint.id(),
+                  9,
+                  snapshot(999, 1, paused = true, pc = 0x0200),
+              ))
+      )
+      flushEdt()
+
+      assertEquals("No breakpoint stop in this session", onEdt { panel.stopReasonLabel.text })
+      assertContains(onEdt { panel.breakpointPane.hitLabel.text }, "No breakpoint hit")
+      assertEquals("", onEdt { panel.breakpointPane.tableModel.getValueAt(0, 0) })
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `editing a hit id keeps the captured condition and clears the row marker`() {
+    val original = DebugBreakpoint(DebugBreakpointId(7), true, DebugPcCondition.at(0x0150))
+    val client =
+        RecordingDebuggerClient(
+            137,
+            capabilities(breakpoints = true),
+            deferLastBreakpointHit = true,
+        ).apply { breakpointDefinitions = listOf(original) }
+    val panel = attach(client)
+    try {
+      val stoppingSnapshot = snapshot(137, 1, paused = true, pc = 0x0150)
+      completeInspection(client.inspections.single(), stoppingSnapshot)
+      flushEdt()
+      val hit = DebugBreakpointHit(original, 9, stoppingSnapshot, true)
+      client.lastBreakpointHitRequests.single().complete(DebugResult.success(hit))
+      flushEdt()
+      assertEquals("Last hit", onEdt { panel.breakpointPane.tableModel.getValueAt(0, 0) })
+
+      onEdt {
+        panel.breakpointPane.table.setRowSelectionInterval(0, 0)
+        panel.breakpointPane.editButton.doClick()
+        panel.breakpointPane.editor.addressField.text = "\$0160"
+        panel.breakpointPane.saveButton.doClick()
+      }
+      val edit = client.breakpointSets.single()
+      assertEquals(original.id(), edit.breakpoint.id())
+      assertEquals(DebugPcCondition.at(0x0160), edit.breakpoint.condition())
+      client.breakpointDefinitions = listOf(edit.breakpoint)
+      edit.completion.complete(DebugResult.success(edit.breakpoint))
+      flushEdt()
+
+      assertEquals(2, client.lastBreakpointHitRequests.size)
+      client.lastBreakpointHitRequests.last().complete(DebugResult.success(hit))
+      flushEdt()
+
+      assertContains(onEdt { panel.stopReasonLabel.text }, "\$0150")
+      assertFalse(onEdt { panel.stopReasonLabel.text }.contains("\$0160"))
+      assertEquals("", onEdt { panel.breakpointPane.tableModel.getValueAt(0, 0) })
+      assertEquals("\$0160", onEdt { panel.breakpointPane.tableModel.getValueAt(0, 4) })
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `breakpoint pane waits for a matching inspection before calling a hit current`() {
+    val breakpoint =
+        DebugBreakpoint(DebugBreakpointId(10), true, DebugPcCondition.at(0x0500))
+    val client =
+        RecordingDebuggerClient(
+            138,
+            capabilities(breakpoints = true),
+            deferLastBreakpointHit = true,
+        ).apply { breakpointDefinitions = listOf(breakpoint) }
+    val panel = attach(client)
+    try {
+      val stoppingSnapshot = snapshot(138, 1, paused = true, pc = 0x0500)
+      client.lastBreakpointHitRequests.single().complete(
+          DebugResult.success(DebugBreakpointHit(breakpoint, 9, stoppingSnapshot, true))
+      )
+      flushEdt()
+
+      assertContains(onEdt { panel.stopReasonLabel.text }, "Last stop:")
+      assertContains(onEdt { panel.breakpointPane.hitLabel.text }, "Last hit:")
+      assertFalse(onEdt { panel.breakpointPane.hitLabel.text }.contains("Current stop"))
+
+      completeInspection(
+          client.inspections.single(),
+          snapshot(
+              138,
+              2,
+              paused = true,
+              pc = 0x0500,
+              masterTick = stoppingSnapshot.masterTick(),
+              frame = stoppingSnapshot.frame(),
+              retiredInstructions = stoppingSnapshot.execution().retiredInstructions(),
+          ),
+      )
+      flushEdt()
+
+      assertContains(onEdt { panel.stopReasonLabel.text }, "Stopped by breakpoint #10")
+      assertContains(onEdt { panel.breakpointPane.hitLabel.text }, "Current stop:")
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `metadata started before a resume cannot restore the old stop reason`() {
+    val client =
+        RecordingDebuggerClient(
+            133,
+            capabilities(breakpoints = true),
+            deferLastBreakpointHit = true,
+        )
+    val breakpoint =
+        DebugBreakpoint(DebugBreakpointId(9), true, DebugPcCondition.at(0x0300))
+    client.breakpointDefinitions = listOf(breakpoint)
+    val panel = attach(client)
+    try {
+      val stoppingSnapshot = snapshot(133, 1, paused = true, pc = 0x0300)
+      completeInspection(client.inspections.single(), stoppingSnapshot)
+      flushEdt()
+
+      onEdt { panel.runButton.doClick() }
+      client.resumes.single().complete(
+          DebugResult.success(snapshot(133, 2, paused = false, pc = 0x0300))
+      )
+      flushEdt()
+
+      client.lastBreakpointHitRequests.single().complete(
+          DebugResult.success(DebugBreakpointHit(breakpoint.id(), 9, stoppingSnapshot))
+      )
+      flushEdt()
+
+      assertEquals(2, client.lastBreakpointHitRequests.size)
+      assertEquals("No breakpoint stop in this session", onEdt { panel.stopReasonLabel.text })
+      assertContains(onEdt { panel.breakpointPane.hitLabel.text }, "No breakpoint hit")
+
+      client.lastBreakpointHitRequests.last().complete(
+          DebugResult.failure(
+              DebugErrorCode.NO_BREAKPOINT_HIT,
+              "No breakpoint has stopped this session",
+          )
+      )
+      flushEdt()
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `breakpoint CRUD waits for authoritative state and never reuses allocated ids`() {
+    val initial = DebugBreakpoint(DebugBreakpointId(5), true, DebugPcCondition.at(0x0150))
+    val client = RecordingDebuggerClient(132, capabilities(breakpoints = true))
+    client.breakpointDefinitions = listOf(initial)
+    val panel = attach(client)
+    try {
+      completeInspection(
+          client.inspections.single(),
+          snapshot(132, 1, paused = true, pc = 0x0150),
+      )
+      flushEdt()
+      assertEquals(1, onEdt { panel.breakpointPane.tableModel.rowCount })
+
+      onEdt {
+        panel.breakpointPane.editor.addressField.text = "\$0160"
+        panel.breakpointPane.saveButton.doClick()
+      }
+
+      val firstAdd = client.breakpointSets.single()
+      assertEquals(6, firstAdd.breakpoint.id().value())
+      assertEquals(DebugPcCondition.at(0x0160), firstAdd.breakpoint.condition())
+      assertEquals(1, onEdt { panel.breakpointPane.tableModel.rowCount })
+
+      client.breakpointDefinitions = listOf(initial, firstAdd.breakpoint)
+      firstAdd.completion.complete(DebugResult.success(firstAdd.breakpoint))
+      flushEdt()
+      assertEquals(2, onEdt { panel.breakpointPane.tableModel.rowCount })
+
+      onEdt {
+        val modelRow = panel.breakpointPane.tableModel.indexOf(firstAdd.breakpoint.id())
+        val viewRow = panel.breakpointPane.table.convertRowIndexToView(modelRow)
+        panel.breakpointPane.table.setRowSelectionInterval(viewRow, viewRow)
+        panel.breakpointPane.removeButton.doClick()
+      }
+
+      val removal = client.breakpointRemovals.single()
+      assertEquals(firstAdd.breakpoint.id(), removal.breakpointId)
+      assertEquals(2, onEdt { panel.breakpointPane.tableModel.rowCount })
+
+      client.breakpointDefinitions = listOf(initial)
+      removal.completion.complete(DebugResult.success())
+      flushEdt()
+      assertEquals(1, onEdt { panel.breakpointPane.tableModel.rowCount })
+
+      onEdt {
+        panel.breakpointPane.editor.addressField.text = "\$0170"
+        panel.breakpointPane.saveButton.doClick()
+      }
+
+      val secondAdd = client.breakpointSets.last()
+      assertEquals(2, client.breakpointSets.size)
+      assertEquals(7, secondAdd.breakpoint.id().value())
+      assertEquals(DebugPcCondition.at(0x0170), secondAdd.breakpoint.condition())
+      assertEquals(1, onEdt { panel.breakpointPane.tableModel.rowCount })
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `session replacement clears breakpoint drafts filters and edit identity`() {
+    val oldBreakpoint =
+        DebugBreakpoint(DebugBreakpointId(5), true, DebugPcCondition.at(0x0150))
+    val oldClient = RecordingDebuggerClient(134, capabilities(breakpoints = true)).apply {
+      breakpointDefinitions = listOf(oldBreakpoint)
+    }
+    val newClient = RecordingDebuggerClient(135, capabilities(breakpoints = true))
+    val panel = attach(oldClient)
+    try {
+      completeInspection(
+          oldClient.inspections.single(),
+          snapshot(134, 1, paused = true, pc = 0x0150),
+      )
+      flushEdt()
+      onEdt {
+        panel.breakpointPane.table.setRowSelectionInterval(0, 0)
+        panel.breakpointPane.editButton.doClick()
+        panel.breakpointPane.editor.addressField.text = "\$2222"
+        panel.breakpointPane.filterField.text = "private old-session draft"
+
+        panel.updateClient(135, newClient)
+      }
+      flushEdt()
+
+      assertEquals("", onEdt { panel.breakpointPane.filterField.text })
+      assertEquals("\$0100", onEdt { panel.breakpointPane.editor.addressField.text })
+      assertEquals(0, onEdt { panel.breakpointPane.tableModel.rowCount })
+
+      onEdt {
+        panel.breakpointPane.editor.addressField.text = "\$0200"
+        panel.breakpointPane.saveButton.doClick()
+      }
+      assertEquals(1, newClient.breakpointSets.size)
+      assertEquals(0, newClient.breakpointSets.single().breakpoint.id().value())
+      assertEquals(DebugPcCondition.at(0x0200), newClient.breakpointSets.single().breakpoint.condition())
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `global F9 removes every duplicate breakpoint at the paused PC`() {
+    val first = DebugBreakpoint(DebugBreakpointId(9), true, DebugPcCondition.at(0x0400))
+    val second = DebugBreakpoint(DebugBreakpointId(2), true, DebugPcCondition.at(0x0400))
+    val client = RecordingDebuggerClient(136, capabilities(breakpoints = true)).apply {
+      breakpointDefinitions = listOf(first, second)
+    }
+    val panel = attach(client)
+    try {
+      completeInspection(
+          client.inspections.single(),
+          snapshot(136, 1, paused = true, pc = 0x0400),
+      )
+      flushEdt()
+
+      onEdt {
+        val input = panel.getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+        val actionName = input.get(KeyStroke.getKeyStroke(KeyEvent.VK_F9, 0))
+        panel.actionMap.get(actionName).actionPerformed(null)
+      }
+
+      assertEquals(listOf(DebugBreakpointId(2)), client.breakpointRemovals.map { it.breakpointId })
+      assertEquals(2, onEdt { panel.breakpointPane.tableModel.rowCount })
+      client.breakpointRemovals.single().completion.complete(DebugResult.success())
+      flushEdt()
+
+      assertEquals(
+          listOf(DebugBreakpointId(2), DebugBreakpointId(9)),
+          client.breakpointRemovals.map { it.breakpointId },
+      )
+      client.breakpointDefinitions = emptyList()
+      client.breakpointRemovals.last().completion.complete(DebugResult.success())
+      flushEdt()
+
+      assertEquals(0, onEdt { panel.breakpointPane.tableModel.rowCount })
+      assertContains(onEdt { panel.breakpointPane.editorStatusLabel.text }, "Removed 2")
     } finally {
       onEdt(panel::close)
     }
@@ -807,6 +1168,12 @@ class DebuggerPanelTest {
                 .getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
                 .get(KeyStroke.getKeyStroke(KeyEvent.VK_F8, 0))
           })
+      assertNotNull(
+          onEdt {
+            panel
+                .getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .get(KeyStroke.getKeyStroke(KeyEvent.VK_F9, 0))
+          })
 
       val rowHeight = onEdt { panel.timelineTable.rowHeight }
       onEdt {
@@ -934,13 +1301,17 @@ class DebuggerPanelTest {
       paused: Boolean,
       pc: Int = 0x100,
       sp: Int = 0xc000,
+      masterTick: Long = sequence * 10,
+      frame: Long = sequence,
+      framePosition: Int = 0,
+      retiredInstructions: Long = sequence,
   ): DebugSnapshot =
       DebugSnapshot(
           generation,
           sequence,
-          sequence * 10,
-          sequence,
-          0,
+          masterTick,
+          frame,
+          framePosition,
           paused,
           DebugRegisters(0x12, 0xb0, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, sp, pc),
           DebugInterruptState(true, false, 0x01, 0x01, 0x01),
@@ -967,7 +1338,15 @@ class DebuggerPanelTest {
               DebugFeatureState.UNKNOWN,
               DebugFeatureState.UNKNOWN,
           ),
-          DebugExecutionState(DebugCpuState.OPCODE_FETCH, 0, -1, 0, false, false, sequence),
+          DebugExecutionState(
+              DebugCpuState.OPCODE_FETCH,
+              0,
+              -1,
+              0,
+              false,
+              false,
+              retiredInstructions,
+          ),
       )
 
   private fun capabilities(
@@ -975,6 +1354,7 @@ class DebuggerPanelTest {
       coherentInspection: Boolean = true,
       history: Boolean = false,
       trace: Boolean = false,
+      breakpoints: Boolean = false,
       inspectionSections: Set<DebugInspectionSection> = emptySet(),
   ): DebugCapabilities =
       if (coherentInspection) {
@@ -987,8 +1367,8 @@ class DebuggerPanelTest {
             true,
             true,
             maxInspectionBytes,
-            emptySet(),
-            0,
+            if (breakpoints) EnumSet.allOf(DebugBreakpointKind::class.java) else emptySet(),
+            if (breakpoints) 128 else 0,
             if (trace) EnumSet.allOf(TraceCategory::class.java) else emptySet(),
             if (trace) 2_000 else 0,
             if (trace) 256 else 0,
@@ -1200,10 +1580,21 @@ class DebuggerPanelTest {
       val completion: CompletableFuture<DebugResult<TraceConfiguration>>,
   )
 
+  private data class BreakpointSetCall(
+      val breakpoint: DebugBreakpoint,
+      val completion: CompletableFuture<DebugResult<DebugBreakpoint>>,
+  )
+
+  private data class BreakpointRemovalCall(
+      val breakpointId: DebugBreakpointId,
+      val completion: CompletableFuture<DebugResult<Void>>,
+  )
+
   private class RecordingDebuggerClient(
       override val generation: Long,
       override val capabilities: DebugCapabilities,
       private val failTraceDisable: Boolean = false,
+      private val deferLastBreakpointHit: Boolean = false,
   ) : DebuggerClient {
     val inspections = mutableListOf<InspectionCall>()
     val pauses = mutableListOf<CompletableFuture<DebugResult<DebugSnapshot>>>()
@@ -1211,6 +1602,11 @@ class DebuggerPanelTest {
     val historyRequests = mutableListOf<CompletableFuture<DebugResult<DebugHistoryStatus>>>()
     val historyConfigurations = mutableListOf<HistoryConfigurationCall>()
     val traceConfigurations = mutableListOf<TraceConfigurationCall>()
+    val lastBreakpointHitRequests =
+        mutableListOf<CompletableFuture<DebugResult<DebugBreakpointHit>>>()
+    val breakpointSets = mutableListOf<BreakpointSetCall>()
+    val breakpointRemovals = mutableListOf<BreakpointRemovalCall>()
+    var breakpointDefinitions: List<DebugBreakpoint> = emptyList()
 
     override fun inspect(
         request: DebugInspectionRequest
@@ -1254,15 +1650,36 @@ class DebuggerPanelTest {
         }
 
     override fun listBreakpoints(): CompletionStage<DebugResult<DebugBreakpointList>> =
-        CompletableFuture.completedFuture(DebugResult.success(DebugBreakpointList(emptyList())))
+        CompletableFuture.completedFuture(
+            DebugResult.success(DebugBreakpointList(breakpointDefinitions))
+        )
+
+    override fun lastBreakpointHit(): CompletionStage<DebugResult<DebugBreakpointHit>> =
+        CompletableFuture<DebugResult<DebugBreakpointHit>>().also { completion ->
+          lastBreakpointHitRequests += completion
+          if (!deferLastBreakpointHit) {
+            completion.complete(
+                DebugResult.failure(
+                    DebugErrorCode.NO_BREAKPOINT_HIT,
+                    "No breakpoint has stopped this session",
+                )
+            )
+          }
+        }
 
     override fun setBreakpoint(
         breakpoint: DebugBreakpoint
-    ): CompletionStage<DebugResult<DebugBreakpoint>> = unsupported()
+    ): CompletionStage<DebugResult<DebugBreakpoint>> =
+        CompletableFuture<DebugResult<DebugBreakpoint>>().also { completion ->
+          breakpointSets += BreakpointSetCall(breakpoint, completion)
+        }
 
     override fun removeBreakpoint(
         breakpointId: DebugBreakpointId
-    ): CompletionStage<DebugResult<Void>> = unsupported()
+    ): CompletionStage<DebugResult<Void>> =
+        CompletableFuture<DebugResult<Void>>().also { completion ->
+          breakpointRemovals += BreakpointRemovalCall(breakpointId, completion)
+        }
 
     private fun <T> unsupported(): CompletionStage<DebugResult<T>> =
         CompletableFuture.completedFuture(

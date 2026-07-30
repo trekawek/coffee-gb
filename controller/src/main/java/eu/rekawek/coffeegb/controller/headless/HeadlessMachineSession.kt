@@ -143,7 +143,8 @@ internal class HeadlessMachineSession(
       inspection: DebugInspectionResult,
   ): DebugBreakpointHit {
     checkOwnerAndOpen()
-    return DebugBreakpointHit(match.breakpointId(), match.matchMasterTick(), inspection.snapshot())
+    return DebugBreakpointHit(
+        match.breakpoint(), match.matchMasterTick(), inspection.snapshot(), true)
   }
 
   fun hashes(): ReplayStateHashes {

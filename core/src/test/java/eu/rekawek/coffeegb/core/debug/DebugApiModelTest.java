@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.core.debug;
 
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPoint;
@@ -619,14 +621,36 @@ public class DebugApiModelTest {
     }
 
     @Test
-    public void breakpointHitRequiresAPausedSnapshotAtOrAfterTheMatch() {
+    public void breakpointHitPinsItsDefinitionAndSeparatesHistoricalOwnership() {
         DebugBreakpointId id = new DebugBreakpointId(5);
-        DebugBreakpointHit hit = new DebugBreakpointHit(id, 1234, snapshot(true));
+        DebugBreakpoint definition =
+                new DebugBreakpoint(id, true, DebugPcCondition.at(0x100));
+        DebugBreakpointHit hit =
+                new DebugBreakpointHit(definition, 1234, snapshot(true), true);
         assertSame(id, hit.breakpointId());
+        assertSame(definition, hit.breakpoint().orElseThrow());
+        assertTrue(hit.activePause());
+
+        DebugBreakpointHit historical = hit.withActivePause(false);
+        assertFalse(historical.activePause());
+        assertSame(definition, historical.breakpoint().orElseThrow());
+        assertSame(hit.snapshot(), historical.snapshot());
+
+        DebugBreakpointHit legacy = new DebugBreakpointHit(id, 1234, snapshot(true));
+        assertTrue(legacy.breakpoint().isEmpty());
+        assertTrue(legacy.activePause());
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugBreakpointHit(id, 1234, snapshot(false)));
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugBreakpointHit(id, 1235, snapshot(true)));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugBreakpointHit(
+                        id,
+                        1234,
+                        snapshot(true),
+                        Optional.of(new DebugBreakpoint(
+                                new DebugBreakpointId(6), true, DebugPcCondition.at(0x100))),
+                        true));
     }
 
     @Test

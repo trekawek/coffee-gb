@@ -380,6 +380,42 @@ class BasicControllerDebugPortTest {
   }
 
   @Test
+  fun userRewindMakesTheBreakpointOwnedPauseHistorical() {
+    val rewind = RewindManager()
+    withController(rewind) { eventBus, port, _, _, _ ->
+      awaitCondition { rewind.historySize > 0 }
+      val paused = await(port.pause()).value()
+      val breakpoint =
+          DebugBreakpoint(
+              DebugBreakpointId(66),
+              true,
+              DebugCounterCondition.atFrame(paused.frame() + 1),
+          )
+      assertTrue(await(port.setBreakpoint(breakpoint)).isSuccess)
+
+      val step = await(port.step(DebugStepKind.FRAME))
+      assertTrue(step.isSuccess, step.toString())
+      assertEquals(DebugStepStopReason.BREAKPOINT, step.value().stopReason())
+      val hit = await(port.lastBreakpointHit()).value()
+      assertEquals(0, hit.snapshot().framePosition())
+      assertTrue(hit.activePause())
+
+      val retainedBeforeRewind = rewind.historySize
+      eventBus.post(Controller.RewindEvent(true))
+      awaitCondition { rewind.historySize < retainedBeforeRewind }
+      eventBus.post(Controller.RewindEvent(false))
+      awaitCondition {
+        val result = await(port.lastBreakpointHit())
+        result.isSuccess && !result.value().activePause()
+      }
+
+      val historical = await(port.lastBreakpointHit()).value()
+      assertEquals(breakpoint, historical.breakpoint().orElseThrow())
+      assertEquals(hit.snapshot(), historical.snapshot())
+    }
+  }
+
+  @Test
   fun historyRejectsLiveSensorCartridgesInThePrimaryAndDatelSlot() {
     for ((name, type) in listOf("MBC7" to 0x22, "POCKET_CAMERA" to 0xfc)) {
       withController(
@@ -491,6 +527,8 @@ class BasicControllerDebugPortTest {
       assertEquals(targetTick, hit.matchMasterTick())
       assertEquals(targetTick, hit.snapshot().masterTick())
       assertTrue(hit.snapshot().paused())
+      assertEquals(breakpoint, hit.breakpoint().orElseThrow())
+      assertTrue(hit.activePause())
 
       val stopped = await(port.snapshot()).value()
       assertEquals(targetTick, stopped.masterTick())
@@ -505,6 +543,7 @@ class BasicControllerDebugPortTest {
           stopped.execution().retiredInstructions(),
           stillStopped.execution().retiredInstructions(),
       )
+      assertTrue(await(port.lastBreakpointHit()).value().activePause())
 
       val trace = await(port.readTrace(TraceReadRequest.initial(256))).value()
       assertTrue(trace.entries().isNotEmpty())
@@ -512,6 +551,59 @@ class BasicControllerDebugPortTest {
           trace.entries().all {
             it.category() == TraceCategory.CPU || it.category() == TraceCategory.MEMORY
           })
+
+      val replacement =
+          DebugBreakpoint(
+              breakpoint.id(),
+              true,
+              DebugCounterCondition.atMasterTick(targetTick - 1),
+          )
+      assertEquals(replacement, await(port.setBreakpoint(replacement)).value())
+      val retained = await(port.lastBreakpointHit()).value()
+      assertEquals(breakpoint, retained.breakpoint().orElseThrow())
+      assertTrue(retained.activePause())
+
+      assertTrue(await(port.resume()).isSuccess)
+      val historical = await(port.lastBreakpointHit()).value()
+      assertEquals(breakpoint, historical.breakpoint().orElseThrow())
+      assertFalse(historical.activePause())
+      assertEquals(hit.snapshot(), historical.snapshot())
+    }
+  }
+
+  @Test
+  fun forcedLifecycleBoundaryMovementMakesAMidFrameHitHistorical() {
+    withController { eventBus, port, _, controller, _ ->
+      val paused = await(port.pause()).value()
+      val frameTicks = controllerSession(controller).gameboy.clockSpec.controllerTicksPerFrame()
+      val targetPosition = 64
+      val ticksToTarget =
+          if (paused.framePosition() < targetPosition) {
+            targetPosition - paused.framePosition()
+          } else {
+            frameTicks - paused.framePosition() + targetPosition
+          }
+      val breakpoint =
+          DebugBreakpoint(
+              DebugBreakpointId(65),
+              true,
+              DebugCounterCondition.atMasterTick(paused.masterTick() + ticksToTarget),
+          )
+      assertTrue(await(port.setBreakpoint(breakpoint)).isSuccess)
+      assertTrue(await(port.resume()).isSuccess)
+
+      val hit = awaitBreakpointHit(port)
+      assertEquals(targetPosition, hit.snapshot().framePosition())
+      assertTrue(hit.activePause())
+
+      // This stale cancellation is intentionally a no-op after the controller reaches its normal
+      // frame boundary, but reaching that boundary still advances beyond the breakpoint stop.
+      eventBus.post(Controller.CancelRomOpenEvent(Long.MIN_VALUE))
+      awaitCondition { !await(port.lastBreakpointHit()).value().activePause() }
+
+      val historical = await(port.lastBreakpointHit()).value()
+      assertEquals(breakpoint, historical.breakpoint().orElseThrow())
+      assertEquals(hit.snapshot(), historical.snapshot())
     }
   }
 
@@ -633,11 +725,30 @@ class BasicControllerDebugPortTest {
       eventBus.post(StateSaveRequestEvent(910, stateSession.sessionId, slot, null, null))
       awaitStateCompletion(completed, 910)
 
+      val beforeStop = await(port.snapshot()).value()
+      val breakpoint =
+          DebugBreakpoint(
+              DebugBreakpointId(67),
+              true,
+              DebugCounterCondition.atFrame(beforeStop.frame() + 1),
+          )
+      assertTrue(await(port.setBreakpoint(breakpoint)).isSuccess)
+      val stoppingStep = await(port.step(DebugStepKind.FRAME))
+      assertTrue(stoppingStep.isSuccess, stoppingStep.toString())
+      assertEquals(DebugStepStopReason.BREAKPOINT, stoppingStep.value().stopReason())
+      val breakpointHit = await(port.lastBreakpointHit()).value()
+      assertTrue(breakpointHit.activePause())
+
       val before = await(port.readTrace(TraceReadRequest.initial(256))).value()
       assertTrue(before.entries().isNotEmpty())
 
       eventBus.post(StateLoadRefRequestEvent(911, stateSession.sessionId, slot))
       awaitStateCompletion(completed, 911)
+
+      val historicalHit = await(port.lastBreakpointHit()).value()
+      assertFalse(historicalHit.activePause())
+      assertEquals(breakpoint, historicalHit.breakpoint().orElseThrow())
+      assertEquals(breakpointHit.snapshot(), historicalHit.snapshot())
 
       val after = await(port.readTrace(TraceReadRequest.initial(256))).value()
       assertTrue(after.entries().isEmpty())

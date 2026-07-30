@@ -22,7 +22,7 @@ hiding, or closing the debugger cancels that work and releases its snapshot and 
 | --- | --- |
 | **CPU** | Registers and flags, execution/interrupt/timer/PPU/APU scalars, mapper banks, stack, and side-effect-free disassembly. |
 | **Memory** | One validated ROM, work-RAM, or high-RAM address/range, read only while paused. |
-| **Breakpoints** | Program-counter breakpoints and read/write/execute watchpoints with optional byte value and mask. |
+| **Breakpoints** | Searchable, sortable Breakpoint Center for PC, memory, opcode, interrupt, PPU, serial, master-tick, and frame conditions. Definitions can be added, edited, duplicated, enabled/disabled, or removed without blocking the UI. |
 | **Graphics** | Hardware mode, VRAM tile banks, background/window maps, all 40 OAM objects, DMG registers, and CGB RGB555 palettes. |
 | **Audio** | Mixer/frame-sequencer state, four APU channels, raw/decoded registers, and all 32 wave samples in text plus a supplemental graph. |
 | **Timeline** | Sequence-ordered typed events, including serial and input activity when those categories are selected. |
@@ -37,12 +37,21 @@ not mutate the machine. Table and color-preview information is also available as
 - **F6** pauses at the next safe retirement or releases the debugger-owned pause.
 - **F7** steps one instruction; **Shift+F7** steps one frame.
 - **F8** moves back one recorded instruction; **Shift+F8** moves back one recorded frame.
+- **F9** toggles an exact program-counter breakpoint at the current paused address. If imported or
+  external state contains duplicates at that address, the toggle removes all of them.
 - The platform menu shortcut plus `+`/`-` changes font size, `0` resets it, and `C` copies the
   current pane or selected table rows.
 
-Controls have keyboard mnemonics, labels are associated with their editors, tables keep normal
-focus/selection indicators, and status is always stated in text rather than by color alone. Font
-scaling covers text, row heights, and stable table column widths from 70% through 200%.
+Toolbar controls have keyboard mnemonics. The Breakpoint Center uses unambiguous Enter, F9, and
+platform-shortcut+F actions plus normal focus traversal, rather than colliding with run-control
+mnemonics. Labels are associated with their editors, tables keep normal focus/selection indicators,
+and status is always stated in text rather than by color alone. Font scaling covers text, row
+heights, and stable table column widths from 70% through 200%.
+
+When a breakpoint stops the machine, the header names the immutable triggering definition and its
+match/stop ticks. The Breakpoint Center marks that definition while it still exists. After the
+machine moves, the same information is explicitly labelled as the last historical stop rather than
+the cause of a later pause.
 
 ## Reverse history and timeline capture
 

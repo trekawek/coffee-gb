@@ -20,6 +20,7 @@ import java.util.EnumSet;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -137,6 +138,27 @@ public class DebugInstrumentationTest {
         instrumentation.onMemoryAccess(DebugMemoryAccess.READ, 0xc000, 0x12);
         assertTrue(instrumentation.removeBreakpoint(id));
         assertNull(instrumentation.pollBreakpointMatch());
+    }
+
+    @Test
+    public void polledMatchRetainsTheExactDefinitionAfterIdReuse() {
+        DebugInstrumentation instrumentation = instrumentation(2);
+        DebugBreakpointId id = new DebugBreakpointId(8);
+        DebugBreakpoint matched = new DebugBreakpoint(
+                id, true,
+                new DebugMemoryCondition(DebugMemoryAccess.READ, 0xc000, 0xc000));
+        instrumentation.setBreakpoint(matched);
+
+        instrumentation.onMemoryAccess(DebugMemoryAccess.READ, 0xc000, 0x12);
+        DebugInstrumentation.BreakpointMatch match = instrumentation.pollBreakpointMatch();
+
+        assertTrue(instrumentation.removeBreakpoint(id));
+        instrumentation.setBreakpoint(
+                new DebugBreakpoint(id, true, DebugPcCondition.at(0x200)));
+        assertEquals(id, match.breakpointId());
+        assertSame(matched, match.breakpoint());
+        assertEquals(DebugMemoryAccess.READ,
+                ((DebugMemoryCondition) match.breakpoint().condition()).access());
     }
 
     private static DebugInstrumentation instrumentation(int maxBreakpoints) {

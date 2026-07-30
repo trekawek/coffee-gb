@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
 import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugDisassembler
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
@@ -12,7 +13,6 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
-import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugResult
@@ -20,9 +20,8 @@ import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepResult
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
-import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
-import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
 import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
@@ -79,7 +78,6 @@ import javax.swing.ListSelectionModel
 import javax.swing.SpinnerNumberModel
 import javax.swing.SwingUtilities
 import javax.swing.Timer
-import javax.swing.table.AbstractTableModel
 import org.slf4j.LoggerFactory
 
 /** Modeless desktop debugger retained by [DesktopDebuggerController]. */
@@ -192,6 +190,8 @@ internal interface DebuggerClient {
 
   fun listBreakpoints(): CompletionStage<DebugResult<DebugBreakpointList>>
 
+  fun lastBreakpointHit(): CompletionStage<DebugResult<DebugBreakpointHit>>
+
   fun setBreakpoint(
       breakpoint: DebugBreakpoint
   ): CompletionStage<DebugResult<DebugBreakpoint>>
@@ -237,6 +237,9 @@ private class DebugPortDebuggerClient(private val port: DebugPort) : DebuggerCli
   override fun listBreakpoints(): CompletionStage<DebugResult<DebugBreakpointList>> =
       port.listBreakpoints()
 
+  override fun lastBreakpointHit(): CompletionStage<DebugResult<DebugBreakpointHit>> =
+      port.lastBreakpointHit()
+
   override fun setBreakpoint(
       breakpoint: DebugBreakpoint
   ): CompletionStage<DebugResult<DebugBreakpoint>> = port.setBreakpoint(breakpoint)
@@ -263,6 +266,7 @@ internal class DebuggerPanel(
   private var uiPreferences = initialPreferences.sanitized()
   internal val sessionLabel = JLabel("No emulation session")
   internal val snapshotLabel = JLabel("Waiting for a debug snapshot")
+  internal val stopReasonLabel = JLabel("No breakpoint stop in this session")
   internal val statusLabel = JLabel("Debugger ready")
   internal val runButton = JButton("Release debug pause")
   internal val pauseButton = JButton("Pause")
@@ -280,14 +284,6 @@ internal class DebuggerPanel(
   internal val memorySpace = JComboBox(SAFE_MEMORY_SPACES)
   internal val memoryRange = JTextField("\$C000-\$C07F", 15)
   internal val memoryReadButton = JButton("Read")
-  internal val breakpointKind = JComboBox(BreakpointEditorKind.entries.toTypedArray())
-  internal val breakpointRange = JTextField("\$0100", 13)
-  internal val breakpointValue = JTextField("", 4)
-  internal val breakpointMask = JTextField("", 4)
-  internal val breakpointAddButton = JButton("Add")
-  internal val breakpointRemoveButton = JButton("Remove")
-  internal val breakpointModel = DebuggerBreakpointTableModel(::toggleBreakpoint)
-  internal val breakpointTable = JTable(breakpointModel)
   internal val historyLabel = JLabel("Reverse history status unavailable")
   internal val timelineToggle = JCheckBox("Capture trace timeline")
   internal val timelineWarning = JLabel("Timeline capture is off")
@@ -314,7 +310,15 @@ internal class DebuggerPanel(
       JSplitPane(JSplitPane.VERTICAL_SPLIT, cpuScalarSplit, cpuCodeSplit)
   internal val cpuPane = cpuPanel()
   internal val memoryPane = memoryPanel()
-  internal val breakpointPane = breakpointPanel()
+  internal val breakpointPane =
+      DebuggerBreakpointPanel(
+          DebuggerBreakpointPanelCallbacks(
+              onSave = ::saveBreakpoint,
+              onRemove = ::removeBreakpoint,
+              onToggle = ::toggleBreakpoint,
+              onToggleAtCurrentPc = ::toggleBreakpointAtCurrentPc,
+              onStatus = { message -> statusLabel.text = message },
+          ))
   internal val graphicsPane = DebuggerGraphicsPanel(copyText)
   internal val audioPane = DebuggerAudioPanel(copyText)
   internal val timelinePane = timelinePanel()
@@ -325,6 +329,9 @@ internal class DebuggerPanel(
   private var client: DebuggerClient? = null
   private var latestGeneration = NO_GENERATION
   private var snapshot: DebugSnapshot? = null
+  private var lastBreakpointHit: DebugBreakpointHit? = null
+  private var breakpointRows: List<DebugBreakpoint> = emptyList()
+  private var nextBreakpointId = 0L
   private var historyStatus: DebugHistoryStatus? = null
   private var selectedMemory: DebugMemoryRequest? = null
   @Volatile private var windowEpoch = 0L
@@ -351,6 +358,7 @@ internal class DebuggerPanel(
   @Volatile private var peripheralPreparationRequestId = 0L
   private var closed = false
   private var lastAppliedStateRequestId = 0L
+  private var lastAppliedCommandRequestId = 0L
 
   init {
     requireDebuggerWindowEdt("Debugger panel construction")
@@ -358,11 +366,13 @@ internal class DebuggerPanel(
     border = BorderFactory.createEmptyBorder(6, 6, 6, 6)
     getAccessibleContext().accessibleName = "Desktop debugger"
     getAccessibleContext().accessibleDescription =
-        "F5 refreshes, F6 toggles run control, F7 and F8 step forward and back, " +
+        "F5 refreshes, F6 toggles run control, F7 and F8 step forward and back, F9 toggles " +
+            "a program-counter breakpoint, " +
             "the menu shortcut plus or minus changes font size, and the menu shortcut C copies"
 
     sessionLabel.accessibleContext.accessibleName = "Debugger session"
     snapshotLabel.accessibleContext.accessibleName = "Debugger snapshot identity"
+    stopReasonLabel.accessibleContext.accessibleName = "Debugger stop reason"
     statusLabel.accessibleContext.accessibleName = "Debugger status"
     statusLabel.accessibleContext.accessibleDescription = statusLabel.text
     statusLabel.addPropertyChangeListener("text") { event ->
@@ -378,6 +388,7 @@ internal class DebuggerPanel(
     val header = JPanel(GridLayout(0, 1, 2, 2))
     header.add(sessionLabel)
     header.add(snapshotLabel)
+    header.add(stopReasonLabel)
     header.add(historyLabel)
 
     val toolbar = JPanel(FlowLayout(FlowLayout.LEADING, 5, 2))
@@ -482,10 +493,6 @@ internal class DebuggerPanel(
       timelineModel.setRetentionLimit(uiPreferences.timelineCapacity)
     }
     memoryReadButton.addActionListener { selectMemoryRange() }
-    breakpointAddButton.addActionListener { addBreakpoint() }
-    breakpointRemoveButton.addActionListener { removeSelectedBreakpoint() }
-    breakpointTable.selectionModel.addListSelectionListener { updateControlState() }
-    breakpointKind.addActionListener { updateBreakpointEditor() }
     tabs.addChangeListener {
       if (pollingActive) {
         syncPollingTimer()
@@ -494,7 +501,6 @@ internal class DebuggerPanel(
     }
 
     installKeyboardBindings()
-    updateBreakpointEditor()
     clearSessionView()
     applyDivider(uiPreferences.cpuScalarDivider, cpuScalarSplit)
     applyDivider(uiPreferences.cpuCodeDivider, cpuCodeSplit)
@@ -532,39 +538,6 @@ internal class DebuggerPanel(
     return JPanel(BorderLayout(4, 4)).apply {
       add(controls, BorderLayout.NORTH)
       add(scroll(memoryArea), BorderLayout.CENTER)
-    }
-  }
-
-  private fun breakpointPanel(): Component {
-    breakpointTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
-    breakpointTable.fillsViewportHeight = true
-    breakpointTable.autoCreateRowSorter = false
-    breakpointTable.accessibleContext.accessibleName = "Breakpoints and watchpoints"
-    breakpointTable.columnModel.getColumn(0).preferredWidth = 65
-    breakpointTable.columnModel.getColumn(1).preferredWidth = 70
-    breakpointTable.columnModel.getColumn(2).preferredWidth = 140
-    breakpointTable.columnModel.getColumn(3).preferredWidth = 420
-
-    breakpointKind.accessibleContext.accessibleName = "Breakpoint type"
-    breakpointRange.accessibleContext.accessibleName = "Breakpoint address or range"
-    breakpointValue.accessibleContext.accessibleName = "Optional watchpoint byte value"
-    breakpointMask.accessibleContext.accessibleName = "Optional watchpoint byte mask"
-    val editor = JPanel(FlowLayout(FlowLayout.LEADING))
-    editor.add(debuggerLabel("Type:", breakpointKind, KeyEvent.VK_Y))
-    editor.add(breakpointKind)
-    editor.add(debuggerLabel("Address/range:", breakpointRange, KeyEvent.VK_A))
-    editor.add(breakpointRange)
-    editor.add(debuggerLabel("Value:", breakpointValue, KeyEvent.VK_V))
-    editor.add(breakpointValue)
-    editor.add(debuggerLabel("Mask:", breakpointMask, KeyEvent.VK_M))
-    editor.add(breakpointMask)
-    breakpointAddButton.mnemonic = KeyEvent.VK_D
-    breakpointRemoveButton.mnemonic = KeyEvent.VK_O
-    editor.add(breakpointAddButton)
-    editor.add(breakpointRemoveButton)
-    return JPanel(BorderLayout(4, 4)).apply {
-      add(editor, BorderLayout.NORTH)
-      add(JScrollPane(breakpointTable), BorderLayout.CENTER)
     }
   }
 
@@ -674,6 +647,11 @@ internal class DebuggerPanel(
     ) {
       if (backFrameButton.isEnabled) backFrameButton.doClick()
     }
+    bind(KeyStroke.getKeyStroke(KeyEvent.VK_F9, 0), ACTION_TOGGLE_PC_BREAKPOINT) {
+      if (breakpointPane.toggleCurrentPcButton.isEnabled) {
+        breakpointPane.toggleCurrentPcButton.doClick()
+      }
+    }
     bind(
         KeyStroke.getKeyStroke(KeyEvent.VK_EQUALS, shortcutMask),
         ACTION_ZOOM_IN,
@@ -739,7 +717,7 @@ internal class DebuggerPanel(
               listOf(registersArea.text, machineArea.text, disassemblyArea.text, stackArea.text)
                   .joinToString("\n\n")
           memoryPane -> memoryArea.text
-          breakpointPane -> breakpointModel.copyText(breakpointTable.selectedRows)
+          breakpointPane -> breakpointPane.copyText()
           graphicsPane -> graphicsPane.copyText()
           audioPane -> audioPane.copyText()
           timelinePane -> timelineModel.copyText(timelineTable.selectedRows)
@@ -790,6 +768,9 @@ internal class DebuggerPanel(
     client = nextClient
     windowEpoch++
     snapshot = null
+    lastBreakpointHit = null
+    breakpointRows = emptyList()
+    nextBreakpointId = 0L
     historyStatus = null
     selectedMemory = null
     refreshInFlight = false
@@ -800,6 +781,7 @@ internal class DebuggerPanel(
     metadataAgain = false
     commandInFlight = false
     lastAppliedStateRequestId = 0L
+    lastAppliedCommandRequestId = 0L
     traceCursor = -1L
     timelineModel.clear()
     graphicsPane.clear()
@@ -811,7 +793,8 @@ internal class DebuggerPanel(
           nextClient.capabilities.coherentTraceInspection() -> "Timeline capture is off"
           else -> "Coherent trace timeline is unsupported in this session"
         }
-    breakpointModel.replace(emptyList(), null)
+    breakpointPane.clear()
+    breakpointPane.replace(emptyList(), nextClient?.capabilities, null, null)
     syncPollingTimer()
     if (nextClient == null) {
       clearSessionView()
@@ -824,6 +807,7 @@ internal class DebuggerPanel(
       snapshotLabel.text =
           if (coherentInspection) "Waiting for a coherent snapshot"
           else "Coherent inspection is unavailable for this session"
+      stopReasonLabel.text = "Waiting for breakpoint stop metadata"
       historyLabel.text = "Waiting for reverse history status"
       registersArea.text =
           if (coherentInspection) "Waiting for CPU state" else "Snapshot inspection unavailable"
@@ -1101,6 +1085,7 @@ internal class DebuggerPanel(
     val wasRunning = snapshot?.paused() == false
     val view = DebuggerPresentation.snapshot(result.snapshot)
     snapshot = result.snapshot
+    renderBreakpointHit()
     snapshotLabel.text =
         "${view.identity.label} — ${if (view.paused) "PAUSED" else "RUNNING"} — ${view.timingText}"
     registersArea.text = view.registers.render()
@@ -1204,28 +1189,41 @@ internal class DebuggerPanel(
     }
     val token = token(attached)
     metadataInFlight = true
+    updateControlState()
     val breakpoints =
         if (attached.capabilities.breakpoints()) attached.listBreakpoints()
         else completedResult(DebugResult.success(DebugBreakpointList(emptyList())))
     val history =
         if (attached.capabilities.history().checkpointHistory()) attached.historyStatus()
         else completedResult<DebugResult<DebugHistoryStatus>?>(null)
-    breakpoints.thenCombine(history) { breakpointResult, historyResult ->
-          MetadataResult(breakpointResult, historyResult)
+    val lastHit =
+        if (attached.capabilities.breakpoints()) attached.lastBreakpointHit()
+        else completedResult<DebugResult<DebugBreakpointHit>?>(null)
+    breakpoints
+        .thenCombine(history) { breakpointResult, historyResult ->
+          MetadataResult(breakpointResult, historyResult, null)
         }
+        .thenCombine(lastHit) { metadata, hitResult -> metadata.copy(lastHit = hitResult) }
         .whenComplete { result, failure ->
           dispatchSwingMutation {
             if (!sameSession(token)) return@dispatchSwingMutation
             metadataInFlight = false
             if (token.epoch == windowEpoch && pollingActive) {
               when {
+                token.requestId < lastAppliedCommandRequestId -> metadataAgain = true
                 failure != null -> showFailure("Metadata refresh", failure)
                 result == null -> statusLabel.text = "Metadata refresh returned no result"
                 result.breakpoints.isFailure -> showFailure("Breakpoint refresh", result.breakpoints)
                 else -> {
-                  breakpointModel.replace(
-                      result.breakpoints.value().breakpoints(),
+                  breakpointRows = result.breakpoints.value().breakpoints()
+                  advanceBreakpointId(breakpointRows)
+                  applyBreakpointHit(result.lastHit)
+                  breakpointPane.replace(
+                      breakpointRows,
                       attached.capabilities,
+                      lastBreakpointHit,
+                      snapshot?.takeIf { it.paused() }?.registers()?.pc(),
+                      isCurrentBreakpointStop(lastBreakpointHit),
                   )
                   val historyResult = result.history
                   if (historyResult != null) {
@@ -1243,6 +1241,67 @@ internal class DebuggerPanel(
             if (repeat) requestMetadata()
           }
         }
+  }
+
+  private fun applyBreakpointHit(result: DebugResult<DebugBreakpointHit>?) {
+    when {
+      result == null -> {
+        lastBreakpointHit = null
+        renderBreakpointHit()
+      }
+      result.isFailure && result.error().code() == DebugErrorCode.NO_BREAKPOINT_HIT -> {
+        lastBreakpointHit = null
+        renderBreakpointHit()
+      }
+      result.isFailure -> {
+        lastBreakpointHit = null
+        stopReasonLabel.text =
+            "Breakpoint stop reason unavailable — ${result.error().code()}: ${result.error().message()}"
+      }
+      else -> {
+        lastBreakpointHit =
+            result.value().takeIf {
+              it.snapshot().sessionGeneration() == latestGeneration
+            }
+        renderBreakpointHit()
+      }
+    }
+  }
+
+  private fun renderBreakpointHit() {
+    val hit =
+        lastBreakpointHit?.takeIf { it.snapshot().sessionGeneration() == latestGeneration }
+    breakpointPane.updateExecutionContext(
+        hit,
+        snapshot?.takeIf { it.paused() }?.registers()?.pc(),
+        isCurrentBreakpointStop(hit),
+    )
+    if (hit == null) {
+      stopReasonLabel.text = "No breakpoint stop in this session"
+      return
+    }
+    val id = hit.breakpointId().value()
+    val condition =
+        hit.breakpoint()
+            .map { DebuggerPresentation.breakpointRows(listOf(it)).single().condition }
+            .orElse("condition unavailable")
+    val current = isCurrentBreakpointStop(hit)
+    val prefix = if (current) "Stopped by" else "Last stop:"
+    stopReasonLabel.text =
+        "$prefix breakpoint #$id — $condition — matched tick ${hit.matchMasterTick()}, " +
+            "paused tick ${hit.snapshot().masterTick()}"
+  }
+
+  private fun isCurrentBreakpointStop(hit: DebugBreakpointHit?): Boolean {
+    if (hit?.activePause() != true) return false
+    val current = snapshot ?: return false
+    return current.paused() &&
+        current.sessionGeneration() == hit.snapshot().sessionGeneration() &&
+        current.masterTick() == hit.snapshot().masterTick() &&
+        current.frame() == hit.snapshot().frame() &&
+        current.framePosition() == hit.snapshot().framePosition() &&
+        current.execution().retiredInstructions() ==
+            hit.snapshot().execution().retiredInstructions()
   }
 
   private fun applyHistory(status: DebugHistoryStatus?) {
@@ -1536,36 +1595,52 @@ internal class DebuggerPanel(
     requestRefresh()
   }
 
-  private fun addBreakpoint() {
+  private fun saveBreakpoint(request: DebuggerBreakpointSaveRequest) {
     val attached = client ?: return
-    val editorKind = breakpointKind.selectedItem as BreakpointEditorKind
-    val parsed: DebuggerParsedValue<out DebugBreakpointCondition> =
-        if (editorKind == BreakpointEditorKind.PROGRAM_COUNTER) {
-          DebuggerPresentation.parseProgramCounterCondition(breakpointRange.text)
-        } else {
-          DebuggerPresentation.parseMemoryCondition(
-              breakpointRange.text,
-              editorKind.access!!,
-              breakpointValue.text,
-              breakpointMask.text,
-          )
-        }
-    if (!parsed.isValid) {
-      statusLabel.text = parsed.error
+    if (!attached.capabilities.supports(request.condition.kind())) {
+      statusLabel.text = "${request.condition.kind()} breakpoints are unsupported in this session."
+      breakpointPane.commandFailed(statusLabel.text)
       return
     }
-    val condition = parsed.value!!
-    if (!attached.capabilities.supports(condition.kind())) {
-      statusLabel.text = "${condition.kind()} breakpoints are unsupported in this session."
-      return
-    }
-    if (breakpointModel.rowCount >= attached.capabilities.maxBreakpoints()) {
+    val replacing = request.replacedId
+    if (replacing == null && breakpointRows.size >= attached.capabilities.maxBreakpoints()) {
       statusLabel.text = "The session breakpoint limit has been reached."
+      breakpointPane.commandFailed(statusLabel.text)
       return
     }
-    val id = breakpointModel.nextId()
-    val breakpoint = DebugBreakpoint(DebugBreakpointId(id), true, condition)
-    executeCommand("Add breakpoint $id", { attached.setBreakpoint(breakpoint) }) {}
+    if (replacing == null && nextBreakpointId == Long.MAX_VALUE) {
+      statusLabel.text = "No unused breakpoint identifier remains in this session."
+      breakpointPane.commandFailed(statusLabel.text)
+      return
+    }
+    if (replacing != null && breakpointRows.none { it.id() == replacing }) {
+      statusLabel.text = "Breakpoint #${replacing.value()} no longer exists; refresh before saving."
+      breakpointPane.commandFailed(statusLabel.text)
+      return
+    }
+    val duplicate =
+        breakpointRows.firstOrNull {
+          it.id() != replacing && it.condition() == request.condition
+        }
+    if (duplicate != null) {
+      statusLabel.text =
+          "Breakpoint #${duplicate.id().value()} already uses this condition."
+      breakpointPane.commandFailed(statusLabel.text)
+      return
+    }
+    val id = replacing ?: allocateBreakpointId()
+    val breakpoint = DebugBreakpoint(id, request.enabled, request.condition)
+    val verb = if (replacing == null) "Add" else "Save"
+    executeCommand(
+        "$verb breakpoint ${id.value()}",
+        { attached.setBreakpoint(breakpoint) },
+        onFailure = breakpointPane::commandFailed,
+    ) {
+      breakpointPane.commandSucceeded(
+          "${if (replacing == null) "Added" else "Saved"} breakpoint #${id.value()}",
+          clearEditor = true,
+      )
+    }
   }
 
   private fun toggleBreakpoint(breakpoint: DebugBreakpoint, enabled: Boolean) {
@@ -1578,24 +1653,92 @@ internal class DebuggerPanel(
     ) {}
   }
 
-  private fun removeSelectedBreakpoint() {
+  private fun advanceBreakpointId(values: List<DebugBreakpoint>) {
+    val maximum = values.maxOfOrNull { it.id().value() } ?: return
+    nextBreakpointId =
+        if (maximum == Long.MAX_VALUE) Long.MAX_VALUE
+        else maxOf(nextBreakpointId, maximum + 1)
+  }
+
+  private fun allocateBreakpointId(): DebugBreakpointId {
+    check(nextBreakpointId < Long.MAX_VALUE) { "Breakpoint identifiers are exhausted" }
+    return DebugBreakpointId(nextBreakpointId++)
+  }
+
+  private fun removeBreakpoint(breakpoint: DebugBreakpoint) {
     val attached = client ?: return
-    val row = breakpointTable.selectedRow
-    if (row < 0) return
-    val modelRow = breakpointTable.convertRowIndexToModel(row)
-    val breakpoint = breakpointModel.breakpointAt(modelRow)
     executeCommand(
         "Remove breakpoint ${breakpoint.id().value()}",
         { attached.removeBreakpoint(breakpoint.id()) },
-    ) {}
+        onFailure = breakpointPane::commandFailed,
+    ) {
+      breakpointPane.commandSucceeded(
+          "Removed breakpoint #${breakpoint.id().value()}",
+          clearEditor = false,
+      )
+    }
   }
 
-  private fun updateBreakpointEditor() {
-    val memory = (breakpointKind.selectedItem as? BreakpointEditorKind)?.access != null
-    breakpointValue.isEnabled = memory
-    breakpointMask.isEnabled = memory
-    updateControlState()
+  private fun toggleBreakpointAtCurrentPc(programCounter: Int) {
+    val existing = breakpointPane.breakpointsAtProgramCounter(programCounter)
+    if (existing.isNotEmpty()) {
+      removeBreakpoints(existing)
+    } else {
+      saveBreakpoint(
+          DebuggerBreakpointSaveRequest(
+              null,
+              true,
+              DebuggerBreakpointDraft.ProgramCounter(
+                  DebuggerPresentation.formatWord(programCounter)
+              ),
+              DebugPcCondition.at(programCounter),
+          ))
+    }
   }
+
+  private fun removeBreakpoints(breakpoints: List<DebugBreakpoint>) {
+    val attached = client ?: return
+    require(breakpoints.isNotEmpty()) { "At least one breakpoint is required" }
+    val ordered = breakpoints.sortedBy { it.id().value() }
+    val description =
+        if (ordered.size == 1) {
+          "breakpoint ${ordered.single().id().value()}"
+        } else {
+          "${ordered.size} duplicate PC breakpoints"
+        }
+    executeCommand(
+        "Remove $description",
+        { removeBreakpointsSequentially(attached, ordered, 0) },
+        onFailure = { message ->
+          breakpointPane.commandFailed(message)
+          // A later removal can fail after an earlier duplicate was removed. Reload the backend
+          // list so the authoritative table never conceals that partial progress.
+          requestMetadata()
+        },
+    ) {
+      breakpointPane.commandSucceeded(
+          if (ordered.size == 1) {
+            "Removed breakpoint #${ordered.single().id().value()}"
+          } else {
+            "Removed ${ordered.size} program-counter breakpoints"
+          },
+          clearEditor = false,
+      )
+    }
+  }
+
+  private fun removeBreakpointsSequentially(
+      attached: DebuggerClient,
+      breakpoints: List<DebugBreakpoint>,
+      index: Int,
+  ): CompletionStage<DebugResult<Void>> =
+      attached.removeBreakpoint(breakpoints[index].id()).thenCompose { result ->
+        if (result.isFailure || index == breakpoints.lastIndex) {
+          CompletableFuture.completedFuture(result)
+        } else {
+          removeBreakpointsSequentially(attached, breakpoints, index + 1)
+        }
+      }
 
   private fun applyCommandSnapshot(value: DebugSnapshot) {
     snapshot = value
@@ -1606,11 +1749,13 @@ internal class DebuggerPanel(
     machineArea.text = renderMachine(value)
     graphicsPane.showNotCaptured(view.identity)
     audioPane.showNotCaptured(view.identity)
+    renderBreakpointHit()
   }
 
   private fun <T> executeCommand(
       label: String,
       operation: () -> CompletionStage<DebugResult<T>>,
+      onFailure: (String) -> Unit = {},
       onSuccess: (T?) -> Unit,
   ) {
     requireDebuggerWindowEdt("Debugger command")
@@ -1626,6 +1771,7 @@ internal class DebuggerPanel(
         } catch (failure: RuntimeException) {
           commandInFlight = false
           showFailure(label, failure)
+          onFailure(statusLabel.text)
           updateControlState()
           return
         }
@@ -1635,10 +1781,21 @@ internal class DebuggerPanel(
         commandInFlight = false
         if (token.epoch == windowEpoch && pollingActive) {
           when {
-            failure != null -> showFailure(label, failure)
-            result == null -> statusLabel.text = "$label returned no result"
-            result.isFailure -> showFailure(label, result)
+            failure != null -> {
+              showFailure(label, failure)
+              onFailure(statusLabel.text)
+            }
+            result == null -> {
+              statusLabel.text = "$label returned no result"
+              onFailure(statusLabel.text)
+            }
+            result.isFailure -> {
+              showFailure(label, result)
+              onFailure(statusLabel.text)
+            }
             else -> {
+              lastAppliedCommandRequestId =
+                  maxOf(lastAppliedCommandRequestId, token.requestId)
               lastAppliedStateRequestId = maxOf(lastAppliedStateRequestId, token.requestId)
               onSuccess(result.value())
               if (statusLabel.text == "$label…") statusLabel.text = "$label completed"
@@ -1682,22 +1839,7 @@ internal class DebuggerPanel(
     memoryRange.isEnabled = usable && paused && capabilities?.coherentInspection() == true
     memoryReadButton.isEnabled = usable && paused && capabilities?.coherentInspection() == true
 
-    val editorKind = breakpointKind.selectedItem as? BreakpointEditorKind
-    val editorSupported =
-        when {
-          editorKind == null || capabilities == null -> false
-          editorKind == BreakpointEditorKind.PROGRAM_COUNTER ->
-              capabilities.supports(DebugBreakpointKind.PROGRAM_COUNTER)
-          else -> capabilities.supports(DebugBreakpointKind.MEMORY)
-        }
-    breakpointKind.isEnabled = usable && capabilities?.breakpoints() == true
-    breakpointRange.isEnabled = usable && editorSupported
-    breakpointValue.isEnabled = usable && editorSupported && editorKind?.access != null
-    breakpointMask.isEnabled = usable && editorSupported && editorKind?.access != null
-    breakpointAddButton.isEnabled = usable && editorSupported
-    breakpointRemoveButton.isEnabled =
-        usable && capabilities?.breakpoints() == true && breakpointTable.selectedRow >= 0
-    breakpointTable.isEnabled = usable && capabilities?.breakpoints() == true
+    breakpointPane.setBusy(commandInFlight || metadataInFlight || closed)
 
     val traceSupported = capabilities?.coherentTraceInspection() == true
     val timelineOwned = traceOwner === attached && !traceDisableRequested
@@ -1714,7 +1856,7 @@ internal class DebuggerPanel(
               traceSupported &&
               !timelineOwned &&
               !traceConfigurationInFlight &&
-              capabilities?.supports(category) == true
+              capabilities.supports(category)
     }
     timelineCapacity.isEnabled =
         usable &&
@@ -1728,6 +1870,7 @@ internal class DebuggerPanel(
   private fun clearSessionView() {
     sessionLabel.text = "No emulation session"
     snapshotLabel.text = "Waiting for a debug snapshot"
+    stopReasonLabel.text = "No breakpoint stop in this session"
     historyLabel.text = "Reverse history status unavailable"
     registersArea.text = "No CPU state"
     machineArea.text = "No machine state"
@@ -1751,11 +1894,14 @@ internal class DebuggerPanel(
   private fun releaseRetainedSessionState() {
     client?.let { releaseTimelineOwnership(it, "Debugger hidden; timeline state released") }
     snapshot = null
+    lastBreakpointHit = null
+    breakpointRows = emptyList()
     historyStatus = null
     selectedMemory = null
     snapshotOnlyRefreshPending = false
-    breakpointModel.replace(emptyList(), client?.capabilities)
+    breakpointPane.clear()
     snapshotLabel.text = "Debugger hidden; retained snapshot released"
+    stopReasonLabel.text = "Debugger hidden; breakpoint stop state released"
     historyLabel.text = "Debugger hidden; reverse-history state released"
     registersArea.text = "Debugger hidden; CPU state released"
     machineArea.text = "Debugger hidden; machine state released"
@@ -1826,10 +1972,12 @@ internal class DebuggerPanel(
     activeRefreshRequestId = 0L
     if (ownsPeripheralExecutor) peripheralExecutor.shutdownNow()
     snapshot = null
+    lastBreakpointHit = null
+    breakpointRows = emptyList()
     historyStatus = null
     selectedMemory = null
     snapshotOnlyRefreshPending = false
-    breakpointModel.replace(emptyList(), null)
+    breakpointPane.clear()
     clearSessionView()
     statusLabel.text = "Debugger closed"
     updateControlState()
@@ -1908,6 +2056,7 @@ internal class DebuggerPanel(
   private data class MetadataResult(
       val breakpoints: DebugResult<DebugBreakpointList>,
       val history: DebugResult<DebugHistoryStatus>?,
+      val lastHit: DebugResult<DebugBreakpointHit>?,
   )
 
   private companion object {
@@ -1924,6 +2073,7 @@ internal class DebuggerPanel(
     const val ACTION_STEP_FRAME = "debugger-step-frame"
     const val ACTION_BACK_INSTRUCTION = "debugger-back-instruction"
     const val ACTION_BACK_FRAME = "debugger-back-frame"
+    const val ACTION_TOGGLE_PC_BREAKPOINT = "debugger-toggle-pc-breakpoint"
     const val ACTION_ZOOM_IN = "debugger-zoom-in"
     const val ACTION_ZOOM_OUT = "debugger-zoom-out"
     const val ACTION_ZOOM_RESET = "debugger-zoom-reset"
@@ -1935,97 +2085,6 @@ internal class DebuggerPanel(
             DebugAddressSpace.WORK_RAM,
             DebugAddressSpace.HIGH_RAM,
         )
-  }
-}
-
-internal enum class BreakpointEditorKind(
-    private val label: String,
-    val access: DebugMemoryAccess?,
-) {
-  PROGRAM_COUNTER("Program counter", null),
-  READ("Memory read", DebugMemoryAccess.READ),
-  WRITE("Memory write", DebugMemoryAccess.WRITE),
-  EXECUTE("Memory execute", DebugMemoryAccess.EXECUTE);
-
-  override fun toString(): String = label
-}
-
-internal class DebuggerBreakpointTableModel(
-    private val onToggle: (DebugBreakpoint, Boolean) -> Unit,
-) : AbstractTableModel() {
-  private var breakpoints: List<DebugBreakpoint> = emptyList()
-  private var rows: List<DebuggerBreakpointRow> = emptyList()
-
-  override fun getRowCount(): Int = rows.size
-
-  override fun getColumnCount(): Int = COLUMNS.size
-
-  override fun getColumnName(column: Int): String = COLUMNS[column]
-
-  override fun getColumnClass(columnIndex: Int): Class<*> =
-      if (columnIndex == 0) java.lang.Boolean::class.java else String::class.java
-
-  override fun isCellEditable(rowIndex: Int, columnIndex: Int): Boolean =
-      columnIndex == 0 && rows[rowIndex].supported
-
-  override fun getValueAt(rowIndex: Int, columnIndex: Int): Any {
-    val row = rows[rowIndex]
-    return when (columnIndex) {
-      0 -> row.enabled
-      1 -> row.id.toString()
-      2 -> row.kind
-      3 -> row.condition
-      else -> error("Unknown breakpoint column: $columnIndex")
-    }
-  }
-
-  override fun setValueAt(value: Any?, rowIndex: Int, columnIndex: Int) {
-    if (columnIndex != 0 || value !is Boolean) return
-    onToggle(breakpoints[rowIndex], value)
-  }
-
-  fun breakpointAt(row: Int): DebugBreakpoint = breakpoints[row]
-
-  fun nextId(): Long {
-    val maximum = breakpoints.maxOfOrNull { it.id().value() } ?: -1L
-    check(maximum < Long.MAX_VALUE) { "Breakpoint identifiers are exhausted" }
-    return maximum + 1
-  }
-
-  fun replace(values: List<DebugBreakpoint>, capabilities: DebugCapabilities?) {
-    breakpoints = values.toList()
-    rows = DebuggerPresentation.breakpointRows(breakpoints, capabilities)
-    fireTableDataChanged()
-  }
-
-  fun copyText(selectedRows: IntArray): String {
-    val indexes =
-        selectedRows
-            .asSequence()
-            .filter { it in rows.indices }
-            .distinct()
-            .sorted()
-            .toList()
-            .ifEmpty { rows.indices.toList() }
-    return buildString {
-          append(COLUMNS.joinToString("\t"))
-          indexes.forEach { index ->
-            val row = rows[index]
-            append('\n')
-            append(row.enabled)
-            append('\t')
-            append(row.id)
-            append('\t')
-            append(row.kind)
-            append('\t')
-            append(row.condition)
-          }
-        }
-        .trimEnd()
-  }
-
-  private companion object {
-    val COLUMNS = arrayOf("Enabled", "ID", "Kind", "Condition")
   }
 }
 

@@ -324,6 +324,7 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
 
     fun tick(): Boolean {
       tickBreakpointHit = null
+      markLastBreakpointHitHistorical()
       val frameReady = machine.tick()
       masterTick++
       framePosition++
@@ -334,7 +335,7 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
       }
       instrumentation.pollBreakpointMatch()?.let { match ->
         if (!paused) updatePaused(true)
-        val hit = DebugBreakpointHit(match.breakpointId(), match.matchMasterTick(), snapshot())
+        val hit = DebugBreakpointHit(match.breakpoint(), match.matchMasterTick(), snapshot(), true)
         lastBreakpointHit = hit
         tickBreakpointHit = hit
       }
@@ -382,6 +383,10 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     fun listBreakpoints(): DebugBreakpointList = instrumentation.listBreakpoints()
 
     fun lastBreakpointHit(): DebugBreakpointHit? = lastBreakpointHit
+
+    fun markLastBreakpointHitHistorical() {
+      lastBreakpointHit = lastBreakpointHit?.withActivePause(false)
+    }
 
     fun configureTrace(configuration: TraceConfiguration): TraceConfiguration {
       val configured = instrumentation.configureTrace(configuration)
@@ -528,6 +533,7 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
           if (!state.paused) {
             DebugResult.failure(DebugErrorCode.ALREADY_RUNNING, "Agent session is already running")
           } else {
+            state.markLastBreakpointHitHistorical()
             state.updatePaused(false)
             DebugResult.success(state.snapshot())
           }
