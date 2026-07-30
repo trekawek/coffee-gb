@@ -289,7 +289,8 @@ with SHA-256 `2d2178e6eba26a8debdacf84be144cccd1b42e50bf0dbce5c41612bcb16aa226`.
 
 - #345 adds MGB and the repeatable profile-extension process. The separate AGB-in-GB-mode evidence
   audit [#391](https://github.com/trekawek/coffee-gb/issues/391) remains open; it adds no production profile.
-- #315 may consume the service-free profile identity seam, but no replay format is implemented here.
+- #315 `CGBR` v1 consumes the service-free profile identity and four-slot input seam; its exact
+  timing and privacy contract is documented in [replay-format-v1.md](replay-format-v1.md).
 
 No Phase-0 artifact is real-hardware proof by itself. Synthetic hashes are implementation behavior
 locks; external technical references and redistributable conformance inputs remain separately

@@ -30,6 +30,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileIdentity;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint;
 import eu.rekawek.coffeegb.core.ir.InfraredPort;
+import eu.rekawek.coffeegb.core.joypad.InputTimelineObserver;
 import eu.rekawek.coffeegb.core.joypad.Joypad;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -1065,6 +1066,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 slotCartridge == null ? null : slotCartridge.captureRtcRuntimeState());
     }
 
+    /** Checks both cartridge RTC pause boundaries without mutating their wall-time state. */
+    public boolean hasPausedCartridgeRtc() {
+        return cartridge.isRtcEmulationPaused()
+                || slotCartridge != null && slotCartridge.isRtcEmulationPaused();
+    }
+
     public void validateRtcRuntimeState(RtcRuntimeState state) {
         if (state == null) {
             throw new IllegalArgumentException("Cartridge RTC runtime state is missing");
@@ -1164,8 +1171,23 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return joypad.getLegacyPressedButtons();
     }
 
+    /** Physical P1-P4 input latched at the most recent joypad sample boundary. */
+    public eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot getSampledPlayerInput() {
+        return joypad.getSampledInput();
+    }
+
     public void setPressedButtons(java.util.Collection<eu.rekawek.coffeegb.core.joypad.Button> pressed) {
         joypad.setPressedButtons(pressed);
+    }
+
+    /** Exclusively installs a source-local input observer without an alignment event. */
+    public boolean attachInputTimelineObserver(InputTimelineObserver observer) {
+        return joypad.attachInputTimelineObserver(observer);
+    }
+
+    /** Detaches a source-local input observer only while it still owns the seam. */
+    public boolean detachInputTimelineObserver(InputTimelineObserver observer) {
+        return joypad.detachInputTimelineObserver(observer);
     }
 
     /** Platform-neutral SGB controller status for diagnostics and conformance tests. */

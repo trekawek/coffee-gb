@@ -59,6 +59,15 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     /** Stable {@link DebugButton#ordinal()} mask for the effective P1 input union. */
     private transient int observedDebugButtonMask;
 
+    /** Owner-thread replay/input observer; deliberately absent from portable machine state. */
+    private transient InputTimelineObserver inputTimelineObserver;
+
+    /** Source-local alignment state used only while an input timeline observer is attached. */
+    private transient int observedLegacyButtonMask;
+
+    private final transient int[] observedPhysicalButtonMasks =
+            new int[PlayerInputSource.PLAYER_COUNT];
+
     private int players;
     private int currentPlayer;
 
@@ -112,6 +121,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (buttons.add(button)) {
             inputChangedSinceLastTick = true;
             notifyDebugInputChange();
+            notifyLegacyInputChange();
         }
     }
 
@@ -120,6 +130,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (buttons.remove(button)) {
             inputChangedSinceLastTick = true;
             notifyDebugInputChange();
+            notifyLegacyInputChange();
         }
     }
 
@@ -144,6 +155,16 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         return new java.util.HashSet<>(buttons);
     }
 
+    /**
+     * Immutable physical input latched at the most recent joypad sample boundary.
+     *
+     * <p>This is an observation-only replay preflight seam. The returned value owns immutable
+     * button sets and cannot mutate the live input service or joypad.</p>
+     */
+    public PlayerInputSnapshot getSampledInput() {
+        return sampledInput;
+    }
+
     public void setPressedButtons(Collection<Button> pressed) {
         if (buttons.equals(Set.copyOf(pressed))) {
             return;
@@ -152,6 +173,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         buttons.addAll(pressed);
         inputChangedSinceLastTick = true;
         notifyDebugInputChange();
+        notifyLegacyInputChange();
     }
 
     public void tick() {
@@ -162,6 +184,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             sampledInput = nextInput;
             inputChangedSinceLastTick = true;
             notifyDebugInputChange();
+            notifyPhysicalInputChanges();
         }
         // JOYP writes happen after the joypad clock edge represented by this emulator
         // tick. Start sampling a changed input on the following tick, then require four
@@ -358,6 +381,33 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         this.currentByteIndex = mem.currentByteIndex;
         this.currentPacketIndex = mem.currentPacketIndex;
         alignDebugInput();
+        alignInputTimeline();
+    }
+
+    /**
+     * Exclusively installs an owner-thread observer without emitting alignment events.
+     *
+     * @return false when another capture already owns the observation seam
+     */
+    public boolean attachInputTimelineObserver(InputTimelineObserver observer) {
+        Objects.requireNonNull(observer, "observer");
+        if (inputTimelineObserver != null) {
+            return false;
+        }
+        alignInputTimeline();
+        this.inputTimelineObserver = observer;
+        return true;
+    }
+
+    /** Clears the observer only when the caller still owns the installed instance. */
+    public boolean detachInputTimelineObserver(InputTimelineObserver observer) {
+        Objects.requireNonNull(observer, "observer");
+        if (inputTimelineObserver != observer) {
+            return false;
+        }
+        alignInputTimeline();
+        inputTimelineObserver = null;
+        return true;
     }
 
     /** Installs an optional owner-thread observer without emitting an alignment event. */
@@ -392,6 +442,44 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private void alignDebugInput() {
         observedDebugButtonMask = getDebugButtonMask();
+    }
+
+    private void notifyLegacyInputChange() {
+        InputTimelineObserver observer = inputTimelineObserver;
+        if (observer == null) {
+            return;
+        }
+        int buttonMask = JoypadButtonMask.fromButtons(buttons);
+        int changedMask = buttonMask ^ observedLegacyButtonMask;
+        observedLegacyButtonMask = buttonMask;
+        if (changedMask != 0) {
+            observer.onInputChanged(InputTimelineObserver.Phase.LEGACY_P1_BEFORE_TICK,
+                    0, buttonMask, changedMask);
+        }
+    }
+
+    private void notifyPhysicalInputChanges() {
+        InputTimelineObserver observer = inputTimelineObserver;
+        if (observer == null) {
+            return;
+        }
+        for (int player = 0; player < PlayerInputSource.PLAYER_COUNT; player++) {
+            int buttonMask = JoypadButtonMask.fromButtons(sampledInput.buttons(player));
+            int changedMask = buttonMask ^ observedPhysicalButtonMasks[player];
+            observedPhysicalButtonMasks[player] = buttonMask;
+            if (changedMask != 0) {
+                observer.onInputChanged(InputTimelineObserver.Phase.PHYSICAL_JOYPAD_SAMPLE,
+                        player, buttonMask, changedMask);
+            }
+        }
+    }
+
+    private void alignInputTimeline() {
+        observedLegacyButtonMask = JoypadButtonMask.fromButtons(buttons);
+        for (int player = 0; player < PlayerInputSource.PLAYER_COUNT; player++) {
+            observedPhysicalButtonMasks[player] =
+                    JoypadButtonMask.fromButtons(sampledInput.buttons(player));
+        }
     }
 
     private int getDebugButtonMask() {

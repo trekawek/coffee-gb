@@ -162,6 +162,11 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         }
     }
 
+    /** Returns the controller pause boundary without advancing wall-clock-backed state. */
+    public boolean isEmulationPaused() {
+        return emulationPaused;
+    }
+
     private void catchUpPausedTime() {
         if (!emulationPaused) {
             return;

@@ -31,6 +31,9 @@ class Session(
 
   @Volatile private var resourcesClosed = false
 
+  /** Non-null while a deterministic capture owns all mutable host-service seams. */
+  private var deterministicCaptureOwner: Any? = null
+
   internal var serialEndpoint: SerialEndpoint = serialEndpoint
     private set
 
@@ -84,6 +87,12 @@ class Session(
       disconnectSerialEndpointSafely(endpoint, disconnect)
       throw IllegalStateException("Cannot attach a serial endpoint to a closed session")
     }
+    if (deterministicCaptureOwner != null) {
+      disconnectSerialEndpointSafely(endpoint, disconnect)
+      throw IllegalStateException(
+          "Cannot change the serial endpoint during deterministic capture",
+      )
+    }
 
     val previousEndpoint = serialEndpoint
     val previousDisconnect = serialEndpointDisconnect
@@ -101,6 +110,22 @@ class Session(
     serialEndpoint = endpoint
     serialEndpointDisconnect = disconnect
     disconnectSerialEndpointSafely(previousEndpoint, previousDisconnect)
+  }
+
+  /** Atomically reserves mutable host-service seams for one deterministic recorder. */
+  @Synchronized
+  internal fun reserveDeterministicCapture(owner: Any): Boolean {
+    if (resourcesClosed || deterministicCaptureOwner != null) return false
+    deterministicCaptureOwner = owner
+    return true
+  }
+
+  /** Releases the reservation only when [owner] is still its identity token. */
+  @Synchronized
+  internal fun releaseDeterministicCapture(owner: Any): Boolean {
+    if (deterministicCaptureOwner !== owner) return false
+    deterministicCaptureOwner = null
+    return true
   }
 
   /** Disconnects the selected device and leaves the emulated link port physically empty. */

@@ -217,6 +217,11 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         return addressSpace instanceof Mbc3 mbc3 ? mbc3.captureRtcRuntimeState() : null;
     }
 
+    /** Checks the MBC3 pause boundary without applying elapsed host time. */
+    public boolean isRtcEmulationPaused() {
+        return addressSpace instanceof Mbc3 mbc3 && mbc3.isRtcEmulationPaused();
+    }
+
     public void validateRtcRuntimeState(RealTimeClock.RuntimeState state) {
         if (!(addressSpace instanceof Mbc3 mbc3)) {
             if (state != null) {
