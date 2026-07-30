@@ -60,14 +60,24 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.debug.DebugButton
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugCpuState
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugInstrumentation
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepResult
 import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusTeardownTimeoutException
@@ -86,6 +96,7 @@ import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
+import java.util.EnumSet
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
@@ -294,6 +305,13 @@ class BasicController private constructor(
 
   /** Session-bound, bounded debugger lane; commands are executed only by [thread]. */
   private var debugPort: QueuedDebugPort? = null
+
+  private var debugInstrumentation: DebugInstrumentation? = null
+
+  private var lastDebugBreakpointHit: DebugBreakpointHit? = null
+
+  /** Keeps background resume discovery from advancing past an automatic mid-frame stop. */
+  private var debugBreakpointPauseActive = false
 
   private val nextDebugSessionGeneration = AtomicLong()
 
@@ -592,6 +610,19 @@ class BasicController private constructor(
       return
     }
 
+    if (!rewound &&
+        !isEffectivelyPaused() &&
+        !isRewinding &&
+        debugInstrumentation?.hasEnabledBreakpoints() == true) {
+      runDebugTickWindow(clockSpec, stopAtNextBoundary = false)
+      return
+    }
+
+    val suppressDebugObservation = rewound && debugInstrumentation?.isActive == true
+    if (suppressDebugObservation) {
+      session?.gameboy?.let(::detachAndClearDebugTimelineObservation)
+    }
+
     repeat(frameTicks) {
       if (rewound || (!isEffectivelyPaused() && !isRewinding)) {
         session?.gameboy?.tick()
@@ -603,6 +634,9 @@ class BasicController private constructor(
       debugMasterTick = Math.addExact(debugMasterTick, frameTicks.toLong())
       debugFrame = Math.addExact(debugFrame, 1L)
       debugFramePosition = 0
+    }
+    if (suppressDebugObservation) {
+      syncDebugInstrumentation()
     }
     if (emulated && !rewound) {
       if (hasMobileAdapterExternalIo()) {
@@ -630,7 +664,13 @@ class BasicController private constructor(
       return
     }
     val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
-    val queuedBoundaryControl = eventQueue.anyEvent(::requiresDebugFrameBoundary)
+    val queuedBoundaryControl =
+        eventQueue.anyEvent { event ->
+          requiresDebugFrameBoundary(event) &&
+              !(debugBreakpointPauseActive &&
+                  event is StateWorkerCompletedEvent &&
+                  event.purpose == StateWorkerPurpose.RESUME_SCAN)
+        }
     val completedLifecycleWork = hasCompletedLifecycleWork()
     // Detaching the debugger cannot leave its partial frame as a hidden third pause owner. Finish
     // that frame once even when the desktop pause remains active, then restore ordinary FIFO work.
@@ -699,12 +739,20 @@ class BasicController private constructor(
           if (debugFramePosition == frameTicks) {
             debugFramePosition = 0
             debugFrame = Math.addExact(debugFrame, 1L)
+            debugInstrumentation?.onFrameBoundary(debugFrame)
             recordDebugFrameBoundary()
             if (stopAtNextBoundary) {
               holdAtBoundary = true
             }
           }
-          finishPendingDebugAction(gameboy, frameTicks)
+          if (handleDebugBreakpointMatch(gameboy)) {
+            // Even a continuation that was completing a resumed partial frame must stop at the
+            // newly observed breakpoint. Explicit lifecycle work can supersede it on the next
+            // owner iteration; background resume discovery waits for the debugger to advance.
+            holdAtBoundary = true
+          } else {
+            finishPendingDebugAction(gameboy, frameTicks)
+          }
         }
       }
       timingTicker.run(clockSpec)
@@ -729,8 +777,11 @@ class BasicController private constructor(
     if (debugTrackingEnabled) {
       currentSession?.gameboy?.disableDebugRetirementTracking()
     }
+    currentSession?.gameboy?.updateDebugInstrumentation(null, debugMasterTick)
     pendingDebugAction = null
     debugTrackingEnabled = false
+    debugInstrumentation = null
+    lastDebugBreakpointHit = null
     setDebugPaused(false)
     debugPort = null
     console?.setDebugPort(null)
@@ -794,6 +845,27 @@ class BasicController private constructor(
         is QueuedDebugCommand.Step -> handleDebugStep(command)
         is QueuedDebugCommand.ReadMemory -> handleDebugMemoryRead(command)
         is QueuedDebugCommand.SetButton -> handleDebugButton(command)
+        is QueuedDebugCommand.SetBreakpoint -> handleDebugSetBreakpoint(command)
+        is QueuedDebugCommand.RemoveBreakpoint -> handleDebugRemoveBreakpoint(command)
+        is QueuedDebugCommand.ListBreakpoints ->
+            command.complete(
+                DebugResult.success(checkNotNull(debugInstrumentation).listBreakpoints()))
+        is QueuedDebugCommand.LastBreakpointHit -> {
+          val hit = lastDebugBreakpointHit
+          if (hit == null) {
+            command.fail(
+                DebugErrorCode.NO_BREAKPOINT_HIT,
+                "No breakpoint has stopped this session",
+            )
+          } else {
+            command.complete(DebugResult.success(hit))
+          }
+        }
+        is QueuedDebugCommand.ConfigureTrace -> handleDebugConfigureTrace(command)
+        is QueuedDebugCommand.ReadTrace ->
+            command.complete(
+                DebugResult.success(
+                    checkNotNull(debugInstrumentation).readTrace(command.request)))
       }
     } catch (failure: RuntimeException) {
       LOG.warn("Debug command {} failed", command.javaClass.simpleName, failure)
@@ -852,6 +924,7 @@ class BasicController private constructor(
         }
         // A desktop/workflow pause is sufficient to authorize the request, but the debugger
         // acquires its own ownership so the result remains stopped if that other owner resumes.
+        debugBreakpointPauseActive = false
         setDebugPaused(true)
         val retirement = gameboy.debugRetirementSequence
         pendingDebugAction =
@@ -863,6 +936,7 @@ class BasicController private constructor(
             )
       }
       DebugStepKind.FRAME -> {
+        debugBreakpointPauseActive = false
         setDebugPaused(true)
         val ticksToBoundary =
             if (debugFramePosition == 0) {
@@ -909,6 +983,73 @@ class BasicController private constructor(
     command.complete(DebugResult.success())
   }
 
+  private fun handleDebugSetBreakpoint(command: QueuedDebugCommand.SetBreakpoint) {
+    val instrumentation = checkNotNull(debugInstrumentation)
+    try {
+      command.complete(DebugResult.success(instrumentation.setBreakpoint(command.breakpoint)))
+      syncDebugInstrumentation()
+    } catch (_: UnsupportedOperationException) {
+      command.fail(
+          DebugErrorCode.UNSUPPORTED_BREAKPOINT,
+          "Requested breakpoint kind is unavailable",
+      )
+    } catch (_: IllegalStateException) {
+      command.fail(DebugErrorCode.BREAKPOINT_LIMIT, "Breakpoint capacity is exhausted")
+    }
+  }
+
+  private fun handleDebugRemoveBreakpoint(command: QueuedDebugCommand.RemoveBreakpoint) {
+    val removed = checkNotNull(debugInstrumentation).removeBreakpoint(command.breakpointId)
+    if (!removed) {
+      command.fail(
+          DebugErrorCode.BREAKPOINT_NOT_FOUND,
+          "No breakpoint has id ${command.breakpointId.value()}",
+      )
+      return
+    }
+    syncDebugInstrumentation()
+    command.complete(DebugResult.success())
+  }
+
+  private fun handleDebugConfigureTrace(command: QueuedDebugCommand.ConfigureTrace) {
+    val instrumentation = checkNotNull(debugInstrumentation)
+    try {
+      val configured = instrumentation.configureTrace(command.configuration)
+      syncDebugInstrumentation()
+      command.complete(DebugResult.success(configured))
+    } catch (_: UnsupportedOperationException) {
+      command.fail(
+          DebugErrorCode.UNSUPPORTED_TRACE_CATEGORY,
+          "Trace configuration contains an unsupported category",
+      )
+    } catch (_: IllegalArgumentException) {
+      command.fail(DebugErrorCode.TRACE_LIMIT, "Trace capacity exceeds the negotiated limit")
+    }
+  }
+
+  private fun syncDebugInstrumentation() {
+    val gameboy = session?.gameboy ?: return
+    val instrumentation = debugInstrumentation
+    gameboy.updateDebugInstrumentation(
+        instrumentation?.takeIf { it.isActive },
+        debugMasterTick,
+    )
+  }
+
+  /** Breaks trace/match continuity around a hidden replay or in-place state replacement. */
+  private fun detachAndClearDebugTimelineObservation(gameboy: Gameboy) {
+    gameboy.updateDebugInstrumentation(null, debugMasterTick)
+    debugInstrumentation?.let { instrumentation ->
+      instrumentation.clearPendingMatch()
+      instrumentation.configureTrace(instrumentation.traceConfiguration())
+    }
+  }
+
+  private fun resetDebugTimelineObservation(gameboy: Gameboy) {
+    detachAndClearDebugTimelineObservation(gameboy)
+    syncDebugInstrumentation()
+  }
+
   private fun ensureDebugTracking() {
     if (debugTrackingEnabled) {
       return
@@ -931,6 +1072,49 @@ class BasicController private constructor(
             debugFramePosition,
             isEffectivelyPaused(),
         )
+  }
+
+  /** Returns true when this completed tick was the breakpoint safe point. */
+  private fun handleDebugBreakpointMatch(gameboy: Gameboy): Boolean {
+    val match = debugInstrumentation?.pollBreakpointMatch() ?: return false
+    setDebugPaused(true)
+    debugBreakpointPauseActive = true
+    val snapshot = captureDebugSnapshot()
+    lastDebugBreakpointHit =
+        DebugBreakpointHit(match.breakpointId(), match.matchMasterTick(), snapshot)
+
+    when (val action = pendingDebugAction) {
+      null -> Unit
+      is PendingDebugAction.Pause -> {
+        pendingDebugAction = null
+        action.command.complete(DebugResult.success(snapshot))
+      }
+      is PendingDebugAction.InstructionStep -> {
+        pendingDebugAction = null
+        action.command.complete(
+            DebugResult.success(
+                DebugStepResult(
+                    DebugStepKind.INSTRUCTION,
+                    DebugStepStopReason.BREAKPOINT,
+                    debugMasterTick - action.startMasterTick,
+                    gameboy.debugRetirementSequence - action.startRetirement,
+                    snapshot,
+                )))
+      }
+      is PendingDebugAction.FrameStep -> {
+        pendingDebugAction = null
+        action.command.complete(
+            DebugResult.success(
+                DebugStepResult(
+                    DebugStepKind.FRAME,
+                    DebugStepStopReason.BREAKPOINT,
+                    debugMasterTick - action.startMasterTick,
+                    gameboy.debugRetirementSequence - action.startRetirement,
+                    snapshot,
+                )))
+      }
+    }
+    return true
   }
 
   private fun finishPendingDebugAction(gameboy: Gameboy, frameTicks: Int) {
@@ -1652,6 +1836,7 @@ class BasicController private constructor(
       // live desktop workflow, so loading must not let an old capture override the effective
       // pause selected for this session.
       currentSession.gameboy.setCartridgeClockPaused(isEffectivelyPaused())
+      resetDebugTimelineObservation(currentSession.gameboy)
       rewindManager.clear()
       if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
         mobileAdapterStateLoadCompleted()
@@ -1734,6 +1919,7 @@ class BasicController private constructor(
       // Match managed-load ownership: a saved cartridge clock pause bit must not override the
       // effective pause chosen for the live desktop session.
       currentSession.gameboy.setCartridgeClockPaused(isEffectivelyPaused())
+      resetDebugTimelineObservation(currentSession.gameboy)
       rewindManager.clear()
       if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
         mobileAdapterStateLoadCompleted()
@@ -2375,6 +2561,9 @@ class BasicController private constructor(
   }
 
   private fun setDebugPaused(paused: Boolean) {
+    if (!paused) {
+      debugBreakpointPauseActive = false
+    }
     if (debugPaused == paused) {
       return
     }
@@ -2948,7 +3137,18 @@ class BasicController private constructor(
     debugFramePosition = 0
     debugTrackingEnabled = false
     pendingDebugAction = null
+    lastDebugBreakpointHit = null
+    debugBreakpointPauseActive = false
     session.gameboy.disableDebugRetirementTracking()
+    session.gameboy.updateDebugInstrumentation(null, 0)
+    debugInstrumentation =
+        DebugInstrumentation(
+            MAX_BREAKPOINTS,
+            MAX_TRACE_CAPACITY,
+            DEFAULT_TRACE_CAPACITY,
+            BREAKPOINT_KINDS,
+            TRACE_CATEGORIES,
+        )
     val port =
         QueuedDebugPort(
             nextDebugSessionGeneration.incrementAndGet(),
@@ -2969,7 +3169,11 @@ class BasicController private constructor(
     if (debugTrackingEnabled) {
       owner?.gameboy?.disableDebugRetirementTracking()
     }
+    owner?.gameboy?.updateDebugInstrumentation(null, debugMasterTick)
     debugPort = null
+    debugInstrumentation = null
+    lastDebugBreakpointHit = null
+    debugBreakpointPauseActive = false
     pendingDebugAction = null
     debugTrackingEnabled = false
     debugPaused = false
@@ -3623,6 +3827,26 @@ class BasicController private constructor(
 
     const val MAX_DEBUG_CONTROL_EVENTS_PER_SAFE_POINT = 64
 
+    const val MAX_BREAKPOINTS = 128
+
+    const val MAX_TRACE_CAPACITY = 65_536
+
+    const val DEFAULT_TRACE_CAPACITY = 4096
+
+    const val MAX_TRACE_READ_ENTRIES = 1024
+
+    val BREAKPOINT_KINDS: Set<DebugBreakpointKind> =
+        EnumSet.of(
+            DebugBreakpointKind.PROGRAM_COUNTER,
+            DebugBreakpointKind.MEMORY,
+            DebugBreakpointKind.OPCODE,
+            DebugBreakpointKind.INTERRUPT,
+            DebugBreakpointKind.COUNTER,
+        )
+
+    val TRACE_CATEGORIES: Set<TraceCategory> =
+        EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY, TraceCategory.INTERRUPT)
+
     val DEBUG_CAPABILITIES =
         DebugCapabilities(
             true,
@@ -3633,6 +3857,11 @@ class BasicController private constructor(
             true,
             true,
             4_096,
+            BREAKPOINT_KINDS,
+            MAX_BREAKPOINTS,
+            TRACE_CATEGORIES,
+            MAX_TRACE_CAPACITY,
+            MAX_TRACE_READ_ENTRIES,
         )
 
     val SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION =

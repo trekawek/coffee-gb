@@ -3,17 +3,27 @@ package eu.rekawek.coffeegb.controller.agent
 import eu.rekawek.coffeegb.controller.debug.DebugResultDispatcher
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.debug.DebugButton
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugCpuState
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugInstrumentation
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepResult
 import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
@@ -23,6 +33,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.core.sound.Sound
 import java.io.File
+import java.util.EnumSet
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -78,6 +89,7 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
       repeat(ticks) {
         ensureOpenOnOwner()
         state.tick()
+        if (state.breakpointHitThisTick() != null) return@executeSync
       }
     }
   }
@@ -87,7 +99,7 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     executeSync { state ->
       repeat(maxTicks) {
         ensureOpenOnOwner()
-        if (state.tick()) return@executeSync
+        if (state.tick() || state.breakpointHitThisTick() != null) return@executeSync
       }
     }
   }
@@ -290,16 +302,39 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
 
     private var framePosition = 0
 
+    private val instrumentation =
+        DebugInstrumentation(
+            MAX_BREAKPOINTS,
+            MAX_TRACE_CAPACITY,
+            DEFAULT_TRACE_CAPACITY,
+            BREAKPOINT_KINDS,
+            TRACE_CATEGORIES,
+        )
+
+    private var lastBreakpointHit: DebugBreakpointHit? = null
+
+    private var tickBreakpointHit: DebugBreakpointHit? = null
+
     fun tick(): Boolean {
+      tickBreakpointHit = null
       val frameReady = machine.tick()
       masterTick++
       framePosition++
       if (frameReady) {
         frame++
         framePosition = 0
+        instrumentation.onFrameBoundary(frame)
+      }
+      instrumentation.pollBreakpointMatch()?.let { match ->
+        if (!paused) updatePaused(true)
+        val hit = DebugBreakpointHit(match.breakpointId(), match.matchMasterTick(), snapshot())
+        lastBreakpointHit = hit
+        tickBreakpointHit = hit
       }
       return frameReady
     }
+
+    fun breakpointHitThisTick(): DebugBreakpointHit? = tickBreakpointHit
 
     fun snapshot(): DebugSnapshot =
         machine.captureDebugSnapshot(
@@ -315,12 +350,44 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
       eventBus.post(if (pressed) ButtonPressEvent(coreButton) else ButtonReleaseEvent(coreButton))
     }
 
+    fun setBreakpoint(breakpoint: DebugBreakpoint): DebugBreakpoint {
+      val installed = instrumentation.setBreakpoint(breakpoint)
+      syncInstrumentation()
+      return installed
+    }
+
+    fun removeBreakpoint(breakpointId: DebugBreakpointId): Boolean {
+      val removed = instrumentation.removeBreakpoint(breakpointId)
+      if (removed) syncInstrumentation()
+      return removed
+    }
+
+    fun listBreakpoints(): DebugBreakpointList = instrumentation.listBreakpoints()
+
+    fun lastBreakpointHit(): DebugBreakpointHit? = lastBreakpointHit
+
+    fun configureTrace(configuration: TraceConfiguration): TraceConfiguration {
+      val configured = instrumentation.configureTrace(configuration)
+      syncInstrumentation()
+      return configured
+    }
+
+    fun readTrace(request: TraceReadRequest): TraceReadResult = instrumentation.readTrace(request)
+
+    private fun syncInstrumentation() {
+      machine.updateDebugInstrumentation(
+          if (instrumentation.isActive) instrumentation else null,
+          masterTick,
+      )
+    }
+
     fun updatePaused(value: Boolean) {
       machine.setCartridgeClockPaused(value)
       paused = value
     }
 
     fun close() {
+      runCatching { machine.updateDebugInstrumentation(null, masterTick) }
       runCatching { machine.disableDebugRetirementTracking() }
       runCatching { eventBus.close() }
       runCatching { machine.closeSilently() }
@@ -414,6 +481,11 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
             true,
             true,
             MAX_MEMORY_READ_LENGTH,
+            BREAKPOINT_KINDS,
+            MAX_BREAKPOINTS,
+            TRACE_CATEGORIES,
+            MAX_TRACE_CAPACITY,
+            MAX_TRACE_READ_ENTRIES,
         )
 
     override fun sessionGeneration(): Long = SESSION_GENERATION
@@ -509,6 +581,106 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
           }
         }
 
+    override fun setBreakpoint(
+        breakpoint: DebugBreakpoint?
+    ): CompletionStage<DebugResult<DebugBreakpoint>> =
+        if (breakpoint == null) {
+          rejectedDebugStage(
+              DebugResult.failure(DebugErrorCode.INVALID_ARGUMENT, "Breakpoint is required"))
+        } else {
+          enqueueDebug { state ->
+            try {
+              DebugResult.success(state.setBreakpoint(breakpoint))
+            } catch (failure: UnsupportedOperationException) {
+              DebugResult.failure(
+                  DebugErrorCode.UNSUPPORTED_BREAKPOINT,
+                  failure.message ?: "Unsupported breakpoint kind",
+              )
+            } catch (failure: IllegalStateException) {
+              DebugResult.failure(
+                  DebugErrorCode.BREAKPOINT_LIMIT,
+                  failure.message ?: "Breakpoint capacity is exhausted",
+              )
+            }
+          }
+        }
+
+    override fun removeBreakpoint(
+        breakpointId: DebugBreakpointId?
+    ): CompletionStage<DebugResult<Void>> =
+        if (breakpointId == null) {
+          rejectedDebugStage(
+              DebugResult.failure(DebugErrorCode.INVALID_ARGUMENT, "Breakpoint id is required"))
+        } else {
+          enqueueDebug { state ->
+            if (state.removeBreakpoint(breakpointId)) {
+              DebugResult.success()
+            } else {
+              DebugResult.failure(
+                  DebugErrorCode.BREAKPOINT_NOT_FOUND,
+                  "No breakpoint has id ${breakpointId.value()}",
+              )
+            }
+          }
+        }
+
+    override fun listBreakpoints(): CompletionStage<DebugResult<DebugBreakpointList>> =
+        enqueueDebug { state -> DebugResult.success(state.listBreakpoints()) }
+
+    override fun lastBreakpointHit(): CompletionStage<DebugResult<DebugBreakpointHit>> =
+        enqueueDebug { state ->
+          val hit = state.lastBreakpointHit()
+          if (hit == null) {
+            DebugResult.failure(
+                DebugErrorCode.NO_BREAKPOINT_HIT,
+                "No breakpoint has stopped this session",
+            )
+          } else {
+            DebugResult.success(hit)
+          }
+        }
+
+    override fun configureTrace(
+        configuration: TraceConfiguration?
+    ): CompletionStage<DebugResult<TraceConfiguration>> =
+        if (configuration == null) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.INVALID_ARGUMENT,
+                  "Trace configuration is required",
+              ))
+        } else if (configuration.capacity() > MAX_TRACE_CAPACITY) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.TRACE_LIMIT,
+                  "Trace capacity exceeds $MAX_TRACE_CAPACITY entries",
+              ))
+        } else if (!TRACE_CATEGORIES.containsAll(configuration.categories())) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.UNSUPPORTED_TRACE_CATEGORY,
+                  "Trace configuration contains an unsupported category",
+              ))
+        } else {
+          enqueueDebug { state -> DebugResult.success(state.configureTrace(configuration)) }
+        }
+
+    override fun readTrace(
+        request: TraceReadRequest?
+    ): CompletionStage<DebugResult<TraceReadResult>> =
+        if (request == null) {
+          rejectedDebugStage(
+              DebugResult.failure(DebugErrorCode.INVALID_ARGUMENT, "Trace request is required"))
+        } else if (request.maxEntries() > MAX_TRACE_READ_ENTRIES) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.TRACE_LIMIT,
+                  "Trace read exceeds $MAX_TRACE_READ_ENTRIES entries",
+              ))
+        } else {
+          enqueueDebug { state -> DebugResult.success(state.readTrace(request)) }
+        }
+
     override fun isClosed(): Boolean = closed.get()
 
     override fun close() {
@@ -533,6 +705,14 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
         ensureOpenOnOwner()
         state.tick()
         ticks++
+        state.breakpointHitThisTick()?.let { hit ->
+          return breakpointStepResult(
+              DebugStepKind.INSTRUCTION,
+              ticks,
+              state.retirementSequence() - initialRetirement,
+              hit,
+          )
+        }
       }
       if (state.retirementSequence() == initialRetirement) {
         return DebugResult.failure(DebugErrorCode.STEP_LIMIT, "Instruction step exceeded its tick limit")
@@ -564,6 +744,14 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
         ensureOpenOnOwner()
         state.tick()
         ticks++
+        state.breakpointHitThisTick()?.let { hit ->
+          return breakpointStepResult(
+              DebugStepKind.MACHINE_CYCLE,
+              ticks,
+              state.retirementSequence() - initialRetirement,
+              hit,
+          )
+        }
         snapshot = state.snapshot()
       } while (snapshot.execution().machineCycle() != 0 && ticks < MACHINE_CYCLE_STEP_LIMIT)
       if (snapshot.execution().machineCycle() != 0) {
@@ -587,6 +775,14 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
         ensureOpenOnOwner()
         completed = state.tick()
         ticks++
+        state.breakpointHitThisTick()?.let { hit ->
+          return breakpointStepResult(
+              DebugStepKind.FRAME,
+              ticks,
+              state.retirementSequence() - initialRetirement,
+              hit,
+          )
+        }
         if (completed) break
       }
       if (!completed) {
@@ -601,6 +797,21 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
               state.snapshot(),
           ))
     }
+
+    private fun breakpointStepResult(
+        kind: DebugStepKind,
+        ticks: Long,
+        retired: Long,
+        hit: DebugBreakpointHit,
+    ): DebugResult<DebugStepResult> =
+        DebugResult.success(
+            DebugStepResult(
+                kind,
+                DebugStepStopReason.BREAKPOINT,
+                ticks,
+                retired,
+                hit.snapshot(),
+            ))
   }
 
   private data class Bootstrap(val defaultFrameWaitTicks: Int)
@@ -613,10 +824,24 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     const val FRAME_CAPACITY = 10
     const val AUDIO_CAPACITY = 100
     const val MAX_MEMORY_READ_LENGTH = 4096
+    const val MAX_BREAKPOINTS = 128
+    const val MAX_TRACE_CAPACITY = 65_536
+    const val DEFAULT_TRACE_CAPACITY = 4096
+    const val MAX_TRACE_READ_ENTRIES = 1024
     const val CLOSE_TIMEOUT_MILLIS = 5_000L
     const val SESSION_GENERATION = 1L
     const val INSTRUCTION_STEP_LIMIT = 1_000_000L
     const val MACHINE_CYCLE_STEP_LIMIT = 8L
+    val BREAKPOINT_KINDS: Set<DebugBreakpointKind> =
+        EnumSet.of(
+            DebugBreakpointKind.PROGRAM_COUNTER,
+            DebugBreakpointKind.MEMORY,
+            DebugBreakpointKind.OPCODE,
+            DebugBreakpointKind.INTERRUPT,
+            DebugBreakpointKind.COUNTER,
+        )
+    val TRACE_CATEGORIES: Set<TraceCategory> =
+        EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY, TraceCategory.INTERRUPT)
     val NEXT_OWNER_ID = AtomicLong()
   }
 }

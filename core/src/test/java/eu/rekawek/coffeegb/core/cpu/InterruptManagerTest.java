@@ -1,6 +1,12 @@
 package eu.rekawek.coffeegb.core.cpu;
 
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.DebugInterruptType;
+import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
 import org.junit.Test;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.LCDC;
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.Timer;
@@ -32,6 +38,27 @@ public class InterruptManagerTest {
         interrupts.setByte(0xff0f, 0);
 
         assertFalse(interrupts.consumeLcdcInterruptFlagWriteClear());
+    }
+
+    @Test
+    public void cpuFlagWriteReportsOnlyNewlyAssertedInterruptRequests() {
+        InterruptManager interrupts = new InterruptManager(false);
+        interrupts.setByte(0xff0f, 0);
+        RecordingDebugHooks hooks = new RecordingDebugHooks();
+        interrupts.setDebugHooks(hooks);
+
+        interrupts.setByte(0xff0f, 1 << Timer.ordinal());
+        interrupts.setByteFromCpu(0xff0f,
+                (1 << VBlank.ordinal())
+                        | (1 << Timer.ordinal())
+                        | (1 << InterruptManager.InterruptType.Serial.ordinal()));
+        interrupts.setByteFromCpu(0xff0f,
+                (1 << VBlank.ordinal())
+                        | (1 << Timer.ordinal())
+                        | (1 << InterruptManager.InterruptType.Serial.ordinal()));
+
+        assertEquals(List.of(DebugInterruptType.VBLANK, DebugInterruptType.SERIAL),
+                hooks.requestedInterrupts);
     }
 
     @Test
@@ -377,5 +404,36 @@ public class InterruptManagerTest {
         interrupts.setByte(0xff0f, 0);
         interrupts.setByte(0xffff, 1 << type.ordinal());
         return interrupts;
+    }
+
+    private static final class RecordingDebugHooks implements DebugHooks {
+
+        private final List<DebugInterruptType> requestedInterrupts = new ArrayList<>();
+
+        @Override
+        public void onInstructionFetch(int programCounter) {
+        }
+
+        @Override
+        public void onOpcodeFetched(int programCounter, boolean cbPrefixed, int opcode) {
+        }
+
+        @Override
+        public void onInstructionRetired(
+                boolean instructionKnown, int programCounter, int opcode, int prefixedOpcode) {
+        }
+
+        @Override
+        public void onMemoryAccess(DebugMemoryAccess access, int address, int value) {
+        }
+
+        @Override
+        public void onInterruptRequested(DebugInterruptType interrupt) {
+            requestedInterrupts.add(interrupt);
+        }
+
+        @Override
+        public void onInterruptAccepted(DebugInterruptType interrupt) {
+        }
     }
 }

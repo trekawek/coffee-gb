@@ -5,6 +5,7 @@ public enum DebugStepStopReason {
     INSTRUCTION_RETIRED,
     MACHINE_CYCLE_COMPLETED,
     FRAME_BOUNDARY,
+    BREAKPOINT,
     CPU_IDLE,
     CPU_LOCKED,
     STEP_LIMIT

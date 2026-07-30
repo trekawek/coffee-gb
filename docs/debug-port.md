@@ -1,15 +1,17 @@
-# Debug port contract and disabled-overhead measurement
+# Debug port contract and performance measurement
 
 ## Scope
 
-This document pins the Phase 1 debugger contract implemented by `DebugPort`. The API is
-platform-neutral and exposes immutable values only. It does not expose a mutable core component,
-an AWT/Swing type, a live array, or a reflection escape hatch. The model is still an internal
-Coffee GB API until a later change explicitly versions it for third-party use.
+This document pins the Phase 1 debugger foundation and the Phase 2 breakpoint/trace contract
+implemented by `DebugPort`. The API is platform-neutral and exposes immutable values only. It does
+not expose a mutable core component, an AWT/Swing type, a live array, or a reflection escape hatch.
+The model is still an internal Coffee GB API until a later change explicitly versions it for
+third-party use.
 
-Phase 1 supports pause/resume, coherent snapshots, negotiated stepping, bounded side-effect-free
-memory reads, and deterministic button input. Breakpoints, watchpoints, tracing, checkpoints, and
-replay are later phases; clients must not infer those capabilities from this interface.
+Phase 1 supplies pause/resume, coherent snapshots, negotiated stepping, bounded side-effect-free
+memory reads, and deterministic button input. Phase 2 adds negotiated breakpoints/watchpoints and
+bounded CPU, memory, and interrupt tracing. Checkpoints, replay, reverse execution, and a debugger
+UI remain later phases; clients must not infer those capabilities from this interface.
 
 ## Session publication and capabilities
 
@@ -32,6 +34,9 @@ The current implementations advertise:
 | frame step | yes | yes | no |
 | memory read | yes, at most 4096 bytes | yes, at most 4096 bytes | no |
 | button input | yes | yes | no |
+| breakpoints | yes, 5 kinds / at most 128 | yes, 5 kinds / at most 128 | no |
+| trace | CPU, memory, interrupt / at most 65,536 entries | same | no |
+| trace read | at most 1024 entries | at most 1024 entries | no |
 
 `DebugStepKind.MACHINE_CYCLE` is part of the shared model, but the desktop controller returns
 `UNSUPPORTED_STEP` for it. A client must not emulate an unsupported granularity by issuing direct
@@ -137,6 +142,82 @@ interrupt acceptance, it stops at that instruction's retirement; the interrupt-e
 is available to the next step. `ticksExecuted` counts completed `Gameboy.tick()` calls and
 `instructionsRetired` reports the attachment-local sequence delta.
 
+## Breakpoints, watchpoints, and automatic stops
+
+Breakpoint IDs are non-negative and assigned by the client. `setBreakpoint` installs a new
+definition or replaces the definition with the same ID; disabled definitions remain listable but
+do no matching. `removeBreakpoint` does not silently accept an unknown ID. Desktop and headless
+sessions retain at most 128 definitions and currently negotiate these condition kinds:
+
+| Kind | Condition and observation point | Stop boundary |
+|---|---|---|
+| `PROGRAM_COUNTER` | Inclusive PC range observed on the real instruction fetch. | Retirement of that instruction. |
+| `MEMORY` | `EXECUTE`, `READ`, or `WRITE` in an inclusive address range, optionally constrained by `(observed & mask) == (value & mask)`. | The completed master-tick containing the bus access, including accesses while the CPU is idle. |
+| `OPCODE` | Exact base-table or CB-prefixed opcode observed on the real fetch. | Retirement of that instruction. |
+| `INTERRUPT` | Exact interrupt at final acceptance, after late priority selection. | Retirement of the accepted interrupt entry. |
+| `COUNTER` | Exact master-tick or owner frame-counter value. | The completed tick or frame boundary carrying that value. |
+
+Instruction-only PC/opcode/interrupt hooks do not install the CPU address-space wrapper. The
+wrapper is active only for an enabled memory breakpoint or memory trace, and each observed bus
+operation still delegates exactly once. A read condition sees the final byte returned to the CPU,
+while a write condition sees the attempted byte and never performs a debugger readback. `EXECUTE`
+covers actual opcode and operand fetches; side-effect-free debugger reads and speculative
+disassembly are deliberately invisible. `PPU_STATE` exists in the shared data model for a later
+hook phase but is not negotiated by either current implementation.
+
+A hit is completed only at a coherent safe point, acquires the debugger pause, and records a
+`DebugBreakpointHit` containing the breakpoint ID, the tick of the observed match, and the final
+snapshot. A PC or opcode observation can precede its final snapshot by the remaining ticks of that
+instruction. A memory observation stops after its enclosing master tick, so its snapshot may
+describe a CPU partway through the instruction; this also guarantees that STOP-time bus polling
+cannot strand a watchpoint waiting for a retirement that never occurs. `lastBreakpointHit` returns
+the most recent automatic stop and reports `NO_BREAKPOINT_HIT` before the first one.
+
+The first matching observed event before a stop wins. If several definitions match that same event,
+the lowest numeric ID wins, independent of insertion order. Editing or removing a definition
+cancels an observation still pending for that ID. An automatic hit preempts a pending pause,
+instruction step, or frame step; a preempted step completes normally with
+`DebugStepStopReason.BREAKPOINT` and the hit snapshot. Breakpoint handling executes no extra guest
+tick after the reported safe point. A separately queued explicit lifecycle action may still
+supersede the pause on a later owner iteration so stop, replacement, and close work cannot starve.
+
+## Bounded trace capture
+
+Each session owns one owner-thread-confined overwrite ring. The desktop and headless adapters
+currently negotiate `CPU`, `MEMORY`, and `INTERRUPT`, a capacity from 1 through 65,536 entries, and
+at most 1024 entries per port read. An empty category set disables capture. Other typed event
+categories are reserved in the shared model but must be rejected with
+`UNSUPPORTED_TRACE_CATEGORY` until a session advertises them.
+
+Current payloads are captured as follows:
+
+- CPU entries contain PC, base opcode, and optional CB opcode at instruction retirement.
+- Memory entries contain access kind, address, and final read/execute or attempted write byte from
+  the CPU-facing bus.
+- Interrupt entries distinguish a newly asserted interrupt request from final CPU acceptance.
+
+`TraceFilter` provides inclusive CPU-PC and memory-address ranges plus accepted memory-access and
+interrupt sets. Filtering occurs on the producer path before an immutable event or entry is
+constructed. A filter affects the categories for which it has fields; it does not disable an
+enabled category by itself. Category selection and filter replacement are cold-path operations.
+
+Every accepted event receives one monotonically increasing `sequence`; sequence order is
+authoritative when several events share a master tick. `readTrace` uses an exclusive
+`afterSequence` cursor (`-1` starts at the oldest retained entry) and returns an immutable page.
+Readers do not register with or stall the producer. If a cursor falls behind an overwrite,
+`missedEventCount` reports the cursor-specific gap, while `droppedEventCount` is the session's
+cumulative overwrite/clear count. `oldestAvailableSequence` and `nextSequence` bound the retained
+window, and `nextAfterSequence` can be used directly for the next request.
+
+Reconfiguration atomically clears retained entries, preserves the monotonically increasing
+sequence space, and adds the cleared entry count to `droppedEventCount`; this makes an old cursor
+resume or report loss rather than wait on reused IDs. Desktop rewind likewise suppresses all
+breakpoint and trace hooks while replaying restored state, clears pending matches and retained
+trace entries with the same accounting, then reattaches the unchanged definitions/configuration.
+Successful managed and legacy in-place state loads perform the same pending-match and trace
+discontinuity reset around the restored machine. Rewind and state loading therefore cannot
+synthesize delayed hits or splice trace events from unrelated timelines.
+
 ## Speed and frame semantics
 
 `Gameboy.tick()` is the debugger's master-tick unit. In CGB double-speed mode the CPU can advance
@@ -210,14 +291,23 @@ must not be parsed.
 | `UNSUPPORTED_TOPOLOGY` | The requested feature is unavailable for this session topology/capability set. |
 | `SESSION_BUSY` | Load, replacement, stop, rewind, or another transition temporarily removes the safe point. |
 | `STEP_LIMIT` | A bounded pause/step could not reach its target in the allowed tick window. |
+| `BREAKPOINT_LIMIT` | A new definition would exceed the negotiated breakpoint count. |
+| `BREAKPOINT_NOT_FOUND` | Removal named an ID that is not installed. |
+| `NO_BREAKPOINT_HIT` | No automatic hit has been recorded for this session. |
+| `UNSUPPORTED_BREAKPOINT` | The condition kind is not advertised by this session. |
+| `UNSUPPORTED_TRACE_CATEGORY` | The configuration contains a trace category not advertised by this session. |
+| `TRACE_LIMIT` | Trace capacity or page size exceeds the negotiated bound. |
 | `INTERNAL_ERROR` | An unexpected implementation failure was contained instead of escaping on the owner. |
 
 ## Lifecycle and hook removal
 
-Creating a desktop port does not enable CPU retirement observation. The first operation that needs
-a debug snapshot enables the allocation-free retirement tracker. Closing or revoking the port
-removes that tracker, cancels any pending step/pause action, releases the debugger pause, and drops
-the controller's port reference. No debugger counter is restored from machine state.
+Creating a desktop port does not enable CPU retirement, breakpoint, or trace observation. The first
+operation that needs a debug snapshot enables the allocation-free retirement tracker. Instruction
+and interrupt hooks attach only while a corresponding breakpoint or trace category needs them; the
+more expensive CPU-bus wrapper attaches independently only for memory observation. All detach when
+none is needed. Closing or revoking the port removes every tracker/hook, cancels any pending
+step/pause action, releases the debugger pause, and drops the controller's port reference. No
+debugger counter, breakpoint, or trace entry is restored from machine state.
 
 ROM replacement revokes the old generation with `SESSION_REPLACED` before the old machine is torn
 down. Ordinary port/session close completes admitted work with `PORT_CLOSED`. A late owner
@@ -230,8 +320,9 @@ button or pause effect was applied. Clients must treat an in-flight terminal res
 effect-indeterminate and inspect the replacement/current generation rather than retrying a
 non-idempotent effect blindly.
 
-Clients must release completed snapshots and stages they no longer need. Phase 1 has no trace or
-reverse-history buffer, so the port itself retains no unbounded machine history.
+Clients must release completed snapshots, trace pages, and stages they no longer need. The port's
+trace history is fixed-capacity and overwriting; there is still no reverse-history buffer or other
+unbounded retained machine history.
 
 ## Disabled-retirement benchmark
 
@@ -336,3 +427,77 @@ CAND1 [290677912,293098447,301474726,298556573,297046830,310254318,290274075,292
 CAND2 [297017300,304355125,298326050,304470051,310511426,304722702,300290046,302669316,306510243]
 CAND3 [295645115,291396092,305735179,296932139,315209558,294213686,295712315,295606281,293423504]
 ```
+
+## Phase 2 breakpoint and trace benchmark
+
+`core/src/test/java/eu/rekawek/coffeegb/core/DebugInstrumentationBenchmarkTest.java` is the
+companion opt-in benchmark for attached Phase 2 producer paths. Run the unchanged,
+baseline-portable disabled test and the companion in adjacent fresh Maven test JVMs:
+
+```text
+mvn -B -pl core -am \
+  -Dtest=DebugDisabledBenchmarkTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dcoffeegb.debug.benchmark=true test
+mvn -B -pl core -am \
+  -Dtest=DebugInstrumentationBenchmarkTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dcoffeegb.debug.benchmark=true test
+```
+
+It uses the same deterministic `JR -2` machine and reports three modes:
+
+| Mode | Purpose | Workload |
+|---|---|---|
+| `pc-no-hit` | One enabled exact-PC breakpoint at an address the loop never fetches; measures instruction-hook matching without a bus wrapper or hit/snapshot allocation. | Same 30,000,000-tick warmup and nine 5,000,000-tick samples as the disabled baseline. |
+| `cpu-memory-filter-rejects-all` | CPU and memory categories enabled with a filter that rejects every workload event; verifies filtering before payload construction. | Same geometry as the disabled baseline. |
+| `cpu-memory-trace-enabled` | CPU and memory events accepted into a 4096-entry overwrite ring; reports producer throughput, allocation per event, retained bounds, sequence, and drop accounting. | 5,000,000-tick warmup and seven 1,000,000-tick samples to bound the deliberately allocation-heavy run. |
+
+Every mode prints median/minimum/maximum throughput, raw times, thread allocation totals and rates,
+and captured-event accounting. Allocation accounting has the same HotSpot requirement as the
+disabled test, and the reported per-event figure is explicitly gross: it includes the emulator's
+ordinary allocation. The full-trace mode also asserts only deterministic structural facts:
+retention equals capacity, sequence continues beyond capacity, and overwrite/missed counts agree.
+The no-hit mode must not produce a hit or trace; the rejecting mode must retain and drop zero
+events. There is deliberately no timing or allocation assertion in ordinary CI.
+
+Compare the no-hit fresh-fork median with the disabled median from the same Phase 2 revision; its
+target regression is at most 5%. Compare the disabled Phase 2 median against the pre-feature
+baseline using the earlier at-most-1% budget. The no-hit and rejecting modes should add no
+allocation proportional to instruction/event count beyond the emulator's measured disabled-loop
+allocation. Full tracing necessarily constructs immutable payload/entry objects, so its relevant
+report is throughput and allocation per accepted event. Subtract the disabled
+`allocatedBytesPerMillionTicks` from the trace mode's rate before dividing by
+`eventsPerMillionTicks` to estimate incremental instrumentation bytes per event. Fixed retained
+entry count and monotonic drop accounting establish the memory bound. Scheduler, thermal, GC, and
+host variance remain report-time considerations rather than flaky test thresholds.
+
+### Phase 2 checked-in report
+
+The following measurements were taken on 2026-07-30 after instruction hooks were separated from
+the optional memory-bus wrapper. Three adjacent disabled/instrumented fresh-fork pairs ran with no
+other Maven or Java workload observed at launch. The candidate was the complete uncommitted Phase
+2 working tree based on `8c8f0569e9daa8bcf251c97a3906f6302f212f30`; its final commit SHA did not
+yet exist. The environment matched the Phase 1 report: Java 21.0.1 HotSpot, Maven 3.8.6, Linux
+7.0.0-28, an Intel Core i7-1165G7, the `powersave` governor, and 8 available processors.
+
+| Mode | Fresh-fork median ticks/s, run 1 | Run 2 | Run 3 | Median of medians | Allocated bytes / million ticks | Accepted events / million ticks |
+|---|---:|---:|---:|---:|---:|---:|
+| disabled | 16,730,524.625 | 16,729,852.587 | 17,034,769.119 | 16,730,524.625 | 26,669,524.444 | 0 |
+| PC no-hit | 16,048,063.102 | 16,617,368.860 | 16,838,995.714 | 16,617,368.860 | 26,669,524.444 | 0 |
+| CPU/memory filter rejects all | 16,579,858.727 | 17,061,092.452 | 16,396,772.619 | 16,579,858.727 | 26,668,838.578 | 0 |
+| CPU/memory trace enabled | 16,173,657.204 | 15,933,085.375 | 16,209,527.727 | 16,173,657.204 | 42,668,836.571 gross | 250,000 |
+
+The median-of-medians PC no-hit regression against the same-revision disabled path is **0.6763%**;
+the three adjacent-pair regressions are 4.0791%, 0.6724%, and 1.1493%, so every observed pair and
+the aggregate pass the at-most-5% target. Against the pre-feature baseline median recorded in the
+Phase 1 table, the Phase 2 disabled path's observed regression is **-2.0752%** (faster), passing the
+at-most-1% disabled budget.
+
+The disabled and PC no-hit allocation vectors were byte-identical in every fork. The rejecting
+filter captured no event and allocated 30,864 fewer total bytes than disabled over each 45-million-
+tick measured workload, providing no evidence of producer allocation. Full trace captured exactly
+1,750,000 events in each 7-million-tick measured workload. Subtracting the disabled rate gives an
+estimated **63.997 incremental bytes per accepted event**. After warmup and measurement its
+4096-entry ring reported `nextSequence=3,000,000`, `droppedEventCount=2,995,904`, and
+`oldestAvailableSequence=2,995,904`, exactly matching the overwrite bound.

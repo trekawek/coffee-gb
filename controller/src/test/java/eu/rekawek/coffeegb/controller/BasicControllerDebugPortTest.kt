@@ -10,24 +10,35 @@ import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.StatePrepareCloseCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StatePrepareCloseRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateRef
+import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
 import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugCounterCondition
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.EnumSet
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
@@ -37,6 +48,116 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerDebugPortTest {
+
+  @Test
+  fun breakpointAutomaticallyPausesAtTheExactTickWithoutAdvancingAgain() {
+    withController { _, port, _, _, _ ->
+      val paused = await(port.pause()).value()
+      val traceConfiguration =
+          TraceConfiguration(256, EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY))
+      assertEquals(traceConfiguration, await(port.configureTrace(traceConfiguration)).value())
+
+      val targetTick = paused.masterTick() + 64
+      val breakpoint =
+          DebugBreakpoint(
+              DebugBreakpointId(61),
+              true,
+              DebugCounterCondition.atMasterTick(targetTick),
+          )
+      assertEquals(breakpoint, await(port.setBreakpoint(breakpoint)).value())
+      assertTrue(await(port.resume()).isSuccess)
+
+      val hit = awaitBreakpointHit(port)
+      assertEquals(breakpoint.id(), hit.breakpointId())
+      assertEquals(targetTick, hit.matchMasterTick())
+      assertEquals(targetTick, hit.snapshot().masterTick())
+      assertTrue(hit.snapshot().paused())
+
+      val stopped = await(port.snapshot()).value()
+      assertEquals(targetTick, stopped.masterTick())
+      assertEquals(
+          hit.snapshot().execution().retiredInstructions(),
+          stopped.execution().retiredInstructions(),
+      )
+      Thread.sleep(25)
+      val stillStopped = await(port.snapshot()).value()
+      assertEquals(stopped.masterTick(), stillStopped.masterTick())
+      assertEquals(
+          stopped.execution().retiredInstructions(),
+          stillStopped.execution().retiredInstructions(),
+      )
+
+      val trace = await(port.readTrace(TraceReadRequest.initial(256))).value()
+      assertTrue(trace.entries().isNotEmpty())
+      assertTrue(
+          trace.entries().all {
+            it.category() == TraceCategory.CPU || it.category() == TraceCategory.MEMORY
+          })
+    }
+  }
+
+  @Test
+  fun instructionStepReportsBreakpointWhenTheNextInstructionMatches() {
+    withController { _, port, _, _, _ ->
+      val paused = await(port.pause()).value()
+      val breakpoint =
+          DebugBreakpoint(
+              DebugBreakpointId(62),
+              true,
+              DebugPcCondition.at(paused.registers().pc()),
+          )
+      assertTrue(await(port.setBreakpoint(breakpoint)).isSuccess)
+
+      val step = await(port.step(DebugStepKind.INSTRUCTION))
+      assertTrue(step.isSuccess, step.toString())
+      assertEquals(DebugStepStopReason.BREAKPOINT, step.value().stopReason())
+      assertEquals(1, step.value().instructionsRetired())
+      assertTrue(step.value().snapshot().paused())
+
+      val hit = await(port.lastBreakpointHit()).value()
+      assertEquals(breakpoint.id(), hit.breakpointId())
+      assertEquals(step.value().snapshot().masterTick(), hit.snapshot().masterTick())
+      assertEquals(
+          step.value().snapshot().execution().retiredInstructions(),
+          hit.snapshot().execution().retiredInstructions(),
+      )
+    }
+  }
+
+  @Test
+  fun successfulStateLoadClearsTraceWithoutResettingItsSequenceSpace() {
+    withController { eventBus, port, _, _, stateSession ->
+      val completed = LinkedBlockingQueue<StateOperationCompletedEvent>()
+      eventBus.register<StateOperationCompletedEvent>(completed::add)
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(
+          await(
+                  port.configureTrace(
+                      TraceConfiguration(
+                          256,
+                          EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY),
+                      )))
+              .isSuccess)
+      assertTrue(await(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+
+      val slot = StateRef.Slot(7)
+      eventBus.post(StateSaveRequestEvent(910, stateSession.sessionId, slot, null, null))
+      awaitStateCompletion(completed, 910)
+
+      val before = await(port.readTrace(TraceReadRequest.initial(256))).value()
+      assertTrue(before.entries().isNotEmpty())
+
+      eventBus.post(StateLoadRefRequestEvent(911, stateSession.sessionId, slot))
+      awaitStateCompletion(completed, 911)
+
+      val after = await(port.readTrace(TraceReadRequest.initial(256))).value()
+      assertTrue(after.entries().isEmpty())
+      assertEquals(before.nextSequence(), after.nextSequence())
+      assertEquals(after.nextSequence(), after.oldestAvailableSequence())
+      assertTrue(after.droppedEventCount() >= before.droppedEventCount() + before.entries().size)
+    }
+  }
 
   @Test
   fun pauseAndStepsStayOnCoherentInstructionAndFrameSafePoints() {
@@ -395,6 +516,31 @@ class BasicControllerDebugPortTest {
   private fun assertError(expected: DebugErrorCode, result: eu.rekawek.coffeegb.core.debug.DebugResult<*>) {
     assertTrue(result.isFailure, result.toString())
     assertEquals(expected, result.error().code())
+  }
+
+  private fun awaitBreakpointHit(port: DebugPort): DebugBreakpointHit {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+    while (System.nanoTime() < deadline) {
+      val result = await(port.lastBreakpointHit())
+      if (result.isSuccess) return result.value()
+      assertEquals(DebugErrorCode.NO_BREAKPOINT_HIT, result.error().code())
+      Thread.yield()
+    }
+    val result = await(port.lastBreakpointHit())
+    assertTrue(result.isSuccess, "breakpoint did not stop the desktop controller: $result")
+    return result.value()
+  }
+
+  private fun awaitStateCompletion(
+      completed: LinkedBlockingQueue<StateOperationCompletedEvent>,
+      requestId: Long,
+  ): StateOperationCompletedEvent {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+    while (System.nanoTime() < deadline) {
+      val event = completed.poll(50, TimeUnit.MILLISECONDS) ?: continue
+      if (event.requestId == requestId) return event
+    }
+    throw AssertionError("state operation $requestId did not complete")
   }
 
   private fun awaitCondition(condition: () -> Boolean) {

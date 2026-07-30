@@ -1,6 +1,11 @@
 package eu.rekawek.coffeegb.core.debug;
 
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
 import org.junit.Test;
+
+import java.util.EnumSet;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -144,6 +149,49 @@ public class DebugApiModelTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugCapabilities(true, true, true, true, true,
                         true, true, 0));
+    }
+
+    @Test
+    public void capabilitiesNegotiateBoundedBreakpointsAndTrace() {
+        EnumSet<DebugBreakpointKind> breakpointKinds = EnumSet.of(
+                DebugBreakpointKind.PROGRAM_COUNTER, DebugBreakpointKind.MEMORY);
+        EnumSet<TraceCategory> traceCategories = EnumSet.of(
+                TraceCategory.CPU, TraceCategory.MEMORY);
+        DebugCapabilities capabilities = new DebugCapabilities(
+                true, true, true, false, true, true, true, 4096,
+                breakpointKinds, 32, traceCategories, 2048, 256);
+
+        breakpointKinds.clear();
+        traceCategories.clear();
+        assertTrue(capabilities.breakpoints());
+        assertTrue(capabilities.supports(DebugBreakpointKind.PROGRAM_COUNTER));
+        assertFalse(capabilities.supports(DebugBreakpointKind.OPCODE));
+        assertEquals(32, capabilities.maxBreakpoints());
+        assertTrue(capabilities.trace());
+        assertTrue(capabilities.supports(TraceCategory.MEMORY));
+        assertFalse(capabilities.supports(TraceCategory.TIMER));
+        assertEquals(2048, capabilities.maxTraceCapacity());
+        assertEquals(256, capabilities.maxTraceReadEntries());
+
+        assertThrows(IllegalArgumentException.class, () -> new DebugCapabilities(
+                true, true, true, false, true, true, true, 4096,
+                EnumSet.noneOf(DebugBreakpointKind.class), 1,
+                EnumSet.noneOf(TraceCategory.class), 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new DebugCapabilities(
+                true, true, true, false, true, true, true, 4096,
+                EnumSet.of(DebugBreakpointKind.PROGRAM_COUNTER), 1,
+                EnumSet.of(TraceCategory.CPU), 0, 1));
+    }
+
+    @Test
+    public void breakpointHitRequiresAPausedSnapshotAtOrAfterTheMatch() {
+        DebugBreakpointId id = new DebugBreakpointId(5);
+        DebugBreakpointHit hit = new DebugBreakpointHit(id, 1234, snapshot(true));
+        assertSame(id, hit.breakpointId());
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugBreakpointHit(id, 1234, snapshot(false)));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugBreakpointHit(id, 1235, snapshot(true)));
     }
 
     @Test

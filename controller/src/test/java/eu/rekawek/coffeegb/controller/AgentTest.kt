@@ -7,9 +7,18 @@ import eu.rekawek.coffeegb.core.debug.DebugRegisters
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
+import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Collections
+import java.util.EnumSet
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -28,6 +37,86 @@ import org.junit.rules.TemporaryFolder
 class AgentTest {
 
   @get:Rule val temporaryFolder = TemporaryFolder()
+
+  @Test
+  fun headlessBreakpointAutomaticallyPausesWithoutAnExtraTickAndRetainsTrace() {
+    Agent(testRom(0x3e, 0x12, 0x3c, 0x18, 0xfe)).use { agent ->
+      val port = agent.debugPort
+      assertTrue(port.capabilities().breakpoints())
+      assertTrue(
+          port.capabilities().breakpointKinds().contains(DebugBreakpointKind.PROGRAM_COUNTER))
+      assertTrue(port.capabilities().traceCategories().contains(TraceCategory.CPU))
+      assertDebugFailure(port.lastBreakpointHit(), DebugErrorCode.NO_BREAKPOINT_HIT)
+
+      val traceConfiguration =
+          TraceConfiguration(128, EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY))
+      val configured = awaitDebug(port.configureTrace(traceConfiguration))
+      assertTrue(configured.isSuccess, configured.toString())
+      assertEquals(traceConfiguration, configured.value())
+
+      val breakpoint =
+          DebugBreakpoint(DebugBreakpointId(7), true, DebugPcCondition.at(0x102))
+      assertEquals(breakpoint, awaitDebug(port.setBreakpoint(breakpoint)).value())
+      assertTrue(awaitDebug(port.resume()).isSuccess)
+
+      val hit =
+          awaitValue("Headless breakpoint did not stop the machine") {
+            awaitDebug(port.lastBreakpointHit()).let { result ->
+              if (result.isSuccess) result.value() else null
+            }
+          }
+      assertEquals(breakpoint.id(), hit.breakpointId())
+      assertTrue(hit.snapshot().paused())
+      assertTrue(hit.snapshot().masterTick() >= hit.matchMasterTick())
+
+      val stopped = awaitDebug(port.snapshot()).value()
+      assertTrue(stopped.paused())
+      assertEquals(hit.snapshot().masterTick(), stopped.masterTick())
+      assertEquals(
+          hit.snapshot().execution().retiredInstructions(),
+          stopped.execution().retiredInstructions(),
+      )
+      Thread.sleep(25)
+      val stillStopped = awaitDebug(port.snapshot()).value()
+      assertEquals(stopped.masterTick(), stillStopped.masterTick())
+      assertEquals(
+          stopped.execution().retiredInstructions(),
+          stillStopped.execution().retiredInstructions(),
+      )
+
+      val trace = awaitDebug(port.readTrace(TraceReadRequest.initial(128))).value()
+      assertTrue(trace.entries().isNotEmpty())
+      assertTrue(
+          trace.entries().all {
+            it.category() == TraceCategory.CPU || it.category() == TraceCategory.MEMORY
+          })
+      assertEquals(trace.entries().last().sequence(), trace.nextAfterSequence())
+    }
+  }
+
+  @Test
+  fun headlessInstructionStepIsPreemptedByBreakpointAtItsRetirementSafePoint() {
+    Agent(testRom(0x3e, 0x12, 0x3c, 0x18, 0xfe)).use { agent ->
+      val breakpoint =
+          DebugBreakpoint(DebugBreakpointId(8), true, DebugPcCondition.at(0x100))
+      assertTrue(awaitDebug(agent.debugPort.setBreakpoint(breakpoint)).isSuccess)
+
+      val step = awaitDebug(agent.debugPort.step(DebugStepKind.INSTRUCTION))
+      assertTrue(step.isSuccess, step.toString())
+      assertEquals(DebugStepStopReason.BREAKPOINT, step.value().stopReason())
+      assertEquals(1, step.value().instructionsRetired())
+      assertEquals(0x102, step.value().snapshot().registers().pc())
+      assertTrue(step.value().snapshot().paused())
+
+      val hit = awaitDebug(agent.debugPort.lastBreakpointHit()).value()
+      assertEquals(breakpoint.id(), hit.breakpointId())
+      assertEquals(step.value().snapshot().masterTick(), hit.snapshot().masterTick())
+      assertEquals(
+          step.value().snapshot().execution().retiredInstructions(),
+          hit.snapshot().execution().retiredInstructions(),
+      )
+    }
+  }
 
   @Test
   fun instructionStepRetiresExactlyOneOrdinaryInstruction() {
@@ -306,6 +395,9 @@ class AgentTest {
     assertTrue(result.isFailure, result.toString())
     assertEquals(expected, result.error().code())
   }
+
+  private fun <T> awaitDebug(stage: CompletionStage<DebugResult<T>>): DebugResult<T> =
+      stage.toCompletableFuture().get(5, TimeUnit.SECONDS)
 
   private fun bankedTestRom() =
       temporaryFolder.newFile("agent-banked-${System.nanoTime()}.gb").apply {

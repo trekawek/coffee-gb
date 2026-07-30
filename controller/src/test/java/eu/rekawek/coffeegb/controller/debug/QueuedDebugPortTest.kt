@@ -1,12 +1,23 @@
 package eu.rekawek.coffeegb.controller.debug
 
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugResult
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugOpcodeCondition
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
 import java.util.Collections
+import java.util.EnumSet
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -22,6 +33,92 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class QueuedDebugPortTest {
+  @Test
+  fun `advanced commands validate before admission and preserve their FIFO envelopes`() {
+    val port = QueuedDebugPort(16, advancedCapabilities(), 6)
+    val breakpoint =
+        DebugBreakpoint(DebugBreakpointId(41), true, DebugPcCondition.at(0x1234))
+    val unsupportedBreakpoint =
+        DebugBreakpoint(DebugBreakpointId(42), true, DebugOpcodeCondition.base(0x00))
+    val traceConfiguration =
+        TraceConfiguration(16, EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY))
+    try {
+      assertFailure(port.setBreakpoint(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(
+          port.setBreakpoint(unsupportedBreakpoint),
+          DebugErrorCode.UNSUPPORTED_BREAKPOINT,
+      )
+      assertFailure(port.removeBreakpoint(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(port.configureTrace(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(
+          port.configureTrace(TraceConfiguration(17, EnumSet.of(TraceCategory.CPU))),
+          DebugErrorCode.TRACE_LIMIT,
+      )
+      assertFailure(
+          port.configureTrace(TraceConfiguration(8, EnumSet.of(TraceCategory.PPU))),
+          DebugErrorCode.UNSUPPORTED_TRACE_CATEGORY,
+      )
+      assertFailure(port.readTrace(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(port.readTrace(TraceReadRequest.initial(5)), DebugErrorCode.TRACE_LIMIT)
+      assertEquals(0, port.outstandingRequestCount())
+      assertFalse(port.hasPendingCommands())
+
+      val set = port.setBreakpoint(breakpoint)
+      val remove = port.removeBreakpoint(breakpoint.id())
+      val list = port.listBreakpoints()
+      val lastHit = port.lastBreakpointHit()
+      val configure = port.configureTrace(traceConfiguration)
+      val readRequest = TraceReadRequest.initial(4)
+      val read = port.readTrace(readRequest)
+
+      val commands = port.drainCommands(6)
+      assertEquals((1L..6L).toList(), commands.map { it.requestId })
+      assertTrue(commands.all { it.sessionGeneration == 16L })
+      assertEquals(breakpoint, assertIs<QueuedDebugCommand.SetBreakpoint>(commands[0]).breakpoint)
+      assertEquals(
+          breakpoint.id(),
+          assertIs<QueuedDebugCommand.RemoveBreakpoint>(commands[1]).breakpointId,
+      )
+      assertIs<QueuedDebugCommand.ListBreakpoints>(commands[2])
+      assertIs<QueuedDebugCommand.LastBreakpointHit>(commands[3])
+      assertEquals(
+          traceConfiguration,
+          assertIs<QueuedDebugCommand.ConfigureTrace>(commands[4]).configuration,
+      )
+      assertEquals(readRequest, assertIs<QueuedDebugCommand.ReadTrace>(commands[5]).request)
+
+      assertTrue(
+          assertIs<QueuedDebugCommand.SetBreakpoint>(commands[0])
+              .complete(DebugResult.success(breakpoint)))
+      assertTrue(
+          assertIs<QueuedDebugCommand.RemoveBreakpoint>(commands[1])
+              .complete(DebugResult.success()))
+      assertTrue(
+          assertIs<QueuedDebugCommand.ListBreakpoints>(commands[2])
+              .complete(DebugResult.success(DebugBreakpointList(listOf(breakpoint)))))
+      assertTrue(
+          assertIs<QueuedDebugCommand.LastBreakpointHit>(commands[3])
+              .fail(DebugErrorCode.NO_BREAKPOINT_HIT, "Test completion"))
+      assertTrue(
+          assertIs<QueuedDebugCommand.ConfigureTrace>(commands[4])
+              .complete(DebugResult.success(traceConfiguration)))
+      val emptyTrace = TraceReadResult(emptyList(), -1, 0, 0, 0, 0)
+      assertTrue(
+          assertIs<QueuedDebugCommand.ReadTrace>(commands[5])
+              .complete(DebugResult.success(emptyTrace)))
+
+      assertEquals(breakpoint, await(set).value())
+      assertTrue(await(remove).isSuccess)
+      assertEquals(listOf(breakpoint), await(list).value().breakpoints())
+      assertFailure(lastHit, DebugErrorCode.NO_BREAKPOINT_HIT)
+      assertEquals(traceConfiguration, await(configure).value())
+      assertEquals(emptyTrace, await(read).value())
+    } finally {
+      port.close()
+      assertTrue(port.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+    }
+  }
+
   @Test
   fun `default capacity is exactly sixty four outstanding requests`() {
     val port = QueuedDebugPort(6, capabilities())
@@ -289,6 +386,23 @@ class QueuedDebugPortTest {
 
   private fun capabilities(maxMemoryReadLength: Int = 256): DebugCapabilities =
       DebugCapabilities(true, true, true, true, true, true, true, maxMemoryReadLength)
+
+  private fun advancedCapabilities(): DebugCapabilities =
+      DebugCapabilities(
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          256,
+          EnumSet.of(DebugBreakpointKind.PROGRAM_COUNTER),
+          2,
+          EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY),
+          16,
+          4,
+      )
 
   private fun <T> await(stage: CompletionStage<T>): T =
       stage.toCompletableFuture().get(5, TimeUnit.SECONDS)
