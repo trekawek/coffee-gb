@@ -6,7 +6,15 @@ import eu.rekawek.coffeegb.core.debug.CommandPattern;
 public class Quit implements Command {
 
     private static final CommandPattern PATTERN =
-            CommandPattern.Builder.create("quit", "q").withDescription("quits the emulator").build();
+            CommandPattern.Builder.create("quit", "q")
+                    .withDescription("closes the debugger console")
+                    .build();
+
+    private final Runnable stop;
+
+    public Quit(Runnable stop) {
+        this.stop = java.util.Objects.requireNonNull(stop, "stop");
+    }
 
     @Override
     public CommandPattern getPattern() {
@@ -15,6 +23,6 @@ public class Quit implements Command {
 
     @Override
     public void run(CommandPattern.ParsedCommandLine commandLine) {
-        System.exit(0);
+        stop.run();
     }
 }

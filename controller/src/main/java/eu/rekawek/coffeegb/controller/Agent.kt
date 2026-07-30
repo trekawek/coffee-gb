@@ -1,213 +1,173 @@
 package eu.rekawek.coffeegb.controller
 
-import eu.rekawek.coffeegb.core.Gameboy
-import eu.rekawek.coffeegb.core.cpu.Opcodes
-import eu.rekawek.coffeegb.core.cpu.Registers
-import eu.rekawek.coffeegb.core.events.EventBusImpl
-import eu.rekawek.coffeegb.core.gpu.Display
-import eu.rekawek.coffeegb.core.hardware.ClockSpec
+import eu.rekawek.coffeegb.controller.agent.AgentDisassembler
+import eu.rekawek.coffeegb.controller.agent.HeadlessAgentSession
+import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugButton
+import eu.rekawek.coffeegb.core.debug.DebugCpuState
+import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
+import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugPort
+import eu.rekawek.coffeegb.core.debug.DebugRegisters
+import eu.rekawek.coffeegb.core.debug.DebugResult
+import eu.rekawek.coffeegb.core.debug.DebugSnapshot
+import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.joypad.Button
-import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
-import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
-import eu.rekawek.coffeegb.core.memory.cart.Rom
-import eu.rekawek.coffeegb.core.sound.Sound
 import java.awt.image.BufferedImage
 import java.io.File
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CompletionStage
+import java.util.concurrent.ExecutionException
 
-class Agent(romFile: File) {
-    private val rom = Rom(romFile)
-    private val config = Gameboy.GameboyConfiguration(rom)
-    private val eventBus = EventBusImpl(null, null, false)
-    private val gameboy = config.build()
+/**
+ * Synchronous headless convenience adapter over a bounded, asynchronous [DebugPort].
+ *
+ * Each instance owns one named emulation thread. Call [close] when finished; Kotlin callers can use
+ * `Agent(file).use { ... }`. The temporary [BufferedImage] adapter remains outside the debug API.
+ */
+class Agent(romFile: File) : AutoCloseable {
 
-    private val frameQueue = LinkedBlockingQueue<IntArray>()
-    private val soundQueue = LinkedBlockingQueue<IntArray>()
+  private val session = HeadlessAgentSession(romFile)
 
-    init {
-        gameboy.init(eventBus, eu.rekawek.coffeegb.core.serial.SerialEndpoint.NULL_ENDPOINT, null)
-        eventBus.register({ event ->
-            val pixels = IntArray(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT)
-            event.toRgb(pixels, false)
-            frameQueue.put(pixels)
-            if (frameQueue.size > 10) frameQueue.poll()
-        }, Display.DmgFrameReadyEvent::class.java)
-        eventBus.register({ event ->
-            val pixels = IntArray(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT)
-            event.toRgb(pixels)
-            frameQueue.put(pixels)
-            if (frameQueue.size > 10) frameQueue.poll()
-        }, Display.GbcFrameReadyEvent::class.java)
-        eventBus.register({ event ->
-            soundQueue.put(event.buffer.clone())
-            if (soundQueue.size > 100) soundQueue.poll()
-        }, Sound.SoundSampleEvent::class.java)
+  val debugPort: DebugPort
+    get() = session.debugPort
+
+  fun tick() {
+    session.runTicks(1)
+  }
+
+  fun step() {
+    requireSuccess(debugPort.step(DebugStepKind.INSTRUCTION))
+  }
+
+  fun runUntilFrame(maxTicks: Int = session.defaultFrameWaitTicks) {
+    session.runUntilFrame(maxTicks)
+  }
+
+  fun runTicks(ticks: Int) {
+    session.runTicks(ticks)
+  }
+
+  fun snapshot(): DebugSnapshot = requireSuccess(debugPort.snapshot())
+
+  fun isLcdEnabled(): Boolean = snapshot().ppu().lcdEnabled()
+
+  fun getLcdc(): Int = snapshot().ppu().lcdc()
+
+  fun getLY(): Int = snapshot().ppu().line()
+
+  /** Returns a caller-owned frame without introducing AWT into [DebugPort]. */
+  fun getFrame(): BufferedImage? {
+    val pixels = getFramePixels() ?: return null
+    return BufferedImage(DISPLAY_WIDTH, DISPLAY_HEIGHT, BufferedImage.TYPE_INT_RGB).apply {
+      setRGB(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels, 0, DISPLAY_WIDTH)
     }
+  }
 
-    fun tick() {
-        gameboy.tick()
+  /** Returns a caller-owned RGB frame buffer, or null when no frame is queued. */
+  fun getFramePixels(): IntArray? = session.pollFrame()
+
+  /** Returns caller-owned interleaved stereo sample buffers accumulated since the last call. */
+  fun getAudio(): List<IntArray> = session.drainAudio()
+
+  fun getRegisters(): DebugRegisters = snapshot().registers()
+
+  fun getSP(): Int = getRegisters().sp()
+
+  fun readMemory(request: DebugMemoryRequest): DebugMemoryBlock =
+      requireSuccess(debugPort.readMemory(request))
+
+  /**
+   * Legacy address-based helper. Cartridge addresses use the parser-corrected loaded ROM image
+   * rather than the mapper's live CPU window; other addresses use the side-effect-free SYSTEM_BUS
+   * view.
+   */
+  fun getByte(address: Int): Int =
+      readMemory(defaultMemoryRequest(address, 1)).unsignedByteAt(0)
+
+  /**
+   * Legacy address-based helper. A request may not cross from the physical ROM view into the
+   * system-bus view; callers that need a specific view should use [readMemory].
+   */
+  fun getMemory(address: Int, length: Int): IntArray {
+    val block = readMemory(defaultMemoryRequest(address, length))
+    return IntArray(block.length()) { block.unsignedByteAt(it) }
+  }
+
+  fun pressButton(button: Button) {
+    requireSuccess(debugPort.setButton(DebugButton.valueOf(button.name), true))
+  }
+
+  fun releaseButton(button: Button) {
+    requireSuccess(debugPort.setButton(DebugButton.valueOf(button.name), false))
+  }
+
+  fun disassemble(address: Int): String {
+    require(address in 0..0xffff) { "Address must be a 16-bit value: $address" }
+    val available = minOf(MAX_INSTRUCTION_BYTES, defaultRegionEndExclusive(address) - address)
+    val memory = readMemory(defaultMemoryRequest(address, available))
+    return AgentDisassembler.disassemble(address, memory)
+  }
+
+  fun isCpuHalted(): Boolean = snapshot().execution().cpuState() == DebugCpuState.HALTED
+
+  fun isCpuStopped(): Boolean = snapshot().execution().cpuState() == DebugCpuState.STOPPED
+
+  fun getCpuState(): String = snapshot().execution().cpuState().name
+
+  fun getCpuClockCycle(): Int = snapshot().execution().machineCycle()
+
+  fun isImeEnabled(): Boolean = snapshot().interrupts().ime()
+
+  fun getIF(): Int = snapshot().interrupts().requestFlags()
+
+  fun getIE(): Int = snapshot().interrupts().enableFlags()
+
+  fun getRomBank(): Int = snapshot().mapper().romBank()
+
+  override fun close() {
+    session.close()
+  }
+
+  private fun defaultAddressSpace(address: Int): DebugAddressSpace =
+      if (address < 0x8000) DebugAddressSpace.ROM else DebugAddressSpace.SYSTEM_BUS
+
+  private fun defaultMemoryRequest(address: Int, length: Int): DebugMemoryRequest {
+    val request = DebugMemoryRequest(defaultAddressSpace(address), address, length)
+    require(request.endExclusive() <= defaultRegionEndExclusive(address)) {
+      "Legacy memory request crosses a debug address-space boundary; use readMemory() with an " +
+          "explicit named address space"
     }
+    return request
+  }
 
-    fun step() {
-        val cpu = gameboy.cpu
-        // Tick at least once to move away from current state
-        gameboy.tick()
-        // Continue ticking until we reach the start of the next instruction or a halt state
-        while (cpu.state != eu.rekawek.coffeegb.core.cpu.Cpu.State.OPCODE &&
-            cpu.state != eu.rekawek.coffeegb.core.cpu.Cpu.State.HALTED &&
-            cpu.state != eu.rekawek.coffeegb.core.cpu.Cpu.State.STOPPED
-        ) {
-            gameboy.tick()
+  private fun defaultRegionEndExclusive(address: Int): Int =
+      when (address) {
+        in 0x0000..0x7fff -> 0x8000
+        in 0xc000..0xfdff -> 0xfe00
+        in 0xff80..0xfffe -> 0xffff
+        else -> 0x10000
+      }
+
+  private fun <T> requireSuccess(stage: CompletionStage<DebugResult<T>>): T {
+    val result =
+        try {
+          stage.toCompletableFuture().get()
+        } catch (failure: InterruptedException) {
+          Thread.currentThread().interrupt()
+          throw IllegalStateException("Interrupted while awaiting Agent debug command", failure)
+        } catch (failure: ExecutionException) {
+          throw IllegalStateException("Agent debug command failed", failure.cause)
         }
+    if (result.isFailure) {
+      val error = result.error()
+      throw IllegalStateException("${error.code()}: ${error.message()}")
     }
+    return result.value()
+  }
 
-    fun runUntilFrame(
-        maxTicks: Int =
-            Math.toIntExact(
-                gameboy.clockSpec.ticksForSeconds(1, ClockSpec.Rounding.CEILING))
-    ) {
-        var ticks = 0
-        while (!gameboy.tick() && ticks < maxTicks) {
-            ticks++
-        }
-    }
-
-    fun runTicks(ticks: Int) {
-        repeat(ticks) {
-            gameboy.tick()
-        }
-    }
-
-    fun isLcdEnabled(): Boolean {
-        return gameboy.gpu.isLcdEnabled
-    }
-
-    fun getLcdc(): Int {
-        return gameboy.gpu.lcdc.get()
-    }
-    
-    fun getLY(): Int {
-        return gameboy.gpu.registers.get(eu.rekawek.coffeegb.core.gpu.GpuRegister.LY)
-    }
-
-    fun getFrame(): BufferedImage? {
-        val pixels = frameQueue.poll() ?: return null
-        val img = BufferedImage(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, BufferedImage.TYPE_INT_RGB)
-        img.setRGB(0, 0, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, pixels, 0, Display.DISPLAY_WIDTH)
-        return img
-    }
-
-    fun getAudio(): List<IntArray> {
-        val samples = mutableListOf<IntArray>()
-        soundQueue.drainTo(samples)
-        return samples
-    }
-
-    fun getRegisters(): Registers {
-        return gameboy.cpu.registers
-    }
-
-    fun getRegistersObj(): eu.rekawek.coffeegb.core.cpu.Registers {
-        return gameboy.cpu.registers
-    }
-
-    fun getSP(): Int {
-        return gameboy.cpu.registers.sp
-    }
-
-    fun getByte(address: Int): Int {
-        return gameboy.addressSpace.getByte(address)
-    }
-
-    fun pressButton(button: Button) {
-        eventBus.post(ButtonPressEvent(button))
-    }
-
-    fun releaseButton(button: Button) {
-        eventBus.post(ButtonReleaseEvent(button))
-    }
-
-    fun disassemble(address: Int): String {
-        val mmu = gameboy.addressSpace
-        val opcode1 = mmu.getByte(address)
-        if (opcode1 == 0xcb) {
-            val opcode2 = mmu.getByte(address + 1)
-            val opcode = Opcodes.EXT_COMMANDS[opcode2]
-            return String.format("%04X: CB %02X %s", address, opcode2, opcode?.label ?: "UNKNOWN")
-        } else {
-            val opcode = Opcodes.COMMANDS[opcode1]
-            var label = opcode?.label ?: "UNKNOWN"
-            val length = opcode?.operandLength ?: 0
-            val bytes = mutableListOf<String>()
-            bytes.add(String.format("%02X", opcode1))
-            if (length >= 1) {
-                val v = mmu.getByte(address + 1)
-                bytes.add(String.format("%02X", v))
-                label = label.replace("d8", String.format("%02X", v))
-                label = label.replace("r8", String.format("%02X", v))
-                label = label.replace("a8", String.format("%02X", v))
-            }
-            if (length >= 2) {
-                val v1 = mmu.getByte(address + 1)
-                val v2 = mmu.getByte(address + 2)
-                val v = v2 shl 8 or v1
-                bytes.add(String.format("%02X", v2))
-                label = label.replace("d16", String.format("%04X", v))
-                label = label.replace("a16", String.format("%04X", v))
-            }
-            return String.format("%04X: %-11s %s", address, bytes.joinToString(" "), label)
-        }
-    }
-
-    fun getMemory(address: Int, length: Int): IntArray {
-        val data = IntArray(length)
-        for (i in 0 until length) {
-            data[i] = gameboy.addressSpace.getByte(address + i)
-        }
-        return data
-    }
-
-    fun writeMemory(address: Int, value: Int) {
-        gameboy.addressSpace.setByte(address, value)
-    }
-
-    fun isCpuHalted(): Boolean {
-        return gameboy.cpu.state == eu.rekawek.coffeegb.core.cpu.Cpu.State.HALTED
-    }
-
-    fun isCpuStopped(): Boolean {
-        return gameboy.cpu.state == eu.rekawek.coffeegb.core.cpu.Cpu.State.STOPPED
-    }
-
-    fun getCpuState(): String {
-        return gameboy.cpu.state.name
-    }
-
-    fun getCpuClockCycle(): Int {
-        // Use reflection since clockCycle is private
-        val field = gameboy.cpu.javaClass.getDeclaredField("clockCycle")
-        field.isAccessible = true
-        return field.get(gameboy.cpu) as Int
-    }
-
-    fun isImeEnabled(): Boolean {
-        val field = gameboy.javaClass.getDeclaredField("interruptManager")
-        field.isAccessible = true
-        val im = field.get(gameboy) as eu.rekawek.coffeegb.core.cpu.InterruptManager
-        return im.isIme
-    }
-
-    fun getIF(): Int {
-        val field = gameboy.javaClass.getDeclaredField("interruptManager")
-        field.isAccessible = true
-        val im = field.get(gameboy) as eu.rekawek.coffeegb.core.cpu.InterruptManager
-        return im.getByte(0xff0f)
-    }
-
-    fun getIE(): Int {
-        val field = gameboy.javaClass.getDeclaredField("interruptManager")
-        field.isAccessible = true
-        val im = field.get(gameboy) as eu.rekawek.coffeegb.core.cpu.InterruptManager
-        return im.getByte(0xffff)
-    }
+  private companion object {
+    const val DISPLAY_WIDTH = 160
+    const val DISPLAY_HEIGHT = 144
+    const val MAX_INSTRUCTION_BYTES = 3
+  }
 }

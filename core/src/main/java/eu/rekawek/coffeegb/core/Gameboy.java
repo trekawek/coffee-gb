@@ -6,6 +6,19 @@ import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.debug.Console;
+import eu.rekawek.coffeegb.core.debug.DebugApuState;
+import eu.rekawek.coffeegb.core.debug.DebugCpuState;
+import eu.rekawek.coffeegb.core.debug.DebugExecutionState;
+import eu.rekawek.coffeegb.core.debug.DebugFeatureState;
+import eu.rekawek.coffeegb.core.debug.DebugInterruptState;
+import eu.rekawek.coffeegb.core.debug.DebugMapperState;
+import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock;
+import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest;
+import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
+import eu.rekawek.coffeegb.core.debug.DebugPpuState;
+import eu.rekawek.coffeegb.core.debug.DebugRegisters;
+import eu.rekawek.coffeegb.core.debug.DebugSnapshot;
+import eu.rekawek.coffeegb.core.debug.DebugTimerState;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.genie.Genie;
@@ -137,8 +150,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private final SgbDisplay sgbDisplay;
 
     private final Genie gameGenie;
-
-    private transient Console console;
 
     private transient volatile boolean doStop;
 
@@ -469,8 +480,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint,
                      InfraredEndpoint infraredEndpoint, Console console) {
-        attachConsole(console);
-
         joypad.init(eventBus);
         display.init(eventBus);
         sound.init(eventBus);
@@ -491,19 +500,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         eventBus.register(
                 e -> requestWarmReset(((eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent) e).nonCgbGame()),
                 eu.rekawek.coffeegb.core.memory.cart.type.SlMulticart.ResetEvent.class);
-    }
-
-    /**
-     * Attaches the optional debugger console after a staged session becomes the live owner.
-     *
-     * <p>Candidate sessions initialize with no console so a failed or not-yet-committed
-     * replacement cannot temporarily steal commands from the running machine.
-     */
-    public void attachConsole(Console console) {
-        this.console = console;
-        if (console != null) {
-            console.setGameboy(this);
-        }
     }
 
     /**
@@ -609,9 +605,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             } else if (requestedScreenRefresh && newMode == Mode.OamSearch) {
                 requestedScreenRefresh = false;
             }
-        }
-        if (console != null) {
-            console.tick();
         }
         return result;
     }
@@ -806,6 +799,142 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public Cpu getCpu() {
         return cpu;
+    }
+
+    /** Starts a debugger-local retirement sequence without changing emulated state. */
+    public void enableDebugRetirementTracking() {
+        cpu.enableDebugRetirementTracking();
+    }
+
+    /** Removes the optional retirement hook from the CPU hot path. */
+    public void disableDebugRetirementTracking() {
+        cpu.disableDebugRetirementTracking();
+    }
+
+    public long getDebugRetirementSequence() {
+        return cpu.getDebugRetirementSequence();
+    }
+
+    /**
+     * Captures a detached debugger view from scalar component state at the current completed-tick
+     * safe point. The caller owns the session/controller counters so that no debugger metadata is
+     * added to portable emulator state.
+     */
+    public DebugSnapshot captureDebugSnapshot(long sessionGeneration, long sequence,
+                                              long masterTick, long frame, int framePosition,
+                                              boolean debugPaused) {
+        var registers = cpu.getRegisters();
+        DebugRegisters debugRegisters = new DebugRegisters(
+                registers.getA(), registers.getFlags().getFlagsByte(),
+                registers.getB(), registers.getC(), registers.getD(), registers.getE(),
+                registers.getH(), registers.getL(), registers.getSP(), registers.getPC());
+
+        int interruptFlags = interruptManager.getDebugInterruptFlags();
+        int interruptEnableFlags = interruptManager.getDebugInterruptEnableFlags();
+        DebugInterruptState debugInterrupts = new DebugInterruptState(
+                interruptManager.isIme(), interruptManager.isInterruptEnablePending(),
+                interruptFlags, interruptEnableFlags,
+                interruptManager.getDebugPendingInterruptFlags());
+
+        DebugTimerState debugTimer = new DebugTimerState(
+                timer.getDivCounter(), timer.getDebugTima(), timer.getDebugTma(),
+                timer.getDebugTac(), timer.isDebugOverflowPending(),
+                timer.getDebugOverflowDelayTicks());
+
+        var gpuRegisters = gpu.getRegisters();
+        DebugPpuState debugPpu = new DebugPpuState(
+                gpu.isLcdEnabled(), toDebugPpuMode(), gpu.getLine(),
+                Math.max(0, gpu.getTicksInLine()), gpu.getLcdc().get(),
+                statRegister.getByte(0xff41),
+                gpuRegisters.get(GpuRegister.SCY), gpuRegisters.get(GpuRegister.SCX),
+                gpuRegisters.get(GpuRegister.LYC), gpuRegisters.get(GpuRegister.WY),
+                gpuRegisters.get(GpuRegister.WX));
+
+        int nr50 = sound.getByte(0xff24);
+        int nr51 = sound.getByte(0xff25);
+        int nr52 = sound.getByte(0xff26);
+        DebugApuState debugApu = new DebugApuState(
+                (nr52 & 0x80) != 0, -1,
+                (nr52 & 0x01) != 0, (nr52 & 0x02) != 0,
+                (nr52 & 0x04) != 0, (nr52 & 0x08) != 0,
+                nr50, nr51, nr52);
+
+        String mapperId = cartridge.getMemoryController().getClass().getSimpleName();
+        if (mapperId.isEmpty()) {
+            mapperId = cartridge.getMemoryController().getClass().getName();
+        }
+        DebugMapperState debugMapper = new DebugMapperState(
+                mapperId, -1, -1, DebugFeatureState.UNKNOWN,
+                DebugFeatureState.UNKNOWN, DebugFeatureState.UNKNOWN);
+
+        DebugExecutionState debugExecution = new DebugExecutionState(
+                toDebugCpuState(cpu.getState()), cpu.getDebugOpcode(),
+                cpu.getDebugExtendedOpcode(), cpu.getDebugMachineCycle(),
+                speedMode.getSpeedMode() == 2, cpu.isDebugHaltBugActive(),
+                cpu.getDebugRetirementSequence());
+
+        return new DebugSnapshot(sessionGeneration, sequence, masterTick, frame, framePosition,
+                debugPaused, debugRegisters, debugInterrupts, debugTimer, debugPpu, debugApu,
+                debugMapper, debugExecution);
+    }
+
+    /** Reads only side-effect-free physical ROM or MMU-owned RAM views. */
+    public DebugMemoryBlock readDebugMemory(DebugMemoryRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("Debug memory request must not be null");
+        }
+        int address = request.address();
+        int end = request.endExclusive();
+        switch (request.addressSpace()) {
+            case SYSTEM_BUS:
+                break;
+            case ROM:
+                return new DebugMemoryBlock(request.addressSpace(), address,
+                        cartridge.readDebugRom(address, request.length()));
+            case WORK_RAM:
+                if (address < 0xc000 || end > 0xfe00) {
+                    throw new IllegalArgumentException("WORK_RAM range must be within C000-FDFF");
+                }
+                break;
+            case HIGH_RAM:
+                if (address < 0xff80 || end > 0xffff) {
+                    throw new IllegalArgumentException("HIGH_RAM range must be within FF80-FFFE");
+                }
+                break;
+            default:
+                throw new UnsupportedOperationException(
+                        "Debug address space is not side-effect-free: " + request.addressSpace());
+        }
+        return new DebugMemoryBlock(request.addressSpace(), address,
+                mmu.readDebugMemory(address, request.length()));
+    }
+
+    private DebugPpuMode toDebugPpuMode() {
+        if (!gpu.isLcdEnabled()) {
+            return DebugPpuMode.DISABLED;
+        }
+        return switch (gpu.getMode()) {
+            case HBlank -> DebugPpuMode.HBLANK;
+            case VBlank -> DebugPpuMode.VBLANK;
+            case OamSearch -> DebugPpuMode.OAM_SEARCH;
+            case PixelTransfer -> DebugPpuMode.PIXEL_TRANSFER;
+        };
+    }
+
+    private static DebugCpuState toDebugCpuState(Cpu.State state) {
+        return switch (state) {
+            case OPCODE -> DebugCpuState.OPCODE_FETCH;
+            case EXT_OPCODE -> DebugCpuState.EXTENDED_OPCODE_FETCH;
+            case OPERAND -> DebugCpuState.OPERAND_FETCH;
+            case RUNNING -> DebugCpuState.EXECUTING;
+            case IRQ_WAIT_1, IRQ_WAIT_2 -> DebugCpuState.INTERRUPT_WAIT;
+            case IRQ_PUSH_1, IRQ_PUSH_2 -> DebugCpuState.INTERRUPT_PUSH;
+            case IRQ_JUMP -> DebugCpuState.INTERRUPT_JUMP;
+            case STOPPED -> DebugCpuState.STOPPED;
+            case HALTED -> DebugCpuState.HALTED;
+            case SPEED_SWITCH -> DebugCpuState.SPEED_SWITCH;
+            case LOCKED -> DebugCpuState.LOCKED;
+        };
     }
 
     Hdma getHdma() {

@@ -339,8 +339,12 @@ mvn test -f core/pom.xml -Ptest-gambatte-hw \
 Since 2026, Coffee GB has used AI coding agents as compatibility research tools.
 A purpose-built [`controller.Agent`](controller/src/main/java/eu/rekawek/coffeegb/controller/Agent.kt)
 API lets an agent run a ROM headlessly under scripted control, inject input,
-capture frames and audio, inspect registers and memory, and disassemble
-execution without driving the desktop UI.
+capture frames and audio, and inspect immutable debugger snapshots without
+driving the desktop UI. Each Agent owns a bounded command queue and one named
+emulation thread; callers use `Agent(...).use { }` (or `close()`) and can access
+its platform-neutral `DebugPort` directly. Memory inspection is deliberately
+limited to side-effect-free views, and the adapter exposes no live emulator
+objects or memory-write backdoor.
 
 The working loop is deliberately evidence-based:
 

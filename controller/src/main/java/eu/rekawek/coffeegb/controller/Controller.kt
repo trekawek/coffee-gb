@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileIdentity
@@ -159,6 +160,13 @@ interface Controller : AutoCloseable {
   data class SessionPauseSupportEvent(val enabled: Boolean) : Event
 
   data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event
+
+  /**
+   * Publishes the immutable command port for the committed session generation. Single-player
+   * sessions expose functional capabilities; linked sessions expose a typed unavailable port.
+   * A null port revokes the matching generation during replacement or stop.
+   */
+  data class SessionDebugPortEvent(val generation: Long, val debugPort: DebugPort?) : Event
 
   class UpdatedSystemMappingEvent : Event
 

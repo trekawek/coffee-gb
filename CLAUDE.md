@@ -201,14 +201,20 @@ change one without re-running the full battery.**
 
 `eu.rekawek.coffeegb.controller.Agent` provides automated debugging of ROMs:
 
-- Execution: `tick()` (one M-cycle), `step()` (one instruction),
+- Lifecycle: construct it with `Agent(rom).use { agent -> ... }`; one named owner
+  thread performs all emulation work and `close()` releases it.
+- Execution: `tick()` (one master tick), `step()` (one retired instruction),
   `runUntilFrame(maxTicks)`, `runTicks(n)`.
-- State: `getRegisters()`, `getByte(addr)` / `getMemory(addr, len)`,
-  `writeMemory(addr, value)`, `getRomBank()`, `getCpuState()`,
-  `isImeEnabled()` / `getIF()` / `getIE()`.
+- State: `snapshot()` and `getRegisters()` return immutable debug DTOs;
+  `readMemory(request)` plus the `getByte` / `getMemory` adapters accept only
+  side-effect-free parser-corrected ROM-image, work-RAM, echo-RAM, and high-RAM
+  views. The ROM view is not the mapper's live CPU window; there is no
+  memory-write API.
 - Media/input: `getFrame()` (BufferedImage), `getAudio()`,
   `pressButton(b)` / `releaseButton(b)`.
-- Debugging: `disassemble(address)`.
+- Debugging: `debugPort` exposes typed asynchronous pause/resume/step/snapshot
+  operations. `disassemble(address)` is a labelled best-effort view and works
+  only for memory readable through that safe port.
 
 Run Kotlin test scripts in `controller/src/test/java` via
 `mvn exec:java -pl controller -Dexec.mainClass=... -Dexec.classpathScope=test`,
