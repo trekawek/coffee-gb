@@ -12,7 +12,9 @@ import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -88,6 +90,82 @@ public class DebugApiModelTest {
     }
 
     @Test
+    public void inspectionRequestsAreBoundedImmutableAndResolveTheirOwnSnapshotAnchors() {
+        DebugAnchoredMemoryRequest code = new DebugAnchoredMemoryRequest(
+                DebugInspectionAnchor.PROGRAM_COUNTER, 0, 3);
+        DebugAnchoredMemoryRequest stack = new DebugAnchoredMemoryRequest(
+                DebugInspectionAnchor.STACK_POINTER, -2, 2);
+        DebugMemoryRequest memory = new DebugMemoryRequest(
+                DebugAddressSpace.WORK_RAM, 0xc000, 4);
+        List<DebugAnchoredMemoryRequest> anchors = new ArrayList<>(List.of(code, stack));
+        List<DebugMemoryRequest> ranges = new ArrayList<>(List.of(memory));
+        DebugInspectionRequest request = new DebugInspectionRequest(anchors, ranges);
+        anchors.clear();
+        ranges.clear();
+
+        assertEquals(3, request.blockCount());
+        assertEquals(9, request.totalBytes());
+        assertEquals(new DebugMemoryRequest(DebugAddressSpace.ROM, 0x100, 3),
+                code.resolve(snapshot(true)));
+        assertEquals(new DebugMemoryRequest(DebugAddressSpace.SYSTEM_BUS, 0xfffc, 2),
+                stack.resolve(snapshot(true)));
+        assertEquals(2, request.anchoredRequests().size());
+        assertEquals(1, request.memoryRequests().size());
+        assertThrows(UnsupportedOperationException.class,
+                () -> request.memoryRequests().clear());
+
+        assertThrows(IllegalArgumentException.class, () ->
+                new DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER, 0, 0));
+        assertThrows(IllegalArgumentException.class, () ->
+                new DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER,
+                        0x7eff, 2).resolve(snapshot(true)));
+        assertThrows(IllegalArgumentException.class, () ->
+                new DebugAnchoredMemoryRequest(DebugInspectionAnchor.STACK_POINTER,
+                        2, 1).resolve(snapshot(true)));
+        assertThrows(IllegalArgumentException.class, () ->
+                new DebugInspectionRequest(List.of(), List.of(
+                        new DebugMemoryRequest(DebugAddressSpace.ROM, 0, 4096),
+                        new DebugMemoryRequest(DebugAddressSpace.ROM, 4096, 1))));
+        assertThrows(IllegalArgumentException.class, () ->
+                new DebugInspectionRequest(
+                        java.util.Collections.nCopies(17, code), List.of()));
+    }
+
+    @Test
+    public void inspectionResultPinsRequestOrderAndSnapshotIdentity() {
+        DebugSnapshot snapshot = snapshot(true);
+        DebugAnchoredMemoryRequest code = new DebugAnchoredMemoryRequest(
+                DebugInspectionAnchor.PROGRAM_COUNTER, 0, 2);
+        DebugMemoryRequest memory = new DebugMemoryRequest(
+                DebugAddressSpace.SYSTEM_BUS, 0xc000, 1);
+        DebugInspectionRequest request = new DebugInspectionRequest(
+                List.of(code), List.of(memory));
+        DebugMemoryBlock codeBlock = new DebugMemoryBlock(
+                DebugAddressSpace.ROM, 0x100, new byte[]{0x3e, 0x12});
+        DebugMemoryBlock memoryBlock = new DebugMemoryBlock(
+                DebugAddressSpace.SYSTEM_BUS, 0xc000, new byte[]{0x34});
+        List<DebugMemoryBlock> anchoredBlocks = new ArrayList<>(List.of(codeBlock));
+        List<DebugMemoryBlock> memoryBlocks = new ArrayList<>(List.of(memoryBlock));
+
+        DebugInspectionResult result = new DebugInspectionResult(
+                snapshot, request, anchoredBlocks, memoryBlocks);
+        anchoredBlocks.clear();
+        memoryBlocks.clear();
+
+        assertSame(snapshot, result.snapshot());
+        assertSame(request, result.request());
+        assertEquals(List.of(codeBlock), result.anchoredBlocks());
+        assertEquals(List.of(memoryBlock), result.memoryBlocks());
+        assertThrows(IllegalArgumentException.class, () -> new DebugInspectionResult(
+                snapshot, request, List.of(), List.of(memoryBlock)));
+        assertThrows(IllegalArgumentException.class, () -> new DebugInspectionResult(
+                snapshot, request,
+                List.of(new DebugMemoryBlock(
+                        DebugAddressSpace.ROM, 0x101, new byte[]{0x3e, 0x12})),
+                List.of(memoryBlock)));
+    }
+
+    @Test
     public void snapshotIsCoherentDetachedValueData() {
         DebugSnapshot snapshot = snapshot(true);
         assertEquals(7, snapshot.sessionGeneration());
@@ -149,6 +227,9 @@ public class DebugApiModelTest {
         assertFalse(capabilities.supports(DebugStepKind.MACHINE_CYCLE));
         assertTrue(capabilities.supports(DebugStepKind.FRAME));
         assertEquals(4096, capabilities.maxMemoryReadLength());
+        assertTrue(capabilities.coherentInspection());
+        assertEquals(DebugInspectionRequest.MAX_BLOCKS, capabilities.maxInspectionBlocks());
+        assertEquals(4096, capabilities.maxInspectionBytes());
         assertEquals(DebugHistoryCapabilities.disabled(), capabilities.history());
 
         assertThrows(IllegalArgumentException.class,

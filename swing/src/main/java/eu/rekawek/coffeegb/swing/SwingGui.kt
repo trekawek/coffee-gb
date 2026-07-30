@@ -88,6 +88,8 @@ class SwingGui private constructor(
 
   private lateinit var stateUxController: StateUxDesktopController
 
+  private lateinit var debuggerController: DesktopDebuggerController
+
   private lateinit var menu: SwingMenu
 
   private val desktopQuit = DesktopQuitBridge()
@@ -111,6 +113,7 @@ class SwingGui private constructor(
           // persistence failure or watchdog timeout retains a quiesced (not closed) ROM service.
           menu.closeCameraAfterSuccessfulStop(CAMERA_SHUTDOWN_BUDGET_MILLIS)
           romOpen.close()
+          runDesktopEdtStep(debuggerController::close)
           runDesktopEdtStep(stateUxController::close)
           console?.stop()
           closeDesktopSettingsRecoverably(
@@ -179,6 +182,12 @@ class SwingGui private constructor(
             eventBus,
             emulator::captureDisplayImage,
         )
+    debuggerController =
+        DesktopDebuggerController(
+            mainWindow,
+            eventBus,
+            DesktopDebuggerViewFactory { owner -> DebuggerWindow(owner) },
+        )
 
     romOpen =
         DesktopRomOpen(
@@ -207,6 +216,7 @@ class SwingGui private constructor(
             )
           },
           romOpen::close,
+          { runDesktopEdtStep(debuggerController::close) },
           { runDesktopEdtStep(windowSizeController::close) },
           properties::close,
           mobileAdapterConfiguration::close,
@@ -222,6 +232,7 @@ class SwingGui private constructor(
             romOpen::open,
             ::acceptRomLifecycle,
             ::showPreferences,
+            debuggerController::showDebugger,
             stateUxController::saveSlot,
             stateUxController::loadSlot,
             stateUxController::showBrowser,

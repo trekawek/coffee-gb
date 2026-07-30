@@ -11,6 +11,8 @@ import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugInstrumentation
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
+import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
@@ -348,6 +350,11 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     fun readMemory(request: DebugMemoryRequest): DebugMemoryBlock =
         machine.readDebugMemory(request)
 
+    fun inspect(
+        snapshot: DebugSnapshot,
+        request: DebugInspectionRequest,
+    ): DebugInspectionResult = machine.inspectDebugMemory(snapshot, request)
+
     fun setButton(button: DebugButton, pressed: Boolean) {
       val coreButton = Button.valueOf(button.name)
       eventBus.post(if (pressed) ButtonPressEvent(coreButton) else ButtonReleaseEvent(coreButton))
@@ -518,6 +525,43 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
 
     override fun snapshot(): CompletionStage<DebugResult<DebugSnapshot>> =
         enqueueDebug { state -> DebugResult.success(state.snapshot()) }
+
+    override fun inspect(
+        request: DebugInspectionRequest?
+    ): CompletionStage<DebugResult<DebugInspectionResult>> =
+        if (request == null) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.INVALID_ARGUMENT,
+                  "Inspection request is required",
+              ))
+        } else if (
+            request.blockCount() > capabilities.maxInspectionBlocks() ||
+                request.totalBytes() > capabilities.maxInspectionBytes()
+        ) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.INVALID_ARGUMENT,
+                  "Inspection request exceeds the negotiated limits",
+              ))
+        } else {
+          enqueueDebug { state ->
+            try {
+              val snapshot = state.snapshot()
+              DebugResult.success(state.inspect(snapshot, request))
+            } catch (failure: UnsupportedOperationException) {
+              DebugResult.failure(
+                  DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+                  failure.message ?: "Unsupported debug address space",
+              )
+            } catch (failure: IllegalArgumentException) {
+              DebugResult.failure(
+                  DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
+                  failure.message ?: "Invalid debug inspection request",
+              )
+            }
+          }
+        }
 
     override fun step(kind: DebugStepKind?): CompletionStage<DebugResult<DebugStepResult>> =
         if (kind == null) {

@@ -9,8 +9,13 @@ import eu.rekawek.coffeegb.core.debug.DebugCpuState
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugExecutionState
 import eu.rekawek.coffeegb.core.debug.DebugFeatureState
+import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
+import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugInterruptState
 import eu.rekawek.coffeegb.core.debug.DebugMapperState
+import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPpuMode
 import eu.rekawek.coffeegb.core.debug.DebugPpuState
@@ -51,6 +56,62 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class QueuedDebugPortTest {
+  @Test
+  fun `inspection validates negotiated bounds and preserves its typed FIFO envelope`() {
+    val request =
+        DebugInspectionRequest(
+            listOf(
+                DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER, 0, 3),
+                DebugAnchoredMemoryRequest(DebugInspectionAnchor.STACK_POINTER, -2, 2),
+            ),
+            listOf(DebugMemoryRequest(DebugAddressSpace.WORK_RAM, 0xc000, 1)),
+        )
+    val unavailable =
+        QueuedDebugPort(
+            1,
+            DebugCapabilities(true, true, true, true, true, false, true, 0),
+            1,
+        )
+    val bounded = QueuedDebugPort(2, capabilities(maxMemoryReadLength = 4), 1)
+    val port = QueuedDebugPort(17, capabilities(), 1)
+    try {
+      assertFailure(port.inspect(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(
+          unavailable.inspect(DebugInspectionRequest(emptyList(), emptyList())),
+          DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+      )
+      assertFailure(bounded.inspect(request), DebugErrorCode.INVALID_ARGUMENT)
+      assertEquals(0, port.outstandingRequestCount())
+
+      val stage = port.inspect(request)
+      val command = assertIs<QueuedDebugCommand.Inspect>(port.pollCommand())
+      assertEquals(1, command.requestId)
+      assertEquals(17, command.sessionGeneration)
+      assertEquals(request, command.request)
+
+      val snapshot = snapshot(masterTick = 42, frame = 3)
+      val result =
+          DebugInspectionResult(
+              snapshot,
+              request,
+              listOf(
+                  DebugMemoryBlock(DebugAddressSpace.ROM, 0x100, byteArrayOf(0x3e, 0x12, 0)),
+                  DebugMemoryBlock(DebugAddressSpace.SYSTEM_BUS, 0xfffc, byteArrayOf(1, 2)),
+              ),
+              listOf(DebugMemoryBlock(DebugAddressSpace.WORK_RAM, 0xc000, byteArrayOf(3))),
+          )
+      assertTrue(command.complete(DebugResult.success(result)))
+      assertEquals(result, await(stage).value())
+    } finally {
+      unavailable.close()
+      bounded.close()
+      port.close()
+      assertTrue(unavailable.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+      assertTrue(bounded.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+      assertTrue(port.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+    }
+  }
+
   @Test
   fun `history commands validate before admission and preserve FIFO typed completion`() {
     val port = QueuedDebugPort(17, advancedCapabilities(), 3)

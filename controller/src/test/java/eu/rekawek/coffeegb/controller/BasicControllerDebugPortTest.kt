@@ -18,9 +18,12 @@ import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
 import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
@@ -683,7 +686,61 @@ class BasicControllerDebugPortTest {
   @Test
   fun memoryInspectionAcceptsOnlyExplicitSideEffectFreeRanges() {
     withController { _, port, _, _, _ ->
-      assertTrue(await(port.pause()).isSuccess)
+      val paused = await(port.pause()).value()
+      assertTrue(port.capabilities().coherentInspection())
+      assertEquals(16, port.capabilities().maxInspectionBlocks())
+      assertEquals(4096, port.capabilities().maxInspectionBytes())
+
+      val coherentRequest =
+          DebugInspectionRequest(
+              listOf(
+                  DebugAnchoredMemoryRequest(
+                      DebugInspectionAnchor.PROGRAM_COUNTER,
+                      0,
+                      3,
+                  ),
+                  DebugAnchoredMemoryRequest(
+                      DebugInspectionAnchor.STACK_POINTER,
+                      -2,
+                      2,
+                  ),
+              ),
+              listOf(DebugMemoryRequest(DebugAddressSpace.HIGH_RAM, 0xff80, 4)),
+          )
+      val inspected = await(port.inspect(coherentRequest))
+      assertTrue(inspected.isSuccess)
+      val inspection = inspected.value()
+      assertEquals(coherentRequest, inspection.request())
+      assertEquals(paused.masterTick(), inspection.snapshot().masterTick())
+      assertEquals(paused.frame(), inspection.snapshot().frame())
+      assertEquals(paused.framePosition(), inspection.snapshot().framePosition())
+      assertEquals(paused.registers(), inspection.snapshot().registers())
+      assertEquals(
+          inspection.snapshot().registers().pc(),
+          inspection.anchoredBlocks()[0].startAddress(),
+      )
+      assertEquals(DebugAddressSpace.ROM, inspection.anchoredBlocks()[0].addressSpace())
+      assertEquals(
+          inspection.snapshot().registers().sp() - 2,
+          inspection.anchoredBlocks()[1].startAddress(),
+      )
+      assertEquals(4, inspection.memoryBlocks().single().length())
+
+      val unsafePcOffset = 0x8000 - inspection.snapshot().registers().pc()
+      val unsafeInspection =
+          await(
+              port.inspect(
+                  DebugInspectionRequest(
+                      listOf(
+                          DebugAnchoredMemoryRequest(
+                              DebugInspectionAnchor.PROGRAM_COUNTER,
+                              unsafePcOffset,
+                              1,
+                          )),
+                      listOf(DebugMemoryRequest(DebugAddressSpace.HIGH_RAM, 0xff80, 1)),
+                  )))
+      assertTrue(unsafeInspection.isFailure)
+      assertEquals(DebugErrorCode.SIDE_EFFECTFUL_ADDRESS, unsafeInspection.error().code())
 
       val hram =
           await(

@@ -271,6 +271,12 @@ public class ConsoleTest {
         }
 
         @Override
+        public CompletionStage<DebugResult<DebugInspectionResult>> inspect(
+                DebugInspectionRequest request) {
+            return unsupported();
+        }
+
+        @Override
         public CompletionStage<DebugResult<DebugStepResult>> step(DebugStepKind kind) {
             stepCalls++;
             lastStepKind = kind;

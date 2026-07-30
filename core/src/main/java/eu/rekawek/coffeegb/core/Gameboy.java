@@ -12,6 +12,8 @@ import eu.rekawek.coffeegb.core.debug.DebugExecutionState;
 import eu.rekawek.coffeegb.core.debug.DebugFeatureState;
 import eu.rekawek.coffeegb.core.debug.DebugInterruptState;
 import eu.rekawek.coffeegb.core.debug.DebugInstrumentation;
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest;
+import eu.rekawek.coffeegb.core.debug.DebugInspectionResult;
 import eu.rekawek.coffeegb.core.debug.DebugMapperState;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest;
@@ -61,6 +63,8 @@ import eu.rekawek.coffeegb.core.timer.Timer;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
@@ -997,6 +1001,22 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         return new DebugMemoryBlock(request.addressSpace(), address,
                 mmu.readDebugMemory(address, request.length()));
+    }
+
+    /** Copies every requested block against one already-captured coherent snapshot. */
+    public DebugInspectionResult inspectDebugMemory(
+            DebugSnapshot snapshot, DebugInspectionRequest request) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        Objects.requireNonNull(request, "request");
+        var anchoredBlocks = new ArrayList<DebugMemoryBlock>(request.anchoredRequests().size());
+        for (var anchoredRequest : request.anchoredRequests()) {
+            anchoredBlocks.add(readDebugMemory(anchoredRequest.resolve(snapshot)));
+        }
+        var memoryBlocks = new ArrayList<DebugMemoryBlock>(request.memoryRequests().size());
+        for (var memoryRequest : request.memoryRequests()) {
+            memoryBlocks.add(readDebugMemory(memoryRequest));
+        }
+        return new DebugInspectionResult(snapshot, request, anchoredBlocks, memoryBlocks);
     }
 
     private DebugPpuMode toDebugPpuMode() {

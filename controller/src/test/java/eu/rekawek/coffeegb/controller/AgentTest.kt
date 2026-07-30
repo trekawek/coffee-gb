@@ -1,7 +1,10 @@
 package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugRegisters
 import eu.rekawek.coffeegb.core.debug.DebugResult
@@ -37,6 +40,36 @@ import org.junit.rules.TemporaryFolder
 class AgentTest {
 
   @get:Rule val temporaryFolder = TemporaryFolder()
+
+  @Test
+  fun headlessInspectionBindsPcStackAndMemoryToOneSnapshot() {
+    Agent(testRom(0x3e, 0x7b, 0x00)).use { agent ->
+      val request =
+          DebugInspectionRequest(
+              listOf(
+                  DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER, 0, 3),
+                  DebugAnchoredMemoryRequest(DebugInspectionAnchor.STACK_POINTER, -2, 2),
+              ),
+              listOf(DebugMemoryRequest(DebugAddressSpace.HIGH_RAM, 0xff80, 1)),
+          )
+
+      val result = awaitDebug(agent.debugPort.inspect(request))
+
+      assertTrue(result.isSuccess, result.toString())
+      val inspection = result.value()
+      assertEquals(
+          inspection.snapshot().registers().pc(),
+          inspection.anchoredBlocks()[0].startAddress(),
+      )
+      assertEquals(0x3e, inspection.anchoredBlocks()[0].unsignedByteAt(0))
+      assertEquals(0x7b, inspection.anchoredBlocks()[0].unsignedByteAt(1))
+      assertEquals(
+          inspection.snapshot().registers().sp() - 2,
+          inspection.anchoredBlocks()[1].startAddress(),
+      )
+      assertEquals(request, inspection.request())
+    }
+  }
 
   @Test
   fun headlessBreakpointAutomaticallyPausesWithoutAnExtraTickAndRetainsTrace() {

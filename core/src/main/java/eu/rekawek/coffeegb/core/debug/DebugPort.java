@@ -29,6 +29,8 @@ public interface DebugPort extends AutoCloseable {
 
     CompletionStage<DebugResult<DebugSnapshot>> snapshot();
 
+    CompletionStage<DebugResult<DebugInspectionResult>> inspect(DebugInspectionRequest request);
+
     CompletionStage<DebugResult<DebugStepResult>> step(DebugStepKind kind);
 
     /** Reconfigures and clears the bounded reverse-history timeline. */

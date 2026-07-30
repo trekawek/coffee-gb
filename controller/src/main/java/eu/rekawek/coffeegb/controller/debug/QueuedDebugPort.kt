@@ -6,6 +6,8 @@ import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugError
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
+import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPort
@@ -95,6 +97,36 @@ internal class QueuedDebugPort(
         )
     return submit(validation) { requestId, completion ->
       QueuedDebugCommand.Snapshot(requestId, generation, completion)
+    }
+  }
+
+  override fun inspect(
+      request: DebugInspectionRequest?
+  ): CompletionStage<DebugResult<DebugInspectionResult>> {
+    val validation =
+        when {
+          request == null ->
+              DebugError(DebugErrorCode.INVALID_ARGUMENT, "Inspection request is required")
+          !debugCapabilities.coherentInspection() ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+                  "Coherent inspection is unavailable for this session",
+              )
+          request.blockCount() > debugCapabilities.maxInspectionBlocks() ||
+              request.totalBytes() > debugCapabilities.maxInspectionBytes() ->
+              DebugError(
+                  DebugErrorCode.INVALID_ARGUMENT,
+                  "Inspection request exceeds the negotiated limits",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.Inspect(
+          requestId,
+          generation,
+          requireNotNull(request),
+          completion,
+      )
     }
   }
 
@@ -602,6 +634,13 @@ internal sealed class QueuedDebugCommand<T> protected constructor(
       sessionGeneration: Long,
       completion: (DebugResult<DebugSnapshot>) -> Boolean,
   ) : QueuedDebugCommand<DebugSnapshot>(requestId, sessionGeneration, completion)
+
+  class Inspect internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val request: DebugInspectionRequest,
+      completion: (DebugResult<DebugInspectionResult>) -> Boolean,
+  ) : QueuedDebugCommand<DebugInspectionResult>(requestId, sessionGeneration, completion)
 
   class Step internal constructor(
       requestId: Long,

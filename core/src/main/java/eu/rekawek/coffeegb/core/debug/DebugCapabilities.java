@@ -117,6 +117,20 @@ public record DebugCapabilities(
         };
     }
 
+    /** Coherent inspection is available when both snapshots and pure memory copies are available. */
+    public boolean coherentInspection() {
+        return snapshot && memoryRead;
+    }
+
+    public int maxInspectionBlocks() {
+        return coherentInspection() ? DebugInspectionRequest.MAX_BLOCKS : 0;
+    }
+
+    public int maxInspectionBytes() {
+        return coherentInspection()
+                ? Math.min(maxMemoryReadLength, DebugInspectionRequest.MAX_TOTAL_BYTES) : 0;
+    }
+
     public boolean breakpoints() {
         return !breakpointKinds.isEmpty();
     }
