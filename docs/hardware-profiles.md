@@ -176,6 +176,8 @@ Coffee GB rejects MGB and both SGB-family linked loads before constructing a ses
 state. A received coarse DMG remains canonical DMG. The #315 `CGBR` v1 replay identity separately
 carries the exact canonical ID and both reduced clock rationals; see
 [replay-format-v1.md](replay-format-v1.md).
+Headless `run`/`replay` profile and bootstrap selection is documented in
+[headless-cli.md](headless-cli.md); replay defaults to the recording's exact canonical identity.
 
 ## Extension contract
 

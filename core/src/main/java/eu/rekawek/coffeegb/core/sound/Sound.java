@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.timer.Timer;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
@@ -78,6 +79,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     /** Owner-thread observation only; deliberately absent from portable machine state. */
     private transient DebugHooks debugHooks;
+
+    /** Optional exact-output tap; disabled hot-path cost is one predictable null branch. */
+    private transient SoundOutputObserver outputObserver;
 
     public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc) {
         this(timer, speedMode, gbc, ClockSpec.LEGACY);
@@ -196,7 +200,12 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         frameSequencerClockPhase = (frameSequencerClockPhase + 1) & 3;
     }
 
-    private void play(int left, int right) {
+    /** Package-private so the disabled exact-output hot path can be allocation-regression tested. */
+    void play(int left, int right) {
+        SoundOutputObserver observer = outputObserver;
+        if (observer != null) {
+            observer.onSample(left, right);
+        }
         buffer[i] = left;
         buffer[i + 1] = right;
         i += 2;
@@ -299,6 +308,30 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     /** Installs an optional owner-thread observer without emitting an alignment event. */
     public void setDebugHooks(DebugHooks debugHooks) {
         this.debugHooks = debugHooks;
+    }
+
+    /**
+     * Exclusively attaches an exact-output observer at an owner-thread safe point.
+     *
+     * @return {@code false} when another observer already owns the transient tap
+     */
+    public boolean attachOutputObserver(SoundOutputObserver observer) {
+        Objects.requireNonNull(observer, "observer");
+        if (outputObserver != null) {
+            return false;
+        }
+        outputObserver = observer;
+        return true;
+    }
+
+    /** Detaches only the observer that currently owns the transient tap. */
+    public boolean detachOutputObserver(SoundOutputObserver observer) {
+        Objects.requireNonNull(observer, "observer");
+        if (outputObserver != observer) {
+            return false;
+        }
+        outputObserver = null;
+        return true;
     }
 
     private void notifyDebugRegisterWrite(int channel, int address, int value) {

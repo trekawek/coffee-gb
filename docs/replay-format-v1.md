@@ -6,6 +6,8 @@ Coffee GB replay files use the bounded `CGBR` format implemented by
 `controller.replay.ReplayCodec`. Version 1 records one standalone `Session`; linked topology and
 host-backed peripherals are deliberately outside its contract. A replay contains identity and
 input data, not a ROM. Playback therefore requires the caller to supply the matching ROM bytes.
+The supported bounded command-line playback surface, exit codes, and optional CGBI input-script
+format are documented in [headless-cli.md](headless-cli.md).
 
 `ReplayRecorder` and `ReplayPlayer` are owner-thread APIs. A session and its input-timeline observer
 have at most one recorder owner. From a successful `ReplayRecorder.start()` until finish, close, or

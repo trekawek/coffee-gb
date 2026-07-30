@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.replay
 
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.headless.HeadlessMachineSession
 import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.joypad.JoypadButtonMask
@@ -69,51 +70,37 @@ sealed interface ReplayPlaybackStatus {
  */
 class ReplayPlayer private constructor(
     private val replay: ReplayFile,
-    private val session: Session,
+    internal val machine: HeadlessMachineSession,
     private val inputSource: ReplayInputSource,
 ) : AutoCloseable {
   private val ownerThread = Thread.currentThread()
-  private val frameTicks = session.gameboy.clockSpec.controllerTicksPerFrame()
   private val finalCheckpoint = replay.checkpoints.last()
 
   private var nextInputIndex = 0
   private var nextCheckpointIndex = 0
-  private var nextTick = replay.initialConditions.initialTick
-  private var currentFrame = replay.initialConditions.initialFrame
-  private var ticksIntoFrame = 0
-  private var legacyMask = JoypadButtonMask.fromButtons(session.heldButtons)
+  private var legacyMask = JoypadButtonMask.fromButtons(machine.session.heldButtons)
   private var terminal: ReplayPlaybackStatus? = null
   private var closed = false
 
   val position: ReplayPosition
-    get() =
-        ReplayPosition(
-            tick = if (nextTick == replay.initialConditions.initialTick) null else nextTick - 1L,
-            frame = currentFrame,
-        )
+    get() = machine.replayPosition
 
   /** Executes at most one replay tick and stops immediately after the first divergent checkpoint. */
   fun step(): ReplayPlaybackStatus {
     checkOwnerAndOpen()
     terminal?.let { return it }
+    val nextTick = machine.nextReplayTick
     if (nextTick > finalCheckpoint.tick) {
       return complete()
     }
 
     applyInputs(nextTick)
-    session.gameboy.tick()
-    val executedTick = nextTick
-    nextTick = Math.addExact(nextTick, 1L)
-    ticksIntoFrame++
-    if (ticksIntoFrame == frameTicks) {
-      ticksIntoFrame = 0
-      currentFrame = Math.addExact(currentFrame, 1L)
-    }
+    val executedTick = machine.tick()
 
     while (nextCheckpointIndex < replay.checkpoints.size &&
         replay.checkpoints[nextCheckpointIndex].tick == executedTick) {
       val expected = replay.checkpoints[nextCheckpointIndex++]
-      val actual = ReplayStateHasher.hash(session)
+      val actual = machine.hashes()
       if (actual != expected.hashes) {
         val divergence =
             ReplayDivergence(
@@ -124,7 +111,7 @@ class ReplayPlayer private constructor(
                 mismatchedSubsystems(expected.hashes, actual),
             )
         return ReplayPlaybackStatus.Diverged(
-                ReplayPosition(executedTick, currentFrame),
+                machine.replayPosition,
                 divergence,
             )
             .also { terminal = it }
@@ -134,7 +121,7 @@ class ReplayPlayer private constructor(
     return if (executedTick == finalCheckpoint.tick) {
       complete()
     } else {
-      ReplayPlaybackStatus.Advanced(ReplayPosition(executedTick, currentFrame))
+      ReplayPlaybackStatus.Advanced(machine.replayPosition)
     }
   }
 
@@ -168,7 +155,7 @@ class ReplayPlayer private constructor(
   override fun close() {
     if (!closed) {
       checkOwner()
-      session.close()
+      machine.close()
       closed = true
     }
   }
@@ -180,7 +167,7 @@ class ReplayPlayer private constructor(
         ReplayInputPhase.LEGACY_P1_BEFORE_TICK -> {
           requireTransition(record, legacyMask)
           legacyMask = record.absoluteMask
-          session.heldButtons = JoypadButtonMask.toButtons(legacyMask)
+          machine.session.heldButtons = JoypadButtonMask.toButtons(legacyMask)
         }
         ReplayInputPhase.PHYSICAL_JOYPAD_SAMPLE -> {
           requireTransition(record, inputSource.mask(record.player))
@@ -264,7 +251,15 @@ class ReplayPlayer private constructor(
         if (embeddedState != null) {
           ReplayCompatibility.applyEmbeddedState(embeddedState, session)
         }
-        return ReplayPlayer(replay, session, inputSource)
+        return ReplayPlayer(
+            replay,
+            HeadlessMachineSession(
+                session,
+                replay.initialConditions.initialTick,
+                replay.initialConditions.initialFrame,
+            ),
+            inputSource,
+        )
       } catch (failure: Throwable) {
         try {
           session.close()
