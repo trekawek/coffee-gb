@@ -82,6 +82,11 @@ public class DebugApiContractTest {
             DebugHistoryPosition.class,
             DebugHistoryStatus.class,
             DebugHistoryTruncationReason.class,
+            DebugAnchoredMemoryRequest.class,
+            DebugDisassembler.class,
+            DebugInspectionAnchor.class,
+            DebugInspectionRequest.class,
+            DebugInspectionResult.class,
             DebugInterruptCondition.class,
             DebugInterruptState.class,
             DebugInterruptType.class,
@@ -142,6 +147,10 @@ public class DebugApiContractTest {
         assertReturnType("snapshot",
                 "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
                         + "<eu.rekawek.coffeegb.core.debug.DebugSnapshot>>");
+        assertReturnType("inspect",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugInspectionResult>>",
+                DebugInspectionRequest.class);
         assertReturnType("step",
                 "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
                         + "<eu.rekawek.coffeegb.core.debug.DebugStepResult>>",

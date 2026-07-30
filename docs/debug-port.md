@@ -3,11 +3,11 @@
 ## Scope
 
 This document pins the Phase 1 debugger foundation, the Phase 2 CPU breakpoint/trace contract, the
-Phase 3 peripheral event contract, and the Phase 5/6 bounded reverse-execution contract implemented
-by `DebugPort`. The API is platform-neutral and exposes immutable values only. It does not expose
-a mutable core component, an AWT/Swing type, a live array, or a reflection escape hatch. The model
-is still an internal Coffee GB API until a later change explicitly versions it for third-party
-use.
+Phase 3 peripheral event contract, the Phase 5/6 bounded reverse-execution contract, and the Phase
+7 coherent inspection seam implemented by `DebugPort`. The API is platform-neutral and exposes
+immutable values only. It does not expose a mutable core component, an AWT/Swing type, a live
+array, or a reflection escape hatch. The model is still an internal Coffee GB API until a later
+change explicitly versions it for third-party use.
 
 Phase 1 supplies pause/resume, coherent snapshots, negotiated stepping, bounded side-effect-free
 memory reads, and deterministic button input. Phase 2 adds negotiated breakpoints/watchpoints and
@@ -17,7 +17,8 @@ the debug-port-backed console described below. The separate Phase 4 deterministi
 and `CGBR` v1 contract are documented in [replay-format-v1.md](replay-format-v1.md). Phase 5 adds
 the explicitly enabled checkpoint ring and direct reverse-frame operation described below. Phase
 6 adds deterministic replay-forward reverse-instruction, a retained-future cursor, and explicit
-branch invalidation. A debugger UI remains a later phase.
+branch invalidation. Phase 7 binds PC/SP-relative and explicit memory copies to one snapshot for
+desktop debugger panes.
 
 ## Session publication and capabilities
 
@@ -39,6 +40,7 @@ The current implementations advertise:
 | machine-cycle step | no | yes | no |
 | frame step | yes | yes | no |
 | memory read | yes, at most 4096 bytes | yes, at most 4096 bytes | no |
+| coherent inspection | yes, 16 blocks / 4096 aggregate bytes | same | no |
 | button input | yes | yes | no |
 | breakpoints | yes, 7 kinds / at most 128 | yes, 7 kinds / at most 128 | no |
 | trace | all 10 `TraceCategory` values / at most 65,536 entries | same | no |
@@ -107,8 +109,9 @@ These counters reset for a new session generation and are deliberately absent fr
 rewind snapshots. Clients must not compare counters from different generations or merge component
 values from snapshots with different sequences.
 
-Submitting a plain memory read or snapshot while the machine is running is safe because the owner
-performs it between ticks. The returned value is immutable, but it may become stale immediately;
+Submitting a plain memory read, snapshot, or coherent inspection while the machine is running is
+safe because the owner performs it between ticks. The returned value is immutable, but it may
+become stale immediately;
 clients should label it with its generation/sequence rather than combining it with a later view.
 Mapper banks use `-1` and mapper feature flags use `DebugFeatureState.UNKNOWN` when the concrete
 mapper has no pure inspection seam; clients must not interpret an unknown value as disabled.
@@ -398,6 +401,23 @@ without changing the current configuration.
 
 Every read is a bounded copy. The current core exposes a parser-corrected loaded-ROM-image view and
 MMU-owned RAM without invoking mapper logic or the ordinary CPU-bus read path:
+
+`inspect(request)` combines one snapshot with ordered memory copies at the same safe point. An
+inspection may contain up to 16 blocks and 4096 bytes in total (further bounded by the session's
+negotiated memory-read maximum). It returns the original immutable request alongside separate,
+ordered anchored and explicit block lists, so clients can map every block without relying on
+display labels. Either every range is copied or the command returns one typed failure; partial
+results are never published.
+
+Anchored ranges resolve a signed offset from the PC or SP in the inspection's own snapshot. A PC
+range starting below `8000` uses the parser-corrected physical `ROM` image and may not cross the
+`8000` boundary. This is deliberately best-effort code provenance: in the switchable bank it is
+not the mapper's live CPU window. Every other anchor uses the pure `SYSTEM_BUS` view and therefore
+fails with `SIDE_EFFECTFUL_ADDRESS` outside WRAM/echo/HRAM. The platform-neutral
+`DebugDisassembler` formats a detached code block and includes that provenance in its output.
+Coherent inspection is advertised when both snapshot and memory-read capabilities are available;
+constructing or polling ordinary emulation state does no inspection work when no command is
+submitted.
 
 | Address-space ID | Accepted range | Notes |
 |---|---|---|

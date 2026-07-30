@@ -1,13 +1,19 @@
 package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest;
+import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor;
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import org.junit.Test;
 
+import java.util.List;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 
 public class GameboyDebugViewTest {
@@ -67,6 +73,48 @@ public class GameboyDebugViewTest {
                     new DebugMemoryRequest(DebugAddressSpace.SYSTEM_BUS, 0xff0f, 1)));
             assertThrows(UnsupportedOperationException.class, () -> gameboy.readDebugMemory(
                     new DebugMemoryRequest(DebugAddressSpace.IO_REGISTERS, 0xff0f, 1)));
+        }
+    }
+
+    @Test
+    public void inspectionCopiesPcStackAndExplicitRangesAgainstOneSnapshot() throws Exception {
+        byte[] rom = testRom();
+        rom[0x100] = 0x3e;
+        rom[0x101] = 0x42;
+        try (Gameboy gameboy = gameboy(rom)) {
+            gameboy.enableDebugRetirementTracking();
+            gameboy.getAddressSpace().setByte(0xfffc, 0x12);
+            gameboy.getAddressSpace().setByte(0xfffd, 0x34);
+            gameboy.getAddressSpace().setByte(0xc000, 0x56);
+            var snapshot = gameboy.captureDebugSnapshot(9, 12, 0, 0, 0, true);
+            var request = new DebugInspectionRequest(
+                    List.of(
+                            new DebugAnchoredMemoryRequest(
+                                    DebugInspectionAnchor.PROGRAM_COUNTER, 0, 3),
+                            new DebugAnchoredMemoryRequest(
+                                    DebugInspectionAnchor.STACK_POINTER, -2, 2)),
+                    List.of(new DebugMemoryRequest(
+                            DebugAddressSpace.WORK_RAM, 0xc000, 1)));
+
+            var result = gameboy.inspectDebugMemory(snapshot, request);
+
+            assertSame(snapshot, result.snapshot());
+            assertSame(request, result.request());
+            assertEquals(0x3e, result.anchoredBlocks().get(0).unsignedByteAt(0));
+            assertEquals(0x42, result.anchoredBlocks().get(0).unsignedByteAt(1));
+            assertEquals(DebugAddressSpace.ROM,
+                    result.anchoredBlocks().get(0).addressSpace());
+            assertEquals(0x12, result.anchoredBlocks().get(1).unsignedByteAt(0));
+            assertEquals(0x34, result.anchoredBlocks().get(1).unsignedByteAt(1));
+            assertEquals(0x56, result.memoryBlocks().get(0).unsignedByteAt(0));
+
+            var mixedUnsafeRequest = new DebugInspectionRequest(
+                    List.of(),
+                    List.of(
+                            new DebugMemoryRequest(DebugAddressSpace.WORK_RAM, 0xc000, 1),
+                            new DebugMemoryRequest(DebugAddressSpace.IO_REGISTERS, 0xff0f, 1)));
+            assertThrows(UnsupportedOperationException.class,
+                    () -> gameboy.inspectDebugMemory(snapshot, mixedUnsafeRequest));
         }
     }
 

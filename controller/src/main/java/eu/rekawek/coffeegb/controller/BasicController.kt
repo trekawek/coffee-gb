@@ -910,6 +910,7 @@ class BasicController private constructor(
         }
         is QueuedDebugCommand.Snapshot ->
             command.complete(DebugResult.success(captureDebugSnapshot()))
+        is QueuedDebugCommand.Inspect -> handleDebugInspection(command)
         is QueuedDebugCommand.Step -> handleDebugStep(command)
         is QueuedDebugCommand.ConfigureHistory -> handleDebugConfigureHistory(command)
         is QueuedDebugCommand.HistoryStatus ->
@@ -1270,6 +1271,25 @@ class BasicController private constructor(
       command.fail(
           DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
           "The requested range contains a side-effectful or unavailable address",
+      )
+    }
+  }
+
+  private fun handleDebugInspection(command: QueuedDebugCommand.Inspect) {
+    val gameboy = checkNotNull(session).gameboy
+    try {
+      val snapshot = captureDebugSnapshot()
+      command.complete(
+          DebugResult.success(gameboy.inspectDebugMemory(snapshot, command.request)))
+    } catch (_: UnsupportedOperationException) {
+      command.fail(
+          DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+          "An inspection range has no side-effect-free debugger view",
+      )
+    } catch (_: IllegalArgumentException) {
+      command.fail(
+          DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
+          "An inspection range contains a side-effectful or unavailable address",
       )
     }
   }

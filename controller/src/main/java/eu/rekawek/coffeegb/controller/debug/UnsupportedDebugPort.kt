@@ -6,6 +6,8 @@ import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugError
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
+import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPort
@@ -46,6 +48,10 @@ internal class UnsupportedDebugPort(
   override fun resume(): CompletionStage<DebugResult<DebugSnapshot>> = unavailable()
 
   override fun snapshot(): CompletionStage<DebugResult<DebugSnapshot>> = unavailable()
+
+  override fun inspect(
+      request: DebugInspectionRequest?
+  ): CompletionStage<DebugResult<DebugInspectionResult>> = unavailable()
 
   override fun step(kind: DebugStepKind?): CompletionStage<DebugResult<DebugStepResult>> =
       unavailable()
