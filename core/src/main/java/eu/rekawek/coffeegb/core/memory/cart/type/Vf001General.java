@@ -148,6 +148,11 @@ public class Vf001General implements MemoryController {
     }
 
     @Override
+    public boolean isRumbleActive() {
+        return delegate.isRumbleActive();
+    }
+
+    @Override
     public ComponentState<MemoryController> captureState() {
         return new Vf001GeneralState(delegate.captureState(), configMode, runningValue,
                 cur6000, cur700x.clone(), sequenceStartBank, sequenceStartAddress,

@@ -148,6 +148,11 @@ public class MakonNtOld2 implements MemoryController {
     }
 
     @Override
+    public boolean isRumbleActive() {
+        return motorOn;
+    }
+
+    @Override
     public int getByte(int address) {
         if (address >= 0x0000 && address < 0x4000) {
             return getRomByte(baseRomBank, address);

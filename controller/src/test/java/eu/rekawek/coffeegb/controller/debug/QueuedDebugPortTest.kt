@@ -1,17 +1,35 @@
 package eu.rekawek.coffeegb.controller.debug
 
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugApuState
 import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
+import eu.rekawek.coffeegb.core.debug.DebugCpuState
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugExecutionState
+import eu.rekawek.coffeegb.core.debug.DebugFeatureState
+import eu.rekawek.coffeegb.core.debug.DebugInterruptState
+import eu.rekawek.coffeegb.core.debug.DebugMapperState
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugPpuMode
+import eu.rekawek.coffeegb.core.debug.DebugPpuState
+import eu.rekawek.coffeegb.core.debug.DebugRegisters
 import eu.rekawek.coffeegb.core.debug.DebugResult
+import eu.rekawek.coffeegb.core.debug.DebugSnapshot
+import eu.rekawek.coffeegb.core.debug.DebugStepKind
+import eu.rekawek.coffeegb.core.debug.DebugTimerState
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugOpcodeCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPoint
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
@@ -33,6 +51,92 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class QueuedDebugPortTest {
+  @Test
+  fun `history commands validate before admission and preserve FIFO typed completion`() {
+    val port = QueuedDebugPort(17, advancedCapabilities(), 3)
+    val configuration =
+        DebugHistoryConfiguration(
+            true,
+            120,
+            DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES,
+        )
+    try {
+      assertFailure(port.configureHistory(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(
+          port.configureHistory(
+              DebugHistoryConfiguration(
+                  true,
+                  121,
+                  DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES,
+              )),
+          DebugErrorCode.HISTORY_LIMIT,
+      )
+      assertFailure(port.stepBackward(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(
+          port.stepBackward(DebugStepKind.INSTRUCTION),
+          DebugErrorCode.UNSUPPORTED_STEP,
+      )
+      assertFailure(
+          port.stepBackward(DebugStepKind.MACHINE_CYCLE),
+          DebugErrorCode.UNSUPPORTED_STEP,
+      )
+      assertEquals(0, port.outstandingRequestCount())
+      assertFalse(port.hasPendingCommands())
+
+      val configure = port.configureHistory(configuration)
+      val statusRequest = port.historyStatus()
+      val backward = port.stepBackward(DebugStepKind.FRAME)
+
+      val commands = port.drainCommands(3)
+      assertEquals(listOf(1L, 2L, 3L), commands.map { it.requestId })
+      assertTrue(commands.all { it.sessionGeneration == 17L })
+      assertEquals(
+          configuration,
+          assertIs<QueuedDebugCommand.ConfigureHistory>(commands[0]).configuration,
+      )
+      assertIs<QueuedDebugCommand.HistoryStatus>(commands[1])
+      assertEquals(
+          DebugStepKind.FRAME,
+          assertIs<QueuedDebugCommand.StepBackward>(commands[2]).kind,
+      )
+
+      val point = DebugHistoryPoint(1, 100, 2)
+      val status =
+          DebugHistoryStatus(
+              configuration,
+              1,
+              4_096,
+              0,
+              point,
+              point,
+              DebugHistoryTruncationReason.NONE,
+          )
+      val reverse =
+          DebugReverseStepResult(
+              DebugStepKind.FRAME,
+              point,
+              snapshot(masterTick = point.masterTick(), frame = point.frame()),
+              status,
+          )
+      assertTrue(
+          assertIs<QueuedDebugCommand.ConfigureHistory>(commands[0])
+              .complete(DebugResult.success(status)))
+      assertTrue(
+          assertIs<QueuedDebugCommand.HistoryStatus>(commands[1])
+              .complete(DebugResult.success(status)))
+      assertTrue(
+          assertIs<QueuedDebugCommand.StepBackward>(commands[2])
+              .complete(DebugResult.success(reverse)))
+
+      assertEquals(status, await(configure).value())
+      assertEquals(status, await(statusRequest).value())
+      assertEquals(reverse, await(backward).value())
+    } finally {
+      port.close()
+      assertTrue(port.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+    }
+  }
+
   @Test
   fun `advanced commands validate before admission and preserve their FIFO envelopes`() {
     val port = QueuedDebugPort(16, advancedCapabilities(), 6)
@@ -402,6 +506,59 @@ class QueuedDebugPortTest {
           EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY),
           16,
           4,
+          DebugHistoryCapabilities(
+              true,
+              true,
+              false,
+              120,
+              DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES,
+          ),
+      )
+
+  private fun snapshot(masterTick: Long, frame: Long): DebugSnapshot =
+      DebugSnapshot(
+          17,
+          1,
+          masterTick,
+          frame,
+          0,
+          true,
+          DebugRegisters(1, 0xb0, 2, 3, 4, 5, 6, 7, 0xfffe, 0x100),
+          DebugInterruptState(true, false, 0xe1, 0x01, 0x01),
+          DebugTimerState(0, 0, 0, 0, false, 0),
+          DebugPpuState(
+              true,
+              DebugPpuMode.OAM_SEARCH,
+              0,
+              0,
+              0x91,
+              0x82,
+              0,
+              0,
+              0,
+              0,
+              0,
+          ),
+          DebugApuState(
+              true,
+              0,
+              false,
+              false,
+              false,
+              false,
+              0,
+              0,
+              0x80,
+          ),
+          DebugMapperState(
+              "test",
+              -1,
+              -1,
+              DebugFeatureState.UNKNOWN,
+              DebugFeatureState.UNKNOWN,
+              DebugFeatureState.UNKNOWN,
+          ),
+          DebugExecutionState(DebugCpuState.OPCODE_FETCH, 0, -1, 0, false, false, 0),
       )
 
   private fun <T> await(stage: CompletionStage<T>): T =

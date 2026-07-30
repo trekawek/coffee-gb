@@ -415,6 +415,7 @@ class LinkedController(
     val oldCurrentInput = currentInput
     val oldLastInput = lastInput
     val oldHistory = stateHistory.captureSnapshot()
+    val previousRumble = captureRumbleOutputs(active.map { (_, session, _) -> session.gameboy })
     try {
       active.forEach { (player, session, prepared) ->
         probe?.invoke(player, ApplyStage.BEFORE_LIVE_MUTATION)
@@ -441,6 +442,7 @@ class LinkedController(
       }
       throw StateApplyException("Linked session state could not be applied atomically", failure)
     }
+    synchronizeRumbleOutputs(previousRumble)
   }
 
   /** Applies only the reconstruction retained by prepare; candidate state is never rebuilt here. */
@@ -474,6 +476,8 @@ class LinkedController(
     val oldInitialSynchronized = initialStateSynchronized
     val oldHostCheckpointPending = hostCheckpointPending
     val oldLocalCheckpointCreditPending = localCheckpointCreditPending
+    val previousRumble =
+        captureRumbleOutputs(prepared.players.map { player -> player.session.gameboy })
     try {
       prepared.players.forEach { player ->
         val session = player.session
@@ -524,6 +528,21 @@ class LinkedController(
         failure.addSuppressed(rollbackFailure)
       }
       throw StateApplyException("V9 checkpoint could not be applied atomically", failure)
+    }
+    synchronizeRumbleOutputs(previousRumble)
+  }
+
+  /** Captures each affected machine once so a multi-machine restore has one host-output commit. */
+  private fun captureRumbleOutputs(gameboys: Iterable<Gameboy>): IdentityHashMap<Gameboy, Boolean> =
+      IdentityHashMap<Gameboy, Boolean>().also { outputs ->
+        gameboys.forEach { gameboy ->
+          if (!outputs.containsKey(gameboy)) outputs[gameboy] = gameboy.isRumbleActive
+        }
+      }
+
+  private fun synchronizeRumbleOutputs(outputs: IdentityHashMap<Gameboy, Boolean>) {
+    outputs.forEach { (gameboy, previousActive) ->
+      gameboy.synchronizeRumbleOutput(previousActive)
     }
   }
 

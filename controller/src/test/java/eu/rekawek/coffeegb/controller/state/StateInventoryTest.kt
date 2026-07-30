@@ -89,6 +89,7 @@ class StateInventoryTest {
                     .filter {
                       val source = it.readText()
                       "captureState(" in source ||
+                          "captureStateWithoutTimeSource(" in source ||
                           "StatefulComponent<" in source ||
                           "captureDetachedState(" in source ||
                           "DetachedStateAdapter.capture(" in source ||

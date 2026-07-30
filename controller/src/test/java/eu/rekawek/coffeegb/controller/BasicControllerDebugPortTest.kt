@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.controller.Controller.SessionDebugPortEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.controller.state.StatePrepareCloseCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StatePrepareCloseRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateRef
@@ -14,6 +15,7 @@ import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
+import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
 import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
@@ -30,12 +32,17 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugCounterCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPpuCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugSerialCondition
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource
+import eu.rekawek.coffeegb.core.sound.Sound
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -43,6 +50,7 @@ import java.util.EnumSet
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -51,6 +59,245 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerDebugPortTest {
+
+  @Test
+  fun reverseFrameRestoresThePrecedingBoundaryWithoutGuestOrHostSideEffects() {
+    withController { eventBus, port, _, _, _ ->
+      val frameEvents = AtomicInteger()
+      val soundEvents = AtomicInteger()
+      eventBus.register<Display.DmgFrameReadyEvent> { frameEvents.incrementAndGet() }
+      eventBus.register<Sound.SoundSampleEvent> { soundEvents.incrementAndGet() }
+
+      val paused = await(port.pause()).value()
+      assertTrue(port.capabilities().history().checkpointHistory())
+      assertTrue(port.capabilities().history().reverseFrame())
+      assertFalse(port.capabilities().history().reverseInstruction())
+      assertError(DebugErrorCode.HISTORY_DISABLED, await(port.stepBackward(DebugStepKind.FRAME)))
+
+      val configuration = DebugHistoryConfiguration.defaults()
+      assertEquals(configuration, await(port.configureHistory(configuration)).value().configuration())
+      val traceConfiguration = TraceConfiguration(512, EnumSet.of(TraceCategory.CPU))
+      assertTrue(await(port.configureTrace(traceConfiguration)).isSuccess)
+
+      val first = await(port.step(DebugStepKind.FRAME)).value().snapshot()
+      val firstStatus = await(port.historyStatus()).value()
+      val firstPoint = assertNotNull(firstStatus.newest())
+      assertEquals(first.frame(), firstPoint.frame())
+
+      val second = await(port.step(DebugStepKind.FRAME)).value().snapshot()
+      val beforeTrace = await(port.readTrace(TraceReadRequest.initial(512))).value()
+      assertTrue(beforeTrace.entries().isNotEmpty())
+      val framesBeforeReverse = frameEvents.get()
+      val samplesBeforeReverse = soundEvents.get()
+
+      val reversed = await(port.stepBackward(DebugStepKind.FRAME))
+      assertTrue(reversed.isSuccess, reversed.toString())
+      val result = reversed.value()
+      assertEquals(DebugStepKind.FRAME, result.kind())
+      assertEquals(firstPoint, result.restoredPoint())
+      assertEquals(second.masterTick(), result.snapshot().masterTick())
+      assertEquals(second.frame(), result.snapshot().frame())
+      assertTrue(result.snapshot().sequence() > second.sequence())
+      assertEquals(0, result.snapshot().framePosition())
+      assertTrue(result.snapshot().paused())
+      assertMachineViewEquals(first, result.snapshot())
+      assertEquals(
+          second.execution().retiredInstructions(),
+          result.snapshot().execution().retiredInstructions(),
+          "debug retirement accounting remains monotonic across restored machine state",
+      )
+      assertEquals(firstPoint, result.history().newest())
+      assertEquals(
+          DebugHistoryTruncationReason.REVERSE_STEP,
+          result.history().lastTruncationReason(),
+      )
+      assertEquals(framesBeforeReverse, frameEvents.get())
+      assertEquals(samplesBeforeReverse, soundEvents.get())
+
+      val afterTrace = await(port.readTrace(TraceReadRequest.initial(512))).value()
+      assertTrue(afterTrace.entries().isEmpty())
+      assertEquals(beforeTrace.nextSequence(), afterTrace.nextSequence())
+      assertTrue(
+          afterTrace.droppedEventCount() >=
+              beforeTrace.droppedEventCount() + beforeTrace.entries().size)
+      assertTrue(paused.masterTick() <= first.masterTick())
+    }
+  }
+
+  @Test
+  fun reverseFrameFromAPartialFrameRestoresItsStartBoundary() {
+    withController { _, port, _, _, _ ->
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+
+      val boundary = await(port.step(DebugStepKind.FRAME)).value().snapshot()
+      val boundaryStatus = await(port.historyStatus()).value()
+      val boundaryPoint = assertNotNull(boundaryStatus.newest())
+      val partial = await(port.step(DebugStepKind.INSTRUCTION)).value().snapshot()
+      assertTrue(partial.framePosition() > 0)
+
+      val reversed = await(port.stepBackward(DebugStepKind.FRAME)).value()
+      assertEquals(boundaryPoint, reversed.restoredPoint())
+      assertEquals(boundaryStatus.checkpointCount(), reversed.history().checkpointCount())
+      assertEquals(partial.masterTick(), reversed.snapshot().masterTick())
+      assertEquals(partial.frame(), reversed.snapshot().frame())
+      assertEquals(0, reversed.snapshot().framePosition())
+      assertMachineViewEquals(boundary, reversed.snapshot())
+    }
+  }
+
+  @Test
+  fun reverseFrameRequiresAPauseAndAnAvailableSupportedKind() {
+    withController { _, port, _, _, _ ->
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      assertError(
+          DebugErrorCode.UNSUPPORTED_STEP,
+          await(port.stepBackward(DebugStepKind.INSTRUCTION)),
+      )
+      assertTrue(await(port.resume()).isSuccess)
+      assertError(DebugErrorCode.NOT_PAUSED, await(port.stepBackward(DebugStepKind.FRAME)))
+    }
+  }
+
+  @Test
+  fun historyStopsAtAHostDependentPeripheralTopology() {
+    withController { eventBus, port, _, _, _ ->
+      val selections =
+          LinkedBlockingQueue<Controller.SerialPeripheralSelectionChangedEvent>()
+      eventBus.register<Controller.SerialPeripheralSelectionChangedEvent>(selections::add)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      awaitCondition { await(port.historyStatus()).value().checkpointCount() > 0 }
+
+      eventBus.post(
+          Controller.SetSerialPeripheralEvent(Controller.SerialPeripheralSelection.PRINTER))
+      val selected = awaitSerialSelection(selections, Controller.SerialPeripheralSelection.PRINTER)
+      assertEquals(Controller.SerialPeripheralSelection.PRINTER, selected.selection)
+
+      val cleared = await(port.historyStatus()).value()
+      assertEquals(0, cleared.checkpointCount())
+      assertEquals(
+          DebugHistoryTruncationReason.TOPOLOGY_CHANGED,
+          cleared.lastTruncationReason(),
+      )
+      assertError(
+          DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+          await(port.configureHistory(DebugHistoryConfiguration.defaults())),
+      )
+      assertTrue(await(port.pause()).isSuccess)
+      assertError(
+          DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+          await(port.stepBackward(DebugStepKind.FRAME)),
+      )
+    }
+  }
+
+  @Test
+  fun userRewindReportsItsOwnHistoryTruncationReason() {
+    val rewind = RewindManager()
+    withController(rewind) { eventBus, port, _, _, _ ->
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      awaitCondition { await(port.historyStatus()).value().checkpointCount() > 0 }
+
+      eventBus.post(Controller.RewindEvent(true))
+      eventBus.post(Controller.RewindEvent(false))
+
+      awaitCondition {
+        val status = await(port.historyStatus()).value()
+        status.checkpointCount() == 0 &&
+            status.lastTruncationReason() == DebugHistoryTruncationReason.USER_REWIND
+      }
+    }
+  }
+
+  @Test
+  fun historyRejectsLiveSensorCartridgesInThePrimaryAndDatelSlot() {
+    for ((name, type) in listOf("MBC7" to 0x22, "POCKET_CAMERA" to 0xfc)) {
+      withController(
+          rom = sensorRom("DEBUG_$name", type),
+          rewindManager = null,
+          rtcTimeSource = null,
+          configureSession = { it.setSupportBatterySave(false) },
+      ) { _, port, _, _, _ ->
+        assertError(
+            DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+            await(port.configureHistory(DebugHistoryConfiguration.defaults())),
+        )
+      }
+
+      val sensorBytes = sensorRomBytes("SLOT_$name", type)
+      withController(
+          rom = romFile("DEBUG_DATEL_$name", StateCodecTestSupport.datelRom()),
+          rewindManager = null,
+          rtcTimeSource = null,
+          configureSession = {
+            it.setSupportBatterySave(false)
+            it.setSlotRom(Rom(sensorBytes))
+          },
+      ) { _, port, _, _, _ ->
+        assertError(
+            DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+            await(port.configureHistory(DebugHistoryConfiguration.defaults())),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun successfulDebugReverseClearsTheIndependentUserRewindTimeline() {
+    val rewind = RewindManager()
+    withController(rewind) { _, port, _, _, _ ->
+      awaitCondition { rewind.historySize > 0 }
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      assertTrue(rewind.historySize > 0)
+
+      assertTrue(await(port.stepBackward(DebugStepKind.FRAME)).isSuccess)
+      assertEquals(0, rewind.historySize)
+    }
+  }
+
+  @Test
+  fun failedReverseRestoreRollsBackAndCompletesWithoutKillingTheOwner() {
+    val time = FailingTimeSource(360_000)
+    withController(mbc3Rom("DEBUG_RTC_FAILURE"), time) { _, port, _, _, _ ->
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      assertTrue(
+          await(
+                  port.configureTrace(
+                      TraceConfiguration(256, EnumSet.of(TraceCategory.CPU))))
+              .isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      val before = await(port.snapshot()).value()
+      val traceBefore = await(port.readTrace(TraceReadRequest.initial(256))).value()
+      assertTrue(traceBefore.entries().isNotEmpty())
+
+      // Two paused-clock reads capture rollback state; fail only at the post-mutation re-anchor.
+      time.failAfterSuccessfulCalls(2)
+      assertError(
+          DebugErrorCode.INTERNAL_ERROR,
+          await(port.stepBackward(DebugStepKind.FRAME)),
+      )
+      assertEquals(1, time.failureCount)
+      time.resume()
+
+      val after = await(port.snapshot()).value()
+      assertEquals(before.masterTick(), after.masterTick())
+      assertEquals(before.frame(), after.frame())
+      assertMachineViewEquals(before, after)
+      val traceAfter = await(port.readTrace(TraceReadRequest.initial(256))).value()
+      assertTrue(traceAfter.entries().isEmpty())
+      assertEquals(traceBefore.nextSequence(), traceAfter.nextSequence())
+      assertTrue(
+          traceAfter.droppedEventCount() >=
+              traceBefore.droppedEventCount() + traceBefore.entries().size)
+      assertTrue(await(port.stepBackward(DebugStepKind.FRAME)).isSuccess)
+    }
+  }
 
   @Test
   fun breakpointAutomaticallyPausesAtTheExactTickWithoutAdvancingAgain() {
@@ -201,6 +448,7 @@ class BasicControllerDebugPortTest {
       val completed = LinkedBlockingQueue<StateOperationCompletedEvent>()
       eventBus.register<StateOperationCompletedEvent>(completed::add)
       assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
       assertTrue(
           await(
                   port.configureTrace(
@@ -227,6 +475,12 @@ class BasicControllerDebugPortTest {
       assertEquals(before.nextSequence(), after.nextSequence())
       assertEquals(after.nextSequence(), after.oldestAvailableSequence())
       assertTrue(after.droppedEventCount() >= before.droppedEventCount() + before.entries().size)
+      val history = await(port.historyStatus()).value()
+      assertEquals(0, history.checkpointCount())
+      assertEquals(
+          DebugHistoryTruncationReason.SESSION_BOUNDARY,
+          history.lastTruncationReason(),
+      )
     }
   }
 
@@ -518,7 +772,74 @@ class BasicControllerDebugPortTest {
   ) = withController(namedRom("DEBUG_PORT"), test)
 
   private fun withController(
+      rewindManager: RewindManager,
+      test:
+          (
+              EventBusImpl,
+              DebugPort,
+              LinkedBlockingQueue<SessionDebugPortEvent>,
+              BasicController,
+              StateUxSessionEvent,
+          ) -> Unit
+  ) = withController(namedRom("DEBUG_PORT"), rewindManager, test)
+
+  private fun withController(
       rom: File,
+      test:
+          (
+              EventBusImpl,
+              DebugPort,
+              LinkedBlockingQueue<SessionDebugPortEvent>,
+              BasicController,
+              StateUxSessionEvent,
+          ) -> Unit
+  ) = withController(rom, null, test)
+
+  private fun withController(
+      rom: File,
+      rtcTimeSource: TimeSource,
+      test:
+          (
+              EventBusImpl,
+              DebugPort,
+              LinkedBlockingQueue<SessionDebugPortEvent>,
+              BasicController,
+              StateUxSessionEvent,
+          ) -> Unit
+  ) = withController(rom, null, rtcTimeSource, test)
+
+  private fun withController(
+      rom: File,
+      rewindManager: RewindManager?,
+      test:
+          (
+              EventBusImpl,
+              DebugPort,
+              LinkedBlockingQueue<SessionDebugPortEvent>,
+              BasicController,
+              StateUxSessionEvent,
+          ) -> Unit
+  ) = withController(rom, rewindManager, null, test)
+
+  private fun withController(
+      rom: File,
+      rewindManager: RewindManager?,
+      rtcTimeSource: TimeSource?,
+      test:
+          (
+              EventBusImpl,
+              DebugPort,
+              LinkedBlockingQueue<SessionDebugPortEvent>,
+              BasicController,
+              StateUxSessionEvent,
+          ) -> Unit
+  ) = withController(rom, rewindManager, rtcTimeSource, {}, test)
+
+  private fun withController(
+      rom: File,
+      rewindManager: RewindManager?,
+      rtcTimeSource: TimeSource?,
+      configureSession: (Gameboy.GameboyConfiguration) -> Unit,
       test:
           (
               EventBusImpl,
@@ -553,9 +874,23 @@ class BasicControllerDebugPortTest {
           val config =
               Controller.createGameboyConfig(properties, Rom(event.rom))
                   .setBootstrapMode(BootstrapMode.SKIP)
+          rtcTimeSource?.let(config::setRtcTimeSource)
+          configureSession(config)
           PreparedSession.Ready(config, config.build())
         }
-    val controller = BasicController(eventBus, properties, null, preparer)
+    val controller =
+        if (rewindManager == null) {
+          BasicController(eventBus, properties, null, preparer)
+        } else {
+          BasicController(
+              eventBus,
+              properties,
+              null,
+              preparer,
+              SnapshotManagerFactory.DEFAULT,
+              rewindManager,
+          )
+        }
     controller.startController()
     try {
       eventBus.post(LoadRomEvent(rom))
@@ -602,8 +937,50 @@ class BasicControllerDebugPortTest {
     return rom
   }
 
+  private fun mbc3Rom(title: String): File {
+    val rom = namedRom(title)
+    val bytes = rom.readBytes()
+    bytes[0x147] = 0x10
+    bytes[0x149] = 0x03
+    rom.writeBytes(bytes)
+    return rom
+  }
+
+  private fun sensorRom(title: String, type: Int): File =
+      romFile(title, sensorRomBytes(title, type))
+
+  private fun sensorRomBytes(title: String, type: Int): ByteArray =
+      StateCodecTestSupport.rom().also { bytes ->
+        for (address in 0x0134 until 0x0143) bytes[address] = 0
+        title
+            .toByteArray(Charsets.US_ASCII)
+            .copyInto(bytes, 0x0134, endIndex = title.length.coerceAtMost(15))
+        bytes[0x0147] = type.toByte()
+      }
+
+  private fun romFile(title: String, bytes: ByteArray): File =
+      Files.createTempFile("coffee-gb-$title", ".gbc").toFile().also { it.writeBytes(bytes) }
+
   private fun <T> await(stage: java.util.concurrent.CompletionStage<T>): T =
       stage.toCompletableFuture().get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+
+  private fun assertMachineViewEquals(
+      expected: eu.rekawek.coffeegb.core.debug.DebugSnapshot,
+      actual: eu.rekawek.coffeegb.core.debug.DebugSnapshot,
+  ) {
+    assertEquals(expected.registers(), actual.registers())
+    assertEquals(expected.interrupts(), actual.interrupts())
+    assertEquals(expected.timer(), actual.timer())
+    assertEquals(expected.ppu(), actual.ppu())
+    assertEquals(expected.apu(), actual.apu())
+    assertEquals(expected.mapper(), actual.mapper())
+    assertEquals(expected.execution().cpuState(), actual.execution().cpuState())
+    assertEquals(expected.execution().opcode(), actual.execution().opcode())
+    assertEquals(expected.execution().extendedOpcode(), actual.execution().extendedOpcode())
+    assertEquals(expected.execution().machineCycle(), actual.execution().machineCycle())
+    assertEquals(expected.execution().doubleSpeed(), actual.execution().doubleSpeed())
+    assertEquals(expected.execution().haltBug(), actual.execution().haltBug())
+  }
 
   private fun assertError(expected: DebugErrorCode, result: eu.rekawek.coffeegb.core.debug.DebugResult<*>) {
     assertTrue(result.isFailure, result.toString())
@@ -635,6 +1012,18 @@ class BasicControllerDebugPortTest {
     throw AssertionError("state operation $requestId did not complete")
   }
 
+  private fun awaitSerialSelection(
+      selections: LinkedBlockingQueue<Controller.SerialPeripheralSelectionChangedEvent>,
+      expected: Controller.SerialPeripheralSelection,
+  ): Controller.SerialPeripheralSelectionChangedEvent {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+    while (System.nanoTime() < deadline) {
+      val event = selections.poll(50, TimeUnit.MILLISECONDS) ?: continue
+      if (event.selection == expected) return event
+    }
+    throw AssertionError("serial selection $expected did not commit")
+  }
+
   private fun awaitCondition(condition: () -> Boolean) {
     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
     while (System.nanoTime() < deadline) {
@@ -648,5 +1037,35 @@ class BasicControllerDebugPortTest {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
 
     const val TIMEOUT_SECONDS = 10L
+  }
+
+  private class FailingTimeSource(
+      private val current: Long,
+  ) : TimeSource {
+    @Volatile private var successfulCallsUntilFailure: Int? = null
+
+    @Volatile var failureCount = 0
+      private set
+
+    fun failAfterSuccessfulCalls(count: Int) {
+      require(count >= 0)
+      successfulCallsUntilFailure = count
+    }
+
+    fun resume() {
+      successfulCallsUntilFailure = null
+    }
+
+    override fun currentTimeMillis(): Long {
+      val remaining = successfulCallsUntilFailure
+      if (remaining != null) {
+        if (remaining == 0) {
+          failureCount++
+          error("Injected time-source failure")
+        }
+        successfulCallsUntilFailure = remaining - 1
+      }
+      return current
+    }
   }
 }

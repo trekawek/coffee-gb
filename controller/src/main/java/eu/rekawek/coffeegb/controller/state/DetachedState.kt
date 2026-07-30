@@ -419,8 +419,9 @@ internal object DetachedStateAdapter {
             current.rtcRuntime.toCore(),
             current.dmgFifoRuntime.toCore(),
         )
+    val previousRumble = gameboy.isRumbleActive
     try {
-      gameboy.restoreState(candidate.componentState)
+      gameboy.restoreStateSilently(candidate.componentState)
       probeAfterLegacyMutation?.invoke()
       gameboy.restoreDmgFifoRuntimeState(candidate.dmgFifoRuntime)
       gameboy.restoreRtcRuntimeState(candidate.rtcRuntime)
@@ -432,6 +433,7 @@ internal object DetachedStateAdapter {
       }
       throw StateApplyException("Legacy machine state could not be applied atomically", failure)
     }
+    gameboy.synchronizeRumbleOutput(previousRumble)
   }
 
   /**
@@ -510,6 +512,7 @@ internal object DetachedStateAdapter {
   ) {
     val prepared = prepare(gameboy, state)
     val rollback = prepare(gameboy, capture(gameboy))
+    val previousRumble = gameboy.isRumbleActive
     try {
       probe?.invoke(ApplyStage.BEFORE_LIVE_MUTATION)
       commit(gameboy, prepared)
@@ -521,6 +524,7 @@ internal object DetachedStateAdapter {
       }
       throw StateApplyException("Detached machine state could not be applied atomically", failure)
     }
+    gameboy.synchronizeRumbleOutput(previousRumble)
   }
 
   fun apply(
@@ -530,6 +534,7 @@ internal object DetachedStateAdapter {
   ) {
     val prepared = prepare(session, state)
     val rollback = prepare(session, capture(session))
+    val previousRumble = session.gameboy.isRumbleActive
     try {
       probe?.invoke(ApplyStage.BEFORE_LIVE_MUTATION)
       commit(session, prepared, probe)
@@ -541,6 +546,7 @@ internal object DetachedStateAdapter {
       }
       throw StateApplyException("Detached session state could not be applied atomically", failure)
     }
+    session.gameboy.synchronizeRumbleOutput(previousRumble)
   }
 
   /**
@@ -648,7 +654,9 @@ internal object DetachedStateAdapter {
       prepared: PreparedMachineState,
       probe: ((ApplyStage) -> Unit)? = null,
   ) {
-    gameboy.restoreState(prepared.componentState)
+    // The caller owns the complete transaction boundary. Publishing host output here would expose
+    // a speculative machine state if a later runtime, endpoint, or linked-player step failed.
+    gameboy.restoreStateSilently(prepared.componentState)
     gameboy.restoreDmgFifoRuntimeState(prepared.dmgFifoRuntime)
     gameboy.restoreRtcRuntimeState(prepared.rtcRuntime)
     probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)

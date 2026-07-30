@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.gpu.DmgPixelFifo
 import eu.rekawek.coffeegb.core.gpu.Gpu
+import eu.rekawek.coffeegb.core.memory.cart.MemoryController
 import eu.rekawek.coffeegb.core.state.MachineStateCapture
 import eu.rekawek.coffeegb.core.state.ComponentState
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock
@@ -35,6 +36,7 @@ import kotlin.math.min
 internal class MachineSnapshot private constructor(
     private val root: SnapshotRecord,
     private val rtcRuntime: SnapshotRtcRuntime,
+    private val wallClockRuntime: SnapshotWallClockRuntime,
     private val profileId: String,
     private val dmgFifoRuntime: SnapshotDmgFifoRuntime?,
     internal val captureStats: CaptureStats,
@@ -46,13 +48,15 @@ internal class MachineSnapshot private constructor(
    */
   fun restore(
       gameboy: Gameboy,
+      synchronizeHostOutputs: Boolean = true,
       probe: ((ApplyStage) -> Unit)? = null,
   ) {
     if (gameboy.hardwareProfile.id() != profileId) {
       throw StateApplyException(
           "Internal $profileId snapshot does not match ${gameboy.hardwareProfile.id()} profile")
     }
-    val rollbackState = gameboy.captureState()
+    val rollbackState = gameboy.captureStateWithoutTimeSource()
+    val rollbackRumble = gameboy.isRumbleActive
     if (SnapshotGraph.ownershipSignature(root) !=
         SnapshotGraph.ownershipSignature(rollbackState)) {
       throw StateApplyException("Internal snapshot mapper/battery ownership does not match target")
@@ -69,30 +73,38 @@ internal class MachineSnapshot private constructor(
           throw StateApplyException("Internal machine snapshot could not be reconstructed", failure)
         }
     val candidateRtc = rtcRuntime.toCore()
+    val candidateWallClock = wallClockRuntime.toCore()
     val candidateFifo = dmgFifoRuntime?.toCore()
     try {
       gameboy.validateRtcRuntimeState(candidateRtc)
+      gameboy.validateWallClockRuntimeState(candidateWallClock)
       gameboy.validateDmgFifoRuntimeState(candidateFifo)
     } catch (failure: IllegalArgumentException) {
       throw StateApplyException("Internal machine runtime layout is incompatible", failure)
     }
-    val rollbackRtc = gameboy.captureRtcRuntimeState()
+    val rollbackRtc = gameboy.captureRtcRuntimeStateWithoutTimeSource()
+    val rollbackWallClock = gameboy.captureWallClockRuntimeStateWithoutTimeSource()
     val rollbackFifo = gameboy.captureDmgFifoRuntimeState()
     try {
       probe?.invoke(ApplyStage.BEFORE_LIVE_MUTATION)
-      gameboy.restoreState(candidate)
+      gameboy.restoreStateSilently(candidate)
       probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)
       gameboy.restoreDmgFifoRuntimeState(candidateFifo)
       gameboy.restoreRtcRuntimeState(candidateRtc)
+      gameboy.restoreWallClockRuntimeState(candidateWallClock)
     } catch (failure: Throwable) {
       try {
-        gameboy.restoreState(rollbackState)
+        gameboy.restoreStateSilently(rollbackState)
         gameboy.restoreDmgFifoRuntimeState(rollbackFifo)
         gameboy.restoreRtcRuntimeState(rollbackRtc)
+        gameboy.restoreWallClockRuntimeState(rollbackWallClock)
       } catch (rollbackFailure: Throwable) {
         failure.addSuppressed(rollbackFailure)
       }
       throw StateApplyException("Internal machine snapshot could not be applied atomically", failure)
+    }
+    if (synchronizeHostOutputs) {
+      gameboy.synchronizeRumbleOutput(rollbackRumble)
     }
   }
 
@@ -141,6 +153,94 @@ internal class MachineSnapshot private constructor(
       val modeledRetainedBytes: Long,
   )
 
+  /**
+   * Exact incremental counterpart to [retainedStats] for bounded owner-thread histories.
+   *
+   * Each immutable graph node and primitive page is charged once while at least one retained
+   * snapshot references it. Adding or removing a snapshot visits only that snapshot's graph, so a
+   * long checkpoint ring does not require a whole-history identity scan every frame.
+   */
+  internal class RetentionLedger {
+    private val nodeReferences = IdentityHashMap<SnapshotValue, Int>()
+    private val pageReferences = IdentityHashMap<SnapshotPage, Int>()
+
+    var modeledRetainedBytes = 0L
+      private set
+
+    fun add(snapshot: MachineSnapshot) {
+      val values = ArrayList<SnapshotValue>()
+      val pages = IdentityHashMap<SnapshotPage, Boolean>()
+      snapshot.root.visit { value ->
+        values += value
+        if (value is SnapshotPrimitiveArray) {
+          value.pages.forEach { page -> pages[page] = true }
+        }
+      }
+
+      var addedBytes = snapshot.modeledSnapshotBytes()
+      values.forEach { value ->
+        if (!nodeReferences.containsKey(value)) {
+          addedBytes = Math.addExact(addedBytes, value.modeledBytes())
+        }
+      }
+      pages.keys.forEach { page ->
+        if (!pageReferences.containsKey(page)) {
+          addedBytes = Math.addExact(addedBytes, page.retainedBytes())
+        }
+      }
+      val updatedBytes = Math.addExact(modeledRetainedBytes, addedBytes)
+
+      values.forEach { value ->
+        nodeReferences[value] = Math.addExact(nodeReferences[value] ?: 0, 1)
+      }
+      pages.keys.forEach { page ->
+        pageReferences[page] = Math.addExact(pageReferences[page] ?: 0, 1)
+      }
+      modeledRetainedBytes = updatedBytes
+    }
+
+    fun remove(snapshot: MachineSnapshot) {
+      val values = ArrayList<SnapshotValue>()
+      val pages = IdentityHashMap<SnapshotPage, Boolean>()
+      snapshot.root.visit { value ->
+        values += value
+        if (value is SnapshotPrimitiveArray) {
+          value.pages.forEach { page -> pages[page] = true }
+        }
+      }
+
+      var removedBytes = snapshot.modeledSnapshotBytes()
+      values.forEach { value ->
+        val references = checkNotNull(nodeReferences[value])
+        if (references == 1) {
+          removedBytes = Math.addExact(removedBytes, value.modeledBytes())
+        }
+      }
+      pages.keys.forEach { page ->
+        val references = checkNotNull(pageReferences[page])
+        if (references == 1) {
+          removedBytes = Math.addExact(removedBytes, page.retainedBytes())
+        }
+      }
+      check(removedBytes <= modeledRetainedBytes)
+
+      values.forEach { value -> decrement(nodeReferences, value) }
+      pages.keys.forEach { page -> decrement(pageReferences, page) }
+      modeledRetainedBytes -= removedBytes
+    }
+
+    private fun <T> decrement(references: IdentityHashMap<T, Int>, value: T) {
+      val count = checkNotNull(references[value])
+      check(count > 0)
+      if (count == 1) references.remove(value) else references[value] = count - 1
+    }
+  }
+
+  private fun modeledSnapshotBytes(): Long =
+      MACHINE_SNAPSHOT_SHALLOW_BYTES +
+          WALL_CLOCK_RUNTIME_BYTES +
+          wallClockRuntime.entryCount * MAPPER_WALL_CLOCK_RUNTIME_BYTES
+
   companion object {
     const val PAGE_BYTES = 4 * 1024
 
@@ -154,12 +254,21 @@ internal class MachineSnapshot private constructor(
             SnapshotGraph.capture(view, compatiblePrevious?.root, source)
           }
       val rtc = gameboy.captureRtcRuntimeState()
+      val wallClock = gameboy.captureWallClockRuntimeState()
       val fifo = gameboy.captureDmgFifoRuntimeState()
       return MachineSnapshot(
           graph.root,
           SnapshotRtcRuntime(
               rtc.primary()?.let { SnapshotMbc3Runtime(it.emulationPaused(), it.pauseStartedMillis()) },
               rtc.slot()?.let { SnapshotMbc3Runtime(it.emulationPaused(), it.pauseStartedMillis()) },
+          ),
+          SnapshotWallClockRuntime(
+              wallClock.primary()?.let {
+                SnapshotMapperWallClockRuntime(it.kind(), it.checkpointSecond())
+              },
+              wallClock.slot()?.let {
+                SnapshotMapperWallClockRuntime(it.kind(), it.checkpointSecond())
+              },
           ),
           gameboy.hardwareProfile.id(),
           fifo?.let {
@@ -178,7 +287,7 @@ internal class MachineSnapshot private constructor(
       var primitiveBytes = 0L
       var modeledBytes = 0L
       snapshots.forEach { snapshot ->
-        modeledBytes += MACHINE_SNAPSHOT_SHALLOW_BYTES
+        modeledBytes += snapshot.modeledSnapshotBytes()
         snapshot.root.visit { value ->
           if (nodes.put(value, true) == null) {
             modeledBytes += value.modeledBytes()
@@ -214,6 +323,10 @@ internal class MachineSnapshot private constructor(
         )
 
     private const val MACHINE_SNAPSHOT_SHALLOW_BYTES = 40L
+
+    private const val WALL_CLOCK_RUNTIME_BYTES = 24L
+
+    private const val MAPPER_WALL_CLOCK_RUNTIME_BYTES = 24L
   }
 }
 
@@ -230,6 +343,25 @@ private data class SnapshotRtcRuntime(
       Gameboy.RtcRuntimeState(
           primary?.let { RealTimeClock.RuntimeState(it.emulationPaused, it.pauseStartedMillis) },
           slot?.let { RealTimeClock.RuntimeState(it.emulationPaused, it.pauseStartedMillis) },
+      )
+}
+
+private data class SnapshotMapperWallClockRuntime(
+    val kind: MemoryController.WallClockKind,
+    val checkpointSecond: Long,
+)
+
+private data class SnapshotWallClockRuntime(
+    val primary: SnapshotMapperWallClockRuntime?,
+    val slot: SnapshotMapperWallClockRuntime?,
+) {
+  val entryCount: Int
+    get() = (if (primary == null) 0 else 1) + (if (slot == null) 0 else 1)
+
+  fun toCore() =
+      Gameboy.WallClockRuntimeState(
+          primary?.let { MemoryController.WallClockRuntimeState(it.kind, it.checkpointSecond) },
+          slot?.let { MemoryController.WallClockRuntimeState(it.kind, it.checkpointSecond) },
       )
 }
 

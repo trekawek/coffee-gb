@@ -12,6 +12,12 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugOpcodeCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPpuCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugSerialCondition;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPoint;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason;
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
 import eu.rekawek.coffeegb.core.debug.trace.ApuTrace;
 import eu.rekawek.coffeegb.core.debug.trace.CpuInstructionTrace;
 import eu.rekawek.coffeegb.core.debug.trace.DmaTrace;
@@ -69,6 +75,11 @@ public class DebugApiContractTest {
             DebugErrorCode.class,
             DebugExecutionState.class,
             DebugFeatureState.class,
+            DebugHistoryCapabilities.class,
+            DebugHistoryConfiguration.class,
+            DebugHistoryPoint.class,
+            DebugHistoryStatus.class,
+            DebugHistoryTruncationReason.class,
             DebugInterruptCondition.class,
             DebugInterruptState.class,
             DebugInterruptType.class,
@@ -87,6 +98,7 @@ public class DebugApiContractTest {
             DebugPpuState.class,
             DebugRegisters.class,
             DebugResult.class,
+            DebugReverseStepResult.class,
             DebugSnapshot.class,
             DebugStepKind.class,
             DebugStepResult.class,
@@ -131,6 +143,17 @@ public class DebugApiContractTest {
         assertReturnType("step",
                 "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
                         + "<eu.rekawek.coffeegb.core.debug.DebugStepResult>>",
+                DebugStepKind.class);
+        assertReturnType("configureHistory",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus>>",
+                DebugHistoryConfiguration.class);
+        assertReturnType("historyStatus",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus>>");
+        assertReturnType("stepBackward",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult>>",
                 DebugStepKind.class);
         assertReturnType("readMemory",
                 "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
@@ -214,7 +237,8 @@ public class DebugApiContractTest {
                         "UNSUPPORTED_TOPOLOGY", "SESSION_BUSY", "STEP_LIMIT",
                         "BREAKPOINT_LIMIT", "BREAKPOINT_NOT_FOUND", "NO_BREAKPOINT_HIT",
                         "UNSUPPORTED_BREAKPOINT", "UNSUPPORTED_TRACE_CATEGORY", "TRACE_LIMIT",
-                        "INTERNAL_ERROR"),
+                        "INTERNAL_ERROR", "HISTORY_DISABLED", "HISTORY_EXHAUSTED",
+                        "HISTORY_LIMIT"),
                 List.of(DebugErrorCode.values()).stream().map(Enum::name)
                         .collect(Collectors.toList()));
     }

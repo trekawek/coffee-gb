@@ -15,6 +15,9 @@ import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepResult
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
@@ -105,6 +108,74 @@ internal class QueuedDebugPort(
         }
     return submit(validation) { requestId, completion ->
       QueuedDebugCommand.Step(requestId, generation, requireNotNull(kind), completion)
+    }
+  }
+
+  override fun configureHistory(
+      configuration: DebugHistoryConfiguration?
+  ): CompletionStage<DebugResult<DebugHistoryStatus>> {
+    val history = debugCapabilities.history()
+    val validation =
+        when {
+          configuration == null ->
+              DebugError(DebugErrorCode.INVALID_ARGUMENT, "History configuration is required")
+          !history.checkpointHistory() ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+                  "Reverse history is unavailable for this session",
+              )
+          configuration.enabled() &&
+              (configuration.maxFrames() > history.maxFrames() ||
+                  configuration.memoryBudgetBytes() > history.maxMemoryBudgetBytes()) ->
+              DebugError(
+                  DebugErrorCode.HISTORY_LIMIT,
+                  "History configuration exceeds the negotiated limits",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.ConfigureHistory(
+          requestId,
+          generation,
+          requireNotNull(configuration),
+          completion,
+      )
+    }
+  }
+
+  override fun historyStatus(): CompletionStage<DebugResult<DebugHistoryStatus>> {
+    val validation =
+        unsupportedUnless(
+            debugCapabilities.history().checkpointHistory(),
+            "Reverse history is unavailable for this session",
+        )
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.HistoryStatus(requestId, generation, completion)
+    }
+  }
+
+  override fun stepBackward(
+      kind: DebugStepKind?
+  ): CompletionStage<DebugResult<DebugReverseStepResult>> {
+    val history = debugCapabilities.history()
+    val validation =
+        when {
+          kind == null -> DebugError(DebugErrorCode.INVALID_ARGUMENT, "Step kind is required")
+          kind == DebugStepKind.FRAME && !history.reverseFrame() ->
+              DebugError(DebugErrorCode.UNSUPPORTED_STEP, "Reverse-frame is unavailable")
+          kind == DebugStepKind.INSTRUCTION && !history.reverseInstruction() ->
+              DebugError(DebugErrorCode.UNSUPPORTED_STEP, "Reverse-instruction is unavailable")
+          kind == DebugStepKind.MACHINE_CYCLE ->
+              DebugError(DebugErrorCode.UNSUPPORTED_STEP, "Reverse machine-cycle is unavailable")
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.StepBackward(
+          requestId,
+          generation,
+          requireNotNull(kind),
+          completion,
+      )
     }
   }
 
@@ -538,6 +609,26 @@ internal sealed class QueuedDebugCommand<T> protected constructor(
       val kind: DebugStepKind,
       completion: (DebugResult<DebugStepResult>) -> Boolean,
   ) : QueuedDebugCommand<DebugStepResult>(requestId, sessionGeneration, completion)
+
+  class ConfigureHistory internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val configuration: DebugHistoryConfiguration,
+      completion: (DebugResult<DebugHistoryStatus>) -> Boolean,
+  ) : QueuedDebugCommand<DebugHistoryStatus>(requestId, sessionGeneration, completion)
+
+  class HistoryStatus internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      completion: (DebugResult<DebugHistoryStatus>) -> Boolean,
+  ) : QueuedDebugCommand<DebugHistoryStatus>(requestId, sessionGeneration, completion)
+
+  class StepBackward internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val kind: DebugStepKind,
+      completion: (DebugResult<DebugReverseStepResult>) -> Boolean,
+  ) : QueuedDebugCommand<DebugReverseStepResult>(requestId, sessionGeneration, completion)
 
   class ReadMemory internal constructor(
       requestId: Long,

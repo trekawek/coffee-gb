@@ -207,6 +207,35 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         addressSpace.setClockPaused(paused);
     }
 
+    /** Rebinds mapper host-time bookkeeping after state restoration. */
+    public void reanchorRtcEmulationPause(boolean paused) {
+        addressSpace.reanchorClockAfterRestore(paused);
+    }
+
+    /** Prevents speculative state capture/restore from consulting mapper host-time services. */
+    public void setStateTimeSourceAccessSuppressed(boolean suppressed) {
+        addressSpace.setStateTimeSourceAccessSuppressed(suppressed);
+    }
+
+    /** Captures mapper wall-time bookkeeping without retaining the owning TimeSource. */
+    public MemoryController.WallClockRuntimeState captureWallClockRuntimeState() {
+        return addressSpace.captureWallClockRuntimeState();
+    }
+
+    public void validateWallClockRuntimeState(MemoryController.WallClockRuntimeState state) {
+        addressSpace.validateWallClockRuntimeState(state);
+    }
+
+    /** Applies elapsed wall time through a checkpoint boundary without consulting TimeSource. */
+    public void restoreWallClockRuntimeState(MemoryController.WallClockRuntimeState state) {
+        addressSpace.restoreWallClockRuntimeState(state);
+    }
+
+    /** Current mapper-owned motor output, without invoking host services. */
+    public boolean isRumbleActive() {
+        return addressSpace.isRumbleActive();
+    }
+
     /** Bypasses mapper-side boot-ROM handshakes when the console boot itself is skipped. */
     public void skipBoot() {
         addressSpace.skipBoot();

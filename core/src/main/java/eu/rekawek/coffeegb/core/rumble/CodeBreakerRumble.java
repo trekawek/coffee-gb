@@ -66,6 +66,19 @@ public class CodeBreakerRumble implements StatefulComponent<CodeBreakerRumble> {
         setMotorOn(mem.motorOn);
     }
 
+    /** Restores the emulated latch without exposing a speculative transaction to the host. */
+    public void restoreStateSilently(ComponentState<CodeBreakerRumble> state) {
+        if (!(state instanceof CodeBreakerRumbleState mem)) {
+            throw new IllegalArgumentException("Invalid state type");
+        }
+        motorOn = mem.motorOn;
+    }
+
+    /** Current accessory-owned motor output, without invoking host services. */
+    public boolean isMotorOn() {
+        return motorOn;
+    }
+
     private record CodeBreakerRumbleState(boolean motorOn)
             implements ComponentState<CodeBreakerRumble> {
     }

@@ -48,6 +48,11 @@ public class LiCheng implements MemoryController {
     }
 
     @Override
+    public boolean isRumbleActive() {
+        return delegate.isRumbleActive();
+    }
+
+    @Override
     public ComponentState<MemoryController> captureState() {
         return delegate.captureState();
     }
