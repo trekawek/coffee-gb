@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.core.debug;
 
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus;
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult;
@@ -277,6 +280,23 @@ public class ConsoleTest {
             return CompletableFuture.completedFuture(
                     DebugResult.success(new DebugStepResult(
                             kind, reason, 4, 1, ConsoleTest.snapshot(true))));
+        }
+
+        @Override
+        public CompletionStage<DebugResult<DebugHistoryStatus>> configureHistory(
+                DebugHistoryConfiguration configuration) {
+            return unsupported();
+        }
+
+        @Override
+        public CompletionStage<DebugResult<DebugHistoryStatus>> historyStatus() {
+            return unsupported();
+        }
+
+        @Override
+        public CompletionStage<DebugResult<DebugReverseStepResult>> stepBackward(
+                DebugStepKind kind) {
+            return unsupported();
         }
 
         @Override

@@ -146,6 +146,17 @@ public class Mbc3 implements MemoryController {
         clock.setEmulationPaused(paused);
     }
 
+    /** Rebinds restore-time pause ownership without charging time from the abandoned timeline. */
+    @Override
+    public void reanchorClockAfterRestore(boolean paused) {
+        clock.reanchorEmulationPause(paused);
+    }
+
+    @Override
+    public void setStateTimeSourceAccessSuppressed(boolean suppressed) {
+        clock.setStateTimeSourceAccessSuppressed(suppressed);
+    }
+
     public RealTimeClock.RuntimeState captureRtcRuntimeState() {
         return clock.captureRuntimeState();
     }

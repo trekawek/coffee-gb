@@ -162,6 +162,52 @@ public class RealTimeTimeSourceTest {
     }
 
     @Test
+    public void restoredPauseCanBeReanchoredWithoutChargingAbandonedWallTime() {
+        tick(Gameboy.TICKS_PER_SEC / 2L);
+        rtc.setEmulationPaused(true);
+        var targetState = rtc.captureState();
+        var targetRuntime = rtc.captureRuntimeState();
+
+        wallClock.forward(10, TimeUnit.SECONDS);
+        rtc.setSeconds(37);
+        rtc.restoreState(targetState);
+        rtc.restoreRuntimeState(targetRuntime);
+        rtc.reanchorEmulationPause(true);
+
+        var reanchored = rtc.captureRuntimeState();
+        assertTrue(reanchored.emulationPaused());
+        assertEquals(wallClock.currentTimeMillis(), reanchored.pauseStartedMillis());
+
+        wallClock.forward(500, TimeUnit.MILLISECONDS);
+        rtc.setEmulationPaused(false);
+        assertEquals(1, rtc.getSeconds());
+        assertEquals(0, rtc.captureRuntimeState().pauseStartedMillis());
+    }
+
+    @Test
+    public void restoredRunningOwnershipDiscardsOldPauseWithoutCatchUp() {
+        tick(Gameboy.TICKS_PER_SEC / 4L);
+        rtc.setEmulationPaused(true);
+        var targetState = rtc.captureState();
+        var targetRuntime = rtc.captureRuntimeState();
+
+        wallClock.forward(10, TimeUnit.SECONDS);
+        rtc.restoreState(targetState);
+        rtc.restoreRuntimeState(targetRuntime);
+        rtc.reanchorEmulationPause(false);
+
+        var running = rtc.captureRuntimeState();
+        assertFalse(running.emulationPaused());
+        assertEquals(0, running.pauseStartedMillis());
+        assertEquals(0, rtc.getSeconds());
+
+        tick(Gameboy.TICKS_PER_SEC * 3L / 4L - 1L);
+        assertEquals(0, rtc.getSeconds());
+        rtc.tick();
+        assertEquals(1, rtc.getSeconds());
+    }
+
+    @Test
     public void invalidRegisterValuesUseHardwareRolloverRules() {
         rtc.setMinutes(10);
         rtc.setSeconds(63);

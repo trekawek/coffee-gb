@@ -30,11 +30,13 @@ import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsStore
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.ApplyStage
+import eu.rekawek.coffeegb.controller.state.BooleanState
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.Int32State
 import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
 import eu.rekawek.coffeegb.controller.state.LinkedSessionState
 import eu.rekawek.coffeegb.controller.state.LinkedTopologyState
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.RecordState
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
@@ -68,6 +70,7 @@ import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceFailedEvent
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
 import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import org.junit.Assume
@@ -4209,14 +4212,35 @@ class LinkedControllerTest {
 
     sut.runFrame()
     val beforeInjectedFailure = sut.captureDetachedState()
+    val rumblingCoherent =
+        linkedCopy(
+            coherent,
+            players =
+                coherent.players.map { player ->
+                  if (player.player == 0) {
+                    LinkedPlayerState(
+                        player.player,
+                        assertNotNull(player.session).withCodeBreakerMotor(true),
+                    )
+                  } else {
+                    player
+                  }
+                },
+        )
+    val rumble = mutableListOf<Boolean>()
+    eventBus.register({ event -> rumble += event.on() }, RumbleEvent::class.java)
     assertFailsWith<StateApplyException> {
-      sut.restoreDetachedState(coherent) { player, stage ->
+      sut.restoreDetachedState(rumblingCoherent) { player, stage ->
         if (player == 1 && stage == ApplyStage.AFTER_MACHINE_MUTATION) {
           throw IllegalStateException("injected linked restore failure")
         }
       }
     }
     assertEquals(beforeInjectedFailure, sut.captureDetachedState())
+    assertEquals(emptyList(), rumble)
+
+    sut.restoreDetachedState(rumblingCoherent)
+    assertEquals(listOf(true), rumble)
     eventBus.close()
   }
 
@@ -4534,6 +4558,40 @@ class LinkedControllerTest {
             state.serialRuntime,
             state.heldButtons,
         )
+
+    fun SessionState.withCodeBreakerMotor(on: Boolean): SessionState {
+      val root =
+          RecordState(
+              machine.root.typeId,
+              machine.root.fields.map { field ->
+                if (field.name != "codeBreakerRumbleMemento") {
+                  field
+                } else {
+                  val rumble = field.value as RecordState
+                  StateField(
+                      field.name,
+                      RecordState(
+                          rumble.typeId,
+                          rumble.fields.map { rumbleField ->
+                            if (rumbleField.name == "motorOn") {
+                              StateField(rumbleField.name, BooleanState(on))
+                            } else {
+                              rumbleField
+                            }
+                          },
+                      ),
+                  )
+                }
+              },
+          )
+      return SessionState(
+          MachineState(root, machine.rtcRuntime, machine.hardware, machine.dmgFifoRuntime),
+          serialPeripheral,
+          serialState,
+          serialRuntime,
+          heldButtons,
+      )
+    }
 
     fun linkedCopy(
         state: LinkedSessionState,

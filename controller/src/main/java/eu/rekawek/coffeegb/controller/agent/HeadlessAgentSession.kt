@@ -20,6 +20,9 @@ import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
@@ -537,6 +540,17 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
           }
         }
 
+    override fun configureHistory(
+        configuration: DebugHistoryConfiguration?
+    ): CompletionStage<DebugResult<DebugHistoryStatus>> = unsupportedHistory()
+
+    override fun historyStatus(): CompletionStage<DebugResult<DebugHistoryStatus>> =
+        unsupportedHistory()
+
+    override fun stepBackward(
+        kind: DebugStepKind?
+    ): CompletionStage<DebugResult<DebugReverseStepResult>> = unsupportedHistory()
+
     override fun readMemory(
         request: DebugMemoryRequest?
     ): CompletionStage<DebugResult<DebugMemoryBlock>> =
@@ -687,6 +701,17 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     override fun close() {
       this@HeadlessAgentSession.close()
     }
+
+    private fun <T> unsupportedHistory(): CompletionStage<DebugResult<T>> =
+        rejectedDebugStage(
+            if (closed.get()) {
+              DebugResult.failure(DebugErrorCode.PORT_CLOSED, "Agent debug port is closed")
+            } else {
+              DebugResult.failure(
+                  DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+                  "Reverse history is unavailable for Agent sessions",
+              )
+            })
 
     private fun stepInstruction(state: OwnerState): DebugResult<DebugStepResult> {
       val before = state.snapshot()

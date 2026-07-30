@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.debug;
 
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities;
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
@@ -24,7 +25,8 @@ public record DebugCapabilities(
         int maxBreakpoints,
         Set<TraceCategory> traceCategories,
         int maxTraceCapacity,
-        int maxTraceReadEntries) {
+        int maxTraceReadEntries,
+        DebugHistoryCapabilities history) {
 
     public DebugCapabilities {
         if (maxMemoryReadLength < 0 || maxMemoryReadLength > DebugMemoryRequest.MAX_LENGTH) {
@@ -68,6 +70,28 @@ public record DebugCapabilities(
             throw new IllegalArgumentException(
                     "Trace categories and limits must agree");
         }
+        Objects.requireNonNull(history, "history");
+    }
+
+    /** Compatibility constructor for transports that predate reverse history. */
+    public DebugCapabilities(
+            boolean pauseResume,
+            boolean snapshot,
+            boolean instructionStep,
+            boolean machineCycleStep,
+            boolean frameStep,
+            boolean memoryRead,
+            boolean buttonInput,
+            int maxMemoryReadLength,
+            Set<DebugBreakpointKind> breakpointKinds,
+            int maxBreakpoints,
+            Set<TraceCategory> traceCategories,
+            int maxTraceCapacity,
+            int maxTraceReadEntries) {
+        this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
+                memoryRead, buttonInput, maxMemoryReadLength,
+                breakpointKinds, maxBreakpoints, traceCategories, maxTraceCapacity,
+                maxTraceReadEntries, DebugHistoryCapabilities.disabled());
     }
 
     /** Compatibility constructor for transports that expose only the phase-one operations. */
@@ -82,7 +106,7 @@ public record DebugCapabilities(
             int maxMemoryReadLength) {
         this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
                 memoryRead, buttonInput, maxMemoryReadLength,
-                Set.of(), 0, Set.of(), 0, 0);
+                Set.of(), 0, Set.of(), 0, 0, DebugHistoryCapabilities.disabled());
     }
 
     public boolean supports(DebugStepKind kind) {

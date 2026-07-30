@@ -39,6 +39,7 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.*;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
+import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush;
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage;
@@ -47,6 +48,7 @@ import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.serial.SerialPort;
 import eu.rekawek.coffeegb.core.sgb.Background;
@@ -61,8 +63,13 @@ import java.io.IOException;
 import java.util.concurrent.CancellationException;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Gameboy.class);
 
     /** @deprecated Use the owning Gameboy's {@link #getClockSpec()}. */
     @Deprecated
@@ -136,6 +143,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private final InfraredPort infraredPort;
 
     private final CodeBreakerRumble codeBreakerRumble;
+
+    private transient EventBus hostEventBus = EventBus.NULL_EVENT_BUS;
 
     private final Joypad joypad;
 
@@ -484,6 +493,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint,
                      InfraredEndpoint infraredEndpoint, Console console) {
+        hostEventBus = eventBus;
         joypad.init(eventBus);
         display.init(eventBus);
         sound.init(eventBus);
@@ -1059,11 +1069,39 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
     }
 
+    /**
+     * Rebinds primary and pass-through MBC3 clocks to current controller pause ownership after a
+     * machine-state restore, without applying host time from the replaced timeline.
+     */
+    public void reanchorCartridgeRtcPause(boolean paused) {
+        cartridge.reanchorRtcEmulationPause(paused);
+        if (slotCartridge != null) {
+            slotCartridge.reanchorRtcEmulationPause(paused);
+        }
+    }
+
     /** Captures MBC3 pause bookkeeping for each physical cartridge location. */
     public RtcRuntimeState captureRtcRuntimeState() {
         return new RtcRuntimeState(
                 cartridge.captureRtcRuntimeState(),
                 slotCartridge == null ? null : slotCartridge.captureRtcRuntimeState());
+    }
+
+    /** Captures RTC pause bookkeeping without consulting an external wall-clock service. */
+    public RtcRuntimeState captureRtcRuntimeStateWithoutTimeSource() {
+        return withStateTimeSourceAccessSuppressed(this::captureRtcRuntimeState);
+    }
+
+    /** Captures host-time boundaries for HuC3/TAMA5 without retaining their TimeSource. */
+    public WallClockRuntimeState captureWallClockRuntimeState() {
+        return new WallClockRuntimeState(
+                cartridge.captureWallClockRuntimeState(),
+                slotCartridge == null ? null : slotCartridge.captureWallClockRuntimeState());
+    }
+
+    /** Captures rollback wall-clock bookkeeping without consulting an external service. */
+    public WallClockRuntimeState captureWallClockRuntimeStateWithoutTimeSource() {
+        return withStateTimeSourceAccessSuppressed(this::captureWallClockRuntimeState);
     }
 
     /** Checks both cartridge RTC pause boundaries without mutating their wall-time state. */
@@ -1094,6 +1132,30 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
     }
 
+    public void validateWallClockRuntimeState(WallClockRuntimeState state) {
+        if (state == null) {
+            throw new IllegalArgumentException("Cartridge wall-clock runtime state is missing");
+        }
+        cartridge.validateWallClockRuntimeState(state.primary());
+        if (slotCartridge == null) {
+            if (state.slot() != null) {
+                throw new IllegalArgumentException(
+                        "Slot wall-clock runtime state supplied without a slot cartridge");
+            }
+        } else {
+            slotCartridge.validateWallClockRuntimeState(state.slot());
+        }
+    }
+
+    /** Advances restored mapper calendars only through their captured host-time boundaries. */
+    public void restoreWallClockRuntimeState(WallClockRuntimeState state) {
+        validateWallClockRuntimeState(state);
+        cartridge.restoreWallClockRuntimeState(state.primary());
+        if (slotCartridge != null) {
+            slotCartridge.restoreWallClockRuntimeState(state.slot());
+        }
+    }
+
     /** Captures DMG FIFO fields kept outside the pinned legacy Java memento. */
     public Gpu.DmgFifoRuntimeState captureDmgFifoRuntimeState() {
         return gpu.captureDmgFifoRuntimeState();
@@ -1110,6 +1172,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Service-free runtime state that is intentionally outside the pinned legacy memento. */
     public record RtcRuntimeState(RealTimeClock.RuntimeState primary,
                                   RealTimeClock.RuntimeState slot) {
+    }
+
+    /** Service-free HuC3/TAMA5 checkpoint boundaries for both physical cartridge locations. */
+    public record WallClockRuntimeState(MemoryController.WallClockRuntimeState primary,
+                                        MemoryController.WallClockRuntimeState slot) {
     }
 
     public HardwareProfile getHardwareProfile() {
@@ -1203,6 +1270,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return new GameboyState(biosShadow.captureState(), cartridge.captureState(), gpu.captureState(), statRegister.captureState(), mmu.captureState(), oamRam.captureState(), cpu.captureState(), interruptManager.captureState(), timer.captureState(), dma.captureState(), hdma.captureState(), null, sound.captureState(), serialPort.captureState(), infraredPort.captureState(), codeBreakerRumble.captureState(), joypad.captureState(), speedMode.captureState(), superGameboy.captureState(), background.captureState(), vRamTransfer.captureState(), sgbDisplay.captureState(), gameGenie.captureState(), requestedScreenRefresh, lcdDisabled, lcdOffTicks, speedSwitchTailTicks, speedSwitchClockPhaseShifted, blankCgbBootTilePending, clearBootTilemapPending, clearCgbBootOamShadowPending);
     }
 
+    /** Captures rollback state without consulting an external wall-clock service. */
+    public ComponentState<Gameboy> captureStateWithoutTimeSource() {
+        return withStateTimeSourceAccessSuppressed(this::captureState);
+    }
+
     @Override
     public ComponentState<Gameboy> captureState(MachineStateCapture capture) {
         return new GameboyState(
@@ -1282,10 +1354,35 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     @Override
     public void restoreState(ComponentState<Gameboy> state) {
+        boolean previousRumble = isRumbleActive();
         if (!(state instanceof GameboyState mem)) {
             throw new IllegalArgumentException();
         }
         restoreMachineState(mem, true);
+        synchronizeRumbleOutput(previousRumble);
+    }
+
+    /**
+     * Applies emulated state without publishing host output or consulting an external RTC
+     * TimeSource from a speculative transaction.
+     */
+    public void restoreStateSilently(ComponentState<Gameboy> state) {
+        if (!(state instanceof GameboyState mem)) {
+            throw new IllegalArgumentException();
+        }
+        withStateTimeSourceAccessSuppressed(() -> {
+            restoreMachineState(mem, true);
+            return null;
+        });
+    }
+
+    private <R> R withStateTimeSourceAccessSuppressed(Supplier<R> action) {
+        cartridge.setStateTimeSourceAccessSuppressed(true);
+        try {
+            return action.get();
+        } finally {
+            cartridge.setStateTimeSourceAccessSuppressed(false);
+        }
     }
 
     /**
@@ -1302,7 +1399,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (bootState == null) {
             throw new IllegalArgumentException("Boot state is required");
         }
+        boolean previousRumble = isRumbleActive();
         restoreMachineState(bootState.state, false);
+        synchronizeRumbleOutput(previousRumble);
     }
 
     private void restoreMachineState(GameboyState mem, boolean restoreCartridge) {
@@ -1327,7 +1426,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         sound.restoreState(mem.soundMemento());
         serialPort.restoreState(mem.serialPortMemento());
         infraredPort.restoreState(mem.infraredPortMemento());
-        codeBreakerRumble.restoreState(mem.codeBreakerRumbleMemento());
+        codeBreakerRumble.restoreStateSilently(mem.codeBreakerRumbleMemento());
         joypad.restoreState(mem.joypadMemento());
         speedMode.restoreState(mem.speedModeMemento());
         superGameboy.restoreState(mem.superGameboyMemento());
@@ -1343,6 +1442,32 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         blankCgbBootTilePending = mem.blankCgbBootTilePending();
         clearBootTilemapPending = mem.clearBootTilemapPending();
         clearCgbBootOamShadowPending = mem.clearCgbBootOamShadowPending();
+    }
+
+    /** Current aggregate emulated motor output, without invoking host services. */
+    public boolean isRumbleActive() {
+        return codeBreakerRumble.isMotorOn()
+                || cartridge.isRumbleActive()
+                || slotCartridge != null && slotCartridge.isRumbleActive();
+    }
+
+    /**
+     * Reconciles aggregate motor state after a complete restore transaction commits.
+     *
+     * <p>Subscriber failures are contained here: emulated state is already committed and cannot
+     * be rolled back merely because a host presentation callback rejected its reconciliation.
+     * No synthetic event is sent when the aggregate output did not change.
+     */
+    public void synchronizeRumbleOutput(boolean previousActive) {
+        boolean active = isRumbleActive();
+        if (active == previousActive) {
+            return;
+        }
+        try {
+            hostEventBus.post(new RumbleEvent(active));
+        } catch (RuntimeException failure) {
+            LOG.warn("Unable to synchronize host rumble output after state restore", failure);
+        }
     }
 
     /** Releases an asynchronously prepared machine that was never attached to a session. */

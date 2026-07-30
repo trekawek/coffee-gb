@@ -335,6 +335,7 @@ class AgentTest {
     agent.close()
     awaitValue("Agent owner survived close") { (!owner.isAlive).takeIf { it } }
     assertTrue(agent.debugPort.isClosed)
+    assertDebugFailure(agent.debugPort.historyStatus(), DebugErrorCode.PORT_CLOSED)
   }
 
   @Test

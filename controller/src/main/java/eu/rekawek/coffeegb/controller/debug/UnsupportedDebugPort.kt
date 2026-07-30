@@ -15,6 +15,9 @@ import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepResult
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
@@ -46,6 +49,16 @@ internal class UnsupportedDebugPort(
 
   override fun step(kind: DebugStepKind?): CompletionStage<DebugResult<DebugStepResult>> =
       unavailable()
+
+  override fun configureHistory(
+      configuration: DebugHistoryConfiguration?
+  ): CompletionStage<DebugResult<DebugHistoryStatus>> = unavailable()
+
+  override fun historyStatus(): CompletionStage<DebugResult<DebugHistoryStatus>> = unavailable()
+
+  override fun stepBackward(
+      kind: DebugStepKind?
+  ): CompletionStage<DebugResult<DebugReverseStepResult>> = unavailable()
 
   override fun readMemory(
       request: DebugMemoryRequest?

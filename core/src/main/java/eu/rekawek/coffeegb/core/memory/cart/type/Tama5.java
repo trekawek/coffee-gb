@@ -94,6 +94,8 @@ public class Tama5 implements MemoryController {
 
     private boolean ramUpdated;
 
+    private transient boolean stateTimeSourceAccessSuppressed;
+
     public Tama5(Rom rom, Battery battery) {
         this(rom, battery, new SystemTimeSource());
     }
@@ -323,7 +325,10 @@ public class Tama5 implements MemoryController {
      * last latch.
      */
     private void latchRtc() {
-        long now = timeSource.currentTimeMillis() / 1000;
+        latchRtc(timeSource.currentTimeMillis() / 1000);
+    }
+
+    private void latchRtc(long now) {
         long t = now - lastRtcSecond;
         lastRtcSecond = now;
         if (t <= 0 || rtcDisabled) {
@@ -389,6 +394,37 @@ public class Tama5 implements MemoryController {
         rtcTimerPage[RTC_MONTH_10] = month / 10;
         rtcTimerPage[RTC_YEAR_1] = year % 10;
         rtcTimerPage[RTC_YEAR_10] = year / 10;
+    }
+
+    /** Discards wall time belonging to the abandoned timeline after a historical restore. */
+    @Override
+    public void reanchorClockAfterRestore(boolean paused) {
+        lastRtcSecond = timeSource.currentTimeMillis() / 1000;
+    }
+
+    @Override
+    public void setStateTimeSourceAccessSuppressed(boolean suppressed) {
+        stateTimeSourceAccessSuppressed = suppressed;
+    }
+
+    @Override
+    public WallClockRuntimeState captureWallClockRuntimeState() {
+        long checkpointSecond = stateTimeSourceAccessSuppressed
+                ? lastRtcSecond : timeSource.currentTimeMillis() / 1000;
+        return new WallClockRuntimeState(WallClockKind.TAMA5, checkpointSecond);
+    }
+
+    @Override
+    public void validateWallClockRuntimeState(WallClockRuntimeState state) {
+        if (state == null || state.kind() != WallClockKind.TAMA5) {
+            throw new IllegalArgumentException("TAMA5 wall-clock runtime state is missing or invalid");
+        }
+    }
+
+    @Override
+    public void restoreWallClockRuntimeState(WallClockRuntimeState state) {
+        validateWallClockRuntimeState(state);
+        latchRtc(state.checkpointSecond());
     }
 
     private static int dayOfYear(int day, int month, int year) {

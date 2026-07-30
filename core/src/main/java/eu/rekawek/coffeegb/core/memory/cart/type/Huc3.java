@@ -60,6 +60,8 @@ public class Huc3 implements MemoryController {
 
     private boolean ramUpdated;
 
+    private transient boolean stateTimeSourceAccessSuppressed;
+
     public Huc3(Rom rom, Battery battery) {
         this(rom, battery, new SystemTimeSource());
     }
@@ -88,7 +90,10 @@ public class Huc3 implements MemoryController {
     }
 
     private void updateRtc() {
-        long now = timeSource.currentTimeMillis() / 1000;
+        updateRtc(timeSource.currentTimeMillis() / 1000);
+    }
+
+    private void updateRtc(long now) {
         while (lastRtcSecond / 60 < now / 60) {
             lastRtcSecond += 60;
             minutes++;
@@ -97,6 +102,37 @@ public class Huc3 implements MemoryController {
                 minutes = 0;
             }
         }
+    }
+
+    /** Discards wall time belonging to the abandoned timeline after a historical restore. */
+    @Override
+    public void reanchorClockAfterRestore(boolean paused) {
+        lastRtcSecond = timeSource.currentTimeMillis() / 1000;
+    }
+
+    @Override
+    public void setStateTimeSourceAccessSuppressed(boolean suppressed) {
+        stateTimeSourceAccessSuppressed = suppressed;
+    }
+
+    @Override
+    public WallClockRuntimeState captureWallClockRuntimeState() {
+        long checkpointSecond = stateTimeSourceAccessSuppressed
+                ? lastRtcSecond : timeSource.currentTimeMillis() / 1000;
+        return new WallClockRuntimeState(WallClockKind.HUC3, checkpointSecond);
+    }
+
+    @Override
+    public void validateWallClockRuntimeState(WallClockRuntimeState state) {
+        if (state == null || state.kind() != WallClockKind.HUC3) {
+            throw new IllegalArgumentException("HuC3 wall-clock runtime state is missing or invalid");
+        }
+    }
+
+    @Override
+    public void restoreWallClockRuntimeState(WallClockRuntimeState state) {
+        validateWallClockRuntimeState(state);
+        updateRtc(state.checkpointSecond());
     }
 
     @Override

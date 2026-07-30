@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
+import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
@@ -1136,6 +1137,35 @@ class DetachedStateTest {
 
       assertTrue(reachedLiveFailure, failure.toString())
       assertEquals(beforeFailure, session.captureDetachedState())
+    }
+  }
+
+  @Test
+  fun failedSessionTransactionDoesNotPublishSpeculativeRumble() {
+    session(configuration().setCodeBreakerRumble(true)).use { session ->
+      val rumble = mutableListOf<Boolean>()
+      session.eventBus.register({ event -> rumble += event.on() }, RumbleEvent::class.java)
+      session.gameboy.addressSpace.setByte(0xfffe, 0x80)
+      val target = session.captureDetachedState()
+
+      session.gameboy.addressSpace.setByte(0xfffe, 0x00)
+      session.gameboy.addressSpace.setByte(0xc123, 0x77)
+      val beforeFailure = session.captureDetachedState()
+      rumble.clear()
+
+      assertFailsWith<StateApplyException> {
+        DetachedStateAdapter.apply(session, target) { stage ->
+          if (stage == ApplyStage.AFTER_MACHINE_MUTATION) {
+            throw InjectedApplyFailure()
+          }
+        }
+      }
+
+      assertEquals(beforeFailure, session.captureDetachedState())
+      assertEquals(emptyList(), rumble)
+
+      DetachedStateAdapter.apply(session, target)
+      assertEquals(listOf(true), rumble)
     }
   }
 

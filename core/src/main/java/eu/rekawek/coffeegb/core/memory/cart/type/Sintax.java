@@ -108,6 +108,11 @@ public class Sintax implements MemoryController {
     }
 
     @Override
+    public boolean isRumbleActive() {
+        return delegate.isRumbleActive();
+    }
+
+    @Override
     public ComponentState<MemoryController> captureState() {
         return new SintaxState(delegate.captureState(), xorValues.clone(), mode, bankNo,
                 romBankXor);

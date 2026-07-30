@@ -120,6 +120,11 @@ public class Vf001Zook implements MemoryController {
     }
 
     @Override
+    public boolean isRumbleActive() {
+        return delegate.isRumbleActive();
+    }
+
+    @Override
     public ComponentState<MemoryController> captureState() {
         return new Vf001ZookState(delegate.captureState(), stream.clone(), streamLength,
                 bankPortRun);

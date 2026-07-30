@@ -16,11 +16,37 @@ internal class SessionSnapshot private constructor(
     internal val serialModeledBytes: Long,
 ) {
 
+  /** Exact incremental modeled retention for a collection of session snapshots. */
+  internal class RetentionLedger {
+    private val machine = MachineSnapshot.RetentionLedger()
+
+    private var serialBytes = 0L
+
+    val retainedBytes: Long
+      get() = Math.addExact(machine.modeledRetainedBytes, serialBytes)
+
+    fun add(snapshot: SessionSnapshot) {
+      val updatedSerialBytes = Math.addExact(serialBytes, snapshot.serialModeledBytes)
+      machine.add(snapshot.machine)
+      serialBytes = updatedSerialBytes
+    }
+
+    fun remove(snapshot: SessionSnapshot) {
+      val updatedSerialBytes = Math.subtractExact(serialBytes, snapshot.serialModeledBytes)
+      check(updatedSerialBytes >= 0)
+      machine.remove(snapshot.machine)
+      serialBytes = updatedSerialBytes
+    }
+  }
+
   /**
    * Preflights the complete serial candidate, cancels live endpoint work, then restores machine
    * and endpoint as one rollback-protected operation.
    */
-  fun restore(session: Session) {
+  fun restore(
+      session: Session,
+      effectiveCartridgePause: Boolean? = null,
+  ) {
     val endpoint = session.serialEndpoint
     val currentPeripheral = DetachedStateAdapter.serialPeripheral(endpoint)
     if (currentPeripheral != serialPeripheral) {
@@ -42,19 +68,22 @@ internal class SessionSnapshot private constructor(
     DetachedStateAdapter.validateSerialRuntime(endpoint, serialRuntime)
 
     val rollbackMachine = MachineSnapshot.capture(session.gameboy)
+    val rollbackRumble = session.gameboy.isRumbleActive
     val rollbackSerial = endpoint.captureState()
     val rollbackRuntime = DetachedStateAdapter.captureSerialRuntime(endpoint)
     try {
       // Cancellation precedes every live restore. Mobile restore also cancels defensively, but the
       // explicit boundary guarantees no queued backend completion races machine mutation.
       endpoint.disconnect()
-      machine.restore(session.gameboy)
+      machine.restore(session.gameboy, synchronizeHostOutputs = false)
       endpoint.restoreState(candidate)
       DetachedStateAdapter.applySerialRuntime(endpoint, serialRuntime)
+      effectiveCartridgePause?.let(session.gameboy::reanchorCartridgeRtcPause)
     } catch (failure: Throwable) {
       rollback(session, endpoint, rollbackMachine, rollbackSerial, rollbackRuntime, failure)
       throw StateApplyException("Internal session snapshot could not be applied atomically", failure)
     }
+    session.gameboy.synchronizeRumbleOutput(rollbackRumble)
   }
 
   private fun rollback(
@@ -66,7 +95,7 @@ internal class SessionSnapshot private constructor(
       original: Throwable,
   ) {
     try {
-      rollbackMachine.restore(session.gameboy)
+      rollbackMachine.restore(session.gameboy, synchronizeHostOutputs = false)
     } catch (rollbackFailure: Throwable) {
       original.addSuppressed(rollbackFailure)
     }

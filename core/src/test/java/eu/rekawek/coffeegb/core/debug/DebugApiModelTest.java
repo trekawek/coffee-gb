@@ -2,6 +2,12 @@ package eu.rekawek.coffeegb.core.debug;
 
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPoint;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason;
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
 import org.junit.Test;
 
@@ -142,6 +148,7 @@ public class DebugApiModelTest {
         assertFalse(capabilities.supports(DebugStepKind.MACHINE_CYCLE));
         assertTrue(capabilities.supports(DebugStepKind.FRAME));
         assertEquals(4096, capabilities.maxMemoryReadLength());
+        assertEquals(DebugHistoryCapabilities.disabled(), capabilities.history());
 
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugCapabilities(true, true, true, true, true,
@@ -149,6 +156,111 @@ public class DebugApiModelTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugCapabilities(true, true, true, true, true,
                         true, true, 0));
+    }
+
+    @Test
+    public void historyConfigurationAndCapabilitiesEnforcePublicBounds() {
+        DebugHistoryConfiguration disabled = DebugHistoryConfiguration.disabled();
+        assertFalse(disabled.enabled());
+        assertEquals(0, disabled.maxFrames());
+        assertEquals(0, disabled.memoryBudgetBytes());
+
+        DebugHistoryConfiguration defaults = DebugHistoryConfiguration.defaults();
+        assertTrue(defaults.enabled());
+        assertEquals(DebugHistoryConfiguration.DEFAULT_MAX_FRAMES, defaults.maxFrames());
+        assertEquals(DebugHistoryConfiguration.DEFAULT_MEMORY_BUDGET_BYTES,
+                defaults.memoryBudgetBytes());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryConfiguration(false, 1, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryConfiguration(true, 0,
+                        DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryConfiguration(true, 1,
+                        DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES - 1));
+
+        DebugHistoryCapabilities history = new DebugHistoryCapabilities(
+                true, true, false, DebugHistoryConfiguration.MAX_FRAMES,
+                DebugHistoryConfiguration.MAX_MEMORY_BUDGET_BYTES);
+        DebugCapabilities capabilities = new DebugCapabilities(
+                true, true, true, false, true, true, true, 4096,
+                EnumSet.noneOf(DebugBreakpointKind.class), 0,
+                EnumSet.noneOf(TraceCategory.class), 0, 0, history);
+        assertSame(history, capabilities.history());
+
+        assertThrows(NullPointerException.class, () -> new DebugCapabilities(
+                true, true, true, false, true, true, true, 4096,
+                EnumSet.noneOf(DebugBreakpointKind.class), 0,
+                EnumSet.noneOf(TraceCategory.class), 0, 0, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryCapabilities(false, true, false, 0, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryCapabilities(true, false, false, 1,
+                        DebugHistoryConfiguration.MAX_MEMORY_BUDGET_BYTES + 1));
+    }
+
+    @Test
+    public void historyStatusPinsBoundedMonotonicPointsAndReverseResult() {
+        DebugHistoryConfiguration configuration = DebugHistoryConfiguration.defaults();
+        DebugHistoryPoint first = new DebugHistoryPoint(1, 100, 2);
+        DebugHistoryPoint second = new DebugHistoryPoint(2, 200, 3);
+        DebugHistoryStatus status = new DebugHistoryStatus(
+                configuration, 2, 4_096, 3, first, second,
+                DebugHistoryTruncationReason.FRAME_BUDGET);
+
+        assertSame(first, status.oldest());
+        assertSame(second, status.newest());
+        assertEquals(DebugHistoryTruncationReason.FRAME_BUDGET,
+                status.lastTruncationReason());
+
+        DebugReverseStepResult result = new DebugReverseStepResult(
+                DebugStepKind.FRAME, second, snapshot(true), status);
+        assertEquals(DebugStepKind.FRAME, result.kind());
+        assertSame(second, result.restoredPoint());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryPoint(0, 0, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(configuration, 0, 1, 0,
+                        null, null, DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(configuration, 1, 1, 0,
+                        first, second, DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(configuration, 2, 1, 0,
+                        second, first, DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(DebugHistoryConfiguration.disabled(),
+                        1, 1, 0, first, first, DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(
+                        new DebugHistoryConfiguration(true, 1,
+                                DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES),
+                        2, 1, 0, first, second, DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(
+                        new DebugHistoryConfiguration(true, 2,
+                                DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES),
+                        2, DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES + 1,
+                        0, first, second, DebugHistoryTruncationReason.NONE));
+        assertThrows(NullPointerException.class,
+                () -> new DebugReverseStepResult(null, first, snapshot(true), status));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugReverseStepResult(
+                        DebugStepKind.MACHINE_CYCLE, first, snapshot(true), status));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugReverseStepResult(
+                        DebugStepKind.FRAME, first, snapshot(false), status));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugReverseStepResult(
+                        DebugStepKind.FRAME, first, snapshot(true), status));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugReverseStepResult(
+                        DebugStepKind.FRAME, first, snapshot(true),
+                        new DebugHistoryStatus(
+                                DebugHistoryConfiguration.disabled(), 0, 0, 0,
+                                null, null, DebugHistoryTruncationReason.NONE)));
     }
 
     @Test

@@ -2,19 +2,21 @@
 
 ## Scope
 
-This document pins the Phase 1 debugger foundation, the Phase 2 CPU breakpoint/trace contract, and
-the Phase 3 peripheral event contract implemented by `DebugPort`. The API is platform-neutral and
-exposes immutable values only. It does not expose a mutable core component, an AWT/Swing type, a
-live array, or a reflection escape hatch. The model is still an internal Coffee GB API until a
-later change explicitly versions it for third-party use.
+This document pins the Phase 1 debugger foundation, the Phase 2 CPU breakpoint/trace contract, the
+Phase 3 peripheral event contract, and the Phase 5 checkpoint/reverse-frame contract implemented
+by `DebugPort`. The API is platform-neutral and exposes immutable values only. It does not expose
+a mutable core component, an AWT/Swing type, a live array, or a reflection escape hatch. The model
+is still an internal Coffee GB API until a later change explicitly versions it for third-party
+use.
 
 Phase 1 supplies pause/resume, coherent snapshots, negotiated stepping, bounded side-effect-free
 memory reads, and deterministic button input. Phase 2 adds negotiated breakpoints/watchpoints and
 bounded CPU, memory, and interrupt tracing. Phase 3 adds exact PPU-state and serial breakpoints,
 all ten typed trace categories with producer provenance, selective peripheral instrumentation, and
 the debug-port-backed console described below. The separate Phase 4 deterministic recorder/player
-and `CGBR` v1 contract are documented in [replay-format-v1.md](replay-format-v1.md); checkpoints,
-reverse execution, and a debugger UI remain later phases and are not implied by `DebugPort`.
+and `CGBR` v1 contract are documented in [replay-format-v1.md](replay-format-v1.md). Phase 5 adds
+the explicitly enabled checkpoint ring and direct reverse-frame operation described below;
+replay-forward reverse-instruction and a debugger UI remain later phases.
 
 ## Session publication and capabilities
 
@@ -40,6 +42,9 @@ The current implementations advertise:
 | breakpoints | yes, 7 kinds / at most 128 | yes, 7 kinds / at most 128 | no |
 | trace | all 10 `TraceCategory` values / at most 65,536 entries | same | no |
 | trace read | at most 1024 entries | at most 1024 entries | no |
+| checkpoint history | yes, 1-7200 frames / 8-512 MiB | no | no |
+| reverse frame | yes | no | no |
+| reverse instruction | no | no | no |
 
 `DebugStepKind.MACHINE_CYCLE` is part of the shared model, but the desktop controller returns
 `UNSUPPORTED_STEP` for it. A client must not emulate an unsupported granularity by issuing direct
@@ -280,6 +285,71 @@ bounded one-emulated-second wait. If STOP/LCD state prevents a frame-ready bound
 window, it returns `STEP_LIMIT`. Clients must use capabilities and the returned tick count rather
 than assume the desktop lattice applies to every `DebugPort` implementation.
 
+## Bounded checkpoint history and reverse frame
+
+Desktop reverse history is disabled by default and does no capture or retention work until a
+client calls `configureHistory` with an enabled `DebugHistoryConfiguration`. The default enabled
+configuration retains at most 1800 frame checkpoints and 64 MiB; the negotiated public ranges are
+1 through 7200 checkpoints and 8 through 512 MiB. A valid configuration that exceeds a session's
+negotiated capability fails before owner admission with `HISTORY_LIMIT`; structurally invalid
+configuration values are rejected by the value model itself. Disabling uses the canonical
+zero-budget configuration.
+
+If history is enabled at a controller frame boundary, that current boundary becomes the initial
+anchor. If it is enabled partway through a frame, capture begins at the next completed boundary.
+Thereafter the owner captures exactly one `SessionSnapshot` at each completed controller-frame
+lattice boundary. Snapshots use immutable 4 KiB pages with identity-based structural sharing.
+Both limits are strict: the oldest checkpoints are evicted until the frame count and the modeled
+retained snapshot-graph byte count fit. Reapplying even an equal enabled configuration resets the
+ring and reports `CONFIGURATION_CHANGED`. `historyStatus` reports the configuration, exact modeled
+retained bytes, checkpoint count, cumulative eviction count, oldest/newest points, and the most
+recent truncation reason. The reasons distinguish frame-budget and memory-budget eviction,
+configuration replacement, session discontinuity, user rewind, topology changes,
+nondeterministic I/O, and destructive reverse.
+
+`stepBackward(FRAME)` requires an effectively paused desktop session. At a frame boundary it
+restores the preceding retained boundary. Partway through a frame it restores the newest retained
+boundary, which is the start of that partial frame. The restore is direct and rollback-protected:
+it executes no guest tick, advances no timing ticker, and emits no synthetic video or audio event.
+MBC3 real-time clocks in both the primary cartridge and Datel slot are re-anchored to the effective
+pause state after restore, so abandoned host wall time is never charged to the restored timeline.
+HuC3 and TAMA5 materialize elapsed host time only through the captured checkpoint boundary before
+their anchors are rebound, preserving legitimate pre-checkpoint time while excluding the abandoned
+future.
+Speculative apply and rollback keep rumble output silent; after commit, one aggregate rumble event
+is published only when the restored motor state differs from the live state it replaced.
+
+The live generation's `masterTick`, `frame`, snapshot sequence, and debugger retirement count stay
+monotonic across a reverse. `DebugReverseStepResult.restoredPoint` carries the checkpoint's
+historical master tick and frame separately, while its `snapshot` is the coherent post-restore
+view labelled with the current live counters. Breakpoint definitions and trace configuration
+survive; pending breakpoint correlation, the last hit, and retained trace entries are cleared so
+observations from two timelines cannot be spliced. Currently held host input remains live rather
+than being rewritten by a frame checkpoint.
+
+If a restore fails after live mutation begins, machine and serial state roll back atomically and
+the command returns `INTERNAL_ERROR`; retained checkpoints and the user-rewind ring remain intact.
+Transient breakpoint/trace correlation is cleared after that rollback because it cannot be
+reconstructed from portable machine state, and the emulation-owner thread remains available.
+
+This slice is intentionally destructive. After a successful boundary reverse, checkpoints from
+the abandoned future are released and status reports `REVERSE_STEP`. Replay-forward branching and
+reverse-instruction are not implied by the current operation.
+
+History is available only for an isolated desktop machine using the null serial endpoint or its
+ordinary unpaired peer-to-peer endpoint, the null infrared endpoint, and no active Mobile Adapter
+external I/O. MBC7 accelerometer and Pocket Camera cartridges are excluded in both the primary and
+Datel pass-through slots because their live sensor inputs are not represented by frame snapshots.
+Other serial/IR ownership or a live sensor cartridge returns `UNSUPPORTED_TOPOLOGY`; a committed
+topology handoff clears retained checkpoints and reports `TOPOLOGY_CHANGED`, unsupported
+topologies cannot record new ones, and reverse rechecks the topology before restoring. State
+loads, legacy imports, ROM replacement, and other session discontinuities also release retained
+state. User rewind reports its distinct `USER_REWIND` cause. Closing or replacing the port disables
+history. Successful debug reverse also clears the separate user-rewind ring so it cannot
+reintroduce states from the abandoned future. In the normal disabled mode the controller performs
+only one boolean check at an already existing completed-frame boundary, with no snapshot capture
+or per-tick allocation.
+
 ## Side-effect-free memory
 
 Every read is a bounded copy. The current core exposes a parser-corrected loaded-ROM-image view and
@@ -372,6 +442,9 @@ must not be parsed.
 | `UNSUPPORTED_TRACE_CATEGORY` | The configuration contains a trace category not advertised by this session. |
 | `TRACE_LIMIT` | Trace capacity or page size exceeds the negotiated bound. |
 | `INTERNAL_ERROR` | An unexpected implementation failure was contained instead of escaping on the owner. |
+| `HISTORY_DISABLED` | Reverse was requested before checkpoint history was enabled. |
+| `HISTORY_EXHAUSTED` | No preceding retained frame boundary is available. |
+| `HISTORY_LIMIT` | A history frame or memory budget is outside the negotiated range. |
 
 ## Lifecycle and hook removal
 
@@ -407,8 +480,9 @@ effect-indeterminate and inspect the replacement/current generation rather than 
 non-idempotent effect blindly.
 
 Clients must release completed snapshots, trace pages, and stages they no longer need. The port's
-trace history is fixed-capacity and overwriting; there is still no reverse-history buffer or other
-unbounded retained machine history.
+trace history is fixed-capacity and overwriting. Its optional reverse history is independently
+bounded by both frame count and modeled retained bytes; neither facility retains unbounded machine
+history.
 
 ## Disabled-retirement benchmark
 

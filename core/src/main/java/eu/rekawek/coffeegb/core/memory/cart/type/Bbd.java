@@ -95,6 +95,11 @@ public class Bbd implements MemoryController {
     }
 
     @Override
+    public boolean isRumbleActive() {
+        return delegate.isRumbleActive();
+    }
+
+    @Override
     public ComponentState<MemoryController> captureState() {
         return new BbdState(delegate.captureState(), dataSwapMode, bankSwapMode);
     }

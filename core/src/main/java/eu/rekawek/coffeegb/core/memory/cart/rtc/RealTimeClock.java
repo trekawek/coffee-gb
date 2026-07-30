@@ -34,6 +34,8 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
 
     private transient long pauseStartedMillis;
 
+    private transient boolean stateTimeSourceAccessSuppressed;
+
     private boolean latched;
 
     private int latchedSeconds;
@@ -162,13 +164,28 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         }
     }
 
+    /**
+     * Rebinds controller pause ownership after a machine-state restore without applying elapsed
+     * wall time from the abandoned timeline.
+     *
+     * <p>The restored clock fields already describe the target safe point. This operation therefore
+     * changes only host-time pause bookkeeping; ordinary pause/resume transitions must continue to
+     * use {@link #setEmulationPaused(boolean)}. The new anchor is obtained before either field is
+     * mutated so a failing {@link TimeSource} leaves the runtime state unchanged.</p>
+     */
+    public void reanchorEmulationPause(boolean paused) {
+        long anchor = paused ? timeSource.currentTimeMillis() : 0;
+        emulationPaused = paused;
+        pauseStartedMillis = anchor;
+    }
+
     /** Returns the controller pause boundary without advancing wall-clock-backed state. */
     public boolean isEmulationPaused() {
         return emulationPaused;
     }
 
     private void catchUpPausedTime() {
-        if (!emulationPaused) {
+        if (!emulationPaused || stateTimeSourceAccessSuppressed) {
             return;
         }
         long now = timeSource.currentTimeMillis();
@@ -304,9 +321,14 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         latchedDays = mem.latchedDays;
         latchedHalt = mem.latchedHalt;
         latchedCounterOverflow = mem.latchedCounterOverflow;
-        if (emulationPaused) {
+        if (emulationPaused && !stateTimeSourceAccessSuppressed) {
             pauseStartedMillis = timeSource.currentTimeMillis();
         }
+    }
+
+    /** Owner-thread transaction guard; ordinary emulation must leave this disabled. */
+    public void setStateTimeSourceAccessSuppressed(boolean suppressed) {
+        stateTimeSourceAccessSuppressed = suppressed;
     }
 
     /**

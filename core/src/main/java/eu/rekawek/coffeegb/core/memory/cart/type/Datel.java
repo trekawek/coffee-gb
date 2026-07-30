@@ -345,6 +345,13 @@ public class Datel implements MemoryController {
     }
 
     @Override
+    public void setStateTimeSourceAccessSuppressed(boolean suppressed) {
+        if (slot != null) {
+            slot.setStateTimeSourceAccessSuppressed(suppressed);
+        }
+    }
+
+    @Override
     public void restoreState(ComponentState<MemoryController> state) {
         if (!(state instanceof DatelState mem)) {
             throw new IllegalArgumentException("Invalid state type");

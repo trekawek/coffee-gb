@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.core.debug;
 
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus;
+import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult;
@@ -27,6 +30,14 @@ public interface DebugPort extends AutoCloseable {
     CompletionStage<DebugResult<DebugSnapshot>> snapshot();
 
     CompletionStage<DebugResult<DebugStepResult>> step(DebugStepKind kind);
+
+    /** Reconfigures and clears the bounded reverse-history timeline. */
+    CompletionStage<DebugResult<DebugHistoryStatus>> configureHistory(
+            DebugHistoryConfiguration configuration);
+
+    CompletionStage<DebugResult<DebugHistoryStatus>> historyStatus();
+
+    CompletionStage<DebugResult<DebugReverseStepResult>> stepBackward(DebugStepKind kind);
 
     CompletionStage<DebugResult<DebugMemoryBlock>> readMemory(DebugMemoryRequest request);
 

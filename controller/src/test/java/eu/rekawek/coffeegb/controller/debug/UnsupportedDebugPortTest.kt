@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
@@ -34,9 +35,23 @@ class UnsupportedDebugPortTest {
     assertTrue(port.capabilities().traceCategories().isEmpty())
     assertEquals(0, port.capabilities().maxTraceCapacity())
     assertEquals(0, port.capabilities().maxTraceReadEntries())
+    assertFalse(port.capabilities().history().checkpointHistory())
+    assertFalse(port.capabilities().history().reverseFrame())
+    assertFalse(port.capabilities().history().reverseInstruction())
+    assertEquals(0, port.capabilities().history().maxFrames())
+    assertEquals(0, port.capabilities().history().maxMemoryBudgetBytes())
     assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.pause())
     assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.snapshot())
     assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.step(DebugStepKind.INSTRUCTION))
+    assertError(
+        DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+        port.configureHistory(DebugHistoryConfiguration.defaults()),
+    )
+    assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.historyStatus())
+    assertError(
+        DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+        port.stepBackward(DebugStepKind.FRAME),
+    )
     val breakpoint =
         DebugBreakpoint(DebugBreakpointId(1), true, DebugPcCondition.at(0x100))
     assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.setBreakpoint(breakpoint))
@@ -54,6 +69,12 @@ class UnsupportedDebugPortTest {
 
     port.close()
     assertTrue(port.isClosed)
+    assertError(DebugErrorCode.PORT_CLOSED, port.historyStatus())
+    assertError(
+        DebugErrorCode.PORT_CLOSED,
+        port.configureHistory(DebugHistoryConfiguration.disabled()),
+    )
+    assertError(DebugErrorCode.PORT_CLOSED, port.stepBackward(DebugStepKind.FRAME))
     assertError(DebugErrorCode.PORT_CLOSED, port.readTrace(TraceReadRequest.initial(1)))
   }
 
@@ -65,6 +86,8 @@ class UnsupportedDebugPortTest {
 
     assertTrue(port.isClosed)
     assertError(DebugErrorCode.SESSION_REPLACED, port.snapshot())
+    assertError(DebugErrorCode.SESSION_REPLACED, port.historyStatus())
+    assertError(DebugErrorCode.SESSION_REPLACED, port.stepBackward(DebugStepKind.FRAME))
   }
 
   private fun <T> assertError(
