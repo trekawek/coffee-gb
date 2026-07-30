@@ -165,6 +165,49 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         return sampledInput;
     }
 
+    /**
+     * Installs the external-input baseline paired with a deterministic replay checkpoint.
+     *
+     * <p>Legacy buttons and the last physical sample are deliberately absent from portable
+     * machine state. A replay target must therefore supply them separately before executing its
+     * first tick. This method changes only those two external values: the checkpoint already owns
+     * the JOYP filter, interrupt, and {@code inputChangedSinceLastTick} state. Synthetic alignment
+     * is silent and cannot enter a debug or input timeline.</p>
+     */
+    public void seedDeterministicReplayInput(
+            Collection<Button> legacyButtons,
+            PlayerInputSnapshot sampledPhysicalInput) {
+        Set<Button> legacyCopy = Set.copyOf(
+                Objects.requireNonNull(legacyButtons, "legacyButtons"));
+        PlayerInputSnapshot physical = Objects.requireNonNull(
+                sampledPhysicalInput, "sampledPhysicalInput");
+        buttons.clear();
+        buttons.addAll(legacyCopy);
+        sampledInput = physical;
+        alignDebugInput();
+        alignInputTimeline();
+    }
+
+    /**
+     * Applies one absolute legacy-P1 transition during deterministic replay without host output.
+     *
+     * <p>The guest-visible change flag matches the ordinary event-driven input path, while event
+     * bus, debug-hook, and timeline notifications stay silent because they belong to the already
+     * recorded source timeline.</p>
+     */
+    public void applyDeterministicReplayLegacyInput(Collection<Button> legacyButtons) {
+        Set<Button> replayButtons = Set.copyOf(
+                Objects.requireNonNull(legacyButtons, "legacyButtons"));
+        if (buttons.equals(replayButtons)) {
+            return;
+        }
+        buttons.clear();
+        buttons.addAll(replayButtons);
+        inputChangedSinceLastTick = true;
+        alignDebugInput();
+        alignInputTimeline();
+    }
+
     public void setPressedButtons(Collection<Button> pressed) {
         if (buttons.equals(Set.copyOf(pressed))) {
             return;

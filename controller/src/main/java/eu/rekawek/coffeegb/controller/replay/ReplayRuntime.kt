@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 
 /** Builds a service-isolated configuration without copying battery bytes or host backends. */
 internal object ReplayRuntime {
@@ -28,12 +29,14 @@ internal object ReplayRuntime {
   fun session(
       configuration: Gameboy.GameboyConfiguration,
       restoreImmediately: Boolean,
+      serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
   ): Session {
     val prebuilt = if (restoreImmediately) configuration.forRestore().build() else null
     return Session(
         configuration,
         EventBusImpl(null, null, false),
         null,
+        serialEndpoint = serialEndpoint,
         prebuiltGameboy = prebuilt,
     )
   }

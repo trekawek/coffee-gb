@@ -164,6 +164,11 @@ public class FileBattery implements Battery {
     }
 
     @Override
+    public synchronized DebugHistoryReplayShape debugHistoryReplayShape() {
+        return new DebugHistoryReplayShape(DebugHistoryReplayKind.FILE_STATE, ramBuffer.length);
+    }
+
+    @Override
     public void flush() {
         BatteryFlush capture;
         Path capturedTarget;

@@ -23,6 +23,11 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
         peer.peer = this;
     }
 
+    /** True only while this endpoint has a live peer whose traffic must be replayed jointly. */
+    public boolean isConnected() {
+        return peer != null;
+    }
+
     @Override
     public void setSb(int sb) {
         this.sb = sb;

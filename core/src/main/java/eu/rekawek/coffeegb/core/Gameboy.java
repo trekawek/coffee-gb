@@ -41,6 +41,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush;
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage;
 import eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery;
@@ -253,7 +254,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             mmu.setCodeBreakerRumble(codeBreakerRumble);
         }
 
-        if (configuration.batteryData != null) {
+        if (configuration.debugHistoryReplay) {
+            cartridge = new Cartridge(
+                    configuration.rom,
+                    configuration.debugHistoryPrimaryBatteryShape.createServiceFreeBattery(),
+                    configuration.rtcTimeSource,
+                    clockSpec);
+        } else if (configuration.batteryData != null) {
             cartridge = new Cartridge(configuration.rom, new MemoryBattery(configuration.batteryData),
                     configuration.rtcTimeSource, clockSpec);
         } else {
@@ -266,12 +273,30 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         if (configuration.slotRom != null && cartridge.getDatel() != null) {
             // the game cartridge in the Action Replay's pass-through slot
-            slotCartridge = new Cartridge(
-                    configuration.slotRom,
-                    configuration.supportBatterySave,
-                    configuration.slotBatteryStorage,
-                    configuration.rtcTimeSource,
-                    clockSpec);
+            if (configuration.debugHistoryReplay) {
+                if (configuration.debugHistorySlotBatteryShape == null) {
+                    throw new IllegalStateException(
+                            "Debug-history replay is missing the live slot battery shape");
+                }
+                slotCartridge = new Cartridge(
+                        configuration.slotRom,
+                        configuration.debugHistorySlotBatteryShape.createServiceFreeBattery(),
+                        configuration.rtcTimeSource,
+                        clockSpec);
+            } else if (configuration.slotBatteryData != null) {
+                slotCartridge = new Cartridge(
+                        configuration.slotRom,
+                        new MemoryBattery(configuration.slotBatteryData),
+                        configuration.rtcTimeSource,
+                        clockSpec);
+            } else {
+                slotCartridge = new Cartridge(
+                        configuration.slotRom,
+                        configuration.supportBatterySave,
+                        configuration.slotBatteryStorage,
+                        configuration.rtcTimeSource,
+                        clockSpec);
+            }
             cartridge.getDatel().setSlotCartridge(slotCartridge.getMemoryController(),
                     configuration.slotRom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB);
         } else {
@@ -1243,6 +1268,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return joypad.getSampledInput();
     }
 
+    /** Silently installs the external-input baseline paired with a replay checkpoint. */
+    public void seedDeterministicReplayInput(
+            java.util.Collection<eu.rekawek.coffeegb.core.joypad.Button> legacyButtons,
+            eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot sampledPhysicalInput) {
+        joypad.seedDeterministicReplayInput(legacyButtons, sampledPhysicalInput);
+    }
+
+    /** Silently applies one recorded absolute legacy-P1 replay transition. */
+    public void applyDeterministicReplayLegacyInput(
+            java.util.Collection<eu.rekawek.coffeegb.core.joypad.Button> legacyButtons) {
+        joypad.applyDeterministicReplayLegacyInput(legacyButtons);
+    }
+
     public void setPressedButtons(java.util.Collection<eu.rekawek.coffeegb.core.joypad.Button> pressed) {
         joypad.setPressedButtons(pressed);
     }
@@ -1584,11 +1622,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         private byte[] batteryData;
 
+        private byte[] slotBatteryData;
+
         private boolean supportBatterySave = true;
 
         private BatteryStorage batteryStorage;
 
         private BatteryStorage slotBatteryStorage;
+
+        /** Selects service-free batteries while retaining live snapshot record ownership. */
+        private boolean debugHistoryReplay;
+
+        private Battery.DebugHistoryReplayShape debugHistoryPrimaryBatteryShape;
+
+        private Battery.DebugHistoryReplayShape debugHistorySlotBatteryShape;
 
         private boolean displaySgbBorder = true;
 
@@ -1729,6 +1776,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return this;
         }
 
+        /** Supplies an in-memory battery image for an Action Replay pass-through cartridge. */
+        public GameboyConfiguration setSlotBatteryData(byte[] slotBatteryData) {
+            this.slotBatteryData = slotBatteryData;
+            return this;
+        }
+
         public GameboyConfiguration setSupportBatterySave(boolean supportBatterySave) {
             this.supportBatterySave = supportBatterySave;
             return this;
@@ -1802,10 +1855,35 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return copy;
         }
 
+        /**
+         * Service-free configuration for debugger history replay. Battery ownership is frozen
+         * from the already-built live machine, rather than inferred from mutable save settings.
+         * The supplied deterministic time and input sources replace live host services.
+         */
+        public GameboyConfiguration forDebugHistoryReplay(
+                Gameboy liveGameboy,
+                TimeSource rtcTimeSource,
+                PlayerInputSource playerInputSource) {
+            GameboyConfiguration copy = copy();
+            Gameboy source = java.util.Objects.requireNonNull(
+                    liveGameboy, "liveGameboy");
+            copy.debugHistoryReplay = true;
+            copy.debugHistoryPrimaryBatteryShape =
+                    source.cartridge.debugHistoryReplayBatteryShape();
+            copy.debugHistorySlotBatteryShape = source.slotCartridge == null
+                    ? null : source.slotCartridge.debugHistoryReplayBatteryShape();
+            copy.rtcTimeSource = java.util.Objects.requireNonNull(
+                    rtcTimeSource, "rtcTimeSource");
+            copy.playerInputSource = playerInputSource == null
+                    ? PlayerInputSource.RELEASED : playerInputSource;
+            return copy;
+        }
+
         /** A boot-equivalent copy that cannot read or write a user's battery save. */
         public GameboyConfiguration forBootTemplate() {
             GameboyConfiguration copy = copy();
             copy.batteryData = null;
+            copy.slotBatteryData = null;
             copy.supportBatterySave = false;
             return copy;
         }
@@ -1816,9 +1894,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             copy.bootstrapMode = bootstrapMode;
             copy.slotRom = slotRom;
             copy.batteryData = batteryData;
+            copy.slotBatteryData = slotBatteryData;
             copy.supportBatterySave = supportBatterySave;
             copy.batteryStorage = batteryStorage;
             copy.slotBatteryStorage = slotBatteryStorage;
+            copy.debugHistoryReplay = debugHistoryReplay;
+            copy.debugHistoryPrimaryBatteryShape = debugHistoryPrimaryBatteryShape;
+            copy.debugHistorySlotBatteryShape = debugHistorySlotBatteryShape;
             copy.displaySgbBorder = displaySgbBorder;
             copy.mealybugDmgBlob = mealybugDmgBlob;
             copy.codeBreakerRumble = codeBreakerRumble;

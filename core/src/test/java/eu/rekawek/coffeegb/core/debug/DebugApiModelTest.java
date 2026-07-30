@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPoint;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPosition;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason;
 import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
@@ -205,22 +206,68 @@ public class DebugApiModelTest {
         DebugHistoryConfiguration configuration = DebugHistoryConfiguration.defaults();
         DebugHistoryPoint first = new DebugHistoryPoint(1, 100, 2);
         DebugHistoryPoint second = new DebugHistoryPoint(2, 200, 3);
+        DebugHistoryPosition firstPosition = DebugHistoryPosition.atCheckpoint(first);
         DebugHistoryStatus status = new DebugHistoryStatus(
-                configuration, 2, 4_096, 3, first, second,
+                configuration, 2, 4_096, 3, first, second, firstPosition, 1,
                 DebugHistoryTruncationReason.FRAME_BUDGET);
 
         assertSame(first, status.oldest());
         assertSame(second, status.newest());
+        assertSame(firstPosition, status.cursor());
+        assertEquals(1, status.futureCheckpointCount());
         assertEquals(DebugHistoryTruncationReason.FRAME_BUDGET,
                 status.lastTruncationReason());
 
         DebugReverseStepResult result = new DebugReverseStepResult(
-                DebugStepKind.FRAME, second, snapshot(true), status);
+                DebugStepKind.FRAME, firstPosition, first, snapshot(true), status);
         assertEquals(DebugStepKind.FRAME, result.kind());
-        assertSame(second, result.restoredPoint());
+        assertSame(firstPosition, result.restoredPosition());
+        assertSame(first, result.replayAnchor());
+        assertSame(first, result.restoredPoint());
+
+        DebugHistoryPosition instructionPosition =
+                new DebugHistoryPosition(150, 2, 50);
+        DebugHistoryStatus instructionStatus = new DebugHistoryStatus(
+                configuration, 2, 4_096, 3, first, second, instructionPosition, 1,
+                DebugHistoryTruncationReason.NONE);
+        DebugReverseStepResult instructionResult = new DebugReverseStepResult(
+                DebugStepKind.INSTRUCTION, instructionPosition, first,
+                snapshot(true), instructionStatus);
+        assertSame(instructionPosition, instructionResult.restoredPosition());
+        assertSame(first, instructionResult.replayAnchor());
+
+        // An instruction replay can reach the same public coordinates as a retained checkpoint
+        // whose capture-time RTC state belongs to the old branch. The cursor has no checkpoint
+        // identity, so a positive future count is the discriminator in this logical-equality case.
+        DebugHistoryStatus equalCoordinateFuture = new DebugHistoryStatus(
+                configuration, 2, 4_096, 3, first, second,
+                DebugHistoryPosition.atCheckpoint(second), 1,
+                DebugHistoryTruncationReason.NONE);
+        assertEquals(1, equalCoordinateFuture.futureCheckpointCount());
+
+        DebugHistoryStatus legacyStatus = new DebugHistoryStatus(
+                configuration, 2, 4_096, 3, first, second,
+                DebugHistoryTruncationReason.FRAME_BUDGET);
+        assertEquals(DebugHistoryPosition.atCheckpoint(second), legacyStatus.cursor());
+        assertEquals(0, legacyStatus.futureCheckpointCount());
+        DebugReverseStepResult legacyResult = new DebugReverseStepResult(
+                DebugStepKind.FRAME, second, snapshot(true), legacyStatus);
+        assertSame(second, legacyResult.restoredPoint());
+
+        DebugHistoryPosition unanchoredCursor = new DebugHistoryPosition(25, 0, 25);
+        DebugHistoryStatus unanchored = new DebugHistoryStatus(
+                configuration, 0, 0, 0, null, null, unanchoredCursor, 0,
+                DebugHistoryTruncationReason.NONE);
+        assertSame(unanchoredCursor, unanchored.cursor());
 
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugHistoryPoint(0, 0, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryPosition(-1, 0, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryPosition(0, -1, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryPosition(0, 0, -1));
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugHistoryStatus(configuration, 0, 1, 0,
                         null, null, DebugHistoryTruncationReason.NONE));
@@ -245,6 +292,29 @@ public class DebugApiModelTest {
                         2, DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES + 1,
                         0, first, second, DebugHistoryTruncationReason.NONE));
         assertThrows(NullPointerException.class,
+                () -> new DebugHistoryStatus(configuration, 2, 1, 0,
+                        first, second, null, 1, DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(configuration, 2, 1, 0,
+                        first, second, firstPosition, -1,
+                        DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(configuration, 2, 1, 0,
+                        first, second, firstPosition, 2,
+                        DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(configuration, 2, 1, 0,
+                        first, second, firstPosition, 0,
+                        DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(configuration, 2, 1, 0,
+                        first, second, new DebugHistoryPosition(50, 1, 0), 1,
+                        DebugHistoryTruncationReason.NONE));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugHistoryStatus(DebugHistoryConfiguration.disabled(),
+                        0, 0, 0, null, null, unanchoredCursor, 0,
+                        DebugHistoryTruncationReason.NONE));
+        assertThrows(NullPointerException.class,
                 () -> new DebugReverseStepResult(null, first, snapshot(true), status));
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugReverseStepResult(
@@ -254,7 +324,19 @@ public class DebugApiModelTest {
                         DebugStepKind.FRAME, first, snapshot(false), status));
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugReverseStepResult(
-                        DebugStepKind.FRAME, first, snapshot(true), status));
+                        DebugStepKind.FRAME, second, snapshot(true), status));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugReverseStepResult(
+                        DebugStepKind.FRAME, new DebugHistoryPosition(100, 2, 1), first,
+                        snapshot(true),
+                        new DebugHistoryStatus(
+                                configuration, 2, 1, 0, first, second,
+                                new DebugHistoryPosition(100, 2, 1), 1,
+                                DebugHistoryTruncationReason.NONE)));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugReverseStepResult(
+                        DebugStepKind.INSTRUCTION, firstPosition,
+                        new DebugHistoryPoint(3, 250, 4), snapshot(true), status));
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugReverseStepResult(
                         DebugStepKind.FRAME, first, snapshot(true),

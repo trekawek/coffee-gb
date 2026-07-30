@@ -77,6 +77,11 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         this.addressSpace = createMemoryController(rom, battery, rtcTimeSource, clockSpec);
     }
 
+    /** Freezes the built cartridge's battery ownership independently of mutable configuration. */
+    public Battery.DebugHistoryReplayShape debugHistoryReplayBatteryShape() {
+        return battery.debugHistoryReplayShape();
+    }
+
     private static MemoryController createMemoryController(Rom rom, Battery battery,
                                                            TimeSource rtcTimeSource,
                                                            ClockSpec clockSpec) {
@@ -289,6 +294,27 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     }
 
     private static Battery createBattery(Rom rom, BatteryStorage configuredStorage) {
+        int ramSize = batteryRamSize(rom);
+        if (ramSize < 0) {
+            return Battery.NULL_BATTERY;
+        }
+        BatteryStorage storage = configuredStorage;
+        if (storage == null) {
+            Path savePath = rom.getOrigin().persistencePath(".sav").orElseThrow();
+            Path legacyPath =
+                    rom.getOrigin()
+                            .legacyArchivePersistencePath(".sav")
+                            .orElse(null);
+            storage =
+                    legacyPath == null
+                            ? BatteryStorage.direct(savePath)
+                            : BatteryStorage.direct(savePath, java.util.List.of(legacyPath));
+        }
+        return new FileBattery(storage, ramSize);
+    }
+
+    /** Returns -1 when this cartridge has no live file-backed battery. */
+    private static int batteryRamSize(Rom rom) {
         boolean xploderGb = rom.getCartridgeProperties().getMapper()
                 == CartridgeProperties.Mapper.XPLODER_GB;
         if (rom.getType().isBattery() || xploderGb) {
@@ -317,22 +343,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             if (rom.getType().isMbc7()) {
                 ramSize = 0x100; // 93LC56 EEPROM
             }
-            BatteryStorage storage = configuredStorage;
-            if (storage == null) {
-                Path savePath = rom.getOrigin().persistencePath(".sav").orElseThrow();
-                Path legacyPath =
-                        rom.getOrigin()
-                                .legacyArchivePersistencePath(".sav")
-                                .orElse(null);
-                storage =
-                        legacyPath == null
-                                ? BatteryStorage.direct(savePath)
-                                : BatteryStorage.direct(savePath, java.util.List.of(legacyPath));
-            }
-            return new FileBattery(storage, ramSize);
-        } else {
-            return Battery.NULL_BATTERY;
+            return ramSize;
         }
+        return -1;
     }
 
     private static boolean canPersist(Rom rom, BatteryStorage configuredStorage) {

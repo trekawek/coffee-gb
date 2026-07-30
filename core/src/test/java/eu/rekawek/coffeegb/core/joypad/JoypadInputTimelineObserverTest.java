@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.joypad;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -113,6 +114,68 @@ public class JoypadInputTimelineObserverTest {
                         JoypadButtonMask.UP, JoypadButtonMask.UP),
                 new InputEvent(PHYSICAL_JOYPAD_SAMPLE, 2,
                         JoypadButtonMask.LEFT, JoypadButtonMask.START)), observer.events);
+    }
+
+    @Test
+    public void replaySeedAlignsExternalInputWithoutChangingCheckpointStateOrNotifying() {
+        PlayerInputSnapshot physical = PlayerInputSnapshot.of(List.of(
+                Set.of(Button.LEFT),
+                Set.of(Button.B),
+                Set.of(),
+                Set.of(Button.START)));
+        MutableInput input = new MutableInput(physical);
+        Joypad joypad = new Joypad(
+                new InterruptManager(false), EventBus.NULL_EVENT_BUS, true, input);
+        RecordingObserver observer = new RecordingObserver();
+        assertTrue(joypad.attachInputTimelineObserver(observer));
+        ComponentState<Joypad> checkpointState = joypad.captureState();
+
+        joypad.seedDeterministicReplayInput(Set.of(Button.A), physical);
+
+        assertFalse(inputChangedSinceLastTick(checkpointState));
+        assertFalse(inputChangedSinceLastTick(joypad.captureState()));
+        assertEquals(Set.of(Button.A), joypad.getLegacyPressedButtons());
+        assertEquals(physical, joypad.getSampledInput());
+        assertEquals(List.of(), observer.events);
+
+        // The replay source already exposes the seeded sample, so the first tick has no synthetic
+        // physical transition and cannot resample a released power-on baseline.
+        joypad.tick();
+        assertEquals(List.of(), observer.events);
+    }
+
+    @Test
+    public void replayLegacyTransitionSetsGuestChangeStateButKeepsObservationSilent() {
+        Joypad joypad = new Joypad(
+                new InterruptManager(false), EventBus.NULL_EVENT_BUS, false);
+        joypad.seedDeterministicReplayInput(
+                Set.of(Button.A), PlayerInputSnapshot.released());
+        RecordingObserver observer = new RecordingObserver();
+        assertTrue(joypad.attachInputTimelineObserver(observer));
+        ComponentState<Joypad> before = joypad.captureState();
+
+        joypad.applyDeterministicReplayLegacyInput(Set.of(Button.B, Button.START));
+
+        assertFalse(inputChangedSinceLastTick(before));
+        assertTrue(inputChangedSinceLastTick(joypad.captureState()));
+        assertEquals(Set.of(Button.B, Button.START), joypad.getLegacyPressedButtons());
+        assertEquals(List.of(), observer.events);
+
+        ComponentState<Joypad> after = joypad.captureState();
+        joypad.applyDeterministicReplayLegacyInput(Set.of(Button.START, Button.B));
+        assertTrue(inputChangedSinceLastTick(after));
+        assertTrue(inputChangedSinceLastTick(joypad.captureState()));
+        assertEquals(List.of(), observer.events);
+    }
+
+    private static boolean inputChangedSinceLastTick(ComponentState<Joypad> state) {
+        try {
+            var accessor = state.getClass().getDeclaredMethod("inputChangedSinceLastTick");
+            accessor.setAccessible(true);
+            return (boolean) accessor.invoke(state);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Joypad checkpoint has no input-change state", e);
+        }
     }
 
     private record InputEvent(InputTimelineObserver.Phase phase, int player,
