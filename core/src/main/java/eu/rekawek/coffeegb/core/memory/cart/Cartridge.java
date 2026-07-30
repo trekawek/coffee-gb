@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.memory.cart;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -195,6 +196,10 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     /** Advances cartridge hardware clocked from the Game Boy master clock. */
     public void tick() {
         addressSpace.tick();
+    }
+
+    public void setDebugHooks(DebugHooks hooks) {
+        addressSpace.setDebugHooks(hooks);
     }
 
     /** Notifies independent cartridge clocks that emulation has paused or resumed. */

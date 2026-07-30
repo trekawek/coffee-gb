@@ -5,6 +5,9 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.BitUtils;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
+import eu.rekawek.coffeegb.core.debug.DebugButton;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.InputTrace;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -49,6 +52,12 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     private int filteredInputLines = 0x0f;
 
     private volatile boolean inputChangedSinceLastTick;
+
+    /** Owner-thread observation only; deliberately absent from portable machine state. */
+    private transient DebugHooks debugHooks;
+
+    /** Stable {@link DebugButton#ordinal()} mask for the effective P1 input union. */
+    private transient int observedDebugButtonMask;
 
     private int players;
     private int currentPlayer;
@@ -102,6 +111,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         LOG.atDebug().log("Pressed button {} at tick {}", button, tick);
         if (buttons.add(button)) {
             inputChangedSinceLastTick = true;
+            notifyDebugInputChange();
         }
     }
 
@@ -109,6 +119,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         LOG.atDebug().log("Released button {} at tick {}", button, tick);
         if (buttons.remove(button)) {
             inputChangedSinceLastTick = true;
+            notifyDebugInputChange();
         }
     }
 
@@ -140,6 +151,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         buttons.clear();
         buttons.addAll(pressed);
         inputChangedSinceLastTick = true;
+        notifyDebugInputChange();
     }
 
     public void tick() {
@@ -149,6 +161,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (!sampledInput.equals(nextInput)) {
             sampledInput = nextInput;
             inputChangedSinceLastTick = true;
+            notifyDebugInputChange();
         }
         // JOYP writes happen after the joypad clock edge represented by this emulator
         // tick. Start sampling a changed input on the following tick, then require four
@@ -344,6 +357,66 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         System.arraycopy(mem.currentPacket, 0, this.currentPacket, 0, mem.currentPacket.length);
         this.currentByteIndex = mem.currentByteIndex;
         this.currentPacketIndex = mem.currentPacketIndex;
+        alignDebugInput();
+    }
+
+    /** Installs an optional owner-thread observer without emitting an alignment event. */
+    public void setDebugHooks(DebugHooks debugHooks) {
+        alignDebugInput();
+        this.debugHooks = debugHooks;
+    }
+
+    private void notifyDebugInputChange() {
+        int buttonMask = getDebugButtonMask();
+        int changedMask = buttonMask ^ observedDebugButtonMask;
+        if (changedMask == 0) {
+            return;
+        }
+        int pressedMask = buttonMask & changedMask;
+        int releasedMask = observedDebugButtonMask & changedMask;
+        observedDebugButtonMask = buttonMask;
+        DebugHooks hooks = debugHooks;
+        if (hooks == null) {
+            return;
+        }
+        InputTrace.Kind kind;
+        if (releasedMask == 0) {
+            kind = InputTrace.Kind.PRESSED;
+        } else if (pressedMask == 0) {
+            kind = InputTrace.Kind.RELEASED;
+        } else {
+            kind = InputTrace.Kind.STATE_CHANGED;
+        }
+        hooks.onInputEvent(kind, buttonMask, changedMask);
+    }
+
+    private void alignDebugInput() {
+        observedDebugButtonMask = getDebugButtonMask();
+    }
+
+    private int getDebugButtonMask() {
+        int result = 0;
+        for (Button button : buttons) {
+            result |= getDebugButtonMask(button);
+        }
+        for (Button button : sampledInput.buttons(0)) {
+            result |= getDebugButtonMask(button);
+        }
+        return result;
+    }
+
+    private static int getDebugButtonMask(Button button) {
+        DebugButton debugButton = switch (button) {
+            case RIGHT -> DebugButton.RIGHT;
+            case LEFT -> DebugButton.LEFT;
+            case UP -> DebugButton.UP;
+            case DOWN -> DebugButton.DOWN;
+            case A -> DebugButton.A;
+            case B -> DebugButton.B;
+            case SELECT -> DebugButton.SELECT;
+            case START -> DebugButton.START;
+        };
+        return 1 << debugButton.ordinal();
     }
 
     private static void validateState(JoypadState state) {

@@ -30,7 +30,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
 /**
- * Manual measurements of the Phase 2 breakpoint and trace producer paths.
+ * Manual measurements of the Phase 2/3 breakpoint and trace producer paths.
  *
  * <p>Run in a fresh Maven test JVM immediately after the portable disabled baseline using:
  * {@code mvn -B -pl core -am
@@ -65,6 +65,13 @@ public class DebugInstrumentationBenchmarkTest {
         measure(
                 "cpu-memory-trace-enabled",
                 DebugInstrumentationBenchmarkTest::configureFullTrace,
+                TRACE_WARMUP_TICKS,
+                TRACE_SAMPLES,
+                TRACE_TICKS_PER_SAMPLE,
+                DebugInstrumentationBenchmarkTest::validateFullTrace);
+        measure(
+                "all-categories-trace-enabled",
+                DebugInstrumentationBenchmarkTest::configureAllCategoryTrace,
                 TRACE_WARMUP_TICKS,
                 TRACE_SAMPLES,
                 TRACE_TICKS_PER_SAMPLE,
@@ -218,6 +225,13 @@ public class DebugInstrumentationBenchmarkTest {
                 TraceFilter.all()));
     }
 
+    private static void configureAllCategoryTrace(DebugInstrumentation instrumentation) {
+        instrumentation.configureTrace(new TraceConfiguration(
+                TRACE_CAPACITY,
+                EnumSet.allOf(TraceCategory.class),
+                TraceFilter.all()));
+    }
+
     private static void validateNoHitPcBreakpoint(
             DebugInstrumentation instrumentation, TraceReadResult trace) {
         assertNull(instrumentation.pollBreakpointMatch());
@@ -249,7 +263,7 @@ public class DebugInstrumentationBenchmarkTest {
                 TRACE_CAPACITY,
                 TRACE_CAPACITY,
                 Set.of(DebugBreakpointKind.PROGRAM_COUNTER),
-                EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY));
+                EnumSet.allOf(TraceCategory.class));
     }
 
     private static TraceReadResult traceState(DebugInstrumentation instrumentation) {

@@ -96,6 +96,26 @@ public final class DebugBreakpointMatcher {
                 && (!condition.constrainsMode() || condition.mode() == mode);
     }
 
+    /** Matches a serial transfer start or completed byte observation. */
+    public static boolean matchesSerial(
+            DebugBreakpoint breakpoint,
+            DebugSerialCondition.Event event,
+            int value) {
+        Objects.requireNonNull(breakpoint, "breakpoint");
+        if (!breakpoint.enabled()
+                || !(breakpoint.condition() instanceof DebugSerialCondition condition)) {
+            return false;
+        }
+        Objects.requireNonNull(event, "event");
+        DebugBreakpointChecks.unsignedByte("value", value);
+        if (condition.event() != event) {
+            return false;
+        }
+        return !condition.hasValueConstraint()
+                || (value & condition.valueMask())
+                == (condition.value() & condition.valueMask());
+    }
+
     /** Matches exact monotonic master-tick or frame-count conditions. */
     public static boolean matchesCounters(
             DebugBreakpoint breakpoint,

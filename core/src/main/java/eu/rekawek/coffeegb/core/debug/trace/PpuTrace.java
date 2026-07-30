@@ -15,6 +15,8 @@ public record PpuTrace(Kind kind, long ppuFrame, int line, int dot, DebugPpuMode
         implements TraceEvent {
 
     public enum Kind {
+        LCD_ENABLED,
+        LCD_DISABLED,
         MODE_CHANGED,
         SCANLINE_STARTED,
         FRAME_READY

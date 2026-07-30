@@ -267,6 +267,7 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     }
 
     private void clearInterruptState(InterruptType type) {
+        boolean wasAsserted = (interruptFlag & (1 << type.ordinal())) != 0;
         interruptFlag = interruptFlag & ~(1 << type.ordinal());
         if (type == InterruptType.VBlank) {
             maskVBlankOnNextRead = false;
@@ -279,6 +280,16 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         cpuInstructionBlockedInterrupts &= ~(1 << type.ordinal());
         if (type == InterruptType.LCDC) {
             maskLcdcUntilNextPeripheralTick = false;
+        }
+        if (wasAsserted) {
+            notifyInterruptCleared(type);
+        }
+    }
+
+    private void notifyInterruptCleared(InterruptType type) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onInterruptCleared(toDebugInterruptType(type));
         }
     }
 
@@ -457,14 +468,13 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
 
     @Override
     public void setByteFromCpu(int address, int value) {
-        int newlyAssertedInterrupts = address == 0xff0f
-                ? ~interruptFlag & value & 0x1f
-                : 0;
+        int previousInterruptFlag = interruptFlag;
         setByte(address, value);
         if (address == 0xff0f) {
             lcdcInterruptFlagWriteClear =
                     (value & (1 << InterruptType.LCDC.ordinal())) == 0;
-            notifyInterruptsRequested(newlyAssertedInterrupts);
+            notifyInterruptsRequested(~previousInterruptFlag & interruptFlag & 0x1f);
+            notifyInterruptsCleared(previousInterruptFlag & ~interruptFlag & 0x1f);
         }
     }
 
@@ -476,6 +486,18 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         for (InterruptType type : InterruptType.VALUES) {
             if ((interruptMask & (1 << type.ordinal())) != 0) {
                 hooks.onInterruptRequested(toDebugInterruptType(type));
+            }
+        }
+    }
+
+    private void notifyInterruptsCleared(int interruptMask) {
+        DebugHooks hooks = debugHooks;
+        if (hooks == null || interruptMask == 0) {
+            return;
+        }
+        for (InterruptType type : InterruptType.VALUES) {
+            if ((interruptMask & (1 << type.ordinal())) != 0) {
+                hooks.onInterruptCleared(toDebugInterruptType(type));
             }
         }
     }

@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.MapperRtcTrace;
+
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -47,6 +50,8 @@ public class Mbc5 implements MemoryController {
     // to disabled RAM can't corrupt the save.
     private final boolean gateRamWrites;
 
+    private transient DebugHooks debugHooks;
+
     public Mbc5(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
         this.romBanks = rom.getRomBanks();
@@ -71,6 +76,10 @@ public class Mbc5 implements MemoryController {
 
     @Override
     public void setByte(int address, int value) {
+        DebugHooks hooks = debugHooks;
+        int previousRomBank = hooks == null ? -1 : selectedRomBank % romBanks;
+        int previousRamBank = hooks == null ? -1 : selectedRamBank;
+        boolean previousRamEnabled = ramWriteEnabled;
         if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = (value & 0b1010) != 0;
         } else if (address >= 0x2000 && address < 0x3000) {
@@ -98,6 +107,28 @@ public class Mbc5 implements MemoryController {
                 ramUpdated = true;
             }
         }
+        if (hooks != null) {
+            int romBank = selectedRomBank % romBanks;
+            if (romBank != previousRomBank) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.ROM_BANK_CHANGED, -1, romBank);
+            }
+            if (selectedRamBank != previousRamBank) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.RAM_BANK_CHANGED, -1, selectedRamBank);
+            }
+            if (ramWriteEnabled != previousRamEnabled) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.RAM_ENABLE_CHANGED,
+                        -1,
+                        ramWriteEnabled ? 1 : 0);
+            }
+        }
+    }
+
+    @Override
+    public void setDebugHooks(DebugHooks hooks) {
+        debugHooks = hooks;
     }
 
     @Override

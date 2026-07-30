@@ -3,6 +3,11 @@ package eu.rekawek.coffeegb.core.memory;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
+import eu.rekawek.coffeegb.core.debug.trace.DmaTrace;
+import eu.rekawek.coffeegb.core.debug.trace.TraceSource;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.Mode;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
@@ -141,6 +146,20 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     // It is deliberately transient and never survives a Gameboy tick boundary.
     private transient SourceBusSample sourceBusSample;
 
+    private transient DebugHooks debugHooks;
+
+    private transient boolean debugMemoryHooks;
+
+    private transient int debugDmaSource;
+
+    private transient int debugDmaDestination;
+
+    private transient int debugDmaLength;
+
+    private transient int debugDmaTransferred;
+
+    private transient DmaTrace.Engine debugDmaEngine = DmaTrace.Engine.VRAM_GENERAL;
+
     public Hdma(AddressSpace addressSpace) {
         this(addressSpace, new SpeedMode(false));
     }
@@ -181,13 +200,34 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 sourceBusSample = new SourceBusSample(sourceAddress, value);
                 blockData[j] = value;
                 sourceBytesTransferred++;
+                if (debugMemoryHooks
+                        && (sourceAddress < 0x8000 || sourceAddress >= 0xa000)) {
+                    int mappedAddress = DmaAddressSpace.mapAddress(sourceAddress, true);
+                    notifyMemoryAccess(
+                            debugAddressSpace(mappedAddress),
+                            DebugMemoryAccess.READ,
+                            mappedAddress,
+                            value);
+                }
             }
             return false;
         }
         // Keep the existing atomic destination commit. Only the source side needs to
         // be visible per byte for HDMA/OAM-DMA bus sharing.
         for (int j = 0; j < 0x10; j++) {
-            addressSpace.setByte(0x8000 | ((dst + j) & 0x1fff), blockData[j]);
+            int destinationAddress = 0x8000 | ((dst + j) & 0x1fff);
+            addressSpace.setByte(destinationAddress, blockData[j]);
+            if (debugMemoryHooks) {
+                notifyMemoryAccess(
+                        DebugAddressSpace.VIDEO_RAM,
+                        DebugMemoryAccess.WRITE,
+                        destinationAddress,
+                        blockData[j]);
+            }
+            if (debugHooks != null) {
+                debugDmaTransferred++;
+                notifyDmaEvent(DmaTrace.Kind.BYTE_TRANSFERRED);
+            }
         }
         // Preserve the grant through a speed switch so Gameboy can account for a
         // burst that completed while the CPU clock was stopped.
@@ -201,6 +241,8 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         // through the 8 KiB VRAM aperture, but reaching 10000 terminates the request
         // rather than wrapping the raw counter (dma_dst_wrap_1/2).
         if (stopAfterCurrentBlock || dst == 0 || length-- == 0) {
+            boolean cancelled = stopAfterCurrentBlock;
+            notifyDmaEvent(cancelled ? DmaTrace.Kind.CANCELLED : DmaTrace.Kind.COMPLETED);
             transferInProgress = false;
             setCpuRequestArbitration(CpuRequestArbitration.NONE);
             length = preserveLengthAfterCurrentBlock ? length : 0x7f;
@@ -702,6 +744,8 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 ? CpuRequestArbitration.UNRESOLVED
                 : CpuRequestArbitration.NONE);
         hblankRequestAge = 0;
+        alignDebugDmaObservation();
+        notifyDmaEvent(DmaTrace.Kind.STARTED);
         if (hblankTransfer && !lcdEnabled) {
             // With the LCD off, starting HDMA copies one block immediately. There are
             // no subsequent HBlanks, so the transfer then remains paused.
@@ -739,6 +783,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             // observes the newly written length.
             stopAfterCurrentBlock = true;
         } else {
+            notifyDmaEvent(DmaTrace.Kind.CANCELLED);
             transferInProgress = false;
             hblankRequestTicks = -1;
             setCpuRequestArbitration(CpuRequestArbitration.NONE);
@@ -749,6 +794,66 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             interruptEntryWonArbitration = false;
             wakeRequestArbitration = WakeRequestArbitration.NONE;
         }
+    }
+
+    public void setDebugHooks(DebugHooks hooks) {
+        boolean newlyAttached = debugHooks == null && hooks != null;
+        debugHooks = hooks;
+        debugMemoryHooks = hooks != null && hooks.requiresPpuMemoryAccessHooks();
+        if (newlyAttached && transferInProgress) {
+            alignDebugDmaObservation();
+        }
+    }
+
+    private void alignDebugDmaObservation() {
+        if (debugHooks == null) {
+            return;
+        }
+        debugDmaSource = src & 0xffff;
+        debugDmaDestination = 0x8000 | (dst & 0x1fff);
+        debugDmaLength = (length + 1) * 0x10;
+        debugDmaTransferred = 0;
+        debugDmaEngine = hblankTransfer
+                ? DmaTrace.Engine.VRAM_HBLANK
+                : DmaTrace.Engine.VRAM_GENERAL;
+    }
+
+    private void notifyDmaEvent(DmaTrace.Kind kind) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onDmaEvent(
+                    debugDmaEngine,
+                    kind,
+                    debugDmaSource,
+                    debugDmaDestination,
+                    debugDmaLength,
+                    Math.min(debugDmaTransferred, debugDmaLength));
+        }
+    }
+
+    private void notifyMemoryAccess(
+            DebugAddressSpace space, DebugMemoryAccess access, int address, int value) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onMemoryAccess(
+                    space,
+                    TraceSource.DMA,
+                    access,
+                    address & 0xffff,
+                    value & 0xff);
+        }
+    }
+
+    private static DebugAddressSpace debugAddressSpace(int address) {
+        int mapped = address & 0xffff;
+        if (mapped < 0x8000) return DebugAddressSpace.ROM;
+        if (mapped < 0xa000) return DebugAddressSpace.VIDEO_RAM;
+        if (mapped < 0xc000) return DebugAddressSpace.CARTRIDGE_RAM;
+        if (mapped < 0xfe00) return DebugAddressSpace.WORK_RAM;
+        if (mapped < 0xfea0) return DebugAddressSpace.OAM;
+        if (mapped >= 0xff80 && mapped < 0xffff) return DebugAddressSpace.HIGH_RAM;
+        if (mapped >= 0xff00) return DebugAddressSpace.IO_REGISTERS;
+        return DebugAddressSpace.SYSTEM_BUS;
     }
 
     @Override
@@ -820,6 +925,9 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         this.cpuRequestAllowsLateInterrupt = cpuRequestArbitration == CpuRequestArbitration.CPU
                 && mem.cpuRequestAllowsLateInterrupt;
         this.haltOpcodeRequestLatched = mem.haltOpcodeRequestLatched;
+        if (debugHooks != null && transferInProgress) {
+            alignDebugDmaObservation();
+        }
     }
 
     public record HdmaState(Mode gpuMode, boolean transferInProgress, boolean hblankTransfer, boolean lcdEnabled,

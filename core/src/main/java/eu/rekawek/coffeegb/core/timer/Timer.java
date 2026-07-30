@@ -5,6 +5,8 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.TimerTrace;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
@@ -46,6 +48,9 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
     // that event falls inside the gate, its future IF assertion has already been
     // consumed by the acknowledge and must not reassert when time catches up.
     private boolean suppressNextInterruptRequest;
+
+    /** Owner-thread observation only; deliberately absent from portable machine state. */
+    private transient DebugHooks debugHooks;
 
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.speedMode = speedMode;
@@ -143,6 +148,13 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
             // (the edge tick itself is count 1). TMA then owns TIMA for four
             // clocks; writes before that window cancel the overflow, while
             // writes inside it are overwritten by the reload bus.
+            if (ticksSinceOverflow >= 4) {
+                int oldTima = tima;
+                tima = tma;
+                if (ticksSinceOverflow == 4 || oldTima != tima) {
+                    notifyDebugEvent(TimerTrace.Kind.COUNTER_RELOADED);
+                }
+            }
             if (ticksSinceOverflow == 4) {
                 if (suppressNextInterruptRequest) {
                     suppressNextInterruptRequest = false;
@@ -150,9 +162,6 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
                     interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Timer);
                     haltWakeDelay = 4;
                 }
-            }
-            if (ticksSinceOverflow >= 4) {
-                tima = tma;
             }
             if (ticksSinceOverflow == 8) {
                 overflow = false;
@@ -167,6 +176,9 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         if (tima == 0) {
             overflow = true;
             ticksSinceOverflow = 0;
+            notifyDebugEvent(TimerTrace.Kind.COUNTER_OVERFLOWED);
+        } else {
+            notifyDebugEvent(TimerTrace.Kind.COUNTER_INCREMENTED);
         }
     }
 
@@ -198,6 +210,7 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
                 ticksSinceDivReset = 0;
                 haltBugDivRipplePending = false;
                 haltBugDivRippleVisible = false;
+                notifyDebugEvent(TimerTrace.Kind.DIVIDER_RESET);
                 break;
 
             case 0xff05:
@@ -213,6 +226,7 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
                 break;
 
             case 0xff07:
+                int oldControl = tac & 0x07;
                 if (speedMode.isGbc()) {
                     // TAC changes the input of the timer's falling-edge detector at
                     // the write edge itself. Waiting for the following divider tick
@@ -227,7 +241,22 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
                 } else {
                     tac = value;
                 }
+                if ((tac & 0x07) != oldControl) {
+                    notifyDebugEvent(TimerTrace.Kind.CONTROL_CHANGED);
+                }
                 break;
+        }
+    }
+
+    /** Installs an optional owner-thread observer without emitting an alignment event. */
+    public void setDebugHooks(DebugHooks debugHooks) {
+        this.debugHooks = debugHooks;
+    }
+
+    private void notifyDebugEvent(TimerTrace.Kind kind) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onTimerEvent(kind, div, tima, tma, tac & 0x07);
         }
     }
 

@@ -7,14 +7,13 @@ import eu.rekawek.coffeegb.core.debug.Command;
 import eu.rekawek.coffeegb.core.debug.CommandPattern;
 import eu.rekawek.coffeegb.core.debug.CommandPattern.ParsedCommandLine;
 
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
-
-import static eu.rekawek.coffeegb.core.debug.ConsoleUtil.printSeparator;
 
 public class ShowOpcode implements Command {
 
@@ -23,6 +22,16 @@ public class ShowOpcode implements Command {
                     .withRequiredArgument("opcode")
                     .withDescription("displays opcode information for hex (0xFA) or name (LD A,B) identifier")
                     .build();
+
+    private final PrintStream output;
+
+    public ShowOpcode() {
+        this(System.out);
+    }
+
+    public ShowOpcode(PrintStream output) {
+        this.output = Objects.requireNonNull(output, "output");
+    }
 
     @Override
     public CommandPattern getPattern() {
@@ -43,7 +52,7 @@ public class ShowOpcode implements Command {
 
         Opcode opcode = getOpcodeFromArg(arg);
         if (opcode == null) {
-            System.out.println("Can't found opcode for " + arg);
+            output.println("Can't find opcode for " + arg);
             return;
         }
 
@@ -105,17 +114,17 @@ public class ShowOpcode implements Command {
                         .sum();
 
         if (isExt) {
-            System.out.printf("0xCB%02X %s%n", opcode.getOpcode(), opcode.getLabel());
+            output.printf("0xCB%02X %s%n", opcode.getOpcode(), opcode.getLabel());
         } else {
-            System.out.printf("0x%02X   %s%n", opcode.getOpcode(), opcode.getLabel());
+            output.printf("0x%02X   %s%n", opcode.getOpcode(), opcode.getLabel());
         }
-        printSeparator(stringLength);
-        compacted.forEach(System.out::println);
-        printSeparator(stringLength);
+        eu.rekawek.coffeegb.core.debug.ConsoleUtil.printSeparator(output, stringLength);
+        compacted.forEach(output::println);
+        eu.rekawek.coffeegb.core.debug.ConsoleUtil.printSeparator(output, stringLength);
         if (totalCyclesUntilCondition != totalCycles) {
-            System.out.printf("Total cycles: %d / %d%n", totalCycles, totalCyclesUntilCondition);
+            output.printf("Total cycles: %d / %d%n", totalCycles, totalCyclesUntilCondition);
         } else {
-            System.out.printf("Total cycles: %d%n", totalCycles);
+            output.printf("Total cycles: %d%n", totalCycles);
         }
     }
 

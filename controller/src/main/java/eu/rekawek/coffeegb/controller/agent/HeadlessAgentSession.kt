@@ -375,6 +375,7 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     fun readTrace(request: TraceReadRequest): TraceReadResult = instrumentation.readTrace(request)
 
     private fun syncInstrumentation() {
+      instrumentation.alignOwnerFrame(frame)
       machine.updateDebugInstrumentation(
           if (instrumentation.isActive) instrumentation else null,
           masterTick,
@@ -838,10 +839,12 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
             DebugBreakpointKind.MEMORY,
             DebugBreakpointKind.OPCODE,
             DebugBreakpointKind.INTERRUPT,
+            DebugBreakpointKind.PPU_STATE,
+            DebugBreakpointKind.SERIAL,
             DebugBreakpointKind.COUNTER,
         )
     val TRACE_CATEGORIES: Set<TraceCategory> =
-        EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY, TraceCategory.INTERRUPT)
+        EnumSet.allOf(TraceCategory::class.java)
     val NEXT_OWNER_ID = AtomicLong()
   }
 }

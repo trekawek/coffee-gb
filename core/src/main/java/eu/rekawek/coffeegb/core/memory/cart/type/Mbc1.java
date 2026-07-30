@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.MapperRtcTrace;
+
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
@@ -63,6 +66,8 @@ public class Mbc1 implements MemoryController {
 
     private boolean upperRegisterUsed;
 
+    private transient DebugHooks debugHooks;
+
     public Mbc1(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
         CartridgeProperties properties = rom.getCartridgeProperties();
@@ -96,6 +101,10 @@ public class Mbc1 implements MemoryController {
 
     @Override
     public void setByte(int address, int value) {
+        DebugHooks hooks = debugHooks;
+        int previousRomBank = hooks == null ? -1 : computeRomBankFor0x4000();
+        int previousRamBank = hooks == null ? -1 : getDebugRamBank();
+        boolean previousRamEnabled = ramWriteEnabled;
         if (address >= 0x0000 && address < 0x2000) {
             ramWriteEnabled = workMasterFlashCart || (value & 0b1111) == 0b1010;
             LOG.trace("RAM write: {}", ramWriteEnabled);
@@ -145,6 +154,36 @@ public class Mbc1 implements MemoryController {
                 ramUpdated = true;
             }
         }
+        if (hooks != null) {
+            int romBank = computeRomBankFor0x4000();
+            int ramBank = getDebugRamBank();
+            if (romBank != previousRomBank) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.ROM_BANK_CHANGED, -1, romBank);
+            }
+            if (ramBank >= 0 && ramBank != previousRamBank) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.RAM_BANK_CHANGED, -1, ramBank);
+            }
+            if (ramWriteEnabled != previousRamEnabled) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.RAM_ENABLE_CHANGED,
+                        -1,
+                        ramWriteEnabled ? 1 : 0);
+            }
+        }
+    }
+
+    @Override
+    public void setDebugHooks(DebugHooks hooks) {
+        debugHooks = hooks;
+    }
+
+    private int getDebugRamBank() {
+        if (ramBanks == 0) {
+            return -1;
+        }
+        return memoryModel == 0 ? 0 : selectedRamBank % ramBanks;
     }
 
     @Override
@@ -200,25 +239,27 @@ public class Mbc1 implements MemoryController {
 
     private int getRomBankFor0x4000() {
         if (cachedRomBankFor0x4000 == -1) {
-            int bank = selectedRomBank;
-            if (wideBank) {
-                cachedRomBankFor0x4000 = Math.max(1, bank) % romBanks;
-                return cachedRomBankFor0x4000;
-            }
-            if (bank % 0x20 == 0) {
-                bank++;
-            }
-            if (memoryModel == 1) {
-                bank &= 0b00011111;
-                bank |= (selectedRamBank << 5);
-            }
-            if (multicart) {
-                bank = ((bank >> 1) & 0x30) | (bank & 0x0f);
-            }
-            bank %= romBanks;
-            cachedRomBankFor0x4000 = bank;
+            cachedRomBankFor0x4000 = computeRomBankFor0x4000();
         }
         return cachedRomBankFor0x4000;
+    }
+
+    private int computeRomBankFor0x4000() {
+        int bank = selectedRomBank;
+        if (wideBank) {
+            return Math.max(1, bank) % romBanks;
+        }
+        if (bank % 0x20 == 0) {
+            bank++;
+        }
+        if (memoryModel == 1) {
+            bank &= 0b00011111;
+            bank |= (selectedRamBank << 5);
+        }
+        if (multicart) {
+            bank = ((bank >> 1) & 0x30) | (bank & 0x0f);
+        }
+        return bank % romBanks;
     }
 
     private int getRomByte(int bank, int address) {

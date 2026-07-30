@@ -6,6 +6,8 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.SerialIrTrace;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import org.slf4j.Logger;
@@ -38,6 +40,9 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     // IF is visible as soon as the eighth bit lands, while HALT's wake input
     // receives the serial edge one CPU machine cycle later.
     private int haltWakeDelay;
+
+    /** Owner-thread observation only; deliberately absent from portable machine state. */
+    private transient DebugHooks debugHooks;
 
     public SerialPort(InterruptManager interruptManager, boolean gbc, SpeedMode speedMode) {
         this.interruptManager = interruptManager;
@@ -151,11 +156,18 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     private void shiftBit(int incomingBit) {
         sb = (sb << 1) & 0xff | (incomingBit & 1);
         receivedBits++;
-        if (receivedBits == 8) {
-            interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Serial);
+        boolean completed = receivedBits == 8;
+        if (completed) {
             haltWakeDelay = 4;
             sc = sc & 0b01111111; // stop transfer
             receivedBits = 0;
+        }
+        notifyDebugEvent(SerialIrTrace.Kind.BIT_SHIFTED, sb);
+        if (completed) {
+            // The final byte and transfer state are visible before the serial IRQ request.
+            // This also makes a final-byte breakpoint ready at the completed-tick safe point.
+            notifyDebugEvent(SerialIrTrace.Kind.BYTE_TRANSFERRED, sb);
+            interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Serial);
             LOG.atDebug().log("[{}] Received sb = {}", this.hashCode(), Integer.toBinaryString(sb));
         }
     }
@@ -180,7 +192,8 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
             serialEndpoint.setSb(sb);
             LOG.atDebug().log("[{}] Set SB = {}", this.hashCode(), Integer.toBinaryString(sb));
         } else if (address == 0xff02) {
-            if ((value & (1 << 7)) != 0) {
+            boolean startsTransfer = (value & (1 << 7)) != 0;
+            if (startsTransfer) {
                 receivedBits = 0;
                 serialClockSignal = false;
                 if (isColorMode() && (sc & 0x80) != 0 && ((sc ^ value) & 0x02) != 0) {
@@ -196,7 +209,23 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
                 receivedBits = 0;
             }
             sc = value;
+            if (startsTransfer) {
+                // A start observes the outgoing byte after SC and all transfer state settle.
+                notifyDebugEvent(SerialIrTrace.Kind.TRANSFER_STARTED, sb);
+            }
             LOG.atDebug().log("[{}] Set SC = {}", this.hashCode(), Integer.toBinaryString(sc));
+        }
+    }
+
+    /** Installs an optional owner-thread observer without emitting an alignment event. */
+    public void setDebugHooks(DebugHooks debugHooks) {
+        this.debugHooks = debugHooks;
+    }
+
+    private void notifyDebugEvent(SerialIrTrace.Kind kind, int value) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onSerialIrEvent(SerialIrTrace.Endpoint.SERIAL, kind, value);
         }
     }
 

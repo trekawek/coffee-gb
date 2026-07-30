@@ -3,6 +3,10 @@ package eu.rekawek.coffeegb.core.gpu;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
+import eu.rekawek.coffeegb.core.debug.trace.PpuTrace;
 import eu.rekawek.coffeegb.core.gpu.phase.*;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -32,6 +36,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private final Ram videoRam1;
 
     private final AddressSpace oamRam;
+
+    private final AddressSpace ppuOam;
 
     private final Display display;
 
@@ -165,6 +171,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private boolean suppressNextDirectOamWriteCorruption;
 
+    private transient DebugHooks debugHooks;
+
+    /** Monotonic physical frame-ready count used only by debugger observations. */
+    private long debugPpuFrame;
+
     public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer,
                StatRegister statRegister, boolean gbc,
                eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
@@ -202,7 +213,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         this.oamRam = oamRam;
         this.dma = dma;
-        AddressSpace ppuOam = new DmaOamAddressSpace(oamRam, dma);
+        this.ppuOam = new DmaOamAddressSpace(oamRam, dma);
 
         this.bgPalette = new ColorPalette(0xff68);
         this.oamPalette = new ColorPalette(0xff6a);
@@ -486,6 +497,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         pixelMachine.machineTick();
 
         Mode oldMode = mode;
+        int oldLine = line;
         ticksInLine++;
         int lineLength = firstLine ? 455 : 456;
         oamSearchPhase.trackDmaSource(ticksInLine == lineLength ? 0 : ticksInLine);
@@ -592,6 +604,37 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 default:
                     break;
             }
+        }
+
+        DebugHooks hooks = debugHooks;
+        boolean scanlineStarted = oldLine != line;
+        boolean frameReady = scanlineStarted && line == 144;
+        if (frameReady) {
+            debugPpuFrame = Math.addExact(debugPpuFrame, 1L);
+        }
+        if (hooks != null && scanlineStarted) {
+            hooks.onPpuEvent(
+                    PpuTrace.Kind.SCANLINE_STARTED,
+                    debugPpuFrame,
+                    line,
+                    0,
+                    toDebugPpuMode(mode));
+        }
+        if (hooks != null && oldMode != mode) {
+            hooks.onPpuEvent(
+                    PpuTrace.Kind.MODE_CHANGED,
+                    debugPpuFrame,
+                    line,
+                    ticksInLine,
+                    toDebugPpuMode(mode));
+        }
+        if (hooks != null && frameReady) {
+            hooks.onPpuEvent(
+                    PpuTrace.Kind.FRAME_READY,
+                    debugPpuFrame,
+                    line,
+                    0,
+                    DebugPpuMode.VBLANK);
         }
 
         if (oldMode == mode) {
@@ -1862,6 +1905,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         pixelMachine.clearOutput();
         pixelMachine.stop();
         display.disableLcd();
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onPpuEvent(
+                    PpuTrace.Kind.LCD_DISABLED,
+                    debugPpuFrame,
+                    0,
+                    0,
+                    DebugPpuMode.DISABLED);
+        }
     }
 
     private void enableLcd() {
@@ -1901,6 +1953,50 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.lcdEnabled = true;
         this.displayEnabledDelay = 244;
         statRegister.onLcdEnabled();
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onPpuEvent(
+                    PpuTrace.Kind.LCD_ENABLED,
+                    debugPpuFrame,
+                    0,
+                    0,
+                    DebugPpuMode.OAM_SEARCH);
+        }
+    }
+
+    public void setDebugHooks(DebugHooks hooks) {
+        debugHooks = hooks;
+        if (hooks != null && hooks.requiresPpuMemoryAccessHooks()) {
+            AddressSpace observedVideoRam0 = new DebugPpuAddressSpace(
+                    videoRam0, DebugAddressSpace.VIDEO_RAM, hooks);
+            AddressSpace observedVideoRam1 = videoRam1 == null ? null : new DebugPpuAddressSpace(
+                    videoRam1, DebugAddressSpace.VIDEO_RAM, hooks);
+            AddressSpace observedPixelOam = new DebugPpuAddressSpace(
+                    ppuOam, DebugAddressSpace.OAM, hooks);
+            AddressSpace observedSearchOam = new DebugPpuAddressSpace(
+                    oamRam, DebugAddressSpace.OAM, hooks);
+            // The shifted pixel machine owns the physical fetch dots. The timing skeleton
+            // performs parallel predictive reads and deliberately remains on raw delegates.
+            pixelMachine.setDebugAddressSpaces(
+                    observedVideoRam0, observedVideoRam1, observedPixelOam);
+            oamSearchPhase.setDebugAddressSpace(observedSearchOam);
+        } else {
+            pixelMachine.setDebugAddressSpaces(videoRam0, videoRam1, ppuOam);
+            oamSearchPhase.setDebugAddressSpace(oamRam);
+        }
+    }
+
+    public long getDebugPpuFrame() {
+        return debugPpuFrame;
+    }
+
+    private static DebugPpuMode toDebugPpuMode(Mode mode) {
+        return switch (mode) {
+            case HBlank -> DebugPpuMode.HBLANK;
+            case VBlank -> DebugPpuMode.VBLANK;
+            case OamSearch -> DebugPpuMode.OAM_SEARCH;
+            case PixelTransfer -> DebugPpuMode.PIXEL_TRANSFER;
+        };
     }
 
     public boolean isLcdEnabled() {

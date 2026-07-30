@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.debug.Command;
 import eu.rekawek.coffeegb.core.debug.CommandArgument;
 import eu.rekawek.coffeegb.core.debug.CommandPattern;
 
+import java.io.PrintStream;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -19,8 +20,15 @@ public class ShowHelp implements Command {
 
     private final List<Command> commands;
 
+    private final PrintStream output;
+
     public ShowHelp(List<Command> commands) {
+        this(commands, System.out);
+    }
+
+    public ShowHelp(List<Command> commands, PrintStream output) {
         this.commands = commands;
+        this.output = java.util.Objects.requireNonNull(output, "output");
     }
 
     @Override
@@ -45,14 +53,14 @@ public class ShowHelp implements Command {
         for (Command command : commands) {
             CommandPattern pattern = command.getPattern();
             String longName = commandMap.get(command);
-            System.out.printf("%-" + max + "s", longName);
+            output.printf("%-" + max + "s", longName);
             if (pattern.getCommandNames().size() > 1) {
-                System.out.printf("   %-5s", pattern.getCommandNames().get(1));
+                output.printf("   %-5s", pattern.getCommandNames().get(1));
             } else {
-                System.out.print("        ");
+                output.print("        ");
             }
-            command.getPattern().getDescription().map(d -> "   " + d).ifPresent(System.out::print);
-            System.out.println();
+            command.getPattern().getDescription().map(d -> "   " + d).ifPresent(output::print);
+            output.println();
         }
     }
 

@@ -11,15 +11,9 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugInterruptCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugMemoryCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugOpcodeCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition;
-import eu.rekawek.coffeegb.core.debug.trace.CpuInstructionTrace;
-import eu.rekawek.coffeegb.core.debug.trace.InterruptTrace;
-import eu.rekawek.coffeegb.core.debug.trace.MemoryAccessTrace;
-import eu.rekawek.coffeegb.core.debug.trace.TraceBuffer;
-import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
-import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
-import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
-import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult;
-import eu.rekawek.coffeegb.core.debug.trace.TraceSource;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPpuCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugSerialCondition;
+import eu.rekawek.coffeegb.core.debug.trace.*;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -57,6 +51,23 @@ public final class DebugInstrumentation implements DebugHooks {
     private long pendingMatchTick;
 
     private BreakpointMatch readyMatch;
+
+    private long ownerFrame;
+
+    private boolean ppuStateKnown;
+
+    private int ppuLy;
+
+    private DebugPpuMode ppuMode = DebugPpuMode.DISABLED;
+
+    private static final int MAX_TRACKED_INTERRUPT_DEPTH = 256;
+
+    private final DebugInterruptType[] acceptedInterrupts =
+            new DebugInterruptType[MAX_TRACKED_INTERRUPT_DEPTH];
+
+    private int acceptedInterruptDepth;
+
+    private int untrackedInterruptDepth;
 
     public DebugInstrumentation(
             int maxBreakpoints,
@@ -106,6 +117,7 @@ public final class DebugInstrumentation implements DebugHooks {
 
     public DebugBreakpoint setBreakpoint(DebugBreakpoint breakpoint) {
         Objects.requireNonNull(breakpoint, "breakpoint");
+        boolean interruptHooksWereRequired = requiresInterruptHooks();
         if (!supportedBreakpointKinds.contains(breakpoint.condition().kind())) {
             throw new UnsupportedOperationException(
                     "Unsupported breakpoint kind: " + breakpoint.condition().kind());
@@ -121,11 +133,13 @@ public final class DebugInstrumentation implements DebugHooks {
             clearPendingMatch();
         }
         rebuildEnabledBreakpoints();
+        clearInterruptCorrelationIfDetached(interruptHooksWereRequired);
         return breakpoint;
     }
 
     public boolean removeBreakpoint(DebugBreakpointId breakpointId) {
         Objects.requireNonNull(breakpointId, "breakpointId");
+        boolean interruptHooksWereRequired = requiresInterruptHooks();
         DebugBreakpoint removed = breakpoints.remove(breakpointId);
         if (removed == null) {
             return false;
@@ -134,6 +148,7 @@ public final class DebugInstrumentation implements DebugHooks {
             clearPendingMatch();
         }
         rebuildEnabledBreakpoints();
+        clearInterruptCorrelationIfDetached(interruptHooksWereRequired);
         return true;
     }
 
@@ -155,6 +170,7 @@ public final class DebugInstrumentation implements DebugHooks {
 
     public TraceConfiguration configureTrace(TraceConfiguration configuration) {
         Objects.requireNonNull(configuration, "configuration");
+        boolean interruptHooksWereRequired = requiresInterruptHooks();
         if (configuration.capacity() > maxTraceCapacity) {
             throw new IllegalArgumentException(
                     "Trace capacity exceeds the negotiated limit: "
@@ -165,6 +181,7 @@ public final class DebugInstrumentation implements DebugHooks {
                     "Trace configuration contains an unsupported category");
         }
         traceBuffer = traceBuffer.reconfigured(configuration);
+        clearInterruptCorrelationIfDetached(interruptHooksWereRequired);
         return configuration;
     }
 
@@ -202,6 +219,57 @@ public final class DebugInstrumentation implements DebugHooks {
         return false;
     }
 
+    public boolean requiresPpuHooks() {
+        return traceBuffer.isEnabled(TraceCategory.PPU)
+                || traceBuffer.isEnabled(TraceCategory.MEMORY)
+                || hasEnabledBreakpoint(DebugBreakpointKind.PPU_STATE);
+    }
+
+    @Override
+    public boolean requiresPpuMemoryAccessHooks() {
+        return traceBuffer.isEnabled(TraceCategory.MEMORY);
+    }
+
+    public boolean requiresInterruptHooks() {
+        return traceBuffer.isEnabled(TraceCategory.INTERRUPT)
+                || hasEnabledBreakpoint(DebugBreakpointKind.INTERRUPT);
+    }
+
+    public boolean requiresDmaHooks() {
+        return traceBuffer.isEnabled(TraceCategory.DMA)
+                || traceBuffer.isEnabled(TraceCategory.MEMORY);
+    }
+
+    public boolean requiresTimerHooks() {
+        return traceBuffer.isEnabled(TraceCategory.TIMER);
+    }
+
+    public boolean requiresSerialIrHooks() {
+        return traceBuffer.isEnabled(TraceCategory.SERIAL_IR)
+                || hasEnabledBreakpoint(DebugBreakpointKind.SERIAL);
+    }
+
+    public boolean requiresInputHooks() {
+        return traceBuffer.isEnabled(TraceCategory.INPUT);
+    }
+
+    public boolean requiresMapperRtcHooks() {
+        return traceBuffer.isEnabled(TraceCategory.MAPPER_RTC);
+    }
+
+    public boolean requiresApuHooks() {
+        return traceBuffer.isEnabled(TraceCategory.APU);
+    }
+
+    private boolean hasEnabledBreakpoint(DebugBreakpointKind kind) {
+        for (int i = 0; i < enabledBreakpoints.length; i++) {
+            if (enabledBreakpoints[i].condition().kind() == kind) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public boolean requiresMemoryAccessHooks() {
         if (traceBuffer.isEnabled(TraceCategory.MEMORY)) {
@@ -227,6 +295,24 @@ public final class DebugInstrumentation implements DebugHooks {
         this.masterTick = masterTick;
     }
 
+    /** Aligns current PPU state without producing an event or matching a breakpoint. */
+    public void alignPpuState(int ly, DebugPpuMode mode) {
+        if (ly < 0 || ly > 153) {
+            throw new IllegalArgumentException("PPU LY must be in 0..153: " + ly);
+        }
+        ppuLy = ly;
+        ppuMode = Objects.requireNonNull(mode, "mode");
+        ppuStateKnown = true;
+    }
+
+    /** Aligns the controller-owned frame counter without observing a boundary. */
+    public void alignOwnerFrame(long frame) {
+        if (frame < 0) {
+            throw new IllegalArgumentException("Frame must not be negative");
+        }
+        ownerFrame = frame;
+    }
+
     /** Called exactly once immediately before each attached {@code Gameboy.tick()}. */
     public void onMasterTickStarted() {
         masterTick = Math.addExact(masterTick, 1L);
@@ -247,12 +333,20 @@ public final class DebugInstrumentation implements DebugHooks {
         if (frame < 0) {
             throw new IllegalArgumentException("Frame must not be negative");
         }
+        ownerFrame = frame;
         for (int i = 0; i < enabledBreakpoints.length; i++) {
             DebugBreakpoint breakpoint = enabledBreakpoints[i];
             DebugBreakpointCondition condition = breakpoint.condition();
             if (condition instanceof DebugCounterCondition counter
                     && counter.counter() == DebugCounterType.FRAME
                     && counter.value() == frame) {
+                offerImmediateMatch(breakpoint.id());
+                return;
+            }
+            if (ppuStateKnown
+                    && condition instanceof DebugPpuCondition
+                    && DebugBreakpointMatcher.matchesPpu(
+                            breakpoint, ownerFrame, ppuLy, ppuMode)) {
                 offerImmediateMatch(breakpoint.id());
                 return;
             }
@@ -269,6 +363,27 @@ public final class DebugInstrumentation implements DebugHooks {
         pendingBreakpointId = null;
         pendingMatchTick = 0;
         readyMatch = null;
+    }
+
+    /** Clears correlations that cannot cross a state restore or hidden replay discontinuity. */
+    public void clearTimelineCorrelation() {
+        clearPendingMatch();
+        clearInterruptCorrelation();
+        ppuStateKnown = false;
+    }
+
+    private void clearInterruptCorrelationIfDetached(boolean previouslyRequired) {
+        if (previouslyRequired && !requiresInterruptHooks()) {
+            clearInterruptCorrelation();
+        }
+    }
+
+    private void clearInterruptCorrelation() {
+        for (int i = 0; i < acceptedInterruptDepth; i++) {
+            acceptedInterrupts[i] = null;
+        }
+        acceptedInterruptDepth = 0;
+        untrackedInterruptDepth = 0;
     }
 
     private boolean hasPendingOrReadyMatch(DebugBreakpointId breakpointId) {
@@ -317,6 +432,9 @@ public final class DebugInstrumentation implements DebugHooks {
                         new CpuInstructionTrace(programCounter, opcode, prefixedOpcode));
             }
         }
+        if (instructionKnown && opcode == 0xd9) {
+            completeAcceptedInterrupt();
+        }
         if (pendingBreakpointId != null && readyMatch == null) {
             readyMatch = new BreakpointMatch(pendingBreakpointId, pendingMatchTick);
             pendingBreakpointId = null;
@@ -326,25 +444,47 @@ public final class DebugInstrumentation implements DebugHooks {
 
     @Override
     public void onMemoryAccess(DebugMemoryAccess access, int address, int value) {
+        onMemoryAccess(
+                DebugAddressSpace.SYSTEM_BUS,
+                TraceSource.CPU,
+                access,
+                address,
+                value);
+    }
+
+    @Override
+    public void onMemoryAccess(
+            DebugAddressSpace addressSpace,
+            TraceSource source,
+            DebugMemoryAccess access,
+            int address,
+            int value) {
+        Objects.requireNonNull(addressSpace, "addressSpace");
+        Objects.requireNonNull(source, "source");
         Objects.requireNonNull(access, "access");
-        for (int i = 0; i < enabledBreakpoints.length; i++) {
-            DebugBreakpoint breakpoint = enabledBreakpoints[i];
-            if (breakpoint.condition() instanceof DebugMemoryCondition
-                    && DebugBreakpointMatcher.matchesMemory(
-                            breakpoint, access, address, value)) {
-                // Bus accesses are themselves complete observations. Owners poll only after the
-                // enclosing Gameboy.tick(), so expose the match at that safe point even when the
-                // CPU is idle and no instruction retirement will follow (for example STOP polling).
-                offerImmediateMatch(breakpoint.id());
-                break;
+        // The current watchpoint model has no producer dimension and therefore remains scoped
+        // to the CPU's logical system-bus view. DMA/PPU accesses are still available in MEMORY
+        // trace with explicit provenance and can gain source-aware predicates later.
+        if (source == TraceSource.CPU) {
+            for (int i = 0; i < enabledBreakpoints.length; i++) {
+                DebugBreakpoint breakpoint = enabledBreakpoints[i];
+                if (breakpoint.condition() instanceof DebugMemoryCondition
+                        && DebugBreakpointMatcher.matchesMemory(
+                                breakpoint, access, address, value)) {
+                    // Bus accesses are themselves complete observations. Owners poll only after
+                    // the enclosing Gameboy.tick(), so expose the match at that safe point even
+                    // when the CPU is idle and no retirement follows (for example STOP polling).
+                    offerImmediateMatch(breakpoint.id());
+                    break;
+                }
             }
         }
         if (traceBuffer.isEnabled(TraceCategory.MEMORY)
                 && traceBuffer.configuration().filter().acceptsMemory(access, address)) {
             traceBuffer.append(
                     masterTick,
-                    TraceSource.MEMORY_BUS,
-                    new MemoryAccessTrace(access, address, value));
+                    source,
+                    new MemoryAccessTrace(addressSpace, access, address, value));
         }
     }
 
@@ -377,6 +517,160 @@ public final class DebugInstrumentation implements DebugHooks {
                     masterTick,
                     TraceSource.CPU,
                     new InterruptTrace(InterruptTrace.Kind.ACCEPTED, interrupt));
+        }
+        if (acceptedInterruptDepth < acceptedInterrupts.length) {
+            acceptedInterrupts[acceptedInterruptDepth++] = interrupt;
+        } else {
+            untrackedInterruptDepth++;
+        }
+    }
+
+    @Override
+    public void onInterruptCleared(DebugInterruptType interrupt) {
+        appendInterrupt(InterruptTrace.Kind.CLEARED, interrupt, TraceSource.INTERRUPT_CONTROLLER);
+    }
+
+    private void completeAcceptedInterrupt() {
+        if (untrackedInterruptDepth > 0) {
+            untrackedInterruptDepth--;
+            return;
+        }
+        if (acceptedInterruptDepth == 0) {
+            return;
+        }
+        DebugInterruptType interrupt = acceptedInterrupts[--acceptedInterruptDepth];
+        acceptedInterrupts[acceptedInterruptDepth] = null;
+        appendInterrupt(InterruptTrace.Kind.COMPLETED, interrupt, TraceSource.CPU);
+    }
+
+    private void appendInterrupt(
+            InterruptTrace.Kind kind, DebugInterruptType interrupt, TraceSource source) {
+        Objects.requireNonNull(interrupt, "interrupt");
+        if (traceBuffer.isEnabled(TraceCategory.INTERRUPT)
+                && traceBuffer.configuration().filter().acceptsInterrupt(interrupt)) {
+            traceBuffer.append(masterTick, source, new InterruptTrace(kind, interrupt));
+        }
+    }
+
+    @Override
+    public void onPpuEvent(
+            PpuTrace.Kind kind,
+            long ppuFrame,
+            int line,
+            int dot,
+            DebugPpuMode mode) {
+        Objects.requireNonNull(kind, "kind");
+        ppuLy = line;
+        ppuMode = Objects.requireNonNull(mode, "mode");
+        ppuStateKnown = true;
+        for (int i = 0; i < enabledBreakpoints.length; i++) {
+            DebugBreakpoint breakpoint = enabledBreakpoints[i];
+            if (breakpoint.condition() instanceof DebugPpuCondition
+                    && DebugBreakpointMatcher.matchesPpu(
+                            breakpoint, ownerFrame, line, mode)) {
+                offerImmediateMatch(breakpoint.id());
+                break;
+            }
+        }
+        if (traceBuffer.isEnabled(TraceCategory.PPU)) {
+            traceBuffer.append(
+                    masterTick,
+                    TraceSource.PPU,
+                    new PpuTrace(kind, ppuFrame, line, dot, mode));
+        }
+    }
+
+    @Override
+    public void onDmaEvent(
+            DmaTrace.Engine engine,
+            DmaTrace.Kind kind,
+            int sourceAddress,
+            int destinationAddress,
+            int length,
+            int bytesTransferred) {
+        if (traceBuffer.isEnabled(TraceCategory.DMA)) {
+            traceBuffer.append(
+                    masterTick,
+                    TraceSource.DMA,
+                    new DmaTrace(
+                            engine, kind, sourceAddress, destinationAddress,
+                            length, bytesTransferred));
+        }
+    }
+
+    @Override
+    public void onTimerEvent(
+            TimerTrace.Kind kind, int divider, int counter, int modulo, int control) {
+        if (traceBuffer.isEnabled(TraceCategory.TIMER)) {
+            traceBuffer.append(
+                    masterTick,
+                    TraceSource.TIMER,
+                    new TimerTrace(kind, divider, counter, modulo, control));
+        }
+    }
+
+    @Override
+    public void onSerialIrEvent(
+            SerialIrTrace.Endpoint endpoint, SerialIrTrace.Kind kind, int value) {
+        Objects.requireNonNull(endpoint, "endpoint");
+        Objects.requireNonNull(kind, "kind");
+        if (endpoint == SerialIrTrace.Endpoint.SERIAL) {
+            DebugSerialCondition.Event event = switch (kind) {
+                case TRANSFER_STARTED -> DebugSerialCondition.Event.TRANSFER_STARTED;
+                case BYTE_TRANSFERRED -> DebugSerialCondition.Event.BYTE_TRANSFERRED;
+                default -> null;
+            };
+            if (event != null) {
+                for (int i = 0; i < enabledBreakpoints.length; i++) {
+                    DebugBreakpoint breakpoint = enabledBreakpoints[i];
+                    if (breakpoint.condition() instanceof DebugSerialCondition
+                            && DebugBreakpointMatcher.matchesSerial(
+                                    breakpoint, event, value)) {
+                        offerImmediateMatch(breakpoint.id());
+                        break;
+                    }
+                }
+            }
+        }
+        if (traceBuffer.isEnabled(TraceCategory.SERIAL_IR)) {
+            traceBuffer.append(
+                    masterTick,
+                    endpoint == SerialIrTrace.Endpoint.SERIAL
+                            ? TraceSource.SERIAL : TraceSource.INFRARED,
+                    new SerialIrTrace(endpoint, kind, value));
+        }
+    }
+
+    @Override
+    public void onInputEvent(InputTrace.Kind kind, int buttonMask, int changedMask) {
+        if (traceBuffer.isEnabled(TraceCategory.INPUT)) {
+            traceBuffer.append(
+                    masterTick,
+                    TraceSource.INPUT,
+                    new InputTrace(kind, buttonMask, changedMask));
+        }
+    }
+
+    @Override
+    public void onMapperRtcEvent(MapperRtcTrace.Kind kind, int register, long value) {
+        if (traceBuffer.isEnabled(TraceCategory.MAPPER_RTC)) {
+            TraceSource source = switch (kind) {
+                case RTC_LATCHED, RTC_REGISTER_SELECTED,
+                        RTC_REGISTER_READ, RTC_REGISTER_WRITTEN -> TraceSource.RTC;
+                default -> TraceSource.MAPPER;
+            };
+            traceBuffer.append(
+                    masterTick, source, new MapperRtcTrace(kind, register, value));
+        }
+    }
+
+    @Override
+    public void onApuEvent(ApuTrace.Kind kind, int channel, int register, int value) {
+        if (traceBuffer.isEnabled(TraceCategory.APU)) {
+            traceBuffer.append(
+                    masterTick,
+                    TraceSource.APU,
+                    new ApuTrace(kind, channel, register, value));
         }
     }
 

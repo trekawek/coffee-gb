@@ -68,11 +68,11 @@ public class Fetcher implements StatefulComponent<Fetcher> {
 
     private final PixelFifo fifo;
 
-    private final AddressSpace videoRam0;
+    private AddressSpace videoRam0;
 
-    private final AddressSpace videoRam1;
+    private AddressSpace videoRam1;
 
-    private final AddressSpace oemRam;
+    private AddressSpace oemRam;
 
     private final GpuRegisterValues r;
 
@@ -185,6 +185,13 @@ public class Fetcher implements StatefulComponent<Fetcher> {
         this.oemRam = oemRam;
         this.r = registers;
         this.lcdc = lcdc;
+    }
+
+    public void setDebugAddressSpaces(
+            AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oemRam) {
+        this.videoRam0 = java.util.Objects.requireNonNull(videoRam0, "videoRam0");
+        this.videoRam1 = videoRam1;
+        this.oemRam = java.util.Objects.requireNonNull(oemRam, "oemRam");
     }
 
     public void startLine() {

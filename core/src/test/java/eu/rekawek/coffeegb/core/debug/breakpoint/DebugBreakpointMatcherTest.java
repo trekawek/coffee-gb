@@ -83,6 +83,14 @@ public class DebugBreakpointMatcherTest {
 
     @Test
     public void ppuMatchingCombinesOnlyConfiguredDimensions() {
+        DebugBreakpoint ownerFrame = breakpoint(DebugPpuCondition.atFrame(3));
+        assertTrue(DebugBreakpointMatcher.matchesPpu(
+                ownerFrame, 3, 0, DebugPpuMode.OAM_SEARCH));
+        assertTrue(DebugBreakpointMatcher.matchesPpu(
+                ownerFrame, 3, 153, DebugPpuMode.VBLANK));
+        assertFalse(DebugBreakpointMatcher.matchesPpu(
+                ownerFrame, 2, 0, DebugPpuMode.OAM_SEARCH));
+
         DebugBreakpoint ly = breakpoint(DebugPpuCondition.atLy(144));
         assertTrue(DebugBreakpointMatcher.matchesPpu(
                 ly, 3, 144, DebugPpuMode.VBLANK));
@@ -113,6 +121,32 @@ public class DebugBreakpointMatcherTest {
     }
 
     @Test
+    public void serialMatchingDistinguishesStartCompletionAndMaskedBytes() {
+        DebugBreakpoint anyStart = breakpoint(new DebugSerialCondition(
+                DebugSerialCondition.Event.TRANSFER_STARTED));
+        assertTrue(DebugBreakpointMatcher.matchesSerial(
+                anyStart, DebugSerialCondition.Event.TRANSFER_STARTED, 0));
+        assertTrue(DebugBreakpointMatcher.matchesSerial(
+                anyStart, DebugSerialCondition.Event.TRANSFER_STARTED, 0xff));
+        assertFalse(DebugBreakpointMatcher.matchesSerial(
+                anyStart, DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xff));
+
+        DebugBreakpoint exactCompletion = breakpoint(new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa5));
+        assertTrue(DebugBreakpointMatcher.matchesSerial(
+                exactCompletion, DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa5));
+        assertFalse(DebugBreakpointMatcher.matchesSerial(
+                exactCompletion, DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa4));
+
+        DebugBreakpoint maskedCompletion = breakpoint(new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa0, 0xf0));
+        assertTrue(DebugBreakpointMatcher.matchesSerial(
+                maskedCompletion, DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xaf));
+        assertFalse(DebugBreakpointMatcher.matchesSerial(
+                maskedCompletion, DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xb0));
+    }
+
+    @Test
     public void counterMatchingSelectsTickOrFrameWithoutConflatingThem() {
         DebugBreakpoint tick = breakpoint(DebugCounterCondition.atMasterTick(42));
         assertTrue(DebugBreakpointMatcher.matchesCounters(tick, 42, 1));
@@ -137,6 +171,8 @@ public class DebugBreakpointMatcherTest {
                 interrupt, DebugMemoryAccess.READ, 0xc000, 0));
         assertFalse(DebugBreakpointMatcher.matchesPpu(
                 interrupt, 0, 0, DebugPpuMode.DISABLED));
+        assertFalse(DebugBreakpointMatcher.matchesSerial(
+                interrupt, DebugSerialCondition.Event.TRANSFER_STARTED, 0));
         assertFalse(DebugBreakpointMatcher.matchesCounters(interrupt, 0, 0));
     }
 
@@ -167,6 +203,14 @@ public class DebugBreakpointMatcherTest {
                         ppu, -1, 0, DebugPpuMode.HBLANK));
         assertThrows(NullPointerException.class,
                 () -> DebugBreakpointMatcher.matchesPpu(ppu, 0, 0, null));
+
+        DebugBreakpoint serial = breakpoint(new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED));
+        assertThrows(NullPointerException.class,
+                () -> DebugBreakpointMatcher.matchesSerial(serial, null, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> DebugBreakpointMatcher.matchesSerial(
+                        serial, DebugSerialCondition.Event.BYTE_TRANSFERRED, 0x100));
 
         DebugBreakpoint counter = breakpoint(DebugCounterCondition.atFrame(0));
         assertThrows(IllegalArgumentException.class,
