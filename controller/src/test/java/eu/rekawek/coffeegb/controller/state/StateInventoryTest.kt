@@ -111,7 +111,7 @@ class StateInventoryTest {
             }
             .sorted()
 
-    assertEquals(106, discovered.size)
+    assertEquals(107, discovered.size)
     assertTrue(discovered.all { '\\' !in it })
     assertEquals(discovered, documented)
   }

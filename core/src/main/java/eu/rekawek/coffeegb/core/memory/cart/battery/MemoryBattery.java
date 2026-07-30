@@ -68,6 +68,11 @@ public class MemoryBattery implements Battery, StatefulComponent<Battery> {
     public void flush() {
     }
 
+    @Override
+    public DebugHistoryReplayShape debugHistoryReplayShape() {
+        return new DebugHistoryReplayShape(DebugHistoryReplayKind.MEMORY, buffer.length);
+    }
+
     private void ensureCapacity(int capacity) {
         // Netplay mirrors the save file byte-for-byte, including an existing zero-length or
         // truncated file. Match FileBattery by treating bytes missing from that file as zeroes.

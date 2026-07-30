@@ -71,6 +71,7 @@ the ordinary deep-owned `captureState()` contract, or any portable/legacy byte s
 - CONTRACT `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/battery/Battery.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/battery/FileBattery.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/battery/MemoryBattery.java`
+- OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/battery/StateReplayBattery.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/rtc/RealTimeClock.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/BasicRom.java`
 - OWNER `core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/type/Bbd.java`

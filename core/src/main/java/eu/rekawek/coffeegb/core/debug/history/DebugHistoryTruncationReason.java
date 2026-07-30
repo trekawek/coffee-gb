@@ -10,5 +10,6 @@ public enum DebugHistoryTruncationReason {
     NONDETERMINISTIC_IO,
     REVERSE_STEP,
     USER_REWIND,
-    TOPOLOGY_CHANGED
+    TOPOLOGY_CHANGED,
+    BRANCH_INVALIDATED
 }

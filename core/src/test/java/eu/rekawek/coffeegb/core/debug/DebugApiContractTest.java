@@ -15,6 +15,7 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugSerialCondition;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPoint;
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPosition;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason;
 import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
@@ -78,6 +79,7 @@ public class DebugApiContractTest {
             DebugHistoryCapabilities.class,
             DebugHistoryConfiguration.class,
             DebugHistoryPoint.class,
+            DebugHistoryPosition.class,
             DebugHistoryStatus.class,
             DebugHistoryTruncationReason.class,
             DebugInterruptCondition.class,

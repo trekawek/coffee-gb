@@ -40,6 +40,7 @@ import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.core.joypad.InputTimelineObserver
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource
 import eu.rekawek.coffeegb.core.sound.Sound
@@ -71,7 +72,7 @@ class BasicControllerDebugPortTest {
       val paused = await(port.pause()).value()
       assertTrue(port.capabilities().history().checkpointHistory())
       assertTrue(port.capabilities().history().reverseFrame())
-      assertFalse(port.capabilities().history().reverseInstruction())
+      assertTrue(port.capabilities().history().reverseInstruction())
       assertError(DebugErrorCode.HISTORY_DISABLED, await(port.stepBackward(DebugStepKind.FRAME)))
 
       val configuration = DebugHistoryConfiguration.defaults()
@@ -85,6 +86,8 @@ class BasicControllerDebugPortTest {
       assertEquals(first.frame(), firstPoint.frame())
 
       val second = await(port.step(DebugStepKind.FRAME)).value().snapshot()
+      val secondStatus = await(port.historyStatus()).value()
+      val secondPoint = assertNotNull(secondStatus.newest())
       val beforeTrace = await(port.readTrace(TraceReadRequest.initial(512))).value()
       assertTrue(beforeTrace.entries().isNotEmpty())
       val framesBeforeReverse = frameEvents.get()
@@ -106,9 +109,12 @@ class BasicControllerDebugPortTest {
           result.snapshot().execution().retiredInstructions(),
           "debug retirement accounting remains monotonic across restored machine state",
       )
-      assertEquals(firstPoint, result.history().newest())
+      assertEquals(result.restoredPosition(), result.history().cursor())
+      assertEquals(secondPoint, result.history().newest())
+      assertEquals(secondStatus.checkpointCount(), result.history().checkpointCount())
+      assertEquals(1, result.history().futureCheckpointCount())
       assertEquals(
-          DebugHistoryTruncationReason.REVERSE_STEP,
+          DebugHistoryTruncationReason.NONE,
           result.history().lastTruncationReason(),
       )
       assertEquals(framesBeforeReverse, frameEvents.get())
@@ -147,16 +153,114 @@ class BasicControllerDebugPortTest {
   }
 
   @Test
-  fun reverseFrameRequiresAPauseAndAnAvailableSupportedKind() {
+  fun reverseSteppingRequiresAPauseAndRetainedHistory() {
     withController { _, port, _, _, _ ->
       assertTrue(await(port.pause()).isSuccess)
       assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
       assertError(
-          DebugErrorCode.UNSUPPORTED_STEP,
+          DebugErrorCode.HISTORY_EXHAUSTED,
           await(port.stepBackward(DebugStepKind.INSTRUCTION)),
+      )
+      assertError(
+          DebugErrorCode.UNSUPPORTED_STEP,
+          await(port.stepBackward(DebugStepKind.MACHINE_CYCLE)),
       )
       assertTrue(await(port.resume()).isSuccess)
       assertError(DebugErrorCode.NOT_PAUSED, await(port.stepBackward(DebugStepKind.FRAME)))
+    }
+  }
+
+  @Test
+  fun inputTimelineContentionReturnsSessionBusyWithoutChangingHistoryConfiguration() {
+    withController { _, port, _, controller, _ ->
+      assertTrue(await(port.pause()).isSuccess)
+      val currentSession = controllerSession(controller)
+      val blocker = InputTimelineObserver { _, _, _, _ -> }
+      assertTrue(currentSession.gameboy.attachInputTimelineObserver(blocker))
+
+      try {
+        val before = await(port.historyStatus()).value()
+        assertError(
+            DebugErrorCode.SESSION_BUSY,
+            await(port.configureHistory(DebugHistoryConfiguration.defaults())),
+        )
+        assertEquals(before, await(port.historyStatus()).value())
+      } finally {
+        assertTrue(currentSession.gameboy.detachInputTimelineObserver(blocker))
+      }
+
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+    }
+  }
+
+  @Test
+  fun reverseInstructionRestoresTheExactPriorRetirementWithoutHostSideEffects() {
+    withController(
+        programRom("DEBUG_REVERSE_INSTRUCTION", 0x3c, 0x18, 0xfc),
+    ) { eventBus, port, _, _, _ ->
+      val frameEvents = AtomicInteger()
+      val soundEvents = AtomicInteger()
+      eventBus.register<Display.DmgFrameReadyEvent> { frameEvents.incrementAndGet() }
+      eventBus.register<Sound.SoundSampleEvent> { soundEvents.incrementAndGet() }
+
+      assertTrue(port.capabilities().history().reverseInstruction())
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      // A debugger pause may land inside a frame; establish the first retained replay anchor.
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+
+      val first = await(port.step(DebugStepKind.INSTRUCTION)).value().snapshot()
+      val second = await(port.step(DebugStepKind.INSTRUCTION)).value().snapshot()
+      val framesBeforeReverse = frameEvents.get()
+      val samplesBeforeReverse = soundEvents.get()
+
+      val reversed = await(port.stepBackward(DebugStepKind.INSTRUCTION))
+      assertTrue(reversed.isSuccess, reversed.toString())
+      val result = reversed.value()
+      assertEquals(DebugStepKind.INSTRUCTION, result.kind())
+      assertEquals(first.masterTick(), result.restoredPosition().masterTick())
+      assertEquals(first.frame(), result.restoredPosition().frame())
+      assertEquals(first.framePosition(), result.restoredPosition().framePosition())
+      assertEquals(result.restoredPosition(), result.history().cursor())
+      assertEquals(second.masterTick(), result.snapshot().masterTick())
+      assertEquals(second.frame(), result.snapshot().frame())
+      assertEquals(first.framePosition(), result.snapshot().framePosition())
+      assertTrue(result.snapshot().sequence() > second.sequence())
+      assertMachineViewEquals(first, result.snapshot())
+      assertEquals(
+          second.execution().retiredInstructions(),
+          result.snapshot().execution().retiredInstructions(),
+          "debug retirement accounting remains monotonic across isolated replay",
+      )
+      assertEquals(framesBeforeReverse, frameEvents.get())
+      assertEquals(samplesBeforeReverse, soundEvents.get())
+    }
+  }
+
+  @Test
+  fun forwardExecutionAfterReverseDiscardsTheRetainedFutureBranch() {
+    withController { _, port, _, _, _ ->
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      val beforeReverse = await(port.historyStatus()).value()
+
+      val reversed = await(port.stepBackward(DebugStepKind.FRAME)).value()
+      assertEquals(beforeReverse.checkpointCount(), reversed.history().checkpointCount())
+      assertEquals(1, reversed.history().futureCheckpointCount())
+      assertEquals(beforeReverse.newest(), reversed.history().newest())
+
+      assertTrue(await(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
+      val branched = await(port.historyStatus()).value()
+      assertEquals(0, branched.futureCheckpointCount())
+      assertEquals(beforeReverse.checkpointCount() - 1, branched.checkpointCount())
+      assertEquals(
+          DebugHistoryTruncationReason.BRANCH_INVALIDATED,
+          branched.lastTruncationReason(),
+      )
+      assertEquals(reversed.replayAnchor(), branched.newest())
+      assertTrue(branched.cursor().masterTick() > reversed.restoredPosition().masterTick())
     }
   }
 
@@ -189,6 +293,66 @@ class BasicControllerDebugPortTest {
           DebugErrorCode.UNSUPPORTED_TOPOLOGY,
           await(port.stepBackward(DebugStepKind.FRAME)),
       )
+    }
+  }
+
+  @Test
+  fun reverseInstructionCapabilitySurvivesATemporarySerialTopology() {
+    withController { eventBus, _, ports, _, _ ->
+      val selections =
+          LinkedBlockingQueue<Controller.SerialPeripheralSelectionChangedEvent>()
+      eventBus.register<Controller.SerialPeripheralSelectionChangedEvent>(selections::add)
+      eventBus.post(
+          Controller.SetSerialPeripheralEvent(Controller.SerialPeripheralSelection.PRINTER))
+      awaitSerialSelection(selections, Controller.SerialPeripheralSelection.PRINTER)
+
+      val replacement = programRom("DEBUG_REVERSE_AFTER_PRINTER", 0x3c, 0x18, 0xfc)
+      try {
+        eventBus.post(LoadRomEvent(replacement))
+        val port = assertNotNull(ports.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).debugPort)
+
+        // Capabilities describe the session/ROM, while commands remain fail-closed under the
+        // currently attached host-I/O topology.
+        assertTrue(port.capabilities().history().reverseInstruction())
+        assertError(
+            DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+            await(port.configureHistory(DebugHistoryConfiguration.defaults())),
+        )
+
+        eventBus.post(
+            Controller.SetSerialPeripheralEvent(
+                Controller.SerialPeripheralSelection.PEER_TO_PEER))
+        awaitSerialSelection(selections, Controller.SerialPeripheralSelection.PEER_TO_PEER)
+
+        assertTrue(await(port.pause()).isSuccess)
+        assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+        assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+        assertTrue(await(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
+        assertTrue(await(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
+        assertTrue(await(port.stepBackward(DebugStepKind.INSTRUCTION)).isSuccess)
+      } finally {
+        replacement.delete()
+      }
+    }
+  }
+
+  @Test
+  fun unsupportedInstructionReplayDoesNotDiscardValidFrameHistory() {
+    withController(huc3Rom("DEBUG_FRAME_ONLY")) { _, port, _, _, _ ->
+      assertTrue(port.capabilities().history().reverseFrame())
+      assertFalse(port.capabilities().history().reverseInstruction())
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      val before = await(port.historyStatus()).value()
+
+      assertError(
+          DebugErrorCode.UNSUPPORTED_STEP,
+          await(port.stepBackward(DebugStepKind.INSTRUCTION)),
+      )
+      assertEquals(before, await(port.historyStatus()).value())
+      assertTrue(await(port.stepBackward(DebugStepKind.FRAME)).isSuccess)
     }
   }
 
@@ -914,6 +1078,12 @@ class BasicControllerDebugPortTest {
     }
   }
 
+  private fun controllerSession(controller: BasicController): Session {
+    val field = BasicController::class.java.getDeclaredField("session")
+    field.isAccessible = true
+    return assertNotNull(field.get(controller) as Session?)
+  }
+
   private fun namedRom(title: String): File {
     val bytes = ROM.readBytes()
     for (address in 0x0134 until 0x0143) {
@@ -941,6 +1111,15 @@ class BasicControllerDebugPortTest {
     val rom = namedRom(title)
     val bytes = rom.readBytes()
     bytes[0x147] = 0x10
+    bytes[0x149] = 0x03
+    rom.writeBytes(bytes)
+    return rom
+  }
+
+  private fun huc3Rom(title: String): File {
+    val rom = namedRom(title)
+    val bytes = rom.readBytes()
+    bytes[0x147] = 0xfe.toByte()
     bytes[0x149] = 0x03
     rom.writeBytes(bytes)
     return rom

@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.debug.DebugCheckpointHistory
+import eu.rekawek.coffeegb.controller.debug.DebugHistorySessionBusyException
+import eu.rekawek.coffeegb.controller.debug.DebugInstructionReplayer
 import eu.rekawek.coffeegb.controller.debug.QueuedDebugCommand
 import eu.rekawek.coffeegb.controller.debug.QueuedDebugPort
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
@@ -77,6 +79,7 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPosition
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason
 import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
@@ -92,6 +95,7 @@ import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
+import eu.rekawek.coffeegb.core.joypad.JoypadButtonMask
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
@@ -316,6 +320,9 @@ class BasicController private constructor(
 
   /** Explicitly opt-in; the ordinary run retains no reverse-debug snapshots. */
   private var debugCheckpointHistory = DebugCheckpointHistory()
+
+  /** Lazily owns the service-isolated scratch machine used only by reverse-instruction. */
+  private var debugInstructionReplayer = DebugInstructionReplayer()
 
   private var debugInstrumentation: DebugInstrumentation? = null
 
@@ -640,10 +647,18 @@ class BasicController private constructor(
       session?.gameboy?.let(::detachAndClearDebugTimelineObservation)
     }
 
+    val trackDebugHistory = !rewound && debugCheckpointHistory.enabled
     repeat(frameTicks) {
       if (rewound || (!isEffectivelyPaused() && !isRewinding)) {
-        session?.gameboy?.tick()
-        emulated = session != null
+        val gameboy = session?.gameboy
+        if (gameboy != null) {
+          if (trackDebugHistory) {
+            tickWithDebugHistory(gameboy, frameTicks)
+          } else {
+            gameboy.tick()
+          }
+          emulated = true
+        }
       }
       timingTicker.run(clockSpec)
     }
@@ -745,7 +760,11 @@ class BasicController private constructor(
             pendingDebugAction != null || !isEffectivelyPaused() || stopAtNextBoundary
         val gameboy = session?.gameboy
         if (shouldTick && gameboy != null) {
-          gameboy.tick()
+          if (debugCheckpointHistory.enabled) {
+            tickWithDebugHistory(gameboy, frameTicks)
+          } else {
+            gameboy.tick()
+          }
           debugMasterTick = Math.addExact(debugMasterTick, 1L)
           debugFramePosition++
           if (debugFramePosition == frameTicks) {
@@ -771,6 +790,27 @@ class BasicController private constructor(
     }
   }
 
+  /** Executes one complete guest tick and advances the separate historical cursor atomically. */
+  private fun tickWithDebugHistory(gameboy: Gameboy, frameTicks: Int) {
+    if (!debugCheckpointHistory.inputTimelineValid) {
+      debugCheckpointHistory.clear(DebugHistoryTruncationReason.NONDETERMINISTIC_IO)
+    } else {
+      debugCheckpointHistory.invalidateFuture(checkNotNull(session))
+    }
+    val retirement = gameboy.debugRetirementSequence
+    debugCheckpointHistory.onTickStarted(isEffectivelyPaused())
+    try {
+      gameboy.tick()
+    } catch (failure: Throwable) {
+      debugCheckpointHistory.abortTick()
+      throw failure
+    }
+    debugCheckpointHistory.onTickCompleted(
+        gameboy.debugRetirementSequence != retirement,
+        frameTicks,
+    )
+  }
+
   private fun recordCompletedFrame() {
     val currentSession = session ?: return
     if (hasMobileAdapterExternalIo()) {
@@ -783,7 +823,7 @@ class BasicController private constructor(
       debugCheckpointHistory.clear(debugHistoryUnavailableReason())
     } else {
       try {
-        debugCheckpointHistory.recordFrame(currentSession, debugMasterTick, debugFrame)
+        debugCheckpointHistory.recordFrame(currentSession)
       } catch (failure: Exception) {
         // History is optional. A capture failure releases retained snapshots and cannot stop the
         // emulation owner or recur at every later frame.
@@ -799,6 +839,7 @@ class BasicController private constructor(
       return
     }
     debugCheckpointHistory.disable(DebugHistoryTruncationReason.SESSION_BOUNDARY)
+    debugInstructionReplayer.close()
     val currentSession = session
     if (debugTrackingEnabled) {
       currentSession?.gameboy?.disableDebugRetirementTracking()
@@ -863,6 +904,7 @@ class BasicController private constructor(
             command.fail(DebugErrorCode.ALREADY_RUNNING, "The debugger does not own a pause")
             return
           }
+          debugCheckpointHistory.invalidateFuture(checkNotNull(session))
           setDebugPaused(false)
           command.complete(DebugResult.success(captureDebugSnapshot()))
         }
@@ -952,6 +994,7 @@ class BasicController private constructor(
           }
           else -> Unit
         }
+        debugCheckpointHistory.invalidateFuture(checkNotNull(session))
         // A desktop/workflow pause is sufficient to authorize the request, but the debugger
         // acquires its own ownership so the result remains stopped if that other owner resumes.
         debugBreakpointPauseActive = false
@@ -966,6 +1009,7 @@ class BasicController private constructor(
             )
       }
       DebugStepKind.FRAME -> {
+        debugCheckpointHistory.invalidateFuture(checkNotNull(session))
         debugBreakpointPauseActive = false
         setDebugPaused(true)
         val ticksToBoundary =
@@ -996,6 +1040,10 @@ class BasicController private constructor(
       return
     }
     try {
+      debugInstructionReplayer.close()
+      if (requested.enabled()) {
+        ensureDebugTracking()
+      }
       command.complete(
           DebugResult.success(
               debugCheckpointHistory.configure(
@@ -1005,6 +1053,12 @@ class BasicController private constructor(
                   debugFrame,
                   debugFramePosition,
               )))
+    } catch (failure: DebugHistorySessionBusyException) {
+      LOG.debug("Reverse history input timeline is already owned", failure)
+      command.fail(
+          DebugErrorCode.SESSION_BUSY,
+          "Another deterministic capture already owns the session input timeline",
+      )
     } catch (failure: Exception) {
       debugCheckpointHistory.disable(DebugHistoryTruncationReason.SESSION_BOUNDARY)
       LOG.warn("Unable to configure reverse history", failure)
@@ -1017,8 +1071,8 @@ class BasicController private constructor(
       command.fail(DebugErrorCode.NOT_PAUSED, "Pause the debug session before stepping backward")
       return
     }
-    if (command.kind != DebugStepKind.FRAME) {
-      command.fail(DebugErrorCode.UNSUPPORTED_STEP, "Only reverse-frame is supported")
+    if (command.kind == DebugStepKind.MACHINE_CYCLE) {
+      command.fail(DebugErrorCode.UNSUPPORTED_STEP, "Reverse machine-cycle is unavailable")
       return
     }
     val currentSession = checkNotNull(session)
@@ -1030,6 +1084,29 @@ class BasicController private constructor(
       )
       return
     }
+    if (!debugCheckpointHistory.enabled) {
+      command.fail(DebugErrorCode.HISTORY_DISABLED, "Reverse history is disabled")
+      return
+    }
+    if (!debugCheckpointHistory.inputTimelineValid) {
+      debugCheckpointHistory.clear(DebugHistoryTruncationReason.NONDETERMINISTIC_IO)
+      command.fail(
+          DebugErrorCode.HISTORY_EXHAUSTED,
+          "Reverse history was reset after an unrepresentable input transition",
+      )
+      return
+    }
+    when (command.kind) {
+      DebugStepKind.FRAME -> reverseDebugFrame(command, currentSession)
+      DebugStepKind.INSTRUCTION -> reverseDebugInstruction(command, currentSession)
+      DebugStepKind.MACHINE_CYCLE -> error("Handled above")
+    }
+  }
+
+  private fun reverseDebugFrame(
+      command: QueuedDebugCommand.StepBackward,
+      currentSession: Session,
+  ) {
     val outcome =
         try {
           debugCheckpointHistory.restorePreviousFrame(
@@ -1052,21 +1129,13 @@ class BasicController private constructor(
               "No preceding frame checkpoint is retained",
           )
       is DebugCheckpointHistory.RestoreOutcome.Restored -> {
-        // Observation coordinates remain monotonic for this session generation. The DTO carries
-        // the checkpoint's original coordinate separately from the new coherent snapshot.
-        // Ordinary user rewind is a separate ring; its entries belong to the abandoned future
-        // and must not be appended to the new branch after this restore commits.
-        rewindManager.clear()
-        debugFramePosition = 0
-        debugBreakpointPauseActive = false
-        lastDebugBreakpointHit = null
-        setDebugPaused(true)
-        resetDebugTimelineObservation(currentSession.gameboy)
+        finishDebugReverse(outcome.position, currentSession)
         command.complete(
             DebugResult.success(
                 DebugReverseStepResult(
                     DebugStepKind.FRAME,
-                    outcome.point,
+                    outcome.position,
+                    outcome.anchor,
                     captureDebugSnapshot(),
                     outcome.status,
                 )))
@@ -1074,12 +1143,101 @@ class BasicController private constructor(
     }
   }
 
-  private fun supportsDebugHistory(currentSession: Session): Boolean =
-      (currentSession.serialEndpoint === SerialEndpoint.NULL_ENDPOINT ||
-          currentSession.serialEndpoint is Peer2PeerSerialEndpoint) &&
-          currentSession.infraredEndpoint === InfraredEndpoint.NULL_ENDPOINT &&
-          !hasMobileAdapterExternalIo() &&
-          !hasLiveCartridgeSensor(currentSession)
+  private fun reverseDebugInstruction(
+      command: QueuedDebugCommand.StepBackward,
+      currentSession: Session,
+  ) {
+    if (!supportsDebugInstructionHistory(currentSession)) {
+      command.fail(
+          DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+          "Reverse-instruction requires an isolated serial link and replay-safe cartridge",
+      )
+      return
+    }
+    val plan = debugCheckpointHistory.planPreviousInstruction()
+    if (plan == null) {
+      command.fail(
+          DebugErrorCode.HISTORY_EXHAUSTED,
+          "No preceding instruction boundary is retained",
+      )
+      return
+    }
+    val gameboy = currentSession.gameboy
+    val result =
+        debugInstructionReplayer.replay(
+            currentSession,
+            plan,
+            gameboy.clockSpec.controllerTicksPerFrame(),
+        )
+
+    detachAndClearDebugTimelineObservation(gameboy)
+    val status =
+        try {
+          result.snapshot.restore(currentSession, effectiveCartridgePause = true)
+          gameboy.seedDeterministicReplayInput(
+              JoypadButtonMask.toButtons(result.input.legacyMask),
+              result.input.physical,
+          )
+          debugCheckpointHistory.commitInstructionReverse(plan, result.position)
+        } catch (failure: Exception) {
+          syncDebugInstrumentation()
+          throw failure
+        }
+    finishDebugReverse(result.position, currentSession, resetObservation = false)
+    syncDebugInstrumentation()
+    command.complete(
+        DebugResult.success(
+            DebugReverseStepResult(
+                DebugStepKind.INSTRUCTION,
+                result.position,
+                plan.anchor,
+                captureDebugSnapshot(),
+                status,
+            )))
+  }
+
+  private fun finishDebugReverse(
+      position: DebugHistoryPosition,
+      currentSession: Session,
+      resetObservation: Boolean = true,
+  ) {
+    // Public observation coordinates remain monotonic. Only the frame-lattice phase follows the
+    // restored machine; the result/status expose the original historical coordinate separately.
+    rewindManager.clear()
+    debugFramePosition = position.framePosition()
+    debugBreakpointPauseActive = false
+    lastDebugBreakpointHit = null
+    setDebugPaused(true)
+    if (resetObservation) {
+      resetDebugTimelineObservation(currentSession.gameboy)
+    }
+  }
+
+  private fun supportsDebugHistory(currentSession: Session): Boolean {
+    val serialEndpoint = currentSession.serialEndpoint
+    return (serialEndpoint === SerialEndpoint.NULL_ENDPOINT ||
+        serialEndpoint is Peer2PeerSerialEndpoint && !serialEndpoint.isConnected) &&
+        currentSession.infraredEndpoint === InfraredEndpoint.NULL_ENDPOINT &&
+        !hasMobileAdapterExternalIo() &&
+        !hasLiveCartridgeSensor(currentSession)
+  }
+
+  private fun supportsDebugInstructionHistory(currentSession: Session): Boolean =
+      supportsDebugHistory(currentSession) &&
+          supportsDebugInstructionReplay(currentSession)
+
+  /** Static session capability; temporary host-I/O topology is checked when history is used. */
+  private fun supportsDebugInstructionReplay(currentSession: Session): Boolean =
+      isInstructionReplayCartridge(currentSession.config.rom) &&
+          currentSession.config.slotRom?.let(::isInstructionReplayCartridge) != false
+
+  private fun isInstructionReplayCartridge(rom: Rom): Boolean {
+    val mapper = rom.cartridgeProperties.mapper
+    return !rom.type.isHuc3 &&
+        !rom.type.isTama5 &&
+        mapper != CartridgeProperties.Mapper.DATEL &&
+        mapper != CartridgeProperties.Mapper.SL_MULTICART
+  }
 
   private fun debugHistoryUnavailableReason(): DebugHistoryTruncationReason =
       if (hasMobileAdapterExternalIo()) {
@@ -1119,6 +1277,11 @@ class BasicController private constructor(
   private fun handleDebugButton(command: QueuedDebugCommand.SetButton) {
     val currentSession = checkNotNull(session)
     val button = Button.valueOf(command.button.name)
+    if (currentSession.gameboy.legacyPressedButtons.contains(button) == command.pressed) {
+      command.complete(DebugResult.success())
+      return
+    }
+    debugCheckpointHistory.invalidateFuture(currentSession)
     if (command.pressed) {
       currentSession.eventBus.post(ButtonPressEvent(button))
     } else {
@@ -2704,8 +2867,9 @@ class BasicController private constructor(
     if (isPaused == paused) {
       return
     }
+    val wasEffectivelyPaused = isEffectivelyPaused()
     isPaused = paused
-    session?.gameboy?.setCartridgeClockPaused(isEffectivelyPaused())
+    updateCartridgePause(wasEffectivelyPaused)
   }
 
   private fun setDebugPaused(paused: Boolean) {
@@ -2715,8 +2879,34 @@ class BasicController private constructor(
     if (debugPaused == paused) {
       return
     }
+    val wasEffectivelyPaused = isEffectivelyPaused()
     debugPaused = paused
-    session?.gameboy?.setCartridgeClockPaused(isEffectivelyPaused())
+    updateCartridgePause(wasEffectivelyPaused)
+  }
+
+  private fun updateCartridgePause(wasEffectivelyPaused: Boolean) {
+    val currentSession = session ?: return
+    val gameboy = currentSession.gameboy
+    val effectivelyPaused = isEffectivelyPaused()
+    val resumedPausedRtc =
+        wasEffectivelyPaused &&
+            !effectivelyPaused &&
+            gameboy.hasPausedCartridgeRtc() &&
+            debugCheckpointHistory.enabled
+    if (resumedPausedRtc) {
+      // The live MBC3 applies host elapsed time on resume. That duration is deliberately not in
+      // the deterministic input transcript, so no checkpoint spanning this boundary is replayable.
+      debugCheckpointHistory.clear(DebugHistoryTruncationReason.NONDETERMINISTIC_IO)
+    }
+    gameboy.setCartridgeClockPaused(effectivelyPaused)
+    if (resumedPausedRtc && debugFramePosition == 0 && supportsDebugHistory(currentSession)) {
+      try {
+        debugCheckpointHistory.recordFrame(currentSession)
+      } catch (failure: Exception) {
+        LOG.warn("Unable to restart reverse history after RTC resume", failure)
+        debugCheckpointHistory.disable(DebugHistoryTruncationReason.SESSION_BOUNDARY)
+      }
+    }
   }
 
   private fun isEffectivelyPaused(): Boolean = isPaused || debugPaused
@@ -2863,6 +3053,7 @@ class BasicController private constructor(
     // invalidates them; preparation and handoff failures leave the old endpoint/history intact.
     rewindManager.clear()
     debugCheckpointHistory.clear(DebugHistoryTruncationReason.TOPOLOGY_CHANGED)
+    debugInstructionReplayer.close()
     postSerialPeripheralStatus(
         previousSelection,
         Controller.SerialPeripheralStatus.DETACHED,
@@ -2922,6 +3113,7 @@ class BasicController private constructor(
     }
     rewindManager.clear()
     debugCheckpointHistory.clear(DebugHistoryTruncationReason.TOPOLOGY_CHANGED)
+    debugInstructionReplayer.close()
     postSerialPeripheralStatus(
         Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
         Controller.SerialPeripheralStatus.ATTACHED,
@@ -3282,6 +3474,8 @@ class BasicController private constructor(
   private fun installDebugPort(session: Session) {
     check(debugPort == null) { "Previous debug session was not revoked" }
     debugCheckpointHistory = DebugCheckpointHistory()
+    debugInstructionReplayer.close()
+    debugInstructionReplayer = DebugInstructionReplayer()
     debugSequence = 0
     debugMasterTick = 0
     debugFrame = 0
@@ -3303,7 +3497,7 @@ class BasicController private constructor(
     val port =
         QueuedDebugPort(
             nextDebugSessionGeneration.incrementAndGet(),
-            DEBUG_CAPABILITIES,
+            debugCapabilities(supportsDebugInstructionReplay(session)),
         )
     debugPort = port
     console?.setDebugPort(port)
@@ -3321,6 +3515,7 @@ class BasicController private constructor(
       owner?.gameboy?.disableDebugRetirementTracking()
     }
     debugCheckpointHistory.disable(DebugHistoryTruncationReason.SESSION_BOUNDARY)
+    debugInstructionReplayer.close()
     owner?.gameboy?.updateDebugInstrumentation(null, debugMasterTick)
     debugPort = null
     debugInstrumentation = null
@@ -4002,7 +4197,9 @@ class BasicController private constructor(
     val TRACE_CATEGORIES: Set<TraceCategory> =
         EnumSet.allOf(TraceCategory::class.java)
 
-    val DEBUG_CAPABILITIES =
+    val DEBUG_CAPABILITIES = debugCapabilities(reverseInstruction = true)
+
+    fun debugCapabilities(reverseInstruction: Boolean) =
         DebugCapabilities(
             true,
             true,
@@ -4020,7 +4217,7 @@ class BasicController private constructor(
             DebugHistoryCapabilities(
                 true,
                 true,
-                false,
+                reverseInstruction,
                 DebugHistoryConfiguration.MAX_FRAMES,
                 DebugHistoryConfiguration.MAX_MEMORY_BUDGET_BYTES,
             ),
