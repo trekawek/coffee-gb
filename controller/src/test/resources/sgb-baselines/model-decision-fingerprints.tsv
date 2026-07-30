@@ -1,11 +1,11 @@
 path	sha256
-controller/src/main/java/eu/rekawek/coffeegb/controller/Agent.kt	7c798d5cf62fb781c9f83b61c9618e970db7c06bffba9c0d14108b57b1c98ab8
-controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt	89b2f670e00525f05ecbe0cfe4b59975c8d9580f46b6110e2f9d2524ba44037e
+controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt	0d2b1c011fcb42788d23c89cb42d347170df4d84708347c68b1057cb183a4eab
 controller/src/main/java/eu/rekawek/coffeegb/controller/Controller.kt	172735519e2ebf25ba108ba03c3832d471eaf3bb9c48b342b4a458d13bafe416
 controller/src/main/java/eu/rekawek/coffeegb/controller/LegacySnapshotImporter.kt	b4a5567280e0392435d48f136d203e11b56d8d25e620a97ae71002c02a0326fe
 controller/src/main/java/eu/rekawek/coffeegb/controller/RomSessionPreparer.kt	b5f9acd8cfe12cb8a1b6a6653d71d7510895e364e706aa8b3b883fe8a18a30c5
 controller/src/main/java/eu/rekawek/coffeegb/controller/StateTypeRegistry.kt	d1bbcea3556d7406fcecb64282cab5ae73a8be0c5b8e7623e7d2bbd8e660d791
 controller/src/main/java/eu/rekawek/coffeegb/controller/TimingTicker.kt	6329897c8cb86887a5df84523af17379071c889d86af8837f75eb2bc6706a2f1
+controller/src/main/java/eu/rekawek/coffeegb/controller/agent/HeadlessAgentSession.kt	669e3f4d305879446fba9fb03a6596fa47c4aa6120486ab7bd8e917d3f486d8c
 controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedClockPolicy.kt	a3a75fdc9e05a5a908fd0ffc8e35f043091f8c7e906e736f43455fd0876ce82d
 controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt	41ad51b6aab64b7dcc0ae5bb974b72e0c4a84046225c5a57ca71260b34e5b078
 controller/src/main/java/eu/rekawek/coffeegb/controller/link/StateHistory.kt	c849427da71f8a59766caf2099d84c595e0e2b382cde0dfa9ca3f3165daec77e
@@ -56,7 +56,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/memory/Bios.java	d34eb790bf1ae45858c
 core/src/main/java/eu/rekawek/coffeegb/core/memory/Dma.java	c0d12923e92a50e16aa16a1221876e8de5b1b8dcc575f569a15fad01d761533c
 core/src/main/java/eu/rekawek/coffeegb/core/memory/DmaAddressSpace.java	44789a622be098ac3e68eeb8f22758d7acee59207253e3f7656e5108e4ddecb2
 core/src/main/java/eu/rekawek/coffeegb/core/memory/DmaCpuAddressSpace.java	21c6cc0dff3b3a049d5267369af3561260f6935d3f859fd8f9e5ebba4b5ae9be
-core/src/main/java/eu/rekawek/coffeegb/core/memory/Mmu.java	88871bd68d6536f575f0408a552cc830a5ebef334f48efd8acd6dda9efb01a81
+core/src/main/java/eu/rekawek/coffeegb/core/memory/Mmu.java	a198d4d5abc97347410f210c931887d847b759b25ea76b694de310c46baac4b4
 core/src/main/java/eu/rekawek/coffeegb/core/memory/OamEchoRam.java	be80f590f7b90d4a4d4218884d9eef3f59e6faf9f5444c71231ae069175c209b
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/Cartridge.java	a978c0c211d961cb8dbea351ee966688a67a0c5b631fa3deb993d718150a4ecb
 core/src/main/java/eu/rekawek/coffeegb/core/memory/cart/CartridgeProperties.java	b5f0db3e5ce50ade13f608d40bff663f3fd42e03de4068eaad444c8f4ba25638

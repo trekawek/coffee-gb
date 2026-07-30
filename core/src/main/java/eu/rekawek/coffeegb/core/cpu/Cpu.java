@@ -102,6 +102,12 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private boolean stopFrameBlankRequested;
 
+    /**
+     * Optional debugger-only retirement sequence. It is deliberately absent from component state:
+     * enabling observation must not change the emulated machine or any portable checkpoint.
+     */
+    private transient DebugRetirementTracker debugRetirementTracker;
+
     public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode,
                Display display) {
         this(addressSpace, interruptManager, gpu, speedMode, display, null);
@@ -274,6 +280,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             // an illegal opcode freezes the CPU on hardware; do the
                             // same instead of crashing the emulation thread
                             state = State.LOCKED;
+                            markDebugRetirement();
                             return;
                         }
                     }
@@ -301,6 +308,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                     }
                     if (currentOpcode == null) {
                         state = State.LOCKED;
+                        markDebugRetirement();
                         return;
                     }
                     state = State.OPERAND;
@@ -347,6 +355,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             }
                             display.disableLcd();
                         }
+                        markDebugRetirement();
                         return;
                     } else if (opcode1 == 0x76) {
                         // HALT always samples the next opcode. It is normally fetched
@@ -368,6 +377,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             asynchronousHaltEntryStatPhase = false;
                             ordinaryHaltWakeStatPhase = false;
                             state = State.OPCODE;
+                            markDebugRetirement();
                             return;
                         }
                         if (interruptManager.isHaltBug()) {
@@ -379,6 +389,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             synchronousHaltEntryStatPhase = true;
                             asynchronousHaltEntryStatPhase = false;
                             ordinaryHaltWakeStatPhase = false;
+                            markDebugRetirement();
                             return;
                         } else {
                             state = State.HALTED;
@@ -387,6 +398,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             ordinaryHaltWakeStatPhase = false;
                             haltedCpuCycles = 0;
                             haltEntrySampleTicks = speedMode.isGbc() ? 2 : 4;
+                            markDebugRetirement();
                             return;
                         }
                     }
@@ -424,6 +436,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         state = State.OPCODE;
                         operandIndex = 0;
                         interruptManager.onInstructionFinished();
+                        markDebugRetirement();
                         return;
                     }
                     break;
@@ -516,6 +529,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                 }
                 requestedIrq = null;
                 state = State.OPCODE;
+                markDebugRetirement();
                 break;
         }
     }
@@ -572,6 +586,53 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     public State getState() {
         return state;
+    }
+
+    /** Enables allocation-free instruction-retirement observation for an attached debugger. */
+    public void enableDebugRetirementTracking() {
+        if (debugRetirementTracker == null) {
+            debugRetirementTracker = new DebugRetirementTracker();
+        }
+    }
+
+    /** Disables the optional retirement hook without changing emulated CPU state. */
+    public void disableDebugRetirementTracking() {
+        debugRetirementTracker = null;
+    }
+
+    /** Sequence local to the current debugger attachment; zero means no retirement was observed. */
+    public long getDebugRetirementSequence() {
+        DebugRetirementTracker tracker = debugRetirementTracker;
+        return tracker == null ? 0 : tracker.sequence;
+    }
+
+    public int getDebugOpcode() {
+        return opcode1;
+    }
+
+    public int getDebugExtendedOpcode() {
+        return opcode1 == 0xcb ? opcode2 : -1;
+    }
+
+    /** Current CPU sub-cycle within the active machine-cycle slot. */
+    public int getDebugMachineCycle() {
+        return Math.max(0, clockCycle);
+    }
+
+    public boolean isDebugHaltBugActive() {
+        return haltBugMode;
+    }
+
+    private void markDebugRetirement() {
+        DebugRetirementTracker tracker = debugRetirementTracker;
+        if (tracker != null) {
+            tracker.sequence++;
+        }
+    }
+
+    private static final class DebugRetirementTracker {
+
+        private long sequence;
     }
 
     public boolean isSynchronousHaltEntryStatPhase() {

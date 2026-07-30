@@ -14,6 +14,7 @@ import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
@@ -417,7 +418,7 @@ class BasicControllerTest {
     try {
       eventBus.post(LoadRomEvent(rom))
       assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      val retained = assertNotNull(console.attachedGameboy)
+      val retained = assertNotNull(console.attachedDebugPort)
       assertTrue(subscriberEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
       val closeStarted = System.nanoTime()
@@ -434,13 +435,14 @@ class BasicControllerTest {
           cleanupCalls.get(),
           "machine cleanup must wait until the session bus has actually stopped",
       )
-      assertSame(retained, console.attachedGameboy)
+      assertTrue(retained.isClosed)
+      assertNull(console.attachedDebugPort)
 
       releaseSubscriber.countDown()
       assertTrue(subscriberReturned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertNotNull(controller.closeWithState())
       assertEquals(1, cleanupCalls.get())
-      assertNull(console.attachedGameboy)
+      assertNull(console.attachedDebugPort)
     } finally {
       releaseSubscriber.countDown()
       runCatching { controller.close() }
@@ -493,19 +495,20 @@ class BasicControllerTest {
     try {
       eventBus.post(LoadRomEvent(oldRom))
       assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      val retained = assertNotNull(console.attachedGameboy)
+      val retained = assertNotNull(console.attachedDebugPort)
       eventBus.post(LoadRomEvent(nextRom))
       assertTrue(loaderEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
       assertFailsWith<Controller.PersistenceBarrierException> { controller.closeWithState() }
       assertEquals(0, cleanupCalls.get())
-      assertSame(retained, console.attachedGameboy)
+      assertTrue(retained.isClosed)
+      assertNull(console.attachedDebugPort)
 
       releaseLoader.countDown()
       assertTrue(loaderReturned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertNotNull(controller.closeWithState())
       assertEquals(1, cleanupCalls.get())
-      assertNull(console.attachedGameboy)
+      assertNull(console.attachedDebugPort)
     } finally {
       releaseLoader.countDown()
       runCatching { controller.close() }
@@ -527,6 +530,7 @@ class BasicControllerTest {
     eventBus.register<RumbleEvent> { rumble.add(it) }
     eventBus.register<LoadRomFailedEvent> { failures.add(it) }
     val cleanupCalls = AtomicInteger()
+    val rumbleRequests = AtomicInteger()
     val firstRom = namedRom("RUMBLE_FIRST")
     val secondRom = namedRom("RUMBLE_SECOND")
     val console = TrackingConsole()
@@ -538,6 +542,13 @@ class BasicControllerTest {
                   .setCodeBreakerRumble(true)
           val gameboy =
               object : Gameboy(config) {
+                override fun tick(): Boolean {
+                  if (rumbleRequests.getAndSet(0) != 0) {
+                    addressSpace.setByte(0xfffe, 0x80)
+                  }
+                  return super.tick()
+                }
+
                 override fun closeAfterCartridgeFlushSilently() {
                   cleanupCalls.incrementAndGet()
                   super.closeAfterCartridgeFlushSilently()
@@ -551,7 +562,7 @@ class BasicControllerTest {
     try {
       eventBus.post(LoadRomEvent(firstRom))
       assertEquals("RUMBLE_FIRST", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
-      assertNotNull(console.attachedGameboy).addressSpace.setByte(0xfffe, 0x80)
+      rumbleRequests.incrementAndGet()
       assertTrue(assertNotNull(rumble.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).on())
 
       eventBus.post(LoadRomEvent(secondRom))
@@ -559,20 +570,20 @@ class BasicControllerTest {
       assertEquals("RUMBLE_SECOND", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
       awaitValue(cleanupCalls, 1)
 
-      assertNotNull(console.attachedGameboy).addressSpace.setByte(0xfffe, 0x80)
+      rumbleRequests.incrementAndGet()
       assertTrue(assertNotNull(rumble.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).on())
       eventBus.post(Controller.StopEmulationEvent())
       assertNotNull(stopped.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       awaitValue(cleanupCalls, 2)
-      awaitCondition { console.attachedGameboy == null }
+      awaitCondition { console.attachedDebugPort == null }
 
       eventBus.post(LoadRomEvent(firstRom))
       assertEquals("RUMBLE_FIRST", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
-      assertNotNull(console.attachedGameboy).addressSpace.setByte(0xfffe, 0x80)
+      rumbleRequests.incrementAndGet()
       assertTrue(assertNotNull(rumble.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).on())
       assertNotNull(controller.closeWithState())
       assertEquals(3, cleanupCalls.get())
-      assertNull(console.attachedGameboy)
+      assertNull(console.attachedDebugPort)
       assertNull(failures.poll(250, TimeUnit.MILLISECONDS))
     } finally {
       runCatching { controller.close() }
@@ -924,7 +935,7 @@ class BasicControllerTest {
     try {
       eventBus.post(LoadRomEvent(ROM))
       assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      val oldGameboy = assertNotNull(console.attachedGameboy)
+      val oldPort = assertNotNull(console.attachedDebugPort)
       started.clear()
       stopped.clear()
       frames.clear()
@@ -937,7 +948,7 @@ class BasicControllerTest {
       )
       assertNull(stopped.poll(300, TimeUnit.MILLISECONDS))
       assertNull(started.poll(300, TimeUnit.MILLISECONDS))
-      assertSame(oldGameboy, console.attachedGameboy)
+      assertSame(oldPort, console.attachedDebugPort)
       assertNotNull(
           frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
           "the old session must resume after candidate initialization fails",
@@ -962,13 +973,13 @@ class BasicControllerTest {
     try {
       eventBus.post(LoadRomEvent(ROM))
       assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      val oldGameboy = assertNotNull(console.attachedGameboy)
+      val oldPort = assertNotNull(console.attachedDebugPort)
 
       eventBus.post(LoadRomEvent(nextRom))
       assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
-      assertNotNull(console.attachedGameboy)
-      assertTrue(console.attachedGameboy !== oldGameboy)
+      assertNotNull(console.attachedDebugPort)
+      assertTrue(console.attachedDebugPort !== oldPort)
     } finally {
       controller.close()
       eventBus.close()
@@ -1033,7 +1044,7 @@ class BasicControllerTest {
       eventBus.post(LoadRomEvent(oldRom))
       assertEquals("STALLED_OLD", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
       assertTrue(oldSubscriberEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      val oldGameboy = assertNotNull(console.attachedGameboy)
+      val oldPort = assertNotNull(console.attachedDebugPort)
 
       val replacementStarted = System.nanoTime()
       eventBus.post(LoadRomEvent(nextRom))
@@ -1046,7 +1057,7 @@ class BasicControllerTest {
           TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - replacementStarted)
       assertTrue(replacementMillis < 5_000, "replacement took ${replacementMillis}ms")
       assertNull(failures.poll(250, TimeUnit.MILLISECONDS))
-      assertTrue(console.attachedGameboy !== oldGameboy)
+      assertTrue(console.attachedDebugPort !== oldPort)
 
       eventBus.post(StalledSessionEvent())
       assertEquals(
@@ -1518,10 +1529,10 @@ class BasicControllerTest {
   }
 
   private class TrackingConsole : Console() {
-    @Volatile var attachedGameboy: Gameboy? = null
+    @Volatile var attachedDebugPort: DebugPort? = null
 
-    override fun setGameboy(gameboy: Gameboy?) {
-      this.attachedGameboy = gameboy
+    override fun setDebugPort(debugPort: DebugPort?) {
+      attachedDebugPort = debugPort
     }
   }
 

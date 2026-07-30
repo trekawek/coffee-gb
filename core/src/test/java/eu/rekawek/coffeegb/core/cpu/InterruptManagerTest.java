@@ -55,6 +55,26 @@ public class InterruptManagerTest {
     }
 
     @Test
+    public void debugFlagViewsDoNotConsumeTransientIfReadMasks() {
+        InterruptManager interrupts = new InterruptManager(false);
+        interrupts.setByte(0xff0f,
+                (1 << VBlank.ordinal()) | (1 << LCDC.ordinal()));
+        interrupts.setByte(0xffff, 0x1f);
+        interrupts.maskVBlankOnNextRead();
+        interrupts.maskLcdcUntilNextPeripheralTick();
+        interrupts.setCpuReadInterruptPreview(Timer, true);
+        var stateBeforeDebugRead = interrupts.captureState();
+
+        assertEquals(0x03, interrupts.getDebugInterruptFlags());
+        assertEquals(0x1f, interrupts.getDebugInterruptEnableFlags());
+        assertEquals(0x03, interrupts.getDebugPendingInterruptFlags());
+        assertEquals(stateBeforeDebugRead, interrupts.captureState());
+
+        assertEquals(1 << Timer.ordinal(), interrupts.getByte(0xff0f) & 0x1f);
+        assertEquals(0x07, interrupts.getByte(0xff0f) & 0x1f);
+    }
+
+    @Test
     public void vblankAcknowledgeCaptureSurvivesMementoRestore() {
         InterruptManager interrupts = enabledInterrupt(VBlank);
         interrupts.requestInterrupt(VBlank);

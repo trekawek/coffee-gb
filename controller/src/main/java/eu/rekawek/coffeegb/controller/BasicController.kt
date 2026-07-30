@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.debug.QueuedDebugCommand
+import eu.rekawek.coffeegb.controller.debug.QueuedDebugPort
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkError as BackendNetworkError
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkPhase as BackendNetworkPhase
@@ -57,11 +59,23 @@ import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.debug.DebugButton
+import eu.rekawek.coffeegb.core.debug.DebugCapabilities
+import eu.rekawek.coffeegb.core.debug.DebugCpuState
+import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugResult
+import eu.rekawek.coffeegb.core.debug.DebugSnapshot
+import eu.rekawek.coffeegb.core.debug.DebugStepKind
+import eu.rekawek.coffeegb.core.debug.DebugStepResult
+import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusTeardownTimeoutException
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatPatch
+import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
@@ -278,6 +292,24 @@ class BasicController private constructor(
   /** Two coherent constant-space control slots drained only by the controller frame owner. */
   private val mobileAdapterControlLane = MobileAdapterControlLane()
 
+  /** Session-bound, bounded debugger lane; commands are executed only by [thread]. */
+  private var debugPort: QueuedDebugPort? = null
+
+  private val nextDebugSessionGeneration = AtomicLong()
+
+  private var debugSequence = 0L
+
+  private var debugMasterTick = 0L
+
+  private var debugFrame = 0L
+
+  /** Emulated ticks since the last controller frame lattice boundary. */
+  private var debugFramePosition = 0
+
+  private var debugTrackingEnabled = false
+
+  private var pendingDebugAction: PendingDebugAction? = null
+
   private val stateWorker = stateWorkerFactory.create(eventBus)
 
   private var session: Session? = null
@@ -313,6 +345,9 @@ class BasicController private constructor(
   @Volatile private var doStop = false
 
   private var isPaused = false
+
+  /** Debugger pause ownership is independent from the desktop/workflow pause owner. */
+  private var debugPaused = false
 
   private var isRewinding = false
 
@@ -518,6 +553,14 @@ class BasicController private constructor(
   }
 
   private fun runFrame() {
+    // An instruction-safe pause may stop between controller frame boundaries. Keep ordinary
+    // application/state events at their established frame safe point while the private debug lane
+    // remains responsive and can resume or advance the machine to the next lattice boundary.
+    if (debugFramePosition != 0 || pendingDebugAction != null) {
+      runDebugContinuation()
+      return
+    }
+
     eventQueue.dispatch()
     drainMobileAdapterControlLane()
     pollMobileAdapterBackend()
@@ -538,14 +581,28 @@ class BasicController private constructor(
             isRewinding &&
             session?.let { rewindManager.rewindOneStep(it) } == true
 
+    releaseClosedDebugPortIfNeeded()
+    drainDebugCommands()
+
     var emulated = false
     val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
-    repeat(clockSpec.controllerTicksPerFrame()) {
-      if (rewound || (!isPaused && !isRewinding)) {
+    val frameTicks = clockSpec.controllerTicksPerFrame()
+    if (!rewound && (debugPaused || pendingDebugAction != null)) {
+      runDebugTickWindow(clockSpec, stopAtNextBoundary = false)
+      return
+    }
+
+    repeat(frameTicks) {
+      if (rewound || (!isEffectivelyPaused() && !isRewinding)) {
         session?.gameboy?.tick()
-        emulated = true
+        emulated = session != null
       }
       timingTicker.run(clockSpec)
+    }
+    if (emulated) {
+      debugMasterTick = Math.addExact(debugMasterTick, frameTicks.toLong())
+      debugFrame = Math.addExact(debugFrame, 1L)
+      debugFramePosition = 0
     }
     if (emulated && !rewound) {
       if (hasMobileAdapterExternalIo()) {
@@ -556,6 +613,392 @@ class BasicController private constructor(
       }
     }
   }
+
+  private fun runDebugContinuation() {
+    if (pendingDebugAction == null) {
+      serviceDebugSafePointControls()
+    }
+    releaseClosedDebugPortIfNeeded()
+    drainDebugCommands()
+    if (session == null) {
+      debugFramePosition = 0
+      return
+    }
+    if (debugFramePosition == 0 && pendingDebugAction == null && !debugPaused) {
+      // Resume at a frame boundary re-enters the ordinary path so queued desktop/state events are
+      // dispatched before the next guest tick.
+      return
+    }
+    val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
+    val queuedBoundaryControl = eventQueue.anyEvent(::requiresDebugFrameBoundary)
+    val completedLifecycleWork = hasCompletedLifecycleWork()
+    // Detaching the debugger cannot leave its partial frame as a hidden third pause owner. Finish
+    // that frame once even when the desktop pause remains active, then restore ordinary FIFO work.
+    val finishPartialFrame =
+        debugFramePosition != 0 &&
+            pendingDebugAction == null &&
+            (!isEffectivelyPaused() ||
+                queuedBoundaryControl ||
+                completedLifecycleWork ||
+                debugPort == null)
+    runDebugTickWindow(clockSpec, stopAtNextBoundary = finishPartialFrame)
+  }
+
+  /**
+   * Applies only pause-ownership changes while an instruction-safe pause is between ordinary frame
+   * boundaries. Those controls cannot replace or mutate the session, so they may bypass ordinary
+   * frame-boundary work. Lifecycle controls never bypass: their presence completes the partial
+   * frame and the entire queue is then dispatched in producer order.
+   */
+  private fun serviceDebugSafePointControls() {
+    var remaining = MAX_DEBUG_CONTROL_EVENTS_PER_SAFE_POINT
+    while (remaining-- > 0 && eventQueue.dispatchFirstMatching(::isImmediateDebugControl)) {
+      // Relative order among pause-ownership changes and among retained events is preserved.
+    }
+    drainMobileAdapterControlLane()
+  }
+
+  private fun isImmediateDebugControl(event: Event): Boolean =
+      event is Controller.PauseEmulationEvent || event is Controller.ResumeEmulationEvent
+
+  /** Controls that must not be starved by a debugger-owned mid-frame pause. */
+  private fun requiresDebugFrameBoundary(event: Event): Boolean =
+      isImmediateDebugControl(event) ||
+          event is Controller.LoadRomEvent ||
+          event is Controller.CancelRomOpenEvent ||
+          event is Controller.RetryRomReplacementEvent ||
+          event is Controller.CancelRomReplacementEvent ||
+          event is Controller.ResetEmulationEvent ||
+          event is Controller.StopEmulationEvent ||
+          event is Controller.UpdatedSystemMappingEvent ||
+          event is StatePrepareCloseRequestEvent ||
+          event is StateSkipCloseAutosaveRequestEvent ||
+          event is StateResumeDecisionEvent ||
+          (event is StateWorkerCompletedEvent && event.purpose != StateWorkerPurpose.MANUAL)
+
+  private fun hasCompletedLifecycleWork(): Boolean =
+      loadJob?.task?.isDone == true ||
+          replacementJob?.attempt?.isDone == true ||
+          stopJob?.attempt?.isDone == true
+
+  private fun runDebugTickWindow(clockSpec: ClockSpec, stopAtNextBoundary: Boolean) {
+    val frameTicks = clockSpec.controllerTicksPerFrame()
+    var holdAtBoundary = false
+    repeat(frameTicks) {
+      if (!holdAtBoundary && !isRewinding) {
+        // A queued lifecycle control may explicitly supersede a debugger-owned mid-frame pause.
+        // Retain pause ownership, but finish this one partial frame so the ordinary FIFO can run
+        // at its established boundary.
+        val shouldTick =
+            pendingDebugAction != null || !isEffectivelyPaused() || stopAtNextBoundary
+        val gameboy = session?.gameboy
+        if (shouldTick && gameboy != null) {
+          gameboy.tick()
+          debugMasterTick = Math.addExact(debugMasterTick, 1L)
+          debugFramePosition++
+          if (debugFramePosition == frameTicks) {
+            debugFramePosition = 0
+            debugFrame = Math.addExact(debugFrame, 1L)
+            recordDebugFrameBoundary()
+            if (stopAtNextBoundary) {
+              holdAtBoundary = true
+            }
+          }
+          finishPendingDebugAction(gameboy, frameTicks)
+        }
+      }
+      timingTicker.run(clockSpec)
+    }
+  }
+
+  private fun recordDebugFrameBoundary() {
+    val currentSession = session ?: return
+    if (hasMobileAdapterExternalIo()) {
+      rewindManager.clear()
+    } else {
+      rewindManager.record(currentSession)
+    }
+  }
+
+  private fun releaseClosedDebugPortIfNeeded(notifyLifecycle: Boolean = true) {
+    val port = debugPort ?: return
+    if (!port.isClosed) {
+      return
+    }
+    val currentSession = session
+    if (debugTrackingEnabled) {
+      currentSession?.gameboy?.disableDebugRetirementTracking()
+    }
+    pendingDebugAction = null
+    debugTrackingEnabled = false
+    setDebugPaused(false)
+    debugPort = null
+    console?.setDebugPort(null)
+    if (notifyLifecycle && currentSession != null) {
+      postSessionEventSafely(
+          currentSession,
+          Controller.SessionDebugPortEvent(port.sessionGeneration(), null),
+      )
+    }
+  }
+
+  private fun drainDebugCommands() {
+    val port = debugPort ?: return
+    if (pendingDebugAction != null) {
+      return
+    }
+    repeat(MAX_DEBUG_COMMANDS_PER_SAFE_POINT) {
+      val command = port.pollCommand() ?: return
+      // Producers can enqueue a desktop pause and then a debug command while the owner is between
+      // its control-lane and command-lane polls. Recheck the leading FIFO controls after claiming
+      // the command so that an already-visible desktop ownership change wins this safe point.
+      serviceDebugSafePointControls()
+      if (command.sessionGeneration != port.sessionGeneration()) {
+        command.fail(
+            DebugErrorCode.SESSION_REPLACED,
+            "The debug command belongs to a replaced session",
+        )
+      } else if (session == null) {
+        command.fail(DebugErrorCode.NO_ACTIVE_SESSION, "There is no active emulation session")
+      } else if (debugSessionBusy()) {
+        command.fail(
+            DebugErrorCode.SESSION_BUSY,
+            "The session is changing state and has no debugger safe point",
+        )
+      } else {
+        handleDebugCommand(command)
+      }
+      if (pendingDebugAction != null) {
+        return
+      }
+    }
+  }
+
+  private fun debugSessionBusy(): Boolean =
+      loadJob != null || replacementJob != null || stopJob != null || isRewinding
+
+  private fun handleDebugCommand(command: QueuedDebugCommand<*>) {
+    try {
+      when (command) {
+        is QueuedDebugCommand.Pause -> handleDebugPause(command)
+        is QueuedDebugCommand.Resume -> {
+          if (!debugPaused) {
+            command.fail(DebugErrorCode.ALREADY_RUNNING, "The debugger does not own a pause")
+            return
+          }
+          setDebugPaused(false)
+          command.complete(DebugResult.success(captureDebugSnapshot()))
+        }
+        is QueuedDebugCommand.Snapshot ->
+            command.complete(DebugResult.success(captureDebugSnapshot()))
+        is QueuedDebugCommand.Step -> handleDebugStep(command)
+        is QueuedDebugCommand.ReadMemory -> handleDebugMemoryRead(command)
+        is QueuedDebugCommand.SetButton -> handleDebugButton(command)
+      }
+    } catch (failure: RuntimeException) {
+      LOG.warn("Debug command {} failed", command.javaClass.simpleName, failure)
+      command.fail(DebugErrorCode.INTERNAL_ERROR, "The debug command could not be completed")
+    }
+  }
+
+  private fun handleDebugPause(command: QueuedDebugCommand.Pause) {
+    ensureDebugTracking()
+    if (debugPaused) {
+      command.fail(DebugErrorCode.ALREADY_PAUSED, "The debugger already owns a pause")
+      return
+    }
+    val current = captureDebugSnapshot()
+    if (isPaused || current.execution().cpuState().isDebuggerIdle()) {
+      setDebugPaused(true)
+      command.complete(DebugResult.success(captureDebugSnapshot()))
+      return
+    }
+    val retirement = checkNotNull(session).gameboy.debugRetirementSequence
+    pendingDebugAction =
+        PendingDebugAction.Pause(
+            command,
+            debugMasterTick,
+            Math.addExact(retirement, 1L),
+        )
+  }
+
+  private fun handleDebugStep(command: QueuedDebugCommand.Step) {
+    if (!isEffectivelyPaused()) {
+      command.fail(DebugErrorCode.NOT_PAUSED, "Pause the debug session before stepping")
+      return
+    }
+    ensureDebugTracking()
+    val gameboy = checkNotNull(session).gameboy
+    val before = captureDebugSnapshot()
+    when (command.kind) {
+      DebugStepKind.MACHINE_CYCLE ->
+          command.fail(
+              DebugErrorCode.UNSUPPORTED_STEP,
+              "Machine-cycle stepping is not supported by this session",
+          )
+      DebugStepKind.INSTRUCTION -> {
+        when (before.execution().cpuState()) {
+          DebugCpuState.LOCKED -> {
+            command.fail(DebugErrorCode.CPU_LOCKED, "The CPU is locked by an illegal opcode")
+            return
+          }
+          DebugCpuState.HALTED,
+          DebugCpuState.STOPPED,
+          DebugCpuState.SPEED_SWITCH -> {
+            command.fail(DebugErrorCode.CPU_IDLE, "The CPU cannot retire an instruction now")
+            return
+          }
+          else -> Unit
+        }
+        // A desktop/workflow pause is sufficient to authorize the request, but the debugger
+        // acquires its own ownership so the result remains stopped if that other owner resumes.
+        setDebugPaused(true)
+        val retirement = gameboy.debugRetirementSequence
+        pendingDebugAction =
+            PendingDebugAction.InstructionStep(
+                command,
+                debugMasterTick,
+                retirement,
+                Math.addExact(retirement, 1L),
+            )
+      }
+      DebugStepKind.FRAME -> {
+        setDebugPaused(true)
+        val ticksToBoundary =
+            if (debugFramePosition == 0) {
+              gameboy.clockSpec.controllerTicksPerFrame()
+            } else {
+              gameboy.clockSpec.controllerTicksPerFrame() - debugFramePosition
+            }
+        pendingDebugAction =
+            PendingDebugAction.FrameStep(
+                command,
+                debugMasterTick,
+                gameboy.debugRetirementSequence,
+                Math.addExact(debugMasterTick, ticksToBoundary.toLong()),
+            )
+      }
+    }
+  }
+
+  private fun handleDebugMemoryRead(command: QueuedDebugCommand.ReadMemory) {
+    val gameboy = checkNotNull(session).gameboy
+    try {
+      command.complete(DebugResult.success(gameboy.readDebugMemory(command.request)))
+    } catch (_: UnsupportedOperationException) {
+      command.fail(
+          DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+          "The requested address space has no side-effect-free debugger view",
+      )
+    } catch (_: IllegalArgumentException) {
+      command.fail(
+          DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
+          "The requested range contains a side-effectful or unavailable address",
+      )
+    }
+  }
+
+  private fun handleDebugButton(command: QueuedDebugCommand.SetButton) {
+    val currentSession = checkNotNull(session)
+    val button = Button.valueOf(command.button.name)
+    if (command.pressed) {
+      currentSession.eventBus.post(ButtonPressEvent(button))
+    } else {
+      currentSession.eventBus.post(ButtonReleaseEvent(button))
+    }
+    command.complete(DebugResult.success())
+  }
+
+  private fun ensureDebugTracking() {
+    if (debugTrackingEnabled) {
+      return
+    }
+    checkNotNull(session).gameboy.enableDebugRetirementTracking()
+    debugTrackingEnabled = true
+  }
+
+  private fun captureDebugSnapshot(): DebugSnapshot {
+    ensureDebugTracking()
+    val port = checkNotNull(debugPort)
+    debugSequence = Math.addExact(debugSequence, 1L)
+    return checkNotNull(session)
+        .gameboy
+        .captureDebugSnapshot(
+            port.sessionGeneration(),
+            debugSequence,
+            debugMasterTick,
+            debugFrame,
+            debugFramePosition,
+            isEffectivelyPaused(),
+        )
+  }
+
+  private fun finishPendingDebugAction(gameboy: Gameboy, frameTicks: Int) {
+    when (val action = pendingDebugAction) {
+      null -> return
+      is PendingDebugAction.Pause -> {
+        if (gameboy.debugRetirementSequence >= action.targetRetirement) {
+          pendingDebugAction = null
+          setDebugPaused(true)
+          action.command.complete(DebugResult.success(captureDebugSnapshot()))
+        } else if (debugMasterTick - action.startMasterTick >= frameTicks) {
+          pendingDebugAction = null
+          action.command.fail(
+              DebugErrorCode.STEP_LIMIT,
+              "Pause did not reach an instruction safe point within one frame",
+          )
+        }
+      }
+      is PendingDebugAction.InstructionStep -> {
+        if (gameboy.debugRetirementSequence >= action.targetRetirement) {
+          pendingDebugAction = null
+          val snapshot = captureDebugSnapshot()
+          val stopReason =
+              if (snapshot.execution().cpuState() == DebugCpuState.LOCKED) {
+                DebugStepStopReason.CPU_LOCKED
+              } else {
+                DebugStepStopReason.INSTRUCTION_RETIRED
+              }
+          action.command.complete(
+              DebugResult.success(
+                  DebugStepResult(
+                      DebugStepKind.INSTRUCTION,
+                      stopReason,
+                      debugMasterTick - action.startMasterTick,
+                      gameboy.debugRetirementSequence - action.startRetirement,
+                      snapshot,
+                  )))
+        } else if (debugMasterTick - action.startMasterTick >= frameTicks) {
+          pendingDebugAction = null
+          action.command.fail(
+              DebugErrorCode.STEP_LIMIT,
+              "Instruction step exceeded one controller frame",
+          )
+        }
+      }
+      is PendingDebugAction.FrameStep -> {
+        if (debugMasterTick >= action.targetMasterTick) {
+          pendingDebugAction = null
+          val snapshot = captureDebugSnapshot()
+          action.command.complete(
+              DebugResult.success(
+                  DebugStepResult(
+                      DebugStepKind.FRAME,
+                      DebugStepStopReason.FRAME_BOUNDARY,
+                      debugMasterTick - action.startMasterTick,
+                      gameboy.debugRetirementSequence - action.startRetirement,
+                      snapshot,
+                  )))
+        }
+      }
+    }
+  }
+
+  private fun DebugCpuState.isDebuggerIdle(): Boolean =
+      this == DebugCpuState.HALTED ||
+          this == DebugCpuState.STOPPED ||
+          this == DebugCpuState.SPEED_SWITCH ||
+          this == DebugCpuState.LOCKED
 
   /** Coalesces an arbitrary producer burst into one cancellation and the newest revision. */
   private fun drainMobileAdapterControlLane() {
@@ -1208,7 +1651,7 @@ class BasicController private constructor(
       // A portable state contains the cartridge clock pause bit. Pause ownership belongs to the
       // live desktop workflow, so loading must not let an old capture override the effective
       // pause selected for this session.
-      currentSession.gameboy.setCartridgeClockPaused(isPaused)
+      currentSession.gameboy.setCartridgeClockPaused(isEffectivelyPaused())
       rewindManager.clear()
       if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
         mobileAdapterStateLoadCompleted()
@@ -1290,7 +1733,7 @@ class BasicController private constructor(
       manager.applySnapshotReadOnly(snapshot, currentSession)
       // Match managed-load ownership: a saved cartridge clock pause bit must not override the
       // effective pause chosen for the live desktop session.
-      currentSession.gameboy.setCartridgeClockPaused(isPaused)
+      currentSession.gameboy.setCartridgeClockPaused(isEffectivelyPaused())
       rewindManager.clear()
       if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
         mobileAdapterStateLoadCompleted()
@@ -1412,7 +1855,7 @@ class BasicController private constructor(
     }
     // setPaused intentionally avoids redundant core calls. State loading may have restored a
     // different cartridge-clock bit, so explicitly establish the effective live value.
-    session?.gameboy?.setCartridgeClockPaused(isPaused)
+    session?.gameboy?.setCartridgeClockPaused(isEffectivelyPaused())
   }
 
   private fun acquireLoadingPause() {
@@ -1795,7 +2238,6 @@ class BasicController private constructor(
       } catch (cleanupFailure: RuntimeException) {
         e.addSuppressed(cleanupFailure)
       }
-      console?.setGameboy(session?.gameboy)
       reportLoadFailure(job.event, e)
       return
     }
@@ -1818,6 +2260,8 @@ class BasicController private constructor(
     nextSession = null
     nextSnapshotManager = null
     pauseStateBeforeLoading = null
+
+    revokeDebugPort(previousSession, replaced = true)
 
     previousSession?.let { oldSession ->
       postSessionEventSafely(oldSession, Controller.EmulationStoppedEvent())
@@ -1926,9 +2370,19 @@ class BasicController private constructor(
     if (isPaused == paused) {
       return
     }
-    session?.gameboy?.setCartridgeClockPaused(paused)
     isPaused = paused
+    session?.gameboy?.setCartridgeClockPaused(isEffectivelyPaused())
   }
+
+  private fun setDebugPaused(paused: Boolean) {
+    if (debugPaused == paused) {
+      return
+    }
+    debugPaused = paused
+    session?.gameboy?.setCartridgeClockPaused(isEffectivelyPaused())
+  }
+
+  private fun isEffectivelyPaused(): Boolean = isPaused || debugPaused
 
   private fun restorePauseStateAfterLoading() {
     val restorePaused = pauseStateBeforeLoading ?: return
@@ -2392,9 +2846,11 @@ class BasicController private constructor(
     val session = session ?: return
 
     isPaused = false
+    debugPaused = false
     pauseStateBeforeResume = null
     sessionStartedNanos = System.nanoTime()
     stateSessionId = nextStateSessionId()
+    installDebugPort(session)
     closeAutosaveCapture = null
     closeAutosavePlayDurationNanos = null
     closeAutosavePlayDurationCaptured = false
@@ -2442,6 +2898,13 @@ class BasicController private constructor(
     postSessionEventSafely(session, Controller.SessionPauseSupportEvent(true))
     postSessionEventSafely(
         session,
+        Controller.SessionDebugPortEvent(
+            checkNotNull(debugPort).sessionGeneration(),
+            debugPort,
+        ),
+    )
+    postSessionEventSafely(
+        session,
         Controller.SessionSnapshotSupportEvent(if (snapshotManager == null) null else this),
     )
     postSessionEventSafely(
@@ -2475,6 +2938,48 @@ class BasicController private constructor(
         Controller.SerialPeripheralStatus.ATTACHED,
     )
     postInitialMobileAdapterNetworkStatus()
+  }
+
+  private fun installDebugPort(session: Session) {
+    check(debugPort == null) { "Previous debug session was not revoked" }
+    debugSequence = 0
+    debugMasterTick = 0
+    debugFrame = 0
+    debugFramePosition = 0
+    debugTrackingEnabled = false
+    pendingDebugAction = null
+    session.gameboy.disableDebugRetirementTracking()
+    val port =
+        QueuedDebugPort(
+            nextDebugSessionGeneration.incrementAndGet(),
+            DEBUG_CAPABILITIES,
+        )
+    debugPort = port
+    console?.setDebugPort(port)
+  }
+
+  /** Revokes a port before its owning session can be replaced or torn down. */
+  private fun revokeDebugPort(owner: Session?, replaced: Boolean) {
+    val port = debugPort ?: return
+    if (replaced) {
+      port.invalidateForSessionReplacement()
+    } else {
+      port.close()
+    }
+    if (debugTrackingEnabled) {
+      owner?.gameboy?.disableDebugRetirementTracking()
+    }
+    debugPort = null
+    pendingDebugAction = null
+    debugTrackingEnabled = false
+    debugPaused = false
+    console?.setDebugPort(null)
+    owner?.let {
+      postSessionEventSafely(
+          it,
+          Controller.SessionDebugPortEvent(port.sessionGeneration(), null),
+      )
+    }
   }
 
   private fun applySavesSettings(
@@ -2571,6 +3076,7 @@ class BasicController private constructor(
       closeDeadlineNanos: Long? = null,
   ) {
     val session = session ?: return
+    revokeDebugPort(session, replaced = false)
     postSerialPeripheralStatus(
         serialPeripheralSelection,
         Controller.SerialPeripheralStatus.DETACHED,
@@ -2599,7 +3105,7 @@ class BasicController private constructor(
     } else {
       session.close()
     }
-    console?.setGameboy(null)
+    console?.setDebugPort(null)
     this.session = null
     currentRomHashes = null
     snapshotManager = null
@@ -2686,6 +3192,11 @@ class BasicController private constructor(
     }
     val closeDeadlineNanos =
         System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(closeTimeoutMillis)
+    // Reject already-admitted and future requests before the sole emulation owner is stopped.
+    // A retryable persistence failure intentionally retains the frozen machine, but must never
+    // leave an apparently open port whose commands have nobody left to service them.
+    debugPort?.close()
+    console?.setDebugPort(null)
     doStop = true
     awaitTimingThread(closeDeadlineNanos)
 
@@ -2698,6 +3209,7 @@ class BasicController private constructor(
     pauseStateBeforeLoading = null
     pauseStateBeforeResume = null
     setPaused(true)
+    releaseClosedDebugPortIfNeeded(notifyLifecycle = false)
 
     try {
       if (closeState == null) {
@@ -3053,6 +3565,28 @@ class BasicController private constructor(
           ?: closeState?.rom?.origin?.displayName()
           ?: "battery save"
 
+  private sealed interface PendingDebugAction {
+    data class Pause(
+        val command: QueuedDebugCommand.Pause,
+        val startMasterTick: Long,
+        val targetRetirement: Long,
+    ) : PendingDebugAction
+
+    data class InstructionStep(
+        val command: QueuedDebugCommand.Step,
+        val startMasterTick: Long,
+        val startRetirement: Long,
+        val targetRetirement: Long,
+    ) : PendingDebugAction
+
+    data class FrameStep(
+        val command: QueuedDebugCommand.Step,
+        val startMasterTick: Long,
+        val startRetirement: Long,
+        val targetMasterTick: Long,
+    ) : PendingDebugAction
+  }
+
   private data class PreparedSerialEndpoint(
       val endpoint: SerialEndpoint,
       val disconnect: () -> Unit = {},
@@ -3084,6 +3618,22 @@ class BasicController private constructor(
     val NEXT_MOBILE_ADAPTER_ATTACHMENT_ID = AtomicLong(1)
 
     const val NO_MOBILE_ADAPTER_CONFIGURATION_REVISION = -1L
+
+    const val MAX_DEBUG_COMMANDS_PER_SAFE_POINT = 64
+
+    const val MAX_DEBUG_CONTROL_EVENTS_PER_SAFE_POINT = 64
+
+    val DEBUG_CAPABILITIES =
+        DebugCapabilities(
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            4_096,
+        )
 
     val SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION =
         Controller.MobileAdapterConfigurationProvider {

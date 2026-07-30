@@ -36,6 +36,7 @@ import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.events.EventQueue
 import eu.rekawek.coffeegb.controller.events.owningFunnel
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.debug.UnsupportedDebugPort
 import eu.rekawek.coffeegb.controller.network.Connection.PeerLoadedGameEvent
 import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSource
 import eu.rekawek.coffeegb.controller.network.Connection.PeerEventSourceDisconnectedEvent
@@ -175,6 +176,11 @@ class LinkedController(
       )
 
   @VisibleForTesting internal val timingTicker = TimingTicker()
+
+  /** Linked rollback owns several machines, so Phase 1 publishes an explicit unsupported token. */
+  private var debugPort: UnsupportedDebugPort? = null
+
+  private val nextDebugSessionGeneration = AtomicLong()
 
   @VisibleForTesting
   internal var persistLocalBatteryCapture: (BatteryFlush) -> BatteryPersistenceResult =
@@ -1524,6 +1530,7 @@ class LinkedController(
 
     // This assignment is the replacement ownership commit. Only now may host lifecycle
     // subscribers release input, rumble and UI state for the old machine.
+    revokeDebugPort(replaced = true)
     replacement.previousSession?.let { previous ->
       postHostEventSafely(Controller.EmulationStoppedEvent())
       try {
@@ -1553,6 +1560,7 @@ class LinkedController(
         Controller.HardwareProfileEvent(replacement.event.config.hardwareProfile))
     postHostEventSafely(Controller.SessionPauseSupportEvent(false))
     postHostEventSafely(Controller.SessionSnapshotSupportEvent(null))
+    installUnsupportedDebugPort()
     postHostEventSafely(
         Controller.EmulationStartedEvent(
             replacement.event.config.rom.title,
@@ -1916,6 +1924,7 @@ class LinkedController(
     val checkpoint = isFourPlayerHost()
     if (checkpoint) reconcileHistory()
     localSessionCommandJob = null
+    revokeDebugPort(replaced = false)
     job.previousSession?.let { localSession ->
       // Match BasicController's explicit stop boundary: publish while the old session bus is
       // still routable, then release the core and commit the empty local slot.
@@ -1933,9 +1942,11 @@ class LinkedController(
   private fun commitLocalReset(job: LocalSessionCommandJob, candidate: Session) {
     reconcileHistory()
     localSessionCommandJob = null
+    revokeDebugPort(replaced = true)
     sessions[localPlayer] = candidate
     job.previousSession?.closeAfterCartridgeFlush()
     candidate.activate()
+    installUnsupportedDebugPort()
     if (isFourPlayerHost()) {
       commitHostCheckpoint()
     } else {
@@ -2260,12 +2271,19 @@ class LinkedController(
       rejectPeerState(event.source, event.source?.player ?: -1, failure)
       return false
     }
+    // The checkpoint commit replaced every active Session, including the local machine. Revoke
+    // the old token only after that atomic commit succeeds so rejected checkpoints leave the
+    // current debug generation usable until its real owner is released below.
+    revokeDebugPort(replaced = true)
     oldSessions.forEach { old ->
       try {
         old?.close()
       } catch (failure: Throwable) {
         LOG.warn("Unable to close replaced linked session", failure)
       }
+    }
+    if (sessions[localPlayer] != null) {
+      installUnsupportedDebugPort()
     }
     rollbackMetrics.recordCheckpoint(NetplayRollbackReason.CHECKPOINT)
     rollbackMetrics.updateHistory(stateHistory.entryCount())
@@ -2727,6 +2745,30 @@ class LinkedController(
         ))
   }
 
+  private fun installUnsupportedDebugPort() {
+    check(debugPort == null) { "Previous linked debug session was not revoked" }
+    val port =
+        UnsupportedDebugPort(
+            nextDebugSessionGeneration.incrementAndGet(),
+            "Debugging is unavailable while linked rollback owns multiple machines",
+        )
+    debugPort = port
+    console?.setDebugPort(port)
+    postHostEventSafely(Controller.SessionDebugPortEvent(port.sessionGeneration(), port))
+  }
+
+  private fun revokeDebugPort(replaced: Boolean) {
+    val port = debugPort ?: return
+    if (replaced) {
+      port.invalidateForSessionReplacement()
+    } else {
+      port.close()
+    }
+    debugPort = null
+    console?.setDebugPort(null)
+    postHostEventSafely(Controller.SessionDebugPortEvent(port.sessionGeneration(), null))
+  }
+
   private fun postHostEventSafely(event: Event) {
     try {
       eventBus.post(event)
@@ -2996,6 +3038,9 @@ class LinkedController(
     }
     val closeDeadlineNanos =
         System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(closeTimeoutMillis)
+    debugPort?.close()
+    debugPort = null
+    console?.setDebugPort(null)
     doStop = true
     awaitTimingThread(closeDeadlineNanos)
 

@@ -1,0 +1,170 @@
+package eu.rekawek.coffeegb.core.debug;
+
+import org.junit.Test;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletionStage;
+import java.util.stream.Collectors;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+public class DebugApiContractTest {
+
+    private static final Set<Class<?>> API_TYPES = Set.of(
+            DebugAddressSpace.class,
+            DebugApuState.class,
+            DebugButton.class,
+            DebugCapabilities.class,
+            DebugCpuState.class,
+            DebugError.class,
+            DebugErrorCode.class,
+            DebugExecutionState.class,
+            DebugFeatureState.class,
+            DebugInterruptState.class,
+            DebugMapperState.class,
+            DebugMemoryBlock.class,
+            DebugMemoryRequest.class,
+            DebugPort.class,
+            DebugPpuMode.class,
+            DebugPpuState.class,
+            DebugRegisters.class,
+            DebugResult.class,
+            DebugSnapshot.class,
+            DebugStepKind.class,
+            DebugStepResult.class,
+            DebugStepStopReason.class,
+            DebugTimerState.class);
+
+    @Test
+    public void portHasThePinnedAsynchronousSessionBoundSurface() throws Exception {
+        assertEquals(long.class, DebugPort.class.getMethod("sessionGeneration").getReturnType());
+        assertEquals(DebugCapabilities.class,
+                DebugPort.class.getMethod("capabilities").getReturnType());
+        assertEquals(boolean.class, DebugPort.class.getMethod("isClosed").getReturnType());
+        assertEquals(void.class, DebugPort.class.getMethod("close").getReturnType());
+
+        assertReturnType("pause",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugSnapshot>>");
+        assertReturnType("resume",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugSnapshot>>");
+        assertReturnType("snapshot",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugSnapshot>>");
+        assertReturnType("step",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugStepResult>>",
+                DebugStepKind.class);
+        assertReturnType("readMemory",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugMemoryBlock>>",
+                DebugMemoryRequest.class);
+        assertReturnType("setButton",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<java.lang.Void>>",
+                DebugButton.class, boolean.class);
+    }
+
+    @Test
+    public void dtoSurfaceIsFinalAndDoesNotExposeMutableArrays() {
+        for (Class<?> type : API_TYPES) {
+            if (!type.isInterface()) {
+                assertTrue(type.getName(), Modifier.isFinal(type.getModifiers()));
+            }
+            for (Field field : type.getDeclaredFields()) {
+                if (field.isSynthetic() || Modifier.isStatic(field.getModifiers())) continue;
+                assertTrue(type.getName() + "." + field.getName(),
+                        Modifier.isPrivate(field.getModifiers()));
+                assertTrue(type.getName() + "." + field.getName(),
+                        Modifier.isFinal(field.getModifiers()));
+            }
+            for (Method method : type.getMethods()) {
+                if (!API_TYPES.contains(method.getDeclaringClass())) continue;
+                // Every Java enum necessarily has the compiler-generated values() array factory.
+                if (type.isEnum() && method.getName().equals("values")
+                        && method.getParameterCount() == 0) continue;
+                assertFalse(type.getName() + "." + method.getName(),
+                        method.getReturnType().isArray());
+                assertAllowed(method.getGenericReturnType(), type + "." + method.getName());
+                for (Type parameter : method.getGenericParameterTypes()) {
+                    assertAllowed(parameter, type + "." + method.getName());
+                }
+            }
+        }
+    }
+
+    @Test
+    public void onlyMemoryBlockAcceptsAnArrayAndItDoesNotReturnOne() {
+        List<Constructor<?>> arrayConstructors = API_TYPES.stream()
+                .flatMap(type -> List.of(type.getConstructors()).stream())
+                .filter(constructor -> List.of(constructor.getParameterTypes()).stream()
+                        .anyMatch(Class::isArray))
+                .collect(Collectors.toList());
+        assertEquals(1, arrayConstructors.size());
+        assertEquals(DebugMemoryBlock.class, arrayConstructors.get(0).getDeclaringClass());
+        assertEquals(byte[].class, arrayConstructors.get(0).getParameterTypes()[2]);
+    }
+
+    @Test
+    public void errorCodesArePinnedForMachineReadableClients() {
+        assertEquals(List.of(
+                        "NO_ACTIVE_SESSION", "SESSION_REPLACED", "PORT_CLOSED", "QUEUE_FULL",
+                        "INVALID_ARGUMENT", "NOT_PAUSED", "ALREADY_PAUSED", "ALREADY_RUNNING",
+                        "CPU_IDLE", "CPU_LOCKED", "UNSUPPORTED_STEP",
+                        "UNSUPPORTED_ADDRESS_SPACE", "SIDE_EFFECTFUL_ADDRESS",
+                        "UNSUPPORTED_TOPOLOGY", "SESSION_BUSY", "STEP_LIMIT", "INTERNAL_ERROR"),
+                List.of(DebugErrorCode.values()).stream().map(Enum::name)
+                        .collect(Collectors.toList()));
+    }
+
+    private static void assertReturnType(String method, String expected, Class<?>... parameters)
+            throws Exception {
+        assertEquals(expected,
+                DebugPort.class.getMethod(method, parameters).getGenericReturnType().getTypeName());
+    }
+
+    private static void assertAllowed(Type type, String location) {
+        if (type instanceof Class<?> clazz) {
+            if (clazz.isArray()) {
+                assertTrue(location, clazz == byte[].class);
+                return;
+            }
+            if (clazz.isPrimitive() || clazz == String.class || clazz == Void.class
+                    || clazz == CompletionStage.class || clazz == AutoCloseable.class
+                    || clazz == Class.class || clazz == Object.class
+                    || clazz.getPackageName().equals("eu.rekawek.coffeegb.core.debug")) {
+                return;
+            }
+            throw new AssertionError(location + " exposes " + clazz.getName());
+        }
+        if (type instanceof ParameterizedType parameterized) {
+            assertAllowed(parameterized.getRawType(), location);
+            for (Type argument : parameterized.getActualTypeArguments()) {
+                assertAllowed(argument, location);
+            }
+            return;
+        }
+        if (type instanceof WildcardType wildcard) {
+            for (Type bound : wildcard.getUpperBounds()) assertAllowed(bound, location);
+            for (Type bound : wildcard.getLowerBounds()) assertAllowed(bound, location);
+            return;
+        }
+        if (type instanceof TypeVariable<?> variable) {
+            for (Type bound : variable.getBounds()) assertAllowed(bound, location);
+            return;
+        }
+        throw new AssertionError(location + " exposes unsupported type " + type.getTypeName());
+    }
+}

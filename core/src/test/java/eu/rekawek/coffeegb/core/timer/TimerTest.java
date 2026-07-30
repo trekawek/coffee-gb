@@ -98,6 +98,20 @@ public class TimerTest {
     }
 
     @Test
+    public void debugViewReportsOverflowDelayWithoutChangingTimerState() {
+        Timer timer = overflowingTimer();
+        var state = timer.captureState();
+
+        assertEquals(0x0010, timer.getDivCounter());
+        assertEquals(0x00, timer.getDebugTima());
+        assertEquals(0xf0, timer.getDebugTma());
+        assertEquals(0xfd, timer.getDebugTac());
+        assertTrue(timer.isDebugOverflowPending());
+        assertEquals(3, timer.getDebugOverflowDelayTicks());
+        assertEquals(state, timer.captureState());
+    }
+
+    @Test
     public void timaWriteBeforeReloadCancelsOverflow() {
         Timer timer = overflowingTimer();
         tick(timer, 2);

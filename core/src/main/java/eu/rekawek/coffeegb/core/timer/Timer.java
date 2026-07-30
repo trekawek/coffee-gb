@@ -63,6 +63,27 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return div;
     }
 
+    public int getDebugTima() {
+        return tima;
+    }
+
+    public int getDebugTma() {
+        return tma;
+    }
+
+    public int getDebugTac() {
+        return tac | 0xf8;
+    }
+
+    public boolean isDebugOverflowPending() {
+        return overflow;
+    }
+
+    /** Number of CPU clocks remaining before an overflowing TIMA reloads from TMA. */
+    public int getDebugOverflowDelayTicks() {
+        return overflow ? Math.max(0, 4 - ticksSinceOverflow) : 0;
+    }
+
     public void tick() {
         acknowledgeInterruptIfNeeded();
         divReset = false;

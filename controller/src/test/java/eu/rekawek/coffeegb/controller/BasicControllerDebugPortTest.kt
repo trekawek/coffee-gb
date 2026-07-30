@@ -1,0 +1,414 @@
+package eu.rekawek.coffeegb.controller
+
+import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
+import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
+import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.Controller.SessionDebugPortEvent
+import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.StatePrepareCloseCompletedEvent
+import eu.rekawek.coffeegb.controller.state.StatePrepareCloseRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateRef
+import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
+import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugButton
+import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugPort
+import eu.rekawek.coffeegb.core.debug.DebugStepKind
+import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
+import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
+import eu.rekawek.coffeegb.core.memory.cart.Rom
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+import org.junit.Test
+
+class BasicControllerDebugPortTest {
+
+  @Test
+  fun pauseAndStepsStayOnCoherentInstructionAndFrameSafePoints() {
+    withController { eventBus, port, _, _, _ ->
+      val paused = await(port.pause())
+      assertTrue(paused.isSuccess)
+      assertTrue(paused.value().paused())
+
+      val instruction = await(port.step(DebugStepKind.INSTRUCTION))
+      assertTrue(instruction.isSuccess)
+      assertEquals(DebugStepStopReason.INSTRUCTION_RETIRED, instruction.value().stopReason())
+      assertEquals(1, instruction.value().instructionsRetired())
+      assertTrue(instruction.value().ticksExecuted() > 0)
+      assertTrue(instruction.value().snapshot().paused())
+
+      val beforeFrame = instruction.value().snapshot()
+      val frame = await(port.step(DebugStepKind.FRAME))
+      assertTrue(frame.isSuccess)
+      assertEquals(DebugStepStopReason.FRAME_BOUNDARY, frame.value().stopReason())
+      assertEquals(0, frame.value().snapshot().framePosition())
+      assertEquals(beforeFrame.frame() + 1, frame.value().snapshot().frame())
+      assertTrue(frame.value().snapshot().paused())
+
+      val resumed = await(port.resume())
+      assertTrue(resumed.isSuccess)
+      assertFalse(resumed.value().paused())
+
+      // The public port is the only object delivered to the producer/UI thread.
+      assertEquals(port.sessionGeneration(), resumed.value().sessionGeneration())
+      assertNotNull(eventBus)
+    }
+  }
+
+  @Test
+  fun memoryInspectionAcceptsOnlyExplicitSideEffectFreeRanges() {
+    withController { _, port, _, _, _ ->
+      assertTrue(await(port.pause()).isSuccess)
+
+      val hram =
+          await(
+              port.readMemory(
+                  DebugMemoryRequest(DebugAddressSpace.SYSTEM_BUS, 0xff80, 16)))
+      assertTrue(hram.isSuccess)
+      assertEquals(16, hram.value().length())
+
+      val unsafe =
+          await(
+              port.readMemory(
+                  DebugMemoryRequest(DebugAddressSpace.SYSTEM_BUS, 0xff0f, 1)))
+      assertTrue(unsafe.isFailure)
+      assertEquals(DebugErrorCode.SIDE_EFFECTFUL_ADDRESS, unsafe.error().code())
+
+      val unsupported =
+          await(
+              port.readMemory(
+                  DebugMemoryRequest(DebugAddressSpace.IO_REGISTERS, 0xff0f, 1)))
+      assertTrue(unsupported.isFailure)
+      assertEquals(DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE, unsupported.error().code())
+    }
+  }
+
+  @Test
+  fun replacingSessionRevokesOldGenerationAndPublishesANewPort() {
+    withController { eventBus, oldPort, ports, _, _ ->
+      val paused = await(oldPort.pause())
+      assertTrue(paused.isSuccess)
+      assertTrue(paused.value().framePosition() > 0)
+
+      val revocationEntered = CountDownLatch(1)
+      val releaseRevocation = CountDownLatch(1)
+      eventBus.register<SessionDebugPortEvent> {
+        if (it.debugPort == null) {
+          revocationEntered.countDown()
+          releaseRevocation.await()
+        }
+      }
+
+      val replacement = namedRom("DEBUG_REPLACEMENT")
+      try {
+        eventBus.post(LoadRomEvent(replacement))
+        assertTrue(revocationEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+        // Revocation is terminal before arbitrary lifecycle subscribers are invoked.
+        val stale = await(oldPort.snapshot())
+        assertTrue(stale.isFailure)
+        assertEquals(DebugErrorCode.SESSION_REPLACED, stale.error().code())
+
+        releaseRevocation.countDown()
+        val next = assertNotNull(ports.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).debugPort)
+        assertTrue(next.sessionGeneration() > oldPort.sessionGeneration())
+        assertTrue(await(next.snapshot()).isSuccess)
+      } finally {
+        releaseRevocation.countDown()
+        replacement.delete()
+      }
+    }
+  }
+
+  @Test
+  fun pauseOwnershipAndExpectedStateErrorsAreExplicit() {
+    withController { eventBus, port, _, _, _ ->
+      assertError(DebugErrorCode.ALREADY_RUNNING, await(port.resume()))
+      assertTrue(await(port.pause()).isSuccess)
+      assertError(DebugErrorCode.ALREADY_PAUSED, await(port.pause()))
+
+      val instruction = await(port.step(DebugStepKind.INSTRUCTION))
+      assertTrue(instruction.isSuccess)
+      assertEquals(1, instruction.value().instructionsRetired())
+
+      val resumed = await(port.resume())
+      assertTrue(resumed.isSuccess)
+      assertFalse(resumed.value().paused())
+      assertError(DebugErrorCode.NOT_PAUSED, await(port.step(DebugStepKind.INSTRUCTION)))
+
+      // A separate desktop pause can authorize a step; the debugger then owns the resulting
+      // pause independently until its own resume command is issued.
+      eventBus.post(Controller.PauseEmulationEvent())
+      assertTrue(await(port.snapshot()).value().paused())
+      assertTrue(await(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
+      val debugResume = await(port.resume())
+      assertTrue(debugResume.isSuccess)
+      assertTrue(debugResume.value().paused(), "desktop pause still owns this safe point")
+      eventBus.post(Controller.ResumeEmulationEvent())
+      awaitCondition { !await(port.snapshot()).value().paused() }
+    }
+  }
+
+  @Test
+  fun pausedFrameBoundaryStillServicesApplicationStop() {
+    withController { eventBus, port, _, _, _ ->
+      val stopped = LinkedBlockingQueue<EmulationStoppedEvent>()
+      eventBus.register<EmulationStoppedEvent>(stopped::add)
+
+      assertTrue(await(port.pause()).isSuccess)
+      val frame = await(port.step(DebugStepKind.FRAME))
+      assertEquals(0, frame.value().snapshot().framePosition())
+
+      eventBus.post(Controller.StopEmulationEvent())
+      assertNotNull(stopped.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      awaitCondition { port.isClosed }
+      assertError(DebugErrorCode.PORT_CLOSED, await(port.snapshot()))
+    }
+  }
+
+  @Test
+  fun instructionSafePauseStillServicesApplicationStopMidFrame() {
+    withController { eventBus, port, _, _, _ ->
+      val stopped = LinkedBlockingQueue<EmulationStoppedEvent>()
+      eventBus.register<EmulationStoppedEvent>(stopped::add)
+
+      val paused = await(port.pause())
+      assertTrue(paused.isSuccess)
+      assertTrue(paused.value().framePosition() > 0)
+
+      eventBus.post(Controller.StopEmulationEvent())
+      assertNotNull(stopped.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      awaitCondition { port.isClosed }
+      assertError(DebugErrorCode.PORT_CLOSED, await(port.snapshot()))
+    }
+  }
+
+  @Test
+  fun lifecycleIntentDoesNotOvertakeEarlierStateWork() {
+    withController { eventBus, port, _, _, stateSession ->
+      val paused = await(port.pause())
+      assertTrue(paused.isSuccess)
+      assertTrue(paused.value().framePosition() > 0)
+
+      val slot = StateRef.Slot(1)
+      eventBus.post(StateSaveRequestEvent(901, stateSession.sessionId, slot, null, null))
+      eventBus.post(Controller.StopEmulationEvent())
+
+      val statePath =
+          assertNotNull(stateSession.gameDirectory)
+              .resolve("states")
+              .resolve("slots")
+              .resolve("1")
+              .resolve("state.cgbstate")
+      awaitCondition { Files.isRegularFile(statePath) }
+      awaitCondition { port.isClosed }
+    }
+  }
+
+  @Test
+  fun closingDebugPortFinishesPartialFrameBeforeReturningToDesktopPause() {
+    withController { eventBus, port, _, _, stateSession ->
+      eventBus.post(Controller.PauseEmulationEvent())
+      assertTrue(await(port.snapshot()).value().paused())
+
+      val instruction = await(port.step(DebugStepKind.INSTRUCTION))
+      assertTrue(instruction.isSuccess)
+      assertTrue(instruction.value().snapshot().framePosition() > 0)
+
+      port.close()
+      val slot = StateRef.Slot(2)
+      eventBus.post(StateSaveRequestEvent(903, stateSession.sessionId, slot, null, null))
+
+      val statePath =
+          assertNotNull(stateSession.gameDirectory)
+              .resolve("states")
+              .resolve("slots")
+              .resolve("2")
+              .resolve("state.cgbstate")
+      awaitCondition { Files.isRegularFile(statePath) }
+      assertError(DebugErrorCode.PORT_CLOSED, await(port.snapshot()))
+    }
+  }
+
+  @Test
+  fun closePreparationIsNotStarvedByAnInstructionSafePause() {
+    withController { eventBus, port, _, _, stateSession ->
+      val completed = LinkedBlockingQueue<StatePrepareCloseCompletedEvent>()
+      eventBus.register<StatePrepareCloseCompletedEvent>(completed::add)
+      val paused = await(port.pause())
+      assertTrue(paused.isSuccess)
+      assertTrue(paused.value().framePosition() > 0)
+
+      eventBus.post(StatePrepareCloseRequestEvent(902))
+
+      val result = assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(902, result.requestId)
+      assertEquals(stateSession.sessionId, result.sessionId)
+      assertFalse(result.autosaved)
+      assertEquals(null, result.error)
+    }
+  }
+
+  @Test
+  fun desktopPauseIntentPrecedesDebugResumeWithoutAdvancingTheMachine() {
+    withController { eventBus, port, _, _, _ ->
+      val paused = await(port.pause()).value()
+      assertTrue(paused.framePosition() > 0)
+
+      eventBus.post(Controller.PauseEmulationEvent())
+      val resumed = await(port.resume())
+      assertTrue(resumed.isSuccess)
+      assertTrue(resumed.value().paused())
+      assertEquals(paused.masterTick(), resumed.value().masterTick())
+
+      eventBus.post(Controller.ResumeEmulationEvent())
+      awaitCondition { !await(port.snapshot()).value().paused() }
+    }
+  }
+
+  @Test
+  fun debugInputMutationExecutesOnTheControllerOwner() {
+    withController { eventBus, port, _, _, _ ->
+      val delivered = CountDownLatch(1)
+      val deliveryThread = AtomicReference<Thread>()
+      eventBus.register<ButtonPressEvent> {
+        deliveryThread.set(Thread.currentThread())
+        delivered.countDown()
+      }
+
+      assertTrue(await(port.setButton(DebugButton.A, true)).isSuccess)
+      assertTrue(delivered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals("coffee-gb-controller", deliveryThread.get().name)
+      assertFalse(deliveryThread.get() === Thread.currentThread())
+    }
+  }
+
+  @Test
+  fun closingControllerMakesThePortTerminalWithoutAnOwnerlessFuture() {
+    withController { _, port, _, controller, _ ->
+      val inFlight = port.pause()
+      controller.close()
+
+      val outcome = await(inFlight)
+      assertTrue(
+          outcome.isSuccess || outcome.error().code() == DebugErrorCode.PORT_CLOSED,
+          outcome.toString(),
+      )
+      assertTrue(port.isClosed)
+      assertError(DebugErrorCode.PORT_CLOSED, await(port.snapshot()))
+    }
+  }
+
+  private fun withController(
+      test:
+          (
+              EventBusImpl,
+              DebugPort,
+              LinkedBlockingQueue<SessionDebugPortEvent>,
+              BasicController,
+              StateUxSessionEvent,
+          ) -> Unit
+  ) {
+    val eventBus = EventBusImpl()
+    val ports = LinkedBlockingQueue<SessionDebugPortEvent>()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val stateSessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    eventBus.register<SessionDebugPortEvent> { if (it.debugPort != null) ports.add(it) }
+    eventBus.register<EmulationStartedEvent> { started.add(it) }
+    eventBus.register<StateUxSessionEvent> { if (it.available) stateSessions.add(it) }
+    val rom = namedRom("DEBUG_PORT")
+    val settingsDirectory = Files.createTempDirectory("coffee-gb-debug-port-settings")
+    val properties =
+        EmulatorProperties(settingsDirectory.resolve("settings.properties"), debounceMillis = 0)
+            .also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    settings.saves.copy(
+                        directory = settingsDirectory.resolve("saves"),
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val preparer =
+        SessionPreparer { properties, event ->
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          PreparedSession.Ready(config, config.build())
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val port = assertNotNull(ports.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).debugPort)
+      val stateSession = assertNotNull(stateSessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      test(eventBus, port, ports, controller, stateSession)
+    } finally {
+      runCatching { controller.close() }
+      runCatching { eventBus.close() }
+      runCatching { properties.close() }
+      rom.delete()
+      deleteTree(settingsDirectory)
+    }
+  }
+
+  private fun deleteTree(path: java.nio.file.Path) {
+    if (!Files.exists(path)) return
+    Files.walk(path).use { stream ->
+      stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+    }
+  }
+
+  private fun namedRom(title: String): File {
+    val bytes = ROM.readBytes()
+    for (address in 0x0134 until 0x0143) {
+      bytes[address] = 0
+    }
+    title
+        .toByteArray(Charsets.US_ASCII)
+        .copyInto(bytes, 0x0134, endIndex = title.length.coerceAtMost(15))
+    return Files.createTempFile("coffee-gb-$title", ".gbc").toFile().also {
+      it.writeBytes(bytes)
+    }
+  }
+
+  private fun <T> await(stage: java.util.concurrent.CompletionStage<T>): T =
+      stage.toCompletableFuture().get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+
+  private fun assertError(expected: DebugErrorCode, result: eu.rekawek.coffeegb.core.debug.DebugResult<*>) {
+    assertTrue(result.isFailure, result.toString())
+    assertEquals(expected, result.error().code())
+  }
+
+  private fun awaitCondition(condition: () -> Boolean) {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+    while (System.nanoTime() < deadline) {
+      if (condition()) return
+      Thread.yield()
+    }
+    assertTrue(condition(), "condition did not become true")
+  }
+
+  private companion object {
+    val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
+
+    const val TIMEOUT_SECONDS = 10L
+  }
+}

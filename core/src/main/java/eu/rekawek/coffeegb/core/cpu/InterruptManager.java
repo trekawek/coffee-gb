@@ -301,6 +301,24 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         return ime;
     }
 
+    /**
+     * Side-effect-free view of the stored IF register for debugger snapshots.
+     * Unlike {@link #getByte(int)}, this must not consume any transient CPU-read masks.
+     */
+    public int getDebugInterruptFlags() {
+        return interruptFlag & 0x1f;
+    }
+
+    /** Side-effect-free view of the stored IE register for debugger snapshots. */
+    public int getDebugInterruptEnableFlags() {
+        return interruptEnabled & 0x1f;
+    }
+
+    /** Pending sources before IME and CPU synchronizer timing are applied. */
+    public int getDebugPendingInterruptFlags() {
+        return interruptFlag & interruptEnabled & 0x1f;
+    }
+
     public boolean isInterruptRequested() {
         return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
                 & ~cpuInstructionBlockedInterrupts & 0x1f) != 0;

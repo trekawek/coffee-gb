@@ -53,7 +53,7 @@ import eu.rekawek.coffeegb.controller.network.v9.V9ValidatedCheckpoint
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
-import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
@@ -97,6 +97,94 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class LinkedControllerTest {
+
+  @Test
+  fun linkedSessionPublishesATypedUnsupportedDebugPortAndRevokesItsGeneration() {
+    val eventBus = EventBusImpl()
+    val controller =
+        LinkedController(eventBus, EmulatorProperties(), null).also {
+          it.timingTicker.disabled = true
+        }
+    val ports = LinkedBlockingQueue<Controller.SessionDebugPortEvent>()
+    eventBus.register<Controller.SessionDebugPortEvent> { if (it.debugPort != null) ports.add(it) }
+
+    try {
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      val first = assertNotNull(ports.poll(1, TimeUnit.SECONDS).debugPort)
+      assertFalse(first.capabilities().snapshot())
+      val unsupported = first.snapshot().toCompletableFuture().get(1, TimeUnit.SECONDS)
+      assertTrue(unsupported.isFailure)
+      assertEquals(DebugErrorCode.UNSUPPORTED_TOPOLOGY, unsupported.error().code())
+
+      eventBus.post(LoadRomEvent(ROM))
+      controller.runFrame()
+      val second = assertNotNull(ports.poll(1, TimeUnit.SECONDS).debugPort)
+      assertTrue(second.sessionGeneration() > first.sessionGeneration())
+      val stale = first.snapshot().toCompletableFuture().get(1, TimeUnit.SECONDS)
+      assertTrue(stale.isFailure)
+      assertEquals(DebugErrorCode.SESSION_REPLACED, stale.error().code())
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun acceptedPeerCheckpointReplacesLinkedDebugSessionGeneration() {
+    val hostBus = EventBusImpl()
+    val host =
+        LinkedController(
+            hostBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 0,
+        ).also { it.timingTicker.disabled = true }
+    val checkpoints = LinkedBlockingQueue<LinkedController.SessionStateReadyEvent>()
+    hostBus.register<LinkedController.SessionStateReadyEvent>(checkpoints::add)
+
+    val clientBus = EventBusImpl()
+    val client =
+        LinkedController(
+            clientBus,
+            EmulatorProperties(),
+            null,
+            LinkMode.FOUR_PLAYER_ADAPTER,
+            localPlayer = 1,
+        ).also { it.timingTicker.disabled = true }
+    val ports = LinkedBlockingQueue<Controller.SessionDebugPortEvent>()
+    clientBus.register<Controller.SessionDebugPortEvent> { if (it.debugPort != null) ports.add(it) }
+
+    try {
+      clientBus.post(LoadRomEvent(ROM))
+      client.runFrame()
+      val first = assertNotNull(assertNotNull(ports.poll(1, TimeUnit.SECONDS)).debugPort)
+
+      hostBus.post(LoadRomEvent(ROM))
+      hostBus.post(peerState(0, PeerEventSource(1) { _, _ -> }))
+      host.runFrame()
+      val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
+
+      val failures = mutableListOf<ProtocolErrorReason>()
+      clientBus.post(
+          checkpointEvent(checkpoint, PeerEventSource(0) { reason, _ -> failures += reason }))
+      client.runFrame()
+
+      assertTrue(failures.isEmpty())
+      assertEquals(2, client.activeSessionCount())
+      val second = assertNotNull(assertNotNull(ports.poll(1, TimeUnit.SECONDS)).debugPort)
+      assertTrue(second.sessionGeneration() > first.sessionGeneration())
+      val stale = first.snapshot().toCompletableFuture().get(1, TimeUnit.SECONDS)
+      assertTrue(stale.isFailure)
+      assertEquals(DebugErrorCode.SESSION_REPLACED, stale.error().code())
+    } finally {
+      client.close()
+      host.close()
+      clientBus.close()
+      hostBus.close()
+    }
+  }
 
   @Test
   fun standaloneSerialRequestsDuringLinkedOwnershipReportTypedConflicts() {
@@ -450,9 +538,8 @@ class LinkedControllerTest {
   @Test
   fun successfulLocalReplacementPublishesLoadingStoppedThenStartedToRootSubscribers() {
     val eventBus = EventBusImpl()
-    val console = TrackingConsole()
     val controller =
-        LinkedController(eventBus, EmulatorProperties(), console).also {
+        LinkedController(eventBus, EmulatorProperties(), null).also {
           it.timingTicker.disabled = true
         }
     val lifecycle = mutableListOf<String>()
@@ -464,7 +551,7 @@ class LinkedControllerTest {
       eventBus.post(LoadRomEvent(ROM))
       controller.runFrame()
       assertEquals(listOf("loading", "started"), lifecycle)
-      val oldGameboy = assertNotNull(console.attachedGameboy)
+      val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
       lifecycle.clear()
 
       eventBus.post(LoadRomEvent(ROM))
@@ -475,10 +562,10 @@ class LinkedControllerTest {
           lifecycle,
           "the old linked owner must stop only after replacement commit",
       )
-      assertNotNull(console.attachedGameboy)
+      val replacement = assertNotNull(privateList(controller, "sessions")[0] as Session?)
       assertTrue(
-          console.attachedGameboy !== oldGameboy,
-          "old-session cleanup must not detach the committed staged candidate",
+          replacement !== oldSession,
+          "replacement must retain the newly committed staged candidate",
       )
     } finally {
       controller.close()
@@ -1179,9 +1266,8 @@ class LinkedControllerTest {
   @Test
   fun throwingStoppedSubscriberCannotInterruptCommittedReplacementOrLaterLoads() {
     val eventBus = EventBusImpl()
-    val console = TrackingConsole()
     val controller =
-        LinkedController(eventBus, EmulatorProperties(), console).also {
+        LinkedController(eventBus, EmulatorProperties(), null).also {
           it.timingTicker.disabled = true
         }
     val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
@@ -1205,8 +1291,6 @@ class LinkedControllerTest {
       assertNotNull(started.poll(1, TimeUnit.SECONDS))
       val firstReplacement = assertNotNull(privateList(controller, "sessions")[0] as Session?)
       assertTrue(firstReplacement !== originalSession)
-      assertNotNull(console.attachedGameboy)
-
       // The committed candidate and controller thread remain usable after the subscriber failure.
       controller.runFrame()
       eventBus.post(LoadRomEvent(ROM))
@@ -4259,14 +4343,6 @@ class LinkedControllerTest {
       assertEquals(before, sut.captureDetachedState())
     }
     eventBus.close()
-  }
-
-  private class TrackingConsole : Console() {
-    @Volatile var attachedGameboy: Gameboy? = null
-
-    override fun setGameboy(gameboy: Gameboy?) {
-      attachedGameboy = gameboy
-    }
   }
 
   private companion object {

@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory
 class Session(
     val config: Gameboy.GameboyConfiguration,
     val eventBus: EventBus,
-    private val console: Console?,
+    @Suppress("UNUSED_PARAMETER") console: Console?,
     serialEndpoint: SerialEndpoint = SerialEndpoint.NULL_ENDPOINT,
     infraredEndpoint: InfraredEndpoint = InfraredEndpoint.NULL_ENDPOINT,
     prebuiltGameboy: Gameboy? = null,
@@ -30,8 +30,6 @@ class Session(
   private val cleanupScheduled = AtomicBoolean()
 
   @Volatile private var resourcesClosed = false
-
-  @Volatile private var consoleAttached = !staged && console != null
 
   internal var serialEndpoint: SerialEndpoint = serialEndpoint
     private set
@@ -66,8 +64,6 @@ class Session(
     if (!staged) {
       return
     }
-    gameboy.attachConsole(console)
-    consoleAttached = console != null
     (eventBus as StagedEventBus).activate()
   }
 
@@ -139,7 +135,7 @@ class Session(
     // The final controller close owns retry presentation, so retain the complete machine until
     // its bus has actually quiesced and propagate the bounded failure to that caller.
     eventBus.close(remainingNanos, TimeUnit.NANOSECONDS)
-    finishCleanup(CleanupMode.AFTER_CARTRIDGE_FLUSH, detachConsole = true)
+    finishCleanup(CleanupMode.AFTER_CARTRIDGE_FLUSH)
   }
 
   internal fun discardUnstarted() {
@@ -162,7 +158,7 @@ class Session(
       scheduleDeferredCleanup(mode)
       return
     }
-    finishCleanup(mode, detachConsole = true)
+    finishCleanup(mode)
   }
 
   private fun scheduleDeferredCleanup(mode: CleanupMode) {
@@ -174,9 +170,7 @@ class Session(
               while (!resourcesClosed) {
                 try {
                   eventBus.close()
-                  // A replacement may already have attached its candidate to the same console.
-                  // The owner performs any safe console detach before returning to its caller.
-                  finishCleanup(mode, detachConsole = false)
+                  finishCleanup(mode)
                   return@Thread
                 } catch (failure: EventBusTeardownTimeoutException) {
                   LOG.debug("Still waiting for a session event subscriber to return", failure)
@@ -195,7 +189,7 @@ class Session(
   }
 
   @Synchronized
-  private fun finishCleanup(mode: CleanupMode, detachConsole: Boolean) {
+  private fun finishCleanup(mode: CleanupMode) {
     if (resourcesClosed) {
       return
     }
@@ -206,10 +200,6 @@ class Session(
       CleanupMode.DISCARD_UNSTARTED -> gameboy.discardUnstarted()
     }
     resourcesClosed = true
-    if (detachConsole && consoleAttached) {
-      console?.setGameboy(null)
-      consoleAttached = false
-    }
   }
 
   // Held buttons live outside machine state (the joypad keeps physical input across a

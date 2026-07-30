@@ -33,6 +33,8 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
 
     private final GbcRam gbcRam = new GbcRam();
 
+    private final boolean gbc;
+
     private final OamEchoRam oamEchoRam;
 
     public void setSpeedMode(eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode) {
@@ -69,6 +71,7 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
     }
 
     public Mmu(boolean gbc, boolean cgb0Revision) {
+        this.gbc = gbc;
         oamEchoRam = new OamEchoRam(gbc, cgb0Revision);
         // WRAM powers up with garbage, and neither boot ROM clears it. Games with
         // lazily-seeded random generators rely on that: Minesweeper for 'Windows'
@@ -177,6 +180,63 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
     public int getByte(int address) {
         checkWordArgument("address", address);
         return getSpace(address).getByte(address);
+    }
+
+    /**
+     * Copies debugger-visible memory without entering the emulated CPU bus. Only RAM owned by
+     * this MMU is exposed: work RAM, its E000-FDFF echo, and high RAM. Cartridge, VRAM, OAM and
+     * memory-mapped I/O reads are deliberately rejected because an ordinary read may have
+     * hardware side effects.
+     */
+    public byte[] readDebugMemory(int address, int length) {
+        validateDebugMemoryRange(address, length);
+        byte[] bytes = new byte[length];
+        for (int i = 0; i < length; i++) {
+            bytes[i] = (byte) getDebugMemoryByte(address + i);
+        }
+        return bytes;
+    }
+
+    private void validateDebugMemoryRange(int address, int length) {
+        if (address < 0 || address > 0xffff) {
+            throw new IllegalArgumentException("Invalid debug memory address: "
+                    + Integer.toHexString(address));
+        }
+        if (length < 0 || (long) address + length > 0x10000L) {
+            throw new IllegalArgumentException("Invalid debug memory length: " + length);
+        }
+        if (!isDebugMemoryAddress(address)) {
+            throw new IllegalArgumentException("Debug memory address is not side-effect-free: "
+                    + Integer.toHexString(address));
+        }
+        for (int i = 1; i < length; i++) {
+            if (!isDebugMemoryAddress(address + i)) {
+                throw new IllegalArgumentException("Debug memory address is not side-effect-free: "
+                        + Integer.toHexString(address + i));
+            }
+        }
+    }
+
+    private static boolean isDebugMemoryAddress(int address) {
+        return address >= 0xc000 && address < 0xfe00
+                || address >= 0xff80 && address < 0xffff;
+    }
+
+    private int getDebugMemoryByte(int address) {
+        if (address >= 0xe000 && address < 0xfe00) {
+            address -= 0x2000;
+        }
+        if (address >= 0xc000 && address < 0xd000) {
+            return ramC000.getByte(address);
+        }
+        if (address >= 0xd000 && address < 0xe000) {
+            return gbc ? gbcRam.getByte(address) : ramD000.getByte(address);
+        }
+        if (address >= 0xff80 && address < 0xffff) {
+            return ramFF80.getByte(address);
+        }
+        throw new IllegalArgumentException("Debug memory address is not side-effect-free: "
+                + Integer.toHexString(address));
     }
 
     private AddressSpace getSpace(int address) {

@@ -23,6 +23,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     private final MemoryController addressSpace;
 
+    /** Parser-corrected loaded-image bytes retained for side-effect-free debugger reads. */
+    private final int[] debugRom;
+
     private final Battery battery;
 
     public Cartridge(Rom rom, boolean supportBatterySaves) {
@@ -69,6 +72,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     public Cartridge(Rom rom, Battery battery, TimeSource rtcTimeSource, ClockSpec clockSpec) {
         this.battery = battery;
+        this.debugRom = rom.getRom();
         this.addressSpace = createMemoryController(rom, battery, rtcTimeSource, clockSpec);
     }
 
@@ -157,6 +161,26 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     @Override
     public int getByte(int address) {
         return addressSpace.getByte(address);
+    }
+
+    /**
+     * Copies the first 64 KiB view of the parser-corrected loaded ROM image without invoking mapper
+     * read logic. Missing image bytes read as the cartridge bus's open value. The address is an
+     * image offset, not a CPU address, and this view is intentionally not the mapper's current CPU
+     * window.
+     */
+    public byte[] readDebugRom(int address, int length) {
+        if (address < 0 || address > 0xffff || length < 0
+                || (long) address + length > 0x10000L) {
+            throw new IllegalArgumentException("Invalid debug ROM range");
+        }
+        byte[] bytes = new byte[length];
+        for (int i = 0; i < length; i++) {
+            int physicalAddress = address + i;
+            bytes[i] = (byte) (physicalAddress < debugRom.length
+                    ? debugRom[physicalAddress] : 0xff);
+        }
+        return bytes;
     }
 
     public void flushBattery() {
