@@ -173,9 +173,9 @@ first mutation; decoding and re-encoding preserves the exact old bytes. See
 Protocol v8 negotiates StateFile v1 and remains byte-for-byte frozen. It cannot distinguish MGB
 from coarse DMG, the historical SGB RTC scalar from current exact-clock state, or SGB2 from SGB.
 Coffee GB rejects MGB and both SGB-family linked loads before constructing a session or writing
-state. A received coarse DMG remains canonical DMG. Future network and #315 replay metadata must
-separately negotiate/carry the exact canonical ID and rational clock identity; no replay format is
-implemented here.
+state. A received coarse DMG remains canonical DMG. The #315 `CGBR` v1 replay identity separately
+carries the exact canonical ID and both reduced clock rationals; see
+[replay-format-v1.md](replay-format-v1.md).
 
 ## Extension contract
 

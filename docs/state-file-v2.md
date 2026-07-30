@@ -117,8 +117,10 @@ admission and atomic application only when its explicit play plan is installed; 
 boundaries and the default v8 path still reject CHECKPOINT before proportional payload allocation.
 No v8 byte or behavior changes.
 
-There is no #315 replay format yet. Any future replay must carry the exact canonical profile ID
-(including `mgb` or `sgb2`) plus its rational `ClockSpec`; a coarse enum is insufficient.
+The #315 `CGBR` v1 replay format uses StateFile v2 for explicitly consented embedded session
+initial state. Its separate identity section carries the exact canonical profile ID (including
+`mgb` or `sgb2`) and both reduced `ClockSpec` rationals. See
+[replay-format-v1.md](replay-format-v1.md).
 
 ## Golden fixture and update procedure
 

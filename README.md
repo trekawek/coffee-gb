@@ -347,6 +347,9 @@ fixed-capacity CPU/memory/interrupt traces with cursor-visible overwrite account
 inspection is deliberately limited to side-effect-free views, and the adapter exposes no live
 emulator objects or memory-write backdoor. The complete safe-point, breakpoint, trace, and
 performance contract is in [`docs/debug-port.md`](docs/debug-port.md).
+Deterministic input recordings use the bounded, ROM-free `CGBR` container documented in
+[`docs/replay-format-v1.md`](docs/replay-format-v1.md); playback runs in a service-isolated session
+and reports the first mismatching subsystem checkpoint.
 
 The working loop is deliberately evidence-based:
 

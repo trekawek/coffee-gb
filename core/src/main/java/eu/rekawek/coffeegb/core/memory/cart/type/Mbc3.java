@@ -150,6 +150,10 @@ public class Mbc3 implements MemoryController {
         return clock.captureRuntimeState();
     }
 
+    public boolean isRtcEmulationPaused() {
+        return clock.isEmulationPaused();
+    }
+
     public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
         clock.restoreRuntimeState(state);
     }

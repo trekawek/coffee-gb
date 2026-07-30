@@ -12,8 +12,9 @@ Phase 1 supplies pause/resume, coherent snapshots, negotiated stepping, bounded 
 memory reads, and deterministic button input. Phase 2 adds negotiated breakpoints/watchpoints and
 bounded CPU, memory, and interrupt tracing. Phase 3 adds exact PPU-state and serial breakpoints,
 all ten typed trace categories with producer provenance, selective peripheral instrumentation, and
-the debug-port-backed console described below. Checkpoints, replay, reverse execution, and a
-debugger UI remain later phases; clients must not infer those capabilities from this interface.
+the debug-port-backed console described below. The separate Phase 4 deterministic recorder/player
+and `CGBR` v1 contract are documented in [replay-format-v1.md](replay-format-v1.md); checkpoints,
+reverse execution, and a debugger UI remain later phases and are not implied by `DebugPort`.
 
 ## Session publication and capabilities
 

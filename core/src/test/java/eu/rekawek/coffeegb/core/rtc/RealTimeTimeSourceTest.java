@@ -127,6 +127,16 @@ public class RealTimeTimeSourceTest {
     }
 
     @Test
+    public void pausedStatusQueryDoesNotAdvanceWallClockState() {
+        rtc.setSeconds(5);
+        rtc.setEmulationPaused(true);
+        wallClock.forward(7, TimeUnit.SECONDS);
+
+        assertTrue(rtc.isEmulationPaused());
+        assertEquals(5, rtc.getSeconds());
+    }
+
+    @Test
     public void serializationWhilePausedDoesNotDiscardOrDoubleCountThePause() {
         rtc.setSeconds(5);
         rtc.setEmulationPaused(true);
