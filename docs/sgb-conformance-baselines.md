@@ -47,7 +47,7 @@ part of the contract.
 | --- | ---: | ---: |
 | `HARDWARE_PROFILE` | 28 | 227 |
 | `GAMEBOY_TYPE` | 9 | 46 |
-| `CGB_FLAG` | 44 | 427 |
+| `CGB_FLAG` | 44 | 433 |
 | `SGB_FLAG` | 12 | 44 |
 | `CGB0` | 9 | 42 |
 | `BOOTSTRAP` | 17 | 121 |

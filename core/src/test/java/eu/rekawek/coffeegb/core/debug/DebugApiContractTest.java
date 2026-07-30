@@ -48,6 +48,7 @@ import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Collectors;
@@ -60,6 +61,8 @@ public class DebugApiContractTest {
 
     private static final Set<Class<?>> API_TYPES = Set.of(
             DebugAddressSpace.class,
+            DebugAudioChannelInspection.class,
+            DebugAudioInspection.class,
             DebugApuState.class,
             DebugButton.class,
             DebugBreakpoint.class,
@@ -68,6 +71,7 @@ public class DebugApiContractTest {
             DebugBreakpointId.class,
             DebugBreakpointKind.class,
             DebugBreakpointList.class,
+            DebugByteData.class,
             DebugCapabilities.class,
             DebugCounterCondition.class,
             DebugCounterType.class,
@@ -84,9 +88,12 @@ public class DebugApiContractTest {
             DebugHistoryTruncationReason.class,
             DebugAnchoredMemoryRequest.class,
             DebugDisassembler.class,
+            DebugGraphicsHardwareMode.class,
+            DebugGraphicsInspection.class,
             DebugInspectionAnchor.class,
             DebugInspectionRequest.class,
             DebugInspectionResult.class,
+            DebugInspectionSection.class,
             DebugInterruptCondition.class,
             DebugInterruptState.class,
             DebugInterruptType.class,
@@ -227,15 +234,15 @@ public class DebugApiContractTest {
     }
 
     @Test
-    public void onlyMemoryBlockAcceptsAnArrayAndItDoesNotReturnOne() {
+    public void onlyOwnedBytePayloadsAcceptArraysAndNoneReturnOne() {
         List<Constructor<?>> arrayConstructors = API_TYPES.stream()
                 .flatMap(type -> List.of(type.getConstructors()).stream())
                 .filter(constructor -> List.of(constructor.getParameterTypes()).stream()
                         .anyMatch(Class::isArray))
                 .collect(Collectors.toList());
-        assertEquals(1, arrayConstructors.size());
-        assertEquals(DebugMemoryBlock.class, arrayConstructors.get(0).getDeclaringClass());
-        assertEquals(byte[].class, arrayConstructors.get(0).getParameterTypes()[2]);
+        assertEquals(Set.of(DebugByteData.class, DebugMemoryBlock.class),
+                arrayConstructors.stream().map(Constructor::getDeclaringClass)
+                        .collect(Collectors.toSet()));
     }
 
     @Test
@@ -269,7 +276,7 @@ public class DebugApiContractTest {
             if (clazz.isPrimitive() || clazz == String.class || clazz == Void.class
                     || clazz == CompletionStage.class || clazz == AutoCloseable.class
                     || clazz == Class.class || clazz == Object.class
-                    || clazz == List.class || clazz == Set.class
+                    || clazz == List.class || clazz == Optional.class || clazz == Set.class
                     || clazz.getPackageName().equals("eu.rekawek.coffeegb.core.debug")
                     || clazz.getPackageName().startsWith("eu.rekawek.coffeegb.core.debug.")) {
                 return;

@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugInstrumentation
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
@@ -22,6 +23,7 @@ import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
+import eu.rekawek.coffeegb.core.debug.history.DebugHistoryCapabilities
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
 import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
@@ -353,7 +355,12 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     fun inspect(
         snapshot: DebugSnapshot,
         request: DebugInspectionRequest,
-    ): DebugInspectionResult = machine.inspectDebugMemory(snapshot, request)
+    ): DebugInspectionResult {
+      val trace =
+          request.traceRequest().map { traceRequest -> instrumentation.readTrace(traceRequest) }
+              .orElse(null)
+      return machine.inspectDebugMemory(snapshot, request, trace)
+    }
 
     fun setButton(button: DebugButton, pressed: Boolean) {
       val coreButton = Button.valueOf(button.name)
@@ -497,6 +504,9 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
             TRACE_CATEGORIES,
             MAX_TRACE_CAPACITY,
             MAX_TRACE_READ_ENTRIES,
+            DebugHistoryCapabilities.disabled(),
+            EnumSet.allOf(DebugInspectionSection::class.java),
+            MAX_TRACE_READ_ENTRIES,
         )
 
     override fun sessionGeneration(): Long = SESSION_GENERATION
@@ -543,6 +553,22 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
               DebugResult.failure(
                   DebugErrorCode.INVALID_ARGUMENT,
                   "Inspection request exceeds the negotiated limits",
+              ))
+        } else if (!capabilities.inspectionSections().containsAll(request.sections())) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+                  "A requested peripheral inspection section is unavailable",
+              ))
+        } else if (
+            request.traceRequest().isPresent &&
+                request.traceRequest().get().maxEntries() >
+                    capabilities.maxInspectionTraceEntries()
+        ) {
+          rejectedDebugStage(
+              DebugResult.failure(
+                  DebugErrorCode.TRACE_LIMIT,
+                  "Inspection trace read exceeds the negotiated limit",
               ))
         } else {
           enqueueDebug { state ->

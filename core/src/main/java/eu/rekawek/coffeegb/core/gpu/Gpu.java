@@ -4,6 +4,9 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugByteData;
+import eu.rekawek.coffeegb.core.debug.DebugGraphicsHardwareMode;
+import eu.rekawek.coffeegb.core.debug.DebugGraphicsInspection;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
 import eu.rekawek.coffeegb.core.debug.trace.PpuTrace;
@@ -2025,6 +2028,59 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     public boolean isDmgCompatMode() {
         return speedMode.isDmgCompat();
+    }
+
+    /** Captures raw physical PPU memories without applying CPU bus locks or DMA corruption. */
+    public DebugGraphicsInspection captureDebugGraphicsInspection() {
+        DebugGraphicsHardwareMode hardwareMode = !gbc
+                ? DebugGraphicsHardwareMode.DMG
+                : speedMode.isDmgCompat()
+                        ? DebugGraphicsHardwareMode.CGB_COMPATIBILITY
+                        : DebugGraphicsHardwareMode.CGB_NATIVE;
+        return new DebugGraphicsInspection(
+                hardwareMode,
+                gbc ? r.get(VBK) & 1 : 0,
+                lcdc.get(),
+                r.get(BGP),
+                r.get(OBP0),
+                r.get(OBP1),
+                gbc ? bgPalette.getByte(0xff68) : -1,
+                gbc ? oamPalette.getByte(0xff6a) : -1,
+                new DebugByteData(copyRam(videoRam0)),
+                new DebugByteData(videoRam1 == null ? new byte[0] : copyRam(videoRam1)),
+                new DebugByteData(copyAddressSpace(
+                        oamRam, 0xfe00, DebugGraphicsInspection.OAM_LENGTH)),
+                new DebugByteData(gbc ? copyPalette(bgPalette) : new byte[0]),
+                new DebugByteData(gbc ? copyPalette(oamPalette) : new byte[0]));
+    }
+
+    private static byte[] copyRam(Ram ram) {
+        int[] source = ram.getSpace();
+        byte[] result = new byte[source.length];
+        for (int i = 0; i < source.length; i++) {
+            result[i] = (byte) source[i];
+        }
+        return result;
+    }
+
+    private static byte[] copyAddressSpace(AddressSpace source, int address, int length) {
+        byte[] result = new byte[length];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = (byte) source.getByte(address + i);
+        }
+        return result;
+    }
+
+    private static byte[] copyPalette(ColorPalette palette) {
+        byte[] result = new byte[DebugGraphicsInspection.CGB_PALETTE_LENGTH];
+        int offset = 0;
+        for (int paletteIndex = 0; paletteIndex < 8; paletteIndex++) {
+            for (int color : palette.getPalette(paletteIndex)) {
+                result[offset++] = (byte) color;
+                result[offset++] = (byte) (color >>> 8);
+            }
+        }
+        return result;
     }
 
     /**

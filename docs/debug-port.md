@@ -4,7 +4,7 @@
 
 This document pins the Phase 1 debugger foundation, the Phase 2 CPU breakpoint/trace contract, the
 Phase 3 peripheral event contract, the Phase 5/6 bounded reverse-execution contract, and the Phase
-7 coherent inspection seam implemented by `DebugPort`. The API is platform-neutral and exposes
+7/8 coherent inspection seam implemented by `DebugPort`. The API is platform-neutral and exposes
 immutable values only. It does not expose a mutable core component, an AWT/Swing type, a live
 array, or a reflection escape hatch. The model is still an internal Coffee GB API until a later
 change explicitly versions it for third-party use.
@@ -18,7 +18,12 @@ and `CGBR` v1 contract are documented in [replay-format-v1.md](replay-format-v1.
 the explicitly enabled checkpoint ring and direct reverse-frame operation described below. Phase
 6 adds deterministic replay-forward reverse-instruction, a retained-future cursor, and explicit
 branch invalidation. Phase 7 binds PC/SP-relative and explicit memory copies to one snapshot for
-desktop debugger panes.
+desktop debugger panes. Phase 8 adds optional physical graphics/APU payloads and a bounded trace
+page to that same owner-safe-point inspection.
+
+The Swing user interface built on this contract is documented separately in
+[desktop-debugger.md](desktop-debugger.md), including pane identity, keyboard controls, trace
+opt-in/loss reporting, persisted display preferences, and retained-state release.
 
 ## Session publication and capabilities
 
@@ -41,6 +46,8 @@ The current implementations advertise:
 | frame step | yes | yes | no |
 | memory read | yes, at most 4096 bytes | yes, at most 4096 bytes | no |
 | coherent inspection | yes, 16 blocks / 4096 aggregate bytes | same | no |
+| graphics/audio inspection sections | both | both | no |
+| trace page in coherent inspection | at most 1024 entries | same | no |
 | button input | yes | yes | no |
 | breakpoints | yes, 7 kinds / at most 128 | yes, 7 kinds / at most 128 | no |
 | trace | all 10 `TraceCategory` values / at most 65,536 entries | same | no |
@@ -115,6 +122,30 @@ become stale immediately;
 clients should label it with its generation/sequence rather than combining it with a later view.
 Mapper banks use `-1` and mapper feature flags use `DebugFeatureState.UNKNOWN` when the concrete
 mapper has no pure inspection seam; clients must not interpret an unknown value as disabled.
+
+## Typed peripheral inspection
+
+`DebugInspectionRequest` combines four independent optional inputs: PC/SP-relative memory ranges,
+explicit memory ranges, the `GRAPHICS`/`AUDIO` section set, and one `TraceReadRequest`. The owner
+captures its `DebugSnapshot`, every requested memory and peripheral payload, and the optional trace
+page before another guest tick can run. The result presence exactly matches the request; clients
+must still correlate the returned snapshot generation and sequence.
+
+The existing caller-selected memory limits remain 16 blocks and 4096 aggregate bytes. Fixed
+peripheral payloads do not consume that budget. They are available only through negotiated
+`inspectionSections`, and the trace page is separately bounded by
+`maxInspectionTraceEntries` (currently 1024). Trace capture must already have been configured;
+requesting a page does not enable categories or add producer hooks.
+
+`DebugGraphicsInspection` identifies DMG, CGB compatibility, or native CGB operation and copies
+VRAM bank 0, the physical second bank when present, OAM, the DMG palette registers, and CGB BG/OBJ
+palette RAM plus their index registers. Palette RAM is 32 little-endian RGB555 values per bank.
+`DebugAudioInspection` copies the next frame-sequencer step, NR50-NR52, four ordered channel
+records, and all 16 wave-RAM bytes. Each channel includes its five-address NRx0-NRx4 window,
+enabled/DAC state, digital output, and length counter/enable state; the unused CH2/CH4 NRx0 slots
+are zero. These values come directly from physical GPU/APU storage and therefore neither obey CPU
+VRAM/OAM/wave-RAM visibility restrictions nor trigger read side effects. Large byte payloads use
+immutable indexed `DebugByteData`, never a live core array.
 
 ## Pause and instruction retirement
 

@@ -69,6 +69,7 @@ import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugCpuState
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugInstrumentation
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
@@ -1279,8 +1280,12 @@ class BasicController private constructor(
     val gameboy = checkNotNull(session).gameboy
     try {
       val snapshot = captureDebugSnapshot()
+      val trace =
+          command.request.traceRequest().map { request ->
+            checkNotNull(debugInstrumentation).readTrace(request)
+          }.orElse(null)
       command.complete(
-          DebugResult.success(gameboy.inspectDebugMemory(snapshot, command.request)))
+          DebugResult.success(gameboy.inspectDebugMemory(snapshot, command.request, trace)))
     } catch (_: UnsupportedOperationException) {
       command.fail(
           DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
@@ -4241,6 +4246,8 @@ class BasicController private constructor(
                 DebugHistoryConfiguration.MAX_FRAMES,
                 DebugHistoryConfiguration.MAX_MEMORY_BUDGET_BYTES,
             ),
+            EnumSet.allOf(DebugInspectionSection::class.java),
+            MAX_TRACE_READ_ENTRIES,
         )
 
     val SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION =

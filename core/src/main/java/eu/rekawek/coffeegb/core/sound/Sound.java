@@ -3,6 +3,9 @@ package eu.rekawek.coffeegb.core.sound;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugAudioChannelInspection;
+import eu.rekawek.coffeegb.core.debug.DebugAudioInspection;
+import eu.rekawek.coffeegb.core.debug.DebugByteData;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.trace.ApuTrace;
 import eu.rekawek.coffeegb.core.events.Event;
@@ -334,6 +337,38 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             }
         }
         return result;
+    }
+
+    /** Captures internal APU state without applying CPU register masks or wave-RAM locks. */
+    public DebugAudioInspection captureDebugAudioInspection() {
+        var debugChannels = new java.util.ArrayList<DebugAudioChannelInspection>(4);
+        for (int i = 0; i < allModes.length; i++) {
+            AbstractSoundMode mode = allModes[i];
+            debugChannels.add(new DebugAudioChannelInspection(
+                    i + 1,
+                    mode.isEnabled(),
+                    mode.isDacEnabled(),
+                    mode.isEnabled() ? mode.getCurrentOutput() : 0,
+                    mode.length.getValue(),
+                    mode.length.isEnabled(),
+                    i == 1 || i == 3 ? 0 : mode.getNr0(),
+                    mode.getNr1(),
+                    mode.getNr2(),
+                    mode.getNr3(),
+                    mode.getNr4()));
+        }
+        return new DebugAudioInspection(
+                enabled,
+                getDebugFrameSequencerStep(),
+                r.getByte(0xff24),
+                r.getByte(0xff25),
+                getByte(0xff26),
+                debugChannels,
+                new DebugByteData(((SoundMode3) allModes[2]).copyDebugWaveRam()));
+    }
+
+    public int getDebugFrameSequencerStep() {
+        return frameSequencer.getDebugStep();
     }
 
     private static boolean isTriggerRegister(int address) {

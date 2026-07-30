@@ -7,11 +7,14 @@ import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.debug.Console;
 import eu.rekawek.coffeegb.core.debug.DebugApuState;
+import eu.rekawek.coffeegb.core.debug.DebugAudioInspection;
 import eu.rekawek.coffeegb.core.debug.DebugCpuState;
 import eu.rekawek.coffeegb.core.debug.DebugExecutionState;
 import eu.rekawek.coffeegb.core.debug.DebugFeatureState;
+import eu.rekawek.coffeegb.core.debug.DebugGraphicsInspection;
 import eu.rekawek.coffeegb.core.debug.DebugInterruptState;
 import eu.rekawek.coffeegb.core.debug.DebugInstrumentation;
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection;
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest;
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult;
 import eu.rekawek.coffeegb.core.debug.DebugMapperState;
@@ -22,6 +25,7 @@ import eu.rekawek.coffeegb.core.debug.DebugPpuState;
 import eu.rekawek.coffeegb.core.debug.DebugRegisters;
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot;
 import eu.rekawek.coffeegb.core.debug.DebugTimerState;
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.genie.Genie;
@@ -65,6 +69,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
@@ -948,7 +953,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         int nr51 = sound.getByte(0xff25);
         int nr52 = sound.getByte(0xff26);
         DebugApuState debugApu = new DebugApuState(
-                (nr52 & 0x80) != 0, -1,
+                (nr52 & 0x80) != 0, sound.getDebugFrameSequencerStep(),
                 (nr52 & 0x01) != 0, (nr52 & 0x02) != 0,
                 (nr52 & 0x04) != 0, (nr52 & 0x08) != 0,
                 nr50, nr51, nr52);
@@ -1003,11 +1008,21 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 mmu.readDebugMemory(address, request.length()));
     }
 
-    /** Copies every requested block against one already-captured coherent snapshot. */
+    /** Copies requested memory and peripherals against one already-captured coherent snapshot. */
     public DebugInspectionResult inspectDebugMemory(
             DebugSnapshot snapshot, DebugInspectionRequest request) {
+        return inspectDebugMemory(snapshot, request, null);
+    }
+
+    /** Copies requested memory and peripherals, pairing an optional owner-side trace page. */
+    public DebugInspectionResult inspectDebugMemory(
+            DebugSnapshot snapshot, DebugInspectionRequest request, TraceReadResult trace) {
         Objects.requireNonNull(snapshot, "snapshot");
         Objects.requireNonNull(request, "request");
+        if (request.traceRequest().isPresent() != (trace != null)) {
+            throw new IllegalArgumentException(
+                    "Trace result presence must match the inspection request");
+        }
         var anchoredBlocks = new ArrayList<DebugMemoryBlock>(request.anchoredRequests().size());
         for (var anchoredRequest : request.anchoredRequests()) {
             anchoredBlocks.add(readDebugMemory(anchoredRequest.resolve(snapshot)));
@@ -1016,7 +1031,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         for (var memoryRequest : request.memoryRequests()) {
             memoryBlocks.add(readDebugMemory(memoryRequest));
         }
-        return new DebugInspectionResult(snapshot, request, anchoredBlocks, memoryBlocks);
+        var graphics = request.sections().contains(DebugInspectionSection.GRAPHICS)
+                ? Optional.of(gpu.captureDebugGraphicsInspection())
+                : Optional.<DebugGraphicsInspection>empty();
+        var audio = request.sections().contains(DebugInspectionSection.AUDIO)
+                ? Optional.of(sound.captureDebugAudioInspection())
+                : Optional.<DebugAudioInspection>empty();
+        return new DebugInspectionResult(snapshot, request, anchoredBlocks, memoryBlocks,
+                graphics, audio, Optional.ofNullable(trace));
     }
 
     private DebugPpuMode toDebugPpuMode() {

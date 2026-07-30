@@ -1,16 +1,22 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
+import eu.rekawek.coffeegb.core.debug.DebugAudioChannelInspection
+import eu.rekawek.coffeegb.core.debug.DebugAudioInspection
 import eu.rekawek.coffeegb.core.debug.DebugApuState
 import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
+import eu.rekawek.coffeegb.core.debug.DebugByteData
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugCpuState
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugExecutionState
 import eu.rekawek.coffeegb.core.debug.DebugFeatureState
+import eu.rekawek.coffeegb.core.debug.DebugGraphicsHardwareMode
+import eu.rekawek.coffeegb.core.debug.DebugGraphicsInspection
 import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugInterruptState
 import eu.rekawek.coffeegb.core.debug.DebugMapperState
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
@@ -29,13 +35,36 @@ import eu.rekawek.coffeegb.core.debug.history.DebugHistoryConfiguration
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason
 import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult
+import eu.rekawek.coffeegb.core.debug.trace.InterruptTrace
+import eu.rekawek.coffeegb.core.debug.trace.PpuTrace
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceEntry
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
+import eu.rekawek.coffeegb.core.debug.trace.TraceSource
+import java.awt.Component
+import java.awt.Container
+import java.awt.event.KeyEvent
+import java.util.EnumSet
+import java.util.Optional
+import java.util.ArrayDeque
+import java.util.concurrent.AbstractExecutorService
+import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.RunnableFuture
+import java.util.concurrent.TimeUnit
 import javax.swing.SwingUtilities
+import javax.swing.JLabel
+import javax.swing.KeyStroke
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -218,6 +247,35 @@ class DebuggerPanelTest {
   }
 
   @Test
+  fun `paused unsafe pc and stack produce one replan without an immediate refresh loop`() {
+    val client = RecordingDebuggerClient(81, capabilities())
+    val panel = attach(client)
+    try {
+      completeInspection(
+          client.inspections.single(),
+          snapshot(81, 1, paused = true, pc = 0x8000, sp = 0x8000),
+      )
+      flushEdt()
+
+      assertEquals(2, client.inspections.size)
+      val replan = client.inspections.last()
+      assertEquals(0, replan.request.blockCount())
+      completeInspection(
+          replan,
+          snapshot(81, 2, paused = true, pc = 0x8000, sp = 0x8000),
+      )
+      flushEdt()
+
+      assertEquals(2, client.inspections.size)
+      assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 2")
+      assertContains(onEdt { panel.disassemblyArea.text }, "outside")
+      assertContains(onEdt { panel.stackArea.text }, "unavailable")
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
   fun `polling does not submit inspection when coherent inspection is unavailable`() {
     val client = RecordingDebuggerClient(9, capabilities(coherentInspection = false))
     val panel = attach(client)
@@ -371,25 +429,457 @@ class DebuggerPanelTest {
     }
   }
 
-  private fun attach(client: RecordingDebuggerClient): DebuggerPanel =
+  @Test
+  fun `timeline is explicit opt in and consumes bounded coherent cursor pages`() {
+    val client = RecordingDebuggerClient(15, capabilities(trace = true))
+    val panel = attach(client)
+    try {
+      completeInspection(client.inspections.single(), snapshot(15, 1, paused = false))
+      flushEdt()
+      assertTrue(client.traceConfigurations.isEmpty())
+      assertFalse(onEdt { panel.timelineToggle.isSelected })
+
+      onEdt { panel.timelineToggle.doClick() }
+      assertEquals(1, client.traceConfigurations.size)
+      val enable = client.traceConfigurations.single()
+      assertTrue(enable.configuration.isEnabled())
+      assertTrue(enable.configuration.capacity() <= 2_000)
+      assertFalse(TraceCategory.CPU in enable.configuration.categories())
+      assertFalse(TraceCategory.MEMORY in enable.configuration.categories())
+      enable.completion.complete(DebugResult.success(enable.configuration))
+      flushEdt()
+
+      assertEquals(2, client.inspections.size)
+      val firstPage = client.inspections.last()
+      assertTrue(firstPage.request.traceRequest().isPresent)
+      assertEquals(-1L, firstPage.request.traceRequest().get().afterSequence())
+      assertTrue(firstPage.request.traceRequest().get().maxEntries() <= 256)
+      val tracePage =
+          TraceReadResult(
+              listOf(
+                  TraceEntry(
+                      5,
+                      100,
+                      TraceSource.PPU,
+                      PpuTrace(PpuTrace.Kind.SCANLINE_STARTED, 0, 0, 0, DebugPpuMode.OAM_SEARCH),
+                  ),
+                  TraceEntry(
+                      6,
+                      101,
+                      TraceSource.INTERRUPT_CONTROLLER,
+                      InterruptTrace(
+                          InterruptTrace.Kind.REQUESTED,
+                          eu.rekawek.coffeegb.core.debug.DebugInterruptType.VBLANK,
+                      ),
+                  ),
+              ),
+              6,
+              2,
+              3,
+              5,
+              7,
+          )
+      completeInspection(firstPage, snapshot(15, 2, paused = false), tracePage)
+      flushEdt()
+
+      assertEquals(2, onEdt { panel.timelineModel.rowCount })
+      assertEquals("S15/#2", onEdt { panel.timelineModel.rowAt(0).identity.label })
+      assertContains(onEdt { panel.timelineWarning.text }, "missed 2")
+      assertContains(onEdt { panel.timelineWarning.text }, "dropped 3")
+
+      onEdt { panel.requestRefresh() }
+      val nextPage = client.inspections.last().request.traceRequest().orElseThrow()
+      assertEquals(6L, nextPage.afterSequence())
+      assertTrue(nextPage.maxEntries() <= client.capabilities.maxInspectionTraceEntries())
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `hide disables only timeline tracing that this window enabled`() {
+    val untouchedClient = RecordingDebuggerClient(16, capabilities(trace = true))
+    val untouchedPanel = attach(untouchedClient)
+    completeInspection(untouchedClient.inspections.single(), snapshot(16, 1, paused = false))
+    flushEdt()
+    onEdt { untouchedPanel.setPollingActive(false) }
+    assertTrue(untouchedClient.traceConfigurations.isEmpty())
+    onEdt(untouchedPanel::close)
+
+    val ownedClient = RecordingDebuggerClient(17, capabilities(trace = true))
+    val ownedPanel = attach(ownedClient)
+    try {
+      completeInspection(ownedClient.inspections.single(), snapshot(17, 1, paused = false))
+      flushEdt()
+      onEdt { ownedPanel.timelineToggle.doClick() }
+      val enable = ownedClient.traceConfigurations.single()
+
+      // Hiding while enable is queued must still enqueue a matching disable after it succeeds.
+      onEdt { ownedPanel.setPollingActive(false) }
+      assertEquals(0, onEdt { ownedPanel.timelineModel.rowCount })
+      assertFalse(onEdt { ownedPanel.timelineToggle.isSelected })
+      enable.completion.complete(DebugResult.success(enable.configuration))
+      flushEdt()
+
+      assertEquals(2, ownedClient.traceConfigurations.size)
+      val disable = ownedClient.traceConfigurations.last()
+      assertFalse(disable.configuration.isEnabled())
+      disable.completion.complete(DebugResult.success(disable.configuration))
+      flushEdt()
+      assertContains(onEdt { ownedPanel.timelineWarning.text }, "off")
+    } finally {
+      onEdt(ownedPanel::close)
+    }
+  }
+
+  @Test
+  fun `replacement abandons a terminal old timeline owner after bounded disable retries`() {
+    val oldClient =
+        RecordingDebuggerClient(
+            22,
+            capabilities(trace = true),
+            failTraceDisable = true,
+        )
+    val newClient = RecordingDebuggerClient(23, capabilities(trace = true))
+    val panel = attach(oldClient)
+    try {
+      completeInspection(oldClient.inspections.single(), snapshot(22, 1, paused = false))
+      flushEdt()
+      onEdt { panel.timelineToggle.doClick() }
+      val enable = oldClient.traceConfigurations.single()
+      enable.completion.complete(DebugResult.success(enable.configuration))
+      flushEdt()
+      assertTrue(onEdt { panel.timelineToggle.isSelected })
+
+      onEdt { panel.updateClient(23, newClient) }
+      assertTrue(oldClient.traceConfigurations.drop(1).all { !it.configuration.isEnabled() })
+      completeInspection(newClient.inspections.single(), snapshot(23, 1, paused = false))
+      flushEdt()
+
+      assertFalse(onEdt { panel.timelineToggle.isSelected })
+      assertTrue(onEdt { panel.timelineToggle.isEnabled })
+      onEdt { panel.timelineToggle.doClick() }
+      assertEquals(1, newClient.traceConfigurations.size)
+      assertTrue(newClient.traceConfigurations.single().configuration.isEnabled())
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `peripheral inspection requests only the selected supported pane`() {
+    val client =
+        RecordingDebuggerClient(
+            18,
+            capabilities(
+                inspectionSections = EnumSet.allOf(DebugInspectionSection::class.java),
+            ),
+        )
+    val panel = attach(client)
+    try {
+      val cpuCall = client.inspections.single()
+      assertTrue(cpuCall.request.sections().isEmpty())
+      completeInspection(cpuCall, snapshot(18, 1, paused = false))
+      flushEdt()
+
+      onEdt { panel.tabs.selectedComponent = panel.graphicsPane }
+      val graphicsCall = client.inspections.last()
+      assertEquals(setOf(DebugInspectionSection.GRAPHICS), graphicsCall.request.sections())
+      graphicsCall.completion.complete(
+          DebugResult.failure(DebugErrorCode.UNSUPPORTED_TOPOLOGY, "Stop graphics test request"))
+      flushEdt()
+
+      onEdt { panel.tabs.selectedComponent = panel.audioPane }
+      val audioCall = client.inspections.last()
+      assertEquals(setOf(DebugInspectionSection.AUDIO), audioCall.request.sections())
+      audioCall.completion.complete(
+          DebugResult.failure(DebugErrorCode.UNSUPPORTED_TOPOLOGY, "Stop audio test request"))
+      flushEdt()
+
+      onEdt { panel.tabs.selectedComponent = panel.timelinePane }
+      assertTrue(client.inspections.last().request.sections().isEmpty())
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `stale peripheral preparation is rejected and hide releases rendered payload views`() {
+    val executor = ManualExecutorService()
+    val client =
+        RecordingDebuggerClient(
+            19,
+            capabilities(inspectionSections = setOf(DebugInspectionSection.GRAPHICS)),
+        )
+    val panel = attach(client, executor)
+    try {
+      completeInspection(client.inspections.single(), snapshot(19, 1, paused = false))
+      flushEdt()
+      onEdt { panel.tabs.selectedComponent = panel.graphicsPane }
+
+      val staleCall = client.inspections.last()
+      completeInspection(
+          staleCall,
+          snapshot(19, 2, paused = false),
+          graphics = graphicsInspection(),
+      )
+      assertEquals(1, executor.queuedTaskCount)
+
+      onEdt { panel.setPollingActive(false) }
+      assertEquals(true, executor.lastCancellationMayInterrupt)
+      executor.runNext()
+      flushEdt()
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "No graphics")
+      assertEquals(0, onEdt { panel.graphicsPane.tileTable.rowCount })
+
+      onEdt { panel.setPollingActive(true) }
+      val currentCall = client.inspections.last()
+      assertEquals(setOf(DebugInspectionSection.GRAPHICS), currentCall.request.sections())
+      completeInspection(
+          currentCall,
+          snapshot(19, 3, paused = false),
+          graphics = graphicsInspection(),
+      )
+      executor.runNext()
+      flushEdt()
+      assertTrue(onEdt { panel.graphicsPane.tileTable.rowCount } > 0)
+
+      onEdt { panel.setPollingActive(false) }
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "No graphics")
+      assertEquals(0, onEdt { panel.graphicsPane.tileTable.rowCount })
+    } finally {
+      onEdt(panel::close)
+      executor.shutdownNow()
+    }
+  }
+
+  @Test
+  fun `peripheral panes never retain rows under a newer snapshot identity`() {
+    val executor = ManualExecutorService()
+    val client =
+        RecordingDebuggerClient(
+            20,
+            capabilities(
+                inspectionSections = EnumSet.allOf(DebugInspectionSection::class.java),
+            ),
+        )
+    val panel = attach(client, executor)
+    try {
+      completeInspection(client.inspections.single(), snapshot(20, 1, paused = false))
+      flushEdt()
+
+      onEdt { panel.tabs.selectedComponent = panel.graphicsPane }
+      val graphicsCall = client.inspections.last()
+      completeInspection(
+          graphicsCall,
+          snapshot(20, 2, paused = false),
+          graphics = graphicsInspection(),
+      )
+      executor.runNext()
+      flushEdt()
+      assertTrue(onEdt { panel.graphicsPane.tileTable.rowCount } > 0)
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 2")
+      assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 2")
+
+      onEdt { panel.tabs.selectedIndex = 0 }
+      val cpuCall = client.inspections.last()
+      assertTrue(cpuCall.request.sections().isEmpty())
+      completeInspection(cpuCall, snapshot(20, 3, paused = false))
+      flushEdt()
+      assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 3")
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 3")
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "not captured")
+      assertEquals(0, onEdt { panel.graphicsPane.tileTable.rowCount })
+
+      onEdt { panel.tabs.selectedComponent = panel.audioPane }
+      val audioCall = client.inspections.last()
+      completeInspection(
+          audioCall,
+          snapshot(20, 4, paused = false),
+          audio = audioInspection(),
+      )
+      executor.runNext()
+      flushEdt()
+      assertEquals(4, onEdt { panel.audioPane.channelTable.rowCount })
+      assertContains(onEdt { panel.audioPane.overviewArea.text }, "snapshot 4")
+
+      onEdt { panel.pauseButton.doClick() }
+      client.pauses.single().complete(DebugResult.success(snapshot(20, 5, paused = true)))
+      flushEdt()
+      assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 5")
+      assertContains(onEdt { panel.audioPane.overviewArea.text }, "snapshot 5")
+      assertContains(onEdt { panel.audioPane.overviewArea.text }, "not captured")
+      assertEquals(0, onEdt { panel.audioPane.channelTable.rowCount })
+    } finally {
+      onEdt(panel::close)
+      executor.shutdownNow()
+    }
+  }
+
+  @Test
+  fun `post submit epoch race interrupts stale peripheral preparation`() {
+    val executor = BlockingSubmitExecutorService()
+    val client =
+        RecordingDebuggerClient(
+            21,
+            capabilities(inspectionSections = setOf(DebugInspectionSection.GRAPHICS)),
+        )
+    val panel = attach(client, executor)
+    try {
+      completeInspection(client.inspections.single(), snapshot(21, 1, paused = false))
+      flushEdt()
+      onEdt { panel.tabs.selectedComponent = panel.graphicsPane }
+      val graphicsCall = client.inspections.last()
+      val completionThread =
+          Thread(
+              {
+                completeInspection(
+                    graphicsCall,
+                    snapshot(21, 2, paused = false),
+                    graphics = graphicsInspection(),
+                )
+              },
+              "debugger-blocked-submit-test",
+          )
+      completionThread.start()
+      assertTrue(executor.awaitSubmission(5, TimeUnit.SECONDS))
+
+      onEdt { panel.setPollingActive(false) }
+      executor.releaseSubmission()
+      completionThread.join(5_000)
+      assertFalse(completionThread.isAlive)
+      assertEquals(true, executor.lastCancellationMayInterrupt)
+      flushEdt()
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "No graphics")
+    } finally {
+      executor.releaseSubmission()
+      onEdt(panel::close)
+      executor.shutdownNow()
+    }
+  }
+
+  @Test
+  fun `keyboard accessibility font scaling copy and preferences stay presentation only`() {
+    var copied = ""
+    val initial =
+        DebuggerUiPreferences(
+            selectedPane = 0,
+            fontScalePercent = 120,
+            timelineCategories = setOf(TraceCategory.CPU, TraceCategory.TIMER),
+            timelineCapacity = 512,
+        )
+    val panel =
+        onEdt {
+          DebuggerPanel(
+              clientFactory = { error("not used") },
+              pollingIntervalMillis = 60_000,
+              initialPreferences = initial,
+              copyText = { copied = it },
+          )
+        }
+    try {
+      val labels = onEdt { descendants(panel).filterIsInstance<JLabel>() }
+      assertSame(panel.memorySpace, labels.single { it.text == "Space:" }.labelFor)
+      assertSame(panel.memoryRange, labels.single { it.text == "Range:" }.labelFor)
+      assertSame(panel.timelineCapacity, labels.single { it.text == "Capacity:" }.labelFor)
+      assertTrue(onEdt { panel.refreshButton.mnemonic != 0 })
+      assertNotNull(
+          onEdt {
+            panel
+                .getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .get(KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0))
+          })
+      assertNotNull(
+          onEdt {
+            panel
+                .getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .get(KeyStroke.getKeyStroke(KeyEvent.VK_F6, 0))
+          })
+      assertNotNull(
+          onEdt {
+            panel
+                .getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .get(KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0))
+          })
+      assertNotNull(
+          onEdt {
+            panel
+                .getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .get(KeyStroke.getKeyStroke(KeyEvent.VK_F8, 0))
+          })
+
+      val rowHeight = onEdt { panel.timelineTable.rowHeight }
       onEdt {
-        DebuggerPanel(
-                clientFactory = { error("DebugPort factory is not used by this test") },
-                pollingIntervalMillis = 60_000,
-            )
+        val input = panel.getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+        val zoomKey = input.get(KeyStroke.getKeyStroke(KeyEvent.VK_EQUALS, debuggerMenuShortcutMask()))
+        panel.actionMap.get(zoomKey).actionPerformed(null)
+      }
+      assertEquals(130, onEdt { panel.preferences().fontScalePercent })
+      assertTrue(onEdt { panel.timelineTable.rowHeight } > rowHeight)
+
+      onEdt {
+        panel.registersArea.text = "copyable registers"
+        val input = panel.getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+        val copyKey = input.get(KeyStroke.getKeyStroke(KeyEvent.VK_C, debuggerMenuShortcutMask()))
+        panel.actionMap.get(copyKey).actionPerformed(null)
+      }
+      assertContains(copied, "copyable registers")
+      assertEquals(
+          onEdt { panel.statusLabel.text },
+          onEdt { panel.statusLabel.accessibleContext.accessibleDescription },
+      )
+
+      val saved = onEdt { panel.preferences() }
+      assertEquals(512, saved.timelineCapacity)
+      assertEquals(setOf(TraceCategory.CPU, TraceCategory.TIMER), saved.timelineCategories)
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  private fun attach(
+      client: RecordingDebuggerClient,
+      peripheralExecutor: AbstractExecutorService? = null,
+  ): DebuggerPanel =
+      onEdt {
+        val panel =
+            if (peripheralExecutor == null) {
+              DebuggerPanel(
+                  clientFactory = { error("DebugPort factory is not used by this test") },
+                  pollingIntervalMillis = 60_000,
+              )
+            } else {
+              DebuggerPanel(
+                  clientFactory = { error("DebugPort factory is not used by this test") },
+                  pollingIntervalMillis = 60_000,
+                  peripheralExecutor = peripheralExecutor,
+                  ownsPeripheralExecutor = false,
+              )
+            }
+        panel
             .also { panel ->
               panel.updateClient(client.generation, client)
               panel.setPollingActive(true)
             }
       }
 
-  private fun completeInspection(call: InspectionCall, snapshot: DebugSnapshot) {
-    call.completion.complete(DebugResult.success(inspection(call.request, snapshot)))
+  private fun completeInspection(
+      call: InspectionCall,
+      snapshot: DebugSnapshot,
+      trace: TraceReadResult? = null,
+      graphics: DebugGraphicsInspection? = null,
+      audio: DebugAudioInspection? = null,
+  ) {
+    call.completion.complete(
+        DebugResult.success(inspection(call.request, snapshot, trace, graphics, audio)))
   }
 
   private fun inspection(
       request: DebugInspectionRequest,
       snapshot: DebugSnapshot,
+      trace: TraceReadResult? = null,
+      graphics: DebugGraphicsInspection? = null,
+      audio: DebugAudioInspection? = null,
   ): DebugInspectionResult {
     val anchored =
         request.anchoredRequests().map { anchored ->
@@ -400,7 +890,31 @@ class DebuggerPanelTest {
         request.memoryRequests().map { range ->
           memoryBlock(range.addressSpace(), range.address(), range.length())
         }
-    return DebugInspectionResult(snapshot, request, anchored, memory)
+    val traceResult =
+        if (request.traceRequest().isPresent) {
+          trace
+              ?: request.traceRequest().get().let { traceRequest ->
+                TraceReadResult(
+                    emptyList(),
+                    traceRequest.afterSequence(),
+                    0,
+                    0,
+                    0,
+                    (traceRequest.afterSequence() + 1).coerceAtLeast(0),
+                )
+              }
+        } else {
+          null
+        }
+    return DebugInspectionResult(
+        snapshot,
+        request,
+        anchored,
+        memory,
+        Optional.ofNullable(graphics),
+        Optional.ofNullable(audio),
+        Optional.ofNullable(traceResult),
+    )
   }
 
   private fun memoryBlock(
@@ -460,6 +974,8 @@ class DebuggerPanelTest {
       maxInspectionBytes: Int = 4096,
       coherentInspection: Boolean = true,
       history: Boolean = false,
+      trace: Boolean = false,
+      inspectionSections: Set<DebugInspectionSection> = emptySet(),
   ): DebugCapabilities =
       if (coherentInspection) {
         DebugCapabilities(
@@ -473,9 +989,9 @@ class DebuggerPanelTest {
             maxInspectionBytes,
             emptySet(),
             0,
-            emptySet(),
-            0,
-            0,
+            if (trace) EnumSet.allOf(TraceCategory::class.java) else emptySet(),
+            if (trace) 2_000 else 0,
+            if (trace) 256 else 0,
             if (history) {
               DebugHistoryCapabilities(
                   true,
@@ -487,6 +1003,8 @@ class DebuggerPanelTest {
             } else {
               DebugHistoryCapabilities.disabled()
             },
+            inspectionSections,
+            if (trace) 256 else 0,
         )
       } else {
         DebugCapabilities(false, false, false, false, false, false, false, 0)
@@ -516,6 +1034,157 @@ class DebuggerPanelTest {
     return task.get()
   }
 
+  private fun descendants(root: Component): List<Component> =
+      buildList {
+        fun visit(component: Component) {
+          add(component)
+          (component as? Container)?.components?.forEach(::visit)
+        }
+        visit(root)
+      }
+
+  private fun graphicsInspection(): DebugGraphicsInspection =
+      DebugGraphicsInspection(
+          DebugGraphicsHardwareMode.DMG,
+          0,
+          0x10,
+          0xe4,
+          0xd2,
+          0x1b,
+          -1,
+          -1,
+          DebugByteData(ByteArray(DebugGraphicsInspection.VRAM_BANK_LENGTH)),
+          DebugByteData(ByteArray(0)),
+          DebugByteData(ByteArray(DebugGraphicsInspection.OAM_LENGTH)),
+          DebugByteData(ByteArray(0)),
+          DebugByteData(ByteArray(0)),
+      )
+
+  private fun audioInspection(): DebugAudioInspection =
+      DebugAudioInspection(
+          true,
+          5,
+          0xfa,
+          0x35,
+          0xf1,
+          (1..4).map { channel ->
+            DebugAudioChannelInspection(
+                channel,
+                channel == 1,
+                true,
+                channel,
+                channel,
+                false,
+                if (channel == 2 || channel == 4) 0 else 0x80,
+                0,
+                0xf0,
+                0,
+                0,
+            )
+          },
+          DebugByteData(ByteArray(DebugAudioInspection.WAVE_RAM_LENGTH)),
+      )
+
+  private class ManualExecutorService : AbstractExecutorService() {
+    private val tasks = ArrayDeque<Runnable>()
+    private var stopped = false
+    private var lastTask: RecordingFutureTask<*>? = null
+
+    val queuedTaskCount: Int
+      get() = tasks.size
+
+    val lastCancellationMayInterrupt: Boolean?
+      get() = lastTask?.cancellationMayInterrupt
+
+    override fun <T> newTaskFor(callable: Callable<T>): RunnableFuture<T> =
+        RecordingFutureTask(callable).also { lastTask = it }
+
+    override fun <T> newTaskFor(runnable: Runnable, value: T): RunnableFuture<T> =
+        RecordingFutureTask(runnable, value).also { lastTask = it }
+
+    override fun execute(command: Runnable) {
+      if (stopped) throw RejectedExecutionException("Manual executor is shut down")
+      tasks.addLast(command)
+    }
+
+    fun runNext() {
+      tasks.removeFirst().run()
+    }
+
+    override fun shutdown() {
+      stopped = true
+    }
+
+    override fun shutdownNow(): MutableList<Runnable> {
+      stopped = true
+      val pending = tasks.toMutableList()
+      tasks.clear()
+      return pending
+    }
+
+    override fun isShutdown(): Boolean = stopped
+
+    override fun isTerminated(): Boolean = stopped && tasks.isEmpty()
+
+    override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = isTerminated
+  }
+
+  private class BlockingSubmitExecutorService : AbstractExecutorService() {
+    private val submitted = CountDownLatch(1)
+    private val release = CountDownLatch(1)
+    private var stopped = false
+    private var lastTask: RecordingFutureTask<*>? = null
+
+    val lastCancellationMayInterrupt: Boolean?
+      get() = lastTask?.cancellationMayInterrupt
+
+    override fun <T> newTaskFor(callable: Callable<T>): RunnableFuture<T> =
+        RecordingFutureTask(callable).also { lastTask = it }
+
+    override fun <T> newTaskFor(runnable: Runnable, value: T): RunnableFuture<T> =
+        RecordingFutureTask(runnable, value).also { lastTask = it }
+
+    override fun execute(command: Runnable) {
+      if (stopped) throw RejectedExecutionException("Blocking executor is shut down")
+      submitted.countDown()
+      check(release.await(5, TimeUnit.SECONDS)) { "Timed out waiting to release submit" }
+    }
+
+    fun awaitSubmission(timeout: Long, unit: TimeUnit): Boolean = submitted.await(timeout, unit)
+
+    fun releaseSubmission() = release.countDown()
+
+    override fun shutdown() {
+      stopped = true
+      release.countDown()
+    }
+
+    override fun shutdownNow(): MutableList<Runnable> {
+      shutdown()
+      return mutableListOf()
+    }
+
+    override fun isShutdown(): Boolean = stopped
+
+    override fun isTerminated(): Boolean = stopped
+
+    override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = stopped
+  }
+
+  private class RecordingFutureTask<T> : FutureTask<T> {
+    @Volatile var cancellationMayInterrupt: Boolean? = null
+      private set
+
+    constructor(callable: Callable<T>) : super(callable)
+
+    constructor(runnable: Runnable, value: T) : super(runnable, value)
+
+    override fun cancel(mayInterruptIfRunning: Boolean): Boolean {
+      cancellationMayInterrupt = mayInterruptIfRunning
+      return super.cancel(mayInterruptIfRunning)
+    }
+  }
+
   private data class InspectionCall(
       val request: DebugInspectionRequest,
       val completion: CompletableFuture<DebugResult<DebugInspectionResult>>,
@@ -526,15 +1195,22 @@ class DebuggerPanelTest {
       val completion: CompletableFuture<DebugResult<DebugHistoryStatus>>,
   )
 
+  private data class TraceConfigurationCall(
+      val configuration: TraceConfiguration,
+      val completion: CompletableFuture<DebugResult<TraceConfiguration>>,
+  )
+
   private class RecordingDebuggerClient(
       override val generation: Long,
       override val capabilities: DebugCapabilities,
+      private val failTraceDisable: Boolean = false,
   ) : DebuggerClient {
     val inspections = mutableListOf<InspectionCall>()
     val pauses = mutableListOf<CompletableFuture<DebugResult<DebugSnapshot>>>()
     val resumes = mutableListOf<CompletableFuture<DebugResult<DebugSnapshot>>>()
     val historyRequests = mutableListOf<CompletableFuture<DebugResult<DebugHistoryStatus>>>()
     val historyConfigurations = mutableListOf<HistoryConfigurationCall>()
+    val traceConfigurations = mutableListOf<TraceConfigurationCall>()
 
     override fun inspect(
         request: DebugInspectionRequest
@@ -565,6 +1241,17 @@ class DebuggerPanelTest {
 
     override fun historyStatus(): CompletionStage<DebugResult<DebugHistoryStatus>> =
         CompletableFuture<DebugResult<DebugHistoryStatus>>().also(historyRequests::add)
+
+    override fun configureTrace(
+        configuration: TraceConfiguration
+    ): CompletionStage<DebugResult<TraceConfiguration>> =
+        CompletableFuture<DebugResult<TraceConfiguration>>().also { completion ->
+          traceConfigurations += TraceConfigurationCall(configuration, completion)
+          if (failTraceDisable && !configuration.isEnabled()) {
+            completion.complete(
+                DebugResult.failure(DebugErrorCode.PORT_CLOSED, "The old debug port is closed"))
+          }
+        }
 
     override fun listBreakpoints(): CompletionStage<DebugResult<DebugBreakpointList>> =
         CompletableFuture.completedFuture(DebugResult.success(DebugBreakpointList(emptyList())))

@@ -118,6 +118,18 @@ internal class QueuedDebugPort(
                   DebugErrorCode.INVALID_ARGUMENT,
                   "Inspection request exceeds the negotiated limits",
               )
+          !debugCapabilities.inspectionSections().containsAll(request.sections()) ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+                  "A requested peripheral inspection section is unavailable",
+              )
+          request.traceRequest().isPresent &&
+              request.traceRequest().get().maxEntries() >
+                  debugCapabilities.maxInspectionTraceEntries() ->
+              DebugError(
+                  DebugErrorCode.TRACE_LIMIT,
+                  "Inspection trace read exceeds the negotiated limit",
+              )
           else -> null
         }
     return submit(validation) { requestId, completion ->
