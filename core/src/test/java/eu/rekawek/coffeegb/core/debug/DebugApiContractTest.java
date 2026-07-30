@@ -1,5 +1,34 @@
 package eu.rekawek.coffeegb.core.debug;
 
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugCounterCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugCounterType;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugInterruptCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugMemoryCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugOpcodeCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPpuCondition;
+import eu.rekawek.coffeegb.core.debug.trace.ApuTrace;
+import eu.rekawek.coffeegb.core.debug.trace.CpuInstructionTrace;
+import eu.rekawek.coffeegb.core.debug.trace.DmaTrace;
+import eu.rekawek.coffeegb.core.debug.trace.InputTrace;
+import eu.rekawek.coffeegb.core.debug.trace.InterruptTrace;
+import eu.rekawek.coffeegb.core.debug.trace.MapperRtcTrace;
+import eu.rekawek.coffeegb.core.debug.trace.MemoryAccessTrace;
+import eu.rekawek.coffeegb.core.debug.trace.PpuTrace;
+import eu.rekawek.coffeegb.core.debug.trace.SerialIrTrace;
+import eu.rekawek.coffeegb.core.debug.trace.TimerTrace;
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
+import eu.rekawek.coffeegb.core.debug.trace.TraceEntry;
+import eu.rekawek.coffeegb.core.debug.trace.TraceEvent;
+import eu.rekawek.coffeegb.core.debug.trace.TraceFilter;
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult;
+import eu.rekawek.coffeegb.core.debug.trace.TraceSource;
 import org.junit.Test;
 
 import java.lang.reflect.Constructor;
@@ -25,17 +54,32 @@ public class DebugApiContractTest {
             DebugAddressSpace.class,
             DebugApuState.class,
             DebugButton.class,
+            DebugBreakpoint.class,
+            DebugBreakpointCondition.class,
+            DebugBreakpointHit.class,
+            DebugBreakpointId.class,
+            DebugBreakpointKind.class,
+            DebugBreakpointList.class,
             DebugCapabilities.class,
+            DebugCounterCondition.class,
+            DebugCounterType.class,
             DebugCpuState.class,
             DebugError.class,
             DebugErrorCode.class,
             DebugExecutionState.class,
             DebugFeatureState.class,
+            DebugInterruptCondition.class,
             DebugInterruptState.class,
+            DebugInterruptType.class,
             DebugMapperState.class,
             DebugMemoryBlock.class,
+            DebugMemoryCondition.class,
+            DebugMemoryAccess.class,
             DebugMemoryRequest.class,
+            DebugOpcodeCondition.class,
+            DebugPcCondition.class,
             DebugPort.class,
+            DebugPpuCondition.class,
             DebugPpuMode.class,
             DebugPpuState.class,
             DebugRegisters.class,
@@ -44,7 +88,25 @@ public class DebugApiContractTest {
             DebugStepKind.class,
             DebugStepResult.class,
             DebugStepStopReason.class,
-            DebugTimerState.class);
+            DebugTimerState.class,
+            ApuTrace.class,
+            CpuInstructionTrace.class,
+            DmaTrace.class,
+            InputTrace.class,
+            InterruptTrace.class,
+            MapperRtcTrace.class,
+            MemoryAccessTrace.class,
+            PpuTrace.class,
+            SerialIrTrace.class,
+            TimerTrace.class,
+            TraceCategory.class,
+            TraceConfiguration.class,
+            TraceEntry.class,
+            TraceEvent.class,
+            TraceFilter.class,
+            TraceReadRequest.class,
+            TraceReadResult.class,
+            TraceSource.class);
 
     @Test
     public void portHasThePinnedAsynchronousSessionBoundSurface() throws Exception {
@@ -75,6 +137,28 @@ public class DebugApiContractTest {
                 "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
                         + "<java.lang.Void>>",
                 DebugButton.class, boolean.class);
+        assertReturnType("setBreakpoint",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint>>",
+                DebugBreakpoint.class);
+        assertReturnType("removeBreakpoint",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<java.lang.Void>>",
+                DebugBreakpointId.class);
+        assertReturnType("listBreakpoints",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugBreakpointList>>");
+        assertReturnType("lastBreakpointHit",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.DebugBreakpointHit>>");
+        assertReturnType("configureTrace",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration>>",
+                TraceConfiguration.class);
+        assertReturnType("readTrace",
+                "java.util.concurrent.CompletionStage<eu.rekawek.coffeegb.core.debug.DebugResult"
+                        + "<eu.rekawek.coffeegb.core.debug.trace.TraceReadResult>>",
+                TraceReadRequest.class);
     }
 
     @Test
@@ -124,7 +208,10 @@ public class DebugApiContractTest {
                         "INVALID_ARGUMENT", "NOT_PAUSED", "ALREADY_PAUSED", "ALREADY_RUNNING",
                         "CPU_IDLE", "CPU_LOCKED", "UNSUPPORTED_STEP",
                         "UNSUPPORTED_ADDRESS_SPACE", "SIDE_EFFECTFUL_ADDRESS",
-                        "UNSUPPORTED_TOPOLOGY", "SESSION_BUSY", "STEP_LIMIT", "INTERNAL_ERROR"),
+                        "UNSUPPORTED_TOPOLOGY", "SESSION_BUSY", "STEP_LIMIT",
+                        "BREAKPOINT_LIMIT", "BREAKPOINT_NOT_FOUND", "NO_BREAKPOINT_HIT",
+                        "UNSUPPORTED_BREAKPOINT", "UNSUPPORTED_TRACE_CATEGORY", "TRACE_LIMIT",
+                        "INTERNAL_ERROR"),
                 List.of(DebugErrorCode.values()).stream().map(Enum::name)
                         .collect(Collectors.toList()));
     }
@@ -144,7 +231,9 @@ public class DebugApiContractTest {
             if (clazz.isPrimitive() || clazz == String.class || clazz == Void.class
                     || clazz == CompletionStage.class || clazz == AutoCloseable.class
                     || clazz == Class.class || clazz == Object.class
-                    || clazz.getPackageName().equals("eu.rekawek.coffeegb.core.debug")) {
+                    || clazz == List.class || clazz == Set.class
+                    || clazz.getPackageName().equals("eu.rekawek.coffeegb.core.debug")
+                    || clazz.getPackageName().startsWith("eu.rekawek.coffeegb.core.debug.")) {
                 return;
             }
             throw new AssertionError(location + " exposes " + clazz.getName());

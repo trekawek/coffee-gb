@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.controller.debug
 
 import eu.rekawek.coffeegb.core.debug.DebugButton
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugError
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
@@ -11,6 +13,11 @@ import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepResult
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
 import java.util.ArrayDeque
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
@@ -145,6 +152,139 @@ internal class QueuedDebugPort(
           generation,
           requireNotNull(button),
           pressed,
+          completion,
+      )
+    }
+  }
+
+  override fun setBreakpoint(
+      breakpoint: DebugBreakpoint?
+  ): CompletionStage<DebugResult<DebugBreakpoint>> {
+    val validation =
+        when {
+          breakpoint == null ->
+              DebugError(DebugErrorCode.INVALID_ARGUMENT, "Breakpoint is required")
+          !debugCapabilities.supports(breakpoint.condition().kind()) ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_BREAKPOINT,
+                  "Requested breakpoint kind is unavailable",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.SetBreakpoint(
+          requestId,
+          generation,
+          requireNotNull(breakpoint),
+          completion,
+      )
+    }
+  }
+
+  override fun removeBreakpoint(
+      breakpointId: DebugBreakpointId?
+  ): CompletionStage<DebugResult<Void>> {
+    val validation =
+        when {
+          breakpointId == null ->
+              DebugError(DebugErrorCode.INVALID_ARGUMENT, "Breakpoint id is required")
+          !debugCapabilities.breakpoints() ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_BREAKPOINT,
+                  "Breakpoints are unavailable for this session",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.RemoveBreakpoint(
+          requestId,
+          generation,
+          requireNotNull(breakpointId),
+          completion,
+      )
+    }
+  }
+
+  override fun listBreakpoints(): CompletionStage<DebugResult<DebugBreakpointList>> {
+    val validation =
+        unsupportedUnless(
+            debugCapabilities.breakpoints(),
+            "Breakpoints are unavailable for this session",
+        )
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.ListBreakpoints(requestId, generation, completion)
+    }
+  }
+
+  override fun lastBreakpointHit(): CompletionStage<DebugResult<DebugBreakpointHit>> {
+    val validation =
+        unsupportedUnless(
+            debugCapabilities.breakpoints(),
+            "Breakpoints are unavailable for this session",
+        )
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.LastBreakpointHit(requestId, generation, completion)
+    }
+  }
+
+  override fun configureTrace(
+      configuration: TraceConfiguration?
+  ): CompletionStage<DebugResult<TraceConfiguration>> {
+    val validation =
+        when {
+          configuration == null ->
+              DebugError(DebugErrorCode.INVALID_ARGUMENT, "Trace configuration is required")
+          !debugCapabilities.trace() ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_TRACE_CATEGORY,
+                  "Tracing is unavailable for this session",
+              )
+          configuration.capacity() > debugCapabilities.maxTraceCapacity() ->
+              DebugError(
+                  DebugErrorCode.TRACE_LIMIT,
+                  "Trace capacity exceeds the negotiated limit",
+              )
+          !debugCapabilities.traceCategories().containsAll(configuration.categories()) ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_TRACE_CATEGORY,
+                  "Trace configuration contains an unsupported category",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.ConfigureTrace(
+          requestId,
+          generation,
+          requireNotNull(configuration),
+          completion,
+      )
+    }
+  }
+
+  override fun readTrace(
+      request: TraceReadRequest?
+  ): CompletionStage<DebugResult<TraceReadResult>> {
+    val validation =
+        when {
+          request == null ->
+              DebugError(DebugErrorCode.INVALID_ARGUMENT, "Trace read request is required")
+          !debugCapabilities.trace() ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_TRACE_CATEGORY,
+                  "Tracing is unavailable for this session",
+              )
+          request.maxEntries() > debugCapabilities.maxTraceReadEntries() ->
+              DebugError(
+                  DebugErrorCode.TRACE_LIMIT,
+                  "Trace read exceeds the negotiated limit",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.ReadTrace(
+          requestId,
+          generation,
+          requireNotNull(request),
           completion,
       )
     }
@@ -413,4 +553,44 @@ internal sealed class QueuedDebugCommand<T> protected constructor(
       val pressed: Boolean,
       completion: (DebugResult<Void>) -> Boolean,
   ) : QueuedDebugCommand<Void>(requestId, sessionGeneration, completion)
+
+  class SetBreakpoint internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val breakpoint: DebugBreakpoint,
+      completion: (DebugResult<DebugBreakpoint>) -> Boolean,
+  ) : QueuedDebugCommand<DebugBreakpoint>(requestId, sessionGeneration, completion)
+
+  class RemoveBreakpoint internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val breakpointId: DebugBreakpointId,
+      completion: (DebugResult<Void>) -> Boolean,
+  ) : QueuedDebugCommand<Void>(requestId, sessionGeneration, completion)
+
+  class ListBreakpoints internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      completion: (DebugResult<DebugBreakpointList>) -> Boolean,
+  ) : QueuedDebugCommand<DebugBreakpointList>(requestId, sessionGeneration, completion)
+
+  class LastBreakpointHit internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      completion: (DebugResult<DebugBreakpointHit>) -> Boolean,
+  ) : QueuedDebugCommand<DebugBreakpointHit>(requestId, sessionGeneration, completion)
+
+  class ConfigureTrace internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val configuration: TraceConfiguration,
+      completion: (DebugResult<TraceConfiguration>) -> Boolean,
+  ) : QueuedDebugCommand<TraceConfiguration>(requestId, sessionGeneration, completion)
+
+  class ReadTrace internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val request: TraceReadRequest,
+      completion: (DebugResult<TraceReadResult>) -> Boolean,
+  ) : QueuedDebugCommand<TraceReadResult>(requestId, sessionGeneration, completion)
 }

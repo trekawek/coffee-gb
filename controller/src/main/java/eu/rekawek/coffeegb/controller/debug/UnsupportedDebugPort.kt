@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.controller.debug
 
 import eu.rekawek.coffeegb.core.debug.DebugButton
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
+import eu.rekawek.coffeegb.core.debug.DebugBreakpointList
 import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugError
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
@@ -11,6 +13,11 @@ import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepResult
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicReference
@@ -48,6 +55,26 @@ internal class UnsupportedDebugPort(
       button: DebugButton?,
       pressed: Boolean,
   ): CompletionStage<DebugResult<Void>> = unavailable()
+
+  override fun setBreakpoint(
+      breakpoint: DebugBreakpoint?
+  ): CompletionStage<DebugResult<DebugBreakpoint>> = unavailable()
+
+  override fun removeBreakpoint(
+      breakpointId: DebugBreakpointId?
+  ): CompletionStage<DebugResult<Void>> = unavailable()
+
+  override fun listBreakpoints(): CompletionStage<DebugResult<DebugBreakpointList>> = unavailable()
+
+  override fun lastBreakpointHit(): CompletionStage<DebugResult<DebugBreakpointHit>> = unavailable()
+
+  override fun configureTrace(
+      configuration: TraceConfiguration?
+  ): CompletionStage<DebugResult<TraceConfiguration>> = unavailable()
+
+  override fun readTrace(
+      request: TraceReadRequest?
+  ): CompletionStage<DebugResult<TraceReadResult>> = unavailable()
 
   override fun isClosed(): Boolean = terminalError.get() != null
 

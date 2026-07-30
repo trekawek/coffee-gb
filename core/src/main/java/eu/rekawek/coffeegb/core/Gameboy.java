@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.core.debug.DebugCpuState;
 import eu.rekawek.coffeegb.core.debug.DebugExecutionState;
 import eu.rekawek.coffeegb.core.debug.DebugFeatureState;
 import eu.rekawek.coffeegb.core.debug.DebugInterruptState;
+import eu.rekawek.coffeegb.core.debug.DebugInstrumentation;
 import eu.rekawek.coffeegb.core.debug.DebugMapperState;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest;
@@ -172,6 +173,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private transient volatile boolean doPause;
 
     private transient volatile boolean paused;
+
+    private transient DebugInstrumentation debugInstrumentation;
 
     public Gameboy(Rom rom) {
         this(new GameboyConfiguration(rom));
@@ -546,6 +549,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * @return true if there was a new frame emitted in this tick
      */
     public boolean tick() {
+        DebugInstrumentation instrumentation = debugInstrumentation;
+        if (instrumentation != null) {
+            instrumentation.onMasterTickStarted();
+        }
         if (warmResetRequested) {
             warmResetRequested = false;
             applyWarmReset();
@@ -813,6 +820,22 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public long getDebugRetirementSequence() {
         return cpu.getDebugRetirementSequence();
+    }
+
+    /**
+     * Installs, updates, or removes owner-thread debug instrumentation between ticks.
+     * Instrumentation and its trace history are deliberately absent from portable state.
+     */
+    public void updateDebugInstrumentation(
+            DebugInstrumentation instrumentation, long completedMasterTick) {
+        if (instrumentation != null) {
+            instrumentation.alignMasterTick(completedMasterTick);
+        }
+        this.debugInstrumentation = instrumentation;
+        var hooks = instrumentation != null && instrumentation.requiresCpuHooks()
+                ? instrumentation : null;
+        cpu.setDebugHooks(hooks);
+        interruptManager.setDebugHooks(hooks);
     }
 
     /**

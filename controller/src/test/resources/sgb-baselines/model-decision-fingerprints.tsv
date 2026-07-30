@@ -1,5 +1,5 @@
 path	sha256
-controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt	0d2b1c011fcb42788d23c89cb42d347170df4d84708347c68b1057cb183a4eab
+controller/src/main/java/eu/rekawek/coffeegb/controller/BasicController.kt	a1f5384c427323d01895c494262967646d6661a485c5ccf8c2d76d6d08b93255
 controller/src/main/java/eu/rekawek/coffeegb/controller/Controller.kt	172735519e2ebf25ba108ba03c3832d471eaf3bb9c48b342b4a458d13bafe416
 controller/src/main/java/eu/rekawek/coffeegb/controller/LegacySnapshotImporter.kt	b4a5567280e0392435d48f136d203e11b56d8d25e620a97ae71002c02a0326fe
 controller/src/main/java/eu/rekawek/coffeegb/controller/RomSessionPreparer.kt	b5f9acd8cfe12cb8a1b6a6653d71d7510895e364e706aa8b3b883fe8a18a30c5

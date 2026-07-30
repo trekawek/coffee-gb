@@ -3,6 +3,9 @@ package eu.rekawek.coffeegb.core.cpu;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.DebugInterruptType;
+import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
 import eu.rekawek.coffeegb.core.cpu.op.Op;
 import eu.rekawek.coffeegb.core.cpu.opcode.Opcode;
 import eu.rekawek.coffeegb.core.gpu.*;
@@ -30,7 +33,17 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private final Registers registers;
 
-    private final AddressSpace addressSpace;
+    private final AddressSpace baseAddressSpace;
+
+    private AddressSpace addressSpace;
+
+    private transient DebugCpuAddressSpace debugAddressSpace;
+
+    private transient DebugHooks debugHooks;
+
+    private transient boolean debugInstructionKnown;
+
+    private transient int debugInstructionPc;
 
     private final InterruptManager interruptManager;
 
@@ -116,6 +129,7 @@ public class Cpu implements StatefulComponent<Cpu> {
     public Cpu(AddressSpace addressSpace, InterruptManager interruptManager, Gpu gpu, SpeedMode speedMode,
                Display display, Timer timer) {
         this.registers = new Registers();
+        this.baseAddressSpace = addressSpace;
         this.addressSpace = addressSpace;
         this.interruptManager = interruptManager;
         this.gpu = gpu;
@@ -259,6 +273,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         // opcode may run, just like the ordinary DMA prefetch below.
                         hdmaOpcodePrefetched = true;
                     }
+                    beginDebugInstruction(pc);
                     clearState();
                     opcode1 = useHdmaHaltPrefetch
                             ? haltPrefetchedOpcode
@@ -266,8 +281,9 @@ public class Cpu implements StatefulComponent<Cpu> {
                             ? speedSwitchPaddingOpcode
                             : useHdmaArbitrationOpcode
                             ? hdmaArbitrationOpcode
-                            : addressSpace.getByte(pc);
+                            : readInstructionByte(pc);
                     accessedMemory = true;
+                    notifyOpcodeFetched(pc, false, opcode1);
                     if (opcode1 == 0xcb) {
                         state = State.EXT_OPCODE;
                     } else if (opcode1 == 0x10) {
@@ -302,7 +318,10 @@ public class Cpu implements StatefulComponent<Cpu> {
                         return;
                     }
                     accessedMemory = true;
-                    opcode2 = addressSpace.getByte(pc);
+                    opcode2 = readInstructionByte(pc);
+                    if (opcode1 == 0xcb) {
+                        notifyOpcodeFetched(debugInstructionPc, true, opcode2);
+                    }
                     if (currentOpcode == null) {
                         currentOpcode = Opcodes.EXT_COMMANDS.get(opcode2);
                     }
@@ -321,7 +340,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             return;
                         }
                         accessedMemory = true;
-                        operand[operandIndex++] = addressSpace.getByte(pc);
+                        operand[operandIndex++] = readInstructionByte(pc);
                         registers.incrementPC();
                     }
                     ops = currentOpcode.getOps();
@@ -361,7 +380,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         // HALT always samples the next opcode. It is normally fetched
                         // again on wake, but a simultaneously acknowledged HDMA request
                         // turns this sample into the held pipeline opcode.
-                        haltPrefetchedOpcode = addressSpace.getByte(registers.getPC());
+                        haltPrefetchedOpcode = readInstructionByte(registers.getPC());
                         haltOpcodePrefetchValid = false;
                         // committing a pending EI happens even when entering halt, so
                         // "ei; halt" halts with IME=1 (no halt bug, wake dispatches)
@@ -523,6 +542,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             case IRQ_JUMP:
                 applyLateInterruptPriority();
                 if (requestedIrq != null) {
+                    notifyInterruptAccepted(requestedIrq);
                     registers.setPC(requestedIrq.getHandler());
                 } else {
                     registers.setPC(0x0000);
@@ -600,6 +620,28 @@ public class Cpu implements StatefulComponent<Cpu> {
         debugRetirementTracker = null;
     }
 
+    /** Installs or removes the active-only CPU bus/instruction observer. */
+    public void setDebugHooks(DebugHooks hooks) {
+        boolean observeMemory = hooks != null && hooks.requiresMemoryAccessHooks();
+        if (debugHooks == hooks && (debugAddressSpace != null) == observeMemory) {
+            return;
+        }
+        boolean observerChanged = debugHooks != hooks;
+        debugHooks = hooks;
+        if (observerChanged) {
+            debugInstructionKnown = false;
+            debugInstructionPc = 0;
+        }
+        if (!observeMemory) {
+            debugAddressSpace = null;
+            addressSpace = baseAddressSpace;
+        } else {
+            DebugCpuAddressSpace observed = new DebugCpuAddressSpace(baseAddressSpace, hooks);
+            debugAddressSpace = observed;
+            addressSpace = observed;
+        }
+    }
+
     /** Sequence local to the current debugger attachment; zero means no retirement was observed. */
     public long getDebugRetirementSequence() {
         DebugRetirementTracker tracker = debugRetirementTracker;
@@ -624,10 +666,61 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     private void markDebugRetirement() {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onInstructionRetired(
+                    debugInstructionKnown,
+                    debugInstructionPc,
+                    opcode1,
+                    opcode1 == 0xcb ? opcode2 : -1);
+        }
+        debugInstructionKnown = false;
         DebugRetirementTracker tracker = debugRetirementTracker;
         if (tracker != null) {
             tracker.sequence++;
         }
+    }
+
+    private void beginDebugInstruction(int programCounter) {
+        DebugHooks hooks = debugHooks;
+        if (hooks == null) {
+            return;
+        }
+        debugInstructionKnown = true;
+        debugInstructionPc = programCounter;
+        hooks.onInstructionFetch(programCounter);
+    }
+
+    private void notifyOpcodeFetched(int programCounter, boolean cbPrefixed, int opcode) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null && debugInstructionKnown) {
+            hooks.onOpcodeFetched(programCounter, cbPrefixed, opcode);
+        }
+    }
+
+    private int readInstructionByte(int address) {
+        DebugCpuAddressSpace observed = debugAddressSpace;
+        return observed == null
+                ? baseAddressSpace.getByte(address)
+                : observed.getByte(address, DebugMemoryAccess.EXECUTE);
+    }
+
+    private void notifyInterruptAccepted(InterruptManager.InterruptType interrupt) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onInterruptAccepted(toDebugInterruptType(interrupt));
+        }
+    }
+
+    private static DebugInterruptType toDebugInterruptType(
+            InterruptManager.InterruptType interrupt) {
+        return switch (interrupt) {
+            case VBlank -> DebugInterruptType.VBLANK;
+            case LCDC -> DebugInterruptType.LCD_STATUS;
+            case Timer -> DebugInterruptType.TIMER;
+            case Serial -> DebugInterruptType.SERIAL;
+            case P10_13 -> DebugInterruptType.JOYPAD;
+        };
     }
 
     private static final class DebugRetirementTracker {
@@ -734,7 +827,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         if (!isSafeInstructionAddress(pc)) {
             return null;
         }
-        Opcode decodedOpcode = Opcodes.COMMANDS.get(addressSpace.getByte(pc));
+        Opcode decodedOpcode = Opcodes.COMMANDS.get(baseAddressSpace.getByte(pc));
         if (decodedOpcode == null) {
             return null;
         }
@@ -747,7 +840,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             if (!isSafeInstructionAddress(operandAddress)) {
                 return null;
             }
-            decodedOperand[i] = addressSpace.getByte(operandAddress);
+            decodedOperand[i] = baseAddressSpace.getByte(operandAddress);
         }
         return new DecodedInstruction(decodedOpcode, decodedOperand);
     }
@@ -877,12 +970,14 @@ public class Cpu implements StatefulComponent<Cpu> {
         boolean useHdmaArbitrationOpcode = hdmaArbitrationOpcodeValid;
         speedSwitchPaddingReplayValid = false;
         hdmaArbitrationOpcodeValid = false;
+        beginDebugInstruction(pc);
         clearState();
         opcode1 = useSpeedSwitchPadding
                 ? speedSwitchPaddingOpcode
                 : useHdmaArbitrationOpcode
                 ? hdmaArbitrationOpcode
-                : addressSpace.getByte(pc);
+                : readInstructionByte(pc);
+        notifyOpcodeFetched(pc, false, opcode1);
         if (opcode1 == 0xcb || opcode1 == 0x10) {
             state = State.EXT_OPCODE;
             if (opcode1 == 0x10) {
@@ -968,7 +1063,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             if (isHdmaOpcodeFetchBlockedByPpu(pc)) {
                 return false;
             }
-            hdmaArbitrationOpcode = addressSpace.getByte(pc);
+            hdmaArbitrationOpcode = readInstructionByte(pc);
             hdmaArbitrationOpcodeValid = true;
         }
         return hdmaArbitrationOpcode != 0x76;
@@ -1096,6 +1191,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         this.phasedPpuInputHigh = mem.phasedPpuInputHigh;
         this.fastPhasedPpuDispatch = mem.fastPhasedPpuDispatch;
         this.stopFrameBlankRequested = false;
+        this.debugInstructionKnown = false;
 
         this.currentOpcode = (opcode1 == 0xcb) ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1);
         this.ops = (currentOpcode == null) ? null : currentOpcode.getOps();

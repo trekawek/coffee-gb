@@ -342,9 +342,11 @@ API lets an agent run a ROM headlessly under scripted control, inject input,
 capture frames and audio, and inspect immutable debugger snapshots without
 driving the desktop UI. Each Agent owns a bounded command queue and one named
 emulation thread; callers use `Agent(...).use { }` (or `close()`) and can access
-its platform-neutral `DebugPort` directly. Memory inspection is deliberately
-limited to side-effect-free views, and the adapter exposes no live emulator
-objects or memory-write backdoor.
+its platform-neutral `DebugPort` directly. The port also negotiates deterministic breakpoints and
+fixed-capacity CPU/memory/interrupt traces with cursor-visible overwrite accounting. Memory
+inspection is deliberately limited to side-effect-free views, and the adapter exposes no live
+emulator objects or memory-write backdoor. The complete safe-point, breakpoint, trace, and
+performance contract is in [`docs/debug-port.md`](docs/debug-port.md).
 
 The working loop is deliberately evidence-based:
 

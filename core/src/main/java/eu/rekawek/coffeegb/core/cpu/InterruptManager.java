@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.core.cpu;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.DebugInterruptType;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
@@ -94,6 +96,8 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     // The PPU resolves same-slot set/clear precedence on its following tick.
     private boolean lcdcInterruptFlagWriteClear;
 
+    private transient DebugHooks debugHooks;
+
     public InterruptManager(boolean gbc) {
     }
 
@@ -125,15 +129,18 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         }
         haltBlockedInterrupts &= ~mask;
         cpuBlockedInterrupts &= ~mask;
+        notifyInterruptRequested(type, newlyAsserted);
     }
 
     public void requestInterruptBeforeHaltWake(InterruptType type) {
         int mask = 1 << type.ordinal();
-        if ((interruptFlag & mask) == 0) {
+        boolean newlyAsserted = (interruptFlag & mask) == 0;
+        if (newlyAsserted) {
             haltBlockedInterrupts |= mask;
             cpuPhasedPpuInterrupts &= ~mask;
         }
         interruptFlag |= mask;
+        notifyInterruptRequested(type, newlyAsserted);
     }
 
     /**
@@ -144,30 +151,36 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
      */
     public void requestPhasedInterruptBeforeHaltWake(InterruptType type) {
         int mask = 1 << type.ordinal();
-        if ((interruptFlag & mask) == 0) {
+        boolean newlyAsserted = (interruptFlag & mask) == 0;
+        if (newlyAsserted) {
             haltBlockedInterrupts |= mask;
             cpuPhasedPpuInterrupts |= mask & PPU_INTERRUPT_MASK;
         }
         interruptFlag |= mask;
+        notifyInterruptRequested(type, newlyAsserted);
     }
 
     public void requestPhasedInterruptAfterInstruction(InterruptType type) {
         int mask = 1 << type.ordinal();
-        if ((interruptFlag & mask) == 0) {
+        boolean newlyAsserted = (interruptFlag & mask) == 0;
+        if (newlyAsserted) {
             cpuPhasedPpuInterrupts |= mask & PPU_INTERRUPT_MASK;
             cpuInstructionBlockedInterrupts |= mask;
         }
         interruptFlag |= mask;
+        notifyInterruptRequested(type, newlyAsserted);
     }
 
     public void requestInterruptBeforeCpuAcceptance(InterruptType type) {
         int mask = 1 << type.ordinal();
-        if ((interruptFlag & mask) == 0) {
+        boolean newlyAsserted = (interruptFlag & mask) == 0;
+        if (newlyAsserted) {
             cpuBlockedInterrupts |= mask;
             haltBlockedInterrupts |= mask;
             cpuPhasedPpuInterrupts |= mask & PPU_INTERRUPT_MASK;
         }
         interruptFlag |= mask;
+        notifyInterruptRequested(type, newlyAsserted);
     }
 
     public void requestMode2InterruptBeforeCpuAcceptance(boolean firstLine) {
@@ -196,7 +209,8 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
      */
     public void requestInterruptBeforeCpuAcceptanceUnphased(InterruptType type) {
         int mask = 1 << type.ordinal();
-        if ((interruptFlag & mask) == 0) {
+        boolean newlyAsserted = (interruptFlag & mask) == 0;
+        if (newlyAsserted) {
             cpuBlockedInterrupts |= mask;
             haltBlockedInterrupts |= mask;
             cpuPhasedPpuInterrupts &= ~mask;
@@ -205,6 +219,28 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         if (type == InterruptType.VBlank) {
             maskVBlankOnNextRead = false;
         }
+        notifyInterruptRequested(type, newlyAsserted);
+    }
+
+    public void setDebugHooks(DebugHooks hooks) {
+        debugHooks = hooks;
+    }
+
+    private void notifyInterruptRequested(InterruptType type, boolean newlyAsserted) {
+        DebugHooks hooks = debugHooks;
+        if (newlyAsserted && hooks != null) {
+            hooks.onInterruptRequested(toDebugInterruptType(type));
+        }
+    }
+
+    private static DebugInterruptType toDebugInterruptType(InterruptType interrupt) {
+        return switch (interrupt) {
+            case VBlank -> DebugInterruptType.VBLANK;
+            case LCDC -> DebugInterruptType.LCD_STATUS;
+            case Timer -> DebugInterruptType.TIMER;
+            case Serial -> DebugInterruptType.SERIAL;
+            case P10_13 -> DebugInterruptType.JOYPAD;
+        };
     }
 
     public void releaseCpuAcceptance(InterruptType type) {
@@ -421,10 +457,26 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
 
     @Override
     public void setByteFromCpu(int address, int value) {
+        int newlyAssertedInterrupts = address == 0xff0f
+                ? ~interruptFlag & value & 0x1f
+                : 0;
         setByte(address, value);
         if (address == 0xff0f) {
             lcdcInterruptFlagWriteClear =
                     (value & (1 << InterruptType.LCDC.ordinal())) == 0;
+            notifyInterruptsRequested(newlyAssertedInterrupts);
+        }
+    }
+
+    private void notifyInterruptsRequested(int interruptMask) {
+        DebugHooks hooks = debugHooks;
+        if (hooks == null || interruptMask == 0) {
+            return;
+        }
+        for (InterruptType type : InterruptType.VALUES) {
+            if ((interruptMask & (1 << type.ordinal())) != 0) {
+                hooks.onInterruptRequested(toDebugInterruptType(type));
+            }
         }
     }
 
