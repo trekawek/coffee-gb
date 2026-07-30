@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.SerialIrTrace;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -36,6 +38,15 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     // the written bits of RP: bit 0 (own LED) and bits 6-7 (read enable)
     private int rp;
 
+    /** Owner-thread observation only; deliberately absent from portable machine state. */
+    private transient DebugHooks debugHooks;
+
+    /**
+     * Last physical IR signal mask: bit 0 is the locally driven LED and bit 1 is
+     * received light. Upper bits are reserved. Attachment realigns it before observation.
+     */
+    private transient int observedDebugSignal;
+
     public InfraredPort(boolean gbc, SpeedMode speedMode) {
         this.gbc = gbc;
         this.speedMode = speedMode;
@@ -49,6 +60,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         this.endpoint.setLightOn(false);
         this.endpoint = endpoint;
         endpoint.setLightOn((rp & 0x01) != 0);
+        alignDebugSignal();
         eventBus.register(e -> fullChanger.transform(e.characterId()), FullChanger.TransformEvent.class);
     }
 
@@ -63,12 +75,14 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         endpoint.setLightOn(false);
         endpoint = InfraredEndpoint.NULL_ENDPOINT;
         serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
+        alignDebugSignal();
     }
 
     public void tick() {
         // the pulse timings are defined in double-speed cycles; advance twice as fast in
         // double speed so a game sees the same delays regardless of its speed setting
         fullChanger.tick(speedMode.getSpeedMode());
+        notifyDebugSignalChange();
     }
 
     @Override
@@ -80,6 +94,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     public void setByte(int address, int value) {
         rp = value & 0xc1;
         endpoint.setLightOn((rp & 0x01) != 0);
+        notifyDebugSignalChange();
     }
 
     @Override
@@ -90,6 +105,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         // an armed device starts transmitting at a poll of the register, so the polling
         // loop observes the first pulse from its beginning
         fullChanger.onRpRead();
+        notifyDebugSignalChange();
         // Bits 2, 3 and 5 are pulled high. Bit 4 is not unused on CGB hardware: it
         // exposes link-port pin 4 as a raw digital input for software UARTs.
         int result = rp | 0x2c | 0x02;
@@ -125,6 +141,39 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         this.rp = mem.rp;
         endpoint.setLightOn((rp & 0x01) != 0);
         fullChanger.restoreState(mem.fullChangerMemento);
+        alignDebugSignal();
+    }
+
+    /** Installs an optional owner-thread observer without emitting an alignment event. */
+    public void setDebugHooks(DebugHooks debugHooks) {
+        alignDebugSignal();
+        this.debugHooks = debugHooks;
+    }
+
+    private void notifyDebugSignalChange() {
+        DebugHooks hooks = debugHooks;
+        if (hooks == null) {
+            return;
+        }
+        int signal = getDebugSignal();
+        if (signal == observedDebugSignal) {
+            return;
+        }
+        observedDebugSignal = signal;
+        hooks.onSerialIrEvent(
+                SerialIrTrace.Endpoint.INFRARED,
+                SerialIrTrace.Kind.SIGNAL_CHANGED,
+                signal);
+    }
+
+    private void alignDebugSignal() {
+        observedDebugSignal = getDebugSignal();
+    }
+
+    private int getDebugSignal() {
+        int localOutput = rp & 0x01;
+        int receivedLight = fullChanger.isLightOn() || endpoint.isLightOn() ? 0x02 : 0;
+        return localOutput | receivedLight;
     }
 
     private record InfraredPortState(int rp, ComponentState<FullChanger> fullChangerMemento)

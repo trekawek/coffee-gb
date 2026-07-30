@@ -7,5 +7,6 @@ public enum DebugBreakpointKind {
     OPCODE,
     INTERRUPT,
     PPU_STATE,
+    SERIAL,
     COUNTER
 }

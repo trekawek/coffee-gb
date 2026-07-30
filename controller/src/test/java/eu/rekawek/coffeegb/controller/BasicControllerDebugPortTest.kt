@@ -25,8 +25,11 @@ import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugCounterCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPpuCondition
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugSerialCondition
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
@@ -94,6 +97,74 @@ class BasicControllerDebugPortTest {
             it.category() == TraceCategory.CPU || it.category() == TraceCategory.MEMORY
           })
     }
+  }
+
+  @Test
+  fun ppuBreakpointPausesOnTheObservedLineTransitionWithoutAdvancingAgain() {
+    withController { _, port, _, _, _ ->
+      val paused = await(port.pause()).value()
+      assertTrue(port.capabilities().supports(DebugBreakpointKind.PPU_STATE))
+      val targetLine = (paused.ppu().line() + 1) % 154
+      val breakpoint =
+          DebugBreakpoint(
+              DebugBreakpointId(63),
+              true,
+              DebugPpuCondition.atLy(targetLine),
+          )
+      assertEquals(breakpoint, await(port.setBreakpoint(breakpoint)).value())
+      assertTrue(await(port.resume()).isSuccess)
+
+      val hit = awaitBreakpointHit(port)
+      assertEquals(breakpoint.id(), hit.breakpointId())
+      assertEquals(hit.matchMasterTick(), hit.snapshot().masterTick())
+      assertEquals(targetLine, hit.snapshot().ppu().line())
+      assertTrue(hit.snapshot().paused())
+
+      Thread.sleep(25)
+      assertEquals(hit.matchMasterTick(), await(port.snapshot()).value().masterTick())
+    }
+  }
+
+  @Test
+  fun serialBreakpointPausesOnTheTransferStartTickWithoutAdvancingAgain() {
+    withController(
+        programRom(
+            "SERIAL_BREAK",
+            0x3e,
+            0xa5, // LD A,$A5
+            0xea,
+            0x01,
+            0xff, // LD ($FF01),A
+            0x3e,
+            0x81, // LD A,$81
+            0xea,
+            0x02,
+            0xff, // LD ($FF02),A
+            0x18,
+            0xf4, // JR $0100
+        )) { _, port, _, _, _ ->
+          assertTrue(await(port.pause()).isSuccess)
+          assertTrue(port.capabilities().supports(DebugBreakpointKind.SERIAL))
+          val breakpoint =
+              DebugBreakpoint(
+                  DebugBreakpointId(64),
+                  true,
+                  DebugSerialCondition(
+                      DebugSerialCondition.Event.TRANSFER_STARTED,
+                      0xa5,
+                  ),
+              )
+          assertEquals(breakpoint, await(port.setBreakpoint(breakpoint)).value())
+          assertTrue(await(port.resume()).isSuccess)
+
+          val hit = awaitBreakpointHit(port)
+          assertEquals(breakpoint.id(), hit.breakpointId())
+          assertEquals(hit.matchMasterTick(), hit.snapshot().masterTick())
+          assertTrue(hit.snapshot().paused())
+
+          Thread.sleep(25)
+          assertEquals(hit.matchMasterTick(), await(port.snapshot()).value().masterTick())
+        }
   }
 
   @Test
@@ -444,6 +515,18 @@ class BasicControllerDebugPortTest {
               BasicController,
               StateUxSessionEvent,
           ) -> Unit
+  ) = withController(namedRom("DEBUG_PORT"), test)
+
+  private fun withController(
+      rom: File,
+      test:
+          (
+              EventBusImpl,
+              DebugPort,
+              LinkedBlockingQueue<SessionDebugPortEvent>,
+              BasicController,
+              StateUxSessionEvent,
+          ) -> Unit
   ) {
     val eventBus = EventBusImpl()
     val ports = LinkedBlockingQueue<SessionDebugPortEvent>()
@@ -452,7 +535,6 @@ class BasicControllerDebugPortTest {
     eventBus.register<SessionDebugPortEvent> { if (it.debugPort != null) ports.add(it) }
     eventBus.register<EmulationStartedEvent> { started.add(it) }
     eventBus.register<StateUxSessionEvent> { if (it.available) stateSessions.add(it) }
-    val rom = namedRom("DEBUG_PORT")
     val settingsDirectory = Files.createTempDirectory("coffee-gb-debug-port-settings")
     val properties =
         EmulatorProperties(settingsDirectory.resolve("settings.properties"), debounceMillis = 0)
@@ -508,6 +590,16 @@ class BasicControllerDebugPortTest {
     return Files.createTempFile("coffee-gb-$title", ".gbc").toFile().also {
       it.writeBytes(bytes)
     }
+  }
+
+  private fun programRom(title: String, vararg program: Int): File {
+    val rom = namedRom(title)
+    val bytes = rom.readBytes()
+    for (index in program.indices) {
+      bytes[0x100 + index] = program[index].toByte()
+    }
+    rom.writeBytes(bytes)
+    return rom
   }
 
   private fun <T> await(stage: java.util.concurrent.CompletionStage<T>): T =

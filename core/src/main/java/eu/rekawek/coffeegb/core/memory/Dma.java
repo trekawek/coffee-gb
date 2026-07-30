@@ -3,6 +3,11 @@ package eu.rekawek.coffeegb.core.memory;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
+import eu.rekawek.coffeegb.core.debug.trace.DmaTrace;
+import eu.rekawek.coffeegb.core.debug.trace.TraceSource;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -73,6 +78,10 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
     // the preceding OAM source-bus phase for the remainder of this transfer.
     private boolean vramDmaBusCollisionObserved;
 
+    private transient DebugHooks debugHooks;
+
+    private transient boolean debugMemoryHooks;
+
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
         this.addressSpace = new DmaAddressSpace(addressSpace, speedMode.isGbc());
         this.speedMode = speedMode;
@@ -122,19 +131,34 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
                         // The shared bus addresses OAM with the low byte of the VRAM-DMA
                         // source, rather than OAM DMA's ordinary sequential destination.
                         oam.setByte(0xfe00 + vramDmaOamIndex, vramDmaBusValue);
+                        if (debugMemoryHooks) {
+                            notifyMemoryWrite(
+                                    DebugAddressSpace.OAM,
+                                    0xfe00 + vramDmaOamIndex,
+                                    vramDmaBusValue);
+                        }
                         vramDmaBusCollisionObserved = true;
                         if (pendingInterruptWriteByte == currentByte) {
                             pendingInterruptWriteByte = -1;
                         }
                     } else {
-                        int value = addressSpace.getByte(from + currentByte);
+                        int sourceAddress = from + currentByte;
+                        int value = addressSpace.getByte(sourceAddress);
+                        if (debugMemoryHooks) {
+                            notifyMemoryRead(sourceAddress, value);
+                        }
                         if (pendingInterruptWriteByte == currentByte) {
                             value = applyCpuWriteCollision(value, pendingInterruptWriteValue);
                             pendingInterruptWriteByte = -1;
                         }
                         oam.setByte(0xfe00 + currentByte, value);
+                        if (debugMemoryHooks) {
+                            notifyMemoryWrite(
+                                    DebugAddressSpace.OAM, 0xfe00 + currentByte, value);
+                        }
                     }
                     currentByte++;
+                    notifyDmaEvent(DmaTrace.Kind.BYTE_TRANSFERRED, currentByte);
                 }
                 if (transferClocks >= 648) {
                     finishTransfer();
@@ -147,6 +171,7 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
     }
 
     private void finishTransfer() {
+        notifyDmaEvent(DmaTrace.Kind.COMPLETED, 0xa0);
         transferInProgress = false;
         restarted = false;
         ppuOamOwnedThroughRestart = false;
@@ -177,6 +202,9 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
 
     @Override
     public void setByte(int address, int value) {
+        if (transferInProgress) {
+            notifyDmaEvent(DmaTrace.Kind.CANCELLED, currentByte);
+        }
         from = value * 0x100;
         restarted = isOamBlocked();
         ppuOamOwnedThroughRestart = oamOwnedForPpu;
@@ -190,6 +218,65 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
         vramDmaBusCollisionObserved = false;
         transferInProgress = true;
         regValue = value;
+        notifyDmaEvent(DmaTrace.Kind.STARTED, 0);
+    }
+
+    public void setDebugHooks(DebugHooks hooks) {
+        debugHooks = hooks;
+        debugMemoryHooks = hooks != null && hooks.requiresPpuMemoryAccessHooks();
+    }
+
+    private void notifyDmaEvent(DmaTrace.Kind kind, int bytesTransferred) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onDmaEvent(
+                    DmaTrace.Engine.OAM,
+                    kind,
+                    from & 0xffff,
+                    0xfe00,
+                    0xa0,
+                    bytesTransferred);
+        }
+    }
+
+    private void notifyMemoryRead(int address, int value) {
+        if (speedMode.isGbc() && address >= 0xe000) {
+            return;
+        }
+        int mappedAddress = DmaAddressSpace.mapAddress(address, speedMode.isGbc());
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onMemoryAccess(
+                    debugAddressSpace(mappedAddress),
+                    TraceSource.DMA,
+                    DebugMemoryAccess.READ,
+                    mappedAddress & 0xffff,
+                    value & 0xff);
+        }
+    }
+
+    private void notifyMemoryWrite(DebugAddressSpace space, int address, int value) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onMemoryAccess(
+                    space,
+                    TraceSource.DMA,
+                    DebugMemoryAccess.WRITE,
+                    address,
+                    value & 0xff);
+        }
+    }
+
+    private static DebugAddressSpace debugAddressSpace(int address) {
+        int mapped = address & 0xffff;
+        if (mapped < 0x8000) return DebugAddressSpace.ROM;
+        if (mapped < 0xa000) return DebugAddressSpace.VIDEO_RAM;
+        if (mapped < 0xc000) return DebugAddressSpace.CARTRIDGE_RAM;
+        if (mapped < 0xfe00) return DebugAddressSpace.WORK_RAM;
+        if (mapped < 0xfea0) return DebugAddressSpace.OAM;
+        if (mapped >= 0xff80 && mapped < 0xffff) return DebugAddressSpace.HIGH_RAM;
+        if (mapped >= 0xff00) return DebugAddressSpace.IO_REGISTERS;
+        return DebugAddressSpace.SYSTEM_BUS;
     }
 
     @Override

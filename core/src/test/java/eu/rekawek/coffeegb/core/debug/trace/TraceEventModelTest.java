@@ -1,8 +1,9 @@
 package eu.rekawek.coffeegb.core.debug.trace;
 
-import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
+import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
 import eu.rekawek.coffeegb.core.debug.DebugInterruptType;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
+import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
 import org.junit.Test;
 
 import java.lang.reflect.RecordComponent;
@@ -86,6 +87,9 @@ public class TraceEventModelTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new MemoryAccessTrace(DebugMemoryAccess.READ, -1, 0));
         assertThrows(NullPointerException.class,
+                () -> new MemoryAccessTrace(
+                        null, DebugMemoryAccess.READ, 0, 0));
+        assertThrows(NullPointerException.class,
                 () -> new InterruptTrace(null, DebugInterruptType.TIMER));
         assertThrows(IllegalArgumentException.class,
                 () -> new PpuTrace(PpuTrace.Kind.MODE_CHANGED, 0, 154, 0,
@@ -104,6 +108,48 @@ public class TraceEventModelTest {
                 () -> new MapperRtcTrace(MapperRtcTrace.Kind.RTC_REGISTER_WRITTEN, 0, -1));
         assertThrows(IllegalArgumentException.class,
                 () -> new ApuTrace(ApuTrace.Kind.REGISTER_WRITTEN, 5, 0xff10, 0));
+    }
+
+    @Test
+    public void memoryPayloadCarriesNamedSpaceAndProducerProvenance() {
+        MemoryAccessTrace dmaWrite = new MemoryAccessTrace(
+                DebugAddressSpace.OAM,
+                DebugMemoryAccess.WRITE,
+                0xfe00,
+                0x5a);
+        TraceEntry entry = new TraceEntry(0, 1, TraceSource.DMA, dmaWrite);
+
+        assertEquals(DebugAddressSpace.OAM, dmaWrite.addressSpace());
+        assertEquals(TraceSource.DMA, entry.source());
+        assertEquals(DebugMemoryAccess.WRITE, dmaWrite.access());
+        assertEquals(0xfe00, dmaWrite.address());
+        assertEquals(0x5a, dmaWrite.value());
+
+        MemoryAccessTrace compatibility = new MemoryAccessTrace(
+                DebugMemoryAccess.READ, 0xc000, 0x12);
+        assertEquals(DebugAddressSpace.SYSTEM_BUS, compatibility.addressSpace());
+    }
+
+    @Test
+    public void ppuPayloadDistinguishesLcdEdgesFromPhysicalFrameReadiness() {
+        PpuTrace disabled = new PpuTrace(
+                PpuTrace.Kind.LCD_DISABLED,
+                7,
+                42,
+                123,
+                DebugPpuMode.DISABLED);
+        PpuTrace frameReady = new PpuTrace(
+                PpuTrace.Kind.FRAME_READY,
+                8,
+                144,
+                0,
+                DebugPpuMode.VBLANK);
+
+        assertEquals(TraceCategory.PPU, disabled.category());
+        assertEquals(7, disabled.ppuFrame());
+        assertEquals(PpuTrace.Kind.LCD_DISABLED, disabled.kind());
+        assertEquals(8, frameReady.ppuFrame());
+        assertEquals(PpuTrace.Kind.FRAME_READY, frameReady.kind());
     }
 
     @Test

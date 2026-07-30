@@ -3,10 +3,13 @@ package eu.rekawek.coffeegb.core.debug.breakpoint;
 import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
 
 /**
- * PPU-state predicate combining any non-empty subset of frame, LY, and PPU mode.
+ * PPU-state predicate combining any non-empty subset of owner frame, LY, and PPU mode.
  *
  * <p>{@link #ANY_FRAME} and {@link #ANY_LY} are explicit wildcards. A {@code null} mode is a
- * mode wildcard. LY is the physical scanline index and is limited to 0..153.
+ * mode wildcard. Frame is the same controller-owned counter exposed by
+ * {@code DebugSnapshot.frame}; LY is the physical scanline index and is limited to 0..153.
+ * Conditions are observed on PPU transitions and owner frame boundaries, not level-triggered
+ * on every master tick.
  */
 public record DebugPpuCondition(long frame, int ly, DebugPpuMode mode)
         implements DebugBreakpointCondition {

@@ -106,8 +106,44 @@ public class DebugBreakpointModelTest {
     }
 
     @Test
+    public void serialConditionsDistinguishTransferEdgesAndOptionalByteMasks() {
+        DebugSerialCondition started = new DebugSerialCondition(
+                DebugSerialCondition.Event.TRANSFER_STARTED);
+        assertEquals(DebugBreakpointKind.SERIAL, started.kind());
+        assertEquals(DebugSerialCondition.Event.TRANSFER_STARTED, started.event());
+        assertFalse(started.hasValueConstraint());
+        assertEquals(0, started.value());
+        assertEquals(0, started.valueMask());
+
+        DebugSerialCondition exact = new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa5);
+        assertTrue(exact.hasValueConstraint());
+        assertEquals(0xa5, exact.value());
+        assertEquals(0xff, exact.valueMask());
+
+        DebugSerialCondition masked = new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa0, 0xf0);
+        assertEquals(masked, new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa0, 0xf0));
+        assertEquals(masked.hashCode(), new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa0, 0xf0).hashCode());
+        assertTrue(masked.toString().contains("BYTE_TRANSFERRED"));
+
+        assertThrows(NullPointerException.class, () -> new DebugSerialCondition(null));
+        assertThrows(IllegalArgumentException.class, () -> new DebugSerialCondition(
+                DebugSerialCondition.Event.TRANSFER_STARTED, -1));
+        assertThrows(IllegalArgumentException.class, () -> new DebugSerialCondition(
+                DebugSerialCondition.Event.TRANSFER_STARTED, 0x100));
+        assertThrows(IllegalArgumentException.class, () -> new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new DebugSerialCondition(
+                DebugSerialCondition.Event.BYTE_TRANSFERRED, 0, 0x100));
+    }
+
+    @Test
     public void ppuConditionsCanConstrainAnyNonEmptySubset() {
         DebugPpuCondition frame = DebugPpuCondition.atFrame(12);
+        assertEquals(12, frame.frame());
         assertTrue(frame.constrainsFrame());
         assertFalse(frame.constrainsLy());
         assertFalse(frame.constrainsMode());

@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugMemoryCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugOpcodeCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition;
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPpuCondition;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugSerialCondition;
 import eu.rekawek.coffeegb.core.debug.trace.ApuTrace;
 import eu.rekawek.coffeegb.core.debug.trace.CpuInstructionTrace;
 import eu.rekawek.coffeegb.core.debug.trace.DmaTrace;
@@ -80,6 +81,8 @@ public class DebugApiContractTest {
             DebugPcCondition.class,
             DebugPort.class,
             DebugPpuCondition.class,
+            DebugSerialCondition.class,
+            DebugSerialCondition.Event.class,
             DebugPpuMode.class,
             DebugPpuState.class,
             DebugRegisters.class,

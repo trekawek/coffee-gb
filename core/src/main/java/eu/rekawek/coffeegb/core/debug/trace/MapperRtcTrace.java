@@ -11,6 +11,7 @@ public record MapperRtcTrace(Kind kind, int register, long value) implements Tra
         RAM_BANK_CHANGED,
         RAM_ENABLE_CHANGED,
         RTC_LATCHED,
+        RTC_REGISTER_SELECTED,
         RTC_REGISTER_READ,
         RTC_REGISTER_WRITTEN
     }

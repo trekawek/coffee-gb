@@ -1,22 +1,26 @@
-package eu.rekawek.coffeegb.core.cpu;
+package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
-import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
 import eu.rekawek.coffeegb.core.debug.trace.TraceSource;
 
 import java.util.Objects;
 
-/** Active-only observer around the CPU-facing DMA-aware address space. */
-final class DebugCpuAddressSpace implements AddressSpace {
+/** Active-only, delegate-once observer for physical PPU fetch buses. */
+final class DebugPpuAddressSpace implements AddressSpace {
 
     private final AddressSpace delegate;
 
+    private final DebugAddressSpace addressSpace;
+
     private final DebugHooks hooks;
 
-    DebugCpuAddressSpace(AddressSpace delegate, DebugHooks hooks) {
+    DebugPpuAddressSpace(
+            AddressSpace delegate, DebugAddressSpace addressSpace, DebugHooks hooks) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
+        this.addressSpace = Objects.requireNonNull(addressSpace, "addressSpace");
         this.hooks = Objects.requireNonNull(hooks, "hooks");
     }
 
@@ -27,13 +31,13 @@ final class DebugCpuAddressSpace implements AddressSpace {
 
     @Override
     public int getByte(int address) {
-        return getByte(address, DebugMemoryAccess.READ);
-    }
-
-    int getByte(int address, DebugMemoryAccess access) {
         int value = delegate.getByte(address);
         hooks.onMemoryAccess(
-                DebugAddressSpace.SYSTEM_BUS, TraceSource.CPU, access, address, value);
+                addressSpace,
+                TraceSource.PPU,
+                DebugMemoryAccess.READ,
+                address,
+                value);
         return value;
     }
 
@@ -41,8 +45,8 @@ final class DebugCpuAddressSpace implements AddressSpace {
     public void setByte(int address, int value) {
         delegate.setByte(address, value);
         hooks.onMemoryAccess(
-                DebugAddressSpace.SYSTEM_BUS,
-                TraceSource.CPU,
+                addressSpace,
+                TraceSource.PPU,
                 DebugMemoryAccess.WRITE,
                 address,
                 value);

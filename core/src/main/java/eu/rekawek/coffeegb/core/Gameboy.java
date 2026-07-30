@@ -832,10 +832,41 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             instrumentation.alignMasterTick(completedMasterTick);
         }
         this.debugInstrumentation = instrumentation;
-        var hooks = instrumentation != null && instrumentation.requiresCpuHooks()
+        var cpuHooks = instrumentation != null && instrumentation.requiresCpuHooks()
                 ? instrumentation : null;
-        cpu.setDebugHooks(hooks);
-        interruptManager.setDebugHooks(hooks);
+        cpu.setDebugHooks(cpuHooks);
+        interruptManager.setDebugHooks(
+                instrumentation != null && instrumentation.requiresInterruptHooks()
+                        ? instrumentation : null);
+        if (instrumentation != null && instrumentation.requiresPpuHooks()) {
+            instrumentation.alignPpuState(gpu.getLine(), toDebugPpuMode());
+            gpu.setDebugHooks(instrumentation);
+        } else {
+            gpu.setDebugHooks(null);
+        }
+        var dmaHooks = instrumentation != null && instrumentation.requiresDmaHooks()
+                ? instrumentation : null;
+        dma.setDebugHooks(dmaHooks);
+        hdma.setDebugHooks(dmaHooks);
+        timer.setDebugHooks(
+                instrumentation != null && instrumentation.requiresTimerHooks()
+                        ? instrumentation : null);
+        var serialIrHooks = instrumentation != null && instrumentation.requiresSerialIrHooks()
+                ? instrumentation : null;
+        serialPort.setDebugHooks(serialIrHooks);
+        infraredPort.setDebugHooks(serialIrHooks);
+        joypad.setDebugHooks(
+                instrumentation != null && instrumentation.requiresInputHooks()
+                        ? instrumentation : null);
+        var mapperHooks = instrumentation != null && instrumentation.requiresMapperRtcHooks()
+                ? instrumentation : null;
+        cartridge.setDebugHooks(mapperHooks);
+        if (slotCartridge != null) {
+            slotCartridge.setDebugHooks(mapperHooks);
+        }
+        sound.setDebugHooks(
+                instrumentation != null && instrumentation.requiresApuHooks()
+                        ? instrumentation : null);
     }
 
     /**

@@ -1030,6 +1030,7 @@ class BasicController private constructor(
   private fun syncDebugInstrumentation() {
     val gameboy = session?.gameboy ?: return
     val instrumentation = debugInstrumentation
+    instrumentation?.alignOwnerFrame(debugFrame)
     gameboy.updateDebugInstrumentation(
         instrumentation?.takeIf { it.isActive },
         debugMasterTick,
@@ -1040,7 +1041,7 @@ class BasicController private constructor(
   private fun detachAndClearDebugTimelineObservation(gameboy: Gameboy) {
     gameboy.updateDebugInstrumentation(null, debugMasterTick)
     debugInstrumentation?.let { instrumentation ->
-      instrumentation.clearPendingMatch()
+      instrumentation.clearTimelineCorrelation()
       instrumentation.configureTrace(instrumentation.traceConfiguration())
     }
   }
@@ -3841,11 +3842,13 @@ class BasicController private constructor(
             DebugBreakpointKind.MEMORY,
             DebugBreakpointKind.OPCODE,
             DebugBreakpointKind.INTERRUPT,
+            DebugBreakpointKind.PPU_STATE,
+            DebugBreakpointKind.SERIAL,
             DebugBreakpointKind.COUNTER,
         )
 
     val TRACE_CATEGORIES: Set<TraceCategory> =
-        EnumSet.of(TraceCategory.CPU, TraceCategory.MEMORY, TraceCategory.INTERRUPT)
+        EnumSet.allOf(TraceCategory::class.java)
 
     val DEBUG_CAPABILITIES =
         DebugCapabilities(

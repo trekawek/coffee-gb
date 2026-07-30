@@ -378,6 +378,11 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         this.oamReaderBus = oamReaderBus;
     }
 
+    public void setDebugAddressSpaces(
+            AddressSpace videoRam0, AddressSpace videoRam1, AddressSpace oamRam) {
+        fetcher.setDebugAddressSpaces(videoRam0, videoRam1, oamRam);
+    }
+
     public int getObjectTimingPenalty() {
         return objectTimingPenalty;
     }

@@ -53,7 +53,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/hardware/HardwareProfileRegistry.jav
 core/src/main/java/eu/rekawek/coffeegb/core/ir/InfraredPort.java	1a58d8c07d46912040d734b2a18fd0f3a17be76b3c6e7c1d4f10a3df6a05b16d
 core/src/main/java/eu/rekawek/coffeegb/core/joypad/Joypad.java	6ee5046307cc119b6a25bc52a40fdf322e10d03e89654c7b05f0be94a42d68c4
 core/src/main/java/eu/rekawek/coffeegb/core/memory/Bios.java	d34eb790bf1ae45858caabcea82731cc19a38a205e9344bba4110fa81746752d
-core/src/main/java/eu/rekawek/coffeegb/core/memory/Dma.java	c0d12923e92a50e16aa16a1221876e8de5b1b8dcc575f569a15fad01d761533c
+core/src/main/java/eu/rekawek/coffeegb/core/memory/Dma.java	0798b5118b90ccbca3d298ff8de269984a0c5c155f7e2ff7d52b96a5d91cba88
 core/src/main/java/eu/rekawek/coffeegb/core/memory/DmaAddressSpace.java	44789a622be098ac3e68eeb8f22758d7acee59207253e3f7656e5108e4ddecb2
 core/src/main/java/eu/rekawek/coffeegb/core/memory/DmaCpuAddressSpace.java	21c6cc0dff3b3a049d5267369af3561260f6935d3f859fd8f9e5ebba4b5ae9be
 core/src/main/java/eu/rekawek/coffeegb/core/memory/Mmu.java	a198d4d5abc97347410f210c931887d847b759b25ea76b694de310c46baac4b4
@@ -78,7 +78,7 @@ core/src/main/java/eu/rekawek/coffeegb/core/sound/FrequencySweep.java	ec238ac161
 core/src/main/java/eu/rekawek/coffeegb/core/sound/Sound.java	2e12cbfe01b9fd1b7b2aa75801f5e68d027d88392c805eff5a05af960b006331
 core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode1.java	4d17be84287d819288de2dd7598cc42c8c9f763b802f16032dafd10544f91634
 core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode2.java	a30c1619d1b944e11ee102c9a802eeaf7b8da721749e47ac18d24f0946f15be0
-core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode3.java	93e6fdea4e5509e52ef22273aa24132313f91be9e0da566a95b2682b490218f1
+core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode3.java	2def1a876a2849f6ef142c62b28edb312692d3a1fa5b9764dcbafef43694a460
 core/src/main/java/eu/rekawek/coffeegb/core/sound/SoundMode4.java	1d69e05ce5a3bf864d7305f0ad6c0398d286219d96b9de698ae94593f218c7ba
 core/src/main/java/eu/rekawek/coffeegb/core/timer/Timer.java	d992464a2fa04f084a23ca2feb4c8da10b4b3308c4aad6709beb55de79c52612
 swing/src/main/java/eu/rekawek/coffeegb/swing/Main.kt	c21bb9752b47c568755c0bd041c6fc2f9cb8f9bf8447930ce8425f6dc76ec54f

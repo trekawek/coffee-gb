@@ -3,6 +3,8 @@ package eu.rekawek.coffeegb.core.sound;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.ApuTrace;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
@@ -71,6 +73,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
      */
     private int frameSequencerDivOffset;
 
+    /** Owner-thread observation only; deliberately absent from portable machine state. */
+    private transient DebugHooks debugHooks;
+
     public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc) {
         this(timer, speedMode, gbc, ClockSpec.LEGACY);
     }
@@ -102,10 +107,13 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             return;
         }
 
+        int enabledBefore = getDebugEnabledChannelMask();
+
         channels[0] = allModes[0].tick(divReset);
         channels[1] = allModes[1].tick(divReset);
         channels[2] = allModes[2].tick(divReset);
         channels[3] = allModes[3].tick(divReset);
+        notifyDebugChannelDisables(enabledBefore);
 
         int selection = r.getByte(0xff25);
         int left = 0;
@@ -162,6 +170,8 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (firedStep < 0) {
             return;
         }
+        int enabledBefore = getDebugEnabledChannelMask();
+        notifyDebugEvent(ApuTrace.Kind.FRAME_SEQUENCER_STEP, -1, -1, firedStep);
         for (AbstractSoundMode m : allModes) m.tickEnvelopeClock(firedStep);
         if ((firedStep & 1) == 0) {
             for (AbstractSoundMode m : allModes) m.tickLength();
@@ -172,6 +182,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (firedStep == 7) {
             for (AbstractSoundMode m : allModes) m.tickEnvelope();
         }
+        notifyDebugChannelDisables(enabledBefore);
     }
 
     public boolean isFrameSequencerClockAfterCpu() {
@@ -216,6 +227,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     @Override
     public void setByte(int address, int value) {
         if (address == 0xff26) {
+            int enabledBefore = getDebugEnabledChannelMask();
             if ((value & (1 << 7)) == 0) {
                 if (enabled) {
                     enabled = false;
@@ -227,27 +239,37 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
                     start();
                 }
             }
+            notifyDebugRegisterWrite(-1, address, value);
+            notifyDebugChannelDisables(enabledBefore);
             return;
         }
 
         if (!enabled && address < 0xff30) {
             // while the APU is off, the only writable register bits are the DMG length
             // counters (and NR52 handled above); everything else is ignored
+            int channel = -1;
             if (!gbc) {
                 switch (address) {
                     case 0xff11:
                         allModes[0].writeLengthWhileOff(value);
+                        channel = 1;
                         break;
                     case 0xff16:
                         allModes[1].writeLengthWhileOff(value);
+                        channel = 2;
                         break;
                     case 0xff1b:
                         allModes[2].writeLengthWhileOff(value);
+                        channel = 3;
                         break;
                     case 0xff20:
                         allModes[3].writeLengthWhileOff(value);
+                        channel = 4;
                         break;
                 }
+            }
+            if (channel != -1) {
+                notifyDebugRegisterWrite(channel, address, value);
             }
             return;
         }
@@ -256,7 +278,84 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (s == null) {
             return;
         }
+        boolean accepted = !(s instanceof SoundMode3 mode3)
+                || mode3.isWriteAccepted(address);
+        int enabledBefore = getDebugEnabledChannelMask();
         s.setByte(address, value);
+        if (!accepted) {
+            return;
+        }
+        int channel = getDebugChannel(address);
+        notifyDebugRegisterWrite(channel, address, value);
+        if (isTriggerRegister(address) && (value & 0x80) != 0) {
+            notifyDebugEvent(ApuTrace.Kind.CHANNEL_TRIGGERED, channel, address, value & 0xff);
+        }
+        notifyDebugChannelDisables(enabledBefore);
+    }
+
+    /** Installs an optional owner-thread observer without emitting an alignment event. */
+    public void setDebugHooks(DebugHooks debugHooks) {
+        this.debugHooks = debugHooks;
+    }
+
+    private void notifyDebugRegisterWrite(int channel, int address, int value) {
+        notifyDebugEvent(ApuTrace.Kind.REGISTER_WRITTEN, channel, address, value & 0xff);
+    }
+
+    private void notifyDebugChannelDisables(int enabledBefore) {
+        DebugHooks hooks = debugHooks;
+        if (hooks == null || enabledBefore == 0) {
+            return;
+        }
+        int disabled = enabledBefore & ~getEnabledChannelMask();
+        for (int i = 0; i < allModes.length; i++) {
+            if ((disabled & (1 << i)) != 0) {
+                hooks.onApuEvent(ApuTrace.Kind.CHANNEL_DISABLED, i + 1, -1, -1);
+            }
+        }
+    }
+
+    private void notifyDebugEvent(ApuTrace.Kind kind, int channel, int register, int value) {
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onApuEvent(kind, channel, register, value);
+        }
+    }
+
+    private int getDebugEnabledChannelMask() {
+        return debugHooks == null ? 0 : getEnabledChannelMask();
+    }
+
+    private int getEnabledChannelMask() {
+        int result = 0;
+        for (int i = 0; i < allModes.length; i++) {
+            if (allModes[i].isEnabled()) {
+                result |= 1 << i;
+            }
+        }
+        return result;
+    }
+
+    private static boolean isTriggerRegister(int address) {
+        return address == 0xff14 || address == 0xff19
+                || address == 0xff1e || address == 0xff23;
+    }
+
+    private static int getDebugChannel(int address) {
+        if (address >= 0xff10 && address <= 0xff14) {
+            return 1;
+        }
+        if (address >= 0xff15 && address <= 0xff19) {
+            return 2;
+        }
+        if ((address >= 0xff1a && address <= 0xff1e)
+                || (address >= 0xff30 && address <= 0xff3f)) {
+            return 3;
+        }
+        if (address >= 0xff1f && address <= 0xff23) {
+            return 4;
+        }
+        return -1;
     }
 
     @Override

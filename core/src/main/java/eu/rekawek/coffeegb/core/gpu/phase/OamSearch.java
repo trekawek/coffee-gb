@@ -83,7 +83,7 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
         }
     }
 
-    private final AddressSpace oemRam;
+    private AddressSpace oemRam;
 
     private final Dma dma;
 
@@ -140,6 +140,10 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
         for (int j = 0; j < sprites.length; j++) {
             this.sprites[j] = new SpritePosition();
         }
+    }
+
+    public void setDebugAddressSpace(AddressSpace oemRam) {
+        this.oemRam = java.util.Objects.requireNonNull(oemRam, "oemRam");
     }
 
     public OamSearch start() {

@@ -84,6 +84,13 @@ public class SoundMode3 extends AbstractSoundMode {
         }
     }
 
+    /** Whether a write reaches storage rather than being blocked by the active wave-RAM gate. */
+    boolean isWriteAccepted(int address) {
+        return !waveRam.accepts(address)
+                || !isEnabled()
+                || (waveRam.accepts(lastReadAddr) && (gbc || ticksSinceRead < 2));
+    }
+
     @Override
     protected void setNr0(int value) {
         super.setNr0(value);

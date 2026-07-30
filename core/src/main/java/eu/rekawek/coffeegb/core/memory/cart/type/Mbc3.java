@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
+import eu.rekawek.coffeegb.core.debug.trace.MapperRtcTrace;
+
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -32,6 +35,8 @@ public class Mbc3 implements MemoryController {
 
     private boolean ramEnabled;
 
+    private transient DebugHooks debugHooks;
+
     public Mbc3(Rom rom, Battery battery) {
         this(rom, battery, new SystemTimeSource(), ClockSpec.LEGACY);
     }
@@ -60,6 +65,10 @@ public class Mbc3 implements MemoryController {
 
     @Override
     public void setByte(int address, int value) {
+        DebugHooks hooks = debugHooks;
+        int previousRomBank = selectedRomBank;
+        int previousRamBank = selectedRamBank;
+        boolean previousRamEnabled = ramEnabled;
         if (address >= 0x0000 && address < 0x2000) {
             ramEnabled = (value & 0x0f) == 0x0a;
         } else if (address >= 0x2000 && address < 0x4000) {
@@ -69,6 +78,10 @@ public class Mbc3 implements MemoryController {
             selectedRamBank = value & 0x0f;
         } else if (address >= 0x6000 && address < 0x8000) {
             clock.latch();
+            if (hooks != null) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.RTC_LATCHED, -1, value & 0xffL);
+            }
         } else if (address >= 0xa000 && address < 0xc000 && ramEnabled && isRamBankSelected()) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
@@ -77,6 +90,44 @@ public class Mbc3 implements MemoryController {
         } else if (address >= 0xa000 && address < 0xc000 && ramEnabled) {
             setTimer(value);
         }
+        if (hooks != null) {
+            if (selectedRomBank != previousRomBank) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.ROM_BANK_CHANGED, -1, selectedRomBank);
+            }
+            if (selectedRamBank != previousRamBank) {
+                boolean previouslyRtc = isRtcRegister(previousRamBank);
+                boolean currentlyRtc = isRtcRegister(selectedRamBank);
+                if (currentlyRtc) {
+                    hooks.onMapperRtcEvent(
+                            MapperRtcTrace.Kind.RTC_REGISTER_SELECTED,
+                            selectedRamBank,
+                            1);
+                } else {
+                    if (previouslyRtc) {
+                        hooks.onMapperRtcEvent(
+                                MapperRtcTrace.Kind.RTC_REGISTER_SELECTED, -1, 0);
+                    }
+                    if (isRamBank(selectedRamBank)) {
+                        hooks.onMapperRtcEvent(
+                                MapperRtcTrace.Kind.RAM_BANK_CHANGED,
+                                -1,
+                                selectedRamBank);
+                    }
+                }
+            }
+            if (ramEnabled != previousRamEnabled) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.RAM_ENABLE_CHANGED,
+                        -1,
+                        ramEnabled ? 1 : 0);
+            }
+        }
+    }
+
+    @Override
+    public void setDebugHooks(DebugHooks hooks) {
+        debugHooks = hooks;
     }
 
     @Override
@@ -126,7 +177,15 @@ public class Mbc3 implements MemoryController {
                 return 0xff;
             }
         } else if (address >= 0xa000 && address < 0xc000) {
-            return getTimer();
+            int value = getTimer();
+            DebugHooks hooks = debugHooks;
+            if (hooks != null && isRtcRegisterSelected()) {
+                hooks.onMapperRtcEvent(
+                        MapperRtcTrace.Kind.RTC_REGISTER_READ,
+                        selectedRamBank,
+                        value & 0xffL);
+            }
+            return value;
         } else {
             throw new IllegalArgumentException(Integer.toHexString(address));
         }
@@ -146,7 +205,19 @@ public class Mbc3 implements MemoryController {
     }
 
     private boolean isRamBankSelected() {
-        return selectedRamBank < (mbc30 ? 8 : 4);
+        return isRamBank(selectedRamBank);
+    }
+
+    private boolean isRamBank(int bank) {
+        return bank >= 0 && bank < (mbc30 ? 8 : 4);
+    }
+
+    private boolean isRtcRegisterSelected() {
+        return isRtcRegister(selectedRamBank);
+    }
+
+    private static boolean isRtcRegister(int bank) {
+        return bank >= 0x08 && bank <= 0x0c;
     }
 
     private int getTimer() {
@@ -173,6 +244,9 @@ public class Mbc3 implements MemoryController {
     }
 
     private void setTimer(int value) {
+        if (!isRtcRegisterSelected()) {
+            return;
+        }
         switch (selectedRamBank) {
             case 0x08:
                 clock.setSeconds(value);
@@ -195,6 +269,13 @@ public class Mbc3 implements MemoryController {
                 clock.setHalt((value & (1 << 6)) != 0);
                 clock.setCounterOverflow((value & (1 << 7)) != 0);
                 break;
+        }
+        DebugHooks hooks = debugHooks;
+        if (hooks != null) {
+            hooks.onMapperRtcEvent(
+                    MapperRtcTrace.Kind.RTC_REGISTER_WRITTEN,
+                    selectedRamBank,
+                    value & 0xffL);
         }
     }
 
