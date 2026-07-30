@@ -623,6 +623,9 @@ class BasicController private constructor(
             stopJob == null &&
             isRewinding &&
             session?.let { rewindManager.rewindOneStep(it) } == true
+    if (rewound) {
+      relinquishDebugBreakpointPauseOwnership()
+    }
 
     releaseClosedDebugPortIfNeeded()
     drainDebugCommands()
@@ -653,6 +656,7 @@ class BasicController private constructor(
       if (rewound || (!isEffectivelyPaused() && !isRewinding)) {
         val gameboy = session?.gameboy
         if (gameboy != null) {
+          relinquishDebugBreakpointPauseOwnership()
           if (trackDebugHistory) {
             tickWithDebugHistory(gameboy, frameTicks)
           } else {
@@ -754,13 +758,14 @@ class BasicController private constructor(
     var holdAtBoundary = false
     repeat(frameTicks) {
       if (!holdAtBoundary && !isRewinding) {
-        // A queued lifecycle control may explicitly supersede a debugger-owned mid-frame pause.
-        // Retain pause ownership, but finish this one partial frame so the ordinary FIFO can run
-        // at its established boundary.
+        // A queued lifecycle control may explicitly supersede a breakpoint-owned mid-frame stop.
+        // Retain the debugger pause while finishing this partial frame, but make the hit
+        // historical before the first guest tick so the stop reason cannot describe moved state.
         val shouldTick =
             pendingDebugAction != null || !isEffectivelyPaused() || stopAtNextBoundary
         val gameboy = session?.gameboy
         if (shouldTick && gameboy != null) {
+          relinquishDebugBreakpointPauseOwnership()
           if (debugCheckpointHistory.enabled) {
             tickWithDebugHistory(gameboy, frameTicks)
           } else {
@@ -999,7 +1004,7 @@ class BasicController private constructor(
         debugCheckpointHistory.invalidateFuture(checkNotNull(session))
         // A desktop/workflow pause is sufficient to authorize the request, but the debugger
         // acquires its own ownership so the result remains stopped if that other owner resumes.
-        debugBreakpointPauseActive = false
+        relinquishDebugBreakpointPauseOwnership()
         setDebugPaused(true)
         val retirement = gameboy.debugRetirementSequence
         pendingDebugAction =
@@ -1012,7 +1017,7 @@ class BasicController private constructor(
       }
       DebugStepKind.FRAME -> {
         debugCheckpointHistory.invalidateFuture(checkNotNull(session))
-        debugBreakpointPauseActive = false
+        relinquishDebugBreakpointPauseOwnership()
         setDebugPaused(true)
         val ticksToBoundary =
             if (debugFramePosition == 0) {
@@ -1207,8 +1212,7 @@ class BasicController private constructor(
     // restored machine; the result/status expose the original historical coordinate separately.
     rewindManager.clear()
     debugFramePosition = position.framePosition()
-    debugBreakpointPauseActive = false
-    lastDebugBreakpointHit = null
+    relinquishDebugBreakpointPauseOwnership()
     setDebugPaused(true)
     if (resetObservation) {
       resetDebugTimelineObservation(currentSession.gameboy)
@@ -1414,7 +1418,7 @@ class BasicController private constructor(
     debugBreakpointPauseActive = true
     val snapshot = captureDebugSnapshot()
     lastDebugBreakpointHit =
-        DebugBreakpointHit(match.breakpointId(), match.matchMasterTick(), snapshot)
+        DebugBreakpointHit(match.breakpoint(), match.matchMasterTick(), snapshot, true)
 
     when (val action = pendingDebugAction) {
       null -> Unit
@@ -2165,6 +2169,7 @@ class BasicController private constructor(
         }
         else -> StateCodec.applyDecoded(read.state, currentSession, context.identity)
       }
+      relinquishDebugBreakpointPauseOwnership()
       // A portable state contains the cartridge clock pause bit. Pause ownership belongs to the
       // live desktop workflow, so loading must not let an old capture override the effective
       // pause selected for this session.
@@ -2250,6 +2255,7 @@ class BasicController private constructor(
     val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
       manager.applySnapshotReadOnly(snapshot, currentSession)
+      relinquishDebugBreakpointPauseOwnership()
       // Match managed-load ownership: a saved cartridge clock pause bit must not override the
       // effective pause chosen for the live desktop session.
       currentSession.gameboy.setCartridgeClockPaused(isEffectivelyPaused())
@@ -2899,7 +2905,7 @@ class BasicController private constructor(
 
   private fun setDebugPaused(paused: Boolean) {
     if (!paused) {
-      debugBreakpointPauseActive = false
+      relinquishDebugBreakpointPauseOwnership()
     }
     if (debugPaused == paused) {
       return
@@ -2907,6 +2913,11 @@ class BasicController private constructor(
     val wasEffectivelyPaused = isEffectivelyPaused()
     debugPaused = paused
     updateCartridgePause(wasEffectivelyPaused)
+  }
+
+  private fun relinquishDebugBreakpointPauseOwnership() {
+    debugBreakpointPauseActive = false
+    lastDebugBreakpointHit = lastDebugBreakpointHit?.withActivePause(false)
   }
 
   private fun updateCartridgePause(wasEffectivelyPaused: Boolean) {
@@ -3734,6 +3745,7 @@ class BasicController private constructor(
     val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
       if (manager.loadSnapshot(slot, currentSession)) {
+        relinquishDebugBreakpointPauseOwnership()
         rewindManager.clear()
         debugCheckpointHistory.clear(DebugHistoryTruncationReason.SESSION_BOUNDARY)
         if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {

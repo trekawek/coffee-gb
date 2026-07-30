@@ -113,6 +113,8 @@ class AgentTest {
       assertEquals(breakpoint.id(), hit.breakpointId())
       assertTrue(hit.snapshot().paused())
       assertTrue(hit.snapshot().masterTick() >= hit.matchMasterTick())
+      assertEquals(breakpoint, hit.breakpoint().orElseThrow())
+      assertTrue(hit.activePause())
 
       val stopped = awaitDebug(port.snapshot()).value()
       assertTrue(stopped.paused())
@@ -128,6 +130,7 @@ class AgentTest {
           stopped.execution().retiredInstructions(),
           stillStopped.execution().retiredInstructions(),
       )
+      assertTrue(awaitDebug(port.lastBreakpointHit()).value().activePause())
 
       val trace = awaitDebug(port.readTrace(TraceReadRequest.initial(128))).value()
       assertTrue(trace.entries().isNotEmpty())
@@ -136,6 +139,15 @@ class AgentTest {
             it.category() == TraceCategory.CPU || it.category() == TraceCategory.MEMORY
           })
       assertEquals(trace.entries().last().sequence(), trace.nextAfterSequence())
+
+      val replacement =
+          DebugBreakpoint(breakpoint.id(), true, DebugPcCondition.at(0xffff))
+      assertEquals(replacement, awaitDebug(port.setBreakpoint(replacement)).value())
+      assertTrue(awaitDebug(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
+      val historical = awaitDebug(port.lastBreakpointHit()).value()
+      assertEquals(breakpoint, historical.breakpoint().orElseThrow())
+      assertFalse(historical.activePause())
+      assertEquals(hit.snapshot(), historical.snapshot())
     }
   }
 
@@ -160,6 +172,45 @@ class AgentTest {
           step.value().snapshot().execution().retiredInstructions(),
           hit.snapshot().execution().retiredInstructions(),
       )
+    }
+  }
+
+  @Test
+  fun directTickApisMakeABreakpointOwnedPauseHistoricalOnlyWhenTheyMove() {
+    val movers: List<(Agent) -> Unit> =
+        listOf(
+            { agent -> agent.runTicks(1) },
+            { agent -> agent.runUntilFrame(1) },
+        )
+
+    movers.forEachIndexed { index, move ->
+      Agent(testRom(0x3e, 0x12, 0x3c, 0x18, 0xfe)).use { agent ->
+        val breakpoint =
+            DebugBreakpoint(
+                DebugBreakpointId(80L + index),
+                true,
+                DebugPcCondition.at(0x100),
+            )
+        assertTrue(awaitDebug(agent.debugPort.setBreakpoint(breakpoint)).isSuccess)
+        val stoppingStep = awaitDebug(agent.debugPort.step(DebugStepKind.INSTRUCTION))
+        assertEquals(DebugStepStopReason.BREAKPOINT, stoppingStep.value().stopReason())
+        assertTrue(awaitDebug(agent.debugPort.lastBreakpointHit()).value().activePause())
+
+        agent.runTicks(0)
+        agent.runUntilFrame(0)
+        assertTrue(awaitDebug(agent.debugPort.lastBreakpointHit()).value().activePause())
+
+        assertTrue(
+            awaitDebug(
+                    agent.debugPort.setBreakpoint(
+                        DebugBreakpoint(breakpoint.id(), true, DebugPcCondition.at(0xffff))))
+                .isSuccess)
+        move(agent)
+
+        val historical = awaitDebug(agent.debugPort.lastBreakpointHit()).value()
+        assertFalse(historical.activePause())
+        assertEquals(breakpoint, historical.breakpoint().orElseThrow())
+      }
     }
   }
 
